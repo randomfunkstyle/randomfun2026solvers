@@ -68,6 +68,11 @@ The worker treats these as run failures:
 - invalid output JSON
 - missing or invalid `solution_b64`
 
+## Solvers
+
+- `shell-smoke`: writes a minimal `{"smoke": true}` solution for entrypoint checks.
+- `sudoku`: solves `demo_sudoku` task payloads and writes `{"grid": "<81 digits>"}`.
+
 ## Local smoke
 
 Create a tiny input file and run the default smoke solver:

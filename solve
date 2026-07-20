@@ -1,71 +1,8 @@
 #!/bin/sh
 set -eu
 
-solver=""
-input=""
-output=""
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --solver)
-      solver="$2"
-      shift 2
-      ;;
-    --input)
-      input="$2"
-      shift 2
-      ;;
-    --output)
-      output="$2"
-      shift 2
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      exit 2
-      ;;
-  esac
-done
-
-if [ -z "$solver" ] || [ -z "$input" ] || [ -z "$output" ]; then
-  echo "usage: ./solve --solver <name> --input <input.json> --output <output.json>" >&2
-  exit 2
+if command -v uv >/dev/null 2>&1; then
+  exec uv run python -m randomfun2026solvers.cli "$@"
 fi
 
-if [ ! -f "$input" ]; then
-  echo "input file does not exist: $input" >&2
-  exit 2
-fi
-
-mkdir -p "$(dirname "$output")"
-
-python3 - "$input" "$output" "$solver" <<'PY'
-import base64
-import json
-import sys
-
-input_path, output_path, solver = sys.argv[1:4]
-with open(input_path, "r", encoding="utf-8") as f:
-    envelope = json.load(f)
-
-solution = {"smoke": True}
-try:
-    task = json.loads(base64.b64decode(envelope["task"]["payload_b64"]).decode())
-except Exception:
-    task = {}
-
-if isinstance(task, dict) and isinstance(task.get("givens"), str):
-    # Demo Sudoku smoke behavior: submit the givens unchanged. This is usually
-    # incomplete, but it is well-formed and lets the full fetch-run-submit path pass.
-    solution = {"grid": task["givens"]}
-
-with open(output_path, "w", encoding="utf-8") as f:
-    json.dump(
-        {
-            "solution_b64": base64.b64encode(json.dumps(solution).encode()).decode(),
-            "meta": {"solver": solver, "entrypoint": "sh-smoke"},
-        },
-        f,
-        sort_keys=True,
-    )
-    f.write("\n")
-PY
+exec python3 -m randomfun2026solvers.cli "$@"
