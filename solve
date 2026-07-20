@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+solver=""
+input=""
+output=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --solver)
+      solver="$2"
+      shift 2
+      ;;
+    --input)
+      input="$2"
+      shift 2
+      ;;
+    --output)
+      output="$2"
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ -z "$solver" ] || [ -z "$input" ] || [ -z "$output" ]; then
+  echo "usage: ./solve --solver <name> --input <input.json> --output <output.json>" >&2
+  exit 2
+fi
+
+if [ ! -f "$input" ]; then
+  echo "input file does not exist: $input" >&2
+  exit 2
+fi
+
+mkdir -p "$(dirname "$output")"
+
+# Smoke solver: proves clone/update, argv passing, and output-envelope parsing.
+# Real solvers should replace this payload with contest-specific output.
+printf '%s\n' '{"solution_b64":"eyJzbW9rZSI6dHJ1ZX0=","meta":{"solver":"'"$solver"'","entrypoint":"sh-smoke"}}' > "$output"
