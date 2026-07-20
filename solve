@@ -38,6 +38,34 @@ fi
 
 mkdir -p "$(dirname "$output")"
 
-# Smoke solver: proves clone/update, argv passing, and output-envelope parsing.
-# Real solvers should replace this payload with contest-specific output.
-printf '%s\n' '{"solution_b64":"eyJzbW9rZSI6dHJ1ZX0=","meta":{"solver":"'"$solver"'","entrypoint":"sh-smoke"}}' > "$output"
+python3 - "$input" "$output" "$solver" <<'PY'
+import base64
+import json
+import sys
+
+input_path, output_path, solver = sys.argv[1:4]
+with open(input_path, "r", encoding="utf-8") as f:
+    envelope = json.load(f)
+
+solution = {"smoke": True}
+try:
+    task = json.loads(base64.b64decode(envelope["task_payload_b64"]).decode())
+except Exception:
+    task = {}
+
+if isinstance(task, dict) and isinstance(task.get("givens"), str):
+    # Demo Sudoku smoke behavior: submit the givens unchanged. This is usually
+    # incomplete, but it is well-formed and lets the full fetch-run-submit path pass.
+    solution = {"grid": task["givens"]}
+
+with open(output_path, "w", encoding="utf-8") as f:
+    json.dump(
+        {
+            "solution_b64": base64.b64encode(json.dumps(solution).encode()).decode(),
+            "meta": {"solver": solver, "entrypoint": "sh-smoke"},
+        },
+        f,
+        sort_keys=True,
+    )
+    f.write("\n")
+PY
