@@ -49,7 +49,7 @@ with open(input_path, "r", encoding="utf-8") as f:
 
 solution = {"smoke": True}
 try:
-    task = json.loads(base64.b64decode(envelope["task_payload_b64"]).decode())
+    task = json.loads(base64.b64decode(envelope["task"]["payload_b64"]).decode())
 except Exception:
     task = {}
 
