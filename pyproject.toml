@@ -19,10 +19,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["randomfun2026solvers"]
+packages = ["solvers/python/randomfun2026solvers"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"randomfun2026solvers/py.typed" = "randomfun2026solvers/py.typed"
+"solvers/python/randomfun2026solvers/py.typed" = "randomfun2026solvers/py.typed"
 
 [tool.ruff]
 target-version = "py312"

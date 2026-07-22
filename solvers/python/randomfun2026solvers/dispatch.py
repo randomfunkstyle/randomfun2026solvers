@@ -29,13 +29,6 @@ def _decode_task_payload(envelope: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _shell_smoke(envelope: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
-    return json.dumps({"smoke": True}, sort_keys=True).encode(), {
-        "solver": envelope.get("solver"),
-        "entrypoint": "python-cli",
-    }
-
-
 def _sudoku(envelope: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     task = envelope.get("task")
     if not isinstance(task, dict):
@@ -50,7 +43,6 @@ def _sudoku(envelope: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
 
 
 _SOLVERS: dict[str, SolverFn] = {
-    "shell-smoke": _shell_smoke,
     "sudoku": _sudoku,
 }
 

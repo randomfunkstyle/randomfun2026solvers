@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+
+solver=
+output=
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --solver)
+      if [ "$#" -lt 2 ]; then
+        echo "missing value for --solver" >&2
+        exit 2
+      fi
+      solver=$2
+      shift 2
+      ;;
+    --input)
+      # The smoke solver does not need the input payload, but the flag is part
+      # of the shared solver contract.
+      if [ "$#" -lt 2 ]; then
+        echo "missing value for --input" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --output)
+      if [ "$#" -lt 2 ]; then
+        echo "missing value for --output" >&2
+        exit 2
+      fi
+      output=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [ "$solver" != "shell-smoke" ]; then
+  echo "bash solver only supports shell-smoke" >&2
+  exit 2
+fi
+
+if [ -z "$output" ]; then
+  echo "missing required --output" >&2
+  exit 2
+fi
+
+mkdir -p "$(dirname -- "$output")"
+printf '{"meta":{"entrypoint":"bash-cli","solver":"shell-smoke"},"solution_b64":"eyJzbW9rZSI6dHJ1ZX0="}\n' > "$output"
