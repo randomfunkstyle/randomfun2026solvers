@@ -1,8 +1,50 @@
 #!/bin/sh
 set -eu
 
-if command -v uv >/dev/null 2>&1; then
-  exec uv run python -m randomfun2026solvers.cli "$@"
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+solver=
+expect_solver_value=0
+for arg do
+  if [ "$expect_solver_value" -eq 1 ]; then
+    solver=$arg
+    expect_solver_value=0
+    continue
+  fi
+  case "$arg" in
+    --solver)
+      expect_solver_value=1
+      ;;
+  esac
+done
+
+if [ "$expect_solver_value" -eq 1 ]; then
+  echo "missing value for --solver" >&2
+  exit 2
 fi
 
-exec python3 -m randomfun2026solvers.cli "$@"
+if [ -z "$solver" ]; then
+  echo "missing required --solver" >&2
+  exit 2
+fi
+
+case "$solver" in
+  shell-smoke | bash-*)
+    exec "$ROOT_DIR/solvers/bash/solve" "$@"
+    ;;
+  sudoku | python-*)
+    PYTHONPATH="$ROOT_DIR/solvers/python${PYTHONPATH:+:$PYTHONPATH}"
+    export PYTHONPATH
+    if command -v uv >/dev/null 2>&1; then
+      exec uv run python -m randomfun2026solvers.cli "$@"
+    fi
+    exec python3 -m randomfun2026solvers.cli "$@"
+    ;;
+  swift-smoke | swift-*)
+    exec swift run --package-path "$ROOT_DIR/solvers/swift" SwiftSolver -- "$@"
+    ;;
+  *)
+    echo "unknown solver '$solver'; known solvers: shell-smoke, sudoku, swift-smoke" >&2
+    exit 2
+    ;;
+esac

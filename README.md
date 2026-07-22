@@ -68,10 +68,20 @@ The worker treats these as run failures:
 - invalid output JSON
 - missing or invalid `solution_b64`
 
+## Solver Layout
+
+The root `./solve` script dispatches by solver name to language-specific
+entrypoints:
+
+- `solvers/bash/solve`: Bash solvers.
+- `solvers/python/randomfun2026solvers`: Python solvers.
+- `solvers/swift`: Swift CLI package.
+
 ## Solvers
 
-- `shell-smoke`: writes a minimal `{"smoke": true}` solution for entrypoint checks.
-- `sudoku`: solves `demo_sudoku` task payloads and writes `{"grid": "<81 digits>"}`.
+- `shell-smoke`: Bash smoke solver that writes a minimal `{"smoke": true}` solution.
+- `sudoku`: Python solver for `demo_sudoku` task payloads that writes `{"grid": "<81 digits>"}`.
+- `swift-smoke`: Swift smoke solver that writes a minimal `{"smoke": true}` solution.
 
 ## Local smoke
 
