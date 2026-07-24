@@ -8,7 +8,7 @@ specs and public tests: [`../../tasks/problems/`](../../tasks/problems/).
 |---|---|---|
 | [`../../tasks/solutions/memory_tape.man`](../../tasks/solutions/memory_tape.man) | `memory` (Semester 1) | **the one to submit** — 27/27 local, 32×32, area² 1024, judge-scored **61.9M** |
 | `memory.man` | `memory` | identical copy kept here for the tooling examples below |
-| `memory-v2.man` | `memory` | previous build (single-value loops); judge-scored **92.0M** at 32×33 |
+| `memory-v2.man` | `memory` | previous build (single-value loops), 32×32 — **not the file that scored 92.0M**: that submission was 32×33 (area² 1089) before the relay trim shaved a row. This one predicts 86.5M and was never submitted. |
 | `memory-v1-submitted.man` | `memory` | the 42×33 build that scored **158M**; earliest known-good fallback |
 | `memory-n8.man` | — | N=8 build of the same generator; small enough to trace by hand |
 | `register-cell.man` | — | the 1-value register block (store `1 v`, fetch `-1`) |

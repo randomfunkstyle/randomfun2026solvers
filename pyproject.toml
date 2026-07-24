@@ -36,3 +36,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `slow` = engine-heavy cases (the judge-weight `memory-heavy-cases` suite).
+# Deselected by default; run them with `-m slow`, or everything with `-m ""`.
+markers = ["slow: engine-heavy; deselected by default, run with -m slow"]
+addopts = ["-m", "not slow"]
