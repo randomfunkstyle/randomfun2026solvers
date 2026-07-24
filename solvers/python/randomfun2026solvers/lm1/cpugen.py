@@ -41,8 +41,8 @@ Spill is one `register-cell` on the east bus, per ARCH.md 4.1's two-tier rule --
 `triangle` needs exactly one live value besides ACC, because A dies on every
 fetch.
 
-Verify: node littleman/tools/route-check.mjs littleman/programs/triangle-cpu.man
-        node littleman/tools/run-cases.mjs littleman/programs/triangle-cpu.man <cases> 200000 1
+Verify: node littleman/tools/route-check.mjs tasks/solutions/triangle_cpu.man
+        node littleman/tools/run-cases.mjs tasks/solutions/triangle_cpu.man <cases> 200000 1
 """
 
 W, H = 40, 32

@@ -32,7 +32,7 @@ Two ways to use the ROM:
 
 Verify any output with the bundled interpreter::
 
-    node littleman/lm.mjs run tasks/solutions/history-lesson.man
+    node littleman/lm.mjs run tasks/solutions/history-lesson_rom.man
 """
 
 from __future__ import annotations
@@ -384,7 +384,7 @@ def main(argv: list[str] | None = None) -> int:
     force ``data_w`` (or ``fixed N`` to use the fixed-grid builder instead)::
 
         python -m randomfun2026solvers.rom_snake \\
-          < codes.txt > tasks/solutions/history-lesson.man
+          < codes.txt > tasks/solutions/history-lesson_rom.man
     """
     args = sys.argv[1:] if argv is None else argv
     codes = [int(tok) for tok in sys.stdin.read().split()]
