@@ -1,10 +1,12 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: design frozen; toolchain built; hardware is a 2-opcode slice.** The
-ISA, emulator and assembler exist (`lm1/`, 230 tests green) and all 7 memory-free
+**Status: a generated CPU solves a graded problem end to end.** The ISA,
+emulator and assembler exist (`lm1/`, 230 tests green) and all 7 memory-free
 problems pass every public test case in the emulator. On the real interpreter,
-ROM + ring + CPU runs end to end at 20 ticks/instruction (§2.5). The full CPU
-generator is not written yet (§9 step 5).
+`lm1/cpugen.py` emits a complete 7-opcode machine — ROM + code ring + CPU +
+register cell + I/O — that passes 6/6 public cases of `triangle` at 446 ticks
+(§2.6). Generalising that generator to the full ISA table is what remains
+(§9 step 5).
 
 Two problems are already solved *without* LM-1, as bespoke grids: `memory`
 (accepted by the judge) and `history-lesson`. LM-1 is the safety net for the
