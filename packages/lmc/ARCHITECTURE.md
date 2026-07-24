@@ -101,5 +101,15 @@ Compute (compare/ALU/branch) lives in the CPU; the DMA is the memory + I/O subsy
 
 ## Status
 Built + validated + committed: the routing model, `if3`, stores, the CPU↔DMA bus, and the
-DMA stack (PUSH/POP) with its looper. Next blocks: DMA `LOAD_IDX/STORE_IDX` and `IN/OUT`
-command arms, then unroll `memory` and `sort` as CPU programs over the bus.
+DMA stack (PUSH/POP/ROTATE) with its looper.
+
+**Routing feasibility of the full memory subsystem is proven.** A 6-pipe integrated DMA —
+`req`/`resp` (North bus), RAM (South), input (West), output (East) — is SAT under the
+zoning rule (RAM ops dip South near the ring; result-sends route North to `resp`; `IN`
+reads West; `OUT` sends East). So every routing/architecture unknown for semester-1 is
+resolved; what remains is assembly, not discovery.
+
+Remaining for **sort + memory** (semester-1): hand-lay the integrated DMA *logic* (the
+5-command datapath: PUSH/POP/ROTATE + IN/OUT, with the winding S→N result paths + looper),
+then write the two CPU programs over the bus (the CPU spills its transient values to the
+DMA stack, so it has no register wall). Substantial hand-layout, but no unknowns.
