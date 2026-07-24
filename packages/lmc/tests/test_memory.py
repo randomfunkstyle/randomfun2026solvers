@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from lmc.memory import render_memdma_standalone
+from lmc.memory import render_memdma_standalone, render_read_driver_standalone
 from lmc.oracle import LM_PATH, run_grid
 
 _HAVE_ORACLE = shutil.which("node") is not None and Path(LM_PATH).exists()
@@ -36,3 +36,23 @@ def test_memdma_commands(cmds, expected):
     grid = render_memdma_standalone(SEED)
     res = run_grid(grid, cmds, max_ticks=14000)
     assert res.output[: len(expected)] == expected, grid
+
+
+def test_read_driver_renders():
+    assert "I" in render_read_driver_standalone(5)
+
+
+@requires_oracle
+@pytest.mark.parametrize(
+    "op_stream,cmds",
+    [
+        # READ addr=2 over N=5 -> ADVANCE,ADVANCE, PEEK, ADVANCE,ADVANCE
+        ([0, 2], [0, 0, 0, 0, 1, 0, 0, 0, 0, 0]),
+        ([0, 0], [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        ([0, 4], [0, 0, 0, 0, 0, 0, 0, 0, 1, 0]),
+    ],
+)
+def test_read_driver_command_stream(op_stream, cmds):
+    grid = render_read_driver_standalone(5)
+    res = run_grid(grid, op_stream, max_ticks=8000)
+    assert res.output[: len(cmds)] == cmds, grid

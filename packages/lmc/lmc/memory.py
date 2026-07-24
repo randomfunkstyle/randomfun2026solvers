@@ -17,7 +17,8 @@ is control glyphs only.
 from __future__ import annotations
 
 from .blockspec import BlockGraph, E, Instr, Pipe, S, W
-from .router import Canvas, solve_attachments
+from .loopgen import forever_loop, linear_block, seq_block, while_loop
+from .router import Canvas, render, solve_attachments
 from .stores import RingStore
 from .trail import PlacedCell, TrailLayout
 
@@ -93,6 +94,42 @@ def memdma_trail(seed_vals: list[int]) -> TrailLayout:
     put(re, 2, "^")
     put(re, 1, "^")
     return TrailLayout(width=end + 2, height=5, cells=cells, spawn=(0, 0))
+
+
+# --- Block 2: the READ Driver (op-stream -> command-stream) --------------------
+# Only two pipes (input W, command-out E) -> routes for any layout, so it is COMPOSED
+# (unlike the ring men). READ(addr) over an N-cell ring lowers to: ADVANCE x addr, PEEK,
+# ADVANCE x (N-addr-1) -- a full lap so the ring returns to canonical. Register plan:
+# addr -> B (kept) and BP (position count); restore count N-addr-1 -> BP before PEEK.
+
+def _adv_loop() -> TrailLayout:
+    # emit ADVANCE (0,0), BP times
+    return while_loop(
+        [], [Op("d")],
+        linear_block([Op("0"), Op("s", "req"), Op("0"), Op("s", "req"), Op("m")]),
+        [],
+    )
+
+
+def read_driver_program(n_cells: int) -> TrailLayout:
+    """Forever: read (op, addr); emit ADVANCE x addr, PEEK, ADVANCE x (N-addr-1)."""
+    body = seq_block([
+        linear_block([Op("r", "in")]),                        # op (READ; discarded)
+        linear_block([Op("r", "in"), Op("M"), Op("b")]),      # addr; B=addr; BP=addr
+        _adv_loop(),                                          # ADVANCE x addr
+        linear_block([Op("W"), Op("M"), *_lit(n_cells - 1), Op("-"), Op("b")]),  # BP=N-addr-1
+        linear_block([Op("1"), Op("s", "req"), Op("0"), Op("s", "req")]),        # PEEK
+        _adv_loop(),                                          # ADVANCE x (N-addr-1)
+    ])
+    return forever_loop(prologue=[Op("@")], body=body)
+
+
+def render_read_driver_standalone(n_cells: int) -> str:
+    """Standalone: op-stream <- West input, command-stream -> East output."""
+    g = BlockGraph(cpu="DRV")
+    g.rooms = {"DRV": "cpu", "I": "input", "O": "output"}
+    g.pipes = [Pipe("in", "I", E, "DRV", W), Pipe("req", "DRV", E, "O", W)]
+    return render(g, read_driver_program(n_cells))
 
 
 def render_memdma_standalone(seed_vals: list[int], ram_len: int = 6) -> str:
