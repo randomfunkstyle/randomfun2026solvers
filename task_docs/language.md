@@ -1,0 +1,230 @@
+Language Reference
+Contents
+The machine
+Instruction set
+Pipes
+Which pipe do I talk to?
+Input & output
+The LM-75 Display
+Judging & halting
+Fine print
+The machine
+A program is a grid of ASCII characters walked by one or more little men. Time advances in discrete ticks. On each tick, every little man executes the instruction under him and then - unless the instruction blocks or halts him - advances one step in his current direction.
+
+A little man carries three integers - one in each hand and one in his backpack. We will write A for his main hand, B for his off hand, and BP for his backpack. All three integers start at 0. Every value in the language is a signed 64-bit integer. Arithmetic wraps silently on overflow.
+
+Little men must be placed in rooms - rectangles drawn with + at the corners, - horizontal and | vertical borders. A little man spawns at every @ that is inside a room, and always begins facing right. Stepping on a wall is an error: it ends your whole program.
+
+↑ contents
+
+Instruction set
+Stepping on any character not listed below is an error: it ends your whole program.
+
+Little Men
+@
+Where a little man begins. You may only place a single @ in a room.
+Constants
+0–9
+A = the digit's value.
+`123`
+Numeric literal: the digits between two backticks (spaces allowed and ignored) load into A when the little man walks onto the closing backtick. `123` is 123 walked left-to-right, 321 right-to-left; vertical literals work the same. Spaces are ignored. It is an error to place anything but a space or a number between two `. See the fine print for overlap rules.
+Hands
+M
+B = A (A unchanged).
+W
+Swap A and B.
+Arithmetic
++
+A = A + B.
+-
+A = A − B.
+*
+A = A × B.
+%
+A = A mod B, with B's sign; 0 if B = 0.
+/
+A = ⌊A / B⌋; the remainder goes to B. Floored to match %, so (A/B)·B + remainder = A always. If B = 0: A = 0 and B keeps the dividend.
+N
+A = −A.
+Bitwise
+Two's-complement on all 64 bits — negative operands are nothing special (−1 is all ones).
+
+&
+A = A AND B.
+|
+A = A OR B.
+~
+A = A XOR B.
+{
+A = A << B; 0 if B is outside 0–63.
+}
+A = A >> B, arithmetic (sign-filling). 0 if B < 0; sign-fill if B > 63.
+Direction
+>
+Head east.
+<
+Head west.
+^
+Head north.
+V v
+Head south (lower and uppercase both work)
+X
+Turn by sign(A): clockwise if A > 0, counter-clockwise if A < 0, straight if A = 0. A is unchanged.
+Control flow
+.
+Do nothing (nop).
+(space)
+Do nothing: little men walk straight over spaces.
+H
+Halt this little man. The program ends when every little man has stopped.
+Backpack
+b
+Backpack = A (A unchanged).
+m
+Backpack −= 1 (no clamp; may go negative).
+d
+Turn clockwise if backpack > 0, else go straight.
+a
+Turn counter-clockwise if backpack > 0, else go straight.
+q
+Backpack = number of values in the nearest incoming pipe.
+]
+Backpack >>= 1 (arithmetic shift right; sign-preserving).
+x
+Turn clockwise if the backpack's low bit is 1, else counter-clockwise. Unlike d/a it always turns, and it reads the raw bit — a negative backpack is not treated as zero.
+Pipes (send / receive)
+Sends block while the target pipe's source cell is occupied; receives block when the target pipe(s) have no values in their destination cell(s). Blocked little men do not move and retry the next tick. Running a pipe instruction in a room with no pipe is an error: it ends your whole program.
+
+See also: which pipe do I talk to?
+
+s
+Send A into the nearest outgoing pipe. Blocks if full.
+S
+Send A into every outgoing pipe at once. Blocks unless all have a free source cell — it never writes to just some of them.
+r
+Receive into A from the nearest incoming pipe. Blocks if nothing is ready.
+R
+Receive into A from any incoming pipe with a value ready. Blocks if nothing is ready.
+U
+Like R, but on success the little man turns away from the pipe that he read from.
+↑ contents
+
+Pipes
+A pipe carries values one way between two rooms.
+
+Pipes must be at least 2 cells long. They are drawn with body glyphs -/| and arrowheads > < ^ v pointing with the flow. Each cell holds at most one value and every value shifts one cell toward the destination each tick if the next cell is free. Sends put a value into the source end (the pipe segment connected to the sending room); receives take from the destination end (the pipe segment connected to the receiving room).
+
+A pipe parses when all of these hold:
+
+It starts with an arrowhead whose backward cell (opposite the arrow) is on the source room's border. The arrow points away from the room.
+Body glyphs match their direction: - on horizontal runs, | on vertical ones. A wrong body glyph is a load error, not a bend.
+Every bend is an arrowhead pointing in the new direction. Straight-through arrowheads are legal but redundant.
+It ends at the first arrowhead whose forward cell is on a room border (any room other than the source). The terminal arrowhead may itself be a bend.
+Common mistakes:
+
+>----^ into a room above needs no bend arrow before the ^ — the terminal arrowhead doubles as the final bend.
+A body glyph running into a wall (>----|) is a load error; end with an arrowhead pointing into the room.
+An arrowhead pointing back along the flow (>--<) is a load error.
+Both ends need arrowheads even for a length-2 pipe (>>); a pipe cannot be a single cell.
+Here are a few examples of valid pipes:
+
+
+
+
+
+3/s
+back (b)
+next (n)
+play (p)
+run (⌘↩)
+↑ contents
+
+Which pipe do I talk to?
+s and S operate over outgoing pipes in the current room;r/R/U/q act over incoming pipes.
+
+Some operations target the "nearest" pipe. The distance to a pipe is the Manhattan distance (|Δx| + |Δy|) from the operation to the pipe segment that is attached to the current room: the source segment for outgoing pipes, or the destination segment for incoming pipes. If multiple pipes are equally close, the pipe whose segment comes first in reading order (top to bottom, left to right) wins.
+
+When a room has more than one pipe to consider for an operation:
+
+s, r, and q use the pipe nearest to the instruction. Ties are broken using reading order. Nearest means nearest, not nearest-that-can-proceed.
+R and U take a single value from any incoming pipe that has a value to read. If multiple values are ready ties are broken using reading order. They block when no pipe has a value.
+S writes to all outgoing pipes, and blocks if any outgoing pipe cannot be written to.
+In the editor, select a send or receive cell and the pipe it routes to lights up.
+
+↑ contents
+
+Input & output
+The input room is a 3×3 room (counting walls) whose one interior cell is I, with exactly one pipe flowing out of it. The output room is the same with O and one pipe flowing in. A pipe in the wrong direction, a second pipe, or a second input/output room is a load error; a pipeless I/O room is legal.
+
+Input is a whitespace-separated sequence of integers. Each tick, if the input pipe's source cell is free, the next value is placed into it.
+
+Output a value reaching the end of the output pipe is consumed and appended to the program output.
+
+↑ contents
+
+The LM-75 Display
+The LM-75 display is a special room drawn using + at the corners, : for its vertical walls, and = for its horizontal walls. It has a maximum interior width and height of 64 cells, meaning its max size is 66x66 counting the borders around it.
+
+The LM-75 is controlled by pipes. The side of the LM-75 that a pipe is connected to determines that pipe's function.
+
+Top: a pipe connected to the top of the LM-75 is an ADDR pipe.
+Left: a pipe connected to the left of the LM-75 is an DATA pipe.
+Bottom: a pipe connected to the bottom of the LM-75 is an SWAP pipe.
+The display can read a value from all 3 of its pipes in the same tick. The display processes ADDR first, then DATA, then SWAP. Attaching multiple pipes to the same side of the display, attaching a pipe to the right side of the display, or attaching a pipe to the corner of the display is a load error.
+
+Displays have a current buffer, a next buffer, and a cursor. The current buffer is the buffer currently displayed. The next buffer is the buffer that will be displayed next. The cursor is the position of the pixel on the display that will be changed.
+
+Writing a value of the form row * width + column to the ADDR pipe sets the cursor's position to col, row. It is an error to write a negative value or a value outside the bounds of the display.
+
+Writing a value to the DATA pipe changes the value of the pixel at the cursor's current position and then advances the cursor (the cursor moves to the next column if it can, otherwise the next row, otherwise the upper-left corner). The value written determines the color of the pixel. The display supports 16 colors, so values must be between 0 and 15 (inclusive); anything else is an error.
+
+Writing a value to the SWAP pipe copies the next buffer into the current buffer, displaying whatever was in the next buffer. A 0 clears the next buffer and resets the cursor's position; a1 preserves the next buffer and cursor's position. It is an error to write a value other than 0 or 1.
+
+The cursor begins at position 0, 0 - the upper-left corner of the display. The current and next buffers are initially filled with color 0 (black).
+
+↑ contents
+
+Judging & halting
+You pass a test by emitting the correct output in the correct order. Your program passes a test the moment that it emits the correct output, so you do not need to halt in order to pass a test.
+
+You fail a test the moment that you emit incorrect output. You also fail a test if the run ends before you emit the correct output. A run ends in exactly one of three ways: every little man has stopped, an error, or the step cap.
+
+A little man stops when he hits an H instruction, or when he touches another little man (both stop). This stops that little man only; the program keeps running while any little man remains.
+
+Anything else that stops a little man is an error. Errors end your whole program on the spot:
+
+wall
+A little man ran into a wall.
+bad-op
+A little man stepped on a character that is not an instruction.
+no-pipe
+A pipe instruction (s/S/r/R/U/q) ran in a room with no pipe on the side it needs.
+Programs are run with a step cap - the maximum number of ticks that your program can use. Hitting the cap immediately ends your program.
+
+↑ contents
+
+Fine print
+Here are some small details that you may care about. When in doubt, test your program in the editor.
+
+Tick order
+Within one tick, in order:
+
+Pipes shift: every value moves one cell toward its destination if the next cell is free.
+I/O: a value at the end of the output pipe is emitted, then the next input value enters the input pipe if able
+Execution: every little man executes the instruction under him. Displays consume and process input.
+Movement: every non-blocked little man advances one cell.
+Because pipes shift before instructions execute, a value sent this tick starts moving next tick, and a value can be moved and read on the same tick.
+
+Output flush when everyone halts
+If values are still in flight in the output pipe when the last little man halts, pipes and I/O rooms keep ticking until the output pipe drains (unless the step cap is hit).
+
+Withheld input
+On some problems the judge releases input in stages, withholding later values until the program has produced earlier output. Withheld input looks exactly like input still in flight — the pipe runs dry until it is released.
+
+Numeric literals
+The value must fit in 64 bits read in both directions, or the program is rejected at load.
+A backtick delimits along whichever axis it pairs on; a corner backtick can open a horizontal and a vertical literal at once, so literals may overlap and cross, sharing digits. A digit walked in a direction where it belongs to no literal is an ordinary single-digit load.
+Walked along an axis it does not delimit, a backtick is a no-op, as is an empty literal (`` or spaces only).
+Odds and ends
+Execution is fully deterministic.
+Short source lines are padded with spaces to the longest line's width.
