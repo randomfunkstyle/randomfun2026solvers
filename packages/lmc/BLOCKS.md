@@ -179,14 +179,42 @@ How much live memory each problem needs — i.e. the ring size to draw:
 
 ## 6. Status
 
-- **Generated end-to-end today:** straight-line arithmetic (`triangle`, echo,
-  polynomials) — Python source → grid → correct on the reference.
+- **Generated end-to-end today:**
+  - straight-line arithmetic (`triangle`, echo, polynomials) — Python → grid.
+  - **BP counted loops** (`loopgen.counted_loop_trail`) — read n, run a body n
+    times; the Z3 router places the I/O pipes around it.
+- **Z3 router** (`router.py`) places CPU pipe attach cells so every `s`/`r`
+  resolves to its target by nearest-Manhattan (reading-order tiebreak). Nearest is
+  origin-independent (local to the CPU block), so the model is tiny QF_LIA and
+  scales to any pipe count. R0 reproduces `ring_io` more tightly than the hand grid.
 - **Proven as hand-built, oracle-validated blocks:** forwarder, chain, 1-word
-  cell, N-word ring, 4-pipe read/write cycle. Every primitive an array program
-  needs exists.
-- **Not yet generated:** array programs (`reverse`, `sort`, …). The missing piece
-  is the **layout emitter** that weaves a single man's trail across the 4-pipe
-  field (visiting I / ring / O out of left-to-right order) plus a rotate-to-index
-  routine. No new *primitive* is needed — this is codegen/routing.
-- **Not built:** the LM-75 display block (for `plotter`) and CSP multi-man
-  compute (systolic `matrix_multiply`).
+  cell, N-word ring, 4-pipe read/write cycle.
+
+### Reverse: a 4-pipe nested-loop program (design, no spill needed)
+Array access is *rotate-to-index* = a loop **inside** the main loop, and there is
+one `BP` counter with no `BP→A`. The trick: **ring `r`/`s` only touch `A`, so `B`
+is preserved across them.** Keep the outer counter `rem` in `B`, use `BP` for the
+inner rotate. No second counter, no memory spill — reverse stays a **4-pipe** CPU
+(I, O, ring-up, ring-down) with just A/B/BP:
+
+```
+push:   r ; M ; b                     # A=n, B=n (rem), BP=n
+push-loop (BP times):  r ; s(up)      # read input, push to ring   (B=n survives)
+emit-loop (until rem==0):
+        W ; M ; X(rem==0 -> halt)     # bring rem to A, restore B, test
+        b ; m                         # BP = rem-1  (rotations)
+        rot-loop (BP times): r(down) ; s(up)   # rotate; B=rem survives
+        r(down) ; s(out)              # extract head x(rem-1), emit
+        W ; M ; 1 ; - ; N ; M         # B = rem-1
+```
+emits x(n-1)..x0. The router already places the 4 pipes. Missing codegen pieces:
+1. **nested-loop layout** — wrap a (multi-row) body block with BP setup +
+   decrement + test + a collision-free return lane (entry `>` left of body,
+   `m d` right, return row below, up-lane at the entry column).
+2. **outer loop-back with a value test** (`X` on `rem`) routing to halt vs body.
+3. **ring rotate / extract / push** fragments.
+
+Sort adds a `<` compare (`X` on `a[j]-a[m]`) and swap on top of the same scaffold.
+
+- **Not built:** the LM-75 display block (`plotter`) and CSP multi-man compute
+  (systolic `matrix_multiply`).
