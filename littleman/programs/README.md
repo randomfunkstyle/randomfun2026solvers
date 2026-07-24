@@ -129,7 +129,29 @@ average**, good to ~1%.
 
 So `score ≈ area² × 0.328 × local_heavy_avgTicks` — measure locally, submit once.
 
-## Where the score can still go (currently 92.0M)
+## Where the score can still go (currently 61.9M)
+
+**Complexity today is Θ(N) unconditionally** — every operation walks all 100
+values, because the full lap is what restores the ring's alignment. Touching cell
+3 costs exactly what cell 97 costs: ~500 of ~641 ticks/op.
+
+| | per-access | ticks/op | score |
+|---|---|---|---|
+| now (v3) | Θ(N), 5 t/v | 641 | 61.9M |
+| relative rotation (v4) | **Θ(gap), E=N/2** — deletes the P2 lap | ~330 | ≈31M |
+| + lap-tested ring | Θ(gap) at 2.3 t/v | ~200 | ≈20M |
+| banks B=10 + bit decode | Θ(N/B + log B) | ~206 | 24–31M |
+| tree of 100 registers | Θ(log N) ticks, **Θ(N) area** | — | area² eats it |
+
+True O(1) RAM is not reachable: addressing is *positional* (`r`/`s` pick the
+nearest pipe by the instruction's own location), so "go to address k" means
+physically walking a man there. The one addressable primitive, the LM-75 display,
+is write-only and 4-bit.
+
+**The wall is fixed cost.** At ~200 ticks/op roughly 80 is corridors plus setup
+arithmetic. Past ~2× the lever stops being complexity and becomes worker
+tightness, which is also why banking buys less than its Θ suggests — area² is
+squared and ten duplicated access machineries grow the box.
 
 Ranked by payoff. Note compaction helps *both* terms — the corridors are ticks:
 
@@ -142,7 +164,51 @@ dispatch and targets adjacent to the loops. Corridor ticks fell less than hoped
 (~150 → ~120 of ~840/op), so the footprint was the real gain.
 
 1. ~~**Compact the worker — ~1.9× total, and the safest change**~~ (layout only, logic and tests untouched). The 34×24 interior is ~90% blank: 22 rows exist only because each loop is 4 tall and each branch owns its own row. Packing toward 24×24 takes area² 1764 → ~1024 (1.7×) *and* shortens the per-op corridors from ~150 to ~60 ticks (1.1×). → done: 158M → ≈ 92M.
-2. **Rotate relatively instead of a full revolution (~2.6× ticks).** Keep the index of the next value to emerge and rotate `(addr − next) mod 100` — average 33 passes instead of 100. Two wrinkles: the mod correction needs a compare-and-add branch, and the index must live outside A/B/BP (all three are busy: A is clobbered by pass-through, BP is the loop counter, B carries `op`'s sign) — that's the job for `register-cell.man`, storing `index+1` so the value is never the fatal `0` command. → ≈ 36M with #1 done.
+2. **Rotate relatively instead of a full revolution — designed, part-built, ≈31M.**
+   Track the alignment and rotate `(addr − phase) mod 100`. **The gap is uniform on
+   0…99, so E[gap] = 49.5, not N/3** — one-way pipes mean we cannot take the
+   shorter way round, so this is ~2× on the pass-through, not 3×. It also *deletes
+   P2*, which halves the corridors (MAIN + the dance at the top, one ring at the
+   bottom: two vertical traversals instead of four).
+
+   Verified pieces: [`blocks/scratch-register.man`](blocks/scratch-register.man)
+   (~10-tick round trip, survives A and B being clobbered) and the mod arithmetic
+   (`%` is floored, so `−95 mod 100 == 5`).
+
+   The dance is **shared, not duplicated per arm**, because `op` becomes a ±1 flag
+   two cells after it is read. Put the register's two anchors on adjacent top-wall
+   columns so `r(reg)`/`s(reg)` are neighbours instead of a shuttle apart:
+
+   ```
+   r(in)->op ; X:  0 -> `1` N (A=-1)   1 -> `1` (A=+1) ; merge    flag = ±1
+   s(reg) park flag                              ring: [phase, flag]
+   r(reg)->phase ; M ; 1 ; +           A = phase+1 = t
+   s(reg) park t                                 ring: [flag, t]
+   r(in)->addr ; -                     A = addr-phase = delta_raw  (B = phase)
+     X: <0 -> M ; `100` ; +            A = delta in 0..99          (B free now)
+   M                                   B = delta
+   r(reg)->flag ; s(reg)               re-park flag                ring: [t, flag]
+   r(reg)->t ; +                       A = t+delta = addr+1 = new phase
+   s(reg) park phase                             ring: [flag, phase]
+   r(reg)->flag                                  ring: [phase]  <- invariant back
+   W ; b                               BP = delta, B = flag
+   <pass through delta values>
+   W ; X                               dispatch on flag's sign
+   ```
+
+   Two traps found while building it:
+
+   - **`S` can no longer implement a READ.** It sends to *every* outgoing pipe, so
+     it would inject the read value into the register ring too. Carry the value in
+     A up the return path and emit at the top — that walk happens anyway, so it
+     costs nothing.
+   - The phase needs no `mod`: `addr+1` may reach 100, and `delta_raw` then lands
+     in [−100, 99], which the single `+100` correction still maps into [0, 99].
+
+   What remains is purely layout: the correction's three arms (CCW with the
+   `+100`, straight, CW) must merge without crossing each other's cells, and every
+   register op must stay inside its distance window. `circuit.py` rejects the bad
+   versions, so this is fiddly rather than risky.
 **Done (v3, now `memory.man`):** both pass-through loops are `counted_ring`s —
 2 values per lap, 5 ticks/value instead of 8. Heavy-suite ticks 257,528 →
 183,808 (**1.40×**) with area² unchanged at 1024, so ≈ **62M** expected. The
