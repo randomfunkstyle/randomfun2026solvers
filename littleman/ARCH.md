@@ -86,6 +86,31 @@ Result: values circulate indefinitely as `1 2 3 1 2 3 …`, **order preserved**.
   starves the CPU while words make their way around. The generator knows `P`, so
   it sizes the ring pipes to `P + 2..4`.
 
+**A ring always needs two rooms — a self-loop pipe does not exist.** Probed with
+two grids of identical geometry, differing only in which room the far end
+re-enters:
+
+```
+A -> A  (ignored)          A -> B  (a pipe)
++------+                   +------+
+|@1s  r|<-<                |  s  r|>-v
+|      |  |                +------+  |
+|  s  r|>-^                +------+  |
++------+                   |@r    |<-<
+rooms=1 pipes=0            rooms=2 pipes=1  src=0 dst=1
+```
+
+Same glyphs, same arrows, same wall attachments. `analyze` reports the A→B pipe
+and **silently drops** the A→A one — no load error, no diagnostic; a `s`/`r`
+aimed at it just binds to nothing. So every ring costs a turnaround room.
+
+**But one room can turn around many rings.** Pipe binding is positional
+(`two-roms.man`: `r` at col 11 → the west pipe, `r` at col 25 → the east one, no
+branch and no decode), so a single relay may hold N `r`/`s` pairs, one per ring.
+This is safe *only* when the rings are permanently full — a data ring holding its
+payload never empties, so the relay's `r` never blocks. A relay serving rings
+that can drain will deadlock on the first empty one.
+
 ### 2.2 The backpack is an instruction decoder
 
 Probe: `@5bx` / `@4bx` / `@5b]x`, each with `H` on both branch targets, reading
