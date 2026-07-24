@@ -6,7 +6,8 @@ specs and public tests: [`../../tasks/problems/`](../../tasks/problems/).
 
 | Program | Problem | Status |
 |---|---|---|
-| `memory.man` | `memory` (Semester 1) | **27/27** local, 32×32, area² 1024 — judge-scored **61.9M** |
+| [`../../tasks/solutions/memory_tape.man`](../../tasks/solutions/memory_tape.man) | `memory` (Semester 1) | **the one to submit** — 27/27 local, 32×32, area² 1024, judge-scored **61.9M** |
+| `memory.man` | `memory` | identical copy kept here for the tooling examples below |
 | `memory-v2.man` | `memory` | previous build (single-value loops); judge-scored **92.0M** at 32×33 |
 | `memory-v1-submitted.man` | `memory` | the 42×33 build that scored **158M**; earliest known-good fallback |
 | `memory-n8.man` | — | N=8 build of the same generator; small enough to trace by hand |
@@ -19,7 +20,7 @@ built on [`circuit.py`](../../solvers/python/randomfun2026solvers/circuit.py).
 ```sh
 # regenerate
 PYTHONPATH=solvers/python python3 -c "from randomfun2026solvers.memory_tape import build_v3; \
-  open('littleman/programs/memory.man','w').write('\n'.join(build_v3(100))+'\n')"
+  open('tasks/solutions/memory_tape.man','w').write('\n'.join(build_v3(100))+'\n')"
 # it must pass all four suites: memory-cases, memory-heavy-cases, memory-edge-cases,
 # memory-fresh-cases (the last is a different seed, with read-heavy/write-heavy mixes)
 
