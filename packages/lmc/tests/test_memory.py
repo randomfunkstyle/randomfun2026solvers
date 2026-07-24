@@ -103,3 +103,21 @@ def test_memory_read_write(op_stream, expected):
     grid = render_memory([0, 0, 0, 0, 0])
     res = run_grid(grid, op_stream, max_ticks=80000)
     assert res.output[: len(expected)] == expected, grid
+
+
+@requires_oracle
+@pytest.mark.parametrize(
+    "op_stream,expected",
+    [
+        ([0, 3], [0]),                                              # fresh cell reads 0
+        ([1, 7, 42, 0, 7], [42]),                                  # write then read
+        ([1, 5, 1, 1, 5, 2, 0, 5, 1, 5, -5, 0, 5], [2, -5]),       # overwrite
+        ([1, 0, -1000000, 1, 99, 1000000, 0, 0, 0, 99, 0, 50],
+         [-1000000, 1000000, 0]),                                  # boundary addr/value
+    ],
+)
+def test_memory_100_cell_public_cases(op_stream, expected):
+    """The real `memory` problem: a 100-cell RAM (semester 1)."""
+    grid = render_memory([0] * 100, ram_len=55)
+    res = run_grid(grid, op_stream, max_ticks=600000)
+    assert res.output[: len(expected)] == expected
