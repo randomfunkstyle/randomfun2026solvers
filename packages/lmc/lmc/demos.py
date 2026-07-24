@@ -7,7 +7,8 @@ and they double as end-to-end tests of the loop/ring/router stack.
 from __future__ import annotations
 
 from .blockspec import BlockGraph, E, Instr, N, Pipe, S, W
-from .loopgen import forever_loop, linear_block, seq_block, while_loop
+from .loopgen import forever_loop
+from .memlib import reverse_round
 from .trail import TrailLayout
 
 Op = Instr
@@ -16,38 +17,14 @@ Op = Instr
 def reverse_program() -> tuple[BlockGraph, TrailLayout]:
     """reverse_list, one round: read n, then n values; emit them reversed.
 
-    A 4-pipe CPU (I, O, ring up/down). The outer emit-loop's counter `rem` lives
-    in B (ring r/s only touch A, so B survives); the inner rotate-loop uses BP.
-    Emits x[n-1], x[n-2], ..., x[0] via rotate-(rem-1)-then-extract.
+    A 4-pipe CPU (I, O, ring up/down). Assembled from the `memlib` ring fragments
+    (append n, rotate-to-index, pop-emit). The outer emit-loop's counter `rem`
+    lives in B (ring r/s only touch A, so B survives); the inner rotate-loop uses
+    BP. Emits x[n-1], ..., x[0] via rotate-(rem-1)-then-extract.
     """
-    push = while_loop(
-        prologue=[Op("@"), Op("r", "in"), Op("M"), Op("b")],  # A=n, B=n(rem), BP=n
-        test=[Op("d")],
-        body=linear_block([Op("r", "in"), Op("s", "up"), Op("m")]),  # read, push, BP--
-        epilogue=[],
-    )
-    rotate = while_loop(  # rotate BP(=rem-1) times; zero-trip
-        prologue=[],
-        test=[Op("d")],
-        body=linear_block([Op("r", "down"), Op("s", "up"), Op("m")]),
-        epilogue=[],
-    )
-    emit = while_loop(
-        prologue=[],
-        test=[Op("W"), Op("M"), Op("X")],  # A=rem, B=rem, continue while rem>0
-        body=seq_block(
-            [
-                linear_block([Op("b"), Op("m")]),  # BP = rem-1
-                rotate,
-                linear_block([Op("r", "down"), Op("s", "out")]),  # extract head, emit
-                linear_block([Op("W"), Op("M"), Op("1"), Op("-"), Op("N"), Op("M")]),  # rem--
-            ]
-        ),
-        epilogue=[],
-    )
-    # Outer round loop: never halts. Each pass reads a fresh n (push prologue),
-    # emits it reversed, then loops back to read the next round's list.
-    program = forever_loop(prologue=[], body=seq_block([push, emit]))
+    # Outer round loop: never halts. Each pass reads a fresh n, emits it reversed,
+    # then loops back to read the next round's list.
+    program = forever_loop(prologue=[], body=reverse_round("in", "out", "down", "up"))
 
     g = BlockGraph(cpu="CPU")
     g.rooms = {"CPU": "cpu", "I": "input", "O": "output", "BUF": "buf"}
