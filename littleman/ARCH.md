@@ -1,16 +1,22 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: a generated CPU solves a graded problem end to end.** The ISA,
-emulator and assembler exist (`lm1/`, 230 tests green) and all 7 memory-free
-problems pass every public test case in the emulator. On the real interpreter,
-`lm1/cpugen.py` emits a complete 7-opcode machine — ROM + code ring + CPU +
-register cell + I/O — that passes 6/6 public cases of `triangle` at 446 ticks
-(§2.6). Generalising that generator to the full ISA table is what remains
-(§9 step 5).
+**Status: the synthesiser solves the problems that need memory and control flow.**
+`lm1/machine.py` takes an assembled program and emits a whole machine — looping
+ROM + CPU (depth-`k` trie, one lane per used opcode, a structures band for jumps
+and branches) + a request adapter + the 32×32 tape + I/O. On the reference
+interpreter it passes **`brackets` 9/9** (98×95, 62,930 avg ticks) and **`tcp`
+6/6** (112×78, 96,923 avg ticks), plus hand-built cases at both problems'
+constraint limits — `brackets` at depth-32 nesting and n=64, `tcp` at n=48 with a
+worst-case legal scramble (351k ticks against a 5M cap). §2.7 has the findings.
 
-Two problems are already solved *without* LM-1, as bespoke grids: `memory`
-(accepted by the judge) and `history-lesson`. LM-1 is the safety net for the
-rest, not the plan of record (§1).
+That makes **four** problems solved by generated or bespoke grids, and the first
+two that need addressed memory *and* loops. `lm1/cpugen.py` remains the earlier
+hand-rolled 7-opcode instance (`triangle`, §2.6); `lm1/synth.py` is the
+straight-line-only generator it grew into. `machine.py` supersedes both.
+
+Two problems are solved *without* LM-1, as bespoke grids: `memory` (accepted by
+the judge) and `history-lesson`. LM-1 is the safety net for the rest, not the plan
+of record (§1).
 
 Visual walkthrough: [`arch.html`](arch.html) — the verified units, an animated
 run of the whole machine driven by real interpreter snapshots, the tick budget
@@ -229,6 +235,78 @@ man simply blocks on a full pipe, which is the harmless steady state.
 better.** Both pass 6/6. That is the §1 trade, measured rather than assumed: the
 CPU costs two orders of magnitude and buys the ability to solve a problem by
 writing seven lines instead of deriving a grid.
+
+### 2.7 The synthesiser, with memory and control flow
+
+`lm1/machine.py` is §7.5's per-program synthesiser carried out far enough to run
+the graded problems. Measured on the reference interpreter:
+
+| | `brackets` | `tcp` |
+|---|---|---|
+| public cases | **9/9** | **6/6** |
+| size | 98×95 | 112×78 |
+| avg ticks | 62,930 | 96,923 |
+| score | 604,383,988 | 1,215,797,931 |
+| opcodes used → trie depth | 15 → 4 | 14 → 4 |
+| program | P=154 words, 33 ROM rows | P=45 words, 8 ROM rows |
+| tape | N=8 | N=52 |
+
+Also verified at the problems' *constraint* limits, which the public data does not
+reach: `brackets` at depth-32 nesting and every n=64 shape, `tcp` at n=48 with a
+worst-case legal scramble (351k ticks against the 5M cap). Tape size is picked
+from the constraints, not the public cases — `tcp` needs N=52 because n=48 puts
+the top slot at BUF+47, though no public case goes past 35.
+
+**The emulator's tick model held.** Adding §4.1's real tape latency
+(`105 + 8.3N` per access) to the emulator's estimate predicted 55,005 and 114,794
+ticks; hardware measured 62,930 and 96,923 — within ~15 % in both directions. §7.3
+can be trusted for planning, *provided* store accesses are billed at tape cost
+rather than the emulator's flat 6 ticks per word, which is out by a factor of ~30.
+
+Four findings, each of which cost a debugging cycle and none of which is visible
+in the ASCII:
+
+- **The fetch is fixed-width, so the ROM image must be too.** The assembler emits
+  ARCH's abstract *variable*-width form — one word for a zero-operand opcode — and
+  `>rbr` unconditionally takes two. `LDI 42 / OUT / HALT` then pairs up as
+  `(LDI, 42), (OUT, HALT)` and emits 42 forever without ever halting. The
+  generator pads to two words **and rescales every skip count**, since the
+  assembler resolved them in variable-width positions: instruction *k* lives at
+  word 2*k*, so a jump to *t* discards `2·((t − k − 1) mod n)` words.
+- **A drop column may only be `v` at its head.** Filling it with `v` all the way
+  down looks harmless and is not: where it crosses a structures-band slab's
+  westbound entry row it turns that man *south*, into the middle of the drop.
+  `.` is the only glyph that lets a southbound and a westbound man cross the same
+  cell, since each keeps his heading.
+- **Nearest-pipe ties are real, and lose silently.** A branch's discard-loop `r`
+  landed exactly 28 cells from both the ROM pipe (west) and the tape's response
+  pipe (east); the engine broke the tie by reading order, so every taken jump
+  blocked forever on an empty pipe. The loop now runs back to the slab's west edge
+  before reading. §7.1's binding assertion is worth running on *every* pipe glyph,
+  including the ones inside generated sub-structures — that one was missed because
+  only lane glyphs were registered.
+- **A pipe leg alongside a room's corner becomes a second pipe.** §7.4b's "a pipe
+  may attach at a room's corner" cuts both ways: the response pipe's final
+  westward leg ran along the adapter's top-wall row, one cell west of its corner,
+  and the engine read those two cells as an extra adapter→CPU pipe. The CPU's
+  memory `r` bound to it and read the adapter's op words instead of the tape's
+  answers. Counting the pipes the engine finds against the number drawn catches
+  the whole family in one line.
+
+**The `0`/`1` request literal is why memory needed a new idea.** The STORE
+protocol wants an opcode word first, but fixed-width instructions mean `A` already
+holds the operand when a lane starts, and the literal destroys it — §6.1's hole in
+`STP`, now hit by plain `ST` as well. The fix is to put the operation **in the
+sign of a single request word** (`+a` read, `−a` write): no literal, no spill slot,
+no lane reading the ring. A 13×4 adapter room expands that back into the tape's
+real protocol, so the verified tape is untouched. Address 0 is sign-ambiguous, so
+hardware addresses start at 1.
+
+The same trick retires `LDP`/`STP`: `LDA` (`ACC = store[ACC]`) and `MOVA`
+(`store[ACC] = store[addr]`, source read *first*) keep the address in ACC and never
+need a pointer and a value live together. **`tcp` therefore needs no SPILL block at
+all** — one fewer room, two fewer pipes, and every memory lane stays on the east
+bus, which is what keeps §7.1 tractable.
 
 ## 3. Block diagram
 
@@ -844,8 +922,8 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 1 | `sort-numbers` | addressed array + selection loop | 16 | — | B |
 | Sem 1 | `memory` | — | — | **SOLVED as a bespoke grid** (`programs/memory.man`, accepted) | ✔ |
 | Sem 2 | `history-lesson` | no input; pure ROM dump (`footprint`-only) | 0 | 1/1 · P=8431 · 273k | **✔ solved bespoke** |
-| Sem 2 | `brackets` | typed stack depth 32; needs `MODI`/`DIVI` | 32 | 9/9 · P=154 · 30k | B |
-| Sem 2 | `tcp` | indexed by `seq`; needs `LDP`/`STP` | 48 | 6/6 · P=48 · 30k | B |
+| Sem 2 | `brackets` | typed stack depth 32; needs `MODI`/`DIVI` | 6 scalars | 9/9 · P=154 · 30k | **✔ solved by the synthesiser** (98×95, 62,930 ticks, score 604M) |
+| Sem 2 | `tcp` | indexed by `seq`; needs `LDA`/`MOVA` | 51 | 6/6 · P=45 · 30k | **✔ solved by the synthesiser** (112×78, 96,923 ticks, score 1.22bn) |
 | Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 8 | — | C |
 | Sem 3 | `gradebook` | ids + N×K grades, search by id | 80 | — | C |
 | Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | — | **✕** |
@@ -862,9 +940,11 @@ Three findings that change the plan:
   supersedes the earlier "one spill slot is mandatory" note: it is not one slot,
   it is 2–4 slots *on the fast tier*, and getting that wrong costs `triangle` the
   whole tick budget.
-- **`brackets` and `tcp` need arrays too.** Neither was on the blocked list, but a
-  32-deep typed stack and a 48-slot reorder buffer are arrays. They pass in the
-  emulator only because it has `LDP`/`STP` (§6.1).
+- **`brackets` and `tcp` need arrays too — and both are now solved** (§2.7).
+  `brackets` turned out not to need indexing at all: its base-3 packed stack is six
+  scalars, so an N=8 tape serves it. `tcp`'s 48-slot reorder buffer does need
+  indexing, but through `LDA`/`MOVA` rather than `LDP`/`STP`, so it needs no SPILL
+  block either.
 - **`matmul` looks infeasible.** ~8,450 accesses × ~750 ticks ≈ **6.3M against a
   5M cap** — and that is with the *constant-cost* tape, so the earlier delay-line
   estimate was pessimistic about the mechanism but right about the verdict. It
@@ -882,21 +962,28 @@ the plan of record.
 1. ~~**ARCH.md**~~ — **done**, and revised twice since: §7.1 (ports are declared,
    not hand-solved) and §4.1/§5.1/§6.1 (the two-tier memory verdict).
 2. ~~**Python ISA table + emulator + assembler**~~ — **done**
-   (`lm1/`, 230 tests green). All 7 memory-free problems pass every public case.
+   (`lm1/`, and 294 tests green across the package). All 7 memory-free problems pass
+   every public case.
    The findings it produced are folded into §4.1, §5.1, §5.3 and §6.1.
 3. ~~**Vertical slice in `.man`**~~ — **done** (§2.5): ROM + ring + CPU with a
    2-opcode ISA emits `7 8 9` on the real wasm at 20 ticks/instruction. §7.1's
    geometry closes; headings turned out to be part of the port contract.
-4. **Grow the slice** to `LDI`/`ADDI` + a real 2-bit trie + one `register-cell`
-   as SPILL. This is the first increment that exercises operand words, the ring
-   write-back invariant (§5.3) and a second block over a bus. ← *next*
-5. **Per-program CPU synthesiser** (§7.5): program in, smallest machine that
-   runs it out. **First instance done** (§2.6): `lm1/cpugen.py` emits a complete
-   7-opcode CPU that runs `triangle`, 6/6 public cases on the real interpreter.
-   It is hand-rolled for that opcode set rather than driven by `isa.py`;
-   parameterising it — over the used-opcode set, the block list and the packing —
-   is what remains, and is the main lever on every remaining problem.
-6. **Wire in the tape** and unlock the array problems.
+4. ~~**Grow the slice**~~ — **done**, and then some: `lm1/machine.py` runs
+   arbitrary operand words, a depth-4 trie, control flow and the tape.
+5. ~~**Per-program CPU synthesiser**~~ (§7.5) — **done** for the opcode set and
+   the block list: `lm1/machine.py` is driven by `isa.py`, emits a depth-`k` trie
+   with only the used lanes, and sizes the ROM and the tape per program (§2.7).
+   *Packing* is still hand-shaped — see §7.4 and the note below.
+6. ~~**Wire in the tape**~~ — **done** (§2.7), via the sign-biased request word and
+   a small adapter room, leaving the verified tape untouched.
+7. **Pack the generated machine.** Both builds are footprint-dominated and neither
+   dimension is being traded against the other: `brackets` is 98×95 (9,604) where
+   the CPU is 33 wide and the ROM 67, and `tcp` is 112×78 (12,544) where the tape
+   band sets the width. §7.4's `max(w,h)²` objective is the lever, and it is now
+   the *only* thing between these scores and roughly a 3–4× improvement. ← *next*
+8. **Reuse the machinery for the remaining array problems** — `sort-numbers`,
+   `reverse-a-list`, `subset-sum`, `gradebook`, `sudoku-validity`. Each is now an
+   `.asm` file plus a tape size; `matmul` is still out of reach on ticks (§8).
 
 Useful tooling that now exists for steps 4–6: `tools/route-check.mjs` reports
 which pipe every pipe instruction actually resolves to (the §7.1 safety net as a
