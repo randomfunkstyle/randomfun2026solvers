@@ -10,6 +10,7 @@ specs and public tests: [`../../tasks/problems/`](../../tasks/problems/).
 | `memory-v1-submitted.man` | `memory` | the 42x33 build that actually scored **158M** on the judge; kept as the known-good fallback |
 | `memory-n8.man` | — | N=8 build of the same generator; small enough to trace by hand |
 | `register-cell.man` | — | the 1-value register block (store `1 v`, fetch `-1`) |
+| `two-roms.man` | — | two looping ROMs feeding one room: code banks, see [`../ARCH.md`](../ARCH.md) §5.5 |
 
 Generator: [`../../solvers/python/randomfun2026solvers/memory_tape.py`](../../solvers/python/randomfun2026solvers/memory_tape.py),
 built on [`circuit.py`](../../solvers/python/randomfun2026solvers/circuit.py).

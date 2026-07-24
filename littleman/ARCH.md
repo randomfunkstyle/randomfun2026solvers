@@ -494,8 +494,65 @@ cost.
 The mitigation falls out of the cost model: **the skip is `P − L`, so make the
 hot loop most of the program.** A program that is one tight loop pays almost
 nothing per iteration; a tight loop buried in a long program pays for the whole
-rotation. Keep `P` small and put loops last. (v2 option if this bites: a second,
-short "loop ring" so hot bodies never rotate the full program.)
+rotation. Keep `P` small and put loops last. **The better fix is §5.5** — give
+each block its own looping ROM, and branching stops costing word discards
+entirely.
+
+### 5.5 Code banks — one looping ROM per subprogram
+
+A program does not have to live in **one** ROM. Give each subprogram its own
+looping ROM with its own pipe into the CPU, and "call subprogram *k*" becomes
+"route the man to fetch-site *k*".
+
+Verified in `programs/two-roms.man` — two looping ROMs feeding one room, one
+emitting `2,1` and the other `8,7`; the consumer reads two words at its west end
+and two at its east end and emits `2 1 8 7` repeating indefinitely:
+
+```
++----+   +--------------------+   +----+
+|>1sv|>->|>rsrs..........rsrsv|<-<|>7sv|
+|^s2<|   |^..................<|   |^s8<|
+|@..^|   |@..................^|   |@..^|
++----+   +--------------------+   +----+
+```
+
+Two properties, the second not obvious in advance:
+
+- **Which ROM a fetch reads from is decided purely by where the `r` glyph sits**
+  (§7.1's nearest-pipe rule). No opcode, no multiplexer, no bank register.
+- **Alignment survives switching.** Every visit to a bank starts at its word 0 —
+  *provided the call consumes exactly one whole lap of that ROM*. Single entry,
+  single exit, whole body.
+
+That changes the cost of control flow:
+
+| | one ROM | one ROM per subprogram |
+|---|---|---|
+| call / branch | discard `n` words — **O(P) ticks** | route the man to fetch-site `k` — **a turn, ~free** |
+| shared code | duplicated, or reached by a jump | stored **once** |
+| lap latency | the whole program | just that block |
+
+This is the real fix for §5.4's jump cost, which the emulator measured at 13–28 %
+of total ticks — worst on `brackets`, whose dispatch chain forces jumps across a
+154-word ring. It also cuts ROM footprint whenever a routine is used twice.
+
+The resulting shape: **instruction supply stays ROM-driven and compact, while
+branching between blocks becomes geometric** — a turn inside the CPU room. That
+is the hybrid of the two control-flow options weighed at the start of this
+document, and it beats either alone.
+
+Limits to design around:
+
+- **No return address.** "Call" is really "switch fetch source", and the return
+  point is wherever the man's path goes next — so these are *inlined call sites*,
+  not a call stack. Recursion needs extra machinery (a return-address cell and a
+  dispatch trie on it).
+- **Cost per bank** is a room, a pipe and a fetch site, and the nearest-pipe
+  geometry tightens as the count grows: banks need spreading along different
+  walls, or the fetch sites clustered so each is unambiguously nearest its own.
+- **Partial laps desynchronise a bank.** Any path that abandons a bank mid-body
+  leaves it misaligned for the next call. If a block can exit early, it must
+  still drain its remaining words.
 
 ## 6. ISA v1 — a table, not a hardwiring
 
