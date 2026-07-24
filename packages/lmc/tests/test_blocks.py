@@ -41,6 +41,16 @@ def test_forwarder_echoes_stream():
 
 
 @requires_oracle
+def test_ring_io_routes_four_pipes():
+    """CPU juggling 4 pipes (I, O, ring-up, ring-down): a value read from input
+    is pushed into the ring, bounced, read back, and emitted -- all routed by
+    nearest-pipe selection (I left, ring top, O right)."""
+    grid = (EXAMPLES / "ring_io.man").read_text()
+    for v in (42, 7, -5):
+        assert run_grid(grid, [v]).output == [v]
+
+
+@requires_oracle
 def test_ring_cycles_stored_values():
     """3-word circulating store: seeded [10,20,30] cycle past the CPU tap."""
     grid = (EXAMPLES / "ring.man").read_text()
