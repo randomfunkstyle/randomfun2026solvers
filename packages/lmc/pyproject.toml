@@ -3,7 +3,7 @@ name = "lmc"
 version = "0.1.0"
 description = "Little-Man compiler: Python-subset -> 2D grid language (POC)"
 requires-python = "==3.12.*"
-dependencies = []
+dependencies = ["z3-solver>=4.13"]
 
 [build-system]
 requires = ["hatchling"]
