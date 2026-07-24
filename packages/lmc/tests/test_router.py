@@ -44,10 +44,12 @@ def test_attachments_satisfy_nearest():
 
 @requires_oracle
 def test_router_reproduces_ring_io():
-    """R0: router-generated grid echoes input through the ring."""
+    """R0: router-generated grid echoes input through the ring. BUF loops forever
+    (memory server), so the CPU halts but the run hits the cap -- output is
+    correct well before then."""
     grid = render(ring_io_graph())
     for v in (42, 7, -5, 1000000):
-        assert run_grid(grid, [v]).output == [v], (v, grid)
+        assert run_grid(grid, [v], max_ticks=300).output == [v], (v, grid)
 
 
 @requires_oracle
@@ -66,6 +68,26 @@ def test_generated_counted_loop():
     grid = render(g, trail)
     for n in (1, 3, 5, 8):
         assert run_grid(grid, [n]).output == [7] * n, (n, grid)
+
+
+@requires_oracle
+def test_generated_while_loop_zero_trip():
+    """while_loop runs the body 0+ times: n=0 emits nothing."""
+    from lmc.loopgen import linear_block, while_loop
+
+    ii = Instr
+    w = while_loop(
+        prologue=[ii("@"), ii("r", "in"), ii("b")],  # A=n, BP=n
+        test=[ii("d")],  # BP > 0 ?
+        body=linear_block([ii("9"), ii("s", "out"), ii("m")]),  # emit 9, BP--
+        epilogue=[ii("H")],
+    )
+    g = BlockGraph(cpu="CPU")
+    g.rooms = {"CPU": "cpu", "I": "input", "O": "output"}
+    g.pipes = [Pipe("in", "I", E, "CPU", W), Pipe("out", "CPU", E, "O", W)]
+    grid = render(g, w)
+    for n in (0, 1, 3, 5):
+        assert run_grid(grid, [n]).output == [9] * n, (n, grid)
 
 
 @requires_oracle

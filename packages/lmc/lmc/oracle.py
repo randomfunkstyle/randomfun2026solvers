@@ -42,8 +42,18 @@ def run_grid(
         p = subprocess.run(args, capture_output=True, text=True)
         try:
             j = json.loads(p.stdout)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"lm.mjs did not return JSON: {p.stdout}\n{p.stderr}") from e
+        except json.JSONDecodeError:
+            # non-halting program (e.g. a persistent memory-server BUF): `run`
+            # errors at the tick cap without JSON. Fall back to a tick snapshot,
+            # which still reports the output produced so far.
+            snap = tick_grid(program, max_ticks, inputs)
+            return OracleResult(
+                output=snap.get("output") or [],
+                step=snap.get("step", max_ticks),
+                halted=snap.get("halted", False),
+                reason=snap.get("reason"),
+                fatal=snap.get("fatal"),
+            )
         return OracleResult(
             output=j.get("output") or [],
             step=j.get("step", 0),

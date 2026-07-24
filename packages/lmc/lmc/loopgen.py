@@ -85,10 +85,62 @@ def loop_wrap(
     return TrailLayout(width=width, height=height, cells=cells, spawn=(0, 0))
 
 
+def while_loop(
+    prologue: list[Instr],
+    test: list[Instr],
+    body: TrailLayout,
+    epilogue: list[Instr],
+) -> TrailLayout:
+    """Test-first loop that runs the body 0+ times (zero-trip).
+
+        prologue > <test> epilogue        <- row 0
+                 ^  > [BODY] v             <- body dips below; runs only if test passes
+                 +----<------+
+
+    `test` runs at the top of every iteration; its last op turns clockwise to
+    continue (`d` on BP, `X` on A) -- clockwise dives south into the body, going
+    straight exits east to the epilogue. The body must change the tested value
+    (e.g. end with `m` for a BP loop) so the loop terminates.
+    """
+    cells: list[PlacedCell] = []
+    x = 0
+    for ins in prologue:
+        cells.append(PlacedCell(x, 0, ins.char, ins.pipe))
+        x += 1
+    gt_col = x
+    cells.append(PlacedCell(x, 0, ">", None))
+    x += 1
+    for ins in test:
+        cells.append(PlacedCell(x, 0, ins.char, ins.pipe))
+        x += 1
+    branch_col = x - 1  # last test op (d / X): CW -> body, straight -> exit
+    row0_end = x
+    for ins in epilogue:
+        cells.append(PlacedCell(x, 0, ins.char, ins.pipe))
+        x += 1
+    row0_end = x
+
+    # body dips below: enter at (branch_col, 1) heading south, turn east
+    cells.append(PlacedCell(branch_col, 1, ">", None))
+    bx0 = branch_col + 1
+    for c in body.cells:
+        cells.append(PlacedCell(c.x + bx0, c.y + 1, c.char, c.pipe))
+    v_col = bx0 + body.width  # just past the body exit
+    return_row = 1 + body.height
+    cells.append(PlacedCell(v_col, 1, "v", None))  # turn south
+    cells.append(PlacedCell(v_col, return_row, "<", None))  # turn west
+    cells.append(PlacedCell(gt_col, return_row, "^", None))  # climb back to '>'
+
+    width = max(row0_end, v_col + 1)
+    height = return_row + 1
+    return TrailLayout(width=width, height=height, cells=cells, spawn=(0, 0))
+
+
 # convenience wrappers ------------------------------------------------------
 
 def counted_loop_trail(
     prologue: list[Instr], body: list[Instr], epilogue: list[Instr]
 ) -> TrailLayout:
-    """A single BP counted loop with a linear body (do-while, body runs >=1)."""
-    return loop_wrap(prologue, linear_block(body), [Instr("m"), Instr("d")], epilogue)
+    """A single BP counted loop with a linear body. Zero-trip (while semantics):
+    the body runs 0 times if BP starts at 0. `prologue` must set BP."""
+    return while_loop(prologue, [Instr("d")], linear_block([*body, Instr("m")]), epilogue)
