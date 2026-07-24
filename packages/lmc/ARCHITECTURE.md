@@ -174,7 +174,16 @@ Register plan that avoids a Driver wall on WRITE: dispatch `op` first; `addr` dr
 ADVANCE position count (BP); the restore count `N-addr-1` goes to **BP** before the op
 (so it survives the value emit, which uses A/B); `value` is read late and emitted at once.
 
-### Milestone: memory READ works end-to-end
+### Milestone: memory SOLVED (READ + WRITE, 100-cell RAM)
+`render_memory([0]*100, ram_len=55)` passes the public `memory` cases on `littleman.wasm`
+(fresh reads 0, write-then-read, overwrite, boundary). Assembled entirely from composable,
+individually-tested sub-blocks: **DMA-mem** (ADVANCE/PEEK/REPLACE) + **Driver**
+(`dispatch2(WRITE-body, READ-body)`) + **chain**. `dispatch2` is the reusable block-arm
+2-way branch; because each arm reads its own operands, `op` is never carried (no register
+wall). Semester-1: triangle ✓, reverse ✓, **memory ✓**; sort is next (same Driver-over-DMA
+shape with compare/select).
+
+### (earlier) memory READ works end-to-end
 `render_memory_read` chains Driver→DMA-mem: op-stream `(0, addr)` → `cell[addr]`
 (`test_memory.py`, on `littleman.wasm`). First semester-1 path fully assembled from
 composable, individually-tested sub-blocks. The reusable **chain-render rule**: every
