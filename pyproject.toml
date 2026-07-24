@@ -10,6 +10,9 @@ dependencies = [
 [project.scripts]
 randomfun2026solvers = "randomfun2026solvers.cli:main"
 
+[tool.uv.workspace]
+members = ["packages/lmc"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",
