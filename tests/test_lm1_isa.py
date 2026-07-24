@@ -68,6 +68,8 @@ def test_v1_has_no_ext_rows_and_ext_extends_it() -> None:
         "MUL",
         "LDP",
         "STP",
+        "LDA",
+        "MOVA",
         "NEG",
         "PUSH",
         "POP",

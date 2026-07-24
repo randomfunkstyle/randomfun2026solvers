@@ -429,6 +429,30 @@ def _store_ind(em: Emulator, addr: int | None) -> None:
     em.a = wrap(ptr)
 
 
+@_handler(Sem.LOAD_ACC)
+def _load_acc(em: Emulator, _: int | None) -> None:
+    em.a = 0  # `0` — clobbers A while the address sits safely in B
+    em.store.send(em.a)
+    em.a, em.b = em.b, em.a  # `W` — A = the address
+    em.store.send(em.a)
+    em.a = wrap(em.store.recv())  # `r→mem`
+    em.b = em.a  # `M`
+
+
+@_handler(Sem.STORE_ACC_MEM)
+def _store_acc_mem(em: Emulator, src: int | None) -> None:
+    assert src is not None
+    value = em._mem_read(src)  # source first: its address is an immediate
+    em.a, em.b = value, em.b  # `r→mem`
+    em.a, em.b = em.b, em.a  # `W` — A = the destination address (was ACC)
+    dest = em.a
+    em.store.send(1)  # `N` + `s→mem`: the sign is the write marker in hardware
+    em.store.send(dest)
+    em.a, em.b = em.b, em.a  # `W` — A = the value again
+    em.store.send(em.a)  # `s→mem`
+    em.b = em.a  # `M`
+
+
 @_handler(Sem.NEGATE)
 def _negate(em: Emulator, _: int | None) -> None:
     em.a, em.b = em.b, em.a  # `W`

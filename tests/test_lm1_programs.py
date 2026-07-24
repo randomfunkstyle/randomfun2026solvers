@@ -102,7 +102,10 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
     ext = {stem: set(load(stem).ext_ops) for stem in PROGRAMS}
     assert {k: v for k, v in ext.items() if v} == {
         "brackets": {"DIVI", "MODI"},
-        "tcp": {"LDP", "STP"},
+        # LDA/MOVA in place of LDP/STP: keeping the address in ACC means the
+        # `0`/`1` request literal never has to coexist with it, so tcp needs no
+        # SPILL block at all (see tcp.asm's header).
+        "tcp": {"LDA", "MOVA"},
         "triangle-closed": {"MUL", "DIVI"},
     }
 

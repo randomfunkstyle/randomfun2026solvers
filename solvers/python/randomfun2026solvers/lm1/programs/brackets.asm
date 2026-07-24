@@ -10,12 +10,15 @@
 ; ARCH.md's ISA does not have at all (see the step-2 report). The alternative is
 ; `LDP`/`STP` (indexed) with the stack at STORE[DEPTH]: also an extension.
 
-.equ N     0                ; characters left to read
-.equ POS   1                ; 1-based index of the character just read
-.equ STK   2                ; base-3 packed stack
-.equ DEPTH 3                ; stack depth
-.equ C     4                ; current character
-.equ T     5                ; current bracket type: 0 = (), 1 = [], 2 = {}
+; Addresses start at 1: the generated hardware encodes the operation in the
+; *sign* of the address word (+a = read, -a = write), so slot 0 would be
+; ambiguous and is left unused.
+.equ N     1                ; characters left to read
+.equ POS   2                ; 1-based index of the character just read
+.equ STK   3                ; base-3 packed stack
+.equ DEPTH 4                ; stack depth
+.equ C     5                ; current character
+.equ T     6                ; current bracket type: 0 = (), 1 = [], 2 = {}
 
         IN                  ; ACC = n
         ST  N

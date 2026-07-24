@@ -112,6 +112,8 @@ class Sem(StrEnum):
     MUL_MEM = "mul-mem"
     LOAD_IND = "load-ind"
     STORE_IND = "store-ind"
+    LOAD_ACC = "load-acc"
+    STORE_ACC_MEM = "store-acc-mem"
     NEGATE = "negate"
     SPILL_PUSH = "spill-push"
     SPILL_POP = "spill-pop"
@@ -495,6 +497,49 @@ _EXT_OPS: tuple[Op, ...] = (
             Micro.SWAP,
         ),
         sem=Sem.STORE_IND,
+        ext=True,
+    ),
+    Op(
+        code=24,
+        mnemonic="LDA",
+        operands=0,
+        description="ACC = store[ACC] — indexed read with the address in ACC",
+        # The reason this needs no spill slot, unlike `LDP`: the `0` glyph clobbers
+        # A *before* `W` brings the address over from B, so the two never have to be
+        # live at the same time. One `W` buys what LDP needs a whole SPILL pipe for.
+        micro=(
+            Micro.LIT0,
+            Micro.SEND_MEM,
+            Micro.SWAP,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.MOV,
+        ),
+        sem=Sem.LOAD_ACC,
+        ext=True,
+    ),
+    Op(
+        code=25,
+        mnemonic="MOVA",
+        operands=1,
+        description="store[ACC] = store[addr] — indexed write, no spill needed",
+        # The write counterpart of LDA, and the reason it needs no spill: the value
+        # is *fetched from the store* after the destination address has been handed
+        # over, so a pointer and ACC are never live together (which is the hole
+        # ARCH.md §6.1 finds in STP). Reading the source first is what buys that —
+        # the source address is an immediate, so it costs nothing to go first.
+        micro=(
+            Micro.RING_READ,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.SWAP,
+            Micro.NEG,
+            Micro.SEND_MEM,
+            Micro.SWAP,
+            Micro.SEND_MEM,
+            Micro.MOV,
+        ),
+        sem=Sem.STORE_ACC_MEM,
         ext=True,
     ),
     Op(
