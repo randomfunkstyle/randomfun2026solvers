@@ -698,6 +698,51 @@ Until both are expressed, the generator places rooms itself and uses
 `layout.py`'s port validation (§7.1) and `tools/route-check.mjs` as the safety
 net rather than as the placer.
 
+### 7.5 Synthesise a per-program CPU, not one universal CPU
+
+**Decision: the generator takes a program and emits the smallest machine that
+runs it.** There is no "the LM-1 CPU" — there is a CPU *synthesiser*, and each
+task gets its own instance. The §2.6 build is already one (7 opcodes chosen for
+`triangle`); the work is to parameterise it.
+
+This is not a micro-optimisation. The decode trie's depth is
+`ceil(log2(#opcodes used))` and its leaves spread geometrically, so the opcode
+count sets the CPU room's height:
+
+| opcodes used | depth | lanes | CPU rows |
+|---|---|---|---|
+| 7 (`triangle`) | 3 | 8 | ~19 |
+| 16 (ISA v1) | 4 | 16 | ~27 |
+| 24 (v1 + §6.1) | 5 | 32 | ~35 |
+
+Footprint is squared, so synthesising for 7 opcodes instead of 24 is most of the
+score. The same argument applies to every block: instantiate a `register-cell`
+per spill slot actually used, size the tape to the slots actually addressed
+(§4.1's `105 + 8.3N`), and omit the display ports, the `O` room or the `I` room
+when the program never touches them.
+
+The pipeline:
+
+1. **Assemble** the `.asm` → word list `P`, plus the *set* of opcodes it uses.
+2. **Number the opcodes.** `k = ceil(log2 |used|)`. The trie sorts leaves
+   bit-reversed (§2.4), so the number *chooses the row*: put `IN` near the north
+   wall, `OUT` near the south, memory ops near the east. This is the step where
+   ISA-as-data pays off — numbering is an output of layout, not a constant.
+3. **Emit the trie** at depth `k`, and **only the used lanes**.
+4. **Instantiate only the blocks needed**, sized per §4.1.
+5. **ROM**: looping (§5.3), folded onto enough rows to balance `w` against `h`.
+6. **Pack** for `max(w, h)²` (§7.4), growing the smaller dimension deliberately.
+7. **Verify**: `tools/route-check.mjs` for port resolution, then
+   `tools/run-cases.mjs` against the problem's public data.
+
+Per task, the only bespoke artefacts are then **the `.asm` program and its block
+configuration** — data, not code.
+
+Two known hard parts: step 2 ↔ step 6 are coupled (numbering fixes lane rows,
+which fixes where pipes must attach, which constrains packing), and step 6 needs
+the `max(w,h)²` objective taught to `score()` (§7.4 — the other blocker there,
+minimum ring length, is already gone since §5.3).
+
 ### 7.3 Tick and footprint budget
 
 | Stage | Ticks |
@@ -782,11 +827,12 @@ the plan of record.
 4. **Grow the slice** to `LDI`/`ADDI` + a real 2-bit trie + one `register-cell`
    as SPILL. This is the first increment that exercises operand words, the ring
    write-back invariant (§5.3) and a second block over a bus. ← *next*
-5. **Full CPU generator**, driven by the ISA table (v1 + the §6.1 extensions).
-   **First instance done** (§2.6): `lm1/cpugen.py` generates a complete 7-opcode
-   CPU that runs `triangle` as a program — 6/6 public cases on the real
-   interpreter. It is hand-rolled for that ISA rather than driven by `isa.py`;
-   generalising it is what remains.
+5. **Per-program CPU synthesiser** (§7.5): program in, smallest machine that
+   runs it out. **First instance done** (§2.6): `lm1/cpugen.py` emits a complete
+   7-opcode CPU that runs `triangle`, 6/6 public cases on the real interpreter.
+   It is hand-rolled for that opcode set rather than driven by `isa.py`;
+   parameterising it — over the used-opcode set, the block list and the packing —
+   is what remains, and is the main lever on every remaining problem.
 6. **Wire in the tape** and unlock the array problems.
 
 Useful tooling that now exists for steps 4–6: `tools/route-check.mjs` reports
