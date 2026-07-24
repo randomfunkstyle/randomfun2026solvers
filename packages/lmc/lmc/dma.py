@@ -126,6 +126,6 @@ def render_dma_standalone(trail: TrailLayout | None = None, ram_len: int = 6) ->
     for p in RAM.pipes("DMA"):
         col, _ = seg[p.id]
         ch = "v" if p.cpu_dir("DMA") == "out" else "^"
-        for y in range(Hi + 1, buf_top + 1):
+        for y in range(Hi + 1, buf_top):
             c.put(col, y, ch)
     return c.render()

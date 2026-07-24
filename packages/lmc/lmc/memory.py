@@ -184,7 +184,7 @@ def render_memdma_standalone(seed_vals: list[int], ram_len: int = 6) -> str:
     for p in RAM.pipes("DMA"):
         col, _ = seg[p.id]
         ch = "v" if p.cpu_dir("DMA") == "out" else "^"
-        for y in range(Hi + 1, buf_top + 1):
+        for y in range(Hi + 1, buf_top):
             c.put(col, y, ch)
     return c.render()
 
@@ -247,6 +247,6 @@ def _render_chain(drv, seed_vals: list[int], gap: int = 3, ram_len: int = 6) -> 
     for p in RAM.pipes("DMA"):
         col, _ = dseg[p.id]
         ch = "v" if p.cpu_dir("DMA") == "out" else "^"
-        for y in range(MHi + 1, buf_top + 1):
+        for y in range(MHi + 1, buf_top):
             c.put(col + mx, y, ch)
     return c.render()

@@ -205,7 +205,7 @@ def render(
         for p in south:
             col, _ = seg[p.id]  # seg at (col, Hi+1)
             ch = "v" if p.cpu_dir(graph.cpu) == "out" else "^"  # send down / recv up
-            for y in range(Hi + 1, buf_top + 1):
+            for y in range(Hi + 1, buf_top):
                 c.put(col, y, ch)
 
     return c.render()
