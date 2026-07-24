@@ -3,6 +3,10 @@
 **Status: design, not yet built.** This document freezes the architecture so the
 assembler, the emulator and the `.man` generator can be built against one spec.
 
+Visual walkthrough: [`arch.html`](arch.html) — the verified units, an animated
+run of the whole machine driven by real interpreter snapshots, the tick budget
+and the semester matrix.
+
 Companion docs: [`SPEC.md`](SPEC.md) (the language) ·
 [`GRADING.md`](GRADING.md) (scoring) · [`../tasks/problems/`](../tasks/problems/)
 (the 16 problems).
@@ -163,7 +167,7 @@ sign, `H` halts, and the lower lanes carry the `OUT` micro-program and the
 return path back to `r`.
 
 - **Measured: 20 ticks per instruction** (outputs land at t=20, 40, 60). Better
-  than the §7.2 estimate, because this decoder is a single `X`; a depth-4 trie
+  than the §7.3 estimate, because this decoder is a single `X`; a depth-4 trie
   adds ~15.
 - The LOOP man never halts, so the run only ends at the tick cap. Harmless —
   grading stops counting at the last correct output and does not require halting.
@@ -373,33 +377,52 @@ wire format, which is why §4.1 costs nothing.
 
 ## 7. What the generator has to get right
 
-### 7.1 Nearest-pipe geometry is the hard part
+### 7.1 Pipe binding is declared, not hand-solved
 
 `s` targets the nearest **outgoing** pipe and `r` the nearest **incoming** one —
 Manhattan distance, ties by reading order, and *nearest*, not
-nearest-that-can-proceed. The CPU room has up to 8 pipes, so **which pipe an
-instruction talks to is decided by where the glyph sits.**
+nearest-that-can-proceed. The CPU room has up to 8 pipes, so which pipe an
+instruction talks to is decided by where the glyph sits.
 
-Discipline: bind each function to a wall and keep every site in that band.
+That is a constraint we **declare**, not a puzzle we solve by hand.
+`layout.py`'s `Container` already models exactly this: `inputs` and `outputs` are
+lists of **local cell coordinates**, and the list index *is* the port number. So
+the CPU container names its `r` and `s` cells as ports; `Edge` wires port to
+port; and the router does the rest:
 
-| Wall | Pipes |
-|---|---|
-| west | ring-in, ring-out |
-| east | STORE req / resp |
-| north | input |
-| south | output, display ports |
+- `_exit` projects each port onto its nearest border edge and derives the pipe's
+  **touch cell**, breaking ties toward the other container;
+- `_resolve_port` then asserts that the manhattan-nearest port to that touch cell
+  really is the intended one, and raises `LayoutError` if a pipe would land on
+  the wrong port.
 
-Micro-programs then shuttle between bands, paying travel ticks. Two useful
-levers: **opcode numbering is a layout variable** (the trie's bit pattern fixes
-which row each lane lands on, so put `IN` near the north wall and `OUT` near the
-south), and if the geometry still will not close, a satellite mux room trades
-area and ticks for a smaller CPU pipe count.
+So the generator's job is to place `r`/`s` glyphs near the wall they belong to
+and let placement and routing be solved for it. `Container.variants` is the
+escape hatch: offer several equivalent CPU layouts and let the solver pick one
+that routes.
 
-`layout.py` already validates that each pipe lands nearest its intended port —
-that check is the generator's primary safety net, and it must run before every
-`lm.mjs` invocation.
+The useful discipline is still to bind each function to a wall — west for the
+ring, east for `STORE`, north for input, south for output and display — so that
+ports cluster and the solver has an easy job. Two levers make that cheap:
+**opcode numbering is a layout variable** (§2.4: the trie sorts leaves in
+bit-reversed order, so you choose which opcode lands next to which wall — put
+`IN` near the north wall and `OUT` near the south), and if the geometry still
+will not close, a satellite mux room trades area and ticks for a smaller CPU
+pipe count.
 
-### 7.2 Tick and footprint budget
+Port validation must run before every `lm.mjs` invocation — it is the
+generator's primary safety net, and it catches the class of bug that is otherwise
+invisible until a program silently reads the wrong pipe.
+
+### 7.2 Heading is part of every port contract
+
+A port is **(cell, heading)**, never just a cell. The §2.5 slice hung with no
+output because the fetch `r` was entered heading south instead of east: correct
+glyphs, correct pipes, and an infinite two-cell refetch loop. Assert entry
+headings with the wasm's `flow(rows)` (per-cell reachable headings) as part of
+generation, not as a debugging step.
+
+### 7.3 Tick and footprint budget
 
 | Stage | Ticks |
 |---|---|
@@ -420,7 +443,47 @@ Footprint, for a 60-word program: ROM ≈ 300 cells (~20×15), ring ≈ 62 cells
 CPU ≈ 40×24, STORE stub small. Bounding box ~70×50 → `footprint ≈ 4900`, so a
 250k-tick run scores ~1.2e9. Ugly, and expected (§1).
 
-## 8. Build order
+## 8. Coverage by semester
+
+Semesters do not map onto capability tiers — the tiers cut across them. But
+grouping by semester is still informative: **Semester 3 is uniformly "big RAM
+plus nested loops"**, which is exactly where a CPU beats hand-drawing, while
+Semester 1 spans the whole range by itself.
+
+| Set | Problem | Needs | RAM slots | Stage |
+|---|---|---|---|---|
+| Sem 1 | `triangle` | one spill slot (closed form `n(n+1)/2`) | 1 | A |
+| Sem 1 | `reverse-a-list` | LIFO, 16 deep | 16 | B |
+| Sem 1 | `sort-numbers` | addressed array + selection loop | 16 | B |
+| Sem 1 | `memory` | **is** the RAM block | 100 | B |
+| Sem 2 | `history-lesson` | no input; pure ROM dump (`footprint`-only scoring) | 0 | A |
+| Sem 2 | `brackets` | typed stack, depth 32 | 32 | B |
+| Sem 2 | `tcp` | indexed by `seq`, rounds withhold input | 48 | B |
+| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 8 | C |
+| Sem 3 | `gradebook` | ids + N×K grades, search by id | 80 | C |
+| Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | **✕** |
+| Sem 3 | `subset-sum` | 20 values + subset search | 24 | C |
+| Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | C |
+
+Stages: **A** = CPU + 8-slot `STORE` stub · **B** = real `STORE` (i.e. the
+`memory` solution) · **C** = larger `STORE` + display ports.
+
+Two findings that change the plan:
+
+- **One spill slot is mandatory, not optional.** `A` is destroyed by every
+  instruction fetch, so a loop can never hold two live values — even `triangle`
+  needs a slot. The 8-slot `STORE` stub is therefore part of the CPU from day
+  one; the "accumulator only" tier is effectively empty. §5.1's register model
+  stands, but it is not self-sufficient.
+- **`matmul` looks infeasible on a single delay line.** A 16×16 product needs
+  ~8,450 memory accesses; at 768 words a delay-line access averages ~2,300 ticks,
+  so ~19M ticks against a 5M cap. It needs banked memory (§4.1) or a bespoke
+  solution — worth knowing now rather than at hour 60.
+
+`history-lesson` is scored `footprint` only, so ticks are free but the ROM is
+enormous — a general CPU is the *wrong* tool there even though it can do it.
+
+## 9. Build order
 
 1. **ARCH.md** — this document. ← *you are here*
 2. **Python ISA table + emulator + assembler**, and all task programs written
@@ -435,10 +498,10 @@ CPU ≈ 40×24, STORE stub small. Bounding box ~70×50 → `footprint ≈ 4900`,
 5. **Drop in a real `STORE`** (i.e. the `memory` solution) and unlock the array
    problems.
 
-## 9. Open questions
+## 10. Open questions
 
 - **Trie vs `d`/`m` ladder** for decode — decide with measurements once the
-  slice runs (§7.2).
+  slice runs (§7.3).
 - **ROM serpentine density** — reversed literals on alternating rows halve the
   ROM's height but add a whole class of load errors (§4.2). Ship the safe
   version first.
