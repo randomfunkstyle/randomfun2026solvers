@@ -369,3 +369,154 @@ def build_v2(n: int) -> list[str]:
             if "slots" not in str(exc):
                 raise
     raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+# ═════════════════════════════════════════════════════ two-value rings (v3)
+#
+# Ticks are the whole score here: of ~899 ticks/op, ~800 is the tape
+# pass-through (100 values x 8 ticks). So both pass-through loops become
+# `counted_ring`s: 2 values per lap, 5 ticks/value. BP still counts values, so no
+# division or extra state -- each ring just has TWO exits (BP can reach 0 at
+# either test) that must be routed to the same continuation.
+#
+# The rings cost 2 rows each. That is paid for by moving the output room from
+# ABOVE the worker to the LEFT, beside the input room, which frees 5 rows. Note
+# area^2 is width-bound at 32 either way, so the point of the move is the rows,
+# not the footprint.
+#
+# Anchors: input = LEFT wall (row 4), output = LEFT wall (row 0, far from every
+# `s`), tape-forward = RIGHT wall, tape-return = BOTTOM wall.
+
+V3_IW, V3_IH = 22, 23
+V3_IN_ROW, V3_OUT_ROW = 4, 0          # both on the left wall
+V3_FWD_ROW = 9                        # right wall
+V3_RET_COL = 11                       # bottom wall
+RX = 10                               # both rings live at columns 10-11
+FILLX = 15                            # fill loop, beside the P1 ring
+P1Y, P2Y = 7, 17                      # ring top rows
+DISP = 13                             # dispatch row
+TRANSIT = 2                           # the one west-bound corridor row
+CLIMB = V3_IW - 1                     # shared north-bound gutter
+
+
+def worker_v3(n: int) -> Circuit:
+    c = Circuit(V3_IW, V3_IH)
+    L = lit(n)
+
+    # ── INIT (row 0) -> fill loop (beside P1) -> transit -> MAIN ──────────
+    x, _ = c.run(1, 0, "@" + L + "b")
+    c.route((x, 0), E, [(FILLX - 1, 0), (FILLX - 1, P1Y)], (FILLX - 1, P1Y), E)
+    fill, _ = c.counted_loop(FILLX, P1Y, "0s")
+    c.route((fill, P1Y), E, [(CLIMB, P1Y), (CLIMB, TRANSIT)], (0, TRANSIT), S)
+    c.vertical(0, TRANSIT, V3_IN_ROW)
+    c.turn(0, V3_IN_ROW, E)
+
+    # ── MAIN (row 4) + the two setups ────────────────────────────────────
+    c.run(1, V3_IN_ROW, "rX")
+    rx, _ = c.run(3, V3_IN_ROW, "rbM" + L + "-")      # A = N-addr
+    c.turn(2, 5, E)
+    wx, _ = c.run(3, 5, "rbM" + L + "-N")             # A = -(N-addr)
+    # Both risers merge onto row 6 heading west and share the final `M`, so B
+    # ends up +-(N-addr). Sharing it frees a column for INIT's descent.
+    # both risers share column 13 (READ enters it a row higher) and merge on row 6
+    c.route((rx, V3_IN_ROW), E, [(wx, V3_IN_ROW), (wx, 6)], (RX + 2, 6), W)
+    c.route((wx, 5), E, [(wx, 5), (wx, 6)], (RX + 2, 6), W)
+    c.run(RX + 1, 6, "M", d=W)                        # B = +-(N-addr)
+    c.route((RX, 6), W, [(RX - 1, 6), (RX - 1, P1Y)], (RX - 1, P1Y), S)
+    c.turn(RX - 1, P1Y, E)
+    p1 = c.counted_ring(RX, P1Y, "rs")
+
+    # ── both P1 exits descend to the dispatch row, arriving eastbound ─────
+    c.route((p1[0][0], P1Y), E, [(p1[0][0], DISP)], (p1[0][0], DISP), S)
+    c.turn(p1[0][0], DISP, E)
+    c.route(p1[1], W, [(p1[1][0], DISP)], (p1[1][0], DISP), S)
+    c.turn(p1[1][0], DISP, E)
+    # the west exit's run east crosses the east exit's turn -- same heading, fine
+    c.route((p1[1][0], DISP), E, [], (13, DISP), E)
+    c.run(14, DISP, "WX")
+
+    # ── READ target (row 14, CW/south) ───────────────────────────────────
+    c.turn(15, DISP + 1, E)
+    c.run(16, DISP + 1, "bm")                         # BP = N-1-addr
+    c.run(18, DISP + 1, "rS")                         # cell[addr] -> output + tape
+
+    # ── WRITE target (row 12, CCW/north), dodging the P1 descent columns ──
+    c.turn(15, DISP - 1, W)
+    c.run(14, DISP - 1, "N", d=W)
+    c.run(13, DISP - 1, "b", d=W)
+    c.run(11, DISP - 1, "m", d=W)                     # col 12 left clear
+    c.horizontal(DISP - 1, 11, 2)
+    c.run(2, DISP - 1, "r", d=W)                      # r(in) -> value
+    c.route((1, DISP - 1), W, [(1, 15)], (RX - 1, 15), E)
+    c.run(RX, 15, "sr")                               # new value in, old one out
+
+    # ── both targets -> P2 entry ─────────────────────────────────────────
+    c.route((20, DISP + 1), E, [(20, 16), (RX - 1, 16)], (RX - 1, 16), W)
+    c.route((RX + 2, 15), E, [(RX + 2, 16), (RX - 1, 16)], (RX - 1, 16), W)
+    c.turn(RX - 1, 16, S)
+    c.turn(RX - 1, P2Y, E)
+    p2 = c.counted_ring(RX, P2Y, "rs")
+
+    # ── both P2 exits climb the shared gutter back to the transit row ─────
+    c.route((p2[0][0], P2Y), E, [(CLIMB, P2Y), (CLIMB, TRANSIT)], (0, TRANSIT), S)
+    c.route(p2[1], W, [(p2[1][0], V3_IH - 1), (CLIMB, V3_IH - 1), (CLIMB, TRANSIT)],
+            (0, TRANSIT), S)
+    return c
+
+
+def assemble_v3(n: int, fold: int = 2) -> list[str]:
+    """v3 build: both I/O rooms on the LEFT, ring-based worker, folded tape."""
+    IW, IH = V3_IW, V3_IH
+    g = Circuit(400, 200)
+    wk = worker_v3(n)
+    WX, WY = 7, 2
+    for (x, y), ch in wk.cell.items():
+        g.set(WX + x, WY + y, ch)
+    for x in range(-1, IW + 1):
+        g.set(WX + x, WY - 1, "+" if x in (-1, IW) else "-")
+        g.set(WX + x, WY + IH, "+" if x in (-1, IW) else "-")
+    for y in range(IH):
+        g.set(WX - 1, WY + y, "|")
+        g.set(WX + IW, WY + y, "|")
+
+    # both rooms on the left wall: O beside row 0, I beside row 4
+    for label, row, glyph in (("O", V3_OUT_ROW, "<"), ("I", V3_IN_ROW, ">")):
+        ry = WY + row
+        for i, r in enumerate(["+-+", f"|{label}|", "+-+"]):
+            for j, ch in enumerate(r):
+                g.set(WX - 6 + j, ry - 1 + i, ch)
+        g.set(WX - 3, ry, glyph)
+        g.set(WX - 2, ry, glyph)
+
+    bottom_y = WY + IH
+    fy = WY + V3_FWD_ROW
+    ret_col = WX + V3_RET_COL
+    east = WX + IW + 2
+    b_fwd = bottom_y + 6
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    for i, r in enumerate(RELAY):
+        for j, ch in enumerate(r):
+            g.set(1 + j, relay_y + i, ch)
+    adj = len(RELAY[0]) + 1
+
+    n_fwd = _draw_pipe(g, [(WX + IW + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)])
+    n_ret = _draw_pipe(g, [(adj, r_a), (east - 1, r_a), (east - 1, r_b),
+                           (adj + fold, r_b), (adj + fold, r_c),
+                           (ret_col, r_c), (ret_col, bottom_y + 1)])
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    return [r.rstrip() for r in g.rows() if r.strip()]
+
+
+def build_v3(n: int) -> list[str]:
+    """Smallest v3 build whose ring holds >= N+1 values."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v3(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")

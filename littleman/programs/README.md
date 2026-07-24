@@ -6,8 +6,9 @@ specs and public tests: [`../../tasks/problems/`](../../tasks/problems/).
 
 | Program | Problem | Status |
 |---|---|---|
-| `memory.man` | `memory` (Semester 1) | **22/22** local (7 public + 5 heavy + 10 edge), 32x33, area² 1089 — expect ≈ **92M** |
-| `memory-v1-submitted.man` | `memory` | the 42x33 build that actually scored **158M** on the judge; kept as the known-good fallback |
+| `memory.man` | `memory` (Semester 1) | **27/27** local, 32×32, area² 1024, heavy-avg 183,808 ticks — expect ≈ **62M** |
+| `memory-v2.man` | `memory` | previous build (single-value loops); judge-scored **92.0M** at 32×33 |
+| `memory-v1-submitted.man` | `memory` | the 42×33 build that scored **158M**; earliest known-good fallback |
 | `memory-n8.man` | — | N=8 build of the same generator; small enough to trace by hand |
 | `register-cell.man` | — | the 1-value register block (store `1 v`, fetch `-1`) |
 
@@ -124,6 +125,7 @@ average**, good to ~1%.
 | pre-fold 96×24 | 9216 | — | — | 827M |
 | folded 42×33 | 1764 | 273,560 | 158M | **158M** |
 | compact 32×33 | 1089 | 257,528 | 92M | **92.0M** |
+| rings 32×32 | 1024 | 183,808 | **62M** | not yet submitted |
 
 So `score ≈ area² × 0.328 × local_heavy_avgTicks` — measure locally, submit once.
 
@@ -141,7 +143,14 @@ dispatch and targets adjacent to the loops. Corridor ticks fell less than hoped
 
 1. ~~**Compact the worker — ~1.9× total, and the safest change**~~ (layout only, logic and tests untouched). The 34×24 interior is ~90% blank: 22 rows exist only because each loop is 4 tall and each branch owns its own row. Packing toward 24×24 takes area² 1764 → ~1024 (1.7×) *and* shortens the per-op corridors from ~150 to ~60 ticks (1.1×). → done: 158M → ≈ 92M.
 2. **Rotate relatively instead of a full revolution (~2.6× ticks).** Keep the index of the next value to emerge and rotate `(addr − next) mod 100` — average 33 passes instead of 100. Two wrinkles: the mod correction needs a compare-and-add branch, and the index must live outside A/B/BP (all three are busy: A is clobbered by pass-through, BP is the loop counter, B carries `op`'s sign) — that's the job for `register-cell.man`, storing `index+1` so the value is never the fatal `0` command. → ≈ 36M with #1 done.
-3. **Enlarge the pass-through loop ring (~2.2×) — bigger than first thought.** 8 ticks/value is only the floor for a *minimal* 2-wide loop: the four corners, the `d` test and the `m` decrement are fixed cost, so a larger ring amortises them over many values. Each value inherently costs just `r`+`s` = 2 ticks, so the floor is ~2, not 8:
+**Done (v3, now `memory.man`):** both pass-through loops are `counted_ring`s —
+2 values per lap, 5 ticks/value instead of 8. Heavy-suite ticks 257,528 →
+183,808 (**1.40×**) with area² unchanged at 1024, so ≈ **62M** expected. The
+rings cost 2 rows each, paid for by moving the output room from above the worker
+to the left beside the input room. Note area² is *width*-bound at 32, so that
+move buys rows, not footprint. `worker_v3`/`build_v3`.
+
+3. ~~**Enlarge the pass-through loop ring (~2.2×) — bigger than first thought.**~~ 8 ticks/value is only the floor for a *minimal* 2-wide loop: the four corners, the `d` test and the `m` decrement are fixed cost, so a larger ring amortises them over many values. Each value inherently costs just `r`+`s` = 2 ticks, so the floor is ~2, not 8:
 
    | loop | perimeter | values/lap | ticks/value |
    |---|---|---|---|

@@ -38,7 +38,7 @@ class Circuit:
             raise Collision(f"({x},{y}) outside the {self.w}x{self.h} interior")
         old = self.cell.get((x, y))
         if old is None or old == ch:
-            if old is None and ch != " " and (x, y) in self.reserved:
+            if ch != " " and (old is None or old == " ") and (x, y) in self.reserved:
                 raise Collision(
                     f"({x},{y}) is reserved as a corridor; placing {ch!r} there "
                     "would run mid-transit"
