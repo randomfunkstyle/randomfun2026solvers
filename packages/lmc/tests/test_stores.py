@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from lmc.blockspec import E, BlockGraph, Instr, Pipe, W
+from lmc.blockspec import BlockGraph, E, Instr, Pipe, W
 from lmc.oracle import LM_PATH, run_grid
 from lmc.router import render
 from lmc.stores import CellStore, RingStore
