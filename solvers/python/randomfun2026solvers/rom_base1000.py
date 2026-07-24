@@ -38,6 +38,7 @@ __all__ = [
     "decoder_container",
     "encoder_container",
     "build",
+    "footprint",
     "best_encoder_width",
 ]
 
@@ -194,31 +195,35 @@ def _graph(words: list[int], data_w: int) -> Graph:
     )
 
 
-def best_encoder_width(words: list[int], lo: int = 60, hi: int = 280, step: int = 10) -> int:
-    """Search the encoder ``data_w`` that minimises total program size."""
+def footprint(words: list[int], data_w: int) -> tuple[int, int, int]:
+    """Return ``(width, height, max(width, height))`` of the whole laid-out
+    program. ``footprint`` scoring is ``max(width, height)**2`` (GRADING.md),
+    so ``max(width, height)`` is the number to minimise."""
+    man = layout_graph(_graph(words, data_w)).render()
+    lines = man.split("\n")
+    w = max(len(line) for line in lines)
+    h = len(lines)
+    return w, h, max(w, h)
+
+
+def best_encoder_width(words: list[int], lo: int = 50, hi: int = 220) -> int:
+    """Full fine scan for the encoder ``data_w`` minimising the footprint metric
+    ``max(width, height)`` of the entire program (encoder + decoder + ``O``).
+
+    An exhaustive scan (not binary/ternary search): total size vs width is a
+    sawtooth from how word tokens tile into rows, so a divide-and-conquer search
+    would settle in a local dip and miss the global minimum.
+    """
     best: tuple[int, int] | None = None
-
-    def size(dw: int) -> int:
-        return len(layout_graph(_graph(words, dw)).render())
-
-    for dw in range(lo, hi + 1, step):
+    for dw in range(lo, hi + 1):
         try:
-            n = size(dw)
+            _, _, m = footprint(words, dw)
         except ValueError:
             continue
-        if best is None or n < best[0]:
-            best = (n, dw)
+        if best is None or m < best[0]:
+            best = (m, dw)
     if best is None:
         raise ValueError("no feasible encoder width")
-    # refine +/- step around the coarse minimum
-    centre = best[1]
-    for dw in range(max(lo, centre - step), centre + step + 1):
-        try:
-            n = size(dw)
-        except ValueError:
-            continue
-        if n < best[0]:
-            best = (n, dw)
     return best[1]
 
 
