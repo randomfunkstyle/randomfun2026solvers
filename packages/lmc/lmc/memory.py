@@ -163,3 +163,58 @@ def render_memdma_standalone(seed_vals: list[int], ram_len: int = 6) -> str:
         for y in range(Hi + 1, buf_top + 1):
             c.put(col, y, ch)
     return c.render()
+
+
+# --- Block 3: the chain -- Driver -> DMA-mem (hardwired 2-man template) ---------
+# I -> [Driver] --req--> [DMA-mem] --dout--> O. Two men side by side; the Driver's
+# command-out feeds the DMA's command-in. This is the reusable horizontal-chain wiring
+# (each inter-room pipe sits strictly BETWEEN the two room walls -- the E-wall-overwrite
+# bug is the thing to avoid).
+
+def render_memory_read(seed_vals: list[int], gap: int = 3, ram_len: int = 6) -> str:
+    """`memory` READ path end-to-end: op-stream (0, addr) in -> cell[addr] out."""
+    n = len(seed_vals)
+    drv = read_driver_program(n)
+    dma = memdma_trail(seed_vals)
+    DWi, DHi = drv.width, drv.height
+    MWi, MHi = dma.width, dma.height
+
+    dg = BlockGraph(cpu="DMA")
+    dg.pipes = [Pipe("req", "DRV", E, "DMA", W), Pipe("dout", "DMA", E, "O", W), *RAM.pipes("DMA")]
+    dseg = solve_attachments(dg, dma)
+    _, req_row = dseg["req"]
+    _, dout_row = dseg["dout"]
+    mx = DWi + gap + 1  # DMA interior x origin (DMA W wall at mx-1)
+
+    c = Canvas()
+    c.rect(-1, -1, DWi, DHi)                       # Driver room
+    for cc in drv.cells:
+        c.put(cc.x, cc.y, cc.char)
+    c.rect(mx - 1, -1, mx + MWi, MHi)              # DMA room
+    for cc in dma.cells:
+        c.put(cc.x + mx, cc.y, cc.char)
+
+    # I room west of Driver (Driver `in` is its only incoming -> any row; use row 0)
+    c.rect(-6, -1, -4, 1)
+    c.put(-5, 0, "I")
+    c.put(-3, 0, ">")
+    c.put(-2, 0, ">")
+    # req pipe: Driver E wall (DWi) .. DMA W wall (mx-1), strictly between them
+    for x in range(DWi + 1, mx - 1):
+        c.put(x, req_row, ">")
+    # dout pipe + O room: strictly OUTSIDE the DMA E wall (mx+MWi)
+    c.put(mx + MWi + 1, dout_row, ">")
+    c.put(mx + MWi + 2, dout_row, ">")
+    c.rect(mx + MWi + 3, dout_row - 1, mx + MWi + 5, dout_row + 1)
+    c.put(mx + MWi + 4, dout_row, "O")
+    # DMA ring South
+    buf_top = MHi + ram_len + 1
+    c.rect(mx - 1, buf_top, mx + max(MWi, 5), buf_top + 3)
+    c.text("@>rsv", mx, buf_top + 1)
+    c.text(".^..<", mx, buf_top + 2)
+    for p in RAM.pipes("DMA"):
+        col, _ = dseg[p.id]
+        ch = "v" if p.cpu_dir("DMA") == "out" else "^"
+        for y in range(MHi + 1, buf_top + 1):
+            c.put(col + mx, y, ch)
+    return c.render()

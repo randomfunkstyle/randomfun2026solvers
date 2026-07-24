@@ -6,7 +6,11 @@ import shutil
 from pathlib import Path
 
 import pytest
-from lmc.memory import render_memdma_standalone, render_read_driver_standalone
+from lmc.memory import (
+    render_memdma_standalone,
+    render_memory_read,
+    render_read_driver_standalone,
+)
 from lmc.oracle import LM_PATH, run_grid
 
 _HAVE_ORACLE = shutil.which("node") is not None and Path(LM_PATH).exists()
@@ -56,3 +60,22 @@ def test_read_driver_command_stream(op_stream, cmds):
     grid = render_read_driver_standalone(5)
     res = run_grid(grid, op_stream, max_ticks=8000)
     assert res.output[: len(cmds)] == cmds, grid
+
+
+def test_memory_read_renders():
+    assert "I" in render_memory_read([0, 0, 0, 0, 0])
+
+
+@requires_oracle
+@pytest.mark.parametrize(
+    "op_stream,expected",
+    [
+        ([0, 2, 0, 0, 0, 4], [30, 10, 50]),   # READ cells 2,0,4 of seeded ring
+        ([0, 1, 0, 3], [20, 40]),
+    ],
+)
+def test_memory_read_end_to_end(op_stream, expected):
+    """I -> Driver -> DMA-mem -> O, over a ring seeded [10,20,30,40,50]."""
+    grid = render_memory_read([10, 20, 30, 40, 50])
+    res = run_grid(grid, op_stream, max_ticks=30000)
+    assert res.output[: len(expected)] == expected, grid
