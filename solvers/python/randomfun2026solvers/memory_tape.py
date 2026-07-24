@@ -520,3 +520,109 @@ def build_v3(n: int) -> list[str]:
             if "slots" not in str(exc):
                 raise
     raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+# ════════════════════════════════════════════════ relative rotation (v4)
+#
+# v3 is Theta(N) unconditionally: a full lap per operation is what restores the
+# ring's alignment. v4 tracks the alignment in a scratch register instead and
+# rotates only (addr - phase) mod N -- expected gap N/2 -- and P2 disappears.
+#
+# Geometry note that drove the layout: tape-return sits on the RIGHT wall, not the
+# bottom. With it on the bottom, a register read low in the room resolves to the
+# tape (the bottom anchor gets nearer than the top one), which made the upper rows
+# the only legal place for register ops and left no room to route. On the right
+# wall the split is by COLUMN -- register ops in the middle, tape ops bottom-right
+# -- and every row is usable.
+
+V4_IW, V4_IH = 26, 22
+V4_IN_COL, V4_REGF_COL, V4_REGR_COL = 6, 10, 13   # top wall
+V4_OUT_ROW, V4_RET_ROW = 1, 15                    # left wall / right wall
+V4_FWD_COL = 18                                   # bottom wall
+V4_RINGX, V4_RINGY = 17, 13                       # pass-through ring (2x5)
+V4_FILLX = 21                                     # fill loop
+
+
+def worker_v4(n: int) -> Circuit:
+    c = Circuit(V4_IW, V4_IH)
+    L = lit(n)
+    GUT = V4_IW - 1
+
+    # ── INIT: fill the tape with N zeros, seed phase := 0, fall into MAIN ───
+    x, _ = c.run(1, 0, "@" + L + "b")
+    # Seed the phase here, NOT on row 1: row 1 is the per-op return path, and a
+    # stray `0`/`s` there would zero the READ value before it is emitted and push
+    # 0 into the register ring.
+    c.run(x + 1, 0, "0s")                      # A = 0 ; s(reg): phase := 0
+    c.route((x + 3, 0), E, [(V4_FILLX - 1, 0), (V4_FILLX - 1, 4)],
+            (V4_FILLX - 1, 4), E)
+    fill, _ = c.counted_loop(V4_FILLX, 4, "0s")
+    c.route((fill, 4), E, [(GUT, 4), (GUT, 1), (1, 1)], (1, 2), S)
+    c.turn(1, 2, E)
+
+    # ── MAIN: op -> +-1 flag; the arms merge so the dance below is shared ───
+    c.run(5, 2, "rX")                          # r(in) -> op ; X
+    c.run(7, 2, "1N")                          # READ  (op==0, straight): A = -1
+    c.route((9, 2), E, [(9, 3)], (9, 3), E)
+    c.turn(6, 3, E)
+    c.run(7, 3, "1")                           # WRITE (op==1, CW/south): A = +1
+    c.route((8, 3), E, [], (9, 3), E)          # merge, heading east on row 3
+    c.route((10, 3), E, [(10, 4)], (10, 4), E)
+
+    # ── dance 1: park flag, take phase, build t = phase+1 ──────────────────
+    c.run(11, 4, "s")                          # park flag      ring [phase, flag]
+    c.run(12, 4, "r")                          # A = phase      ring [flag]
+    c.run(13, 4, "M1+")                        # A = phase+1 = t   (B = phase)
+    c.route((16, 4), E, [(16, 5)], (15, 5), W)
+
+    # ── dance 2: park t, read addr, delta_raw = addr - phase ───────────────
+    c.run(14, 5, "s", d=W)                     # park t         ring [flag, t]
+    c.route((13, 5), W, [(7, 5)], (7, 5), W)
+    c.run(6, 5, "r", d=W)                      # A = addr       (B = phase)
+    c.run(5, 5, "-", d=W)                      # A = addr - phase = delta_raw
+
+    # ── correction: three arms merge; only the negative one does work ──────
+    c.route((4, 5), W, [(3, 5), (3, 7)], (4, 7), E)
+    c.run(5, 7, "X")                           # <0 north, ==0 straight, >0 south
+    c.turn(5, 6, E)
+    c.run(6, 6, "M" + L + "+")                 # A = delta_raw + 100
+    MG = 17                                    # merge column
+    # all three arms must LEAVE the merge cell heading east, or each keeps its own
+    # heading and they never actually join
+    c.route((6 + 1 + len(L) + 1, 6), E, [(MG, 6)], (MG, 7), E)
+    c.route((6, 7), E, [], (MG, 7), E)         # zero arm, straight along row 7
+    c.turn(5, 8, E)
+    c.route((6, 8), E, [(MG, 8)], (MG, 7), E)  # positive arm rejoins from below
+    c.run(MG + 1, 7, "M")                      # B = delta
+
+    # ── dance 3: new phase = t + delta, restore ring to [phase], BP = delta ──
+    # The FIFO forces r,s,r,+,s,r, so the man zig-zags between the two register
+    # columns; walking back over an op would re-execute it, hence one row each.
+    c.route((MG + 2, 7), E, [(MG + 2, 9), (14, 9)], (14, 9), W)
+    c.run(13, 9, "r", d=W)                     # A = flag        ring [t]
+    c.run(12, 9, "s", d=W)                     # re-park flag    ring [t, flag]
+    c.route((11, 9), W, [(11, 10)], (11, 10), E)
+    c.run(12, 10, "r")                         # A = t           ring [flag]
+    c.run(13, 10, "+")                         # A = t + delta = addr+1 = phase'
+    c.route((14, 10), E, [(14, 11), (12, 11)], (12, 11), W)
+    c.run(11, 11, "s", d=W)                    # park phase'     ring [flag, phase]
+    c.route((10, 11), W, [(10, 12)], (10, 12), E)
+    c.run(11, 12, "r")                         # A = flag        ring [phase]  <- inv
+    c.run(12, 12, "Wb")                        # A = delta, B = flag ; BP = delta
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PARTIAL: everything above routes and traces correctly -- MAIN, the +-1 flag,
+    # the whole shared phase dance, the three-way mod correction, and the exit
+    # state BP=delta / B=flag. What is NOT here yet is the pass-through ring, the
+    # dispatch and the two target arms.
+    #
+    # The blocker is anchor placement, not logic. A READ target needs `s(tape)`
+    # and `s(out)` adjacent in the code but resolving to *different* pipes, so
+    # they must straddle the midline between those two anchors -- and a WRITE
+    # target needs `r(in)`, which only resolves to the input pipe in the upper
+    # rows while its `s(tape)` only resolves in the lower ones. Placing the four
+    # anchor groups (input, output, register, tape) so one per-op sweep visits
+    # them in order -- rather than criss-crossing -- is the thing to solve next;
+    # `S` is no longer available to collapse the READ into one instruction because
+    # it would also write into the register ring.
+    return c
