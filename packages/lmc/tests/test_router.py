@@ -66,3 +66,37 @@ def test_generated_counted_loop():
     grid = render(g, trail)
     for n in (1, 3, 5, 8):
         assert run_grid(grid, [n]).output == [7] * n, (n, grid)
+
+
+@requires_oracle
+def test_generated_nested_loops():
+    """Value-outer loop (counter in B) nesting a counted-inner loop: emit T(n)
+    ones. Exercises nested loops + B surviving + no BP conflict."""
+    from lmc.loopgen import linear_block, loop_wrap, seq_block
+
+    ii = Instr
+    inner = loop_wrap(
+        prologue=[],
+        body=linear_block([ii("1"), ii("s", "out")]),
+        test=[ii("m"), ii("d")],
+        epilogue=[],
+    )
+    outer = loop_wrap(
+        prologue=[ii("@"), ii("r", "in"), ii("M")],
+        body=seq_block(
+            [
+                linear_block([ii("b")]),
+                inner,
+                linear_block([ii("W"), ii("M"), ii("1"), ii("-"), ii("N"), ii("M")]),
+            ]
+        ),
+        test=[ii("W"), ii("M"), ii("X")],
+        epilogue=[ii("H")],
+    )
+    g = BlockGraph(cpu="CPU")
+    g.rooms = {"CPU": "cpu", "I": "input", "O": "output"}
+    g.pipes = [Pipe("in", "I", E, "CPU", W), Pipe("out", "CPU", E, "O", W)]
+    grid = render(g, outer)
+    for n in (1, 2, 3, 4, 6):
+        exp = [1] * (n * (n + 1) // 2)
+        assert run_grid(grid, [n], max_ticks=200000).output == exp, (n, grid)
