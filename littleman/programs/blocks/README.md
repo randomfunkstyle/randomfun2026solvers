@@ -27,6 +27,18 @@ left of column 12 and `r(reg)` right of it. Always confirm with
 `route-check.mjs` rather than by eye: the first draft of this block silently read
 the empty register instead of the input and blocked forever.
 
+## `lap-ring.man` — a pass-through loop tested once per lap
+
+BP counts **laps**, not values: a 2×(K+3) ring whose body is `[r,s]`×K plus one
+`d` and one `m` costs `2K+6` ticks and moves K values, i.e. `2 + 6/K` ticks/value
+against 8 for `counted_loop` and 5 for `counted_ring`. The caller splits its count
+with one `/` (`A=n, B=K` → `A=q, B=rem`) and follows the ring with `rem` single
+values through an ordinary `counted_loop`. Verified 2.75 t/v at K=8, down to
+2.19 at K=32.
+
+Full write-up, exact cell layout, caller register trace and six traps —
+including why the ring must be **2 wide** and not square: [`lap-ring.md`](lap-ring.md).
+
 ## `packed-field-unpack.man` — 3 memory cells in one 64-bit word
 
 A value needs 21 bits (±10⁶ biased by 10⁶), so three fit in 63:

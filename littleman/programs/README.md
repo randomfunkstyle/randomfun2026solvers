@@ -139,7 +139,7 @@ values, because the full lap is what restores the ring's alignment. Touching cel
 |---|---|---|---|
 | now (v3) | Θ(N), 5 t/v | 641 | 61.9M |
 | relative rotation (v4) | **Θ(gap), E=N/2** — deletes the P2 lap | ~330 | ≈31M |
-| + lap-tested ring | Θ(gap) at 2.3 t/v | ~200 | ≈20M |
+| + lap-tested ring | Θ(gap) at 2.75 t/v + an 8 t/v remainder | ~241 | ≈23M |
 | banks B=10 + bit decode | Θ(N/B + log B) | ~206 | 24–31M |
 | tree of 100 registers | Θ(log N) ticks, **Θ(N) area** | — | area² eats it |
 
@@ -218,14 +218,43 @@ move buys rows, not footprint. `worker_v3`/`build_v3`.
 
 3. ~~**Enlarge the pass-through loop ring (~2.2×) — bigger than first thought.**~~ 8 ticks/value is only the floor for a *minimal* 2-wide loop: the four corners, the `d` test and the `m` decrement are fixed cost, so a larger ring amortises them over many values. Each value inherently costs just `r`+`s` = 2 ticks, so the floor is ~2, not 8:
 
-   | loop | perimeter | values/lap | ticks/value |
-   |---|---|---|---|
-   | 2×4 (current) | 8 | 1 | 8.0 |
-   | 2×6 | 12 | 3 | 4.0 |
-   | 6×6 hollow square | 20 | 7 | 2.9 |
-   | 8×8 | 28 | 11 | 2.5 |
+   Built and measured — see [`blocks/lap-ring.md`](blocks/lap-ring.md). The cost is
+   **`2 + 6/K`, not `2 + 4/K`**: per-lap overhead is 4 corners + `m` = 5 cells, and
+   a rectilinear closed loop always has even perimeter while `2K+5` is odd, so one
+   nop is unavoidable.
 
-   Needs `addr = K·q + r` — one `/` yields quotient *and* remainder — then `q` big laps plus up to `K−1` single passes in a small clean-up loop. No new pipes, no persisted state, so it is lower risk than #2 and roughly the same payoff. → ≈ 42M alone.
+   | K | ring box | ticks/value |
+   |---|---|---|
+   | 2 | 2×5 | 5.00 |
+   | 4 | 2×7 | 3.50 |
+   | 8 | 2×11 | **2.75** (shipped) |
+   | 16 | 2×19 | 2.38 |
+   | 32 | 2×35 | 2.19 |
+
+   **Rings for this must be 2 cells wide, never square.** An earlier table here
+   listed a "6×6 hollow square, 2.9 t/v" — that shape is *wrong*: its top row runs
+   `r s r s` before the corner test, so a count of 0 still moves a value. It
+   measures the right ticks/value and is silently incorrect; only the n=0 boundary
+   case catches it. On a straight segment of a CW ring the CW turn points into the
+   hole, so `d` only works on a corner, and entry from outside also only lands on a
+   corner — two adjacent corners forces one side to be 2 cells.
+
+   **The realistic gain is ~1.5×, not 2.2×**, because the remainder loop still runs
+   at 8 t/v: for a count uniform on 0…99 the whole split averages ~163 ticks against
+   250 for `counted_ring`, and it is flat from K=8 to K=12.
+
+   Caller side, verified: `M` `8` `W` `/` `b` leaves **A=q, B=rem, BP=q**; the big
+   ring runs q laps (its `r`/`s` touch only A, so **B carries `rem` across it for
+   free**); then `W` `b` gives BP=rem for a small `counted_loop`. 9 ticks of
+   scaffolding per pass-through.
+
+   **Integration warning:** the split needs `B=K` for one tick, which destroys
+   whatever B was carrying (today `±(N−addr)`). With A, B and BP all live, a
+   drop-in needs a third slot — park it in the scratch register. The `±(rem+1)`
+   sign trick does compose with the existing `b m` / `N b m` arms.
+
+   → with #2, ≈ 23M; alone against v3's double lap, only ≈ 48M (two splits, two
+   remainder loops).
 
 Banks (e.g. 10 rings of 10 cells, one lap each) look tempting at ~80 ticks/op but
 need 10 relays, 10 pipe rings and a 10-way demux; since footprint is *squared*,
