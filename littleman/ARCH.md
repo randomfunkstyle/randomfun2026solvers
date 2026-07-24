@@ -209,13 +209,12 @@ ROM:      0 0  6 0  2 1  1 0  5 2  7 0  4 0        (14 words, fixed 2-word form)
 / 943,736). Every pipe instruction was confirmed against
 `tools/route-check.mjs` to resolve to its intended pipe.
 
-**This build has no code ring**, and that is legal only because `triangle` never
-jumps backwards. The fetch is `>rbr`, not `>rsbrsx`: the two `s` glyphs are the
-§5.3 write-back, which exists so the program survives a lap and can be run
-again. A straight-line program runs once, so it can skip the write-back — and
-then the ring degenerates to a FIFO, which removes the `LOOP` room and the
-minimum-capacity constraint entirely. **Any program with a loop must keep
-both**, which is nearly all of them.
+**This build has no code ring at all** — the ROM man walks a *closed loop* and
+re-emits the program forever, so the fetch is `>rbr` with no write-back (§5.3).
+Unlike the earlier straight-line-only version, this is correct for **looping
+programs too**: a backward jump still discards `n` words, and the ROM keeps
+supplying them. Confirmed at t=20,000 with no error — once the CPU halts the ROM
+man simply blocks on a full pipe, which is the harmless steady state.
 
 - The emulator predicted 407 ticks and the hardware measured 446, so **§7.3's
   tick model is good to ~10 %** — it can be trusted for planning.
@@ -440,9 +439,51 @@ jumps; nothing ever wanted a real PC. Only the *cost* hurts — 13–28 % of tot
 ticks, worst on `brackets`, because §5.4's "put the hot loop last" advice fails
 when a program has several hot loops competing for the tail.
 
-**Invariant — every ring read is immediately followed by a ring write-back.**
-Opcode words *and* operand words *and* skipped words all go back into the ring,
-or the program erases itself on the first lap.
+**Invariant (ring only) — every ring read is immediately followed by a ring
+write-back.** Opcode words *and* operand words *and* skipped words all go back
+into the ring, or the program erases itself on the first lap. A pipe read is
+destructive, so this is the price of using pipes as the program store.
+
+#### The looping ROM makes the ring — and the write-back — unnecessary
+
+The ring has exactly one job: present the program's words to the CPU over and
+over, in order, forever. It does that by *storing* them. A **ROM man walking a
+closed loop** does the same thing by *regenerating* them, and the CPU cannot tell
+the difference — same order, same "PC = phase" property, same jump mechanism
+(discard `n` words).
+
+Verified standalone — emits `9 7 8 9 7 8 …` indefinitely at 4 ticks/word:
+
+```
++------+  +-+
+|>7s8sv|>>|O|
+|^..s9<|  +-+
+|@....^|
++------+
+```
+
+| | code ring | looping ROM |
+|---|---|---|
+| rooms | ROM + `LOOP` | ROM |
+| pipe capacity | **≥ `P`** or deadlock | none — words are regenerated |
+| fetch | `>rsbrsx` | **`>rbr`, for every program** |
+| throughput | 6 ticks/word | 4 here; ~2.3 for a 14-word loop |
+| packing | constrained by minimum pipe length | unconstrained |
+
+The looping ROM wins on every row, so **it is the design of record** (§2.6). Two
+consequences worth stating plainly:
+
+- The §7.4 packing obstacle "the ring needs a *minimum* pipe length" **is gone**.
+  Only the `max(w,h)²` objective remains before `layout_graph` can place rooms.
+- The write-back invariant above applies only if you choose the ring. The one
+  thing the ring still buys is *mutable* program words — self-modifying code, or
+  spill slots living in the ring. LM-1 uses neither (spill is the register cell),
+  so nothing is given up.
+
+Generator constraint: the spawn path must join the loop immediately before word
+0, or execution starts mid-program. The first probe above emitted `9 7 8` rather
+than `7 8 9` for exactly that reason — `lm1/cpugen.py` puts words 0..6 on the
+westbound row and joins at its head.
 
 ### 5.4 Jump cost, and the rule that follows from it
 

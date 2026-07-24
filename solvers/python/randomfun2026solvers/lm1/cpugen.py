@@ -12,13 +12,18 @@ rows, serpentine the ring pipes vertically in a narrow west band) gave 40x31
 (1600), and dropping the ring entirely gave 38x31 (1444). Still hand-packed;
 see ARCH.md 7.4 for why layout.py cannot own this unaided.
 
-**This build has no code ring, and that is only legal because `triangle` never
-jumps backwards.** The fetch is `>rbr`, not `>rsbrsx`: the two `s` glyphs are
-the ring write-back (ARCH.md 5.3), which exists so the program survives a lap
-and can be executed again. A straight-line program is executed once, so it can
-skip the write-back -- and then the ring is just a FIFO, which means no LOOP
-room and no minimum-capacity pipes at all. Any program with a loop (atoi,
-max-element, brackets, tcp -- i.e. nearly all of them) must keep both.
+**This build has no code ring at all.** The ROM man walks a *closed loop* and
+re-emits the program forever, so the fetch is `>rbr` and there is never a
+write-back (ARCH.md 5.3). The ring's only job was to present the program's words
+over and over in order; a looping ROM does that by regenerating them instead of
+storing them, and the CPU cannot tell the difference. That drops the LOOP room,
+drops the capacity >= P constraint on the pipes, and is correct for **looping
+programs too** -- a backward jump still discards n words and the ROM keeps
+supplying them.
+
+The spawn path must join the loop immediately before word 0 or execution starts
+mid-program, which is why words 0..6 sit on the westbound row and the entry
+joins at its head.
 
 Two things make the geometry close, both worth keeping in the general generator:
 
@@ -75,11 +80,12 @@ def pipe(cells):  # [(x,y,glyph), ...]
 # ── ROM: 14 words, all single digits -> `@0s0s...H` on one row ───────────────
 WORDS = [0, 0, 6, 0, 2, 1, 1, 0, 5, 2, 7, 0, 4, 0]  # IN STR ADDI1 MULR DIVI2 OUT HALT
 half = len(WORDS) // 2
-rowA = "@" + "".join(f"{w}s" for w in WORDS[:half]) + "v"
-rowB = ("".join(f"{w}s" for w in WORDS[half:]) + "H")[::-1] + "<"
-room(0, 0, len(rowA) + 1, 3)
-text(1, 1, rowA)
-text(1, 2, rowB)
+seqW = "".join(f"{w}s" for w in WORDS[:half])  # words 0..6, walked WESTBOUND
+seqE = "".join(f"{w}s" for w in WORDS[half:])  # words 7..13, walked EASTBOUND
+room(0, 0, len(seqE) + 3, 4)
+text(1, 1, ">" + seqE + "v")
+text(1, 2, "^" + seqW[::-1] + "<")
+text(2, 3, "@" + "." * (len(seqE) - 1) + "^")  # spawn joins the loop at word 0
 
 # ── LOOP: recirculator, R (any incoming) + s ─────────────────────────────────
 
@@ -156,12 +162,12 @@ text(23, 29, "O")
 
 # ── pipes ───────────────────────────────────────────────────────────────────
 pipe(
-    [(1, 4, "v")] + [(1, y, "|") for y in range(5, 14)] + [(1, 14, ">"), (2, 14, ">")]
-)  # ROM -> CPU (a FIFO, not a ring)
+    [(1, 5, "v")] + [(1, y, "|") for y in range(6, 14)] + [(1, 14, ">"), (2, 14, ">")]
+)  # ROM -> CPU: a FIFO, not a ring
 pipe(
-    [(21, 3, "v"), (21, 4, "<")]
-    + [(x, 4, "-") for x in range(14, 21)]
-    + [(13, 4, "v"), (13, 5, "v")]
+    [(21, 3, "v"), (21, 4, "|"), (21, 5, "<")]
+    + [(x, 5, "-") for x in range(14, 21)]
+    + [(13, 5, "v")]
 )  # I -> CPU
 pipe([(14, 25, "v"), (14, 26, "|"), (14, 27, "v")])  # CPU -> O
 pipe([(29, 13, ">"), (30, 13, ">")])  # CPU -> CELL
