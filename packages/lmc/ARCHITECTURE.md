@@ -97,6 +97,40 @@ IN → data    OUT value                    ← memory-mapped I/O (echo built)
 ```
 Random access `a[i]` needs no new DMA command: the CPU issues `ROTATE` i times, `POP`s
 the head, then `ROTATE`s the rest to restore canonical rotation.
+
+## Memory is behind a swappable interface (a scoring lever)
+The command ISA **is** the memory abstraction boundary. A consumer (a program, or the CPU)
+issues `LOAD_IDX/STORE_IDX/PUSH/POP` and never sees how they are realized. The
+*representation* behind them is a pluggable `Memory` implementation:
+
+- **`RotateRingMemory`** (impl #1) — one ring, address by rotating to the index. O(addr)
+  per access (slow, small footprint). Built first.
+- **direct-access** (impl #2, later) — a faster structure (e.g. banked rings, or a
+  display-backed store) that lowers ticks. O(1)-ish.
+
+Because `max(w,h)² × avg_ticks` trades area against speed, **the representation is chosen
+per problem for score** — swap the impl, not the program. Interface (Python-side fragment
+factories, so it works whether memory is a single man or lives behind the DMA bus):
+```
+class Memory(Protocol):
+    def rooms_pipes(self, owner) -> (rooms, pipes)   # what the router draws
+    def read(self)  -> fragments   # pre: index in A -> post: value in A / emitted
+    def write(self) -> fragments   # pre: index, value staged -> stored
+    def sizing(self, n_cells) -> hints
+```
+Programs (`memory`, `sort`, `sudoku`, `grade_book`, `matrix`) are written against
+`Memory`; the impl is injected. This is the same data-abstraction discipline as
+`stores.py` (Ring/Cell/List/Array/Stack), one level up.
+
+**Implementation must be hand-laid, not composed.** A `RotateRingMemory` built from
+generic `forever_loop`/`while_loop`/`if3` goes UNSAT — the composers scatter the input
+reads / ring ops / output sends and the nearest rule can't place them (verified). Every
+`Memory` impl is therefore a **fixed hand-laid man** following the DMA method: zoned data
+path (input reads West, ring ops near the ring, output East) + a control-only looper +
+control-glyph addressing loops (rotate-to-index is routing-neutral). `dma.py` is the
+worked template; `memory` is a hand-laid man of the same shape with an internal
+rotate-to-addr loop and a READ/WRITE dispatch. Swapping to direct-access = a different
+hand-laid man behind the same `Memory` interface.
 Compute (compare/ALU/branch) lives in the CPU; the DMA is the memory + I/O subsystem.
 
 ## Status
