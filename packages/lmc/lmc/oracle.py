@@ -53,3 +53,19 @@ def run_grid(
         )
     finally:
         os.unlink(path)
+
+
+def tick_grid(program: str, n: int, inputs: list[int] | None = None) -> dict:
+    """Advance n ticks and return the raw reference snapshot JSON (for inspecting
+    non-halting programs: output-so-far, runner registers, pipe contents)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".man", delete=False) as f:
+        f.write(program)
+        path = f.name
+    try:
+        args = ["node", LM_PATH, "tick", path, str(n), "--json"]
+        if inputs:
+            args += ["--input", " ".join(str(x) for x in inputs)]
+        p = subprocess.run(args, capture_output=True, text=True)
+        return json.loads(p.stdout)
+    finally:
+        os.unlink(path)
