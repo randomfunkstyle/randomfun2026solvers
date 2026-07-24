@@ -27,8 +27,8 @@ from __future__ import annotations
 
 import sys
 
-from randomfun2026solvers.layout import Container, Edge, Graph, layout_graph
-from randomfun2026solvers.rom_snake import codes_of, output_room
+from randomfun2026solvers.layout import Container
+from randomfun2026solvers.rom_snake import codes_of
 
 __all__ = [
     "CHARS_PER_WORD",
@@ -181,26 +181,49 @@ def decoder_container(container_id: str = "dec") -> Container:
     )
 
 
-def _graph(words: list[int], data_w: int) -> Graph:
-    return Graph(
-        containers=[
-            encoder_container(words, data_w=data_w),
-            decoder_container(),
-            output_room("O"),
-        ],
-        edges=[
-            Edge(id="e2d", src="enc", dst="dec"),
-            Edge(id="d2o", src="dec", dst="O"),
-        ],
-    )
+def _assemble(words: list[int], data_w: int) -> str:
+    """Place encoder | decoder | ``O`` in a row, joined by minimal straight
+    ``>>`` (length-2) pipes — no A* routing or gaps.
+
+    Each room has a single in/out pipe, so ``s``/``r`` resolve unambiguously
+    regardless of the attach row; the decoder (shorter) is centred against the
+    tall encoder and both pipes ride the decoder's mid row as straight lines.
+    """
+    enc = encoder_container(words, data_w=data_w).content
+    dec = decoder_container().content
+    o = ["+-+", "|O|", "+-+"]
+    we, he = len(enc[0]), len(enc)
+    wd, hd = len(dec[0]), len(dec)
+    wo, ho = len(o[0]), len(o)
+
+    yd = (he - hd) // 2           # centre the decoder against the encoder
+    prow = yd + hd // 2           # decoder's in/out port row (both at mid)
+    yo = prow - ho // 2           # align O's input row to the pipe row
+    xd = we + 2                   # encoder, 2-cell pipe, decoder
+    xo = xd + wd + 2              # decoder, 2-cell pipe, O
+
+    width = xo + wo
+    height = max(he, yd + hd, yo + ho)
+    canvas = [[" "] * width for _ in range(height)]
+
+    def blit(room: list[str], ox: int, oy: int) -> None:
+        for j, row in enumerate(room):
+            for i, ch in enumerate(row):
+                canvas[oy + j][ox + i] = ch
+
+    blit(enc, 0, 0)
+    blit(dec, xd, yd)
+    blit(o, xo, yo)
+    canvas[prow][we] = canvas[prow][we + 1] = ">"          # encoder -> decoder
+    canvas[prow][xd + wd] = canvas[prow][xd + wd + 1] = ">"  # decoder -> O
+    return "\n".join("".join(r).rstrip() for r in canvas)
 
 
 def footprint(words: list[int], data_w: int) -> tuple[int, int, int]:
-    """Return ``(width, height, max(width, height))`` of the whole laid-out
-    program. ``footprint`` scoring is ``max(width, height)**2`` (GRADING.md),
-    so ``max(width, height)`` is the number to minimise."""
-    man = layout_graph(_graph(words, data_w)).render()
-    lines = man.split("\n")
+    """Return ``(width, height, max(width, height))`` of the whole program.
+    ``footprint`` scoring is ``max(width, height)**2`` (GRADING.md), so
+    ``max(width, height)`` is the number to minimise."""
+    lines = _assemble(words, data_w).split("\n")
     w = max(len(line) for line in lines)
     h = len(lines)
     return w, h, max(w, h)
@@ -232,7 +255,7 @@ def build(data: str | bytes | list[int], *, encoder_width: int | None = None) ->
     words = to_words(codes_of(data))
     if encoder_width is None:
         encoder_width = best_encoder_width(words)
-    return layout_graph(_graph(words, encoder_width)).render() + "\n"
+    return _assemble(words, encoder_width) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
