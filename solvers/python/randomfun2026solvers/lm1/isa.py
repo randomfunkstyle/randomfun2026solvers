@@ -121,6 +121,9 @@ class Sem(StrEnum):
     BR_ZERO = "br-zero"
     BR_NEG = "br-neg"
     DISPLAY = "display"
+    DISPLAY_ADDR = "display-addr"
+    DISPLAY_DATA = "display-data"
+    DISPLAY_SWAP = "display-swap"
     HALT = "halt"
 
 
@@ -540,6 +543,38 @@ _EXT_OPS: tuple[Op, ...] = (
             Micro.MOV,
         ),
         sem=Sem.STORE_ACC_MEM,
+        ext=True,
+    ),
+    # ── LM-75 ports, one opcode each ────────────────────────────────────────
+    # `DSP p` cannot be built: it picks a pipe from its *operand*, and which pipe an
+    # `s` talks to is decided by where the glyph sits (ARCH.md §7.1) — a static
+    # property of the grid. Three opcodes, three lanes, three `s` glyphs each beside
+    # its own port. ACC survives via the W/s/W sandwich, as with OUT.
+    Op(
+        code=26,
+        mnemonic="DSPA",
+        operands=0,
+        description="send ACC to the display's ADDR port (top): cursor = row*width + col",
+        micro=(Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
+        sem=Sem.DISPLAY_ADDR,
+        ext=True,
+    ),
+    Op(
+        code=27,
+        mnemonic="DSPD",
+        operands=0,
+        description="send ACC to the display's DATA port (left): draw colour, advance cursor",
+        micro=(Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
+        sem=Sem.DISPLAY_DATA,
+        ext=True,
+    ),
+    Op(
+        code=28,
+        mnemonic="DSPS",
+        operands=0,
+        description="send ACC to the display's SWAP port (bottom): 0 commits and clears",
+        micro=(Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
+        sem=Sem.DISPLAY_SWAP,
         ext=True,
     ),
     Op(

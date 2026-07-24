@@ -24,6 +24,7 @@ from randomfun2026solvers.lm1.programs import (  # noqa: E402
     available,
     history_lesson_source,
     load,
+    problem_json,
     problem_of,
     rounds_for_problem,
 )
@@ -40,7 +41,6 @@ BLOCKED = {
     "subset-sum",
     "gradebook",
     "matmul",
-    "plotter",
     "palette",
 }
 
@@ -61,6 +61,7 @@ def test_the_expected_programs_exist() -> None:
         "brackets",
         "tcp",
         "history-lesson",
+        "plotter",
     }
 
 
@@ -106,6 +107,9 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # `0`/`1` request literal never has to coexist with it, so tcp needs no
         # SPILL block at all (see tcp.asm's header).
         "tcp": {"LDA", "MOVA"},
+        # `DSP p` picks a pipe from its operand, which nearest-pipe binding cannot
+        # express; one opcode per LM-75 port gives each its own lane (see plotter.asm).
+        "plotter": {"DSPA", "DSPD", "DSPS", "NEG"},
         "triangle-closed": {"MUL", "DIVI"},
     }
 
@@ -122,3 +126,59 @@ def test_cli_grades_every_program_green() -> None:
     assert main(["grade"]) == 0
     assert main(["asm", "triangle"]) == 0
     assert main(["run", "triangle", "--input", "4"]) == 0
+
+
+# ── display problems are graded on frames, not on output ─────────────────────
+def test_plotter_draws_exactly_bresenham_on_every_public_case() -> None:
+    """``plotter`` emits no program output, so the generic test above proves nothing.
+
+    Replay its LM-75 port writes through the panel model and compare committed
+    frames pixel for pixel. Bresenham is direction-sensitive, so a case drawn B->A
+    has different pixels from A->B and this catches getting that backwards.
+    """
+    from randomfun2026solvers.lm1.display import frames_from_writes
+
+    prob = problem_json("plotter")
+    width = prob["io"]["display"]["width"]
+    height = prob["io"]["display"]["height"]
+    for case in prob["publicTestData"]:
+        prog = load("plotter")
+        rounds = [
+            Round(input=tuple(int(v) for v in (r.get("in") or [])), expected=())
+            for r in case["rounds"]
+        ]
+        res = Emulator(prog).run(rounds, max_instructions=MAX_INSTRUCTIONS)
+        got = frames_from_writes(res.display_writes, width=width, height=height)
+        want = [r["frames"][0] for r in case["rounds"] if r.get("frames")]
+        assert got == want, f"plotter/{case['name']}: frame mismatch"
+        assert not res.output, f"plotter/{case['name']}: emitted output on a display problem"
+
+
+def test_plotter_fits_the_tick_cap_at_the_worst_legal_case() -> None:
+    """20 rounds of the longest possible segment, with *real* tape latency.
+
+    The public cases top out at 8 rounds, so they say nothing about the private
+    ones. Store accesses are billed at ``ARCH.md`` §4.1's ``105 + 8.3N`` rather
+    than the emulator's flat 6 ticks/word, which understates them ~30x.
+    """
+    from randomfun2026solvers.lm1.store import DictStore
+
+    class Counting(DictStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ops = 0
+
+        def _read(self, addr: int) -> int:
+            self.ops += 1
+            return super()._read(addr)
+
+        def _write(self, addr: int, value: int) -> None:
+            self.ops += 1
+            super()._write(addr, value)
+
+    tape_n = 11
+    rounds = [Round(input=(0, i % 24, 31, (i * 7 + 3) % 24)) for i in range(20)]
+    store = Counting()
+    res = Emulator(load("plotter"), store=store).run(rounds, max_instructions=MAX_INSTRUCTIONS)
+    ticks = res.ticks + store.ops * (105 + 8.3 * tape_n)
+    assert ticks < TICK_CAP, f"{ticks:,.0f} ticks over the {TICK_CAP:,} cap"

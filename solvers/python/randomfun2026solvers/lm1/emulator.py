@@ -453,6 +453,27 @@ def _store_acc_mem(em: Emulator, src: int | None) -> None:
     em.b = em.a  # `M`
 
 
+@_handler(Sem.DISPLAY_ADDR)
+def _display_addr(em: Emulator, _: int | None) -> None:
+    em.a, em.b = em.b, em.a  # `W`
+    em.display_writes.append((0, em.a))
+    em.a, em.b = em.b, em.a  # `W` — ACC preserved
+
+
+@_handler(Sem.DISPLAY_DATA)
+def _display_data(em: Emulator, _: int | None) -> None:
+    em.a, em.b = em.b, em.a
+    em.display_writes.append((1, em.a))
+    em.a, em.b = em.b, em.a
+
+
+@_handler(Sem.DISPLAY_SWAP)
+def _display_swap(em: Emulator, _: int | None) -> None:
+    em.a, em.b = em.b, em.a
+    em.display_writes.append((2, em.a))
+    em.a, em.b = em.b, em.a
+
+
 @_handler(Sem.NEGATE)
 def _negate(em: Emulator, _: int | None) -> None:
     em.a, em.b = em.b, em.a  # `W`
