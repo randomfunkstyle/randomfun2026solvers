@@ -133,6 +133,31 @@ rotate-to-addr loop and a READ/WRITE dispatch. Swapping to direct-access = a dif
 hand-laid man behind the same `Memory` interface.
 Compute (compare/ALU/branch) lives in the CPU; the DMA is the memory + I/O subsystem.
 
+## Memory as a chain of sub-blocks (the buildable plan)
+
+A single memory man (addressing loops + dispatch + I/O + ring) has too many pipes/loops to
+route and a register wall. **Split it into a pipeline of two few-pipe men** — each routes,
+each is standalone-testable, and the register wall vanishes:
+
+```
+problem input ─▶ [ Driver ] ─cmd stream─▶ [ DMA ] ─▶ problem output
+                 translate               ring exec
+```
+
+- **DMA-mem** (block 1) — hand-laid ring man (the `dma.py` template). Commands:
+  `ADVANCE` (rotate ring by 1, no emit), `PEEK` (emit head), `REPLACE value` (head:=value).
+  Standalone test: drive the command stream from input, observe output.
+- **Driver** (block 2) — reads `op, addr, [value]`; emits commands. `READ(addr)` =
+  ADVANCE×addr, PEEK, ADVANCE×(N−addr). `WRITE(addr,value)` = ADVANCE×addr, REPLACE value,
+  ADVANCE×(N−addr). **No register wall:** dispatch `op` first; `addr` stays in B as the
+  ADVANCE counter; `value` is read late and forwarded immediately (never held across the
+  restore). Pipes: input(W) + command-out(E) → routes. Standalone test: drive an op-stream,
+  observe the command stream.
+- **Chain** (block 3) — wire Driver→DMA (proven by `chain.man`) → `memory`.
+
+`sort` follows the same shape: a Driver doing the selection/compare logic over a DMA that
+holds the list. Each block is added and tested on the oracle before composing.
+
 ## Status
 Built + validated + committed: the routing model, `if3`, stores, the CPU↔DMA bus, and the
 DMA stack (PUSH/POP/ROTATE) with its looper.
