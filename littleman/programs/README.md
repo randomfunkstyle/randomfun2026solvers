@@ -202,10 +202,46 @@ dispatch and targets adjacent to the loops. Corridor ticks fell less than hoped
    - The phase needs no `mod`: `addr+1` may reach 100, and `delta_raw` then lands
      in [−100, 99], which the single `+100` correction still maps into [0, 99].
 
-   What remains is purely layout: the correction's three arms (CCW with the
-   `+100`, straight, CW) must merge without crossing each other's cells, and every
-   register op must stay inside its distance window. `circuit.py` rejects the bad
-   versions, so this is fiddly rather than risky.
+   **The anchor plan is now solved** (this was the blocker). Five pipes attach to
+   the BOTTOM wall separated by column, tape-return on the right:
+
+   | | col | why |
+   |---|---|---|
+   | `IN` | 4 | input and register anchors *must* be adjacent — the dance interleaves them, and on opposite walls each register op costs ~16 rows of walking |
+   | `REGF` | 7 | |
+   | `REGR` | 10 | |
+   | `OUT` | 13 | between the register and tape columns, so a READ's `s(tape)`→`s(out)` is a short hop that still discriminates |
+   | `TAPEFWD` | 20 | |
+   | `TAPERET` | right wall | |
+
+   All twelve op classes discriminate with nearest-pipe margin ≥ 4. Verify a plan
+   with a distance table *before* placing code — the first plan put `REGF` and
+   `OUT` in the same column, which silently sent deep `s(reg)` ops to the output
+   pipe, and a second put input and register on opposite walls, which routed fine
+   and would have squandered the entire tick saving on walking.
+
+   **A better dance order was also found.** Park `t` *before* the flag, not after:
+   the FIFO then hands back `t` first, which removes the re-park entirely — 6
+   register ops instead of 8, and no `r(reg) ; s(reg)` shuttle:
+
+   ```
+   r(reg)->phase ; M ; 1 ; +      A = t = phase+1   (B = phase, and `s`/`r`/X all leave B alone)
+   s(reg) park t                                ring: [t]
+   r(in)->op ; X -> +-1 flag
+   s(reg) park flag                             ring: [t, flag]
+   r(in)->addr ; -                A = delta_raw     (B is still phase)
+     X: <0 -> M ; `100` ; +       A = delta in 0..99
+   M                              B = delta
+   r(reg)->t ; +                  A = t+delta = addr+1   <- t is at the head already
+   s(reg) park phase                            ring: [flag, phase]
+   r(reg)->flag                                 ring: [phase]  <- invariant restored
+   W ; b                          BP = delta, B = flag
+   ```
+
+   What is left is placing that sequence plus the ring, dispatch and two target
+   arms without corridor collisions. Two habits that cost time: route corridors to
+   the cell *before* the code, never onto it; and make all arms of a branch *leave*
+   the merge cell with the same heading, or they never actually join.
 **Done (v3, now `memory.man`):** both pass-through loops are `counted_ring`s —
 2 values per lap, 5 ticks/value instead of 8. Heavy-suite ticks 257,528 →
 183,808 (**1.40×**) with area² unchanged at 1024, so ≈ **62M** expected. The
