@@ -158,6 +158,22 @@ problem input ─▶ [ Driver ] ─cmd stream─▶ [ DMA ] ─▶ problem outpu
 `sort` follows the same shape: a Driver doing the selection/compare logic over a DMA that
 holds the list. Each block is added and tested on the oracle before composing.
 
+### Drivers/CPUs are hand-laid microcode (routing is free for them)
+A Driver has only two pipes (input W, command-out E), so **every `r` hits input and every
+`s` hits output — no nearest contention, it routes for any layout**. The hard part is
+purely the control-flow walk, so we **hand-craft it like CPU microcode**: an instruction
+(READ/WRITE) decodes into a fixed sequence of micro-ops (emit `ADVANCE`/`PEEK`/`REPLACE`),
+laid as explicit cells with hand-drawn counted loops — not composed. Composition does not
+fit here anyway: `if3`/`while_loop` arms are linear `list[Instr]`, but a READ/WRITE arm is
+a multi-loop *block*, so generic dispatch over blocks is unavailable (verified:
+`TrailLayout has no len()`). Hand-laid microcode sidesteps both the block-arm limit and
+routing. The `dma.py`/`memory.py` men are the template; the Driver is the same style with
+`s out` (emit) in place of the ring ops.
+
+Register plan that avoids a Driver wall on WRITE: dispatch `op` first; `addr` drives the
+ADVANCE position count (BP); the restore count `N-addr-1` goes to **BP** before the op
+(so it survives the value emit, which uses A/B); `value` is read late and emitted at once.
+
 ## Status
 Built + validated + committed: the routing model, `if3`, stores, the CPU↔DMA bus, and the
 DMA stack (PUSH/POP/ROTATE) with its looper.
