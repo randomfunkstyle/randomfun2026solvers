@@ -125,17 +125,13 @@ def test_generated_nested_loops():
 
 
 @requires_oracle
-def test_generated_reverse():
-    """reverse_list, one round: read n then n values, emit reversed."""
+def test_generated_reverse_all_samples():
+    """Generated reverse_list passes every public sample (n up to 16)."""
     from lmc.demos import reverse_program
+    from lmc.fixtures import load_problem
 
     g, program = reverse_program()
-    grid = render(g, program)
-    cases = [
-        ([1, 42], [42]),
-        ([2, 100, -100], [-100, 100]),
-        ([3, 10, 20, 30], [30, 20, 10]),
-        ([5, 1, 2, 3, 4, 5], [5, 4, 3, 2, 1]),
-    ]
-    for inp, exp in cases:
-        assert run_grid(grid, inp, max_ticks=50000).output == exp, (inp, grid)
+    grid = render(g, program, ring_len=9)  # ring holds ~18 > max n=16
+    for case in load_problem("semester1", "reverse_list"):
+        got = run_grid(grid, case.inputs, max_ticks=200000).output
+        assert got == case.outputs, (case.inputs, got)

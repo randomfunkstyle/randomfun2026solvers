@@ -125,11 +125,15 @@ class Canvas:
         return "\n".join(r.ljust(width) for r in rows) + "\n"
 
 
-def render(graph: BlockGraph, trail: TrailLayout | None = None) -> str:
+def render(
+    graph: BlockGraph, trail: TrailLayout | None = None, ring_len: int = 2
+) -> str:
     """Render the R0 topology (CPU + input W + output E + BUF N up/down).
 
     BUF is always a forwarder loop -- a memory server is a persistent process, so
-    it runs forever (the program passes on output, not on halting)."""
+    it runs forever (the program passes on output, not on halting). `ring_len` is
+    the up/down pipe length; the ring holds ~2*ring_len values, so it must exceed
+    the largest array the program stores."""
     if trail is None:
         trail = build_trail(graph.trail)
     seg = solve_attachments(graph, trail)  # CPU-relative segment cells
@@ -165,20 +169,19 @@ def render(graph: BlockGraph, trail: TrailLayout | None = None) -> str:
         c.rect(Wi + 3, row - 1, Wi + 5, row + 1)
         c.put(Wi + 4, row, "O")
 
-    # --- North: BUF forwarder with up + down pipes ---
+    # --- North: BUF forwarder loop with up + down pipes of length ring_len ---
     north = by_side.get(N, [])
     if north:
-        # BUF forwarder loop: bottom wall -4, interior rows -5/-6, top wall -7
-        c.rect(-1, -7, max(Wi, 5), -4)
-        c.text("@>rsv", 0, -6)
-        c.text(".^..<", 0, -5)
+        # pipe cells at y = -2 .. -(ring_len+1); BUF bottom wall at -(ring_len+2)
+        buf_bottom = -(ring_len + 2)
+        # BUF interior rows buf_bottom-1 / -2, top wall buf_bottom-3
+        c.rect(-1, buf_bottom - 3, max(Wi, 5), buf_bottom)
+        c.text("@>rsv", 0, buf_bottom - 2)
+        c.text(".^..<", 0, buf_bottom - 1)
         for p in north:
             col, _ = seg[p.id]  # seg at (col, -2)
-            if p.cpu_dir(graph.cpu) == "out":  # up: CPU -> BUF
-                c.put(col, -2, "^")
-                c.put(col, -3, "^")
-            else:  # down: BUF -> CPU
-                c.put(col, -2, "v")
-                c.put(col, -3, "v")
+            ch = "^" if p.cpu_dir(graph.cpu) == "out" else "v"  # up vs down
+            for y in range(-2, buf_bottom, -1):
+                c.put(col, y, ch)
 
     return c.render()
