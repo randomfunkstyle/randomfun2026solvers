@@ -6,6 +6,12 @@ line using the **exact interpreter the online editor uses** — `littleman.wasm`
 No reimplementation: this is the reference engine run 1:1, so output matches the
 editor byte-for-byte.
 
+**Docs (saved locally — no need to hit the contest site):**
+[`SPEC.md`](SPEC.md) the language · [`GRADING.md`](GRADING.md) scoring, limits
+and the submission API · [`reference/`](reference/) raw official text +
+interpreter probe · [`../tasks/problems/`](../tasks/problems/) all 16 problem
+statements with public test data.
+
 ## Requirements
 - Node.js 24+ (uses only the stdlib: `fs`, `vm`, `path`, `url`, `WebAssembly`).
 - The wasm engine + Go runtime, bundled in this folder (self-contained):

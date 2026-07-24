@@ -1,0 +1,698 @@
++--------+
+|        |
+| @3M4+H |
+|        |
++--------+
+
++---------+
+|         |
+|    >  x |
+|    ]  ] |
+| @2bx  H |
+|         |
++---------+
+
++-----+
+|     |
+|@  H |
+|     |
+|     |
++-----+
++----+
+|    |
+|@4 H|
+|    |
++----+
+
++-------+
+|       |
+|@4  M v|
+|       |
+|H W  3<|
+|       |
++-------+
+
++-----+      
+|@3s v|   +-+
+|     |>->|O|
+|H   <|   +-+
++-----+      
+
+   +-+        
+   |I|        
+   +-+        
+    v         
+    v         
++-------+  +-+
+|@2Wr*sH|>>|O|
++-------+  +-+
+
++---------+  +-+
+|@`123`s H|>>|O|
++---------+  +-+
+
++----------+      
+|>   v     |   +-+
+|    `     |>->|O|
+| @ `123`sv|   +-+
+|^ s`1 2` <|      
+|          |      
+|    1     |      
+|    `     |      
+|    s     |      
+|    H     |      
++----------+      
+
++---+    +---+
+|>@v|    |>@v|
+|   |    |   |
+|^ <|    |^ <|
++---+    +---+
+
++------+  +-+
+|@3b5v |>>|O|
+| >  v |  +-+
+|Hdms< |
++------+
+
++---+
+|>@v|
+|   |
+|^ <|
++---+
+
++----+    +---+
+|    |    |   |
+|@2sH|>-->|@rH|
+|    |    |   |
++----+    +---+
+
+             +-----+
+             |@   v|
++--------+   |     |
+| @2sss v|>->|v   <|
+| H   s <|   |     |
++--------+   |>  rH|
+             +-----+
+
+          +------+       
+          |@4sssH|       
+          +------+       
+             v           
+             |           
+             v           
++-----+   +----+         
+|@1v  |   |>@Rv|   +----+
+|  >s<|>->|    |>->|@>r<|
++-----+   |    |   +----+
+          |^ S<|         
+          +----+         
+             v           
+             |           
+             v           
+          +----+         
+          |@>r<|         
+          +----+         
+
++-----+
+|     |
+| @   |
+|     |
+|     |
++-----+
+       +----------+     +===+
++-+    |@9b>rsmdv |     :   :
+|I|>-->|   ^   <  |>--->:   :
++-+    |          |     :   :
+       |          |     +===+
+       |        1 |       ^  
+       |        s |>------^  
+       |        H |          
+       +----------+          
+
++------+  +------------+        
+|v1W1@<|  |            |  +====+
+|> s+v |>>| >@8br>smdv |>>:    :
+|^   < |  |      ^  <  |  :    :
++------+  |          r |  :    :
+          |          s |  :    :
+          | ^        < |  +====+
+          |            |    ^   
+          +------------+    |   
+                   ^  v     |   
+                   ^  >-----^   
+         +-+  +-----+           
+         |I|>>|@r>s<|           
+         +-+  +-----+           
+
++-----------------+            
+|@`10`sW1W+s`15`sv|            
+|v`42`s+s`91`s+  <|            
+|>s+s`31`s`37`s  v|            
+|vs+s+s`74`s`34` <|            
+|>+s+sH           |            
++-----------------+            
+           v                   
+           |>--------v         
+           v^        |         
+      +-------+      v         
+      |       |     +=========+
+      |  @>rsv|     :         :
+      |v     <|     :         :
+      |>`12`sv|>--->:         :
+      |      1|     :         :
+      |       |     :         :
+      |      s|     :         :
+      |   ^  <|     :         :
+      +-------+     +=========+
+             v       ^         
+             >-------^         
+
++-+
+|I|
++-+
+ v
+ v
++-------+
+|  H    |
+|  s    |
+|  9    |  +-+
+|@rX0sH |>>|O|
+|  1    |  +-+
+|  s    |
+|  H    |
++-------+
+
+../lessons/arithmetic.man
+../lessons/backpack-binary.man
+../lessons/first-instruction.man
+../lessons/hands1.man
+../lessons/hands2.man
+../lessons/io1.man
+../lessons/io2.man
+../lessons/literals1.man
+../lessons/literals2.man
+../lessons/lockstep.man
+../lessons/loop.man
+../lessons/movement.man
+../lessons/pipes1.man
+../lessons/pipes2.man
+../lessons/pipes3.man
+../lessons/room.man
+../lessons/screen1.man
+../lessons/screen2.man
+../lessons/screen3.man
+../lessons/turning.man
+no lesson program "${e}" — add app/lessons/${e}.man (have: ${Object.keys(R).join(
+)})
+2px solid var(--color-blue-800)
+16px 0 8px
+fixed
+lesson-${e}
+panel
+The unit of time. Each tick, every little man executes the instruction he is standing on and then, if possible, takes one step in his current direction.
+A little man is blocked when the instruction he is standing on cannot complete yet (for example, receiving from an empty pipe). A blocked man stays where he is and tries again next tick.
+A single ASCII character that specifies an operation that a little man should perform.
+A fatal mistake — hitting a wall, stepping on an invalid instruction. An error immediately ends the whole program.
+A halted little man stops moving and executing instructions. A halted program stops ticking.
+The way a little man is currently facing — up, down, left, or right. Each tick he tries to step one square that way, unless he is blocked.
+A little man's home. A rectangular area drawn with + at the corners, - along the top and bottom walls, and | along the left and right walls.
+.man
+The canonical file extension for little man programs.
+Each little man has two hands. Each hand can hold a single integer.
+main hand
+One of the little man's hands. Labeled 'A' in the littleman editor. Many operations, like running over a number or adding two numbers, change the value in a little man's main hand.
+off hand
+The other of a little man's hands. Labeled 'B' in the littleman editor. Operations often use the value in a little man's off hand but rarely write to it.
+A unidirectional connection between two rooms. Values travel one pipe cell per tick; a pipe can hold as many values as it has cells.
+io room
+The input room and the output room: special 3x3 rooms containing only the character I or O. Values read from the input room's pipe are the program's input; values sent into the output room's pipe are the program's output.
+A container each little man carries, capable of holding one integer. Shown as BP in the littleman editor. A little man cannot look at the value in his backpack, but he can turn based on it.
+An instruction — see instruction.
+A grid of ASCII characters that one or more little men walk and execute.
+A solid block of color that is approximately as large as a little man.
+a rectangular device that can show images on command.
+display cursor
+The position on a display where the next pixel will be drawn. The cursor advances from left to right and top to bottom as pixels are drawn.
+display screen buffer
+One of a display's two stored images: current (the image shown on the display) and next (the image being composed). A swap copies next to current.
+
+  && {
+    font-style: normal;
+    color: inherit;
+    border-bottom: 1px dotted var(--color-stone-500);
+    text-decoration: none;
+    cursor: help;
+  }
+  &&:hover,
+  &&:focus {
+    color: inherit;
+    text-decoration: none;
+    border-bottom-color: var(--color-stone-700);
+  }
+
+
+  max-width: 260px;
+  padding: 6px 8px;
+  background: var(--color-stone-800);
+  color: var(--color-paper);
+  font-size: var(--font-size-small);
+  font-style: normal;
+  line-height: 1.4;
+  text-align: left;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+
+
+  margin: 0 -6px 8px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  scroll-margin-top: 16px;
+  transition: background-color 0.7s ease-out;
+
+  &:target {
+    background: var(--color-yellow-200);
+    transition: none;
+  }
+
+start
+little men
+Little men and their rooms
+We represent a little man using an 
+@
+ symbol.
+Little men live in 
+room
+rooms
+ - rectangular areas denoted using the characters 
++
+, 
+-
+, and 
+|
+. A little man may never be placed outside of a room, and may never leave the room he was placed in.
+Try running this program - you'll see an
+error
+error
+ when the little man tries to leave his room. An error ends the whole program.
+room
+instructions
+Instructions
+instruction
+Instructions
+ are ASCII characters that specify behavior that a little man should take. After a little man steps on an instruction, he attempts to execute it. Each step is called a 
+tick
+tick
+The simplest instruction is 
+, which tells a little man to
+halt
+halt
+ - to stop moving for the duration of a program.
+Stepping on an invalid instruction is an
+error
+error
+first-instruction
+movement
+Movement
+Unless they are 
+blocked
+blocked
+ by something, little men attempt to move one square in their current
+direction
+direction
+ on every
+tick
+tick
+. Little men always begin moving to the right.
+Use 
+ to set a little man's direction to down, 
+<
+for left, 
+>
+ for right, and 
+^
+ for up.
+movement
+hands
+Hands
+Each little man has two hands which, for clarity, we'll call their
+main hand
+main hand
+ (the right hand for 90% of little men) and their 
+off hand
+off hand
+. A little man can hold a single integer in each hand. His hands always begin holding the number "0".
+When a little man runs over a number, he copies that number into his main hand.
+The editor shows you live information about what is in each little man's hand when a program is running. For brevity, we use 
+to refer to the little man's main hand and 
+ to refer to his off hand.
+Try running the program below! Notice that 
+ changes to "4" after the little man runs over the 4.
+hands1
+hands
+To place a value into a little man's off hand you can use 
+to 
+copy
+ the value from his main hand, or you can use 
+to 
+swap
+ the values in his hands.
+Here's a program that makes use of both operations. Watch how the
+ and 
+ values change over the course of the program's run.
+hands2
+arithmetic
+Arithmetic
+Little men are extraordinarily proficient at basic mathematical tasks. The operation 
++
+ causes a little man to add the value in his
+off hand
+off hand
+ to the value in his
+main hand
+main hand
+ and place the result into his main hand - a small example program that adds the numbers "3" and "4" is provided below.
+arithmetic
+arithmetic
+Little men can perform other basic arithmetic tasks such as subtraction 
+-
+, multiplication 
+*
+, division 
+/
+, negation 
+, and modulo 
+%
+. Operations that require two terms use the 
+main
+ hand first ( 
+A - B
+ not
+B - A
+ ) and the little man always places the primary result into his 
+main
+ hand (for division, he places the floored result into his main hand and the remainder into his off hand).
+Because this is a course on 
+computation
+, an explanation of binary is out of scope. But mathematically inclined students may appreciate that little men can also perform basic binary operations such as AND 
+&
+, OR 
+|
+, XOR 
+~
+, and left and right shifts 
+{
+ and 
+}
+multiple-rooms
+Multiple Rooms
+A 
+program
+program
+ can contain many
+room
+rooms
+, each of which may contain a little man. Rooms may not overlap or nest. All little men in a program move in lockstep.
+lockstep
+pipes
+Communicating with pipes
+In the early 1970s, Ken Thompson discovered that little men could use
+pipe
+pipes
+ to communicate. A pipe is a unidirectional connection between two rooms.
+A pipe is drawn using 
+, 
+>
+, 
+<
+, and
+^
+ (to establish direction) and 
+-
+ or 
+|
+(depending on if it is traveling horizontally or vertically). Pipes cannot be drawn within rooms.
+A little man can use 
+ (send) to copy the value in his
+main hand
+main hand
+ into the nearest outgoing pipe connected to his room, and 
+ (receive) to take a value from the nearest incoming pipe connected to his room and put it into his main hand.
+pipes1
+pipes
+As you may have noticed, it takes a pipe time to move a value - values move one pipe cell per tick. You can always click on a pipe to see what values are currently inside it.
+A pipe that is 5 cells long can hold a maximum of 5 values. Sending data to a pipe that is full will 
+blocked
+until there is space, and trying to 
+read
+ from an empty pipe will block until there's a value to read.
+pipes2
+pipes
+A room can have an arbitrary number of pipes connected. Programs with many pipes can be very expressive. In this way, pipes are like garden hoses - you can always screw in another segment when you need to massage data in a new way.
+In addition to 
+ and 
+ (which only operate over the
+nearest
+ incoming or outgoing pipe), little men can read from
+ incoming pipe with 
+ and send to 
+every
+outgoing pipe with 
+. Finally, 
+ is like 
+, but, after receiving the value, the little man will turn away from the pipe which he received the value from.
+pipes3
+pipes
+Pipes are the first concept that tends to confuse new students. Remember that you can always click on a pipe to see what values are flowing through it.
+The precise semantics of pipe-drawing, the definition of "nearest," and how ties are broken are described in depth in our
+/language-reference
+language reference
+But don't fear! The editor is here to help you. You can click on any pipe operation (like 
+ or 
+) to highlight the pipe that it will operate over. And the editor comes with dedicated pipe-drawing tools: view the editor help page to learn more.
+input-output
+Input and output
+Fortunately, it is possible to communicate with the little men in our computers. Computers would not be nearly as useful if we couldn't.
+To communicate with our little men we use the
+io room
+input room
+ and output room - special 3x3 rooms that contain only the character "I" or "O".
+To output a value, simply send it to a pipe that is connected to the output room. Run the program below and notice how the number "3" appears in the output box.
+input-output
+Similarly, read from a pipe connected to the input room in order to receive input. This program receives the number "42" (the input box in the bottom left of the editor), multiplies it by 2, and outputs it.
+input-output
+program
+Programs
+ can have at most one input and one output room. It is an error to connect more than one pipe to the input room or the output room, or to connect an input pipe to the output room or vice-versa.
+turning
+Turning
+The 
+ instruction allows a little man to conditionally turn based on the value in his 
+main hand
+main hand
+. Upon running an 
+operation
+operation
+, the little man turns left (counterclockwise) if his main hand is less than 0 and turns right (clockwise) if his main hand is greater than 0. He continues straight if his main hand contains a 0.
+Try making the input value (in the bottom left) to this program negative, positive, or 0 and observe how the man's direction changes when he hits the 
+turning
+backpack
+The backpack
+In addition to his 
+main hand
+main hand
+ and
+off hand
+off hand
+, each little man has a
+backpack
+backpack
+ (shown as 
+ in the editor). The backpack is capable of holding a number. The little man cannot look at the value in his backpack, but he can turn based on it.
+The 
+operation
+operation
+ copies the value from a little man's main hand into his backpack. 
+decrements the value in his backpack by 1.
+The 
+ operation causes a little man to turn to the left if his backpack value is greater than 0 - otherwise he goes straight. Likewise, the 
+ operation turns a little man to the right if his backpack value is greater than 0.
+Clever use of the backpack allows a little man to do a strange thing we call 
+loop
+ - that is, to repeat an operation multiple times. Here, we place the number "3" into the little man's backpack so that he outputs the number "5" three times!
+loop
+backpack
+The little man can also make use of his mathematical prowess when reading from the backpack. The 
+ operation turns the little man to the left (counterclockwise) if the value in his backpack is even, and right otherwise. The 
+]
+ operation divides the value in his backpack by 2, rounding down.
+Students of mathematics may recognize 
+ as a turn based on the value of 
+backpack & 1
+ and 
+]
+ as
+backpack = backpack >> 1
+backpack-binary
+backpack
+The backpack has additional functionality not directly related to turning: the 
+ operation reads the number of values currently sitting in the nearest incoming pipe into the little man's backpack.
+bigger numbers
+Bigger numbers
+You may sometimes need to write numbers larger than 9 in your
+program
+program
+. To do this, surround the number that you would like to write with 
+`
+. A little man loads the entire number between two 
+`
+ into his
+main hand
+main hand
+ upon reaching the closing
+`
+. This program loads and outputs the number "123".
+literals1
+bigger numbers
+Numbers can be written in this fashion vertically and horizontally, and can be walked in any direction. The sequence 
+`123`
+ could be read as "123" or "321" depending on the direction that it is walked.
+You may also leave spaces inside your large numbers - the little man ignores them when deciding what number to store in his main hand.
+Here is a program with several large numbers - try to predict what numbers it will output!
+literals2
+bigger numbers
+It is an error to place anything other than a space or a number between two 
+`
+operation
+operations
+, and it is an error to place an unmatched 
+`
+ in your program.
+the-display
+The LM-75 display
+You are likely reading this textbook on a
+display
+display
+ - a rectangular device that can show images on command. While the implementation of displays is outside the scope of this course, controlling one is relatively simple.
+In this class you will use an LM-75 display with a maximum interior width and height of 64 
+pixel
+pixels
+. LM-75s are drawn using 
++
+, 
+:
+, and 
+=
+. Changing the image on an LM-75 involves writing data over 
+pipe
+pipes
+. However, unlike rooms, the 
+side
+ that a pipe attaches to is significant (readers have likely encountered VGA connectors like this at home).
+Before we discuss the LM-75's precise specification, let us consider a simple example program that uses a display. Try running this program and observe how the display changes!
+screen1
+0 1 2 3 4 5 6 7 8
+the-display
+How does such a simple program produce such a complex image? To answer that, we must understand the core concepts of a display: the
+display cursor
+cursor
+ and the
+display screen buffer
+screen buffers
+Pixels are drawn one at a time. The LM-75's 
+cursor
+ points to the next pixel that the display will draw. It begins pointing at the upper-left pixel of the display, and it automatically advances from left to right and top to bottom whenever a pixel is drawn.
+The LM-75 has two 
+screen buffers
+, which we call 
+current
+and 
+next
+. Current contains the image currently shown on the display; next is where the next image to show is composed. Showing a new image is simply a matter of copying next to current.
+To draw to the LM-75, attach a pipe to its 
+ side. When the LM-75 reads a value from its left side it:
+Looks up the color for that value
+Draws that pixel to next at the cursor's current position
+Advances the cursor
+The LM-75 supports 16 colors, so values that arrive over the left pipe must be between 0 and 15.
+To tell the LM-75 to display the next buffer, attach a pipe to its
+ side. Writing a 
+ copies next to current, clears next, and repositions the cursor in the upper left. Writing a
+ copies next to current but preserves the cursor's position and the state of next.
+Inspect the program below. Try changing its input from 0 to 1 and see how the program's behavior changes. Also note that you can inspect the screen's state as your program runs by clicking on the widget that appears below it.
+screen2
+the-display
+Pipes may also be attached to the 
+ of the LM-75. A value written to this pipe repositions the cursor. These values take the form 
+row * width + column
+ (rows and columns are counted from 0). For example, on a 4x4 display, write 
+ to position the cursor in the third column of the second row, and 
+ to position the cursor in the bottom right.
+Changing the cursor's position allows your programs to quickly draw interesting shapes and images! Run the program below for a simple example.
+screen3
+further study
+Further study
+This wraps up our whirlwind tour of your computer's architecture. You are now ready to begin your homework.
+To get started, take a look at
+/grading
+grading
+how problems are graded
+, and then visit the 
+/problem-sets
+problem sets
+ page to try your first problem.
+To clear up any ambiguities and view the full list of supported
+operation
+operations
+, check out the
+/language-reference
+language reference and instruction set
+. For help with the editor, view the
+/editor-help
+editor help page
+Whether you're a new student eager to write your first
+program
+program
+ or an experienced practitioner who's ready to develop their own methods of creating littleman programs, we're excited to see what you do!
+Loading…
+Introduction to Systems Programming
+This class will serve as an introduction to 
+systems programming
+ - the act of directly interfacing with the underlying primitives that power the computer that you're using right now.
+How does a computer work?
+As some of you likely know, inside your computer are millions (or even billions) of little men.
+Those men are constantly dashing around to find and execute simple
+instruction
+instructions
+. An instruction might, for example, tell a little man to add or subtract two numbers or send a message to another little man.
+We call the set of instructions that a group of little men executes a
+program
+program
+. The individual instructions of a program are simple, but a program's behavior can be surprisingly complex. Programs can solve difficult mathematical problems, simulate games, and communicate over long distances.
+With enough time one could even write a program that simulates the behavior of a little man!
+About the language and editor
+Littleman (
+.man
+.man
+) programs are stored as text files full of ASCII characters.
+For the duration of this course you are free to write your programs in the text editor of your choice or to otherwise generate them in whatever way you see fit. However, many text editors struggle to write
+.man
+ programs because of their spatial nature and very long lines of text.
+To that end, your TAs have written a custom littleman program editor! You'll see the editor embedded below. The editor adds modern affordances like syntax highlighting, copy-paste, and the ability to run
+.man
+ programs directly in your web browser.
+aria-label
+Course contents
+20px 0 28px
+Contents
+8px 0 0
+Definitions
+${e.id}-${t+1}
+↑ contents
+definitions
+Definitions
+def-${e}
+inline
+inline
+ — 

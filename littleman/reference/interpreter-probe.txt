@@ -1,0 +1,225 @@
+--- '%'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=0 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=0 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=-1 B=-2 BP=0 dir=>   
+--- '&'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=2 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=2 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=6 B=-2 BP=0 dir=>   
+--- '*'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=18 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-18 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=-14 B=-2 BP=0 dir=>   
+--- '+'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=9 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-3 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=5 B=-2 BP=0 dir=>   
+--- '-'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=3 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-9 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=9 B=-2 BP=0 dir=>   
+--- '.'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   
+--- '/'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=2 B=0 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-2 B=0 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=-4 B=-1 BP=0 dir=>   
+--- '0'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=0 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=0 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=0 B=-2 BP=0 dir=>   
+--- '1'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=1 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=1 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=1 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=1 B=-2 BP=0 dir=>   
+--- '2'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=2 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=2 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=2 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=2 B=-2 BP=0 dir=>   
+--- '3'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=3 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=3 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=3 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=3 B=-2 BP=0 dir=>   
+--- '4'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=4 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=4 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=4 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=4 B=-2 BP=0 dir=>   
+--- '5'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=5 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=5 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=5 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=5 B=-2 BP=0 dir=>   
+--- '6'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=6 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=6 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=6 B=-2 BP=0 dir=>   
+--- '7'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=7 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=7 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=7 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   
+--- '8'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=8 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=8 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=8 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=8 B=-2 BP=0 dir=>   
+--- '9'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=9 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=9 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=9 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=9 B=-2 BP=0 dir=>   
+--- '<'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=<   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=<   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=<   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=<   
+--- '>'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   
+--- 'H'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   halted:done
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   halted:done
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   halted:done
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   halted:done
+--- 'M'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=6 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=-6 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=7 BP=0 dir=>   
+--- 'N'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=-6 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=6 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=-7 B=-2 BP=0 dir=>   
+--- 'R'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"R"}
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"R"}
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"R"}
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"R"}
+--- 'S'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"S"}
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"S"}
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"S"}
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"S"}
+--- 'U'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"U"}
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"U"}
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"U"}
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"U"}
+--- 'V'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=v   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=v   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=v   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=v   
+--- 'W'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=3 B=6 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=3 B=-6 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=-2 B=7 BP=0 dir=>   
+--- 'X'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=v   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=^   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=v   
+--- 'Y'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=v   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=v   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=v   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=v   
+--- ']'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=1 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=0 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   
+--- '^'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=^   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=^   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=^   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=^   
+--- '`'
+   A=6 B=3 BP=2   ERR unmatched backtick — a numeric literal needs a matching ` on the same row or column
+   A=-6 B=3 BP=1  ERR unmatched backtick — a numeric literal needs a matching ` on the same row or column
+   A=0 B=0 BP=0   ERR unmatched backtick — a numeric literal needs a matching ` on the same row or column
+   A=7 B=-2 BP=0  ERR unmatched backtick — a numeric literal needs a matching ` on the same row or column
+--- 'a'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=^   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=^   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   
+--- 'b'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=6 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=-6 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=7 dir=>   
+--- 'd'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=v   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=v   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   
+--- 'm'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=1 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=0 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=-1 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=-1 dir=>   
+--- 'q'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"q"}
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"q"}
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"q"}
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"q"}
+--- 'r'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"r"}
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"r"}
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"r"}
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"r"}
+--- 's'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"s"}
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"s"}
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[7,6],"cell":"s"}
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=>   halted:no-pipe fatal={"reason":"no-pipe","pos":[8,6],"cell":"s"}
+--- 'v'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=v   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=v   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=v   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=v   
+--- 'x'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=6 B=3 BP=2 dir=^   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-6 B=3 BP=1 dir=v   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=^   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=7 B=-2 BP=0 dir=^   
+--- '{'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=48 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-48 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=0 B=-2 BP=0 dir=>   
+--- '|'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=7 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-5 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=-1 B=-2 BP=0 dir=>   
+--- '}'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=0 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-1 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=0 B=-2 BP=0 dir=>   
+--- '~'
+   A=6 B=3 BP=2   A=6 B=3 BP=2 dir=>  ==>  A=5 B=3 BP=2 dir=>   
+   A=-6 B=3 BP=1  A=-6 B=3 BP=1 dir=>  ==>  A=-7 B=3 BP=1 dir=>   
+   A=0 B=0 BP=0   A=0 B=0 BP=0 dir=>  ==>  A=0 B=0 BP=0 dir=>   
+   A=7 B=-2 BP=0  A=7 B=-2 BP=0 dir=>  ==>  A=-7 B=-2 BP=0 dir=>   
