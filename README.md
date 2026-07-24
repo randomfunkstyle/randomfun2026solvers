@@ -118,6 +118,7 @@ entrypoints:
 
 - `shell-smoke`: Bash smoke solver that writes a minimal `{"smoke": true}` solution.
 - `sudoku`: Python solver for `demo_sudoku` task payloads that writes `{"grid": "<81 digits>"}`.
+- `probe`: Python interactive solver for `demo_probe`; probes each digit index then guesses the reconstructed number (run with `--mode interactive`).
 - `swift-smoke`: Swift smoke solver that writes a minimal `{"smoke": true}` solution.
 
 ## Local smoke
