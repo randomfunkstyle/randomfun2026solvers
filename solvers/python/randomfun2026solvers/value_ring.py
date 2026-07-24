@@ -10,29 +10,33 @@ differs.
                      recirculating.  Ring order v1..vk emits vk..v1.  The count
                      k lives in **B**, which survives every `r`/`s`.
 
-    sort-numbers     two passes per output: pass 1 finds the minimum, pass 2
-                     scans to the first value equal to it, emits it and replaces
-                     it with a SENTINEL bigger than any input.  B is busy
-                     holding the running minimum, so the count cannot live
-                     there -- instead the ring carries a **header word** (= n) as
-                     its first value.  Every pass consumes exactly one whole lap,
-                     so the ring stays aligned and each pass starts by reading
-                     the header back: the count is *readable memory made of
-                     pipe*.  The round ends when the minimum comes back equal to
-                     the sentinel (all n slots retired), which needs no counter
-                     at all.
+    sort-numbers     selection sort, **one lap per output**.  The running
+                     minimum is *carried* in B: each value read is compared
+                     against the carry and the loser is spilled back into the
+                     ring, so after one lap the carry is the minimum and the ring
+                     holds the other k-1 values.  B is therefore busy and the
+                     count cannot live there -- instead the ring carries a
+                     **header word** (= k) as its first value.  Every pass
+                     consumes exactly one whole lap, so the ring stays aligned
+                     and each pass starts by reading the header back: the count
+                     is *readable memory made of pipe*.  Each pass writes back a
+                     header of k-1, and a header of 0 both ends the round and
+                     leaves the ring empty -- no drain pass, no outer counter.
 
 Pipe binding (SPEC "nearest, not nearest-ready") is what dictates the layout.
 Incoming pipes are {input, ring-return}, outgoing are {output, ring-forward}, so
 an `r` only ever competes with the other *incoming* pipe and an `s` with the
-other *outgoing* one.  The two are separated on opposite walls:
+other *outgoing* one.  That is what lets the anchors be packed this tightly:
 
-    input        -> NORTH wall     ring-forward -> EAST wall
-    ring-return  -> SOUTH wall     output       -> WEST wall
+    input  -> NORTH wall (one column)   ring-forward -> EAST wall
+    output -> NORTH wall (another)      ring-return  -> EAST wall
 
-so every `r(input)` sits high, every `r(ring)` low, every `s(ring)` east and the
-lone `s(output)` west.  `littleman/tools/route-check.mjs` verifies each one
-against the engine.
+Input reads sit high near the input pipe's column and ring reads sit low and
+east; ring sends sit east and the lone output send sits far west.  Both I/O rooms
+therefore share the 5-row band above the worker and the whole ring coils into the
+strip east of it -- no rows below the worker, no columns west of it, which is
+where the compact bounding box comes from.  `littleman/tools/route-check.mjs`
+verifies every binding against the engine.
 """
 
 from __future__ import annotations
@@ -41,13 +45,7 @@ import sys
 
 from randomfun2026solvers.circuit import Circuit, Collision, E, N, S, W
 
-__all__ = ["build_reverse", "SENTINEL"]
-
-# NOTE: `build_sort` is designed above but NOT YET IMPLEMENTED -- the header-word
-# trick is the plan of record, not working code.
-
-# A value larger than any list element (|x| <= 1e6 for reverse, 1e4 for sort).
-SENTINEL = 1_000_001
+__all__ = ["build_reverse", "build_sort", "reverse_worker", "sort_worker"]
 
 # ── relay: the ring's turnaround room (6 ticks/word, same as the worker) ──────
 RELAY = [
@@ -111,10 +109,6 @@ def walls(g: Circuit, ox: int, oy: int, iw: int, ih: int) -> None:
         g.set(ox + iw, oy + y, "|")
 
 
-def lit(n: int) -> str:
-    return str(n) if 0 <= n < 10 else f"`{n}`"
-
-
 # ══════════════════════════════════════════════════════ reverse-a-list ════════
 #
 #   MAIN     r(in)->n ; b ; M                      BP = n, B = n
@@ -124,10 +118,12 @@ def lit(n: int) -> str:
 #            r(ring) ; s(out)                      emit vk, do NOT recirculate
 #            W ; M ; X                             A = B = k-1; 0 -> MAIN, + -> EMIT
 #
-# Interior 12x14.  Anchors: input = north wall col 8, output = west wall row 13,
-# ring-forward = east wall row 7, ring-return = south wall col 10.
+# Interior 12x14.  Anchors: input = north wall col 8, output = north wall col 2,
+# ring-forward = east wall row 0, ring-return = east wall row 13.  Both I/O rooms
+# share the 5-row north band and the whole ring coils into the east strip, which
+# is what gets the bounding box down to 21x21 (see `build_reverse`).
 REV_IW, REV_IH = 12, 14
-REV_IN_COL, REV_OUT_ROW, REV_FWD_ROW, REV_RET_COL = 8, 13, 7, 10
+REV_IN_COL, REV_OUT_COL, REV_FWD_ROW, REV_RET_ROW = 8, 2, 0, 13
 
 
 def reverse_worker() -> Circuit:
@@ -162,7 +158,7 @@ def reverse_worker() -> Circuit:
     c.set(11, 12, "r")  # vk off the ring
     c.set(11, 13, "<")
     c.horizontal(13, 11, 2)
-    c.run(2, 13, "s", d=W)  # emit it (output pipe, west wall)
+    c.run(2, 13, "s", d=W)  # emit it (output pipe, north wall)
     c.run(1, 13, "W", d=W)  # A = k-1, B = vk
     c.set(0, 13, "^")
     c.set(0, 12, "M")  # B = k-1
@@ -173,44 +169,182 @@ def reverse_worker() -> Circuit:
 
 
 def build_reverse() -> list[str]:
-    """The whole `reverse-a-list` machine: worker + I/O rooms + relay + ring."""
-    g = Circuit(64, 40)
-    wx, wy = 6, 6
+    """The whole `reverse-a-list` machine: worker + I/O rooms + relay + ring.
+
+    21x21.  The I and O rooms sit side by side in the 5-row band above the worker
+    (both pipes enter its NORTH wall, discriminated by column), and the ring
+    coils into the 7-column strip east of it with both pipes on the EAST wall --
+    so no row is spent below the worker and no column west of it.
+    """
+    g = Circuit(24, 24)
+    wx, wy = 1, 6
     stamp(g, wx, wy, reverse_worker().rows())
     walls(g, wx, wy, REV_IW, REV_IH)
 
-    # input room, above (its pipe must enter the worker's NORTH wall)
+    # I and O rooms, side by side in the north band; both pipes hit the N wall
     icol = wx + REV_IN_COL
     stamp(g, icol - 1, 0, ["+-+", "|I|", "+-+"])
     draw_pipe(g, [(icol, 3), (icol, 4)])
+    ocol = wx + REV_OUT_COL
+    stamp(g, ocol - 1, 0, ["+-+", "|O|", "+-+"])
+    draw_pipe(g, [(ocol, 4), (ocol, 3)])
 
-    # output room, west (its pipe leaves the worker's WEST wall)
-    orow = wy + REV_OUT_ROW
-    stamp(g, 0, orow - 1, ["+-+", "|O|", "+-+"])
-    draw_pipe(g, [(4, orow), (3, orow)])
-
-    # the ring: worker east wall -> relay (east) -> band below -> worker south wall
-    stamp(g, 20, 15, RELAY)
-    n_fwd = draw_pipe(g, [(wx + REV_IW + 1, wy + REV_FWD_ROW), (21, 13), (21, 14)])
+    # the ring, coiled in the east strip: out at the worker's top-right corner,
+    # down through the relay, back in at its bottom-right.
+    east = wx + REV_IW + 1  # first free column east of the wall
+    stamp(g, east + 1, 10, RELAY)
+    n_fwd = draw_pipe(g, [(east, wy + REV_FWD_ROW), (east + 5, wy + REV_FWD_ROW), (east + 5, 9)])
     n_ret = draw_pipe(
         g,
-        [
-            (21, 20),
-            (21, 22),
-            (25, 22),
-            (25, 24),
-            (wx + REV_RET_COL, 24),
-            (wx + REV_RET_COL, wy + REV_IH + 1),
-        ],
+        [(east + 3, 15), (east + 3, 16), (east + 6, 16), (east + 6, 19), (east, wy + REV_RET_ROW)],
     )
-    if n_fwd + n_ret < 16 + 4:
-        raise Collision(f"ring holds {n_fwd + n_ret} values, need >= 20")
+    if n_fwd + n_ret + 2 < 16 + 2:
+        raise Collision(f"ring holds {n_fwd + n_ret + 2} values, need >= 18")
+    return [r.rstrip() for r in g.rows() if r.strip()]
+
+
+# ══════════════════════════════════════════════════════════ sort-numbers ══════
+#
+# Selection sort with the running minimum **carried in B**, one lap per output.
+# The ring carries a HEADER word (the count) ahead of the values, so the count is
+# readable even though B is busy and BP is write-only:
+#
+#   MAIN      r(in)->n ; b ; s(ring)              BP = n, ring = [n]
+#             x n { r(in) ; s(ring) }             ring = [n, v1..vn]
+#   HEAD      r(ring)->k ; X                      k == 0 -> MAIN (ring is empty)
+#   BODY      M ; 1 ; - ; N ; b ; s(ring)         BP = k-1, new header = k-1
+#             r(ring) ; M                         carry = v1
+#             x (k-1) { r(ring) ; - ; X
+#                 A <  0 :  W ; s(ring) ; + ; M   vi < carry: spill carry, carry = vi
+#                 A >= 0 :  + ; s(ring)           vi >= carry: spill vi
+#             }
+#             W ; s(out)                          emit the minimum
+#             -> HEAD
+#
+# Each pass consumes exactly one whole lap, so the ring stays aligned and the
+# next pass reads the header back.  A header of 0 terminates the round *and*
+# leaves the ring empty, so no drain pass and no outer counter is needed.
+# Interior 19x18.  Anchors: input = north wall col 14, output = north wall col 0,
+# ring-forward = east wall row 11, ring-return = east wall row 10.  The forward
+# anchor sits *below* the return one so the two pipes can share a 3-column strip
+# without crossing (the forward pipe's horizontal run would otherwise cut the
+# return pipe's descent), and the output anchor is col 0 because at col 1 the
+# MAIN `s` is 16 away from *both* outgoing pipes -- a tie, and reading order
+# resolves it the wrong way (it would emit the count as program output).
+SORT_IW, SORT_IH = 19, 18
+SORT_IN_COL, SORT_OUT_COL, SORT_FWD_ROW, SORT_RET_ROW = 14, 0, 11, 10
+
+
+def sort_worker() -> Circuit:
+    c = Circuit(SORT_IW, SORT_IH)
+
+    # ── MAIN (row 0): read n, BP = n, ship it as the ring header ────────────
+    c.set(0, 0, ">")
+    c.run(1, 0, "@")
+    c.horizontal(0, 1, 13)
+    c.run(13, 0, "rbs")  # r(input), BP = n, s(ring) header
+    c.set(16, 0, "v")
+    c.set(16, 1, "<")
+    c.set(15, 1, " ")
+    c.set(14, 1, "v")
+
+    # ── LOAD: n x { r(input), s(ring) } ────────────────────────────────────
+    load_exit, _ = c.counted_loop(14, 2, "rs")
+    assert load_exit == 16
+    c.route((16, 2), E, [(16, 6)], (5, 6), S)  # down the east side, west
+    c.vertical(5, 6, 10)
+    c.set(5, 10, ">")  # merge into the HEAD row
+
+    # ── HEAD (row 10): read the header; 0 ends the round ───────────────────
+    c.horizontal(10, 0, 5)  # (5,10) already merges in
+    c.set(0, 10, ">")
+    c.run(6, 10, "rX")  # A = k; 0 -> north lane, + -> BODY
+    c.set(8, 10, "^")  # zero lane: back to MAIN
+    c.route((8, 9), N, [(8, 1)], (0, 1), N)
+    c.set(0, 0, ">")
+
+    # ── BODY (rows 11-12): BP = k-1, new header, load the carry ────────────
+    c.set(7, 11, ">")
+    c.run(8, 11, "M1-Nb")  # B = k, A = k-1, BP = k-1
+    c.horizontal(11, 12, 17)
+    c.run(17, 11, "s")  # new header = k-1
+    c.set(18, 11, "v")
+    c.set(18, 12, "<")
+    c.horizontal(12, 18, 12)
+    c.run(12, 12, "rM", d=W)  # carry = v1
+    c.horizontal(12, 11, 8)
+    c.set(8, 12, "v")
+
+    # ── the pass loop: test row 13, body row 15, three lanes ───────────────
+    c.set(8, 13, ">")
+    c.set(9, 13, "d")  # BP>0 -> south into the body
+    c.set(9, 14, " ")
+    c.set(9, 15, ">")
+    c.run(10, 15, "r-X")  # A = vi - carry, B = carry
+    c.run(13, 15, "+s")  # A >= 0 straight: spill vi
+    c.set(12, 14, ">")
+    c.run(13, 14, "Ws+M")  # A < 0 north: spill carry, carry = vi
+    c.set(12, 16, ">")
+    c.run(13, 16, "+s")  # A > 0 south: spill vi
+    for row in (15, 16):
+        c.horizontal(row, 14, 17)  # row 14's lane reaches col 16
+    for row in (14, 15, 16):
+        c.set(17, row, "v")  # all three lanes merge south
+    c.set(17, 17, "<")
+    c.horizontal(17, 17, 8)
+    c.set(8, 17, "^")
+    c.set(8, 16, " ")
+    c.set(8, 15, " ")
+    c.set(8, 14, "m")
+
+    # ── loop exit -> emit the minimum -> HEAD ──────────────────────────────
+    c.horizontal(13, 9, 14)
+    c.set(14, 13, "^")
+    c.vertical(14, 13, 9)
+    c.set(14, 9, "<")
+    c.horizontal(9, 14, 2)
+    c.run(2, 9, "Ws", d=W)  # A = min, emit it (output pipe)
+    c.set(0, 9, "v")
+    return c
+
+
+def build_sort() -> list[str]:
+    """The whole `sort-numbers` machine: worker + I/O rooms + relay + ring.
+
+    25x25.  Same coiling as :func:`build_reverse`, except the relay lives in the
+    north band beside the I room (the band is 5 rows and the relay is exactly 5
+    rows tall), so the east strip only has to carry the two pipes.
+    """
+    g = Circuit(28, 28)
+    wx, wy = 1, 6
+    stamp(g, wx, wy, sort_worker().rows())
+    walls(g, wx, wy, SORT_IW, SORT_IH)
+
+    icol = wx + SORT_IN_COL
+    stamp(g, icol - 1, 0, ["+-+", "|I|", "+-+"])
+    draw_pipe(g, [(icol, 3), (icol, 4)])
+    ocol = wx + SORT_OUT_COL
+    stamp(g, ocol - 1, 0, ["+-+", "|O|", "+-+"])
+    draw_pipe(g, [(ocol, 4), (ocol, 3)])
+
+    # relay: north band, east of the I room.  Both its pipes attach to its BOTTOM
+    # wall, because only columns east of the worker's north-east corner have a
+    # free cell under the band -- which is what fixes the relay's position.
+    east = wx + SORT_IW + 1
+    stamp(g, east - 2, 0, RELAY)
+    n_fwd = draw_pipe(g, [(east, wy + SORT_FWD_ROW), (east + 2, wy + SORT_FWD_ROW), (east + 2, 5)])
+    n_ret = draw_pipe(g, [(east + 1, 5), (east + 1, wy + SORT_RET_ROW), (east, wy + SORT_RET_ROW)])
+    if n_fwd + n_ret + 2 < 17 + 2:
+        raise Collision(f"ring holds {n_fwd + n_ret + 2} values, need >= 19")
     return [r.rstrip() for r in g.rows() if r.strip()]
 
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "reverse"
-    if which == "reverse-worker":
-        print(reverse_worker().ruler())
-    else:
-        print("\n".join(build_reverse()))
+    builders = {
+        "reverse": build_reverse,
+        "sort": build_sort,
+        "reverse-worker": lambda: reverse_worker().ruler().split("\n"),
+        "sort-worker": lambda: sort_worker().ruler().split("\n"),
+    }
+    print("\n".join(builders[which]()))

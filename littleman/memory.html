@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>memory — how the littleman 100-cell RAM works</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f4f1; --surface-1: #fcfcfb; --surface-2: #eeeeea;
+  --border: #dcdcd5; --text-primary: #0b0b0b; --text-secondary: #52514e;
+  --text-muted: #78776f;
+  --rotate: #2a78d6; --control: #eb6834; --op: #1baf7a; --neutral: #a9a8a0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422;
+    --border: #35352f; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+    --text-muted: #8e8d84;
+    --rotate: #3987e5; --control: #d95926; --op: #199e70; --neutral: #6b6a63;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #242422;
+  --border: #35352f; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+  --text-muted: #8e8d84;
+  --rotate: #3987e5; --control: #d95926; --op: #199e70; --neutral: #6b6a63;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 32px 20px 80px; }
+h1 { font-size: 28px; line-height: 1.25; margin: 0 0 8px; letter-spacing: -.02em; }
+h2 { font-size: 19px; margin: 44px 0 10px; letter-spacing: -.01em; }
+h3 { font-size: 15px; margin: 22px 0 6px; }
+p { margin: 0 0 12px; color: var(--text-secondary); max-width: 68ch; }
+.lede { font-size: 17px; color: var(--text-secondary); max-width: 66ch; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px;
+  font-size: .9em; color: var(--text-primary); }
+.card { background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px; margin: 16px 0; }
+.stats { display: flex; flex-wrap: wrap; gap: 2px; margin: 20px 0 8px; }
+.stat { flex: 1 1 130px; background: var(--surface-1); border: 1px solid var(--border);
+  padding: 12px 14px; }
+.stat:first-child { border-radius: 10px 0 0 10px; }
+.stat:last-child { border-radius: 0 10px 10px 0; }
+.stat b { display: block; font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
+.stat span { font-size: 12px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .05em; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; font-size: 13px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  margin-right: 6px; vertical-align: -1px; }
+.grid { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px; line-height: 1.35; white-space: pre; overflow-x: auto;
+  position: relative; letter-spacing: .5px; }
+.grid .rotate { color: var(--rotate); font-weight: 600; }
+.grid .control { color: var(--control); font-weight: 600; }
+.grid .op { color: var(--op); font-weight: 600; }
+.grid span:not([class]) { color: var(--neutral); }
+.grid .here { background: var(--text-primary); color: var(--surface-1) !important;
+  border-radius: 2px; font-weight: 700; }
+.regs { display: flex; gap: 2px; margin: 12px 0; flex-wrap: wrap; }
+.reg { flex: 1 1 90px; background: var(--surface-2); border-radius: 6px;
+  padding: 8px 10px; }
+.reg span { display: block; font-size: 11px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .05em; }
+.reg b { font: 600 17px/1.3 ui-monospace, Menlo, monospace; }
+.ctl { display: flex; align-items: center; gap: 12px; margin: 14px 0 6px;
+  flex-wrap: wrap; }
+button { font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-primary); cursor: pointer; }
+button:hover { border-color: var(--text-muted); }
+input[type=range] { flex: 1 1 240px; accent-color: var(--rotate); min-width: 180px; }
+.phase { display: inline-block; padding: 2px 9px; border-radius: 20px;
+  font: 600 11px/1.7 ui-sans-serif, system-ui, sans-serif; letter-spacing: .06em; }
+.gloss { min-height: 3em; font-size: 14px; color: var(--text-secondary); }
+.gloss b { color: var(--text-primary); }
+.lap { height: 8px; background: var(--surface-2); border-radius: 4px;
+  overflow: hidden; margin: 10px 0 4px; }
+.lap i { display: block; height: 100%; background: var(--rotate);
+  border-radius: 0 4px 4px 0; transition: width .12s linear; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 10px 0; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-muted); font-weight: 600; }
+td.num, th.num { text-align: right; font-family: ui-monospace, Menlo, monospace; }
+.bars { margin: 8px 0; }
+.bar { display: grid; grid-template-columns: 190px 1fr 74px; gap: 10px;
+  align-items: center; margin-bottom: 6px; font-size: 13px; }
+.bar .track { height: 16px; background: var(--surface-2); border-radius: 3px;
+  position: relative; overflow: hidden; }
+.bar .fill { position: absolute; inset: 0 auto 0 0; border-radius: 0 3px 3px 0; }
+.bar .lbl { font-family: ui-monospace, Menlo, monospace; color: var(--text-secondary);
+  text-align: right; }
+.bar .nm { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.ref { border-left: 2px dashed var(--text-muted); position: absolute;
+  top: -3px; bottom: -3px; }
+.note { font-size: 13px; color: var(--text-muted); }
+.toggle { position: fixed; top: 14px; right: 14px; z-index: 9; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+svg text { font: 11px ui-sans-serif, system-ui, sans-serif; fill: var(--text-secondary); }
+svg .k { fill: var(--text-primary); font-weight: 600; }
+details { margin: 10px 0; } summary { cursor: pointer; font-size: 13px;
+  color: var(--text-secondary); }
+</style></head><body>
+<button class="toggle" onclick="var r=document.documentElement,d=r.getAttribute('data-theme')==='dark';r.setAttribute('data-theme',d?'light':'dark')">◐ theme</button>
+<div class="wrap">
+
+<h1>How <code>memory</code> works</h1>
+<p class="lede">A 100-cell RAM with no memory. The tape is a <b>pipe</b> — 107 cells
+of it, holding 100 values that circulate forever — and a single little man walks the
+whole loop on <b>every single operation</b>. That one fact is the machine's entire
+cost structure.</p>
+
+<div class="stats" id="stats"></div>
+<p class="note">Measured on the reference interpreter (<code>littleman/examples/memory2.man</code>).
+Scoring is <code>footprint-tick</code>: <code>max(w,h)² × avg_ticks</code>, so only the
+larger dimension is billed, and it is squared.</p>
+
+<h2>1. Four rooms and two very long pipes</h2>
+<p>A little man may never leave his room, so all the work happens in one 24×25
+compute room. The tape can't loop back into that room directly — SPEC lists
+"a pipe looping back to its own room" as a load error — so a 6×5 <b>relay</b> room
+exists for no reason other than to turn the ring around.</p>
+<div class="card">
+  <div class="legend">
+    <span><i style="background:var(--rotate)"></i><b>walk the tape</b> — fill, seek, restore</span>
+    <span><i style="background:var(--control)"></i><b>decode &amp; dispatch</b></span>
+    <span><i style="background:var(--op)"></i><b>the actual read/write</b></span>
+    <span><i style="background:var(--neutral)"></i>walls, pipes, lanes</span>
+  </div>
+  <div class="grid" id="grid-static"></div>
+</div>
+<p>Count the blue. Roughly every glyph that does real work is a rotation step —
+and the two blue blocks in the middle-left are the <i>same loop written twice</i>,
+once to seek to the address and once to restore alignment afterwards.</p>
+
+<h2>2. The tape is made of pipe</h2>
+<p>A pipe is a FIFO whose capacity <b>is</b> its length: each cell holds one value
+and shifts one cell per tick. So 107 cells of pipe = 107 slots, of which 100 hold
+the memory. Nothing stores the address — position in the queue <i>is</i> the address.</p>
+<div class="card"><svg viewBox="0 0 640 190" width="100%" height="190" role="img"
+  aria-label="The tape ring: compute room sends into a 46-cell pipe to the relay room, which returns through a 61-cell pipe.">
+  <rect x="40" y="30" width="150" height="90" rx="6" fill="none" stroke="var(--control)" stroke-width="2"/>
+  <text class="k" x="115" y="70" text-anchor="middle">compute room</text>
+  <text x="115" y="88" text-anchor="middle">24 × 25</text>
+  <rect x="450" y="45" width="120" height="60" rx="6" fill="none" stroke="var(--neutral)" stroke-width="2"/>
+  <text class="k" x="510" y="70" text-anchor="middle">relay</text>
+  <text x="510" y="88" text-anchor="middle">6 × 5</text>
+  <path d="M190 60 H450" fill="none" stroke="var(--rotate)" stroke-width="2" marker-end="url(#a)"/>
+  <text x="320" y="50" text-anchor="middle">forward — 46 cells</text>
+  <path d="M510 105 V150 H115 V120" fill="none" stroke="var(--rotate)" stroke-width="2" marker-end="url(#a)"/>
+  <text x="320" y="168" text-anchor="middle">return — 61 cells</text>
+  <text class="k" x="320" y="140" text-anchor="middle">107 slots · 100 values circulating</text>
+  <path d="M115 30 V12 H30" fill="none" stroke="var(--neutral)" stroke-width="2"/>
+  <text x="34" y="8">input</text>
+  <path d="M40 100 H14" fill="none" stroke="var(--op)" stroke-width="2" marker-end="url(#a)"/>
+  <text x="16" y="118">output</text>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+    markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--rotate)"/></marker></defs>
+</svg></div>
+
+<h2>3. Walk it yourself</h2>
+<p>Every frame below is a real interpreter snapshot. This run is
+<code>WRITE 7 → cell 2</code> then <code>READ cell 2</code>, which must output <code>7</code>.</p>
+<div class="card">
+  <div class="ctl">
+    <button id="play">▶ play</button>
+    <input type="range" id="scrub" min="0" value="0">
+    <span class="mono note" id="tick"></span>
+  </div>
+  <div><span class="phase" id="phase"></span></div>
+  <div class="lap"><i id="lapbar" style="width:0%"></i></div>
+  <div class="note" id="laplbl"></div>
+  <div class="regs">
+    <div class="reg"><span>A — main hand</span><b id="rA">0</b></div>
+    <div class="reg"><span>B — off hand</span><b id="rB">0</b></div>
+    <div class="reg"><span>BP — backpack</span><b id="rBP">0</b></div>
+    <div class="reg"><span>output</span><b id="rOut">—</b></div>
+  </div>
+  <div class="gloss" id="gloss"></div>
+  <div class="grid" id="grid-live"></div>
+</div>
+
+<h2>4. Three tricks worth stealing</h2>
+
+<h3>The <i>sign</i> of A carries the opcode</h3>
+<p>After decoding, READ leaves <code>A = 100 − addr</code> and WRITE leaves
+<code>A = addr − 100</code> — the same magnitude, opposite signs. Since
+<code>addr &lt; 100</code>, neither is ever zero. The value is parked in B across the
+whole seek loop, then one <code>W</code> brings it back and one <code>X</code>
+branches on its sign. So the opcode survives a hundred rotations without a
+register, a flag, or a second literal.</p>
+
+<h3><code>S</code> emits and preserves in one glyph</h3>
+<p>A READ has to hand the value to the output <i>and</i> keep it on the tape.
+<code>S</code> sends A into <b>every</b> outgoing pipe at once — output pipe and
+tape ring together — so the answer is emitted and the cell is rewritten by a
+single instruction. No copy, no second pass.</p>
+
+<h3>The counted loop zigzags, so both directions do work</h3>
+<p>A man needs a closed walking cycle, and the smallest cycle holding two
+operations is 3×2 = 6 cells. This machine unrolls it across two columns: down the
+right doing <code>r s m</code>, up the left doing <code>r s m</code>, with a
+<code>d</code> test at each end. Every leg rotates one value instead of every
+other leg, so a rotation costs ~6.6 ticks rather than ~12.</p>
+
+<h2>5. Where the 13,955 ticks go</h2>
+<p>Two costs, and neither is the arithmetic. <b>Setup</b>: 100 zeros pushed into
+the ring at 8 ticks each, so nothing can be served for the first
+<b>855 ticks</b>. <b>Per operation</b>: seek <code>addr</code> values, do the
+read or write, then restore <code>99 − addr</code> — exactly
+<b>100 rotations, whatever the address</b>.</p>
+<div class="two">
+  <div class="card">
+    <h3 style="margin-top:0">Ticks per operation</h3>
+    <div class="bars" id="bars-perop"></div>
+    <p class="note">Converges on ~635 — one full 100-value lap. An op at address 0
+    costs 660 ticks; address 99 adds only 548 more, because the lap is walked
+    either way.</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Share of runtime spent on setup</h3>
+    <div class="bars" id="bars-fill"></div>
+    <p class="note">The 855-tick fill is 94% of the smallest case and 1% of the
+    largest. Because the score averages over cases, it is 6.1% of the total —
+    and it is the same 855 ticks seven times.</p>
+  </div>
+</div>
+<details><summary>Table view — all seven public cases</summary>
+  <table id="tbl"><thead><tr><th>case</th><th class="num">ops</th>
+  <th class="num">ticks</th><th class="num">setup</th><th class="num">per op</th>
+  </tr></thead><tbody></tbody></table>
+</details>
+
+<h2>6. What that says about making it faster</h2>
+<p>The full lap is structural, not sloppy: a pipe cannot skip, so reaching
+cell <i>k</i> means physically moving every value in front of it. Three ways to
+break it, with measured or estimated payoffs:</p>
+<table><thead><tr><th>change</th><th>mechanism</th><th class="num">payoff</th></tr></thead>
+<tbody>
+<tr><td>Lazy rotation</td><td>Track the ring's offset and rotate
+<code>(addr − offset) mod 100</code> instead of a full lap. Mean forward delta on
+the dominant case is 50.0, so the lap halves. Needs no new rooms — the offset can
+ride the ring as a header word.</td><td class="num">~1.8×</td></tr>
+<tr><td>Parallel rings</td><td>Ten rings of ten, so a seek moves ≤10 values.
+Selection is free: pipe binding is positional, proven by
+<code>two-roms.man</code>. Costs one relay, not ten — a data ring is permanently
+full, so its <code>r</code> never blocks.</td><td class="num">~3.5×</td></tr>
+<tr><td>Compact redraw</td><td>The 31×32 box is <b>65% blank</b>, with a 7×10
+empty rectangle inside the compute room. Pure routing slack; footprint is
+squared.</td><td class="num">~1.8×</td></tr>
+</tbody></table>
+<p class="note">Regenerate this page with
+<code>uv run --project solvers/python python littleman/tools/make_memory_html.py</code>.</p>
+</div>
+
+<script>
+const GRID = [[{"c":"+","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"+","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":"|","f":""},{"c":"O","f":""},{"c":"|","f":""},{"c":"<","f":""},{"c":"<","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"@","f":"control"},{"c":"`","f":"control"},{"c":"1","f":"control"},{"c":"0","f":"control"},{"c":"0","f":"control"},{"c":"`","f":"control"},{"c":"b","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"v","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":"+","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":"v","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"<","f":"control"},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":"+","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":"|","f":""},{"c":"I","f":""},{"c":"|","f":""},{"c":">","f":""},{"c":">","f":""},{"c":"|","f":""},{"c":">","f":"control"},{"c":"r","f":"control"},{"c":"X","f":"control"},{"c":"r","f":"control"},{"c":"b","f":"control"},{"c":"M","f":"control"},{"c":"`","f":"control"},{"c":"1","f":"control"},{"c":"0","f":"control"},{"c":"0","f":"control"},{"c":"`","f":"control"},{"c":"-","f":"control"},{"c":" ","f":""},{"c":"v","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":"+","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":"control"},{"c":"r","f":"control"},{"c":"b","f":"control"},{"c":"M","f":"control"},{"c":"`","f":"control"},{"c":"1","f":"control"},{"c":"0","f":"control"},{"c":"0","f":"control"},{"c":"`","f":"control"},{"c":"-","f":"control"},{"c":"N","f":"control"},{"c":"v","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"v","f":"control"},{"c":" ","f":""},{"c":"M","f":"control"},{"c":" ","f":""},{"c":"<","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":"rotate"},{"c":">","f":"rotate"},{"c":"d","f":"rotate"},{"c":"v","f":"rotate"},{"c":" ","f":""},{"c":">","f":"control"},{"c":">","f":"rotate"},{"c":"d","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"^","f":"control"},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"m","f":"rotate"},{"c":"r","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"m","f":"rotate"},{"c":"0","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"s","f":"rotate"},{"c":"s","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"s","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":">","f":""},{"c":"v","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"r","f":"rotate"},{"c":"m","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"^","f":"rotate"},{"c":"<","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"v","f":"rotate"},{"c":"d","f":"rotate"},{"c":"<","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"v","f":"op"},{"c":"r","f":"op"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"m","f":"op"},{"c":" ","f":""},{"c":"b","f":"op"},{"c":"N","f":"op"},{"c":"<","f":"op"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":"control"},{"c":" ","f":""},{"c":"W","f":"control"},{"c":"X","f":"control"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":"op"},{"c":"b","f":"op"},{"c":"m","f":"op"},{"c":"r","f":"op"},{"c":"S","f":"op"},{"c":"v","f":"op"},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":">","f":"op"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"s","f":"op"},{"c":"r","f":"op"},{"c":"v","f":"op"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"v","f":"op"},{"c":" ","f":""},{"c":" ","f":""},{"c":"<","f":"op"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"<","f":"control"},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":"rotate"},{"c":">","f":"rotate"},{"c":"d","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"^","f":"control"},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"m","f":"rotate"},{"c":"r","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"s","f":"rotate"},{"c":"s","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"r","f":"rotate"},{"c":"m","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"v","f":"rotate"},{"c":"d","f":"rotate"},{"c":"<","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":"rotate"},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"^","f":"control"},{"c":"|","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"+","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"^","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":">","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"^","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":"+","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":"^","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"<","f":""},{"c":"|","f":""}],[{"c":"|","f":""},{"c":"@","f":""},{"c":" ","f":""},{"c":">","f":""},{"c":"v","f":""},{"c":"|","f":""},{"c":">","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"^","f":""},{"c":"|","f":""}],[{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"s","f":""},{"c":"r","f":""},{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"|","f":""}],[{"c":"|","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":"^","f":""},{"c":"<","f":""},{"c":"|","f":""},{"c":"<","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"<","f":""}],[{"c":"+","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"-","f":""},{"c":"+","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""},{"c":" ","f":""}]], FRAMES = [{"t":0,"x":1,"y":1,"g":"@","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":1,"x":2,"y":1,"g":"`","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":2,"x":3,"y":1,"g":"1","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":3,"x":4,"y":1,"g":"0","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":4,"x":5,"y":1,"g":"0","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":5,"x":6,"y":1,"g":"`","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":6,"x":7,"y":1,"g":"b","a":100,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":7,"x":8,"y":1,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":8,"x":9,"y":1,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":9,"x":10,"y":1,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":10,"x":11,"y":1,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":11,"x":12,"y":1,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":12,"x":13,"y":1,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":13,"x":14,"y":1,"g":"v","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":14,"x":14,"y":2,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":15,"x":14,"y":3,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":16,"x":14,"y":4,"g":" ","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":17,"x":14,"y":5,"g":" ","a":100,"b":0,"bp":100,"ph":"DECODE","out":[],"lap":0},{"t":18,"x":14,"y":6,"g":" ","a":100,"b":0,"bp":100,"ph":"DECODE","out":[],"lap":0},{"t":19,"x":14,"y":7,"g":" ","a":100,"b":0,"bp":100,"ph":"DECODE","out":[],"lap":0},{"t":20,"x":14,"y":8,"g":">","a":100,"b":0,"bp":100,"ph":"FETCH","out":[],"lap":0},{"t":21,"x":15,"y":8,"g":">","a":100,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":22,"x":16,"y":8,"g":"d","a":100,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":23,"x":16,"y":9,"g":"0","a":100,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":24,"x":16,"y":10,"g":"s","a":0,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":25,"x":16,"y":11,"g":"<","a":0,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":26,"x":15,"y":11,"g":"^","a":0,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":27,"x":15,"y":10,"g":" ","a":0,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":28,"x":15,"y":9,"g":"m","a":0,"b":0,"bp":100,"ph":"FILL","out":[],"lap":0},{"t":29,"x":15,"y":8,"g":">","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":30,"x":16,"y":8,"g":"d","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":31,"x":16,"y":9,"g":"0","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":32,"x":16,"y":10,"g":"s","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":33,"x":16,"y":11,"g":"<","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":34,"x":15,"y":11,"g":"^","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":35,"x":15,"y":10,"g":" ","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":36,"x":15,"y":9,"g":"m","a":0,"b":0,"bp":99,"ph":"FILL","out":[],"lap":0},{"t":37,"x":15,"y":8,"g":">","a":0,"b":0,"bp":98,"ph":"FILL","out":[],"lap":0},{"t":38,"x":16,"y":8,"g":"d","a":0,"b":0,"bp":98,"ph":"FILL","out":[],"lap":0},{"t":39,"x":16,"y":9,"g":"0","a":0,"b":0,"bp":98,"ph":"FILL","out":[],"lap":0},{"t":40,"x":16,"y":10,"g":"s","a":0,"b":0,"bp":98,"ph":"FILL","out":[],"lap":0},{"elide":"the fill loop runs 98 more times \u2014 8 ticks each, 855 ticks before the machine can serve anything"},{"t":853,"x":0,"y":3,"g":"v","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":854,"x":0,"y":4,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":0},{"t":855,"x":0,"y":5,"g":">","a":0,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":856,"x":1,"y":5,"g":"r","a":0,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":857,"x":2,"y":5,"g":"X","a":1,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":858,"x":2,"y":6,"g":">","a":1,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":859,"x":3,"y":6,"g":"r","a":1,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":860,"x":4,"y":6,"g":"b","a":2,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":861,"x":5,"y":6,"g":"M","a":2,"b":0,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":862,"x":6,"y":6,"g":"`","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":863,"x":7,"y":6,"g":"1","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":864,"x":8,"y":6,"g":"0","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":865,"x":9,"y":6,"g":"0","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":866,"x":10,"y":6,"g":"`","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":867,"x":11,"y":6,"g":"-","a":100,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":868,"x":12,"y":6,"g":"N","a":98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":869,"x":13,"y":6,"g":"v","a":-98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":870,"x":13,"y":7,"g":"<","a":-98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":871,"x":12,"y":7,"g":" ","a":-98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":872,"x":11,"y":7,"g":"M","a":-98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":873,"x":10,"y":7,"g":" ","a":-98,"b":-98,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":874,"x":9,"y":7,"g":"v","a":-98,"b":-98,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":875,"x":9,"y":8,"g":">","a":-98,"b":-98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":876,"x":10,"y":8,"g":">","a":-98,"b":-98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":877,"x":11,"y":8,"g":"d","a":-98,"b":-98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":878,"x":11,"y":9,"g":"r","a":-98,"b":-98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":879,"x":11,"y":10,"g":"s","a":0,"b":-98,"bp":2,"ph":"SEEK","out":[],"lap":1},{"t":880,"x":11,"y":11,"g":"m","a":0,"b":-98,"bp":2,"ph":"SEEK","out":[],"lap":1},{"t":881,"x":11,"y":12,"g":"<","a":0,"b":-98,"bp":1,"ph":"SEEK","out":[],"lap":1},{"t":882,"x":10,"y":12,"g":"d","a":0,"b":-98,"bp":1,"ph":"SEEK","out":[],"lap":1},{"t":883,"x":10,"y":11,"g":"r","a":0,"b":-98,"bp":1,"ph":"SEEK","out":[],"lap":1},{"t":884,"x":10,"y":10,"g":"s","a":0,"b":-98,"bp":1,"ph":"SEEK","out":[],"lap":2},{"t":885,"x":10,"y":9,"g":"m","a":0,"b":-98,"bp":1,"ph":"SEEK","out":[],"lap":2},{"t":886,"x":10,"y":8,"g":">","a":0,"b":-98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":887,"x":11,"y":8,"g":"d","a":0,"b":-98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":888,"x":12,"y":8,"g":"v","a":0,"b":-98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":889,"x":12,"y":9,"g":" ","a":0,"b":-98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":890,"x":12,"y":10,"g":" ","a":0,"b":-98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":891,"x":12,"y":11,"g":" ","a":0,"b":-98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":892,"x":12,"y":12,"g":" ","a":0,"b":-98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":893,"x":12,"y":13,"g":" ","a":0,"b":-98,"bp":0,"ph":"WRITE","out":[],"lap":2},{"t":894,"x":12,"y":14,"g":">","a":0,"b":-98,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":895,"x":13,"y":14,"g":" ","a":0,"b":-98,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":896,"x":14,"y":14,"g":"W","a":0,"b":-98,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":897,"x":15,"y":14,"g":"X","a":-98,"b":0,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":898,"x":15,"y":13,"g":"<","a":-98,"b":0,"bp":0,"ph":"WRITE","out":[],"lap":2},{"t":899,"x":14,"y":13,"g":"N","a":-98,"b":0,"bp":0,"ph":"WRITE","out":[],"lap":2},{"t":900,"x":13,"y":13,"g":"b","a":98,"b":0,"bp":0,"ph":"WRITE","out":[],"lap":2},{"t":901,"x":12,"y":13,"g":" ","a":98,"b":0,"bp":98,"ph":"WRITE","out":[],"lap":2},{"t":902,"x":11,"y":13,"g":"m","a":98,"b":0,"bp":98,"ph":"WRITE","out":[],"lap":2},{"t":903,"x":10,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":904,"x":9,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":905,"x":8,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":906,"x":7,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":907,"x":6,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":908,"x":5,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":909,"x":4,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":910,"x":3,"y":13,"g":" ","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":911,"x":2,"y":13,"g":"r","a":98,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":912,"x":1,"y":13,"g":"v","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":913,"x":1,"y":14,"g":" ","a":7,"b":0,"bp":97,"ph":"DISPATCH","out":[],"lap":2},{"t":914,"x":1,"y":15,"g":" ","a":7,"b":0,"bp":97,"ph":"READ","out":[],"lap":2},{"t":915,"x":1,"y":16,"g":">","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":916,"x":2,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":917,"x":3,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":918,"x":4,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":919,"x":5,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":920,"x":6,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":921,"x":7,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":922,"x":8,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":923,"x":9,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":2},{"t":924,"x":10,"y":16,"g":"s","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":3},{"t":925,"x":11,"y":16,"g":"r","a":7,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":3},{"t":926,"x":12,"y":16,"g":"v","a":0,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":3},{"t":927,"x":12,"y":17,"g":"<","a":0,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":3},{"t":928,"x":11,"y":17,"g":" ","a":0,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":3},{"t":929,"x":10,"y":17,"g":" ","a":0,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":3},{"t":930,"x":9,"y":17,"g":"v","a":0,"b":0,"bp":97,"ph":"WRITE","out":[],"lap":3},{"t":931,"x":9,"y":18,"g":">","a":0,"b":0,"bp":97,"ph":"RESTORE","out":[],"lap":3},{"t":932,"x":10,"y":18,"g":">","a":0,"b":0,"bp":97,"ph":"RESTORE","out":[],"lap":3},{"t":933,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":97,"ph":"RESTORE","out":[],"lap":3},{"t":934,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":97,"ph":"RESTORE","out":[],"lap":3},{"t":935,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":97,"ph":"RESTORE","out":[],"lap":4},{"t":936,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":97,"ph":"RESTORE","out":[],"lap":4},{"t":937,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":96,"ph":"RESTORE","out":[],"lap":4},{"t":938,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":96,"ph":"RESTORE","out":[],"lap":4},{"t":939,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":96,"ph":"RESTORE","out":[],"lap":4},{"t":940,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":96,"ph":"RESTORE","out":[],"lap":5},{"t":941,"x":10,"y":19,"g":"m","a":0,"b":0,"bp":96,"ph":"RESTORE","out":[],"lap":5},{"t":942,"x":10,"y":18,"g":">","a":0,"b":0,"bp":95,"ph":"RESTORE","out":[],"lap":5},{"t":943,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":95,"ph":"RESTORE","out":[],"lap":5},{"t":944,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":95,"ph":"RESTORE","out":[],"lap":5},{"t":945,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":95,"ph":"RESTORE","out":[],"lap":6},{"t":946,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":95,"ph":"RESTORE","out":[],"lap":6},{"t":947,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":94,"ph":"RESTORE","out":[],"lap":6},{"t":948,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":94,"ph":"RESTORE","out":[],"lap":6},{"t":949,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":94,"ph":"RESTORE","out":[],"lap":6},{"t":950,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":94,"ph":"RESTORE","out":[],"lap":7},{"t":951,"x":10,"y":19,"g":"m","a":0,"b":0,"bp":94,"ph":"RESTORE","out":[],"lap":7},{"t":952,"x":10,"y":18,"g":">","a":0,"b":0,"bp":93,"ph":"RESTORE","out":[],"lap":7},{"t":953,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":93,"ph":"RESTORE","out":[],"lap":7},{"t":954,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":93,"ph":"RESTORE","out":[],"lap":7},{"t":955,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":93,"ph":"RESTORE","out":[],"lap":8},{"t":956,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":93,"ph":"RESTORE","out":[],"lap":8},{"t":957,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":92,"ph":"RESTORE","out":[],"lap":8},{"t":958,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":92,"ph":"RESTORE","out":[],"lap":8},{"t":959,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":92,"ph":"RESTORE","out":[],"lap":8},{"t":960,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":92,"ph":"RESTORE","out":[],"lap":9},{"t":961,"x":10,"y":19,"g":"m","a":0,"b":0,"bp":92,"ph":"RESTORE","out":[],"lap":9},{"t":962,"x":10,"y":18,"g":">","a":0,"b":0,"bp":91,"ph":"RESTORE","out":[],"lap":9},{"t":963,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":91,"ph":"RESTORE","out":[],"lap":9},{"t":964,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":91,"ph":"RESTORE","out":[],"lap":9},{"t":965,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":91,"ph":"RESTORE","out":[],"lap":10},{"t":966,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":91,"ph":"RESTORE","out":[],"lap":10},{"t":967,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":90,"ph":"RESTORE","out":[],"lap":10},{"t":968,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":90,"ph":"RESTORE","out":[],"lap":10},{"t":969,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":90,"ph":"RESTORE","out":[],"lap":10},{"t":970,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":90,"ph":"RESTORE","out":[],"lap":11},{"t":971,"x":10,"y":19,"g":"m","a":0,"b":0,"bp":90,"ph":"RESTORE","out":[],"lap":11},{"t":972,"x":10,"y":18,"g":">","a":0,"b":0,"bp":89,"ph":"RESTORE","out":[],"lap":11},{"t":973,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":89,"ph":"RESTORE","out":[],"lap":11},{"t":974,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":89,"ph":"RESTORE","out":[],"lap":11},{"t":975,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":89,"ph":"RESTORE","out":[],"lap":12},{"t":976,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":89,"ph":"RESTORE","out":[],"lap":12},{"t":977,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":88,"ph":"RESTORE","out":[],"lap":12},{"t":978,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":88,"ph":"RESTORE","out":[],"lap":12},{"t":979,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":88,"ph":"RESTORE","out":[],"lap":12},{"t":980,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":88,"ph":"RESTORE","out":[],"lap":13},{"t":981,"x":10,"y":19,"g":"m","a":0,"b":0,"bp":88,"ph":"RESTORE","out":[],"lap":13},{"t":982,"x":10,"y":18,"g":">","a":0,"b":0,"bp":87,"ph":"RESTORE","out":[],"lap":13},{"t":983,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":87,"ph":"RESTORE","out":[],"lap":13},{"t":984,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":87,"ph":"RESTORE","out":[],"lap":13},{"t":985,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":87,"ph":"RESTORE","out":[],"lap":14},{"t":986,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":87,"ph":"RESTORE","out":[],"lap":14},{"t":987,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":86,"ph":"RESTORE","out":[],"lap":14},{"t":988,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":86,"ph":"RESTORE","out":[],"lap":14},{"t":989,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":86,"ph":"RESTORE","out":[],"lap":14},{"t":990,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":86,"ph":"RESTORE","out":[],"lap":15},{"t":991,"x":10,"y":19,"g":"m","a":0,"b":0,"bp":86,"ph":"RESTORE","out":[],"lap":15},{"t":992,"x":10,"y":18,"g":">","a":0,"b":0,"bp":85,"ph":"RESTORE","out":[],"lap":15},{"t":993,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":85,"ph":"RESTORE","out":[],"lap":15},{"t":994,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":85,"ph":"RESTORE","out":[],"lap":15},{"t":995,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":85,"ph":"RESTORE","out":[],"lap":16},{"t":996,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":85,"ph":"RESTORE","out":[],"lap":16},{"t":997,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":84,"ph":"RESTORE","out":[],"lap":16},{"t":998,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":84,"ph":"RESTORE","out":[],"lap":16},{"t":999,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":84,"ph":"RESTORE","out":[],"lap":16},{"t":1000,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":84,"ph":"RESTORE","out":[],"lap":17},{"t":1001,"x":10,"y":19,"g":"m","a":0,"b":0,"bp":84,"ph":"RESTORE","out":[],"lap":17},{"t":1002,"x":10,"y":18,"g":">","a":0,"b":0,"bp":83,"ph":"RESTORE","out":[],"lap":17},{"t":1003,"x":11,"y":18,"g":"d","a":0,"b":0,"bp":83,"ph":"RESTORE","out":[],"lap":17},{"t":1004,"x":11,"y":19,"g":"r","a":0,"b":0,"bp":83,"ph":"RESTORE","out":[],"lap":17},{"t":1005,"x":11,"y":20,"g":"s","a":0,"b":0,"bp":83,"ph":"RESTORE","out":[],"lap":18},{"t":1006,"x":11,"y":21,"g":"m","a":0,"b":0,"bp":83,"ph":"RESTORE","out":[],"lap":18},{"t":1007,"x":11,"y":22,"g":"<","a":0,"b":0,"bp":82,"ph":"RESTORE","out":[],"lap":18},{"t":1008,"x":10,"y":22,"g":"d","a":0,"b":0,"bp":82,"ph":"RESTORE","out":[],"lap":18},{"t":1009,"x":10,"y":21,"g":"r","a":0,"b":0,"bp":82,"ph":"RESTORE","out":[],"lap":18},{"t":1010,"x":10,"y":20,"g":"s","a":0,"b":0,"bp":82,"ph":"RESTORE","out":[],"lap":19},{"elide":"the restore loop runs ~95 more times, completing exactly one 100-value lap so the tape realigns"},{"t":1504,"x":21,"y":3,"g":"<","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1505,"x":20,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1506,"x":19,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1507,"x":18,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1508,"x":17,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1509,"x":16,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1510,"x":15,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1511,"x":14,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1512,"x":13,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1513,"x":12,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1514,"x":11,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1515,"x":10,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1516,"x":9,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1517,"x":8,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1518,"x":7,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1519,"x":6,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1520,"x":5,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1521,"x":4,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1522,"x":3,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1523,"x":2,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1524,"x":1,"y":3,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1525,"x":0,"y":3,"g":"v","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1526,"x":0,"y":4,"g":" ","a":0,"b":0,"bp":0,"ph":"FETCH","out":[],"lap":100},{"t":1527,"x":0,"y":5,"g":">","a":0,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":1528,"x":1,"y":5,"g":"r","a":0,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":1529,"x":2,"y":5,"g":"X","a":0,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":1530,"x":3,"y":5,"g":"r","a":0,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":1531,"x":4,"y":5,"g":"b","a":2,"b":0,"bp":0,"ph":"DECODE","out":[],"lap":0},{"t":1532,"x":5,"y":5,"g":"M","a":2,"b":0,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1533,"x":6,"y":5,"g":"`","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1534,"x":7,"y":5,"g":"1","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1535,"x":8,"y":5,"g":"0","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1536,"x":9,"y":5,"g":"0","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1537,"x":10,"y":5,"g":"`","a":2,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1538,"x":11,"y":5,"g":"-","a":100,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1539,"x":12,"y":5,"g":" ","a":98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1540,"x":13,"y":5,"g":"v","a":98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1541,"x":13,"y":6,"g":"v","a":98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1542,"x":13,"y":7,"g":"<","a":98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1543,"x":12,"y":7,"g":" ","a":98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1544,"x":11,"y":7,"g":"M","a":98,"b":2,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1545,"x":10,"y":7,"g":" ","a":98,"b":98,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1546,"x":9,"y":7,"g":"v","a":98,"b":98,"bp":2,"ph":"DECODE","out":[],"lap":0},{"t":1547,"x":9,"y":8,"g":">","a":98,"b":98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":1548,"x":10,"y":8,"g":">","a":98,"b":98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":1549,"x":11,"y":8,"g":"d","a":98,"b":98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":1550,"x":11,"y":9,"g":"r","a":98,"b":98,"bp":2,"ph":"SEEK","out":[],"lap":0},{"t":1551,"x":11,"y":10,"g":"s","a":0,"b":98,"bp":2,"ph":"SEEK","out":[],"lap":1},{"t":1552,"x":11,"y":11,"g":"m","a":0,"b":98,"bp":2,"ph":"SEEK","out":[],"lap":1},{"t":1553,"x":11,"y":12,"g":"<","a":0,"b":98,"bp":1,"ph":"SEEK","out":[],"lap":1},{"t":1554,"x":10,"y":12,"g":"d","a":0,"b":98,"bp":1,"ph":"SEEK","out":[],"lap":1},{"t":1555,"x":10,"y":11,"g":"r","a":0,"b":98,"bp":1,"ph":"SEEK","out":[],"lap":1},{"t":1556,"x":10,"y":10,"g":"s","a":0,"b":98,"bp":1,"ph":"SEEK","out":[],"lap":2},{"t":1557,"x":10,"y":9,"g":"m","a":0,"b":98,"bp":1,"ph":"SEEK","out":[],"lap":2},{"t":1558,"x":10,"y":8,"g":">","a":0,"b":98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":1559,"x":11,"y":8,"g":"d","a":0,"b":98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":1560,"x":12,"y":8,"g":"v","a":0,"b":98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":1561,"x":12,"y":9,"g":" ","a":0,"b":98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":1562,"x":12,"y":10,"g":" ","a":0,"b":98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":1563,"x":12,"y":11,"g":" ","a":0,"b":98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":1564,"x":12,"y":12,"g":" ","a":0,"b":98,"bp":0,"ph":"SEEK","out":[],"lap":2},{"t":1565,"x":12,"y":13,"g":" ","a":0,"b":98,"bp":0,"ph":"WRITE","out":[],"lap":2},{"t":1566,"x":12,"y":14,"g":">","a":0,"b":98,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":1567,"x":13,"y":14,"g":" ","a":0,"b":98,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":1568,"x":14,"y":14,"g":"W","a":0,"b":98,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":1569,"x":15,"y":14,"g":"X","a":98,"b":0,"bp":0,"ph":"DISPATCH","out":[],"lap":2},{"t":1570,"x":15,"y":15,"g":">","a":98,"b":0,"bp":0,"ph":"READ","out":[],"lap":2},{"t":1571,"x":16,"y":15,"g":"b","a":98,"b":0,"bp":0,"ph":"READ","out":[],"lap":2},{"t":1572,"x":17,"y":15,"g":"m","a":98,"b":0,"bp":98,"ph":"READ","out":[],"lap":2},{"t":1573,"x":18,"y":15,"g":"r","a":98,"b":0,"bp":97,"ph":"READ","out":[],"lap":2},{"t":1574,"x":19,"y":15,"g":"S","a":7,"b":0,"bp":97,"ph":"READ","out":[],"lap":3},{"t":1575,"x":20,"y":15,"g":"v","a":7,"b":0,"bp":97,"ph":"READ","out":[],"lap":3},{"t":1576,"x":20,"y":16,"g":" ","a":7,"b":0,"bp":97,"ph":"WRITE","out":[7],"lap":3}], DATA = {"cases":[{"name":"fresh cell reads zero","ops":1,"ticks":908,"fill":855,"per_op":53.0},{"name":"write then read","ops":2,"ticks":1585,"fill":855,"per_op":365.0},{"name":"overwrite","ops":5,"ticks":3540,"fill":855,"per_op":537.0},{"name":"boundary addresses and values","ops":5,"ticks":3797,"fill":855,"per_op":588.4},{"name":"write zero, trailing write","ops":6,"ticks":3530,"fill":855,"per_op":445.8},{"name":"reads only","ops":5,"ticks":4044,"fill":855,"per_op":637.8},{"name":"interleaved cells","ops":125,"ticks":80281,"fill":855,"per_op":635.4}],"avg":13955.0,"w":31,"h":32,"area2":1024,"score":14289920.0};
+
+/* ---- stats ---- */
+const fmt = n => n.toLocaleString('en-US');
+document.getElementById('stats').innerHTML = [
+  [`${DATA.w}×${DATA.h}`, 'footprint'],
+  [fmt(DATA.area2), 'max(w,h)²'],
+  [fmt(Math.round(DATA.avg)), 'avg ticks'],
+  [fmt(Math.round(DATA.score)), 'score'],
+  ['7/7', 'public cases'],
+].map(([v, k]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
+
+/* ---- grids ---- */
+function render(el) {
+  el.innerHTML = GRID.map((row, y) => row.map((c, x) =>
+    `<span${c.f ? ` class="${c.f}"` : ''} data-p="${x},${y}">` +
+    (c.c === ' ' ? ' ' : c.c.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))) +
+    '</span>').join('')).join('\n');
+}
+render(document.getElementById('grid-static'));
+const live = document.getElementById('grid-live');
+render(live);
+
+/* ---- walkthrough ---- */
+const steps = FRAMES.filter(f => !f.elide).length;
+const scrub = document.getElementById('scrub');
+scrub.max = FRAMES.length - 1;
+const FAM = {FILL:'rotate',SEEK:'rotate',RESTORE:'rotate',DECODE:'control',
+  DISPATCH:'control',FETCH:'control',READ:'op',WRITE:'op'};
+const GLOSS = {"@":"spawn a man here, facing east","`":"numeric literal: loads into A on the closing backtick","b":"BP = A \u2014 load the loop counter","m":"BP -= 1 \u2014 one loop iteration done","d":"turn clockwise while BP > 0, else go straight \u2014 the loop's test","r":"receive into A from the nearest incoming pipe (blocks if empty)","s":"send A into the nearest outgoing pipe (blocks if full)","S":"send A into EVERY outgoing pipe at once \u2014 emit and keep, one glyph","M":"B = A \u2014 stash a value in the off hand","W":"swap A and B","X":"turn by sign(A): CW if positive, CCW if negative, straight if zero","N":"A = -A \u2014 negate","-":"A = A - B","0":"A = 0","H":"halt this man",">":"head east","<":"head west","^":"head north","v":"head south"};
+let cur = null;
+
+function show(i) {
+  const f = FRAMES[i];
+  const tickEl = document.getElementById('tick');
+  if (f.elide) {
+    document.getElementById('gloss').innerHTML = `<b>⋯</b> ${f.elide}`;
+    tickEl.textContent = '⋯';
+    return;
+  }
+  if (cur) cur.classList.remove('here');
+  // the man stands in the compute room, whose interior starts at x=6
+  const cell = live.querySelector(`[data-p="${f.x + 6},${f.y}"]`);
+  if (cell) { cell.classList.add('here'); cur = cell; }
+  tickEl.textContent = `tick ${f.t}`;
+  const ph = document.getElementById('phase');
+  ph.textContent = f.ph;
+  ph.style.background = `var(--${FAM[f.ph]})`;
+  ph.style.color = 'var(--surface-1)';
+  document.getElementById('rA').textContent = f.a;
+  document.getElementById('rB').textContent = f.b;
+  document.getElementById('rBP').textContent = f.bp;
+  document.getElementById('rOut').textContent = f.out.length ? f.out.join(' ') : '—';
+  const pct = Math.min(100, f.lap);
+  document.getElementById('lapbar').style.width = pct + '%';
+  document.getElementById('laplbl').textContent =
+    `${f.lap} of 100 tape rotations for this operation`;
+  const g = GLOSS[f.g] || 'nop — the man just walks on';
+  document.getElementById('gloss').innerHTML =
+    `<b>${f.g === ' ' ? '␣' : f.g}</b> — ${g}`;
+}
+scrub.oninput = () => show(+scrub.value);
+show(0);
+
+let timer = null;
+const btn = document.getElementById('play');
+btn.onclick = () => {
+  if (timer) { clearInterval(timer); timer = null; btn.textContent = '▶ play'; return; }
+  btn.textContent = '❚❚ pause';
+  timer = setInterval(() => {
+    let v = +scrub.value + 1;
+    if (v > +scrub.max) { clearInterval(timer); timer = null; btn.textContent = '▶ play'; return; }
+    scrub.value = v; show(v);
+  }, 170);
+};
+
+/* ---- charts ---- */
+function bars(el, rows, colour, max, refAt, refLbl) {
+  el.innerHTML = rows.map(([name, val, lbl]) => `
+    <div class="bar"><div class="nm" title="${name}">${name}</div>
+      <div class="track"><div class="fill" style="width:${100 * val / max}%;
+        background:${colour}"></div>${refAt ? `<div class="ref"
+        style="left:${100 * refAt / max}%" title="${refLbl}"></div>` : ''}</div>
+      <div class="lbl">${lbl}</div></div>`).join('');
+}
+const cs = DATA.cases.slice().sort((a, b) => a.ops - b.ops);
+bars(document.getElementById('bars-perop'),
+  cs.map(c => [`${c.name} (${c.ops})`, c.per_op, c.per_op]),
+  'var(--rotate)', 700, 660, 'one full lap = 660');
+bars(document.getElementById('bars-fill'),
+  cs.map(c => [`${c.name} (${c.ops})`, 100 * c.fill / c.ticks,
+               (100 * c.fill / c.ticks).toFixed(1) + '%']),
+  'var(--control)', 100);
+document.querySelector('#tbl tbody').innerHTML = cs.map(c =>
+  `<tr><td>${c.name}</td><td class="num">${c.ops}</td>
+   <td class="num">${fmt(c.ticks)}</td>
+   <td class="num">${(100 * c.fill / c.ticks).toFixed(1)}%</td>
+   <td class="num">${c.per_op}</td></tr>`).join('');
+</script></body></html>

@@ -356,9 +356,7 @@ class CapacityRouter(AStarRouter):
         if len(path) < target:
             padded = self._pad_path(path, target, canvas, bounds)
             if padded is None:
-                raise LayoutError(
-                    f"edge {e.id!r}: cannot preserve capacity (need length {target})"
-                )
+                raise LayoutError(f"edge {e.id!r}: cannot preserve capacity (need length {target})")
             path = padded
 
         outs = self._ports_global(src, src_off, "outputs")
@@ -453,37 +451,73 @@ def trim_margins(prog: Program) -> list[Candidate]:
 
 
 def _candidate_widths(graph: Graph) -> list[int]:
-    """Target widths to sweep: near-square down to a single stacked column."""
+    """Target widths to sweep: every width from the widest container to a full row.
+
+    Score is ``max(w, h)²``, so the winning packing is usually a *specific* width
+    where the shelves happen to square up -- sampling a handful of widths walks
+    right past it. The sweep is exhaustive because each packing is cheap (place +
+    route); the expensive engine verification is gated by :func:`_relayout`'s
+    footprint filter, not by keeping this list short.
+    """
     widths = [c.width for c in graph.containers]
     if not widths:
         return []
-    total_area = sum(c.width * c.height for c in graph.containers)
     min_w = max(widths)
-    # Row of everything vs a near-square target and a few points between.
     row_w = sum(widths) + 4 * max(0, len(widths) - 1)
-    square = max(min_w, int(total_area**0.5))
-    cand = {min_w, square, (min_w + row_w) // 2, row_w}
-    cand.update({square + min_w, square * 2})
-    return sorted(w for w in cand if w >= min_w)
+    return list(range(min_w, max(min_w, row_w) + 1))
+
+
+# Shelf gaps to sweep, tightest first. The engine permits rooms to abut with no
+# gap at all, and a pipe may attach at a room's corner, so a generous gap is pure
+# wasted footprint -- but a too-tight gap starves the router of attach room (each
+# pipe end needs a 2-cell stub), so the tight packings often fail to route and we
+# need the looser ones as fallbacks.
+_GAPS: tuple[tuple[int, int], ...] = ((0, 0), (1, 0), (0, 1), (1, 1), (2, 1), (2, 2), (4, 3))
+
+# How many distinct packings survive to engine verification. Verifying one
+# candidate means running every public case, so this is the real cost knob.
+_MAX_CANDIDATES = 16
 
 
 def _relayout(prog: Program, router, tag: str) -> list[Candidate]:
-    """Sweep target widths, laying out with ``router``; one Candidate per width."""
+    """Sweep gaps × target widths; return the smallest-footprint packings that route.
+
+    Every (gap, width) pair is placed and routed, then ranked by ``area2`` and cut
+    to :data:`_MAX_CANDIDATES` -- so the caller only pays for engine verification
+    on packings that could actually win. Candidates no smaller than the current
+    grid are dropped outright: footprint is squared, so a bigger box essentially
+    never wins back the difference on ticks.
+    """
     graph = prog.to_graph()
-    out: list[Candidate] = []
-    for w in _candidate_widths(graph):
-        engine = LayoutEngine(placement=CompactPlacement(w), router=router)
-        try:
-            layout = engine.run(graph)
-        except LayoutError:
-            continue
-        # placement offsets are relative to the grid origin (layout.origin).
-        ox, oy = layout.origin
-        placement = {
-            cid: (pl.offset[0] - ox, pl.offset[1] - oy) for cid, pl in layout.placement.items()
-        }
-        out.append(Candidate(grid=list(layout.grid), placement=placement, label=f"{tag}:w={w}"))
-    return out
+    _, _, base_area2 = footprint("\n".join(prog.to_grid()))
+    ranked: list[tuple[int, Candidate]] = []
+    seen: set[tuple[str, ...]] = set()
+    for h_gap, v_gap in _GAPS:
+        for w in _candidate_widths(graph):
+            engine = LayoutEngine(
+                placement=CompactPlacement(w, h_gap=h_gap, v_gap=v_gap), router=router
+            )
+            try:
+                layout = engine.run(graph)
+            except LayoutError:
+                continue
+            grid = list(layout.grid)
+            key = tuple(grid)
+            if key in seen:
+                continue
+            seen.add(key)
+            _, _, area2 = footprint("\n".join(grid))
+            if area2 >= base_area2:
+                continue
+            # placement offsets are relative to the grid origin (layout.origin).
+            ox, oy = layout.origin
+            placement = {
+                cid: (pl.offset[0] - ox, pl.offset[1] - oy) for cid, pl in layout.placement.items()
+            }
+            label = f"{tag}:w={w},gap={h_gap}/{v_gap},area2={area2}"
+            ranked.append((area2, Candidate(grid=grid, placement=placement, label=label)))
+    ranked.sort(key=lambda pair: pair[0])
+    return [cand for _, cand in ranked[:_MAX_CANDIDATES]]
 
 
 def relayout(prog: Program) -> list[Candidate]:
@@ -538,9 +572,7 @@ class OptimizeResult:
     @property
     def improved(self) -> bool:
         return (
-            self.score is not None
-            and self.base_score is not None
-            and self.score < self.base_score
+            self.score is not None and self.base_score is not None and self.score < self.base_score
         )
 
     def render(self) -> str:
@@ -584,12 +616,11 @@ def optimize(
             for cand in pass_fn(cur):
                 if cand.grid == best_grid:
                     continue
-                # Cheap proxy: reject candidates whose footprint isn't smaller
-                # unless ticks might still win (only bother scoring those).
+                # The footprint pre-filter lives in the pass (`_relayout` drops
+                # anything not strictly smaller); this is just for the log.
                 _, _, area2 = footprint("\n".join(cand.grid))
-                if (
-                    cand.placement is not None
-                    and not bindings_preserved(cur, cand.placement, cand.grid, lm=lm)
+                if cand.placement is not None and not bindings_preserved(
+                    cur, cand.placement, cand.grid, lm=lm
                 ):
                     log.append(f"sweep{sweep} {cand.label}: rejected (binding changed)")
                     continue
