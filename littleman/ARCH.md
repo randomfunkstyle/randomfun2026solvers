@@ -1,7 +1,14 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: design, not yet built.** This document freezes the architecture so the
-assembler, the emulator and the `.man` generator can be built against one spec.
+**Status: design frozen; toolchain built; hardware is a 2-opcode slice.** The
+ISA, emulator and assembler exist (`lm1/`, 230 tests green) and all 7 memory-free
+problems pass every public test case in the emulator. On the real interpreter,
+ROM + ring + CPU runs end to end at 20 ticks/instruction (§2.5). The full CPU
+generator is not written yet (§9 step 5).
+
+Two problems are already solved *without* LM-1, as bespoke grids: `memory`
+(accepted by the judge) and `history-lesson`. LM-1 is the safety net for the
+rest, not the plan of record (§1).
 
 Visual walkthrough: [`arch.html`](arch.html) — the verified units, an animated
 run of the whole machine driven by real interpreter snapshots, the tick budget
@@ -225,29 +232,41 @@ prefetch, so there is no branch-flush hazard to reason about.
 
 ## 4. Block contracts
 
-### 4.1 STORE — memory, deliberately left abstract
+### 4.1 Memory — two tiers, and the second one is not optional
 
-Per decision: **no memory is baked into LM-1 v1.** `STORE` is a port contract
-with a throwaway stub behind it, to be replaced later by someone else.
+`memory` is **solved** (`programs/memory.man`, accepted by the judge), so this is
+no longer a stub. Both blocks below are measured on the reference interpreter:
 
-The wire protocol **is the `memory` problem's protocol**, verbatim:
+| Block | Size | Cost per access | Protocol |
+|---|---|---|---|
+| `memory.man` — rotating pipe tape, 100 cells | 32×32 | **~750 ticks, constant** | `0 addr` / `1 addr value` |
+| `register-cell.man` — one value | 6×7 | **~20 ticks** round trip, non-destructive read | `1 v` store · `-1` fetch |
 
-| Request words (in) | Response words (out) |
-|---|---|
-| `0 addr` — READ | one word: the current value at `addr` |
-| `1 addr value` — WRITE | none |
+The tape is a **drop-in `STORE`**: its wire protocol is the `memory` problem's,
+which is exactly the contract this document specified, so no translation is
+needed. It runs exactly one revolution per operation, so cost is constant rather
+than O(distance) — better than the delay line originally assumed here.
 
-Ports: 1 in (`req`), 1 out (`resp`). Cells start at 0.
+**The two tiers are a precondition, not an optimisation.** The emulator (§9
+step 2) measured that **41–53 % of executed instructions are `LD`/`ST`**, and
+almost none of that is arrays — it is register spill, because `A` dies on every
+fetch and a loop needs 2–3 live values. Route spill through a 750-tick tape and
+the machine dies on ticks: `triangle` alone is ~10k accesses ≈ **7.5M ticks
+against a 5M cap**. Route it through register cells at ~20 ticks and the same
+program is comfortable.
 
-This is deliberate: **solving the `memory` problem produces the RAM block.** A
-correct `memory` solution is a drop-in `STORE` with no protocol translation, and
-LM-1 v1 wires in a tiny 8-slot stub of the same shape in the meantime. Anything
-that needs real arrays (`sort-numbers`, `matmul`, `sudoku-validity`,
-`subset-sum`, `gradebook`, `reverse-a-list`) is blocked on that block, and only
-on that block.
+So the memory hierarchy is:
 
-A delay-line ring (N words circulating, addressed by counting them past a gate,
-O(N) ticks per access) is the expected implementation, but LM-1 does not care.
+- **SPILL** — 2–4 `register-cell` blocks for loop counters and temporaries,
+  reached by `PUSH`/`POP` or `LDR`/`STR` (§6.1). Also the only way to implement
+  indirect addressing at all (§6.1).
+- **STORE** — the tape, for arrays *only*: `sort-numbers`, `matmul`,
+  `sudoku-validity`, `subset-sum`, `gradebook`, `reverse-a-list`, plus — not
+  previously on that list — `brackets` (32-deep typed stack) and `tcp` (48-slot
+  reorder buffer).
+
+Hazard inherited from `register-cell`: the command `0` walks its man into a wall
+and kills the whole program. Any bus that can carry a `0` must bias it to ±1.
 
 ### 4.2 ROM — the program store
 
@@ -291,8 +310,15 @@ A little man carries `A`, `B`, `BP`, and that is the entire register file.
 | `B` | **the accumulator (ACC)** | survives fetch and decode untouched |
 | `BP` | decode bits, loop counters | write-only (`b`, `m`, `]`), branch-only (`d`, `a`, `x`) |
 
-ACC lives in `B` precisely because fetch destroys `A`. This costs a `W` or `M`
-in most micro-programs and is much cheaper than spilling ACC to a pipe.
+ACC lives in `B` precisely because fetch destroys `A`. That costs a `W` or `M` in
+most micro-programs, which is cheap.
+
+What is *not* cheap is that three registers are not enough. **A loop needs 2–3
+live values and ACC holds one**, so every loop spills — measured at 41–53 % of
+all executed instructions (§4.1). The original claim here, that this beats
+"spilling ACC to a pipe", compared the wrong two options: the real choice is
+whether spill pays *tape* latency or *register-cell* latency, and that is a 40×
+difference. Hence the SPILL tier in §4.1; it is load-bearing, not a nicety.
 
 ### 5.2 Word format
 
@@ -313,6 +339,17 @@ JMPF n   — recirculate the next n words without executing them
 The assembler resolves labels into `n`, so **source-level jumps are absolute**
 while the hardware only ever skips forward. A backward jump to a target `L`
 words back costs `n = P − L` skips.
+
+Precisely: `n = (target − after) mod P`, where `after = pos + 1 + operands` — the
+word *following* the jump, because the jump's own operand has already been
+consumed by the time the skip starts. The generator must use the same convention
+as the assembler; getting this off by one silently executes the wrong word.
+
+Confirmed by the emulator: **forward-skip-only is not painful to compile
+against.** The resolver is two lines and works uniformly for forward and backward
+jumps; nothing ever wanted a real PC. Only the *cost* hurts — 13–28 % of total
+ticks, worst on `brackets`, because §5.4's "put the hot loop last" advice fails
+when a program has several hot loops competing for the tail.
 
 **Invariant — every ring read is immediately followed by a ring write-back.**
 Opcode words *and* operand words *and* skipped words all go back into the ring,
@@ -374,6 +411,33 @@ The `LD`/`ST` micro-programs also show why the STORE protocol is `op, addr
 operand can be read from the ring straight into `A` and forwarded, so ACC never
 needs a spill slot. That ordering happens to be exactly the `memory` problem's
 wire format, which is why §4.1 costs nothing.
+
+### 6.1 v2 — what the emulator proved the table is missing
+
+All 7 memory-free problems pass on v1, so v1 is *adequate*. It is also badly
+inefficient, and two rows are outright wrong. These are implemented as `LM1_EXT`
+in `lm1/isa.py`; the numbering is deliberately unspecified here because
+assignment is a layout decision (§7.1).
+
+| Mnemonic | Operand | Why it earns a row |
+|---|---|---|
+| `MUL addr` | word | v1 has `MULI` but no memory multiply |
+| `DIVI n` / `MODI n` | word | **no division or modulo existed in any form.** `triangle` must loop 1000× (654k ticks) where `n(n+1)/2` is 7 instructions and 407 ticks — a **1600× difference for two rows** whose micro-programs are 4 and 7 glyphs. `brackets` needs `MODI` for its packed base-3 stack |
+| `NEG` | — | missing, while §4.2's ROM can only encode non-negative literals, so `-1` costs `LDI 0` + `SUBI 1`. The assembler now rejects negative operand words for this reason |
+| `LDP` / `STP` | word | **indirect through a pointer cell.** v1 has immediate addressing only, so an array access means unrolling a 48-way `BRZ` ladder: ~1000 extra words and ~50 branches per access, i.e. ~50× on both footprint and ticks |
+| `PUSH` / `POP` | — | fall out of the SPILL pipe for free once `LDP`/`STP` exist |
+
+Two corrections to the v1 table itself:
+
+- **`SUBI` is one glyph too long.** `r↺` `-` `N` `M` should be `r↺` `W` `-` `M`;
+  same for `SUB addr`. `N` is never needed when `W` can reorder the operands.
+- **Indirect store is impossible without a spill slot — a real hole in §5.1.** To
+  honour the STORE protocol you must emit `1` *before* the address, but the `1`
+  glyph writes `A`, and `B` holds ACC, so the fetched pointer has nowhere to
+  live. There is no third register and `BP` cannot be read back. `LDP`/`STP`
+  therefore park the pointer in the **SPILL pipe**. If you want arrays at all,
+  that pipe is not optional — which is the same conclusion §4.1 reaches from the
+  tick side.
 
 ## 7. What the generator has to get right
 
@@ -450,53 +514,69 @@ grouping by semester is still informative: **Semester 3 is uniformly "big RAM
 plus nested loops"**, which is exactly where a CPU beats hand-drawing, while
 Semester 1 spans the whole range by itself.
 
-| Set | Problem | Needs | RAM slots | Stage |
-|---|---|---|---|---|
-| Sem 1 | `triangle` | one spill slot (closed form `n(n+1)/2`) | 1 | A |
-| Sem 1 | `reverse-a-list` | LIFO, 16 deep | 16 | B |
-| Sem 1 | `sort-numbers` | addressed array + selection loop | 16 | B |
-| Sem 1 | `memory` | **is** the RAM block | 100 | B |
-| Sem 2 | `history-lesson` | no input; pure ROM dump (`footprint`-only scoring) | 0 | A |
-| Sem 2 | `brackets` | typed stack, depth 32 | 32 | B |
-| Sem 2 | `tcp` | indexed by `seq`, rounds withhold input | 48 | B |
-| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 8 | C |
-| Sem 3 | `gradebook` | ids + N×K grades, search by id | 80 | C |
-| Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | **✕** |
-| Sem 3 | `subset-sum` | 20 values + subset search | 24 | C |
-| Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | C |
+Emulator column = passes every public test case under `lm1/emulator.py`, with the
+word count `P` and average estimated ticks. "—" means not yet written.
 
-Stages: **A** = CPU + 8-slot `STORE` stub · **B** = real `STORE` (i.e. the
-`memory` solution) · **C** = larger `STORE` + display ports.
+| Set | Problem | Needs | Slots | Emulator | Stage |
+|---|---|---|---|---|---|
+| Sem 1 | `triangle` | 1 spill slot; needs `DIVI`/`MUL` for the closed form | 1 | 6/6 · P=27 · 118k *(closed: P=11 · 407)* | A |
+| Sem 1 | `reverse-a-list` | LIFO, 16 deep | 16 | — | B |
+| Sem 1 | `sort-numbers` | addressed array + selection loop | 16 | — | B |
+| Sem 1 | `memory` | — | — | **SOLVED as a bespoke grid** (`programs/memory.man`, accepted) | ✔ |
+| Sem 2 | `history-lesson` | no input; pure ROM dump (`footprint`-only) | 0 | 1/1 · P=8431 · 273k | **✔ solved bespoke** |
+| Sem 2 | `brackets` | typed stack depth 32; needs `MODI`/`DIVI` | 32 | 9/9 · P=154 · 30k | B |
+| Sem 2 | `tcp` | indexed by `seq`; needs `LDP`/`STP` | 48 | 6/6 · P=48 · 30k | B |
+| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 8 | — | C |
+| Sem 3 | `gradebook` | ids + N×K grades, search by id | 80 | — | C |
+| Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | — | **✕** |
+| Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
+| Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | — | C |
+| Practice | `hello-world` · `max-element` · `atoi` | 0–1 slots | ≤1 | 1/1 · 10/10 · 2/2 | A |
 
-Two findings that change the plan:
+Stages: **A** = CPU + SPILL only · **B** = SPILL + the tape · **C** = tape +
+display ports.
 
-- **One spill slot is mandatory, not optional.** `A` is destroyed by every
-  instruction fetch, so a loop can never hold two live values — even `triangle`
-  needs a slot. The 8-slot `STORE` stub is therefore part of the CPU from day
-  one; the "accumulator only" tier is effectively empty. §5.1's register model
-  stands, but it is not self-sufficient.
-- **`matmul` looks infeasible on a single delay line.** A 16×16 product needs
-  ~8,450 memory accesses; at 768 words a delay-line access averages ~2,300 ticks,
-  so ~19M ticks against a 5M cap. It needs banked memory (§4.1) or a bespoke
-  solution — worth knowing now rather than at hour 60.
+Three findings that change the plan:
 
-`history-lesson` is scored `footprint` only, so ticks are free but the ROM is
-enormous — a general CPU is the *wrong* tool there even though it can do it.
+- **Spill is the dominant cost, and it must not touch the tape** (§4.1). This
+  supersedes the earlier "one spill slot is mandatory" note: it is not one slot,
+  it is 2–4 slots *on the fast tier*, and getting that wrong costs `triangle` the
+  whole tick budget.
+- **`brackets` and `tcp` need arrays too.** Neither was on the blocked list, but a
+  32-deep typed stack and a 48-slot reorder buffer are arrays. They pass in the
+  emulator only because it has `LDP`/`STP` (§6.1).
+- **`matmul` looks infeasible.** ~8,450 accesses × ~750 ticks ≈ **6.3M against a
+  5M cap** — and that is with the *constant-cost* tape, so the earlier delay-line
+  estimate was pessimistic about the mechanism but right about the verdict. It
+  needs banked memory or a bespoke solution.
+
+`history-lesson` proved the point about scoring rather than capability: LM-1 can
+emit it (P=8431, ~40k ROM cells), but on a `footprint`-only problem that is
+hopeless, so it shipped as a **bespoke 144×148 grid** instead
+(`tasks/solutions/history-lesson.man`, generated by `rom_snake.py`). Two problems
+are now solved *without* the CPU — a reminder that LM-1 is the safety net, not
+the plan of record.
 
 ## 9. Build order
 
-1. **ARCH.md** — this document. ← *you are here*
-2. **Python ISA table + emulator + assembler**, and all task programs written
-   and passing against the emulator. Proves the ISA is sufficient before any
-   ASCII is drawn. *(delegated)*
+1. ~~**ARCH.md**~~ — **done**, and revised twice since: §7.1 (ports are declared,
+   not hand-solved) and §4.1/§5.1/§6.1 (the two-tier memory verdict).
+2. ~~**Python ISA table + emulator + assembler**~~ — **done**
+   (`lm1/`, 230 tests green). All 7 memory-free problems pass every public case.
+   The findings it produced are folded into §4.1, §5.1, §5.3 and §6.1.
 3. ~~**Vertical slice in `.man`**~~ — **done** (§2.5): ROM + ring + CPU with a
-   2-opcode ISA emits `7 8 9` on the real wasm at 20 ticks/instruction. The
-   §7.1 nearest-pipe geometry closes, and headings turned out to be part of the
-   port contract. Next increment: add `LDI`/`ADDI` and a real 2-bit trie so the
-   slice exercises operand words and the ring write-back invariant (§5.3).
-4. **Full 16-lane CPU generator**, driven by the ISA table.
-5. **Drop in a real `STORE`** (i.e. the `memory` solution) and unlock the array
-   problems.
+   2-opcode ISA emits `7 8 9` on the real wasm at 20 ticks/instruction. §7.1's
+   geometry closes; headings turned out to be part of the port contract.
+4. **Grow the slice** to `LDI`/`ADDI` + a real 2-bit trie + one `register-cell`
+   as SPILL. This is the first increment that exercises operand words, the ring
+   write-back invariant (§5.3) and a second block over a bus. ← *next*
+5. **Full CPU generator**, driven by the ISA table (v1 + the §6.1 extensions).
+6. **Wire in the tape** and unlock the array problems.
+
+Useful tooling that now exists for steps 4–6: `tools/route-check.mjs` reports
+which pipe every pipe instruction actually resolves to (the §7.1 safety net as a
+command), `tools/run-cases.mjs` scores a grid against a case file, and
+`tools/trace.mjs` / `watch.mjs` step or watch for stalls.
 
 ## 10. Open questions
 
