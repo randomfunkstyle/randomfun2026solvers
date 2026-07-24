@@ -179,12 +179,23 @@ function resolveInput(flagInput) {
 
 // ── arg parsing ────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { positional: [], json: false, input: null, maxTicks: DEFAULT_MAX_TICKS };
+  const out = {
+    positional: [],
+    json: false,
+    input: null,
+    expected: null,
+    frames: null,
+    maxTicks: DEFAULT_MAX_TICKS,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") out.json = true;
     else if (a === "--input") out.input = argv[++i] ?? "";
     else if (a.startsWith("--input=")) out.input = a.slice("--input=".length);
+    else if (a === "--expected") out.expected = argv[++i] ?? "";
+    else if (a.startsWith("--expected=")) out.expected = a.slice("--expected=".length);
+    else if (a === "--frames") out.frames = argv[++i] ?? "";
+    else if (a.startsWith("--frames=")) out.frames = a.slice("--frames=".length);
     else if (a === "--max-ticks") out.maxTicks = parseInt(argv[++i], 10);
     else if (a.startsWith("--max-ticks=")) out.maxTicks = parseInt(a.slice("--max-ticks=".length), 10);
     else out.positional.push(a);
@@ -260,19 +271,72 @@ async function cmdTick(opts) {
   }
 }
 
+// ── static analysis + judging (structural bridge for tooling) ───────────────
+// These surface wasm exports the run/tick loop doesn't need but an optimizer
+// does: analyze() (rooms/pipes/displays), route() (which pipe a send/recv cell
+// binds to — the nearest-pipe oracle), and judge() (engine-side round-gating +
+// precise settle tick, by passing `expected`/`frames` into load()).
+
+async function cmdAnalyze(opts) {
+  const rows = readManFile(opts.positional[0]);
+  const api = await boot();
+  const info = unwrap(api.analyze(rows));
+  process.stdout.write(JSON.stringify(info, null, opts.json ? 2 : 0) + "\n");
+}
+
+async function cmdRoute(opts) {
+  const rows = readManFile(opts.positional[0]);
+  const x = parseInt(opts.positional[1], 10);
+  const y = parseInt(opts.positional[2], 10);
+  if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("route needs <x> <y>");
+  const api = await boot();
+  const res = unwrap(api.route(rows, x, y));
+  process.stdout.write(JSON.stringify(res, null, opts.json ? 2 : 0) + "\n");
+}
+
+async function cmdJudge(opts) {
+  const rows = readManFile(opts.positional[0]);
+  const input = resolveInput(opts.input);
+  const expected = opts.expected != null ? normalizeInput(opts.expected) : "";
+  const frames = opts.frames ? JSON.parse(opts.frames) : "";
+  const { session, snap: loadSnap } = await loadProgram(rows, input, expected, frames);
+
+  // Step to settle, matching cmdRun's stop condition (halt / fatal / output
+  // settled / no progress), so `step` is the precise final-output tick.
+  let snap = loadSnap;
+  let ticks = snap.step ?? 0;
+  while (!snap.halted && !snap.fatal && !snap.outputSettled) {
+    if (ticks >= opts.maxTicks) break;
+    const prev = snap.step;
+    snap = session.stepN(STEP_CHUNK, false);
+    if (snap.step === prev) break;
+    ticks = snap.step ?? ticks + STEP_CHUNK;
+  }
+  session.close();
+  process.stdout.write(JSON.stringify(snap, null, opts.json ? 2 : 0) + "\n");
+}
+
 const USAGE = `littleman runner
 
-  lm.mjs run  <file.man> [--input "1 2 3"] [--json] [--max-ticks N]
-  lm.mjs tick <file.man> [n] [--input "1 2 3"] [--json]
+  lm.mjs run     <file.man> [--input "1 2 3"] [--json] [--max-ticks N]
+  lm.mjs tick    <file.man> [n] [--input "1 2 3"] [--json]
+  lm.mjs analyze <file.man> [--json]
+  lm.mjs route   <file.man> <x> <y> [--json]
+  lm.mjs judge   <file.man> [--input "…"] [--expected "…"] [--frames JSON] [--json]
 
-run   execute to completion; print program output (space-joined integers).
-tick  advance n ticks (default 1); print ASCII map + hands/backpack/output.
+run     execute to completion; print program output (space-joined integers).
+tick    advance n ticks (default 1); print ASCII map + hands/backpack/output.
+analyze print the structural analysis JSON (rooms, pipes, displays).
+route   print the pipe cells a send/recv instruction at (x,y) binds to.
+judge   run with engine-side round-gating (needs --expected); print the settle snapshot.
 
 Flags:
-  --input "…"   whitespace-separated integers for the program's input room
-                (also read from piped stdin if --input is omitted).
-  --json        emit the raw wasm snapshot JSON instead of the rendered view.
-  --max-ticks N safety cap for run (default ${DEFAULT_MAX_TICKS}).
+  --input "…"    whitespace-separated integers for the program's input room
+                 (also read from piped stdin if --input is omitted).
+  --expected "…" expected output; enables engine round-gating (judge).
+  --frames JSON  expected display frames as JSON (judge, display problems).
+  --json         emit raw / pretty JSON.
+  --max-ticks N  safety cap for run/judge (default ${DEFAULT_MAX_TICKS}).
 `;
 
 async function main() {
@@ -281,6 +345,9 @@ async function main() {
   try {
     if (cmd === "run") await cmdRun(opts);
     else if (cmd === "tick") await cmdTick(opts);
+    else if (cmd === "analyze") await cmdAnalyze(opts);
+    else if (cmd === "route") await cmdRoute(opts);
+    else if (cmd === "judge") await cmdJudge(opts);
     else {
       process.stdout.write(USAGE);
       process.exitCode = cmd ? 1 : 0;

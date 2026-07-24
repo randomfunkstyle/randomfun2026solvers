@@ -44,6 +44,8 @@ score offline is in this repo; the live site is only needed to submit.
 | `tasks/problems/README.md` | Problem table (set / scoring / case counts / summaries). |
 | `solvers/python/randomfun2026solvers/littleman.py` | Typed Python wrapper over `lm.mjs` (pydantic models). |
 | `solvers/python/randomfun2026solvers/scoring.py` | Offline scorer: `area2 × avg ticks` for a `.man` + problem (§6). |
+| `solvers/python/randomfun2026solvers/manparse.py` | Grid → structural `Program` blocks (inverse of `layout.py`); `to_grid`/`to_graph`. |
+| `solvers/python/randomfun2026solvers/optimize.py` | Score optimizer: verified passes shrink `area2 × ticks` (§6). |
 
 A `.man` file **is** the program — the grid, newlines and all. No syntax around it.
 
@@ -221,7 +223,28 @@ queued submissions at once.
    `tick n` (output length is monotonic; the program need not halt). Display
    problems (`plotter`/`palette`) have no output to count — those fall back to
    the run settle/halt tick and are flagged `approx` (see §9.3).
-5. **Submit** via the API in §5 (`POST /submissions` with the problem **id**).
+5. **Optimize** — `optimize.py` searches for a lower-scoring grid that still
+   passes every public case:
+
+   ```sh
+   uv run python -m randomfun2026solvers.optimize <file.man> <slug|json> [--out F] [--verbose]
+   ```
+
+   It parses the grid into blocks (`manparse.py`) then runs verified passes —
+   **trim** (crop blank margins), **relayout** (re-place rooms + re-route pipes
+   shortest, via `layout.py`'s A\* router), **relayout-cap** (same, but
+   `CapacityRouter` pads every pipe back to ≥ its original length, preserving
+   shift-register buffers) — keeping any candidate that lowers the real score.
+   Two gates protect correctness: `verify` (engine round-gated judging, exact
+   output match) and `bindings_preserved` (the `route` oracle re-checks every
+   send/recv still binds to the same pipe). It never returns a grid that fails to
+   verify. Footprint is *squared*, so a re-layout that shrinks `area2` 4× while
+   ~2× the ticks still wins big (atoi 78×6 → 39×27, −54 %). Programs that are both
+   buffer-bound *and* have a multi-pipe room (`memory`) are returned unchanged —
+   the gates reject every re-layout; binding-aware attach placement is the next
+   lever. Note: `scoring.py` does not round-gate and under-counts multi-round
+   ticks — the optimizer's `verify` is the accurate tick source.
+6. **Submit** via the API in §5 (`POST /submissions` with the problem **id**).
 
 ### Engine access beyond the CLI
 

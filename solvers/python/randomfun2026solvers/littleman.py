@@ -32,6 +32,10 @@ __all__ = [
     "PipeValue",
     "Room",
     "Display",
+    "Box",
+    "PipeSeg",
+    "PipeGeom",
+    "Analysis",
     "Entities",
     "Fatal",
     "Snapshot",
@@ -125,6 +129,47 @@ class Display(_Model):
     @classmethod
     def _null_lists(cls, data: Any) -> Any:
         return _nulls_to_lists(data, ("front", "back"))
+
+
+class Box(_Model):
+    """A bare rectangle ``[min, max]`` (inclusive), as ``analyze`` reports rooms."""
+
+    min_: Vec2 = Field(alias="min")
+    max_: Vec2 = Field(alias="max")
+
+
+class PipeSeg(_Model):
+    """One cell of a pipe path: its ``pos`` and the flow ``dir`` there."""
+
+    pos: Vec2
+    dir: Vec2
+
+
+class PipeGeom(_Model):
+    """A pipe from room index ``src`` to room index ``dst`` (from ``analyze``)."""
+
+    path: list[PipeSeg] = Field(default_factory=list)
+    src: int | None = None
+    dst: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_lists(cls, data: Any) -> Any:
+        return _nulls_to_lists(data, ("path",))
+
+
+class Analysis(_Model):
+    """Structural analysis of a grid: room boxes, pipe geometry+connectivity, displays."""
+
+    type: str | None = None
+    rooms: list[Box] = Field(default_factory=list)
+    pipes: list[PipeGeom] = Field(default_factory=list)
+    displays: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_lists(cls, data: Any) -> Any:
+        return _nulls_to_lists(data, ("rooms", "pipes", "displays"))
 
 
 class Entities(_Model):
@@ -252,6 +297,46 @@ class Littleman:
         """Advance ``n`` ticks from the start; returns the resulting :class:`Snapshot`."""
         return self._invoke("tick", program, input=input, extra=[str(n)])
 
+    def analyze(self, program: str | os.PathLike[str]) -> Analysis:
+        """Structural analysis of the grid: rooms, pipes (with connectivity), displays."""
+        data = self._run_json("analyze", program)
+        return Analysis.model_validate(data)
+
+    def route(self, program: str | os.PathLike[str], x: int, y: int) -> list[Vec2]:
+        """The pipe cells a send/recv instruction at ``(x, y)`` binds to (nearest-pipe).
+
+        Returns the ordered cells of the targeted pipe, or ``[]`` if the cell
+        binds to no pipe. This is the oracle for proving a layout transform did
+        not silently re-bind a send/recv.
+        """
+        data = self._run_json("route", program, extra=[str(x), str(y)])
+        return [Vec2.model_validate(c) for c in (data.get("cells") or [])]
+
+    def judge(
+        self,
+        program: str | os.PathLike[str],
+        *,
+        input: str | Sequence[int] | None = None,
+        expected: str | Sequence[int] | None = None,
+        frames: Any | None = None,
+        max_ticks: int | None = None,
+    ) -> Snapshot:
+        """Run with engine-side round-gating (``expected`` withholds later rounds).
+
+        Returns the settle :class:`Snapshot` — ``step`` is the precise
+        final-output tick and ``output`` the emitted values. Rounds in ``input``
+        / ``expected`` are separated by ``/``.
+        """
+        extra: list[str] = []
+        exp = _input_to_str(expected)
+        if exp is not None:
+            extra += ["--expected", exp]
+        if frames is not None:
+            extra += ["--frames", json.dumps(frames)]
+        if max_ticks is not None:
+            extra += ["--max-ticks", str(max_ticks)]
+        return self._invoke("judge", program, input=input, extra=extra)
+
     # internals ------------------------------------------------------------------
     def _invoke(
         self,
@@ -261,6 +346,17 @@ class Littleman:
         input: str | Sequence[int] | None,
         extra: Sequence[str],
     ) -> Snapshot:
+        return Snapshot.model_validate(self._run_json(cmd, program, input=input, extra=extra))
+
+    def _run_json(
+        self,
+        cmd: str,
+        program: str | os.PathLike[str],
+        *,
+        input: str | Sequence[int] | None = None,
+        extra: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Shell out to a CLI subcommand with ``--json`` and return the parsed object."""
         path, cleanup = _resolve_program(program)
         try:
             argv = [self.node, str(self.script), cmd, str(path), *extra, "--json"]
@@ -275,12 +371,11 @@ class Littleman:
         stdout = proc.stdout.strip()
         if stdout:
             try:
-                data = json.loads(stdout)
+                return json.loads(stdout)
             except json.JSONDecodeError as exc:
                 raise LittlemanError(
                     f"could not parse CLI JSON: {exc}; stderr: {proc.stderr.strip()}"
                 ) from exc
-            return Snapshot.model_validate(data)
 
         # No JSON on stdout → a load/usage error (or a missing engine).
         raise _parse_error(proc.stderr)
