@@ -128,13 +128,21 @@ def assign(prog: Program) -> tuple[int, dict[str, int], dict[str, int]]:
     k = max(1, (len(used) - 1).bit_length())
     lanes = 1 << k
 
-    def rank(name: str) -> tuple[int, str]:
+    def rank(name: str) -> tuple[int, int, str]:
+        """Group by pipe need, then **longest micro-program first**.
+
+        A lane drops south to the return row at its own end, and the drop crosses
+        every row below it -- so a lane can only drop early if the lanes beneath
+        are shorter. Ordering longest-first makes the drop columns a descending
+        staircase, which is what lets the short lanes stop early instead of all
+        walking out to a shared far column.
+        """
         b = prog.ops[name].bands
         if Band.IN in b:
-            return (0, name)  # top: beside the north pipe
+            return (0, 0, name)  # top: beside the north pipe
         if Band.OUT in b:
-            return (2, name)  # bottom: beside the south pipe
-        return (1, name)
+            return (2, 0, name)  # bottom: beside the south pipe
+        return (1, -len(prog.ops[name].micro), name)
 
     order = sorted(used, key=rank)
     # spread them: IN-ish first, OUT-ish last, so the extremes hug their walls
@@ -180,7 +188,17 @@ def synthesise(prog: Program) -> list[str]:
                     x += 1
             lane_cells[(x, row)] = glyph
             x += 1
-    ret_x = max(x for x, _ in lane_cells) + 1
+    all_rows = list(range(1, span + 1, 2))
+    lane_end = {
+        r: max((cx for cx, cy in lane_cells if cy == r), default=lane_x0 - 1) for r in all_rows
+    }
+    halting = {rows[n] for n in prog.used if prog.ops[n].halts}
+    # A lane drops south to the return row as soon as its micro-program ends, but
+    # the drop crosses every row below it, so it must clear their cells too.
+    drop_x: dict[int, int] = {}
+    for r in sorted(all_rows, reverse=True):
+        drop_x[r] = max([lane_end[q] for q in all_rows if q >= r]) + 1
+    ret_x = max(drop_x.values())
     cpu_w = ret_x
 
     g = _Grid()
@@ -217,30 +235,29 @@ def synthesise(prog: Program) -> list[str]:
 
     trie(1, centre)
 
-    # ── lanes (already laid out above, so the return column is known)
+    # ── lanes, each dropping at its own end (unused rows included)
     for (x, row), glyph in lane_cells.items():
         cpu(x, row, glyph)
-    for name in prog.used:
-        if prog.ops[name].halts:
+    for r in all_rows:
+        if r in halting:
             continue
-        row = rows[name]
-        x = max(cx for cx, cy in lane_cells if cy == row) + 1
-        while x < ret_x:
-            cpu(x, row, ".")
-            x += 1
+        for x in range(lane_end[r] + 1, drop_x[r]):
+            cpu(x, r, ".")
+        for y in range(r, ret_row):
+            cpu(drop_x[r], y, "v")
 
-    # ── return path: east column -> return row -> west -> north to the fetch
-    for y in range(1, spawn_row + 1):
-        cpu(ret_x, y, "v")
-    cpu(ret_x, ret_row, "<")
-    for x in range(2, ret_x):
-        cpu(x, ret_row, ".")
+    # ── return path. The whole return row is `<`: a man already heading west
+    # passes over it, one arriving from a drop turns onto it, so a drop column can
+    # land anywhere along it.
+    for x in range(2, ret_x + 1):
+        cpu(x, ret_row, "<")
     cpu(1, ret_row, "^")
     for y in range(centre + 1, ret_row):
         cpu(1, y, ".")
     cpu(2, spawn_row, "@")
     for x in range(3, ret_x):
-        cpu(x, spawn_row, ".")
+        if (CX + x, CY + spawn_row) not in g.c:
+            cpu(x, spawn_row, ".")
 
     # ── blocks and pipes
     rom_pipe_y = CY + centre
