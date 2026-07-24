@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from lmc.blockspec import ring_io_graph
+from lmc.blockspec import BlockGraph, E, Instr, Pipe, W, ring_io_graph
 from lmc.oracle import LM_PATH, run_grid
 from lmc.router import render, solve_attachments
 from lmc.trail import build_trail
@@ -48,3 +48,21 @@ def test_router_reproduces_ring_io():
     grid = render(ring_io_graph())
     for v in (42, 7, -5, 1000000):
         assert run_grid(grid, [v]).output == [v], (v, grid)
+
+
+@requires_oracle
+def test_generated_counted_loop():
+    """Loop codegen: read n, emit 7 n times (do-while, n>=1)."""
+    from lmc.loopgen import counted_loop_trail
+
+    g = BlockGraph(cpu="CPU")
+    g.rooms = {"CPU": "cpu", "I": "input", "O": "output"}
+    g.pipes = [Pipe("in", "I", E, "CPU", W), Pipe("out", "CPU", E, "O", W)]
+    trail = counted_loop_trail(
+        prologue=[Instr("@"), Instr("r", "in"), Instr("b")],
+        body=[Instr("7"), Instr("s", "out")],
+        epilogue=[Instr("H")],
+    )
+    grid = render(g, trail)
+    for n in (1, 3, 5, 8):
+        assert run_grid(grid, [n]).output == [7] * n, (n, grid)

@@ -125,9 +125,10 @@ class Canvas:
         return "\n".join(r.ljust(width) for r in rows) + "\n"
 
 
-def render(graph: BlockGraph) -> str:
+def render(graph: BlockGraph, trail: TrailLayout | None = None) -> str:
     """Render the R0 topology (CPU + input W + output E + BUF N up/down)."""
-    trail = build_trail(graph.trail)
+    if trail is None:
+        trail = build_trail(graph.trail)
     seg = solve_attachments(graph, trail)  # CPU-relative segment cells
     Wi, Hi = trail.width, trail.height
 
