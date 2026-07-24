@@ -38,3 +38,13 @@ def test_forwarder_echoes_stream():
     grid = (EXAMPLES / "forwarder.man").read_text()
     snap = tick_grid(grid, 21, [1, 2, 3])
     assert snap.get("output") == [1, 2, 3]
+
+
+@requires_oracle
+def test_ring_cycles_stored_values():
+    """3-word circulating store: seeded [10,20,30] cycle past the CPU tap."""
+    grid = (EXAMPLES / "ring.man").read_text()
+    for tick, want in [(18, 10), (26, 20), (34, 30), (42, 10), (50, 20), (58, 30)]:
+        snap = tick_grid(grid, tick)
+        cpu = max(snap["entities"]["runners"], key=lambda r: r["pos"][1])
+        assert cpu["a"] == want, (tick, cpu["a"], want)

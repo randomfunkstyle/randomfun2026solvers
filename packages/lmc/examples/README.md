@@ -25,11 +25,19 @@ CPU receives it (A=42) and halts (10 ticks). This is the atom of a circulating
 store: a value the CPU can send out and get back. A value kept cycling and not
 consumed is persistent state — i.e. one word of memory.
 
+## `ring.man` — an N-word circulating store
+CPU seeds three literals (10, 20, 30) up into the loop, then runs a tight
+`r`/`s` loop: receive the head value, re-send it back up. The three values
+persist and **cycle past the CPU tap** — A reads 10, 20, 30, 10, 20, 30, … on a
+steady 8-tick period. This is addressable memory: to read index i, rotate i
+times and use the value in hand; sequential access is O(1), random access O(N).
+BUF is the forwarder loop; CPU + BUF share paired vertical pipes. FIFO order is
+preserved (the reference guarantees pipe order), so the ring never scrambles.
+
 # Memory plan (next)
 
-- **N-word circulating ring**: extend the round-trip loop to hold N values that
-  cycle; the CPU rotates by receive+resend and taps the stream. `q` gives the
-  live count. Random access = rotate to index (O(N)); sequential = O(1).
+- **Parametrise the ring**: generate seed + loop for any N; size the loop pipes
+  so capacity >= N. `q` gives the live count for length checks.
 - **Addressing / multi-pipe rooms**: a real CPU touches I, O, and memory at once,
   so `s`/`r` must pick the right pipe by nearest-Manhattan-distance. Lay I on one
   side, O on another, memory on a third; place each `r`/`s` nearest its target.
