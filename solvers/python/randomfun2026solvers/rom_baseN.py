@@ -1,26 +1,31 @@
-"""base-1000 "encode a big number, decode at runtime" ROM (history-lesson v2).
+"""base-N "encode a big number, decode at runtime" ROM (history-lesson v2).
 
 Where :mod:`rom_snake` spends one ``` `NNN`s ``` per output byte, this packs
-**6 bytes per 64-bit word** (base 1000, 3 decimal digits each, least-significant
-byte first) and decodes them at runtime, so the expensive ``` `...`s ``` framing
-is amortised ~6x. For history-lesson this is ~11.3 KB vs ~18.8 KB.
+**several bytes per 64-bit word** and decodes them at runtime, so the expensive
+``` `...`s ``` framing is amortised across a whole word.
 
-Three rooms, wired by pipes (via :func:`~randomfun2026solvers.layout.layout_graph`):
+Default is **base 128, 8 bytes/word**: bytes are 7-bit (ASCII < 128), so 8 fit
+in 56 bits, and a word is at most 17 decimal digits. That matters for two 64-bit
+limits: (1) the value fits signed-64, and (2) a literal must parse as <=64-bit
+**read in both directions** (SPEC "Fine print") — a 17-digit word reversed is
+<= 1e17 < 2**63, always safe (9 bytes / 19 digits could overflow when reversed).
+Decoding by ``/ 128`` also gives the byte as ``x & 127`` and the shift as
+``x >> 7`` in one op. (Base 1000 / 6 bytes also works and is more legible; base
+128 is denser — ~2.1 vs 3.0 digits per byte.)
+
+Three rooms, wired by minimal straight pipes (see :func:`_assemble`):
 
 * **encoder** — a packed ROM that ``s``-sends each word literal into a pipe, then
   a negative **sentinel** (``1 N s`` -> emits -1) to signal end-of-stream;
-* **decoder** — a one-``X`` loop: read a word, then repeatedly ``/ 1000`` (one
-  ``/`` yields the quotient in A *and* the byte remainder in B), send the byte,
-  until the word is exhausted (A hits 0 -> read next word); a negative word
-  halts it;
+* **decoder** — a one-``X`` loop: read a word, then repeatedly ``/ WORD_BASE``
+  (one ``/`` yields the quotient in A *and* the byte remainder in B), send the
+  byte, until the word is exhausted (A hits 0 -> read next word); a negative
+  word halts it;
 * **output** — the ``O`` room.
-
-Because 64-bit is the ceiling (a value must fit in 64 bits or it fails to load),
-a *single* giant number is impossible — 6 bytes (<=18 digits) is the safe chunk.
 
 Verify::
 
-    node littleman/lm.mjs run tasks/solutions/history-lesson_base1000.man
+    node littleman/lm.mjs run tasks/solutions/history-lesson_base128.man
 """
 
 from __future__ import annotations
@@ -42,12 +47,12 @@ __all__ = [
     "best_encoder_width",
 ]
 
-WORD_BASE = 1000          # 3 decimal digits per byte (all bytes < 1000)
-CHARS_PER_WORD = 6        # 6 * 3 = 18 digits <= signed-64-bit (~19 digits)
+WORD_BASE = 128           # 7 bits/byte (ASCII < 128); decode is /128 == (>>7, &127)
+CHARS_PER_WORD = 8        # 8*7 = 56 bits -> <=17 digits, reverse-safe under 64-bit
 
 
 def to_words(codes: list[int]) -> list[int]:
-    """Group ``codes`` into base-1000 words, least-significant byte first."""
+    """Group ``codes`` into base-:data:`WORD_BASE` words, least-significant first."""
     words: list[int] = []
     for i in range(0, len(codes), CHARS_PER_WORD):
         w = 0
@@ -161,7 +166,8 @@ def decoder_container(container_id: str = "dec") -> Container:
         put(xx, 17, " ")
     put(2, 17, "^")
     # extract body: A>0 (CW/south) from (x,4) down
-    body = "M`1000`W/WsW"     # M; load 1000; A/1000 -> quotient A, byte B; send byte
+    # M; load WORD_BASE; A/base -> quotient A, byte B; send byte
+    body = f"M`{WORD_BASE}`W/WsW"
     for i, ch in enumerate(body):
         put(x, 4 + i, ch)
     put(x, 4 + len(body), "<")            # turn west
