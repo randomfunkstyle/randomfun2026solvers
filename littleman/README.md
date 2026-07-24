@@ -80,3 +80,38 @@ Every call returns a JSON string; `{type:"error"}` results are thrown.
 - `examples/walk.man` — a runner walks right into `H` and halts.
 - `examples/io.man` — a `` `123` `` literal is sent to the output room.
 - `examples/echo.man` — reads one input value and echoes it to output.
+
+## Python wrapper
+A typed Python front-end lives at
+`solvers/python/randomfun2026solvers/littleman.py`. It shells out to this CLI with
+`--json` and parses the snapshot into pydantic v2 models.
+
+```python
+from pathlib import Path
+from randomfun2026solvers.littleman import Littleman
+
+lm = Littleman()                                   # finds ../littleman/lm.mjs by default
+snap = lm.run(Path("littleman/examples/io.man"))   # Path => run a .man file
+snap.output                                        # [123]
+snap.step, snap.ok, snap.reason                    # 9, True, "done"
+
+snap = lm.run(Path("littleman/examples/echo.man"), input=[42])   # int list or "42" string
+snap = lm.run("+---+\n|@H |\n+---+\n")              # str => inline program source
+
+snap = lm.tick(Path("littleman/examples/walk.man"), 2)           # step 2 ticks from start
+r = snap.entities.runners[0]
+r.pos.x, r.pos.y, r.a, r.b, r.backpack             # Vec2 coords + hands + backpack
+```
+
+- Coordinates are `Vec2(x, y)` models (`.as_tuple()` for a plain tuple).
+- Program `str` = inline source; `Path`/`os.PathLike` = an existing `.man` file.
+- `input` accepts a whitespace `str` or a sequence of ints.
+- A **fatal** runtime error is reported on `snap.fatal` (a `Fatal` model); a
+  **load/usage** error raises `LittlemanError` (with `.pos`).
+- Override the engine via `Littleman(script=..., node=...)` or env `LM_SCRIPT`/`LM_NODE`.
+
+Mirrored Python CLI (full parity with `lm.mjs`):
+```
+uv run python -m randomfun2026solvers.littleman run  <file.man> [--input STR] [--json] [--max-ticks N]
+uv run python -m randomfun2026solvers.littleman tick <file.man> [n] [--input STR] [--json]
+```

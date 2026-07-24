@@ -3,7 +3,9 @@ name = "randomfun2026solvers"
 version = "0.1.0"
 description = "External batch solvers for randomfun2026 infrastructure"
 requires-python = "==3.12.*"
-dependencies = []
+dependencies = [
+    "pydantic>=2.13.4",
+]
 
 [project.scripts]
 randomfun2026solvers = "randomfun2026solvers.cli:main"
