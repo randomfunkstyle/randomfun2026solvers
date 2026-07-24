@@ -673,6 +673,42 @@ glyphs, correct pipes, and an infinite two-cell refetch loop. Assert entry
 headings with the wasm's `flow(rows)` (per-cell reachable headings) as part of
 generation, not as a debugging step.
 
+### 7.4b Pipe length is a tick cost, on both sides
+
+Measured on `triangle` (9×9, same 11 glyphs, only the pipe lengths varied):
+
+| input pipe | output pipe | ticks |
+|---|---|---|
+| 2 | 2 | **13** |
+| 4 | 2 | 15 |
+| 4 | 4 | 17 |
+
+**Every extra pipe cell costs one tick.** The output side is obvious — a value
+takes one tick per cell to reach the end of the output pipe, and ticks are counted
+until the last correct output *arrives*, not until the man finishes. The input
+side is less obvious: input is free only if the `r` fires after the value has
+already traversed. In a short program `r` runs at t1 and *blocks*, so the input
+pipe's length lands on the critical path too.
+
+Consequences for layout:
+
+- **Both pipes want to be the 2-cell minimum.** This directly opposes §7.4's
+  packing pressure, because wrapping a pipe around a room to save a row makes it
+  longer.
+- Everything *after* `s` is genuinely free — the trailing `H` costs nothing. Keep
+  it anyway: an error before the output pipe drains loses the value in flight.
+- A long input pipe is free *only* for programs that do real work before their
+  first `r`, which is rare.
+
+Worked example of the trade: a wrapped 8×8 `triangle` — I/O rooms abutting below
+the compute room, pipes routed around the outside into a side wall instead of
+dropping through a 2-row gap — would be footprint 64 against 81. It loses twice
+over. It does not route (with both I/O on the bottom row, 8 columns leaves two
+spare, the abutting O blocks I's only east exit, and the two pipes cross), and
+even routed, wrapping lengthens both pipes: 64 × 17 = 1,088 against 81 × 13 =
+1,053. The technique is still worth keeping for larger machines, where a
+saved row is a bigger fraction of the box and a few pipe cells are a smaller one.
+
 ### 7.4 Packing: why `layout.py` cannot own this unaided
 
 Footprint is `max(w, h)²`, so **only the larger dimension is billed** and slack in
