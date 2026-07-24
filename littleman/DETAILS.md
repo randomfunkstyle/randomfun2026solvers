@@ -43,6 +43,7 @@ score offline is in this repo; the live site is only needed to submit.
 | `tasks/problems/<slug>.json` | Full problem: description, `io`, `scoring`, `publicTestData`, … |
 | `tasks/problems/README.md` | Problem table (set / scoring / case counts / summaries). |
 | `solvers/python/randomfun2026solvers/littleman.py` | Typed Python wrapper over `lm.mjs` (pydantic models). |
+| `solvers/python/randomfun2026solvers/scoring.py` | Offline scorer: `area2 × avg ticks` for a `.man` + problem (§6). |
 
 A `.man` file **is** the program — the grid, newlines and all. No syntax around it.
 
@@ -202,7 +203,24 @@ queued submissions at once.
    to the problem's `publicTestData`. Use `--json` for machine-readable state and
    `--max-ticks` to raise the local cap for long programs.
 4. **Score** — footprint from the source grid, ticks from the run (see §5). Lower
-   is better; iterate on making the grid smaller/faster.
+   is better; iterate on making the grid smaller/faster. `scoring.py` does this
+   offline against a problem's public cases (**assuming all pass**):
+
+   ```sh
+   uv run python -m randomfun2026solvers.scoring <file.man> <slug|problem.json> [--json]
+   ```
+   ```python
+   from randomfun2026solvers.scoring import score_program
+   r = score_program("solve.man", "memory")   # slug, .json path, or problem dict
+   r.area2, r.avg_ticks, r.score              # e.g. 1764, 20386.57, 35961912.0
+   ```
+
+   Footprint mirrors `lm.mjs` (drop one trailing newline, split on `\n`; w =
+   longest row, h = row count). Per-case ticks = the exact tick the final
+   expected output value is emitted, found by exponential-then-binary search on
+   `tick n` (output length is monotonic; the program need not halt). Display
+   problems (`plotter`/`palette`) have no output to count — those fall back to
+   the run settle/halt tick and are flagged `approx` (see §9.3).
 5. **Submit** via the API in §5 (`POST /submissions` with the problem **id**).
 
 ### Engine access beyond the CLI
