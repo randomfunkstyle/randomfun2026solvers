@@ -205,8 +205,17 @@ ROM:      0 0  6 0  2 1  1 0  5 2  7 0  4 0        (14 words, fixed 2-word form)
 ```
 
 **6/6 public cases on the reference interpreter**, plus n=999 and n=1000.
-46×31, **446 ticks**, score **943,736**. Every pipe instruction was confirmed
-against `tools/route-check.mjs` to resolve to its intended pipe.
+38×31, **442 ticks**, score **638,248** after packing (§7.4 — it began at 46×31
+/ 943,736). Every pipe instruction was confirmed against
+`tools/route-check.mjs` to resolve to its intended pipe.
+
+**This build has no code ring**, and that is legal only because `triangle` never
+jumps backwards. The fetch is `>rbr`, not `>rsbrsx`: the two `s` glyphs are the
+§5.3 write-back, which exists so the program survives a lap and can be run
+again. A straight-line program runs once, so it can skip the write-back — and
+then the ring degenerates to a FIFO, which removes the `LOOP` room and the
+minimum-capacity constraint entirely. **Any program with a loop must keep
+both**, which is nearly all of them.
 
 - The emulator predicted 407 ticks and the hardware measured 446, so **§7.3's
   tick model is good to ~10 %** — it can be trusted for planning.
@@ -217,7 +226,7 @@ against `tools/route-check.mjs` to resolve to its intended pipe.
   (§2.4's bit-reversal): `IN` = 0 → top row, beside the north input pipe;
   `OUT` = 7 → bottom row, beside the south output pipe.
 
-**The bespoke grid for the same problem is 24×3, 12 ticks, score 6,912 — 137×
+**The bespoke grid for the same problem is 24×3, 12 ticks, score 6,912 — 92×
 better.** Both pass 6/6. That is the §1 trade, measured rather than assumed: the
 CPU costs two orders of magnitude and buys the ability to solve a problem by
 writing seven lines instead of deriving a grid.
@@ -565,6 +574,31 @@ output because the fetch `r` was entered heading south instead of east: correct
 glyphs, correct pipes, and an infinite two-cell refetch loop. Assert entry
 headings with the wasm's `flow(rows)` (per-cell reachable headings) as part of
 generation, not as a debugging step.
+
+### 7.4 Packing: why `layout.py` cannot own this unaided
+
+Footprint is `max(w, h)²`, so **only the larger dimension is billed** and slack in
+the smaller one is free. The first working CPU (§2.6) was 46×31 — width-bound,
+with 15 rows of height doing nothing. Hand-trading width into that slack (fold
+the ROM onto two rows, serpentine the ring pipes vertically in a narrow west
+band) reached 40×31, and dropping the ring reached 38×31: `2116 → 1600 → 1444`,
+a 32 % score improvement with no change to the logic.
+
+None of that went through `layout_graph`. Two reasons it cannot simply be handed
+over:
+
+- **The code ring needs a *minimum* pipe length** (§2.1: capacity ≥ `P` or the
+  machine deadlocks). Every router optimises for *short* pipes, so a naive
+  packing pass silently breaks a looping program. Those two edges need a
+  `min_length` constraint the model does not currently express.
+- **The objective is `max(w, h)²`, not area or wire length.** Packing should
+  deliberately grow the smaller dimension to shrink the larger — the opposite of
+  what a conventional placer does. `score()` is the hook, but it has to encode
+  this, or packing will chase the wrong target.
+
+Until both are expressed, the generator places rooms itself and uses
+`layout.py`'s port validation (§7.1) and `tools/route-check.mjs` as the safety
+net rather than as the placer.
 
 ### 7.3 Tick and footprint budget
 
