@@ -132,9 +132,36 @@ W ; b                BP=rem
 <counted_loop: rem>  8 t/v clean-up
 ```
 
-**Integration constraint:** the split needs `B=8` for one tick, destroying
-whatever B holds. With A, B and BP all live, park the flag in the scratch register
-across the split, or encode it as `±(rem+1)`.
+**The `B=8` clobber is solved — no extra register traffic.** The dance's last
+step (`r(reg)->flag`) simply *moves* to after the pass-through: leave the flag
+sitting in the register ring while the loops run, and read it back for the
+dispatch. The FIFO already has it in the right place:
+
+```
+dance ... s(reg) park phase        ring: [flag, phase]
+M ; `8` ; W ; / ; b                A=q B=rem BP=q     (B was free, flag is parked)
+<big ring: q laps>                 B carries rem across untouched
+W ; b                              BP = rem
+<remainder loop: rem values>
+r(reg)->flag                       ring: [phase]  <- invariant restored
+X                                  dispatch
+```
+
+**The remainder loop MUST be a `counted_ring` (5 t/v), not a `counted_loop`
+(8 t/v).** This decides whether the target is met — modelled over delta uniform
+on 0…99:
+
+| pass-through | E[ticks] | ticks/op | predicted |
+|---|---|---|---|
+| K=8, remainder at 8 t/v | 154 | ~260 | **25.0M — misses** |
+| K=8, remainder at 5 t/v | 144 | ~245 | **23.6M — clears** |
+| K=12, remainder at 5 t/v | 137 | ~238 | 23.1M |
+
+Margin is thin, so do not spend ticks anywhere else. `Serpentine` padding blanks
+cost 1 tick each: keep bands narrow. If it still misses after W3, the next lever is
+**packing 3 cells per 64-bit word** (21 bits each, biased by 10⁶ — verified in
+`blocks/packed-field-unpack.man`), which cuts the tape from 100 values to 34 for
+~40 ticks of arithmetic: pass-through 144 → ~55, total ~215 → ≈20.8M.
 
 ---
 
