@@ -51,6 +51,11 @@ __all__ = [
     "rom_container",
     "output_room",
     "string_rom_graph",
+    "packed_interior",
+    "packed_room",
+    "best_pack_width",
+    "build_packed",
+    "packed_rom_container",
 ]
 
 # ` + three digit slots + ` + s + one pad space (pad makes west-bound mirror safe)
@@ -122,25 +127,29 @@ def rom_room(codes: list[int], cells_per_row: int) -> list[str]:
     return [wall, *("|" + r + "|" for r in interior), wall]
 
 
-def build(codes: list[int], cells_per_row: int = 20) -> str:
-    """Return a complete standalone ``.man`` program that emits ``codes``.
-
-    Wraps :func:`rom_room` and drops a 2-cell output pipe from the bottom wall
-    into a 3x3 ``O`` room. ``cells_per_row`` trades width for height.
-    """
-    room = rom_room(codes, cells_per_row)
-    room_w = cells_per_row * CELL_W + 4
-    canvas = list(room)
-
+def _attach_output(room: list[str]) -> str:
+    """Drop a 2-cell output pipe from the bottom wall of ``room`` into a 3x3
+    ``O`` room and return the finished ``.man`` text."""
+    room_w = len(room[0])
     cx = room_w // 2
+    canvas = list(room)
     canvas.append((" " * cx) + "v")  # pipe cell 1 (backward = bottom wall)
     canvas.append((" " * cx) + "v")  # pipe cell 2 (forward = O top wall)
     canvas.append((" " * (cx - 1)) + "+-+")
     canvas.append((" " * (cx - 1)) + "|O|")
     canvas.append((" " * (cx - 1)) + "+-+")
-
     width = max(len(r) for r in canvas)
     return "\n".join(r.ljust(width) for r in canvas) + "\n"
+
+
+def build(codes: list[int], cells_per_row: int = 20) -> str:
+    """Return a standalone fixed-grid ``.man`` program that emits ``codes``.
+
+    Wraps :func:`rom_room` and attaches an output room. ``cells_per_row`` trades
+    width for height. See :func:`build_packed` for the smaller variable-width
+    variant.
+    """
+    return _attach_output(rom_room(codes, cells_per_row))
 
 
 def rom_container(
@@ -208,18 +217,160 @@ def string_rom_graph(
     )
 
 
+# ── variable-width "safe packer" ──────────────────────────────────────────────
+# The fixed grid wastes a column on every 2-digit value plus a pad column. This
+# packer emits tight ``` `N`s ``` tokens (no digit padding) and inserts a pad
+# space *only* where a placement would drop an ``s`` inside a vertical backtick
+# pair. Safety is a top-down invariant, so the result never hits a load error:
+#
+#   * an ``s`` is placed only in a column whose backtick count so far is EVEN —
+#     any later backticks (below it) then pair among themselves *below* the s,
+#     so it can never end up between a pair;
+#   * a *closing* backtick (one landing where the column parity is odd) is placed
+#     only if no ``s`` — and no >18-digit run — sits between it and its opener.
+
+
+def packed_interior(codes: list[int], data_w: int) -> list[str]:
+    """Boustrophedon rows, tightly packed and rule-safe, each ``data_w + 2`` wide
+    (two turn lanes around ``data_w`` data columns)."""
+    if not codes:
+        raise ValueError("codes must be non-empty")
+    if data_w < 6:
+        raise ValueError("data_w must be >= 6 (smallest ` N ` s token)")
+
+    parity = [0] * data_w
+    bad = [False] * data_w   # non-digit seen since this column's open backtick
+    dig = [0] * data_w       # digit run length since this column's open backtick
+
+    def feasible(col: int, g: str) -> bool:
+        if g == "s":
+            return parity[col] % 2 == 0
+        if g == "`":
+            return parity[col] % 2 == 0 or (not bad[col] and dig[col] <= 18)
+        return True
+
+    def commit(col: int, g: str, cells: list[str]) -> None:
+        cells[col] = g
+        if g == "`":
+            parity[col] += 1
+            bad[col] = False
+            dig[col] = 0
+        elif parity[col] % 2 == 1:
+            if g.isdigit():
+                dig[col] += 1
+            elif g != " ":
+                bad[col] = True
+
+    rows: list[tuple[str, bool]] = []
+    i = 0
+    d = 0
+    while i < len(codes):
+        east = d % 2 == 0
+        cells = [" "] * data_w
+        placed = False
+        cur = 0 if east else data_w - 1
+        while i < len(codes):
+            tok = f"`{codes[i]}`s"
+            glyphs = tok if east else tok[::-1]  # west rows read right-to-left
+            length = len(glyphs)
+            start = cur if east else cur - length + 1
+            # slide the whole token until every column is feasible
+            while 0 <= start and start + length <= data_w and not all(
+                feasible(start + j, glyphs[j]) for j in range(length)
+            ):
+                start += 1 if east else -1
+            if not (0 <= start and start + length <= data_w):
+                break  # no safe spot left in this row → next row
+            for j, g in enumerate(glyphs):
+                commit(start + j, g, cells)
+            cur = start + length if east else start - 1
+            i += 1
+            placed = True
+        if not placed:
+            raise ValueError(f"data_w={data_w} too small to place value {codes[i]}")
+        last = i >= len(codes)
+        body = "".join(cells)
+        if east:
+            rows.append(("@" + body if d == 0 else ">" + body, True))
+            rows[-1] = (rows[-1][0] + ("H" if last else "v"), True)
+        else:
+            rows.append((("H" if last else "v") + body + "<", False))
+        d += 1
+    return [r for r, _ in rows]
+
+
+def packed_room(codes: list[int], data_w: int) -> list[str]:
+    """The tightly-packed ROM as a self-contained rectangular room."""
+    interior = packed_interior(codes, data_w)
+    wall = "+" + "-" * (data_w + 2) + "+"
+    return [wall, *("|" + r + "|" for r in interior), wall]
+
+
+def best_pack_width(codes: list[int], lo: int = 40, hi: int = 260) -> int:
+    """Search ``data_w`` in ``[lo, hi]`` for the one giving the smallest program
+    (footprint is the score). Every width is load-safe, so this only minimises
+    size."""
+    best: tuple[int, int] | None = None
+    for data_w in range(lo, hi + 1):
+        try:
+            size = len(_attach_output(packed_room(codes, data_w)))
+        except ValueError:
+            continue
+        if best is None or size < best[0]:
+            best = (size, data_w)
+    if best is None:
+        raise ValueError("no feasible width in range")
+    return best[1]
+
+
+def build_packed(codes: list[int], data_w: int | None = None) -> str:
+    """Return a standalone tightly-packed ``.man`` (smaller than :func:`build`).
+
+    With ``data_w=None`` the width that minimises program size is searched for.
+    """
+    if data_w is None:
+        data_w = best_pack_width(codes)
+    return _attach_output(packed_room(codes, data_w))
+
+
+def packed_rom_container(
+    container_id: str,
+    data: str | bytes | Iterable[int],
+    *,
+    data_w: int | None = None,
+) -> Container:
+    """Like :func:`rom_container` but using the tight :func:`packed_room`."""
+    codes = codes_of(data)
+    if data_w is None:
+        data_w = best_pack_width(codes)
+    room = packed_room(codes, data_w)
+    width = len(room[0])
+    height = len(room)
+    return Container(
+        id=container_id,
+        width=width,
+        height=height,
+        content=room,
+        inputs=[],
+        outputs=[(width - 1, height // 2)],
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI: read whitespace-separated integer codes from stdin, write ``.man``.
 
-    Example::
+    Defaults to the tight packer with an auto-searched width. Pass an integer to
+    force ``data_w`` (or ``fixed N`` to use the fixed-grid builder instead)::
 
-        python -m randomfun2026solvers.rom_snake 20 \\
+        python -m randomfun2026solvers.rom_snake \\
           < codes.txt > tasks/solutions/history-lesson.man
     """
     args = sys.argv[1:] if argv is None else argv
-    cells_per_row = int(args[0]) if args else 20
     codes = [int(tok) for tok in sys.stdin.read().split()]
-    sys.stdout.write(build(codes, cells_per_row))
+    if args and args[0] == "fixed":
+        sys.stdout.write(build(codes, int(args[1]) if len(args) > 1 else 20))
+    else:
+        sys.stdout.write(build_packed(codes, int(args[0]) if args else None))
     return 0
 
 
