@@ -191,6 +191,35 @@ port must therefore declare **(cell, heading)**, and the generator has to assert
 on it; `flow(rows)` from the wasm (per-cell reachable headings) is the tool for
 that.
 
+### 2.6 A complete CPU running a real program
+
+`lm1/cpugen.py` generates a whole machine — ROM + code ring + CPU + register cell
++ I/O — that solves `triangle` **as a program**, on a 7-opcode ISA
+(`IN STR ADDI MULR DIVI OUT HALT`) dispatched by a depth-3 backpack trie.
+
+```
+program:  IN · STR · ADDI 1 · MULR · DIVI 2 · OUT · HALT
+ROM:      0 0  6 0  2 1  1 0  5 2  7 0  4 0        (14 words, fixed 2-word form)
+```
+
+**6/6 public cases on the reference interpreter**, plus n=999 and n=1000.
+46×31, **446 ticks**, score **943,736**. Every pipe instruction was confirmed
+against `tools/route-check.mjs` to resolve to its intended pipe.
+
+- The emulator predicted 407 ticks and the hardware measured 446, so **§7.3's
+  tick model is good to ~10 %** — it can be trusted for planning.
+- Spill is one `register-cell` on the east bus, which is §4.1's two-tier rule in
+  practice: `triangle` needs exactly one live value besides ACC, because `A` dies
+  on every fetch.
+- Opcode numbering was chosen so the lanes land next to the walls they need
+  (§2.4's bit-reversal): `IN` = 0 → top row, beside the north input pipe;
+  `OUT` = 7 → bottom row, beside the south output pipe.
+
+**The bespoke grid for the same problem is 24×3, 12 ticks, score 6,912 — 137×
+better.** Both pass 6/6. That is the §1 trade, measured rather than assumed: the
+CPU costs two orders of magnitude and buys the ability to solve a problem by
+writing seven lines instead of deriving a grid.
+
 ## 3. Block diagram
 
 Every box is a `layout.py` `Container` with fixed ports; every arrow is a pipe
@@ -365,6 +394,16 @@ difference. Hence the SPILL tier in §4.1; it is load-bearing, not a nicety.
 followed by 0 or 1 operand words, as declared by the ISA table. Extracting a
 packed operand would need `}` (which needs `B`, which holds ACC) — separate
 words dodge that entirely, at the cost of a slightly longer ROM.
+
+**Prefer fixed-width 2-word instructions** (opcode + operand, operand ignored
+where unused). This was the change that made the first working CPU close
+geometrically (§2.6): if instructions are variable-width, an operand-taking lane
+has to read the ring from *inside the lane*, and a lane sitting 4 rows from the
+input pipe finds that pipe nearer than the ring — so the operand fetch silently
+reads program input instead. Making every instruction 2 words moves all ring
+access into the fetch stage, so **each lane needs only the one pipe its own
+micro-program uses** and §7.1's constraint becomes trivial to satisfy. It costs
+ring words and buys a CPU that works.
 
 ### 5.3 The PC is the ring's rotation phase
 
@@ -610,6 +649,10 @@ the plan of record.
    as SPILL. This is the first increment that exercises operand words, the ring
    write-back invariant (§5.3) and a second block over a bus. ← *next*
 5. **Full CPU generator**, driven by the ISA table (v1 + the §6.1 extensions).
+   **First instance done** (§2.6): `lm1/cpugen.py` generates a complete 7-opcode
+   CPU that runs `triangle` as a program — 6/6 public cases on the real
+   interpreter. It is hand-rolled for that ISA rather than driven by `isa.py`;
+   generalising it is what remains.
 6. **Wire in the tape** and unlock the array problems.
 
 Useful tooling that now exists for steps 4–6: `tools/route-check.mjs` reports
