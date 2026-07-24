@@ -6,20 +6,22 @@ specs and public tests: [`../../tasks/problems/`](../../tasks/problems/).
 
 | Program | Problem | Status |
 |---|---|---|
-| `memory.man` | `memory` (Semester 1) | **27/27** local, 32×32, area² 1024, heavy-avg 183,808 ticks — expect ≈ **62M** |
+| `memory.man` | `memory` (Semester 1) | **27/27** local, 32×32, area² 1024 — judge-scored **61.9M** |
 | `memory-v2.man` | `memory` | previous build (single-value loops); judge-scored **92.0M** at 32×33 |
 | `memory-v1-submitted.man` | `memory` | the 42×33 build that scored **158M**; earliest known-good fallback |
 | `memory-n8.man` | — | N=8 build of the same generator; small enough to trace by hand |
 | `register-cell.man` | — | the 1-value register block (store `1 v`, fetch `-1`) |
+| [`blocks/`](blocks/) | — | mechanisms each verified in isolation: scratch register, packed words, lap-tested ring |
 
 Generator: [`../../solvers/python/randomfun2026solvers/memory_tape.py`](../../solvers/python/randomfun2026solvers/memory_tape.py),
 built on [`circuit.py`](../../solvers/python/randomfun2026solvers/circuit.py).
 
 ```sh
 # regenerate
-PYTHONPATH=solvers/python python3 -c "from randomfun2026solvers.memory_tape import build_v2; \
-  open('littleman/programs/memory.man','w').write('\n'.join(build_v2(100))+'\n')"
-# ...and the three suites it must pass: memory-cases / memory-heavy-cases / memory-edge-cases
+PYTHONPATH=solvers/python python3 -c "from randomfun2026solvers.memory_tape import build_v3; \
+  open('littleman/programs/memory.man','w').write('\n'.join(build_v3(100))+'\n')"
+# it must pass all four suites: memory-cases, memory-heavy-cases, memory-edge-cases,
+# memory-fresh-cases (the last is a different seed, with read-heavy/write-heavy mixes)
 
 # test (prints ticks and the contest score)
 node littleman/tools/run-cases.mjs littleman/programs/memory.man littleman/programs/memory-cases.json 4000000 100
@@ -40,7 +42,8 @@ pipe → relay room → return pipe → worker. Nothing is stored in a room; the
 
 The worker runs **exactly one full revolution per operation**, so the ring always
 comes back to the same alignment and cell *k* is simply the *k*-th value out.
-That makes addressing trivial and costs a constant ~800 ticks/op.
+Addressing is therefore trivial and stateless — and unconditionally Θ(N): ~500 of
+~641 ticks/op, the same whether you touch cell 3 or cell 97.
 
 ```
 r(in)->op ; X                    op==0 -> straight (READ), 1 -> CW (WRITE)
@@ -63,7 +66,7 @@ Things that took a while to get right, in case they bite again:
 - **`X` only goes straight when A == 0.** The op test can use `straight` (op is exactly 0 or 1), but the READ/WRITE dispatch cannot: it branches on ±(addr+1), which is never 0, so *both* arms must be turns (one CW, one CCW) and the two target tracks sit above and below the dispatch row.
 - **Carrying `op` across P1.** P1 clobbers A (pass-through) and BP (loop counter), so `op` rides in the *sign of B*. B holds `±(100−addr)` rather than `±(addr+1)` specifically so the P2 count is `|B|−1`: each target arm then needs only `b m` (or `N b m`) instead of `M `100` - b`, which is what shrank the room enough to matter.
 - **WRITE sends before it receives**, so slot `addr` gets the new value and the old one is then discarded. The ring momentarily holds N+1 values, which is why the tape needs ≥ N+1 slots.
-- **Loops must test before the body.** `> body d` is a do-while and passes one value too many when `addr == 0`; the shape used here (`d` first, body in the column below, `m` on the return leg) tests first. 8 ticks per value.
+- **Loops must test before the body.** `> body d` is a do-while and passes one value too many when `addr == 0`; the shape used here tests first. P1/P2 are `counted_ring`s: 2 values per lap, **5 ticks/value**.
 - **Pipe choice is by distance from the instruction**, so the layout keeps every tape `r`/`s` at high columns and every input `r` at low columns. `route-check.mjs` verifies each one against the engine rather than trusting the arithmetic.
 - **The return pipe enters the worker's *bottom* wall.** With both anchors on the right wall the return pipe had to cross the forward pipe's descent; going in underneath lets the whole ring fold into a band below the worker (96x24 → 42x33, area² 9216 → 1764).
 
@@ -91,16 +94,7 @@ first optimisation below.
 
 ## Measured on the real judge
 
-Two submissions of the *same logic* pinned both terms down:
-
-| Submitted | area² | score | ⇒ judge avgTicks |
-|---|---|---|---|
-| pre-fold 96×24 | 9216 | 827M | 89,735 |
-| folded 42×33 | 1764 | **158M** | 89,569 |
-
-The fold delivered exactly the predicted 5.2× and nothing else moved, so the
-judge's `avgTicks ≈ 89.6k` is solid. Note it is **4.4× the 20.4k these 7 public
-cases cost** — the graded set contains materially heavier inputs even though the
+The graded set is **4.4× heavier than the 7 public cases** (20.4k ticks) — the graded set contains materially heavier inputs even though the
 API reports `privateTestCount: 0`. Optimise against `memory-heavy-cases.json`
 (random 300–1000 token streams, generated locally with a Python oracle), not the
 public set: a full 1000-token case is 411 ops / 392k ticks ≈ **955 ticks/op**, and
@@ -108,11 +102,13 @@ the judge's average works out to ~94 ops/case.
 
 Where those 955 ticks/op go:
 
+As shipped (v3, 5 t/v rings) that is ~641 ticks/op:
+
 | | ticks/op | |
 |---|---|---|
-| tape pass-through | ~800 | 100 values × 8 ticks, every op regardless of address |
-| corridor walking | ~150 | ~40 cells P1→dispatch, ~62 cells P2→MAIN, every op |
-| real work | ~10 | reads, arithmetic, the target access |
+| tape pass-through | ~500 | 100 values × 5 ticks, every op regardless of address |
+| corridor walking | ~120 | the man crosses the room between input and tape anchors |
+| real work | ~20 | reads, arithmetic, the target access |
 
 ## Predicting the judge locally (calibrated)
 
