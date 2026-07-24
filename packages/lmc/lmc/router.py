@@ -65,8 +65,12 @@ def solve_attachments(graph: BlockGraph, trail: TrailLayout) -> dict[str, tuple[
     def order(pid):
         return segy[pid] * BIG + segx[pid]
 
-    # nearest constraints
+    # nearest constraints -- only s/r/q pick the nearest pipe. R/S/U are
+    # position-independent (R/U read from ANY ready incoming pipe, S sends to ALL
+    # outgoing), so they impose no locality constraint on attachment placement.
     for cell in trail.pipe_op_cells():
+        if cell.char in ("R", "S", "U"):
+            continue
         target = cell.pipe
         tp = graph.pipe(target)
         direction = tp.cpu_dir(graph.cpu)
