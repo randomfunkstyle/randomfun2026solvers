@@ -68,6 +68,43 @@ The worker treats these as run failures:
 - invalid output JSON
 - missing or invalid `solution_b64`
 
+## Interactive mode
+
+Some tasks need a live conversation with the contest server rather than a single
+batch answer. The worker then invokes:
+
+```sh
+./solve --solver <solver> --mode interactive --input <input.json>
+```
+
+`--mode` defaults to `batch`, so the batch contract above is unchanged. In
+interactive mode there is **no `--output` file**; the solver instead speaks a
+synchronous newline-delimited JSON protocol over stdio (stdout = protocol frames
+only, stderr = logs). The worker proxies every message to the contest server, so
+the solver never opens its own connection.
+
+Requests the solver writes (one JSON object per line), any order, repeatable:
+
+```json
+{"t": "step",  "action_b64": "<opaque action, base64>"}
+{"t": "guess", "answer_b64": "<opaque candidate answer, base64>"}
+{"t": "done",  "solution_b64": "<optional explicit solution>"}
+```
+
+Responses the worker writes back:
+
+```json
+{"t": "observation", "raw_b64": "<opaque>", "query_count": N, "penalty": M, "score": X, "done": false}
+{"t": "verdict",     "correct": true, "score": X, "raw": {}}
+{"t": "error",       "msg": "...", "fatal": false}
+```
+
+Loop: write one request, read exactly one response, repeat; finish by sending
+`done` (optionally with an explicit `solution_b64`) or by exiting. The worker
+decodes `action_b64`/`answer_b64` as opaque bytes and interprets nothing — decode
+and interpret them in the solver per `task.contest_key`. Full contract:
+`randomfun2026claude/contracts.md §3.2`.
+
 ## Solver Layout
 
 The root `./solve` script dispatches by solver name to language-specific
@@ -81,6 +118,7 @@ entrypoints:
 
 - `shell-smoke`: Bash smoke solver that writes a minimal `{"smoke": true}` solution.
 - `sudoku`: Python solver for `demo_sudoku` task payloads that writes `{"grid": "<81 digits>"}`.
+- `probe`: Python interactive solver for `demo_probe`; probes each digit index then guesses the reconstructed number (run with `--mode interactive`).
 - `swift-smoke`: Swift smoke solver that writes a minimal `{"smoke": true}` solution.
 
 ## Local smoke

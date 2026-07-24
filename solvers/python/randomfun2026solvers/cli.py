@@ -10,16 +10,19 @@ from pathlib import Path
 from typing import Any
 
 from randomfun2026solvers.dispatch import SolverError, run_solver
+from randomfun2026solvers.interactive import InteractiveError, run_interactive_solver
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="./solve",
-        description="Run one randomfun2026 batch solver.",
+        description="Run one randomfun2026 solver (batch or interactive).",
     )
     parser.add_argument("--solver", required=True)
+    parser.add_argument("--mode", choices=("batch", "interactive"), default="batch")
     parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    # Required in batch mode only; interactive mode has no output file (§3.2).
+    parser.add_argument("--output", type=Path)
     return parser
 
 
@@ -44,12 +47,26 @@ def _write_output(path: Path, solution: bytes, meta: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         envelope = _read_input(args.input)
-        solution, meta = run_solver(args.solver, envelope)
-        _write_output(args.output, solution, meta)
+        if args.mode == "interactive":
+            if args.output is not None:
+                raise SolverError("--output is not allowed in interactive mode")
+            run_interactive_solver(args.solver, envelope, sys.stdin, sys.stdout, _log)
+        else:
+            if args.output is None:
+                raise SolverError("--output is required in batch mode")
+            solution, meta = run_solver(args.solver, envelope)
+            _write_output(args.output, solution, meta)
+    except InteractiveError as exc:
+        print(f"interactive session failed: {exc}", file=sys.stderr)
+        return 1
     except SolverError as exc:
         print(str(exc), file=sys.stderr)
         return 2

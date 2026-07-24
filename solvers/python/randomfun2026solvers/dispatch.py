@@ -17,7 +17,8 @@ class SolverError(RuntimeError):
 SolverFn = Callable[[dict[str, Any]], tuple[bytes, dict[str, Any]]]
 
 
-def _decode_task_payload(envelope: dict[str, Any]) -> dict[str, Any]:
+def decode_task_payload(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Decode ``task.payload_b64`` from the input envelope into a JSON object."""
     try:
         payload_b64 = envelope["task"]["payload_b64"]
         raw = base64.b64decode(payload_b64, validate=True)
@@ -35,7 +36,7 @@ def _sudoku(envelope: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
         raise SolverError("input envelope must contain task object")
     if task.get("contest_key") != "demo_sudoku":
         raise SolverError("sudoku solver only supports contest_key=demo_sudoku")
-    payload = _decode_task_payload(envelope)
+    payload = decode_task_payload(envelope)
     return solve_sudoku_payload(payload), {
         "solver": "sudoku",
         "contest_key": "demo_sudoku",

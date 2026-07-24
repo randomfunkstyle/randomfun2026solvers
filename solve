@@ -4,22 +4,35 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 solver=
-expect_solver_value=0
+mode=batch
+expect=
 for arg do
-  if [ "$expect_solver_value" -eq 1 ]; then
-    solver=$arg
-    expect_solver_value=0
+  if [ -n "$expect" ]; then
+    case "$expect" in
+      solver) solver=$arg ;;
+      mode) mode=$arg ;;
+    esac
+    expect=
     continue
   fi
   case "$arg" in
     --solver)
-      expect_solver_value=1
+      expect=solver
+      ;;
+    --mode)
+      expect=mode
+      ;;
+    --mode=*)
+      mode=${arg#--mode=}
+      ;;
+    --solver=*)
+      solver=${arg#--solver=}
       ;;
   esac
 done
 
-if [ "$expect_solver_value" -eq 1 ]; then
-  echo "missing value for --solver" >&2
+if [ -n "$expect" ]; then
+  echo "missing value for --$expect" >&2
   exit 2
 fi
 
@@ -28,11 +41,19 @@ if [ -z "$solver" ]; then
   exit 2
 fi
 
+case "$mode" in
+  batch | interactive) ;;
+  *)
+    echo "unknown --mode '$mode'; expected batch or interactive" >&2
+    exit 2
+    ;;
+esac
+
 case "$solver" in
   shell-smoke | bash-*)
     exec "$ROOT_DIR/solvers/bash/solve" "$@"
     ;;
-  sudoku | python-*)
+  probe | sudoku | python-*)
     PYTHONPATH="$ROOT_DIR/solvers/python${PYTHONPATH:+:$PYTHONPATH}"
     export PYTHONPATH
     if command -v uv >/dev/null 2>&1; then
@@ -44,7 +65,7 @@ case "$solver" in
     exec swift run --package-path "$ROOT_DIR/solvers/swift" SwiftSolver -- "$@"
     ;;
   *)
-    echo "unknown solver '$solver'; known solvers: shell-smoke, sudoku, swift-smoke" >&2
+    echo "unknown solver '$solver'; known solvers: shell-smoke, sudoku, probe, swift-smoke" >&2
     exit 2
     ;;
 esac
