@@ -135,3 +135,27 @@ def test_generated_reverse_all_samples():
     for case in load_problem("semester1", "reverse_list"):
         got = run_grid(grid, case.inputs, max_ticks=200000).output
         assert got == case.outputs, (case.inputs, got)
+
+
+@requires_oracle
+def test_generated_reverse_multi_round_streaming():
+    """Each named test case (1-3 rounds) streamed to ONE running program.
+
+    The contest never restarts the program between rounds -- it feeds the next
+    list only after the current one is printed. The outer forever_loop must read a
+    fresh n each round and emit it without halting. Regresses the halt-after-one
+    -list bug (program with a bare `H` epilogue passed the flat samples above but
+    only ever emitted round 1 of a multi-round case).
+    """
+    from lmc.demos import reverse_program
+    from lmc.fixtures import load_test_cases
+
+    g, program = reverse_program()
+    grid = render(g, program, ring_len=9)
+    cases = load_test_cases("semester1", "reverse_list")
+    # A multi-round case's first n differs from its total output length.
+    multi = [c for c in cases if c.inputs[0] != len(c.outputs)]
+    assert multi, "expected at least one multi-round test case"
+    for case in cases:
+        got = run_grid(grid, case.inputs, max_ticks=500000).output
+        assert got == case.outputs, (case.inputs, got)

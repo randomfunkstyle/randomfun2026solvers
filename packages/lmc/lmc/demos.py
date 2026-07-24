@@ -7,7 +7,7 @@ and they double as end-to-end tests of the loop/ring/router stack.
 from __future__ import annotations
 
 from .blockspec import BlockGraph, E, Instr, N, Pipe, S, W
-from .loopgen import linear_block, seq_block, while_loop
+from .loopgen import forever_loop, linear_block, seq_block, while_loop
 from .trail import TrailLayout
 
 Op = Instr
@@ -43,9 +43,11 @@ def reverse_program() -> tuple[BlockGraph, TrailLayout]:
                 linear_block([Op("W"), Op("M"), Op("1"), Op("-"), Op("N"), Op("M")]),  # rem--
             ]
         ),
-        epilogue=[Op("H")],
+        epilogue=[],
     )
-    program = seq_block([push, emit])
+    # Outer round loop: never halts. Each pass reads a fresh n (push prologue),
+    # emits it reversed, then loops back to read the next round's list.
+    program = forever_loop(prologue=[], body=seq_block([push, emit]))
 
     g = BlockGraph(cpu="CPU")
     g.rooms = {"CPU": "cpu", "I": "input", "O": "output", "BUF": "buf"}

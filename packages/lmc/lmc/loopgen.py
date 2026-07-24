@@ -136,6 +136,32 @@ def while_loop(
     return TrailLayout(width=width, height=height, cells=cells, spawn=(0, 0))
 
 
+def forever_loop(prologue: list[Instr], body: TrailLayout) -> TrailLayout:
+    """`while True:` -- run the body forever (no test, no exit). Used for the
+    outer round loop of stream programs, which never halt (they pass on output).
+
+        prologue > [BODY] v
+                  ^ ...... <
+    """
+    cells: list[PlacedCell] = []
+    x = 0
+    for ins in prologue:
+        cells.append(PlacedCell(x, 0, ins.char, ins.pipe))
+        x += 1
+    gt_col = x
+    cells.append(PlacedCell(x, 0, ">", None))
+    x += 1
+    bx0 = x
+    for c in body.cells:
+        cells.append(PlacedCell(c.x + bx0, c.y, c.char, c.pipe))
+    v_col = bx0 + body.width
+    return_row = body.height
+    cells.append(PlacedCell(v_col, 0, "v", None))  # turn south after body
+    cells.append(PlacedCell(v_col, return_row, "<", None))  # turn west
+    cells.append(PlacedCell(gt_col, return_row, "^", None))  # climb back to '>'
+    return TrailLayout(width=v_col + 1, height=return_row + 1, cells=cells, spawn=(0, 0))
+
+
 # convenience wrappers ------------------------------------------------------
 
 def counted_loop_trail(
