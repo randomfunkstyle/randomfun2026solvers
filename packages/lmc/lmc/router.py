@@ -125,8 +125,13 @@ class Canvas:
         return "\n".join(r.ljust(width) for r in rows) + "\n"
 
 
-def render(graph: BlockGraph, trail: TrailLayout | None = None) -> str:
-    """Render the R0 topology (CPU + input W + output E + BUF N up/down)."""
+def render(
+    graph: BlockGraph, trail: TrailLayout | None = None, buf_loop: bool = False
+) -> str:
+    """Render the R0 topology (CPU + input W + output E + BUF N up/down).
+
+    buf_loop=True makes BUF a forwarder *loop* (for a circulating ring that is
+    rotated many times) instead of a one-shot @rsH (single round trip)."""
     if trail is None:
         trail = build_trail(graph.trail)
     seg = solve_attachments(graph, trail)  # CPU-relative segment cells
@@ -165,9 +170,15 @@ def render(graph: BlockGraph, trail: TrailLayout | None = None) -> str:
     # --- North: BUF forwarder with up + down pipes ---
     north = by_side.get(N, [])
     if north:
-        # BUF bottom wall at y=-4, interior y=-5, top wall y=-6, cols -1..Wi
-        c.rect(-1, -6, Wi, -4)
-        c.text("@rsH", 0, -5)
+        if buf_loop:
+            # BUF as a forwarder loop: bottom wall -4, interior -5/-6, top wall -7
+            c.rect(-1, -7, max(Wi, 5), -4)
+            c.text("@>rsv", 0, -6)
+            c.text(".^..<", 0, -5)
+        else:
+            # one-shot BUF: bottom wall -4, interior -5, top wall -6
+            c.rect(-1, -6, max(Wi, 4), -4)
+            c.text("@rsH", 0, -5)
         for p in north:
             col, _ = seg[p.id]  # seg at (col, -2)
             if p.cpu_dir(graph.cpu) == "out":  # up: CPU -> BUF
