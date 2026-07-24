@@ -174,7 +174,7 @@ def synthesise(prog: Program) -> list[str]:
         raise NotImplementedError("multi-digit ROM words need the eastbound-row layout")
 
     bands = prog.bands
-    lane_x0 = 7 + k  # fetch (4) + 2 nops + k trie columns
+    lane_x0 = 5 + k  # fetch `>rbr` (4 cols) + k trie columns
     cell_x = lane_x0 + 11  # east band, if any
 
     # lay the lanes out first, so the return column lands just past the widest
@@ -220,11 +220,11 @@ def synthesise(prog: Program) -> list[str]:
 
     # ── CPU room
     g.room(CX, CY, CX + cpu_w + 1, CY + ret_row + 1)
-    cpu(1, centre, ">rbr..")  # receive opcode, BP = it, receive operand
+    cpu(1, centre, ">rbr")  # receive opcode, BP = it, receive operand
 
     def trie(level: int, row: int) -> None:
         """`x` at this level's column, then walk the branch and recurse."""
-        col, step = 6 + level, 1 << (k - level)
+        col, step = 4 + level, 1 << (k - level)
         cpu(col, row, "x")
         for sign in (-1, +1):
             for d in range(1, step + 1):
@@ -269,16 +269,17 @@ def synthesise(prog: Program) -> list[str]:
 
     if Band.IN in bands:
         in_name = next(n for n in prog.used if Band.IN in prog.ops[n].bands)
-        col = CX + lane_x0
-        g.room(col + 5, 0, col + 7, 2)
-        g.text(col + 6, 1, "I")
-        g.text(col + 6, 3, "v")
-        g.put(col + 6, 4, "|")
-        g.text(col + 6, 5, "<")
-        for x in range(col + 1, col + 6):
-            g.put(x, 5, "-")
-        g.text(col, 5, "v")  # -> CPU north wall at the IN lane's column
         assert rows[in_name] == 1, "IN lane must be the top row"
+        col = CX + lane_x0  # the column IN's `r` sits in
+        ix = max(rom_w + 4, col + 4)  # clear of the ROM room
+        g.room(ix, 0, ix + 2, 2)
+        g.text(ix + 1, 1, "I")
+        g.text(ix + 1, 3, "v")
+        g.put(ix + 1, 4, "|")
+        g.text(ix + 1, 5, "<")
+        for x in range(col + 1, ix + 1):
+            g.put(x, 5, "-")
+        g.text(col, 5, "v")  # -> CPU north wall, above the IN lane
 
     if Band.OUT in bands:
         out_name = next(n for n in prog.used if Band.OUT in prog.ops[n].bands)
