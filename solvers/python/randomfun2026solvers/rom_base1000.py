@@ -182,28 +182,29 @@ def decoder_container(container_id: str = "dec") -> Container:
 
 
 def _assemble(words: list[int], data_w: int) -> str:
-    """Place encoder | decoder | ``O`` in a row, joined by minimal straight
-    ``>>`` (length-2) pipes — no A* routing or gaps.
+    """Place encoder ``>>`` decoder horizontally, then drop ``O`` *below* the
+    decoder with a ``vv`` pipe — no A* routing or gaps.
 
-    Each room has a single in/out pipe, so ``s``/``r`` resolve unambiguously
-    regardless of the attach row; the decoder (shorter) is centred against the
-    tall encoder and both pipes ride the decoder's mid row as straight lines.
+    The decoder (short) is centred against the tall encoder; the input pipe is a
+    straight ``>>`` on its mid row, and the output pipe goes straight *down* into
+    an ``O`` room tucked below the decoder. Because the decoder is far shorter
+    than the encoder, that ``O`` fits inside the encoder's height envelope, so it
+    adds neither width nor height. Each room has a single in/out pipe, so
+    ``s``/``r`` resolve regardless of attach position.
     """
     enc = encoder_container(words, data_w=data_w).content
     dec = decoder_container().content
     o = ["+-+", "|O|", "+-+"]
     we, he = len(enc[0]), len(enc)
     wd, hd = len(dec[0]), len(dec)
-    wo, ho = len(o[0]), len(o)
 
     yd = (he - hd) // 2           # centre the decoder against the encoder
-    prow = yd + hd // 2           # decoder's in/out port row (both at mid)
-    yo = prow - ho // 2           # align O's input row to the pipe row
+    prow = yd + hd // 2           # decoder's input port row (straight >> in)
     xd = we + 2                   # encoder, 2-cell pipe, decoder
-    xo = xd + wd + 2              # decoder, 2-cell pipe, O
+    cxo = xd + wd // 2            # O column, under the decoder's centre
 
-    width = xo + wo
-    height = max(he, yd + hd, yo + ho)
+    width = max(xd + wd, cxo + 2)
+    height = max(he, yd + hd + 2 + 3)   # decoder bottom + vv pipe + O (3 tall)
     canvas = [[" "] * width for _ in range(height)]
 
     def blit(room: list[str], ox: int, oy: int) -> None:
@@ -213,9 +214,9 @@ def _assemble(words: list[int], data_w: int) -> str:
 
     blit(enc, 0, 0)
     blit(dec, xd, yd)
-    blit(o, xo, yo)
-    canvas[prow][we] = canvas[prow][we + 1] = ">"          # encoder -> decoder
-    canvas[prow][xd + wd] = canvas[prow][xd + wd + 1] = ">"  # decoder -> O
+    blit(o, cxo - 1, yd + hd + 2)
+    canvas[prow][we] = canvas[prow][we + 1] = ">"           # encoder -> decoder
+    canvas[yd + hd][cxo] = canvas[yd + hd + 1][cxo] = "v"   # decoder -> O (down)
     return "\n".join("".join(r).rstrip() for r in canvas)
 
 
