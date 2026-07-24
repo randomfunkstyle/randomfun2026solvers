@@ -6,10 +6,49 @@ import shutil
 from pathlib import Path
 
 import pytest
-from lmc.blockspec import BlockGraph, E, Instr, Pipe, W, ring_io_graph
+from lmc.blockspec import BlockGraph, E, Instr, N, Pipe, S, W, ring_io_graph
 from lmc.oracle import LM_PATH, run_grid
 from lmc.router import render, solve_attachments
 from lmc.trail import build_trail
+
+Op = Instr
+
+
+def _south_echo_graph() -> BlockGraph:
+    """I -> CPU: read, store to a South spill cell, load back, emit -> O."""
+    g = BlockGraph(cpu="CPU")
+    g.rooms = {"CPU": "cpu", "I": "input", "O": "output", "SP": "spill"}
+    g.pipes = [
+        Pipe("in", "I", E, "CPU", W),
+        Pipe("out", "CPU", E, "O", W),
+        Pipe("sdown", "CPU", S, "SP", N),
+        Pipe("sup", "SP", N, "CPU", S),
+    ]
+    g.trail = [Op("@"), Op("r", "in"), Op("s", "sdown"), Op("r", "sup"), Op("s", "out"), Op("H")]
+    return g
+
+
+def _north_south_echo_graph() -> BlockGraph:
+    """Use BOTH stores: read, ring-push, ring-pop, spill-store, spill-load, emit.
+
+    Exercises the 6-pipe CPU (in/out + ring up/down + spill up/down): the linchpin
+    that ring (N) and spill (S) ops each route to their intended store by nearest.
+    """
+    g = BlockGraph(cpu="CPU")
+    g.rooms = {"CPU": "cpu", "I": "input", "O": "output", "BUF": "buf", "SP": "spill"}
+    g.pipes = [
+        Pipe("in", "I", E, "CPU", W),
+        Pipe("out", "CPU", E, "O", W),
+        Pipe("up", "CPU", N, "BUF", S),
+        Pipe("down", "BUF", S, "CPU", N),
+        Pipe("sdown", "CPU", S, "SP", N),
+        Pipe("sup", "SP", N, "CPU", S),
+    ]
+    g.trail = [
+        Op("@"), Op("r", "in"), Op("s", "up"), Op("r", "down"),
+        Op("s", "sdown"), Op("r", "sup"), Op("s", "out"), Op("H"),
+    ]
+    return g
 
 _HAVE_ORACLE = shutil.which("node") is not None and Path(LM_PATH).exists()
 requires_oracle = pytest.mark.skipif(
@@ -40,6 +79,22 @@ def test_attachments_satisfy_nearest():
             key_t = (dt, seg[cell.pipe][1], seg[cell.pipe][0])
             key_q = (dq, seg[q.id][1], seg[q.id][0])
             assert key_t < key_q, (cell.char, cell.pipe, q.id, key_t, key_q)
+
+
+@requires_oracle
+def test_south_spill_cell_echo():
+    """A South spill cell (CellStore) stores then loads a value."""
+    grid = render(_south_echo_graph(), spill_len=2)
+    for v in (42, 7, -5, 0, 1000000):
+        assert run_grid(grid, [v], max_ticks=500).output == [v], (v, grid)
+
+
+@requires_oracle
+def test_north_ring_and_south_spill_coexist():
+    """6-pipe CPU: ring (N) and spill (S) ops each route to the right store."""
+    grid = render(_north_south_echo_graph(), ring_len=3, spill_len=2)
+    for v in (42, 7, -5, 0, 1000000):
+        assert run_grid(grid, [v], max_ticks=500).output == [v], (v, grid)
 
 
 @requires_oracle

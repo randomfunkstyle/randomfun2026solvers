@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import z3
 
-from .blockspec import BlockGraph, E, N, W
+from .blockspec import BlockGraph, E, N, S, W
 from .trail import TrailLayout, build_trail
 
 # CPU-relative attach *segment* cell (the pipe cell touching the CPU wall) per side.
@@ -126,14 +126,19 @@ class Canvas:
 
 
 def render(
-    graph: BlockGraph, trail: TrailLayout | None = None, ring_len: int = 2
+    graph: BlockGraph,
+    trail: TrailLayout | None = None,
+    ring_len: int = 2,
+    spill_len: int = 2,
 ) -> str:
-    """Render the R0 topology (CPU + input W + output E + BUF N up/down).
+    """Render the R0 topology (CPU + input W + output E + stores N/S up/down).
 
-    BUF is always a forwarder loop -- a memory server is a persistent process, so
-    it runs forever (the program passes on output, not on halting). `ring_len` is
-    the up/down pipe length; the ring holds ~2*ring_len values, so it must exceed
-    the largest array the program stores."""
+    A store is a forwarder-loop BUF -- a memory server is a persistent process, so
+    it runs forever (the program passes on output, not on halting). `ring_len` sizes
+    the North store (holds ~2*ring_len values, must exceed the largest array a program
+    keeps); `spill_len` sizes an optional South store (a small spill cell). A BUF has
+    exactly one in + one out pipe, so its own `r`/`s` route trivially; only the CPU
+    side needs Z3 to disambiguate which store each op talks to (ring N vs spill S)."""
     if trail is None:
         trail = build_trail(graph.trail)
     seg = solve_attachments(graph, trail)  # CPU-relative segment cells
@@ -182,6 +187,21 @@ def render(
             col, _ = seg[p.id]  # seg at (col, -2)
             ch = "^" if p.cpu_dir(graph.cpu) == "out" else "v"  # up vs down
             for y in range(-2, buf_bottom, -1):
+                c.put(col, y, ch)
+
+    # --- South: spill BUF (mirror of North) with up + down pipes of length spill_len ---
+    south = by_side.get(S, [])
+    if south:
+        # pipe cells at y = Hi+1 .. Hi+spill_len; BUF top wall at Hi+spill_len+1
+        buf_top = Hi + spill_len + 1
+        # BUF interior rows buf_top+1 / +2, bottom wall buf_top+3
+        c.rect(-1, buf_top, max(Wi, 5), buf_top + 3)
+        c.text("@>rsv", 0, buf_top + 1)
+        c.text(".^..<", 0, buf_top + 2)
+        for p in south:
+            col, _ = seg[p.id]  # seg at (col, Hi+1)
+            ch = "v" if p.cpu_dir(graph.cpu) == "out" else "^"  # send down / recv up
+            for y in range(Hi + 1, buf_top + 1):
                 c.put(col, y, ch)
 
     return c.render()
