@@ -86,9 +86,10 @@ Result: values circulate indefinitely as `1 2 3 1 2 3 …`, **order preserved**.
   starves the CPU while words make their way around. The generator knows `P`, so
   it sizes the ring pipes to `P + 2..4`.
 
-**A ring always needs two rooms — a self-loop pipe does not exist.** Probed with
-two grids of identical geometry, differing only in which room the far end
-re-enters:
+**A ring always needs two rooms — a self-loop pipe does not exist.** SPEC lists
+"a pipe looping back to its own room" among the common load errors; what the
+probe adds is *how* it fails. Two grids of identical geometry, differing only in
+which room the far end re-enters:
 
 ```
 A -> A  (ignored)          A -> B  (a pipe)
@@ -101,8 +102,9 @@ rooms=1 pipes=0            rooms=2 pipes=1  src=0 dst=1
 ```
 
 Same glyphs, same arrows, same wall attachments. `analyze` reports the A→B pipe
-and **silently drops** the A→A one — no load error, no diagnostic; a `s`/`r`
-aimed at it just binds to nothing. So every ring costs a turnaround room.
+and **silently drops** the A→A one — it surfaces no diagnostic at all, so the
+grid looks fine and a `s`/`r` aimed at it simply binds to nothing (or to some
+other pipe entirely). So every ring costs a turnaround room.
 
 **But one room can turn around many rings.** Pipe binding is positional
 (`two-roms.man`: `r` at col 11 → the west pipe, `r` at col 25 → the east one, no
