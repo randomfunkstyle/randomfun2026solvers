@@ -700,14 +700,41 @@ Consequences for layout:
 - A long input pipe is free *only* for programs that do real work before their
   first `r`, which is rare.
 
-Worked example of the trade: a wrapped 8×8 `triangle` — I/O rooms abutting below
-the compute room, pipes routed around the outside into a side wall instead of
-dropping through a 2-row gap — would be footprint 64 against 81. It loses twice
-over. It does not route (with both I/O on the bottom row, 8 columns leaves two
-spare, the abutting O blocks I's only east exit, and the two pipes cross), and
-even routed, wrapping lengthens both pipes: 64 × 17 = 1,088 against 81 × 13 =
-1,053. The technique is still worth keeping for larger machines, where a
-saved row is a bigger fraction of the box and a few pipe cells are a smaller one.
+**But wrapping does not have to lengthen a pipe** — and that is how `triangle`
+reached 8×8. Shift the compute room one column right and the freed left edge
+carries the input pipe *up the outside* at the 2-cell minimum, while the output
+pipe drops down the right edge, also 2 cells. Both I/O rooms then abut below with
+no gap column:
+
+```
+ +-----+
+ |@rM*v|
+ |v2M+<|
+>|>W/sH|
+^+-----+
++-++-+v
+|I||O|<
++-++-+
+```
+
+8×8 = 64 footprint, 15 ticks, **score 960** — beating the stacked 9×9's 1,053
+despite two extra ticks, because a 3-row serpentine costs 4 turn cells instead of
+2. Verified 6/6 public cases plus n=0,1,2,999,1000, both pipes 2 cells, both ops
+binding as intended.
+
+Two structural facts this depends on, neither of them obvious and both now
+verified:
+
+- **A pipe may attach at a room's corner.** The input pipe's backward cell is I's
+  top-left `+`. Displays forbid corner attachment; plain rooms do not. Without
+  this the pipe has nowhere to go, since I's top wall is flush against the compute
+  room's bottom-left corner.
+- **Two rooms may abut with no gap column** (`+-++-+`). I and O share a boundary,
+  which is what fits 3+3 rooms into an 8-wide box.
+
+7×7 is out of reach: 4 interior columns × 3 rows leaves only 9 instruction cells
+after `@` and 4 turns, and 4 interior rows costs 6 turns and pushes the height to
+9.
 
 ### 7.4 Packing: why `layout.py` cannot own this unaided
 
