@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -121,3 +122,24 @@ def test_memory_100_cell_public_cases(op_stream, expected):
     grid = render_memory([0] * 100, ram_len=55)
     res = run_grid(grid, op_stream, max_ticks=600000)
     assert res.output[: len(expected)] == expected
+
+
+def _parse_memory_md_cases():
+    md = Path(__file__).resolve().parents[3] / "task_docs/problem_sets/semester1/memory.md"
+    if not md.exists():
+        return []
+    pairs = re.findall(r"\nin:\s*(.*?)\nout:\s*(.*?)\n", md.read_text(), re.S)
+    return [([int(x) for x in i.split()], [int(x) for x in o.split()]) for i, o in pairs]
+
+
+@requires_oracle
+@pytest.mark.parametrize("op_stream,expected", _parse_memory_md_cases())
+def test_memory_all_public_cases_from_md(op_stream, expected):
+    """Every case in memory.md, run against the 100-cell grid on the reference engine.
+
+    Output must match EXACTLY (length included) -- a truncated/over-long output is a fail,
+    which is what the contest reports as wrong-output.
+    """
+    grid = render_memory([0] * 100, ram_len=55)
+    res = run_grid(grid, op_stream, max_ticks=600000)
+    assert res.output == expected
