@@ -125,7 +125,7 @@ average**, good to ~1%.
 | pre-fold 96×24 | 9216 | — | — | 827M |
 | folded 42×33 | 1764 | 273,560 | 158M | **158M** |
 | compact 32×33 | 1089 | 257,528 | 92M | **92.0M** |
-| rings 32×32 | 1024 | 183,808 | **62M** | not yet submitted |
+| rings 32×32 | 1024 | 183,808 | 62M | **61.9M** |
 
 So `score ≈ area² × 0.328 × local_heavy_avgTicks` — measure locally, submit once.
 
