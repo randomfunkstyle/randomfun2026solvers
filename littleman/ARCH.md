@@ -244,8 +244,47 @@ no longer a stub. Both blocks below are measured on the reference interpreter:
 
 The tape is a **drop-in `STORE`**: its wire protocol is the `memory` problem's,
 which is exactly the contract this document specified, so no translation is
-needed. It runs exactly one revolution per operation, so cost is constant rather
-than O(distance) — better than the delay line originally assumed here.
+needed. It runs exactly one revolution per operation, so cost is constant in the
+*address* — better than the delay line originally assumed here.
+
+#### `STORE` is a family, not a block
+
+`memory_tape.build_v2(n)` is parameterized, so there is a whole family of
+variants and the generator should pick one per problem. Measured sweep (10
+writes + 10 reads across the address space, reference interpreter):
+
+| N | 4 | 8 | 16 | 32 | 48 | 64 | 100 |
+|---|---|---|---|---|---|---|---|
+| ticks/op | 138 | 164 | 229 | 364 | 496 | 630 | **936** |
+| footprint | 1024 | 1024 | 1024 | 1024 | 1024 | 1024 | 1024 |
+
+So `ticks/op ≈ 105 + 8.3·N`, and **footprint is 32×32 independent of N**.
+
+That gives an unusually clean generator rule: **size N to the problem's actual
+slot count. It is free on footprint and linear on ticks — there is no trade-off
+to weigh.** `tcp` at N=48 is 1.9× cheaper per access than the N=100 build,
+`brackets` at N=32 is 2.6×, `sort-numbers` at N=16 is 4.1×.
+
+Note the ~105-tick fixed overhead per operation (read op, read addr, arithmetic,
+dispatch) — it does not amortise away, which is why even an N=4 tape costs 138
+ticks and loses to a `register-cell` by 7× for scratch. The tiers are distinct
+mechanisms, not two sizes of the same one.
+
+Further variants, in rough order of payoff (the first two are described in
+`programs/README.md` and not yet built):
+
+- **Relative rotation** instead of a full revolution — rotate `(addr − next) mod
+  N` and keep the index in a `register-cell`: ~2.6× on the slope.
+- **A larger pass-through loop ring** — the 2×4 loop costs 8 ticks/value, but a
+  6×6 hollow square amortises the fixed corner/test/decrement cost over 7 values
+  in flight, reaching ~2.9: another ~2.2×.
+- **Banking** — k rings, address = (bank, offset), ~N/k per access at k× the
+  pipe area. The only route to `matmul`'s 768 slots, and still a stretch.
+- **`register-cell` arrays** — for a handful of named scalars, k cells beat any
+  tape outright.
+
+`layout.py`'s `Container.variants` is the mechanism for handing the solver
+several of these and letting it pick one that routes.
 
 **The two tiers are a precondition, not an optimisation.** The emulator (§9
 step 2) measured that **41–53 % of executed instructions are `LD`/`ST`**, and
@@ -519,7 +558,7 @@ word count `P` and average estimated ticks. "—" means not yet written.
 
 | Set | Problem | Needs | Slots | Emulator | Stage |
 |---|---|---|---|---|---|
-| Sem 1 | `triangle` | 1 spill slot; needs `DIVI`/`MUL` for the closed form | 1 | 6/6 · P=27 · 118k *(closed: P=11 · 407)* | A |
+| Sem 1 | `triangle` | 1 spill slot; needs `DIVI`/`MUL` for the closed form | 1 | 6/6 · P=27 · 118k *(closed: P=11 · 407)* | **✔ solved bespoke** (24×3, 12 ticks, score 6912) |
 | Sem 1 | `reverse-a-list` | LIFO, 16 deep | 16 | — | B |
 | Sem 1 | `sort-numbers` | addressed array + selection loop | 16 | — | B |
 | Sem 1 | `memory` | — | — | **SOLVED as a bespoke grid** (`programs/memory.man`, accepted) | ✔ |
