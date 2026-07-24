@@ -231,9 +231,14 @@ def string_rom_graph(
 #     only if no ``s`` — and no >18-digit run — sits between it and its opener.
 
 
-def packed_interior(codes: list[int], data_w: int) -> list[str]:
+def packed_interior(data: str | bytes | Iterable[int], data_w: int) -> list[str]:
     """Boustrophedon rows, tightly packed and rule-safe, each ``data_w + 2`` wide
-    (two turn lanes around ``data_w`` data columns)."""
+    (two turn lanes around ``data_w`` data columns).
+
+    ``data`` is a string/bytes/codes; ``data_w`` is the (required) data-column
+    width. No output pipe or ``O`` room — a general-purpose ROM block.
+    """
+    codes = codes_of(data)
     if not codes:
         raise ValueError("codes must be non-empty")
     if data_w < 6:
@@ -300,9 +305,12 @@ def packed_interior(codes: list[int], data_w: int) -> list[str]:
     return [r for r, _ in rows]
 
 
-def packed_room(codes: list[int], data_w: int) -> list[str]:
-    """The tightly-packed ROM as a self-contained rectangular room."""
-    interior = packed_interior(codes, data_w)
+def packed_room(data: str | bytes | Iterable[int], data_w: int) -> list[str]:
+    """The tightly-packed ROM as a self-contained rectangular room (walls, no
+    output). General-purpose: pass a string/bytes/codes and a specified
+    ``data_w``; attach a pipe to any wall yourself, or use :func:`build_packed`
+    for a ready standalone program."""
+    interior = packed_interior(data, data_w)
     wall = "+" + "-" * (data_w + 2) + "+"
     return [wall, *("|" + r + "|" for r in interior), wall]
 
