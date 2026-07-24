@@ -136,6 +136,55 @@ def while_loop(
     return TrailLayout(width=width, height=height, cells=cells, spawn=(0, 0))
 
 
+def if3(neg: list[Instr], zero: list[Instr], pos: list[Instr]) -> TrailLayout:
+    """Three-way branch on the sign of A, arms merging back to one continuation.
+
+        (0,0) v            <- entry: drop off row 0 so the north arm has room
+        (0,1) > X <zero> > ^   <- X turns by sign(A); zero arm runs straight (row 1)
+              > <neg> v            <- A<0: CCW north (row 0), then v back down
+              > <pos> ^            <- A>0: CW south (row 2), then ^ back up
+
+    The man enters at (0,0) heading east and a `v` drops him to the middle row where
+    `X` sits (so the CCW/north arm lands on row 0, not off-grid). `X` reads A (sign):
+    A<0 -> CCW (north, row 0), A>0 -> CW (south, row 2), A==0 -> straight (row 1).
+    Each arm runs its linear body, then turns onto a shared `>` merge cell on row 1;
+    a `>` reorients any entrant to east regardless of which side he came from. A short
+    `^`/`>` tail lifts the merged path back to row 0, so the block keeps the standard
+    convention: entered at (0,0) heading east, exits east on row 0.
+
+    `X` does not change A and never touches B/BP, so a value parked in B (e.g. a
+    running min) and any BP counter survive the branch -- arms may read/rewrite them.
+    Caller stages the test value in A before the block. Give two arms the same body
+    to collapse to a two-way branch (e.g. neg==zero for "strictly less" vs "keep").
+    """
+    cells: list[PlacedCell] = []
+    cells.append(PlacedCell(0, 0, "v", None))  # entry drops to middle row
+    cells.append(PlacedCell(0, 1, ">", None))
+    cells.append(PlacedCell(1, 1, "X", None))  # branch on sign(A)
+
+    body_len = max(len(neg), len(zero), len(pos))
+    merge_x = 2 + body_len  # arms turn back to row 1 here
+
+    cells.append(PlacedCell(1, 0, ">", None))  # neg arm (north, row 0)
+    for i, ins in enumerate(neg):
+        cells.append(PlacedCell(2 + i, 0, ins.char, ins.pipe))
+    cells.append(PlacedCell(merge_x, 0, "v", None))  # drop to merge row
+
+    cells.append(PlacedCell(1, 2, ">", None))  # pos arm (south, row 2)
+    for i, ins in enumerate(pos):
+        cells.append(PlacedCell(2 + i, 2, ins.char, ins.pipe))
+    cells.append(PlacedCell(merge_x, 2, "^", None))  # climb to merge row
+
+    for i, ins in enumerate(zero):  # zero arm (straight, row 1)
+        cells.append(PlacedCell(2 + i, 1, ins.char, ins.pipe))
+
+    cells.append(PlacedCell(merge_x, 1, ">", None))  # merge: any entrant -> east
+    cells.append(PlacedCell(merge_x + 1, 1, "^", None))  # tail lifts back to row 0
+    cells.append(PlacedCell(merge_x + 1, 0, ">", None))
+
+    return TrailLayout(width=merge_x + 2, height=3, cells=cells, spawn=(0, 0))
+
+
 def forever_loop(prologue: list[Instr], body: TrailLayout) -> TrailLayout:
     """`while True:` -- run the body forever (no test, no exit). Used for the
     outer round loop of stream programs, which never halt (they pass on output).
