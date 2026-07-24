@@ -1,7 +1,24 @@
-# Plan: `memory` under 24M
+# Plan: `memory` — beat 18.6M
 
 Current: **61.9M** (`tasks/solutions/memory_tape.man`, 32×32, area² 1024, 27/27 local).
-Target: **< 24M**. Score is `max(w,h)² × avgTicks`, lower better.
+A rival team has **18.6M**, so that is the bar; 24M is no longer sufficient.
+Score is `max(w,h)² × avgTicks`, lower better.
+
+> **Priority correction (read this first).** This plan originally treated ticks as
+> the whole problem and footprint as a ≤6% afterthought. That was wrong. The
+> shipped grid is **34% utilised** — 346 non-blank cells in a 1024-cell box — so
+> packing is worth up to **2.56×**, more than everything left in ticks combined.
+> Both terms multiply; work on whichever is cheaper to move, and never trade a
+> large area gain for a small tick gain.
+>
+> | grid | at today's ticks | with relative rotation |
+> |---|---|---|
+> | 32×32 (now) | 61.8M | 31.8M |
+> | 24×24 | 34.7M | 17.9M |
+> | 20×20 | 24.1M | 12.4M |
+>
+> A rival at 18.6M is most plausibly explained by a ~17×17 grid running this same
+> Θ(N) algorithm — not by a cleverer one.
 
 Predict the judge locally — calibrated over three submissions, good to ~1%:
 
@@ -194,7 +211,15 @@ collision checker — assume the next one is the same shape:
 
 ## Work breakdown
 
-**W1 — v4 worker (critical path).** Complete `worker_v4` in `memory_tape.py` using
+**W0 — footprint compaction (highest value per unit of risk).** Pack the existing,
+working logic into a smaller bounding box: fold the tape pipes densely (a pipe may
+bend freely, so 101 cells can serpentine through any free space including the
+worker's unused rows), move the small rooms into the margins, and narrow the
+worker's bands. No logic change, so the existing suites validate it unchanged.
+*Acceptance:* all four suites green under the strict runner, route-check clean,
+ticks not materially worse, and w×h reported. 24×24 ⇒ ≈34.7M today; 20×20 ⇒ ≈24.1M.
+
+**W1 — v4 worker (relative rotation).** Complete `worker_v4` in `memory_tape.py` using
 `Assembler`: the bands above, the pass-through `counted_ring`, the dispatch branch
 and both target arms. Deliver `build_v4(n)` emitting a full program.
 *Acceptance:* all four suites green, route-check clean, area² ≤ 1100, heavy avg
@@ -209,6 +234,25 @@ suites. Do not touch `memory_tape.py` or `asmlayout.py`.
 ring per the T2 sequence, solving the `B=8` clobber.
 *Acceptance:* same as W1 plus heavy avg ≤ 150k (≈ 23M predicted).
 
-**W4 — footprint trim (last).** Only if area² > 1024 after W3: fold the tape band
-or narrow the worker. Width and height are near-equal today, so this is worth ≤6%
-and must never trade ticks for it.
+**W4 — √N banking (alternative to W1+W3).** Split the 100 cells into B banks of
+100/B, each its own ring. An access is Θ(B) to walk to the bank plus Θ(N/B) for one
+lap of it; `/` splits the address in a single instruction. A full lap per bank needs
+**no phase register at all** — each bank realigns itself — so this skips the whole
+relative-rotation dance. Risk is the footprint (B relays + 2B pipes) and pipe
+targeting with ~22 pipes on one room: build a distance table with
+`Anchors.winner()` and prove every op class discriminates by ≥2 *before* laying out
+anything. Report the whole B curve; B=10 is √N but per-bank fixed cost may favour
+B=4–5.
+
+## Tooling added since this plan was written
+
+- `run-cases-strict.mjs` — the plain runner stops when output *length* matches, so
+  it cannot see a loop that moves one value too many. A real primitive here
+  over-moved by 2× and still passed 12/12. **Use the strict runner.**
+- `predict-score.mjs` — w, h, area², heavy average, predicted judge score.
+  Reproduces both real submissions to within 0.2%.
+- `tests/test_memory_solution.py` — `MEMORY_MAN=<path> pytest` aims the whole
+  strict suite at a candidate build.
+- Measured: a scratch-register **park→fetch round trip is ~15 ticks** and the man
+  genuinely blocks on `r(reg)`. A stall there is not necessarily a bug — targeting
+  errors block forever, latency blocks then proceeds. Keep register pipes short.
