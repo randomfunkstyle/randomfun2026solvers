@@ -55,6 +55,7 @@ __all__ = [
     "packed_room",
     "best_pack_width",
     "build_packed",
+    "encode_string",
     "packed_rom_container",
 ]
 
@@ -331,6 +332,18 @@ def build_packed(codes: list[int], data_w: int | None = None) -> str:
     if data_w is None:
         data_w = best_pack_width(codes)
     return _attach_output(packed_room(codes, data_w))
+
+
+def encode_string(data: str | bytes | Iterable[int], *, data_w: int | None = None) -> str:
+    """Encode a constant ``data`` (string/bytes/codes) into a complete standalone
+    ``.man`` program that outputs it, tightly packed (auto width if ``data_w`` is
+    ``None``). The one-call ``string -> .man`` entry point.
+
+    Example::
+
+        open("hello.man", "w").write(encode_string("hello world"))
+    """
+    return build_packed(codes_of(data), data_w)
 
 
 def packed_rom_container(
