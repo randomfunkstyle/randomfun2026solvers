@@ -169,9 +169,15 @@ def decoder_container(container_id: str = "dec") -> Container:
         put(xx, 4 + len(body), " ")
     put(2, 4 + len(body), "^")            # up column 2 back to the approach lane
 
-    width = max(px for px, _ in g) + 1
-    height = max(py for _, py in g) + 1
-    rows = ["".join(g.get((px, py), " ") for px in range(width)) for py in range(height)]
+    # normalise to the content's bounding box (trim empty leading rows/columns)
+    min_x = min(px for px, _ in g)
+    min_y = min(py for _, py in g)
+    width = max(px for px, _ in g) - min_x + 1
+    height = max(py for _, py in g) - min_y + 1
+    rows = [
+        "".join(g.get((px + min_x, py + min_y), " ") for px in range(width))
+        for py in range(height)
+    ]
     wall = "+" + "-" * width + "+"
     room = [wall, *("|" + r + "|" for r in rows), wall]
     w, h = len(room[0]), len(room)
