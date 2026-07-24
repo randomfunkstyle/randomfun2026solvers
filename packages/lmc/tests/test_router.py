@@ -122,3 +122,20 @@ def test_generated_nested_loops():
     for n in (1, 2, 3, 4, 6):
         exp = [1] * (n * (n + 1) // 2)
         assert run_grid(grid, [n], max_ticks=200000).output == exp, (n, grid)
+
+
+@requires_oracle
+def test_generated_reverse():
+    """reverse_list, one round: read n then n values, emit reversed."""
+    from lmc.demos import reverse_program
+
+    g, program = reverse_program()
+    grid = render(g, program)
+    cases = [
+        ([1, 42], [42]),
+        ([2, 100, -100], [-100, 100]),
+        ([3, 10, 20, 30], [30, 20, 10]),
+        ([5, 1, 2, 3, 4, 5], [5, 4, 3, 2, 1]),
+    ]
+    for inp, exp in cases:
+        assert run_grid(grid, inp, max_ticks=50000).output == exp, (inp, grid)
