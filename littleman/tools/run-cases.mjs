@@ -2,7 +2,8 @@
 // output in order; the program need not halt, so we stop at the first tick where
 // output is complete (that tick count is what the contest scores).
 import fs from "node:fs"; import vm from "node:vm"; import path from "node:path";
-const LM="/Users/romanmishchenko/icfp/randomfun2026solvers/littleman";
+import { fileURLToPath } from "node:url";
+const LM = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 vm.runInThisContext(fs.readFileSync(path.join(LM,"wasm_exec.js"),"utf8"));
 const go=new globalThis.Go();
 const mod=await WebAssembly.instantiate(fs.readFileSync(path.join(LM,"littleman.wasm")),go.importObject);

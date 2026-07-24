@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LM-1 — a general-purpose computer written in littleman</title>
+<style>
+  .viz-root, body {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --plane: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --pipe: #2a78d6;
+    --data: #eb6834;
+    --ctrl: #1baf7a;
+    --ord-1: #86b6ef;
+    --ord-2: #5598e7;
+    --ord-3: #2a78d6;
+    --ord-4: #1c5cab;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root,
+    :root:where(:not([data-theme="light"])) body {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --plane: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --pipe: #3987e5;
+      --data: #d95926;
+      --ctrl: #199e70;
+      --ord-1: #184f95;
+      --ord-2: #256abf;
+      --ord-3: #3987e5;
+      --ord-4: #5598e7;
+    }
+  }
+  :root[data-theme="dark"] .viz-root, :root[data-theme="dark"] body {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --pipe: #3987e5;
+    --data: #d95926;
+    --ctrl: #199e70;
+    --ord-1: #184f95;
+    --ord-2: #256abf;
+    --ord-3: #3987e5;
+    --ord-4: #5598e7;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--plane);
+    color: var(--text-primary);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 32px 24px 96px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 8px; }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 44px 0 4px; letter-spacing: -0.01em; }
+  h3 { font-size: 15px; margin: 24px 0 4px; }
+  .lede { color: var(--text-secondary); margin: 0; max-width: 68ch; }
+  p { max-width: 72ch; }
+  .sub { color: var(--text-secondary); font-size: 13.5px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em;
+         background: var(--surface-1); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+  a { color: var(--ord-3); }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; margin: 14px 0; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: 10px; margin: 16px 0; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .tile .v { font-size: 27px; line-height: 1.15; letter-spacing: -0.02em; }
+  .tile .k { font-size: 12.5px; color: var(--text-secondary); margin-top: 3px; }
+  .tile .n { font-size: 11.5px; color: var(--muted); margin-top: 5px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 13px; color: var(--text-secondary); margin: 10px 0 4px; }
+  .legend span.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 10px 0; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 12.5px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.semhead td { background: var(--plane); font-weight: 600; color: var(--text-secondary); font-size: 12.5px; }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; white-space: nowrap; }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+
+  .gridfig { overflow-x: auto; }
+  svg { display: block; max-width: 100%; }
+  .cellhit:hover { outline: none; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0 6px; }
+  button { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--baseline);
+           background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button[aria-pressed="true"] { border-color: var(--ord-3); }
+  input[type=range] { flex: 1; min-width: 200px; accent-color: var(--ord-3); }
+  .readout { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--text-secondary); }
+  .readout b { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  #tip { position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+         background: var(--text-primary); color: var(--surface-1); font-size: 12px; line-height: 1.4;
+         padding: 5px 8px; border-radius: 5px; max-width: 260px; z-index: 10; }
+  .themebtn { position: absolute; top: 24px; right: 24px; }
+  .wrap { position: relative; }
+  .bar { display: flex; width: 100%; height: 34px; gap: 2px; }
+  .bar div { display: flex; align-items: center; justify-content: center; font-size: 11.5px; color: #fff;
+             border-radius: 2px; overflow: hidden; white-space: nowrap; }
+  .bar div:first-child { border-radius: 4px 2px 2px 4px; }
+  .bar div:last-child { border-radius: 2px 4px 4px 2px; }
+  .note { font-size: 13px; color: var(--text-secondary); border-left: 2px solid var(--baseline); padding-left: 12px; margin: 14px 0; }
+</style>
+</head>
+<body class="viz-root">
+<div id="tip"></div>
+<main class="wrap">
+  <button class="themebtn" id="theme">◐ theme</button>
+
+  <header>
+    <h1>LM-1 — a general-purpose computer written in littleman</h1>
+    <p class="lede">One CPU built from little men, rooms and pipes. Solve each contest problem by writing a
+    <em>program</em> for it instead of hand-drawing a bespoke grid. One machine, sixteen programs.</p>
+  </header>
+
+  <h2>1. The bet</h2>
+  <p>Program score is <code>max(width, height)² × avgTicks</code>. A CPU is both large and slow, so
+  LM-1 <strong>will score badly on purpose</strong>. That is the whole trade, and it is a good one:</p>
+  <div class="card" style="font-size:14px">
+    <div><code>test-case points = passing cases / total cases</code> &nbsp;(max 1) &nbsp;→ <strong>LM-1 earns this</strong></div>
+    <div style="margin-top:4px"><code>ranking points&nbsp;&nbsp; = teams you beat on score</code> &nbsp;(max 1) &nbsp;→ LM-1 earns ~0</div>
+  </div>
+  <p>A terrible score still collects the <strong>full test-case point on every problem it solves</strong>.
+  Twelve graded problems × 1 point is the prize. Bespoke grids can reclaim the ranking half later,
+  problem by problem. LM-1 is the safety net, not the optimum.</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="v" id="t-instr">20</div><div class="k">ticks per instruction</div><div class="n">measured, 2-opcode slice</div></div>
+    <div class="tile"><div class="v">6</div><div class="k">ticks per word, ring throughput</div><div class="n">bounded by the room, not the pipe</div></div>
+    <div class="tile"><div class="v">10 / 20</div><div class="k">ticks spent walking home</div><div class="n">the return path is half the cost</div></div>
+    <div class="tile"><div class="v">4</div><div class="k">units verified on the real wasm</div><div class="n">ROM · ring · decode · whole machine</div></div>
+  </div>
+
+  <h2>2. The machine, as blocks</h2>
+  <p>Every box is a <code>layout.py</code> <code>Container</code>: a fixed-size ASCII block that declares
+  <em>local port coordinates</em>. Every arrow is a pipe. You bind a reader or writer to a port near a wall;
+  the layout solver places the containers and routes the lines, and <code>_resolve_port</code> validates that
+  each pipe's touch cell really resolves to the port you intended. Blocks are swappable as long as they honour
+  their port contract.</p>
+  <div class="card gridfig"><svg id="blockdiag" viewBox="0 0 900 340" role="img"
+    aria-label="Block diagram: ROM feeds the code ring; the ring runs through the CPU; the CPU talks to input, output, STORE and an optional display."></svg></div>
+  <p class="note"><strong>The ring runs <em>through</em> the CPU.</strong> The CPU is one of the ring's two rooms:
+  it receives each word and immediately sends it back. That removes a room of latency and makes fetch strictly
+  lock-step — so there is no prefetch, and therefore no branch-flush hazard to reason about.</p>
+
+  <h2>3. The units</h2>
+  <p>Each of these is a real <code>.man</code> file that was run on the bundled reference interpreter.
+  Hover any cell for what that glyph does.</p>
+  <div class="legend" id="legend"></div>
+  <div id="units"></div>
+
+  <h2>4. The whole machine running</h2>
+  <p>ROM + code ring + CPU + output, with a two-opcode ISA: word <code>0</code> means <em>halt</em>, any positive
+  word means <em>emit this value</em>. Program: <code>7 8 9 0</code>. Every frame below is a real interpreter
+  snapshot, not an animation of an idea.</p>
+  <div class="card">
+    <div class="controls">
+      <button id="play">▶ play</button>
+      <button id="step-b">◀ step</button>
+      <button id="step-f">step ▶</button>
+      <input type="range" id="scrub" min="0" max="75" value="0">
+      <span class="sub">tick <b id="tnow" style="font-variant-numeric:tabular-nums">0</b>/75</span>
+    </div>
+    <div class="gridfig"><svg id="anim" role="img" aria-label="Animated LM-1 slice: little men walking the ROM, ring and CPU rooms while values move through pipes."></svg></div>
+    <div class="readout" id="readout"></div>
+  </div>
+  <p>It emits <strong>7 8 9</strong> and the CPU man halts on the <code>0</code> word. The left room is
+  <code>LOOP</code> — <code>R</code> accepts from both the ROM and the CPU, <code>s</code> feeds the CPU.
+  The right room is the CPU: <code>&gt;</code> re-orients, <code>r</code> fetches, <code>s</code> recirculates
+  into the ring, <code>X</code> decodes on sign, <code>H</code> halts, and the lower lanes carry the
+  <em>emit</em> micro-program plus the walk back to the fetch cell.</p>
+  <p class="note"><strong>Heading is part of a unit's port contract.</strong> The first version of this slice hung
+  with no output. Every glyph was correct — but the fetch <code>r</code> was entered heading <em>south</em>, so
+  after receiving, the man stepped onto the return lane's <code>^</code>, which sent him straight back onto
+  <code>r</code>. A two-cell loop that refetched forever and never reached the decoder. Entry ports must declare
+  <strong>(cell, heading)</strong>, and the generator has to assert it.</p>
+
+  <h2>5. Where the 20 ticks go</h2>
+  <p>The CPU man's cycle is 18 cells plus about 2 ticks of blocking. Counting the cells he actually walks:</p>
+  <div class="card">
+    <div class="bar" id="budget"></div>
+    <div class="legend" id="budgetlegend" style="margin-top:10px"></div>
+  </div>
+  <p class="note"><strong>Half the instruction budget is the walk home.</strong> Fetch, decode and execute are
+  8 cells between them; the return path is 10. That makes return-path length — not the ALU, not the decoder —
+  the first thing to optimise, and it argues for lane ends that finish <em>adjacent</em> to the fetch cell rather
+  than at the far wall.</p>
+
+  <h2>6. Decoding with the backpack</h2>
+  <p><code>b</code> loads the opcode into the backpack; then <code>]</code> and <code>x</code> peel one bit per
+  cell and turn. A depth-<em>k</em> trie dispatches 2<sup>k</sup> opcodes and each leaf is a distinct cell —
+  exactly where that opcode's micro-program starts. No comparison chain, no jump table.</p>
+  <table>
+    <thead><tr><th>opcode</th><th>BP bits</th><th>emits</th><th class="num">lane row</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><code>00</code></td><td>4</td><td class="num">1</td></tr>
+      <tr><td>1</td><td><code>01</code></td><td>5</td><td class="num">5</td></tr>
+      <tr><td>2</td><td><code>10</code></td><td>6</td><td class="num">3</td></tr>
+      <tr><td>3</td><td><code>11</code></td><td>7</td><td class="num">7</td></tr>
+    </tbody>
+  </table>
+  <p>Lane rows run <code>0, 2, 1, 3</code> top to bottom: the trie sorts its leaves in <strong>bit-reversed</strong>
+  order. That is the concrete reason opcode numbering is a free layout variable — you choose which opcode lands
+  next to which wall, and therefore which pipe its <code>r</code> and <code>s</code> resolve to.</p>
+
+  <h2>7. Staging by semester</h2>
+  <p>Semesters do not map onto capability tiers — the tiers cut across them. But grouping by semester shows
+  something useful: <strong>Semester 3 is uniformly "big RAM plus nested loops"</strong>, which is precisely
+  where a CPU beats hand-drawing, and Semester 1 spans the entire range on its own.</p>
+  <div class="legend" id="statuslegend"></div>
+  <table id="matrix">
+    <thead><tr><th>problem</th><th>needs</th><th class="num">RAM slots</th><th>stage</th><th>status</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <h3>Memory has to be two tiers — and that's a precondition, not an optimisation</h3>
+  <p>Both blocks below now exist and are measured on the reference interpreter. The tape is a <strong>drop-in
+  <code>STORE</code></strong>: its wire protocol is the <code>memory</code> problem's, which is exactly the
+  contract this architecture specified.</p>
+  <table>
+    <thead><tr><th>block</th><th>size</th><th class="num">ticks / access</th><th>protocol</th></tr></thead>
+    <tbody>
+      <tr><td><code>memory.man</code> — rotating pipe tape, 100 cells</td><td>32×32</td>
+          <td class="num">~750, constant</td><td><code>0 addr</code> / <code>1 addr value</code></td></tr>
+      <tr><td><code>register-cell.man</code> — one value</td><td>6×7</td>
+          <td class="num">~20 round trip</td><td><code>1 v</code> store · <code>-1</code> fetch</td></tr>
+    </tbody>
+  </table>
+  <p class="note"><strong>41–53% of every program's executed instructions are spill traffic</strong> — measured
+  in the emulator, and almost none of it is arrays. It's register spill, because <code>A</code> dies on every
+  fetch and a loop needs 2–3 live values. Route that through a 750-tick tape and <code>triangle</code> alone is
+  ~10k accesses ≈ <strong>7.5M ticks against a 5M cap</strong>. Route it through register cells at ~20 ticks and
+  the same program is comfortable. So: <strong>spill to register cells, arrays to the tape.</strong></p>
+  <p class="note"><strong><code>matmul</code> looks infeasible either way.</strong> ~8,450 accesses × ~750 ticks
+  ≈ 6.3M against a 5M cap — and that's with the <em>constant-cost</em> tape. Needs banked memory or a bespoke
+  solution.</p>
+
+  <h2>8. Verified vs designed</h2>
+  <table>
+    <thead><tr><th>claim</th><th>how we know</th></tr></thead>
+    <tbody>
+      <tr><td>A two-room ring circulates values in order, forever</td><td><span class="chip"><span class="dot" style="background:var(--good)"></span>verified</span> — emits <code>1 2 3 1 2 3 …</code></td></tr>
+      <tr><td>Ring throughput is 6 ticks/word; pipe length adds latency, not rate</td><td><span class="chip"><span class="dot" style="background:var(--good)"></span>verified</span> — measured period</td></tr>
+      <tr><td><code>b</code>/<code>]</code>/<code>x</code> form a working opcode trie</td><td><span class="chip"><span class="dot" style="background:var(--good)"></span>verified</span> — 4 opcodes → 4 lanes</td></tr>
+      <tr><td>ROM literals walk and ship correctly</td><td><span class="chip"><span class="dot" style="background:var(--good)"></span>verified</span> — emits <code>1 12 345</code></td></tr>
+      <tr><td>Nearest-pipe resolution can be controlled by placement</td><td><span class="chip"><span class="dot" style="background:var(--good)"></span>verified</span> — 2 sends, 2 different pipes</td></tr>
+      <tr><td>End-to-end fetch/decode/execute/loop at 20 ticks/instruction</td><td><span class="chip"><span class="dot" style="background:var(--good)"></span>verified</span> — emits <code>7 8 9</code></td></tr>
+      <tr><td>Forward-skip-only jumps are compilable</td><td><span class="chip"><span class="dot" style="background:var(--good)"></span>verified</span> — two-line resolver; never wanted a real PC</td></tr>
+      <tr><td>16-opcode ISA is sufficient for the problem set</td><td><span class="chip"><span class="dot" style="background:var(--serious)"></span>adequate but wrong</span> — 7/7 problems pass, but no division, modulo or indexed addressing: <code>triangle</code> pays 1600× for the missing two rows</td></tr>
+      <tr><td>ACC-only register model is workable</td><td><span class="chip"><span class="dot" style="background:var(--critical)"></span>refuted</span> — 41–53% of instructions are spill; needs a fast SPILL tier</td></tr>
+      <tr><td>Indirect store is possible with A/B/BP alone</td><td><span class="chip"><span class="dot" style="background:var(--critical)"></span>refuted</span> — the pointer has nowhere to live; needs the SPILL pipe</td></tr>
+      <tr><td>The ROM serpentine survives backtick column pairing at scale</td><td><span class="chip"><span class="dot" style="background:var(--serious)"></span>known hazard</span> — bit us at 4 rows already</td></tr>
+      <tr><td>A depth-4 trie's geometry closes with 8 pipes on the CPU room</td><td><span class="chip"><span class="dot" style="background:var(--warning)"></span>unproven</span> — next increment</td></tr>
+    </tbody>
+  </table>
+
+  <p class="sub" style="margin-top:32px">Full spec: <code>littleman/ARCH.md</code>. Language reference:
+  <code>littleman/SPEC.md</code>. Scoring: <code>littleman/GRADING.md</code>. Re-verify anything here with
+  <code>./lm.mjs run &lt;file&gt;.man</code> or
+  <code>uv run python -m randomfun2026solvers.littleman tick &lt;file&gt;.man 40 --json</code>.</p>
+</main>
+
+<script>
+const DATA = {"units":[{"title":"ROM \u2014 the program store","blurb":"One man walks a serpentine of numeric literals; each closing backtick loads the whole number into A, and <code>s</code> ships it into the ring. Roughly one cell per digit.","result":"emits <code>1 12 345</code>","grid":["+-------------------+  +-+","|@`1`s`12`s`345`sH  |>>|O|","+-------------------+  +-+"],"roles":["SSSSSSSSSSSSSSSSSSSSSNNSSS","SCDDDPDDDDPDDDDDPCNNSSSSDS","SSSSSSSSSSSSSSSSSSSSSNNSSS"],"pipeCells":["21,1","22,1"]},{"title":"LOOP \u2014 the code ring","blurb":"Two rooms and two pipes make a ring. Room A seeds <code>1 2 3</code> then loops <code>r</code>/<code>s</code>; room B does the same, closing the loop.","result":"circulates <code>1 2 3 1 2 3 \u2026</code> forever, order preserved, at <strong>6 ticks per word</strong>. The bound is the room, not the pipe: the smallest walking cycle holding two operations is 3\u00d72 = 6 cells, because all four corners must be turn glyphs.","grid":["+--------+   +----+","|@1s2s3sv|>->|@>rv|","|.....vr<|   |.^s<|","|.....>s^|   +----+","+--------+    v    ","     ^        |    ","     ^--------<    "],"roles":["SSSSSSSSSSNNNSSSSSS","SCDPDPDPCSSSSSCCPCS","SNNNNNCPCSNNNSNCPCS","SNNNNNCPCSNNNSSSSSS","SSSSSSSSSSNNNNSNNNN","NNNNNSNNNNNNNNSNNNN","NNNNNSSSSSSSSSSNNNN"],"pipeCells":["10,1","12,1","14,4","5,5","5,6","14,6"]},{"title":"DECODE \u2014 a backpack trie","blurb":"The man arrives heading east with BP = opcode. <code>b</code> loads it, then <code>]</code> and <code>x</code> peel one bit per cell and turn. Each lane emits a marker so the mapping is observable.","result":"opcodes 0/1/2/3 dispatch to four distinct lanes emitting 4/5/6/7, in 12 ticks including the send and halt. Lanes deliberately use bare digits \u2014 four stacked <code>`NN`</code> literals would align backticks in a <em>column</em>, forming unintended vertical pairs and a load error.","grid":["+-----------+      ","|....>4sH...|      ","|...>x......|      ","|...]>6sH...|   +-+","|@0bx.......|>->|O|","|...]>5sH...|   +-+","|...>x......|      ","|....>7sH...|      ","+-----------+      "],"roles":["SSSSSSSSSSSSSNNNNNN","SNNNNCDPCNNNSNNNNNN","SNNNCCNNNNNNSNNNNNN","SNNNCCDPCNNNSNNNSSS","SCDCCNNNNNNNSSSSSDS","SNNNCCDPCNNNSNNNSSS","SNNNCCNNNNNNSNNNNNN","SNNNNCDPCNNNSNNNNNN","SSSSSSSSSSSSSNNNNNN"],"pipeCells":["13,4","15,4"]}],"slice":{"grid":["+------------------+      ","|@7s8s9s0sH........|      ","+------------------+      ","  v                       ","  v                       ","+----+   +---------+      ","|@>Rv|>->|@v.......|      ","|.^s<|<-<|.>rsXH...|   +-+","+----+   |.^..>..sv|>->|O|","         |.^......<|   +-+","         +---------+      "],"roles":["SSSSSSSSSSSSSSSSSSSSNNNNNN","SCDPDPDPDPCNNNNNNNNSNNNNNN","SSSSSSSSSSSSSSSSSSSSNNNNNN","NNSNNNNNNNNNNNNNNNNNNNNNNN","NNSNNNNNNNNNNNNNNNNNNNNNNN","SSSSSSNNNSSSSSSSSSSSNNNNNN","SCCPCSSSSSCCNNNNNNNSNNNNNN","SNCPCSSSSSNCPPCCNNNSNNNSSS","SSSSSSNNNSNCNNCNNPCSSSSSDS","NNNNNNNNNSNCNNNNNNCSNNNSSS","NNNNNNNNNSSSSSSSSSSSNNNNNN"],"pipeCells":["2,3","2,4","6,6","8,6","6,7","8,7","20,8","22,8"]},"frames":[{"t":0,"men":[{"p":[1,1],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[1,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[10,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":1,"men":[{"p":[2,1],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[2,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[11,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":2,"men":[{"p":[3,1],"d":[1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[3,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[11,7],"d":[0,1],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":3,"men":[{"p":[4,1],"d":[1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[3,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,7]]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":4,"men":[{"p":[5,1],"d":[1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[4,6],"d":[1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":5,"men":[{"p":[6,1],"d":[1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[4,7],"d":[0,1],"a":7,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,8]]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":6,"men":[{"p":[7,1],"d":[1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[3,7],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[1,8]]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":7,"men":[{"p":[8,1],"d":[1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[2,7],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,9],[1,8]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":8,"men":[{"p":[9,1],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[2,6],"d":[0,-1],"a":7,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,9],[1,8]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":9,"men":[{"p":[9,1],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[3,6],"d":[1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[13,7],"d":[1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,9],[1,8]]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":10,"men":[{"p":[9,1],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[4,6],"d":[1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[14,7],"d":[1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,9]]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[[0,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":11,"men":[{"p":[10,1],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[4,7],"d":[0,1],"a":8,"b":0,"bp":0,"h":false},{"p":[14,8],"d":[0,1],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,0],[1,9]]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[[1,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":12,"men":[{"p":[10,1],"d":[1,0],"a":0,"b":0,"bp":0,"h":true},{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[15,8],"d":[1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,0],[1,9]]},{"path":[[6,6],[7,6],[8,6]],"vals":[]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":13,"men":[{"p":[2,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[16,8],"d":[1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,0],[1,9]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":14,"men":[{"p":[2,6],"d":[0,-1],"a":8,"b":0,"bp":0,"h":false},{"p":[17,8],"d":[1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,0],[1,9]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[]},{"t":15,"men":[{"p":[3,6],"d":[1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[18,8],"d":[1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,0],[1,9]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[[0,7]]}],"out":[]},{"t":16,"men":[{"p":[4,6],"d":[1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[18,9],"d":[0,1],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[0,0]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[[1,7]]}],"out":[]},{"t":17,"men":[{"p":[4,7],"d":[0,1],"a":9,"b":0,"bp":0,"h":false},{"p":[17,9],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[1,0]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":18,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[16,9],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[1,0]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":19,"men":[{"p":[2,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[15,9],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[1,0]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":20,"men":[{"p":[2,6],"d":[0,-1],"a":9,"b":0,"bp":0,"h":false},{"p":[14,9],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[1,0]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":21,"men":[{"p":[3,6],"d":[1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[13,9],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[[1,0]]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":22,"men":[{"p":[4,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[12,9],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":23,"men":[{"p":[4,7],"d":[0,1],"a":0,"b":0,"bp":0,"h":false},{"p":[11,9],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":24,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[11,8],"d":[0,-1],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":25,"men":[{"p":[2,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[11,7],"d":[0,-1],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,0],[1,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":26,"men":[{"p":[2,6],"d":[0,-1],"a":0,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":7,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,0],[1,9],[2,8]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":27,"men":[{"p":[3,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false},{"p":[13,7],"d":[1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,0],[1,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,7]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":28,"men":[{"p":[4,6],"d":[1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[14,7],"d":[1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[0,8]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":29,"men":[{"p":[4,7],"d":[0,1],"a":7,"b":0,"bp":0,"h":false},{"p":[14,8],"d":[0,1],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[1,8]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":30,"men":[{"p":[3,7],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[15,8],"d":[1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,8]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":31,"men":[{"p":[2,7],"d":[-1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[16,8],"d":[1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,8]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":32,"men":[{"p":[2,6],"d":[0,-1],"a":7,"b":0,"bp":0,"h":false},{"p":[17,8],"d":[1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,8]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7]},{"t":33,"men":[{"p":[3,6],"d":[1,0],"a":7,"b":0,"bp":0,"h":false},{"p":[18,8],"d":[1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,8]]},{"path":[[20,8],[21,8],[22,8]],"vals":[[0,8]]}],"out":[7]},{"t":34,"men":[{"p":[4,6],"d":[1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[18,9],"d":[0,1],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[[1,8]]}],"out":[7]},{"t":35,"men":[{"p":[4,7],"d":[0,1],"a":8,"b":0,"bp":0,"h":false},{"p":[17,9],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":36,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[16,9],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":37,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[15,9],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":38,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[14,9],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":39,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[13,9],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":40,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[12,9],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":41,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[11,9],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":42,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[11,8],"d":[0,-1],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":43,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[11,7],"d":[0,-1],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":44,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":8,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0],[2,9]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":45,"men":[{"p":[3,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[13,7],"d":[1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,7],[1,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":46,"men":[{"p":[2,7],"d":[-1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[14,7],"d":[1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[0,9]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":47,"men":[{"p":[2,6],"d":[0,-1],"a":8,"b":0,"bp":0,"h":false},{"p":[14,8],"d":[0,1],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[1,9]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":48,"men":[{"p":[3,6],"d":[1,0],"a":8,"b":0,"bp":0,"h":false},{"p":[15,8],"d":[1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,9]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":49,"men":[{"p":[4,6],"d":[1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[16,8],"d":[1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":50,"men":[{"p":[4,7],"d":[0,1],"a":9,"b":0,"bp":0,"h":false},{"p":[17,8],"d":[1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8]},{"t":51,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[18,8],"d":[1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[[0,9]]}],"out":[7,8]},{"t":52,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[18,9],"d":[0,1],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[[1,9]]}],"out":[7,8]},{"t":53,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[17,9],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":54,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[16,9],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":55,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[15,9],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":56,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[14,9],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":57,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[13,9],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":58,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[12,9],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":59,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[11,9],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":60,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[11,8],"d":[0,-1],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":61,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[11,7],"d":[0,-1],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":62,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[12,7],"d":[1,0],"a":9,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7],[2,0]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":63,"men":[{"p":[3,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[13,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,8],[1,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":64,"men":[{"p":[2,7],"d":[-1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[14,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[0,0]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":65,"men":[{"p":[2,6],"d":[0,-1],"a":9,"b":0,"bp":0,"h":false},{"p":[15,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[1,0]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":66,"men":[{"p":[3,6],"d":[1,0],"a":9,"b":0,"bp":0,"h":false},{"p":[15,7],"d":[1,0],"a":0,"b":0,"bp":0,"h":true}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[[2,0]]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":67,"men":[{"p":[4,6],"d":[1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":68,"men":[{"p":[4,7],"d":[0,1],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":69,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":70,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":71,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":72,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":73,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":74,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]},{"t":75,"men":[{"p":[3,7],"d":[-1,0],"a":0,"b":0,"bp":0,"h":false}],"pipes":[{"path":[[2,3],[2,4]],"vals":[]},{"path":[[6,6],[7,6],[8,6]],"vals":[[0,9],[1,8],[2,7]]},{"path":[[8,7],[7,7],[6,7]],"vals":[]},{"path":[[20,8],[21,8],[22,8]],"vals":[]}],"out":[7,8,9]}],"matrix":[{"name":"Semester 1 \u2014 graded","rows":[{"slug":"triangle","needs":"spill slot + DIVI/MUL: 407 ticks closed vs 654k looping","slots":1,"stage":"A","st":"now"},{"slug":"reverse-a-list","needs":"LIFO, 16 deep","slots":16,"stage":"B","st":"store"},{"slug":"sort-numbers","needs":"addressed array + selection loop","slots":16,"stage":"B","st":"store"},{"slug":"memory","needs":"accepted by the judge \u2014 32x32 rotating pipe tape, ~750 ticks/op","slots":100,"stage":"\u2014","st":"done"}]},{"name":"Semester 2 \u2014 graded","rows":[{"slug":"history-lesson","needs":"144x148 boustrophedon ROM, 2810/2810 verified","slots":0,"stage":"\u2014","st":"done"},{"slug":"brackets","needs":"typed stack depth 32; needs MODI/DIVI","slots":32,"stage":"B","st":"store"},{"slug":"tcp","needs":"indexed by seq; needs LDP/STP","slots":48,"stage":"B","st":"store"},{"slug":"plotter","needs":"display ADDR/DATA/SWAP + line arithmetic","slots":8,"stage":"C","st":"big"}]},{"name":"Semester 3 \u2014 graded","rows":[{"slug":"gradebook","needs":"ids + N\u00d7K grades, search by id","slots":80,"stage":"C","st":"big"},{"slug":"matmul","needs":"~8450 accesses x ~750 ticks = 6.3M vs a 5M cap","slots":768,"stage":"\u2014","st":"hard"},{"slug":"subset-sum","needs":"20 values + subset search","slots":24,"stage":"C","st":"big"},{"slug":"sudoku-validity","needs":"81 cells + 27 set checks","slots":81,"stage":"C","st":"big"}]},{"name":"Practice \u2014 ungraded","rows":[{"slug":"hello-world","needs":"11 LDI/OUT pairs","slots":0,"stage":"A","st":"now"},{"slug":"atoi","needs":"digit accumulate, one slot","slots":1,"stage":"A","st":"now"},{"slug":"max-element","needs":"incoming in A vs ACC in B \u2014 no storage","slots":0,"stage":"A","st":"now"},{"slug":"palette","needs":"display ports only","slots":0,"stage":"C","st":"big"}]}]};
+
+/* ---------- glyph documentation ---------- */
+const DOC = {
+  '@':'spawn — a little man starts here, always facing east',
+  'r':'receive into A from the nearest incoming pipe (blocks if empty)',
+  'R':'receive into A from any incoming pipe that has a value ready',
+  's':'send A into the nearest outgoing pipe (blocks if full)',
+  'S':'send A into every outgoing pipe at once',
+  'U':'like R, but turn away from the side read from',
+  'q':'BP = number of values in the nearest incoming pipe',
+  'M':'B = A (A unchanged)',
+  'W':'swap A and B',
+  'N':'A = −A',
+  '+':'A = A + B', '*':'A = A × B', '%':'A = A mod B',
+  '/':'A = ⌊A / B⌋, remainder into B',
+  '&':'A = A AND B', '~':'A = A XOR B', '{':'A = A << B', '}':'A = A >> B',
+  'X':'turn by sign(A): clockwise if > 0, counter-clockwise if < 0, straight if 0',
+  'H':'halt this little man',
+  'b':'BP = A', 'm':'BP −= 1',
+  'd':'turn clockwise if BP > 0, else straight',
+  'a':'turn counter-clockwise if BP > 0, else straight',
+  'x':'turn clockwise if BP is odd, counter-clockwise if even — always turns',
+  ']':'BP >>= 1 (arithmetic shift)',
+  'Y':'split — turn clockwise and emit a copy heading counter-clockwise',
+  '`':'numeric literal delimiter — the closing backtick loads the whole number into A',
+  '.':'nop', ' ':'nop',
+  'I':'input room', 'O':'output room',
+};
+for (const d of '0123456789') DOC[d] = 'A = ' + d;
+const HEAD = {'>':'head east','<':'head west','^':'head north','v':'head south','V':'head south'};
+
+const ROLE_COLOR = { P:'var(--pipe)', D:'var(--data)', C:'var(--ctrl)', S:'var(--muted)', N:'var(--muted)' };
+const ROLE_NAME  = { P:'pipe I/O', D:'writes A or B', C:'steers the man', S:'structure — walls & pipe bodies' };
+
+/* ---------- grid renderer ---------- */
+const CW = 13, CH = 19;
+function renderGrid(svg, grid, roles, opts = {}) {
+  const w = Math.max(...grid.map(r => r.length)), h = grid.length;
+  const W = w * CW, H = h * CH;
+  const scale = Math.min(2.4, 920 / W);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('width', Math.round(W * scale));
+  svg.setAttribute('height', Math.round(H * scale));
+  let s = '';
+  for (let y = 0; y < h; y++) {
+    const row = grid[y];
+    for (let x = 0; x < row.length; x++) {
+      const ch = row[x];
+      if (ch === ' ' && roles[y][x] === 'N') continue;
+      const role = roles[y][x];
+      const isStruct = role === 'S';
+      const isLabel = ch === 'I' || ch === 'O';
+      s += `<text x="${x*CW + CW/2}" y="${y*CH + CH*0.72}" text-anchor="middle"
+        font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="14"
+        font-weight="${isStruct ? 400 : 600}"
+        fill="${isLabel ? 'var(--text-secondary)' : ROLE_COLOR[role]}"
+        opacity="${isStruct ? 0.8 : 1}">${esc(ch)}</text>`;
+      if (!isStruct && ch !== '.' && ch !== ' ') {
+        const doc = (HEAD[ch] && !opts.pipeArrows?.has(x+','+y)) ? HEAD[ch] : (DOC[ch] || '');
+        s += `<rect class="cellhit" x="${x*CW}" y="${y*CH}" width="${CW}" height="${CH}"
+          fill="transparent" data-doc="${esc(ch)} — ${esc(doc)}"></rect>`;
+      }
+    }
+  }
+  svg.innerHTML = s + (opts.overlay || '');
+  return { W, H };
+}
+function esc(t) { return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/* ---------- tooltips ---------- */
+const tip = document.getElementById('tip');
+document.addEventListener('mouseover', e => {
+  const d = e.target.getAttribute && e.target.getAttribute('data-doc');
+  if (!d) return;
+  tip.textContent = d; tip.style.opacity = 1;
+});
+document.addEventListener('mousemove', e => {
+  if (tip.style.opacity == 0) return;
+  tip.style.left = Math.min(e.clientX + 12, innerWidth - 280) + 'px';
+  tip.style.top = (e.clientY + 18) + 'px';
+});
+document.addEventListener('mouseout', e => {
+  if (e.target.getAttribute && e.target.getAttribute('data-doc')) tip.style.opacity = 0;
+});
+
+/* ---------- legend ---------- */
+document.getElementById('legend').innerHTML = ['P','D','C','S']
+  .map(r => `<span><span class="sw" style="background:${ROLE_COLOR[r]}"></span>${ROLE_NAME[r]}</span>`).join('')
+  + '<span style="color:var(--muted)">every cell is labelled with its own glyph — colour only reinforces it</span>';
+
+/* ---------- unit figures ---------- */
+const unitsEl = document.getElementById('units');
+for (const u of DATA.units) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<h3>${esc(u.title)}</h3><p class="sub" style="margin:0 0 10px">${u.blurb}</p>
+    <div class="gridfig"><svg role="img" aria-label="${esc(u.title)}"></svg></div>
+    <p class="sub" style="margin:10px 0 0"><strong>Result:</strong> ${u.result}</p>`;
+  unitsEl.appendChild(card);
+  renderGrid(card.querySelector('svg'), u.grid, u.roles, { pipeArrows: new Set(u.pipeCells) });
+}
+
+/* ---------- block diagram ---------- */
+(function () {
+  const svg = document.getElementById('blockdiag');
+  const box = (x, y, w, h, label, sub, color) => `
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="var(--surface-1)"
+      stroke="${color || 'var(--baseline)'}" stroke-width="${color ? 2 : 1}"/>
+    <text x="${x + w/2}" y="${y + (sub ? h/2 - 2 : h/2 + 5)}" text-anchor="middle" font-size="14"
+      font-weight="600" fill="var(--text-primary)">${label}</text>
+    ${sub ? `<text x="${x+w/2}" y="${y+h/2+15}" text-anchor="middle" font-size="11"
+      fill="var(--text-secondary)">${sub}</text>` : ''}`;
+  const arrow = (x1,y1,x2,y2,label,dash) => `
+    <path d="M ${x1} ${y1} L ${x2} ${y2}" stroke="var(--pipe)" stroke-width="2"
+      marker-end="url(#ah)" fill="none" ${dash ? 'stroke-dasharray="5 4"' : ''}/>
+    ${label ? `<text x="${(x1+x2)/2}" y="${(y1+y2)/2 - 6}" text-anchor="middle" font-size="10.5"
+      fill="var(--text-secondary)">${label}</text>` : ''}`;
+  svg.innerHTML = `
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--pipe)"/></marker></defs>
+    ${box(20, 20, 150, 52, 'ROM', 'program as literals')}
+    ${box(20, 128, 150, 52, 'LOOP', 'recirculator')}
+    <rect x="300" y="100" width="200" height="110" rx="7" fill="var(--surface-1)"
+      stroke="var(--ord-3)" stroke-width="2"/>
+    <text x="400" y="126" text-anchor="middle" font-size="14" font-weight="600"
+      fill="var(--text-primary)">CPU</text>
+    <text x="400" y="150" text-anchor="middle" font-size="11" fill="var(--text-secondary)">A = scratch · B = ACC</text>
+    <text x="400" y="166" text-anchor="middle" font-size="11" fill="var(--text-secondary)">BP = decode + counters</text>
+    <text x="400" y="190" text-anchor="middle" font-size="10.5" fill="var(--muted)">fetch → trie → 16 lanes</text>
+    ${box(640, 20, 130, 44, 'I', 'input room')}
+    ${box(640, 84, 130, 44, 'O', 'output room')}
+    ${box(640, 148, 230, 52, 'STORE', 'abstract — the memory problem&#39;s protocol', 'var(--data)')}
+    ${box(640, 224, 230, 46, 'LM-75', 'optional: ADDR / DATA / SWAP')}
+    ${arrow(95, 72, 95, 126, '', false)}
+    ${arrow(170, 145, 298, 130, 'ring in')}
+    ${arrow(298, 185, 172, 168, 'ring out')}
+    ${arrow(638, 42, 502, 118)}
+    ${arrow(502, 132, 638, 106)}
+    ${arrow(502, 160, 638, 172)}
+    ${arrow(638, 186, 502, 176)}
+    ${arrow(502, 196, 638, 240, '', true)}
+    <text x="95" y="108" text-anchor="middle" font-size="10.5" fill="var(--text-secondary)">words, once at boot</text>
+    <text x="400" y="252" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">
+      the code ring: capacity = P + 2…4 words</text>
+    <text x="400" y="270" text-anchor="middle" font-size="10.5" fill="var(--muted)">
+      too small deadlocks · too large starves the CPU</text>
+    <text x="400" y="300" text-anchor="middle" font-size="10.5" fill="var(--muted)">
+      the PC is the ring's rotation phase — a jump recirculates n words unexecuted</text>`;
+})();
+
+/* ---------- animation ---------- */
+(function () {
+  const svg = document.getElementById('anim');
+  const F = DATA.frames, grid = DATA.slice.grid, roles = DATA.slice.roles;
+  const pipeCells = new Set(DATA.slice.pipeCells);
+  const scrub = document.getElementById('scrub'), tnow = document.getElementById('tnow');
+  const playBtn = document.getElementById('play'), readout = document.getElementById('readout');
+  scrub.max = F.length - 1;
+  let i = 0, timer = null;
+
+  function draw() {
+    const f = F[i];
+    let ov = '';
+    for (const p of f.pipes) {
+      for (const [idx, val] of p.vals) {
+        const c = p.path[idx - 1]; if (!c) continue;
+        ov += `<rect x="${c[0]*CW - 1}" y="${c[1]*CH + 2}" width="${CW + 2}" height="${CH - 5}" rx="3"
+          fill="var(--pipe)"/><text x="${c[0]*CW + CW/2}" y="${c[1]*CH + CH*0.7}" text-anchor="middle"
+          font-size="11" font-weight="700" fill="var(--surface-1)"
+          font-family="ui-monospace,Menlo,monospace">${val}</text>`;
+      }
+    }
+    for (const m of f.men) {
+      const cx = m.p[0]*CW + CW/2, cy = m.p[1]*CH + CH/2;
+      ov += `<circle cx="${cx}" cy="${cy}" r="8.5" fill="none" stroke="var(--surface-1)" stroke-width="3"/>
+        <circle cx="${cx}" cy="${cy}" r="8.5" fill="none"
+          stroke="${m.h ? 'var(--muted)' : 'var(--data)'}" stroke-width="2"/>`;
+      if (!m.h) ov += `<path d="M ${cx} ${cy} l ${m.d[0]*11} ${m.d[1]*11}" stroke="var(--data)"
+        stroke-width="2" stroke-linecap="round"/>`;
+    }
+    renderGrid(svg, grid, roles, { overlay: ov, pipeArrows: pipeCells });
+    tnow.textContent = f.t;
+    scrub.value = i;
+    readout.innerHTML = f.men.map((m, n) =>
+      `<span>man ${n+1} — A <b>${m.a}</b> B <b>${m.b}</b> BP <b>${m.bp}</b>${m.h ? ' <em>halted</em>' : ''}</span>`
+    ).join('') + `<span>output <b>${f.out.length ? f.out.join(' ') : '—'}</b></span>`;
+  }
+  function stop() { clearInterval(timer); timer = null; playBtn.textContent = '▶ play'; playBtn.setAttribute('aria-pressed','false'); }
+  playBtn.onclick = () => {
+    if (timer) return stop();
+    playBtn.textContent = '❚❚ pause'; playBtn.setAttribute('aria-pressed','true');
+    timer = setInterval(() => { i = (i + 1) % F.length; draw(); }, 180);
+  };
+  document.getElementById('step-f').onclick = () => { stop(); i = Math.min(F.length-1, i+1); draw(); };
+  document.getElementById('step-b').onclick = () => { stop(); i = Math.max(0, i-1); draw(); };
+  scrub.oninput = () => { stop(); i = +scrub.value; draw(); };
+  draw();
+})();
+
+/* ---------- tick budget ---------- */
+(function () {
+  const seg = [
+    ['fetch + recirculate', 3, 'var(--ord-1)'],
+    ['decode', 1, 'var(--ord-2)'],
+    ['execute', 4, 'var(--ord-3)'],
+    ['walk back to fetch', 10, 'var(--ord-4)'],
+  ];
+  const total = 18;
+  document.getElementById('budget').innerHTML = seg.map(([n, v, c]) =>
+    `<div style="flex:${v};background:${c}" title="${n}: ${v} cells">${v >= 3 ? v + ' cells' : v}</div>`).join('');
+  document.getElementById('budgetlegend').innerHTML = seg.map(([n, v, c]) =>
+    `<span><span class="sw" style="background:${c}"></span>${n} — ${v}</span>`).join('')
+    + `<span style="color:var(--muted)">18 cells walked + ~2 ticks blocked = 20 ticks measured</span>`;
+})();
+
+/* ---------- semester matrix ---------- */
+(function () {
+  const ST = {
+    done:     ['var(--good)',     '★ solved (bespoke grid)'],
+    now:      ['var(--good)',     '● passes in emulator'],
+    store:    ['var(--warning)',  '▲ needs STORE'],
+    big:      ['var(--serious)',  '◆ needs big STORE'],
+    hard:     ['var(--critical)', '✕ likely infeasible'],
+  };
+  const chip = ([c, l]) =>
+    `<span class="chip"><span style="color:${c};font-size:13px">${l.slice(0,1)}</span>${l.slice(2)}</span>`;
+  document.getElementById('statuslegend').innerHTML = Object.values(ST).map(chip).join('');
+  const tb = document.querySelector('#matrix tbody');
+  let html = '';
+  for (const sem of DATA.matrix) {
+    html += `<tr class="semhead"><td colspan="5">${esc(sem.name)}</td></tr>`;
+    for (const p of sem.rows) {
+      html += `<tr><td><code>${esc(p.slug)}</code></td><td>${esc(p.needs)}</td>
+        <td class="num">${p.slots}</td><td>${p.stage}</td>
+        <td>${chip(ST[p.st])}</td></tr>`;
+    }
+  }
+  tb.innerHTML = html;
+})();
+
+/* ---------- theme ---------- */
+document.getElementById('theme').onclick = () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+};
+</script>
+</body>
+</html>
