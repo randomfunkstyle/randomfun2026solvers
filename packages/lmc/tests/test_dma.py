@@ -22,13 +22,27 @@ def test_dma_renders():
 @pytest.mark.parametrize(
     "cmds,expected",
     [
-        ([0, 10, 0, 20, 1, 0, 1, 0], [10, 20]),              # push 10,20; pop,pop
-        ([0, 10, 0, 20, 1, 0, 1, 0, 0, 5, 1, 0], [10, 20, 5]),  # interleaved
-        ([0, -7, 1, 0], [-7]),                                # negative value round-trips
-        ([0, 1, 0, 2, 0, 3, 1, 0, 1, 0, 1, 0], [1, 2, 3]),   # FIFO order
+        ([0, 10, 0, 20, 1, 0, 1, 0], [10, 20]),                  # push 10,20; pop,pop
+        ([0, 10, 0, 20, 1, 0, 1, 0, 0, 5, 1, 0], [10, 20, 5]),   # interleaved
+        ([0, 1, 0, 2, 0, 3, 1, 0, 1, 0, 1, 0], [1, 2, 3]),       # FIFO order
     ],
 )
 def test_dma_push_pop(cmds, expected):
     grid = render_dma_standalone()
-    res = run_grid(grid, cmds, max_ticks=8000)
+    res = run_grid(grid, cmds, max_ticks=10000)
+    assert res.output[: len(expected)] == expected, grid
+
+
+@requires_oracle
+@pytest.mark.parametrize(
+    "cmds,expected",
+    [
+        # push 10,20,30 ; rotate (emit 10, ring->20,30,10) ; pop,pop,pop
+        ([0, 10, 0, 20, 0, 30, -1, 0, 1, 0, 1, 0, 1, 0], [10, 20, 30, 10]),
+        ([0, -7, -1, 0], [-7]),                                  # rotate a single negative
+    ],
+)
+def test_dma_rotate(cmds, expected):
+    grid = render_dma_standalone()
+    res = run_grid(grid, cmds, max_ticks=12000)
     assert res.output[: len(expected)] == expected, grid

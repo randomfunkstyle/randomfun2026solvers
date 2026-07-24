@@ -91,10 +91,12 @@ already here — never a monolithic rewrite. Proven blocks so far:
 
 ## Command ISA (target)
 ```
-PUSH value   POP → data        ← stack (built)
-LOAD_IDX     STORE_IDX   LEN    ← array a[i] (rotate-to-index, next)
-IN → data    OUT value          ← memory-mapped I/O (echo built)
+PUSH value   POP → data   ROTATE → head   ← stack + iteration (built)
+LOAD_IDX     STORE_IDX    LEN             ← array a[i] (CPU rotates i then POP, next)
+IN → data    OUT value                    ← memory-mapped I/O (echo built)
 ```
+Random access `a[i]` needs no new DMA command: the CPU issues `ROTATE` i times, `POP`s
+the head, then `ROTATE`s the rest to restore canonical rotation.
 Compute (compare/ALU/branch) lives in the CPU; the DMA is the memory + I/O subsystem.
 
 ## Status
