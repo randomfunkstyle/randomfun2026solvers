@@ -17,7 +17,7 @@ is control glyphs only.
 from __future__ import annotations
 
 from .blockspec import BlockGraph, E, Instr, Pipe, S, W
-from .loopgen import forever_loop, linear_block, seq_block, while_loop
+from .loopgen import dispatch2, forever_loop, linear_block, seq_block, while_loop
 from .router import Canvas, render, solve_attachments
 from .stores import RingStore
 from .trail import PlacedCell, TrailLayout
@@ -132,6 +132,30 @@ def render_read_driver_standalone(n_cells: int) -> str:
     return render(g, read_driver_program(n_cells))
 
 
+def _access_body(n_cells: int, op_cmds: list[Instr]) -> TrailLayout:
+    """Shared READ/WRITE body: read addr, position, restore->BP, do the op, fill.
+    `op_cmds` emits the middle command (PEEK for READ, REPLACE(-1,value) for WRITE)."""
+    return seq_block([
+        linear_block([Op("r", "in"), Op("M"), Op("b")]),  # addr; B=addr; BP=addr
+        _adv_loop(),                                       # ADVANCE x addr
+        linear_block([Op("W"), Op("M"), *_lit(n_cells - 1), Op("-"), Op("b")]),  # BP=N-addr-1
+        linear_block(op_cmds),
+        _adv_loop(),                                       # ADVANCE x (N-addr-1)
+    ])
+
+
+def memory_driver_program(n_cells: int) -> TrailLayout:
+    """Full memory Driver: dispatch op -> WRITE-body or READ-body over the DMA commands."""
+    read_body = _access_body(n_cells, [Op("1"), Op("s", "req"), Op("0"), Op("s", "req")])  # PEEK
+    write_body = _access_body(
+        n_cells,
+        # read value -> B; emit REPLACE frame (-1, value)
+        [Op("r", "in"), Op("M"), *_lit(-1), Op("s", "req"), Op("W"), Op("s", "req")],
+    )
+    body = dispatch2([Op("r", "in"), Op("b")], write_body, read_body)  # op>0 WRITE else READ
+    return forever_loop(prologue=[Op("@")], body=body)
+
+
 def render_memdma_standalone(seed_vals: list[int], ram_len: int = 6) -> str:
     """Standalone grid: command stream <- West input, results -> East output."""
     trail = memdma_trail(seed_vals)
@@ -173,8 +197,16 @@ def render_memdma_standalone(seed_vals: list[int], ram_len: int = 6) -> str:
 
 def render_memory_read(seed_vals: list[int], gap: int = 3, ram_len: int = 6) -> str:
     """`memory` READ path end-to-end: op-stream (0, addr) in -> cell[addr] out."""
-    n = len(seed_vals)
-    drv = read_driver_program(n)
+    return _render_chain(read_driver_program(len(seed_vals)), seed_vals, gap, ram_len)
+
+
+def render_memory(seed_vals: list[int], gap: int = 3, ram_len: int = 6) -> str:
+    """Full `memory` end-to-end: op-stream (0 addr) READ / (1 addr value) WRITE."""
+    return _render_chain(memory_driver_program(len(seed_vals)), seed_vals, gap, ram_len)
+
+
+def _render_chain(drv, seed_vals: list[int], gap: int = 3, ram_len: int = 6) -> str:
+    """Driver -> DMA-mem horizontal chain (hardwired 2-man template)."""
     dma = memdma_trail(seed_vals)
     DWi, DHi = drv.width, drv.height
     MWi, MHi = dma.width, dma.height

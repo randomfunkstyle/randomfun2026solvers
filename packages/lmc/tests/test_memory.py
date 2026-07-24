@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from lmc.memory import (
     render_memdma_standalone,
+    render_memory,
     render_memory_read,
     render_read_driver_standalone,
 )
@@ -78,4 +79,27 @@ def test_memory_read_end_to_end(op_stream, expected):
     """I -> Driver -> DMA-mem -> O, over a ring seeded [10,20,30,40,50]."""
     grid = render_memory_read([10, 20, 30, 40, 50])
     res = run_grid(grid, op_stream, max_ticks=30000)
+    assert res.output[: len(expected)] == expected, grid
+
+
+def test_memory_full_renders():
+    assert "I" in render_memory([0, 0, 0, 0, 0])
+
+
+@requires_oracle
+@pytest.mark.parametrize(
+    "op_stream,expected",
+    [
+        # WRITE 42->2; READ 2; WRITE 7->0; READ 0; READ 4 (untouched)
+        ([1, 2, 42, 0, 2, 1, 0, 7, 0, 0, 0, 4], [42, 7, 0]),
+        # overwrite: WRITE 1->3; READ 3; WRITE 9->3; READ 3
+        ([1, 3, 1, 0, 3, 1, 3, 9, 0, 3], [1, 9]),
+        # fresh cells read 0
+        ([0, 0, 0, 1, 0, 4], [0, 0, 0]),
+    ],
+)
+def test_memory_read_write(op_stream, expected):
+    """Full memory (READ+WRITE) over a 5-cell RAM (starts at 0)."""
+    grid = render_memory([0, 0, 0, 0, 0])
+    res = run_grid(grid, op_stream, max_ticks=80000)
     assert res.output[: len(expected)] == expected, grid

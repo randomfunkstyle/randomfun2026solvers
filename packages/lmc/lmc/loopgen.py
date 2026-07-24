@@ -44,6 +44,62 @@ def seq_block(blocks: list[TrailLayout]) -> TrailLayout:
     return TrailLayout(width=x, height=height, cells=cells, spawn=(0, 0))
 
 
+def dispatch2(
+    cond: list[Instr], then_block: TrailLayout, else_block: TrailLayout
+) -> TrailLayout:
+    """Two-way branch over whole *blocks* (unlike `if3`, whose arms are linear).
+
+    `cond` runs first and must leave the test in BP (end it with `b`). Then `d` branches:
+    BP>0 -> `then_block` (dips south, below else), BP==0 -> `else_block` (straight, row 0).
+    Both arms run to a shared merge column, climb to row 0, and exit east -- so the block
+    keeps the convention (enter (0,0) E, exit E row 0) and composes under `forever_loop`.
+
+    Because each arm is a separate block that reads its own operands, nothing needs to be
+    carried across the branch -- this is how memory's READ/WRITE dispatch avoids a register
+    wall. Intended for men that route trivially (few pipes); it is pure control geometry.
+    """
+    cells: list[PlacedCell] = []
+
+    def put(x, y, ch, pipe=None):
+        cells.append(PlacedCell(x, y, ch, pipe))
+
+    x = 0
+    for ins in cond:
+        put(x, 0, ins.char, ins.pipe)
+        x += 1
+    put(x, 0, ">")
+    x += 1
+    bcol = x
+    put(x, 0, "d")           # BP>0 -> CW south (then) ; else straight east
+    x += 1
+
+    ex = x                   # else arm on row 0
+    for c in else_block.cells:
+        put(c.x + ex, c.y, c.char, c.pipe)
+    else_exit = ex + else_block.width
+
+    then_y = else_block.height + 1
+    for y in range(1, then_y):          # drop from the branch down below the else arm
+        put(bcol, y, "v")
+    put(bcol, then_y, ">")
+    tx = bcol + 1
+    for c in then_block.cells:
+        put(c.x + tx, c.y + then_y, c.char, c.pipe)
+    then_exit = tx + then_block.width
+
+    mx = max(else_exit, then_exit) + 1
+    for xx in range(else_exit, mx):     # else -> east to MX on row 0
+        put(xx, 0, ">")
+    for xx in range(then_exit, mx):     # then -> east to MX on its row
+        put(xx, then_y, ">")
+    for y in range(1, then_y + 1):      # climb MX from then_y up to row 0
+        put(mx, y, "^")
+    put(mx, 0, ">")                     # merge -> exit east
+    # height must cover the then_block's own dip (then_y .. then_y+then_h-1), not just then_y
+    height = max(else_block.height, then_y + then_block.height)
+    return TrailLayout(width=mx + 1, height=height, cells=cells, spawn=(0, 0))
+
+
 def loop_wrap(
     prologue: list[Instr],
     body: TrailLayout,
