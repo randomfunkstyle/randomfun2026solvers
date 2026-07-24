@@ -181,15 +181,20 @@ composable, individually-tested sub-blocks. The reusable **chain-render rule**: 
 inter-room pipe sits STRICTLY BETWEEN the two room walls (never on a wall); the last
 pipe starts OUTSIDE the E wall. That was the only bug between two working men.
 
-### memory WRITE — make the Driver op-dispatch composable via a self-homing DMA
-WRITE adds a READ/WRITE dispatch. Done naively the arms are multi-loop *blocks* (needs
-hand-laid block-arm dispatch). Cleaner: give the DMA **self-homing** ops — `PEEK`/
-`REPLACE` internally `ADVANCE`-until-sentinel back to canonical (add a sentinel cell +
-a rotate-until-sentinel loop in the DMA). Then the Driver needs **no fill loop**, so
-`addr` isn't held after positioning and **B is free to carry `op`** through the position
-loop. The op-dispatch (`PEEK` vs `REPLACE`+value) then has **linear arms** → plain `if3`
-composes, no hand-lay. Recommended path to full `memory`, then `sort` (Driver does
-compare/select over the same DMA).
+### memory WRITE — Driver-side block-arm dispatch (keep the working DMA)
+WRITE adds a READ/WRITE dispatch. Two paths were considered:
+- *Self-homing DMA* (PEEK/REPLACE ADVANCE-until-sentinel): tried, but it crams more ring
+  ops together (home-loop `r`/`s` + PEEK's `s dout`) and the emit collides with the ring
+  sends -> UNSAT without more zoning. Deferred.
+- **Block-arm dispatch in the Driver (recommended).** The Driver reads `op` and branches
+  to a whole READ-body or WRITE-body. Because these are *separate* composed programs, each
+  reads its own operands, so **`op` is never carried** (the branch consumes it) and there
+  is no register wall: the WRITE-body's plan is read addr -> B; position (BP); restore
+  count N-addr-1 -> BP; read value late -> emit REPLACE (BP survives the value emit); fill.
+  Each body composes with the *existing* working DMA (ADVANCE/PEEK/REPLACE). The only new
+  piece is a **hand-laid 2-way branch that places two blocks** (`d` on op: south=WRITE,
+  straight=READ, arms merge). The Driver has 2 pipes -> routes for any layout, so this is
+  pure control-flow geometry, no routing. This is the path to full `memory`, then `sort`.
 
 ## Status
 Built + validated + committed: the routing model, `if3`, stores, the CPU↔DMA bus, and the
