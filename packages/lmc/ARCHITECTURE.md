@@ -174,6 +174,23 @@ Register plan that avoids a Driver wall on WRITE: dispatch `op` first; `addr` dr
 ADVANCE position count (BP); the restore count `N-addr-1` goes to **BP** before the op
 (so it survives the value emit, which uses A/B); `value` is read late and emitted at once.
 
+### Milestone: memory READ works end-to-end
+`render_memory_read` chains Driver→DMA-mem: op-stream `(0, addr)` → `cell[addr]`
+(`test_memory.py`, on `littleman.wasm`). First semester-1 path fully assembled from
+composable, individually-tested sub-blocks. The reusable **chain-render rule**: every
+inter-room pipe sits STRICTLY BETWEEN the two room walls (never on a wall); the last
+pipe starts OUTSIDE the E wall. That was the only bug between two working men.
+
+### memory WRITE — make the Driver op-dispatch composable via a self-homing DMA
+WRITE adds a READ/WRITE dispatch. Done naively the arms are multi-loop *blocks* (needs
+hand-laid block-arm dispatch). Cleaner: give the DMA **self-homing** ops — `PEEK`/
+`REPLACE` internally `ADVANCE`-until-sentinel back to canonical (add a sentinel cell +
+a rotate-until-sentinel loop in the DMA). Then the Driver needs **no fill loop**, so
+`addr` isn't held after positioning and **B is free to carry `op`** through the position
+loop. The op-dispatch (`PEEK` vs `REPLACE`+value) then has **linear arms** → plain `if3`
+composes, no hand-lay. Recommended path to full `memory`, then `sort` (Driver does
+compare/select over the same DMA).
+
 ## Status
 Built + validated + committed: the routing model, `if3`, stores, the CPU↔DMA bus, and the
 DMA stack (PUSH/POP/ROTATE) with its looper.
