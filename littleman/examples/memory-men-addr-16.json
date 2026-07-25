@@ -1,0 +1,2147 @@
+{
+  "title": "address-carrying man-memory n=16: identical tiles, address in B",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "input",
+      "x": 1,
+      "y": 0,
+      "w": 3,
+      "h": 3,
+      "note": "the problem's own stream: `0 addr` (READ) / `1 addr value` (WRITE)",
+      "color": "#e879f9",
+      "tags": []
+    },
+    {
+      "name": "router / broadcaster",
+      "x": 1,
+      "y": 6,
+      "w": 3,
+      "h": 8,
+      "note": "`r` the op and `X` on it, then broadcast exactly three words: addr, op, value. A READ has no value, so it sends a dummy 0 \u2014 fixed width means an unselected decoder needs no branch to know how much to swallow. This room owns no other outgoing pipe on purpose: `S` would broadcast into it too.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "decoder room",
+      "x": 8,
+      "y": 6,
+      "w": 8,
+      "h": 49,
+      "note": "all 16 decoders share this room, three rows each, every tile the same text. A decoder's `B` is his address and holds nothing else, which is the whole reason he exists: `~` needs `B`, and a cell's `B` is busy.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell room",
+      "x": 20,
+      "y": 6,
+      "w": 7,
+      "h": 49,
+      "note": "all 16 values share this room. A cell holds its value in `B` and never sees an address \u2014 it is addressed by which pipe speaks to it, and only its own decoder ever does.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 0",
+      "x": 11,
+      "y": 7,
+      "w": 5,
+      "h": 3,
+      "note": "B = 0 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 0",
+      "x": 22,
+      "y": 7,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 1",
+      "x": 11,
+      "y": 10,
+      "w": 5,
+      "h": 3,
+      "note": "B = 1 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 1",
+      "x": 22,
+      "y": 10,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 2",
+      "x": 11,
+      "y": 13,
+      "w": 5,
+      "h": 3,
+      "note": "B = 2 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 2",
+      "x": 22,
+      "y": 13,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 3",
+      "x": 11,
+      "y": 16,
+      "w": 5,
+      "h": 3,
+      "note": "B = 3 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 3",
+      "x": 22,
+      "y": 16,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 4",
+      "x": 11,
+      "y": 19,
+      "w": 5,
+      "h": 3,
+      "note": "B = 4 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 4",
+      "x": 22,
+      "y": 19,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 5",
+      "x": 11,
+      "y": 22,
+      "w": 5,
+      "h": 3,
+      "note": "B = 5 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 5",
+      "x": 22,
+      "y": 22,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 6",
+      "x": 11,
+      "y": 25,
+      "w": 5,
+      "h": 3,
+      "note": "B = 6 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 6",
+      "x": 22,
+      "y": 25,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 7",
+      "x": 11,
+      "y": 28,
+      "w": 5,
+      "h": 3,
+      "note": "B = 7 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 7",
+      "x": 22,
+      "y": 28,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 8",
+      "x": 11,
+      "y": 31,
+      "w": 5,
+      "h": 3,
+      "note": "B = 8 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 8",
+      "x": 22,
+      "y": 31,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 9",
+      "x": 11,
+      "y": 34,
+      "w": 5,
+      "h": 3,
+      "note": "B = 9 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 9",
+      "x": 22,
+      "y": 34,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 10",
+      "x": 11,
+      "y": 37,
+      "w": 5,
+      "h": 3,
+      "note": "B = 10 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 10",
+      "x": 22,
+      "y": 37,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 11",
+      "x": 11,
+      "y": 40,
+      "w": 5,
+      "h": 3,
+      "note": "B = 11 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 11",
+      "x": 22,
+      "y": 40,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 12",
+      "x": 11,
+      "y": 43,
+      "w": 5,
+      "h": 3,
+      "note": "B = 12 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 12",
+      "x": 22,
+      "y": 43,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 13",
+      "x": 11,
+      "y": 46,
+      "w": 5,
+      "h": 3,
+      "note": "B = 13 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 13",
+      "x": 22,
+      "y": 46,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 14",
+      "x": 11,
+      "y": 49,
+      "w": 5,
+      "h": 3,
+      "note": "B = 14 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 14",
+      "x": 22,
+      "y": 49,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "decoder addr 15",
+      "x": 11,
+      "y": 52,
+      "w": 5,
+      "h": 3,
+      "note": "B = 15 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 15",
+      "x": 22,
+      "y": 52,
+      "w": 5,
+      "h": 3,
+      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "collector",
+      "x": 31,
+      "y": 6,
+      "w": 4,
+      "h": 49,
+      "note": "`R` reads from ANY incoming pipe, so the answer needs no addressing at all. Spanning the field is what makes every answer pipe a two-cell stub.",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "output",
+      "x": 32,
+      "y": 0,
+      "w": 3,
+      "h": 3,
+      "note": "one word per READ",
+      "color": "#e879f9",
+      "tags": []
+    }
+  ],
+  "circles": [
+    {
+      "name": "the increment",
+      "cx": 9,
+      "cy": 8,
+      "r": 1,
+      "note": "`+` with A=1 pinned: A = 1 + B. Then `M` puts it back in B and `1` restores A, so the next `Y` hands out the next address. This is the only difference between the two rooms' spawners.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 0",
+      "cx": 10,
+      "cy": 8,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 0; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 1",
+      "cx": 10,
+      "cy": 11,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 1; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 2",
+      "cx": 10,
+      "cy": 14,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 2; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 3",
+      "cx": 10,
+      "cy": 17,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 3; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 4",
+      "cx": 10,
+      "cy": 20,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 4; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 5",
+      "cx": 10,
+      "cy": 23,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 5; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 6",
+      "cx": 10,
+      "cy": 26,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 6; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 7",
+      "cx": 10,
+      "cy": 29,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 7; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 8",
+      "cx": 10,
+      "cy": 32,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 8; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 9",
+      "cx": 10,
+      "cy": 35,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 9; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 10",
+      "cx": 10,
+      "cy": 38,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 10; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 11",
+      "cx": 10,
+      "cy": 41,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 11; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 12",
+      "cx": 10,
+      "cy": 44,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 12; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 13",
+      "cx": 10,
+      "cy": 47,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 13; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 14",
+      "cx": 10,
+      "cy": 50,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 14; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> addr 15",
+      "cx": 10,
+      "cy": 53,
+      "r": 1,
+      "note": "entered heading south, so the east child lands on the tile and starts decoding with B = 15; the west child walks the increment on",
+      "color": "#a78bfa",
+      "tags": []
+    }
+  ],
+  "scenarios": [],
+  "lanes": [
+    {
+      "name": "broadcast -> decoder 0",
+      "points": [
+        [
+          5,
+          8
+        ],
+        [
+          7,
+          8
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          8
+        ],
+        [
+          6,
+          8
+        ],
+        [
+          7,
+          8
+        ]
+      ]
+    },
+    {
+      "name": "decoder 0 -> cell 0",
+      "points": [
+        [
+          17,
+          8
+        ],
+        [
+          19,
+          8
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          8
+        ],
+        [
+          18,
+          8
+        ],
+        [
+          19,
+          8
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 0",
+      "points": [
+        [
+          28,
+          8
+        ],
+        [
+          30,
+          8
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          8
+        ],
+        [
+          29,
+          8
+        ],
+        [
+          30,
+          8
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 1",
+      "points": [
+        [
+          5,
+          11
+        ],
+        [
+          7,
+          11
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          11
+        ],
+        [
+          6,
+          11
+        ],
+        [
+          7,
+          11
+        ]
+      ]
+    },
+    {
+      "name": "decoder 1 -> cell 1",
+      "points": [
+        [
+          17,
+          11
+        ],
+        [
+          19,
+          11
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          11
+        ],
+        [
+          18,
+          11
+        ],
+        [
+          19,
+          11
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 1",
+      "points": [
+        [
+          28,
+          11
+        ],
+        [
+          30,
+          11
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          11
+        ],
+        [
+          29,
+          11
+        ],
+        [
+          30,
+          11
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 2",
+      "points": [
+        [
+          5,
+          14
+        ],
+        [
+          7,
+          14
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          14
+        ],
+        [
+          6,
+          14
+        ],
+        [
+          7,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "decoder 2 -> cell 2",
+      "points": [
+        [
+          17,
+          14
+        ],
+        [
+          19,
+          14
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          14
+        ],
+        [
+          18,
+          14
+        ],
+        [
+          19,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 2",
+      "points": [
+        [
+          28,
+          14
+        ],
+        [
+          30,
+          14
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          14
+        ],
+        [
+          29,
+          14
+        ],
+        [
+          30,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 3",
+      "points": [
+        [
+          5,
+          17
+        ],
+        [
+          7,
+          17
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          17
+        ],
+        [
+          6,
+          17
+        ],
+        [
+          7,
+          17
+        ]
+      ]
+    },
+    {
+      "name": "decoder 3 -> cell 3",
+      "points": [
+        [
+          17,
+          17
+        ],
+        [
+          19,
+          17
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          17
+        ],
+        [
+          18,
+          17
+        ],
+        [
+          19,
+          17
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 3",
+      "points": [
+        [
+          28,
+          17
+        ],
+        [
+          30,
+          17
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          17
+        ],
+        [
+          29,
+          17
+        ],
+        [
+          30,
+          17
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 4",
+      "points": [
+        [
+          5,
+          20
+        ],
+        [
+          7,
+          20
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          20
+        ],
+        [
+          6,
+          20
+        ],
+        [
+          7,
+          20
+        ]
+      ]
+    },
+    {
+      "name": "decoder 4 -> cell 4",
+      "points": [
+        [
+          17,
+          20
+        ],
+        [
+          19,
+          20
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          19,
+          20
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 4",
+      "points": [
+        [
+          28,
+          20
+        ],
+        [
+          30,
+          20
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          20
+        ],
+        [
+          29,
+          20
+        ],
+        [
+          30,
+          20
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 5",
+      "points": [
+        [
+          5,
+          23
+        ],
+        [
+          7,
+          23
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          23
+        ],
+        [
+          6,
+          23
+        ],
+        [
+          7,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "decoder 5 -> cell 5",
+      "points": [
+        [
+          17,
+          23
+        ],
+        [
+          19,
+          23
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          19,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 5",
+      "points": [
+        [
+          28,
+          23
+        ],
+        [
+          30,
+          23
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          23
+        ],
+        [
+          29,
+          23
+        ],
+        [
+          30,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 6",
+      "points": [
+        [
+          5,
+          26
+        ],
+        [
+          7,
+          26
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          26
+        ],
+        [
+          6,
+          26
+        ],
+        [
+          7,
+          26
+        ]
+      ]
+    },
+    {
+      "name": "decoder 6 -> cell 6",
+      "points": [
+        [
+          17,
+          26
+        ],
+        [
+          19,
+          26
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          26
+        ],
+        [
+          18,
+          26
+        ],
+        [
+          19,
+          26
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 6",
+      "points": [
+        [
+          28,
+          26
+        ],
+        [
+          30,
+          26
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          26
+        ],
+        [
+          29,
+          26
+        ],
+        [
+          30,
+          26
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 7",
+      "points": [
+        [
+          5,
+          29
+        ],
+        [
+          7,
+          29
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          29
+        ],
+        [
+          6,
+          29
+        ],
+        [
+          7,
+          29
+        ]
+      ]
+    },
+    {
+      "name": "decoder 7 -> cell 7",
+      "points": [
+        [
+          17,
+          29
+        ],
+        [
+          19,
+          29
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          29
+        ],
+        [
+          18,
+          29
+        ],
+        [
+          19,
+          29
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 7",
+      "points": [
+        [
+          28,
+          29
+        ],
+        [
+          30,
+          29
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          29
+        ],
+        [
+          29,
+          29
+        ],
+        [
+          30,
+          29
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 8",
+      "points": [
+        [
+          5,
+          32
+        ],
+        [
+          7,
+          32
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          32
+        ],
+        [
+          6,
+          32
+        ],
+        [
+          7,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "decoder 8 -> cell 8",
+      "points": [
+        [
+          17,
+          32
+        ],
+        [
+          19,
+          32
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          32
+        ],
+        [
+          18,
+          32
+        ],
+        [
+          19,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 8",
+      "points": [
+        [
+          28,
+          32
+        ],
+        [
+          30,
+          32
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          32
+        ],
+        [
+          29,
+          32
+        ],
+        [
+          30,
+          32
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 9",
+      "points": [
+        [
+          5,
+          35
+        ],
+        [
+          7,
+          35
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          35
+        ],
+        [
+          6,
+          35
+        ],
+        [
+          7,
+          35
+        ]
+      ]
+    },
+    {
+      "name": "decoder 9 -> cell 9",
+      "points": [
+        [
+          17,
+          35
+        ],
+        [
+          19,
+          35
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          35
+        ],
+        [
+          18,
+          35
+        ],
+        [
+          19,
+          35
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 9",
+      "points": [
+        [
+          28,
+          35
+        ],
+        [
+          30,
+          35
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          35
+        ],
+        [
+          29,
+          35
+        ],
+        [
+          30,
+          35
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 10",
+      "points": [
+        [
+          5,
+          38
+        ],
+        [
+          7,
+          38
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          38
+        ],
+        [
+          6,
+          38
+        ],
+        [
+          7,
+          38
+        ]
+      ]
+    },
+    {
+      "name": "decoder 10 -> cell 10",
+      "points": [
+        [
+          17,
+          38
+        ],
+        [
+          19,
+          38
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          38
+        ],
+        [
+          18,
+          38
+        ],
+        [
+          19,
+          38
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 10",
+      "points": [
+        [
+          28,
+          38
+        ],
+        [
+          30,
+          38
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          38
+        ],
+        [
+          29,
+          38
+        ],
+        [
+          30,
+          38
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 11",
+      "points": [
+        [
+          5,
+          41
+        ],
+        [
+          7,
+          41
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          41
+        ],
+        [
+          6,
+          41
+        ],
+        [
+          7,
+          41
+        ]
+      ]
+    },
+    {
+      "name": "decoder 11 -> cell 11",
+      "points": [
+        [
+          17,
+          41
+        ],
+        [
+          19,
+          41
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          41
+        ],
+        [
+          18,
+          41
+        ],
+        [
+          19,
+          41
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 11",
+      "points": [
+        [
+          28,
+          41
+        ],
+        [
+          30,
+          41
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          41
+        ],
+        [
+          29,
+          41
+        ],
+        [
+          30,
+          41
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 12",
+      "points": [
+        [
+          5,
+          44
+        ],
+        [
+          7,
+          44
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          44
+        ],
+        [
+          6,
+          44
+        ],
+        [
+          7,
+          44
+        ]
+      ]
+    },
+    {
+      "name": "decoder 12 -> cell 12",
+      "points": [
+        [
+          17,
+          44
+        ],
+        [
+          19,
+          44
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          44
+        ],
+        [
+          18,
+          44
+        ],
+        [
+          19,
+          44
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 12",
+      "points": [
+        [
+          28,
+          44
+        ],
+        [
+          30,
+          44
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          44
+        ],
+        [
+          29,
+          44
+        ],
+        [
+          30,
+          44
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 13",
+      "points": [
+        [
+          5,
+          47
+        ],
+        [
+          7,
+          47
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          47
+        ],
+        [
+          6,
+          47
+        ],
+        [
+          7,
+          47
+        ]
+      ]
+    },
+    {
+      "name": "decoder 13 -> cell 13",
+      "points": [
+        [
+          17,
+          47
+        ],
+        [
+          19,
+          47
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          47
+        ],
+        [
+          18,
+          47
+        ],
+        [
+          19,
+          47
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 13",
+      "points": [
+        [
+          28,
+          47
+        ],
+        [
+          30,
+          47
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          47
+        ],
+        [
+          29,
+          47
+        ],
+        [
+          30,
+          47
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 14",
+      "points": [
+        [
+          5,
+          50
+        ],
+        [
+          7,
+          50
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          50
+        ],
+        [
+          6,
+          50
+        ],
+        [
+          7,
+          50
+        ]
+      ]
+    },
+    {
+      "name": "decoder 14 -> cell 14",
+      "points": [
+        [
+          17,
+          50
+        ],
+        [
+          19,
+          50
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          50
+        ],
+        [
+          18,
+          50
+        ],
+        [
+          19,
+          50
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 14",
+      "points": [
+        [
+          28,
+          50
+        ],
+        [
+          30,
+          50
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          50
+        ],
+        [
+          29,
+          50
+        ],
+        [
+          30,
+          50
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> decoder 15",
+      "points": [
+        [
+          5,
+          53
+        ],
+        [
+          7,
+          53
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value \u2014 always three, always all n pipes",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          53
+        ],
+        [
+          6,
+          53
+        ],
+        [
+          7,
+          53
+        ]
+      ]
+    },
+    {
+      "name": "decoder 15 -> cell 15",
+      "points": [
+        [
+          17,
+          53
+        ],
+        [
+          19,
+          53
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op, value \u2014 only when this address is selected",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          53
+        ],
+        [
+          18,
+          53
+        ],
+        [
+          19,
+          53
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 15",
+      "points": [
+        [
+          28,
+          53
+        ],
+        [
+          30,
+          53
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          53
+        ],
+        [
+          29,
+          53
+        ],
+        [
+          30,
+          53
+        ]
+      ]
+    },
+    {
+      "name": "input-pipe",
+      "points": [
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          5
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op addr [value]",
+      "tags": [],
+      "cells": [
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          4
+        ],
+        [
+          2,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "output-pipe",
+      "points": [
+        [
+          33,
+          4
+        ],
+        [
+          33,
+          2
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "one word per READ",
+      "tags": [],
+      "cells": [
+        [
+          33,
+          4
+        ],
+        [
+          33,
+          3
+        ],
+        [
+          33,
+          2
+        ]
+      ]
+    }
+  ]
+}

@@ -1097,16 +1097,23 @@ _ADAPTER = [
     ".>M0sWs....v",  # read: B=w; A=0; send 0; A=w=a; send a
     "^.........@<",  # return leg; spawn/turn moved left with the freed column
 ]
+_Y_ADAPTER = [
+    ".>Ns1srs...v",  # write: send addr, then op=1, then pass the value
+    "UX.........v",
+    ".>s0s......v",  # read: send addr, then op=0
+    "^.........@<",
+]
 ADAPTER_W = len(_ADAPTER[0])
 ADAPTER_H = len(_ADAPTER)
 ADAPTER_IN_ROW = 2  # west wall: the request pipe from the CPU
 ADAPTER_OUT_ROW = 2  # east wall: the expanded request out to the tape
 
 
-def adapter_cells() -> dict[tuple[int, int], str]:
+def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
     """The adapter's interior cells, local (1,1)-based."""
     out: dict[tuple[int, int], str] = {}
-    for y, row in enumerate(_ADAPTER, start=1):
+    rows = _Y_ADAPTER if address_first else _ADAPTER
+    for y, row in enumerate(rows, start=1):
         for x, ch in enumerate(row, start=1):
             if ch != " ":
                 out[(x, y)] = ch
@@ -1361,6 +1368,10 @@ def build(
     ``22 + 14 * addr`` per access. The man-memory is faster per access at every
     small ``n`` and *narrower in area* at ``n`` around 5, but it widens as
     ``6n + 13``, so it is only the better choice while the tape size is small.
+    ``"men-y"`` uses two equal man-cell banks behind a ``Y`` selector. Its
+    address-first adapter drives the selector directly; CPU loads already wait
+    for their response, so the standalone memory program's ordering head would
+    only add latency. This tier supports every registered STORE size.
 
     ``tape_n`` defaults to the program's highest *static* address, which is wrong
     for any program that computes addresses at runtime (``LDA``/``MOVA``), so those
@@ -1549,7 +1560,7 @@ def _assemble(
             "engine would read a second, spurious pipe into the CPU"
         )
     g.room(AX, AY, AX + ADAPTER_W + 1, AY + ADAPTER_H + 1)
-    g.blit(AX, AY, adapter_cells())
+    g.blit(AX, AY, adapter_cells(address_first=store == "men-y"))
     req_row = AY + ADAPTER_IN_ROW
     g.draw_pipe([(CX + W + 2, req_row), (AX - 1, req_row)])
 
@@ -1558,10 +1569,14 @@ def _assemble(
         from ..memory_men_store import men_block
 
         tape = men_block(tape_n)
+    elif store == "men-y":
+        from ..memory_men_y import y_men_block
+
+        tape = y_men_block(tape_n)
     elif store == "tape":
         tape = tape_block(tape_n)
     else:
-        raise MachineError(f"unknown store tier {store!r}; expected 'tape' or 'men'")
+        raise MachineError(f"unknown store tier {store!r}; expected 'tape', 'men', or 'men-y'")
     TX = AX + ADAPTER_W + 6
     TY = CY
     g.blit(TX, TY, tape.cells)
@@ -1679,7 +1694,7 @@ def _assemble(
     # The memory tier's own internal pipes: the tape's two ring legs, or the
     # man-memory's command and answer pipe per cell. Everything the machine itself
     # drew is already in ``touches``, plus the one response pipe drawn half here.
-    store_pipes = 2 * tape_n if store == "men" else 2
+    store_pipes = tape.pipes if store == "men-y" else (2 * tape_n if store == "men" else 2)
     _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -2034,7 +2049,7 @@ def display_for(slug: str) -> tuple[int, int] | None:
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
 
-def build_for(slug: str) -> Machine:
+def build_for(slug: str, *, store: str = "tape") -> Machine:
     """Generate the machine for a checked-in task program.
 
     Everything not derivable from the ``.asm`` comes from the registry above, except
@@ -2052,6 +2067,7 @@ def build_for(slug: str) -> Machine:
         rom_rows=ROM_ROWS.get(slug),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
+        store=store,
     )
 
 

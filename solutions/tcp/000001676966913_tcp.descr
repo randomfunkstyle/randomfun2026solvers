@@ -1,0 +1,16 @@
+# tcp — submission 356fe3c5-709a-4092-b0aa-eb6c9966ab8a
+
+verdict      done: 20/20 cases, area2 11881, avgTicks 141,147, score 1,676,966,913
+submitted    2026-07-26T00:50:23+0300
+grid         109x73
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  4a6173ed373aaea232ebc62433c64ec400dcd1c274c0e8bc1fd1896fedc8f838
+commit       8b77a33
+local        tcp: 6/6 public cases, avg 88,440 ticks
+source       tasks/compacted/tcp_submitted_ast10.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+deterministic AST10: remove row 47 from best submitted CPU

@@ -131,3 +131,22 @@ overlay names each band's address and its shift count, circles the `{` that is t
 entire address decoder, circles all sixteen `Y` births, and marks the empty lower
 half of the router as load-bearing (a shorter router leaves the lower bands' pipes
 with no source room). Cell-to-address labels are engine-checked, not asserted.
+
+### The address-carrying field
+
+```sh
+uv run python -m randomfun2026solvers.memory_men_addr --cells 16 \
+  --man littleman/examples/memory-men-addr-16.man \
+  --html littleman/examples/memory-men-addr-16.html \
+  --json littleman/examples/memory-men-addr-16.json
+```
+
+The hardest of the three to read without the sidecar, because here the sixteen
+bands are **byte-identical** — the address is not in the code at all, it is a
+number a spawner handed to a man at birth. So the only thing in the ASCII that
+distinguishes address 0 from address 15 is *how many `+` glyphs ago the `Y` was*.
+The overlay names each decoder and each cell with the address it holds, circles
+the `+` that is the whole address generator, and circles all sixteen births. The
+labels are engine-checked twice over: the man standing in the region named
+`decoder addr j` is asserted to be holding `B = j` on the reference engine, and
+the cells are read back end to end.
