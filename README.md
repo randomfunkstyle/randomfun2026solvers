@@ -105,6 +105,11 @@ decodes `action_b64`/`answer_b64` as opaque bytes and interprets nothing — dec
 and interpret them in the solver per `task.contest_key`. Full contract:
 `randomfun2026claude/contracts.md §3.2`.
 
+## Debugging a `.man`
+
+Generated grids carry no comments. `littleman/DEBUGGING.md` covers the overlay/trace/
+profile workflow and the `--man/--html/--json` convention every generator follows.
+
 ## Submitting to the contest
 
 You need **one thing**: the team API key, in either
@@ -120,10 +125,14 @@ uv run python -m randomfun2026solvers.submit list                      # what is
 uv run python -m randomfun2026solvers.submit get <submission-id>       # re-read a verdict
 ```
 
-`send` runs the public cases locally first and **refuses to submit a failing grid**
-(`--force` overrides): only 5 submissions may be pending at once, so a broken one
-wastes a slot. It defaults to `tasks/solutions/<slug>_cpu.man`; use `--file` for
-anything else.
+`send` guards two ways before spending a submission — only 5 may be pending at
+once, so a wasted one costs real time:
+
+- **refuses a failing grid** (`--force` overrides), and
+- **refuses a grid already submitted**, matched by hash against the archive, and
+  prints the verdict it got last time (`--resend` overrides).
+
+It defaults to `tasks/solutions/<slug>_cpu.man`; use `--file` for anything else.
 
 Every graded submission is archived so nothing is ever lost:
 

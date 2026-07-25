@@ -30,7 +30,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["RegionProfile", "attribute", "critical_runner", "report"]
+__all__ = ["RegionProfile", "attribute", "critical_runner", "heat_map", "report"]
 
 
 @dataclass
@@ -42,9 +42,7 @@ class RegionProfile:
     hottest: tuple[int, int, str, int] | None = None  # x, y, glyph, samples
 
 
-def _region_of(
-    x: int, y: int, regions: dict[str, tuple[int, int, int, int]]
-) -> str:
+def _region_of(x: int, y: int, regions: dict[str, tuple[int, int, int, int]]) -> str:
     """The most *specific* region containing the cell (smallest area wins).
 
     Regions nest — a lane sits inside the CPU, the CPU inside nothing — so the
@@ -144,6 +142,60 @@ def report(prof: dict, regions: dict[str, tuple[int, int, int, int]], *, top: in
     return "\n".join(lines)
 
 
+# ── the picture, drawn with man_debug's renderer ─────────────────────────────
+#: Cold -> hot. Not a rainbow on purpose: hue alone has no natural order and fails
+#: for colour-blind readers, so this ramps intensity monotonically.
+_RAMP = (
+    (0.00, "#94a3b8"),
+    (0.02, "#38bdf8"),
+    (0.05, "#a3e635"),
+    (0.10, "#facc15"),
+    (0.20, "#fb923c"),
+    (0.35, "#ef4444"),
+)
+
+
+def _tint(share: float) -> str:
+    out = _RAMP[0][1]
+    for cut, colour in _RAMP:
+        if share >= cut:
+            out = colour
+    return out
+
+
+def heat_map(prof: dict, machine_) -> object:
+    """The generator's own :meth:`Machine.debug_map`, recoloured by measured time.
+
+    Reuses ``man_debug``'s renderer rather than adding a second HTML dialect: every
+    region keeps its name and gains its share of the critical path in the note, and
+    its colour becomes the heat. A profile then reads the same way as every other
+    overlay in ``littleman/examples/``.
+    """
+    dbg = machine_.debug_map()
+    shares = {r.name: r for r in attribute(prof, machine_.regions)}
+    crit = critical_runner(prof)
+    stall = crit["stalled"] / max(1, crit["samples"]) * 100
+    dbg.title = (
+        f"{dbg.title} — heat map over {prof['ticks']:,} ticks "
+        f"(runner {crit['id']} is the critical path, {stall:.0f}% stalled)"
+    )
+    recoloured = []
+    for r in dbg.regions:
+        hit = shares.get(r.name)
+        if hit is None:
+            note, colour = f"{r.note} — 0% (never entered)", _RAMP[0][1]
+        else:
+            hx, hy, hch, _ = hit.hottest or (0, 0, "", 0)
+            note = (
+                f"{hit.share * 100:.2f}% ≈ {hit.ticks:,} ticks · "
+                f"hottest ({hx},{hy}) {hch!r} · {r.note}"
+            )
+            colour = _tint(hit.share)
+        recoloured.append(type(r)(r.name, r.x, r.y, r.w, r.h, note, colour, r.tags))
+    dbg.regions = recoloured
+    return dbg
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -153,10 +205,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("profile", help="JSON written by tools/heatmap.mjs --json")
     ap.add_argument("--slug", required=True, help="task whose machine produced it")
     ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--html", type=Path, help="write a heat-coloured overlay here")
     args = ap.parse_args(argv)
 
     prof = json.loads(Path(args.profile).read_text())
-    print(report(prof, machine.build_for(args.slug).regions, top=args.top))
+    m = machine.build_for(args.slug)
+    print(report(prof, m.regions, top=args.top))
+    if args.html:
+        heat_map(prof, m).write_html(m.rows, args.html)
+        print(f"\nwrote {args.html}")
     return 0
 
 

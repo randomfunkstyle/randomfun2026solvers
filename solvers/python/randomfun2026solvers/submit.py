@@ -32,6 +32,7 @@ kept out of the tree entirely.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -45,7 +46,9 @@ __all__ = [
     "API",
     "SubmitError",
     "Verdict",
+    "already_sent",
     "archive",
+    "fingerprint",
     "poll",
     "problem_id",
     "submit",
@@ -251,6 +254,7 @@ def archive(
         f"submitted    {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
         f"grid         {max(len(r) for r in rows)}x{len(rows)}",
         f"problem id   {problem_id(slug)}",
+        f"fingerprint  {fingerprint(program)}",
     ]
     for k, v in (extra or {}).items():
         lines.append(f"{k:12s} {v}")
@@ -259,6 +263,31 @@ def archive(
     lines += ["", "notes:", (note.strip() or "(none given)")]
     (out / f"{stem}.descr").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return man
+
+
+def fingerprint(program: str) -> str:
+    """A stable hash of the grid itself.
+
+    Normalised on trailing whitespace and the final newline, because those are not
+    part of the program: two grids that differ only there would submit identically
+    and must dedup against each other.
+    """
+    body = "\n".join(line.rstrip() for line in program.rstrip("\n").split("\n"))
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def already_sent(slug: str, program: str) -> tuple[Path, str] | None:
+    """A previous submission of this exact grid, if there is one.
+
+    The archive *is* the index — every submission is in there — so this hashes what
+    is on disk rather than keeping a side table that could fall out of step with it.
+    Returns ``(archived .man, its score tag)``.
+    """
+    want = fingerprint(program)
+    for man in sorted((ARCHIVE / slug).glob("*.man")):
+        if fingerprint(man.read_text(encoding="utf-8")) == want:
+            return man, man.stem.split("_", 1)[0]
+    return None
 
 
 def best_archived(slug: str) -> tuple[int, Path] | None:
@@ -318,6 +347,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--file", help="grid to send (default tasks/solutions/<slug>_cpu.man)")
     s.add_argument("--note", default="", help="free-form text for the .descr")
     s.add_argument("--force", action="store_true", help="submit even if the local check fails")
+    s.add_argument(
+        "--resend",
+        action="store_true",
+        help="submit even if this exact grid was already submitted",
+    )
     s.add_argument("--dry-run", action="store_true", help="check and print, do not submit")
     s.add_argument("--timeout", type=float, default=600.0)
     s.add_argument("--tick-cap", type=int, default=3_000_000)
@@ -368,7 +402,30 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = program.rstrip("\n").split("\n")
     print(f"grid {max(len(r) for r in rows)}x{len(rows)}, problem {problem_id(slug)}")
+
+    # Identical grid already submitted? Don't spend a slot re-learning the answer.
+    # Only 5 submissions may be pending, grading is asynchronous, and the server
+    # keeps our best — so a byte-identical resend can only cost time.
+    dup = already_sent(slug, program)
+    if dup and not args.resend:
+        man, tag = dup
+        verdict = (
+            "unscored (it did not pass every case)" if tag == "unscored" else f"score {int(tag):,}"
+        )
+        print(f"already submitted: this exact grid is {man.name} — {verdict}")
+        descr = man.with_suffix(".descr")
+        if descr.exists():
+            for line in descr.read_text(encoding="utf-8").splitlines():
+                if line.startswith(("verdict", "submitted")):
+                    print(f"  {line}")
+        print("not resending; pass --resend if you really want the server to re-grade it")
+        return 0
+    if dup and args.resend:
+        print(f"--resend: submitting a grid identical to {dup[0].name} anyway")
+
     if args.dry_run:
+        if dup:
+            print("dry run: would be a duplicate of " + dup[0].name)
         print("dry run: not submitting")
         return 0
 

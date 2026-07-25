@@ -21,6 +21,22 @@ if str(PKG) not in sys.path:
 from randomfun2026solvers import submit  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """Every test in this file is offline, and must stay that way.
+
+    Submitting is a real, rate-limited, outward-facing action against the live
+    contest — a test suite must never perform one. This makes an accidental network
+    call fail loudly instead of quietly grading something.
+    """
+
+    def refuse(*a, **k):  # pragma: no cover - only runs if a test regresses
+        raise AssertionError("a test tried to reach the network")
+
+    monkeypatch.setattr(submit.urllib.request, "urlopen", refuse)
+    monkeypatch.delenv("ICFP_TOKEN", raising=False)
+
+
 def test_problem_id_is_the_uuid_not_the_slug() -> None:
     """Submitting takes the id; every other endpoint takes the slug."""
     pid = submit.problem_id("brackets")
@@ -89,3 +105,45 @@ def test_a_verdict_without_a_score_is_not_accepted() -> None:
 def test_load_error_is_reported_instead_of_case_counts() -> None:
     v = submit.Verdict(id="z", status="done", load_error="unmatched `")
     assert "load error" in v.summary()
+
+
+# ── dedup ────────────────────────────────────────────────────────────────────
+def test_fingerprint_ignores_trailing_whitespace_and_final_newline() -> None:
+    """Neither is part of the program, so grids differing only there must dedup."""
+    a = "+-+\n|@|\n+-+\n"
+    assert submit.fingerprint(a) == submit.fingerprint("+-+  \n|@|\t\n+-+")
+    assert submit.fingerprint(a) != submit.fingerprint("+--+\n|@ |\n+--+\n")
+
+
+def test_already_sent_finds_a_byte_identical_archived_grid(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(submit, "ARCHIVE", tmp_path)
+    grid = "+-+\n|@|\n+-+\n"
+    v = submit.Verdict(id="s1", status="done", score=1234, area2=9, cases_passed=9, cases_total=9)
+    submit.archive("brackets", grid, v)
+
+    hit = submit.already_sent("brackets", grid)
+    assert hit is not None and hit[1] == submit._score_tag(1234)
+    # trailing whitespace still counts as the same program
+    assert submit.already_sent("brackets", "+-+\n|@|  \n+-+") is not None
+    # a genuinely different grid does not
+    assert submit.already_sent("brackets", "+--+\n|@ |\n+--+\n") is None
+    assert submit.already_sent("tcp", grid) is None  # per-task
+
+
+def test_an_unscored_submission_still_dedups(tmp_path, monkeypatch) -> None:
+    """A grid that failed is worth remembering: resending it re-learns nothing."""
+    monkeypatch.setattr(submit, "ARCHIVE", tmp_path)
+    grid = "+-+\n|@|\n+-+\n"
+    submit.archive(
+        "gradebook", grid, submit.Verdict(id="s", status="done", cases_passed=19, cases_total=20)
+    )
+    hit = submit.already_sent("gradebook", grid)
+    assert hit is not None and hit[1] == "unscored"
+
+
+def test_the_descr_records_the_fingerprint(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(submit, "ARCHIVE", tmp_path)
+    grid = "+-+\n|@|\n+-+\n"
+    submit.archive("brackets", grid, submit.Verdict(id="s", status="done", score=7, area2=1))
+    text = (tmp_path / "brackets" / f"{submit._score_tag(7)}_brackets.descr").read_text()
+    assert submit.fingerprint(grid) in text

@@ -435,6 +435,7 @@ def test_every_public_case_commits_exactly_the_expected_frames(slug: str) -> Non
             )
 
 
+@pytest.mark.slow  # drives the engine over a whole problem
 @node_required
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
 def test_the_score_is_measured_from_the_committed_frames(slug: str) -> None:
@@ -513,6 +514,7 @@ def _judge_segments(segments: list[tuple[int, ...]]) -> object:
     return snap
 
 
+@pytest.mark.slow  # drives the engine over a whole problem
 @node_required
 def test_only_the_public_cases_are_graded_which_is_why_plotter_is_submittable() -> None:
     """``privateTestCount`` is 0, so the *graded* worst case is a public one.

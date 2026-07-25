@@ -13,7 +13,6 @@ Three tiers, cheapest first:
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -34,10 +33,8 @@ node_required = pytest.mark.skipif(
     shutil.which("node") is None or not LM_MJS.exists(),
     reason="node and littleman/lm.mjs required",
 )
-slow = pytest.mark.skipif(
-    os.environ.get("LM1_SLOW") != "1",
-    reason="set LM1_SLOW=1 to run the full public-case sweeps",
-)
+# One mechanism for "too slow for the default run", registered in pyproject.
+slow = pytest.mark.slow
 
 #: Every task the generator can build, with the tape size each needs — read from
 #: the generator so the two cannot drift apart. Sizes come from the *problem
