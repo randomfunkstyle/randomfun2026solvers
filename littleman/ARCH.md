@@ -4,13 +4,12 @@
 `lm1/machine.py` takes an assembled program and emits a whole machine — looping
 ROM + CPU (depth-`k` trie, one lane per used opcode, a structures band for jumps
 and branches) + a request adapter + the 32×32 tape + I/O. On the reference
-interpreter it passes **`brackets` 9/9** (98×95, 62,930 avg ticks), **`tcp` 6/6**
-(112×78, 96,923 avg ticks) and **`plotter` 6/6** (112×118, 483k avg ticks — but see
-§2.8's tick-cap warning), plus hand-built cases at the problems'
+interpreter it passes **`brackets` 9/9** (98×95, 62,930 avg ticks) and **`tcp`
+6/6** (112×78, 96,923 avg ticks), plus hand-built cases at both problems'
 constraint limits — `brackets` at depth-32 nesting and n=64, `tcp` at n=48 with a
 worst-case legal scramble (351k ticks against a 5M cap). §2.7 has the findings.
 
-That makes **five** problems solved by generated or bespoke grids, and the first
+That makes **four** problems solved by generated or bespoke grids, and the first
 two that need addressed memory *and* loops. `lm1/cpugen.py` remains the earlier
 hand-rolled 7-opcode instance (`triangle`, §2.6); `lm1/synth.py` is the
 straight-line-only generator it grew into. `machine.py` supersedes both.
@@ -336,45 +335,6 @@ need a pointer and a value live together. **`tcp` therefore needs no SPILL block
 all** — one fewer room, two fewer pipes, and every memory lane stays on the east
 bus, which is what keeps §7.1 tractable.
 
-### 2.8 The display, and a warning about the tick cap
-
-`plotter` is the third problem the synthesiser solves: **6/6 public cases on the
-reference interpreter**, pixel-exact Bresenham, 112×118, 483k average ticks.
-
-Two things the panel forces on the generator:
-
-- **`DSP p` is unbuildable.** It selects a port from its *operand*, but which pipe
-  an `s` talks to is fixed by where the glyph sits (§7.1). So there are three
-  opcodes — `DSPA`/`DSPD`/`DSPS` — each with its own lane and its own pipe. Their
-  lanes are kept *adjacent* on purpose: an `s` binds by being nearest its own
-  south-wall pipe, and a lane `d` rows above another needs its pipe more than `d`
-  columns away to win, so a 6-column pitch works for lanes 2 and 4 rows apart and
-  would not for lanes scattered across the band.
-- **The `O` room is omitted.** Emitting any program output on a display problem is
-  an error, which conveniently frees the bottom of the lane band — where the
-  display lanes have to sit anyway, since their pipes leave by the south wall.
-
-The panel also does the erasing: `SWAP ← 0` commits *and* clears `next`, so a round
-starts black and the program writes only its own ≤32 pixels rather than repainting
-all 768. That is what makes the problem fit at all.
-
-**The warning.** At the worst case the constraints allow — 20 rounds of
-full-width segments — the real machine takes **4,781,500 ticks against the
-5,000,000 cap: a 4 % margin.** The public cases top out at 8 rounds and 857k
-ticks, so they hide this completely. The cost is not one bad structure; it is
-17k instructions and 10.6k tape accesses, with §5.4's jump tax only 11 % of it, so
-there is no cheap structural fix. The levers, in order of size:
-
-1. **Shorten the tape's response pipe.** It is ~48 cells, and §7.4b measured that
-   *every pipe cell costs a tick*; each of ~4k reads pays that latency. Packing the
-   tape closer to the CPU is worth several per cent on its own and is step 7 anyway.
-2. **§10's fused instructions**, which for `plotter` stop being an optimisation and
-   become the difference between a 4 % and a ~20 % margin.
-3. **§5.5 code banks**, which would retire the jump tax entirely.
-
-Until one of those lands, `plotter` should be considered *passing but not safe* on
-private data.
-
 ## 3. Block diagram
 
 Every box is a `layout.py` `Container` with fixed ports; every arrow is a pipe
@@ -519,7 +479,35 @@ return path back to fetch.
 `I` and `O` are 3×3 rooms with exactly one pipe each. The LM-75 needs three
 pipes from the CPU (top = ADDR, left = DATA, bottom = SWAP) and is only wired in
 for `plotter` / `palette`; emitting program output on a display problem is an
-error, so the generator omits the `O` room in that configuration.
+error, so the generator omits the `O` room in that configuration — and refuses
+outright if a program uses both, since the `O` room stands where the port pipes
+turn. The `I` room goes the same way: `palette` reads no input, and an unused
+incoming pipe is not merely dead weight, it still competes for every `r` in the CPU
+(§7.1 is nearest, not nearest-useful).
+
+**Built, and the geometry is forced twice over** (`machine._display`). The panel
+goes in the free space south of the CPU, and all three pipes leave the *south* wall
+so that each `s` binds its own port: the pipe drops out of the wall **in the same
+column as its own `s`**, which makes its distance strictly smaller than any
+sibling's by exactly the columns between them (`_DSP_PITCH` guards the margin —
+column separation has to beat row separation). ADDR must arrive from the north and
+SWAP from the south while the CPU is on one side, so exactly one detour is
+unavoidable, and that fixes two orders:
+
+- the three lanes' columns run **DATA < ADDR < SWAP** west to east, so DATA's
+  westward leg starts west of every column a later lane uses and SWAP's eastward
+  leg starts east of every column an earlier one uses;
+- ADDR drops *straight* into the top wall, DATA turns west and comes back into the
+  left wall, SWAP turns east, runs beneath the panel and comes back up into the
+  bottom wall.
+
+Swap either order and two pipes share a cell, or a port silently binds its
+neighbour's pipe — a program that addresses where it meant to paint.
+
+ADDR is the one pipe with no corridor row to turn on, so the panel must **span
+ADDR's column**. A 32×24 panel under a 48-wide CPU does that where it sits
+(`plotter`); `palette`'s 8×8 one does not, and the panel slides east until it does
+(`machine._panel_x`).
 
 ## 5. Registers, words, and the code ring
 
@@ -991,15 +979,46 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 2 | `history-lesson` | no input; pure ROM dump (`footprint`-only) | 0 | 1/1 · P=8431 · 273k | **✔ solved bespoke** |
 | Sem 2 | `brackets` | typed stack depth 32; needs `MODI`/`DIVI` | 6 scalars | 9/9 · P=154 · 30k | **✔ solved by the synthesiser** (98×95, 62,930 ticks, score 604M) |
 | Sem 2 | `tcp` | indexed by `seq`; needs `LDA`/`MOVA` | 51 | 6/6 · P=45 · 30k | **✔ solved by the synthesiser** (112×78, 96,923 ticks, score 1.22bn) |
-| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 10 | 6/6 · P=151 · 386k | **✔ solved by the synthesiser** (112×118, 483k ticks, score 6.7bn; **only 4 % under the tick cap** — see §2.8) |
-| Sem 3 | `gradebook` | ids + N×K grades, search by id | 80 | — | C |
+| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 10 | 6/6 · P=151 · 173k | **✔ solved by the synthesiser** (112×106, 482,933 ticks avg, score 6.06bn) |
+| Sem 3 | `gradebook` | ids + N×K grades, search by id; needs `LDA`/`MOVA`/`DIVI` | 93 | 7/7 · P=460 · 318k | **✔ solved by the synthesiser** (112×103, 694,713 ticks, score 8.71bn) |
 | Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | — | **✕** |
 | Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
 | Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | — | C |
 | Practice | `hello-world` · `max-element` · `atoi` | 0–1 slots | ≤1 | 1/1 · 10/10 · 2/2 | A |
+| Practice | `palette` | display ADDR/DATA/SWAP, 16 solid frames | 1 | 1/1 · P=89 · 59k | **✔ solved by the synthesiser** (98×98, 151,147 ticks, score 1.45bn) |
 
 Stages: **A** = CPU + SPILL only · **B** = SPILL + the tape · **C** = tape +
 display ports.
+
+Both display machines are generated by `lm1/machine.py` and verified *frame for
+frame on the wasm* — twice over, in fact: `lm.mjs judge --frames` reads back the
+engine's own `frameJudge` verdict, and `tools/display-frames.mjs` steps with
+`stopOnFrame` and compares the snapshots in Python. Neither is the old "no fatal, no
+output" check, which proved nothing on a problem that emits no output.
+
+**`plotter`'s tick margin is negative at the constraints' limit, and that is fine
+only because of `privateTestCount`.** Three figures for it get confused with each
+other, so all three, measured on the engine:
+
+| Load | Ticks | vs 5M cap |
+|---|---|---|
+| worst **graded** case (`octant fan`, 8 rounds) | 857k | 0.17× |
+| 20 rounds averaging less than the worst segment | 4.78M | 0.96× |
+| 20 rounds of the **worst legal** segment (`dx=31, dy=23`) | 5.31M | **1.06× — cut off** |
+
+The most expensive legal segment is the one with the largest minor-axis travel, at
+~265.5k ticks a round, so **18 rounds fit and 19 do not** (5.05M). The constraints
+allow 20. What makes `plotter` submittable anyway is that **every problem here has
+`privateTestCount: 0`** — the graded set *is* `publicTestData` — so the 857k figure
+is the one that scores. `test_lm1_display.py` asserts that, rather than leaving it as
+a comment, and asserts the 19-round overrun too; if a problem JSON ever grows private
+cases the margin has to be re-argued from scratch.
+
+The middle row is the trap: it is the load `test_lm1_programs.py` uses, its segments
+average cheaper than the worst, and reading its 0.96× as *the* margin is how a machine
+that is 1.06× over the cap gets written down as being under it. The emulator's
+estimate for that same load is 3.8M — ~20 % optimistic against the engine — so it is
+not the margin either.
 
 Three findings that change the plan:
 
@@ -1049,8 +1068,18 @@ the plan of record.
    band sets the width. §7.4's `max(w,h)²` objective is the lever, and it is now
    the *only* thing between these scores and roughly a 3–4× improvement. ← *next*
 8. **Reuse the machinery for the remaining array problems** — `sort-numbers`,
-   `reverse-a-list`, `subset-sum`, `gradebook`, `sudoku-validity`. Each is now an
-   `.asm` file plus a tape size; `matmul` is still out of reach on ticks (§8).
+   `reverse-a-list`, `subset-sum`, `sudoku-validity`. Each is now an `.asm` file plus
+   a tape size (and a `ROM_ROWS` fold if the default is not the footprint optimum),
+   as `gradebook` (7/7, 112×103, score 8.71bn) has just demonstrated; `matmul` is
+   still out of reach on ticks (§8).
+   `gradebook` also measured where the ticks of an array problem *go*, which the
+   scalar programs could not: with 93 tape slots an access is ~885 ticks and every
+   variable is a slot, so **memory traffic is ~68% of the bill**, the ROM lap a
+   backward jump pays is ~18%, and execute is the remaining ~14%. Two consequences
+   for the programs that follow: bound loops by pointer equality rather than by a
+   counter (one access a lap, not two), and treat the *total* instruction count as
+   part of the cost of every inner loop, since a loop iteration recirculates
+   `2*(n - body)` ROM words whatever it does.
 
 Useful tooling that now exists for steps 4–6: `tools/route-check.mjs` reports
 which pipe every pipe instruction actually resolves to (the §7.1 safety net as a
@@ -1070,28 +1099,3 @@ command), `tools/run-cases.mjs` scores a grid against a case file, and
   works.
 - **Second "loop ring"** for hot bodies, if §5.4's jump cost dominates real
   programs.
-- **Fused custom instructions, and the operand width that blocks them.**
-  *Deferred; the analysis is done and the conclusion is not the obvious one.*
-
-  Opcodes are nearly free: the trie's depth is `ceil(log2 |used|)` and its leaves
-  set the CPU's height, so **a program pays nothing until it crosses a power of
-  two** — 15 used opcodes and 16 both cost a 31-row lane band, and 17 doubles it
-  to 63. `brackets` sits at 15/16, `tcp` at 14/16, `plotter` at 15/16, so each has
-  a spare lane a fused instruction could occupy for free. It is a cliff, not a
-  slope, and the generator should be allowed to spend up to the boundary.
-
-  The catch is *what* to spend it on. The patterns that dominate a hot loop are
-  two-address accumulates (`ERR += DY`, `X0 += SX`), and fusing them does **not**
-  save tape traffic — the data still has to move, so it is three accesses either
-  way. The saving is only the per-instruction overhead (~100 ticks of
-  fetch/decode/return against ~196 for a tape access at N=11). On `plotter`'s
-  worst legal case that is worth perhaps 15 %, not a factor.
-
-  Getting the real win needs a **two-address operand**, which §5.2's word format
-  forbids: 0 or 1 operand words, and a packed pair cannot be split without `}`,
-  which needs `B`, which holds ACC. So the binding constraint is the operand
-  width, not the lane budget. The options, unweighed: a packed operand for a few
-  opcodes whose ACC is dead anyway (`/` can split it — quotient to A, remainder to
-  B); uniform fixed-width *three*-word instructions (simple, costs ROM width);
-  or leaving the ISA alone and attacking the ~105-tick fixed cost of a tape access
-  instead, which is the larger share at small N (§4.1's unbuilt variants).
