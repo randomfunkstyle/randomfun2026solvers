@@ -65,6 +65,7 @@ def test_v1_has_no_ext_rows_and_ext_extends_it() -> None:
     assert {op.mnemonic for op in LM1_EXT if op.ext} == {
         "DIV",
         "DIVI",
+        "OR",
         "MODI",
         "MUL",
         "LDP",

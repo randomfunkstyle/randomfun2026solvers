@@ -64,6 +64,7 @@ class Micro(StrEnum):
     ADD = "+"
     SUB = "-"
     BITAND = "&"
+    BITOR = "|"
     MUL = "*"
     DIV = "/"
     MOD = "%"
@@ -117,6 +118,7 @@ class Sem(StrEnum):
     DEC_MEM = "dec-mem"
     ADD_MEM = "add-mem"
     AND_MEM = "and-mem"
+    OR_MEM = "or-mem"
     SUB_MEM = "sub-mem"
     MUL_MEM = "mul-mem"
     LOAD_IND = "load-ind"
@@ -638,6 +640,27 @@ _EXT_OPS: tuple[Op, ...] = (
             Micro.MOV,
         ),
         sem=Sem.AND_MEM,
+        ext=True,
+    ),
+    Op(
+        # The union half of the pair `AND` opened, and `pathfinder` is what needs
+        # it: a bit-parallel BFS over four 64-bit words has to merge the four
+        # neighbour-source masks, and `|` is a native glyph, so this costs exactly
+        # what `AND` costs.
+        code=35,
+        mnemonic="OR",
+        operands=1,
+        description="ACC |= store[addr] — the union half of the bitset pair",
+        micro=(
+            Micro.LIT0,
+            Micro.SEND_MEM,
+            Micro.RING_READ,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.BITOR,
+            Micro.MOV,
+        ),
+        sem=Sem.OR_MEM,
         ext=True,
     ),
     # ── store-side read-modify-write ────────────────────────────────────────
