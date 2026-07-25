@@ -1,8 +1,19 @@
+from pathlib import Path
 from types import MappingProxyType
 
 import pytest
 
+from littleman_tools import composer
 from littleman_tools.composer import Gate, Netlist
+from littleman_tools.runner import Littleman
+
+
+def _not_netlist() -> Netlist:
+    return Netlist(
+        inputs=("value",),
+        gates=(Gate("not-gate.man", ("value",), "result"),),
+        outputs=("result",),
+    )
 
 
 def test_netlist_normalizes_mutable_sequence_fields_to_tuples() -> None:
@@ -102,3 +113,52 @@ def test_netlist_rejects_invalid_ordered_scalar_dags(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         Netlist(inputs=inputs, gates=gates, outputs=outputs)
+
+
+def test_compose_is_deterministic() -> None:
+    assert composer.compose(_not_netlist()) == composer.compose(_not_netlist())
+
+
+def test_compose_crops_every_whitespace_border() -> None:
+    source = composer.compose(_not_netlist())
+
+    rows = source.splitlines()
+    assert rows[0].strip()
+    assert rows[-1].strip()
+    assert any(row[0].strip() for row in rows)
+    assert any(row[-1].strip() for row in rows)
+
+
+def test_compose_keeps_a_final_newline() -> None:
+    assert composer.compose(_not_netlist()).endswith("\n")
+
+
+def test_compose_does_not_write_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    source = composer.compose(_not_netlist())
+
+    assert source
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_creates_only_parents_and_writes_exact_composed_source(tmp_path: Path) -> None:
+    netlist = _not_netlist()
+    expected = composer.compose(netlist)
+    requested = tmp_path / "nested" / "composed.man"
+
+    result = composer.write(netlist, requested)
+
+    assert result == requested
+    assert requested.read_text(encoding="utf-8") == expected
+    assert list(tmp_path.iterdir()) == [requested.parent]
+    assert list(requested.parent.iterdir()) == [requested]
+
+
+def test_composed_source_has_runtime_visible_rooms_and_connected_pipes() -> None:
+    analysis = Littleman().analyze(composer.compose(_not_netlist()))
+
+    assert len(analysis.rooms) == 3
+    assert len(analysis.pipes) == 2
+    assert all(pipe.src is not None and pipe.dst is not None for pipe in analysis.pipes)
+    assert analysis.displays == []

@@ -19,7 +19,7 @@ from .primitive_contracts import (
     contracts_by_artifact,
 )
 
-__all__ = ["ActiveRoom", "Gate", "Netlist", "extract_active_room"]
+__all__ = ["ActiveRoom", "Gate", "Netlist", "compose", "extract_active_room", "write"]
 
 
 @dataclass(frozen=True)
@@ -1132,6 +1132,40 @@ def _render_raw_grid(routed: _RoutedLayout) -> _RawGrid:
         for y in range(min_y, max_y + 1)
     )
     return _RawGrid(source=source, origin=(min_x, min_y))
+
+
+def compose(netlist: Netlist) -> str:
+    """Compose a validated netlist into deterministic, cropped Little Man source."""
+
+    raw = _render_raw_grid(_route_layout(_plan_layout(netlist)))
+    return _crop_source(raw.source)
+
+
+def write(netlist: Netlist, path: str | Path) -> Path:
+    """Compose ``netlist`` and write its exact source to the requested path."""
+
+    destination = Path(path)
+    source = compose(netlist)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(source, encoding="utf-8")
+    return destination
+
+
+def _crop_source(source: str) -> str:
+    """Crop to the smallest non-whitespace rectangle and retain a final newline."""
+
+    rows = source.splitlines()
+    occupied = [
+        (x, y) for y, row in enumerate(rows) for x, glyph in enumerate(row) if not glyph.isspace()
+    ]
+    if not occupied:
+        return ""
+
+    left = min(x for x, _ in occupied)
+    right = max(x for x, _ in occupied)
+    top = min(y for _, y in occupied)
+    bottom = max(y for _, y in occupied)
+    return "\n".join(row[left : right + 1] for row in rows[top : bottom + 1]) + "\n"
 
 
 def _route_glyph(
