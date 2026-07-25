@@ -73,17 +73,28 @@ so :data:`ORDER` is chosen to satisfy exactly those constraints — notably ever
 before it and its miss block after.  Two blocks (``MAIN`` and ``ROTPRE``) send
 ``pos`` and ``neg`` to the *same* successor, which cannot be both above and
 below; their north lane takes a jog west on the row above the branch instead,
-which is why those two are padded to three rows.
+which needs that row's channel half to be empty and so pads them to four rows.
+
+A block therefore occupies an **even** number of rows — it enters eastbound and
+leaves westbound — and that is where the height goes: 48 blocks, 71 rows spent
+on band reversals, 39 on the reversal a block that runs out of tokens heading
+east still has to pay for.
 
 ## Numeric literals
 
 Backticks pair on rows **and columns independently**, and a non-digit caught
-between a vertical pair is a *load* error.  The program needs 20 multi-digit
-literals — 40 backticks — so the generator keeps a global set of columns that
-already hold one and refuses to put a second there, padding the literal with
-leading zeros (```640``` is still 640... so it pads the *approach*, not the
-digits) or sliding the cursor east until both delimiters land in fresh columns.
-``4w = 48`` columns is what makes that always satisfiable with room to spare.
+between a vertical pair is a *load* error — the reference engine says
+``expected a digit or a space between backticks``.  The program needs 20
+multi-digit literals, so 40 backticks, and the only rule that is checkable
+without a global fixpoint is **one backtick per grid column**: the generator
+keeps the set of columns that already hold one and slides the cursor east a
+blank at a time until both delimiters land in fresh ones, dropping to the next
+row if the row runs out.  ``4w = 48`` code columns is what makes that always
+satisfiable, and it is the floor on the band width for that reason alone.
+
+Digits are emitted in *walk* order, so a literal laid down on a westbound row
+reads correctly for the man and backwards in the file.  That is fine: the load
+check only requires the value to fit in 64 bits read either way.
 
 ## The rest of the box
 
@@ -91,13 +102,18 @@ digits) or sliding the cursor east until both delimiters land in fresh columns.
   incoming pipe must terminate at block-relative ``(1, 1)`` heading east; it
   sits in the north-east corner and the painter pipe climbs the ``sp`` anchor
   column and runs east along row 1 into it;
-* three turnaround rooms, one per pipe loop, in the north band.  Capacity is
-  correctness, not tuning: the ring must hold **19** cells (18 words plus one)
-  or it deadlocks silently, ``F`` 7 and ``G`` 8.  Each is the flat two-row
-  relay measured at 2.9 ticks/word — every non-corner cell is half of an
-  ``r``/``s`` pair — against ``value_ring.RELAY_NORTH``'s 6.
-* the ring relay is high in the band so its two straight vertical pipes are ten
-  cells each; ``F``/``G`` sit low, where four cells each is already enough.
+* three turnaround rooms, one per pipe loop, sitting flush at the top of an
+  **eight-row** north band.  Capacity is correctness, not tuning: the ring must
+  hold **19** cells (18 words plus one) or it deadlocks silently, ``F`` 7 and
+  ``G`` 8.  Each room is the flat two-row relay — every non-corner cell is half
+  of an ``r``/``s`` pair, 2.55 ticks a word at width 14 against
+  ``value_ring.RELAY_NORTH``'s 6.
+* the band is pure overhead on the dimension that gets squared, so the ring
+  buys its 20 cells from two horizontal jogs rather than from ten rows of
+  descent; ``F`` and ``G`` reach theirs straight down in four.
+
+Measured, all seven public cases, both backends agreeing exactly: 84 x 175,
+``area2`` 30,625, 277,368 avg ticks, score 8.49e9.
 """
 
 from __future__ import annotations
