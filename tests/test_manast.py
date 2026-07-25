@@ -231,3 +231,31 @@ def test_anti_parallel_pipes_do_not_merge_even_when_adjacent(gap: int) -> None:
     info = Littleman().analyze("\n".join(r.rstrip() for r in g.rows()))
     assert len(info.pipes) == 2, f"gap={gap} merged the lanes"
     assert sorted(len(p.path) for p in info.pipes) == sorted([n1, n2])
+
+
+@node_required
+def test_an_io_room_is_movable_but_a_display_is_pinned(program) -> None:
+    """`pinned` is "may not translate", which an IO room is not.
+
+    SPEC fixes an IO room's *shape* — 3x3, one marker, at most one pipe — not its
+    address, and its shape needs no flag: a cut through the interior lands on the
+    `I`/`O` glyph and a cut at the edge lands on a wall, both already refused.
+    Pinning it instead conflated the two flags and silently blocked every
+    compaction that had to slide an output room by one row.
+
+    A display is the genuine case for `pinned`: its interior size *is* the pixel
+    resolution and its interior is legitimately blank, so nothing else would stop
+    a cut from quietly shrinking the panel.
+    """
+    ast = parse_ast(program)
+    io = [r for r in ast.rooms if r.kind in ("input", "output")]
+    assert io, "the grid reads and writes"
+    for room in io:
+        assert not room.pinned, f"{room.kind} room should be movable"
+        room.translate(0, 1)  # must not raise
+
+    displays = [r for r in ast.rooms if r.kind == "display"]
+    for room in displays:
+        assert room.pinned
+        with pytest.raises(PaintError, match="pinned"):
+            room.translate(1, 0)

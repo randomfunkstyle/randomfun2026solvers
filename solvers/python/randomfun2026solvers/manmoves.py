@@ -135,9 +135,14 @@ def _drop(ast: Ast, axis: str, index: int, capacity: dict[tuple[int, ...], int])
         # refusing, which is a breached box rather than a moved one.
         if index in (lo, hi):
             raise MoveError(f"{axis} {index} is a wall of room{room.id}")
+        # A Corridor holds `.` cells, which SPEC calls a nop -- the same as a
+        # blank. They are erasable, so they must not count as content here;
+        # treating them as live is what made this sweep refuse cuts that plain
+        # string surgery had already proved safe on gradebook and sudoku.
         occupied = [
             c
             for child in room.children
+            if not isinstance(child, Corridor)
             for c in child.paint()
             if c[ax] == index
         ]
@@ -212,10 +217,17 @@ def _drop(ast: Ast, axis: str, index: int, capacity: dict[tuple[int, ...], int])
 def _shift_child(child, ax: int, index: int) -> None:
     """Slide a room child back by one if it sits after the cut."""
     if isinstance(child, Corridor):
+        # Nops on the cut line are erased, not shifted: a `.` is a blank, and one
+        # left sitting at `index` would land on top of whatever slid up into it.
         child.dots = [
             (x - (1 if not ax and x > index else 0), y - (1 if ax and y > index else 0))
             for x, y in child.dots
+            if (x if not ax else y) != index
         ]
+        if child.dots:
+            child.x = min(x for x, _ in child.dots)
+            child.y = min(y for _, y in child.dots)
+        return
     if isinstance(child, Atom):
         # an atom spanning the cut would have been caught as a live glyph unless
         # its row there is blank, in which case drop that row from the rectangle

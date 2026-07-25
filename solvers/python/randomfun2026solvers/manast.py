@@ -415,9 +415,18 @@ def parse_ast(
             attach[p.dst].append(p.dst_attach)
 
     for room in prog.rooms:
-        # An IO room's 3x3 shape and a display's resolution are the problem's,
-        # not ours; pin them so no move can reshape or relocate them.
-        pinned = room.kind in ("input", "output", "display")
+        # `pinned` means "may not even translate", and an IO room does not qualify:
+        # SPEC fixes its *shape* (3x3, one marker, at most one pipe), not its
+        # address. Pinning it conflates the two flags this model exists to keep
+        # apart, and it silently blocks legitimate compaction -- every cut that
+        # needed to slide an output room one row was refused on those grounds.
+        #
+        # Its shape needs no flag: a cut through the interior lands on the `I`/`O`
+        # glyph and a cut at the edge lands on a wall, and both are already
+        # refused. A display is different -- its interior size *is* the pixel
+        # resolution and its interior is legitimately blank, so nothing else would
+        # stop a cut shrinking it. That one stays pinned.
+        pinned = room.kind == "display"
         rooms.append(
             RoomNode(
                 id=room.id,
@@ -429,7 +438,11 @@ def parse_ast(
                 children=_room_children(prog, room, refine),
                 ports=attach[room.id],
                 pinned=pinned,
-                note=f"{room.kind} room: shape fixed by SPEC" if pinned else "",
+                note=(
+                    "display room: interior size is the pixel resolution"
+                    if pinned
+                    else ""
+                ),
             )
         )
 
