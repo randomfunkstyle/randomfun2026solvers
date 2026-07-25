@@ -39,7 +39,7 @@ from pathlib import Path
 
 from .manast import Ast, Refine, parse_ast, render
 from .mancompact import _binding_signature
-from .manmoves import MoveError, ring_capacity, try_drop
+from .manmoves import MoveError, ring_capacity, try_drop, try_squash
 from .manparse import parse_program
 from .manroute import Plan, Verdict
 
@@ -226,29 +226,57 @@ def _try(ast: Ast, move: Move, caps: dict[tuple[int, ...], int]) -> Ast | str:
             if not v:
                 return v.reason
             return plan.ast
+        if move.kind == "squash":
+            out, report = try_squash(
+                trial,
+                move.args[0],
+                move.args[1],
+                move.args[2],
+                capacity=caps,
+            )
+            return out if out is not None else str(report)
         return f"unknown move {move.kind}"
     except (MoveError, Exception) as exc:  # noqa: BLE001 - a refusal is data
         return f"{type(exc).__name__}: {exc}"
 
 
-def candidates(ast: Ast, *, deltas: int = 3) -> list[Move]:
+def candidates(
+    ast: Ast,
+    *,
+    deltas: int = 3,
+    move_set: str = "layout",
+) -> list[Move]:
     """Every move worth trying, in rough order of cheapness."""
     w, h = ast.bbox
     out: list[Move] = []
-    for y in range(h):
-        out.append(Move("drop-row", (y,)))
-    for x in range(w):
-        out.append(Move("drop-col", (x,)))
-    for room in ast.rooms:
-        if room.pinned:
-            continue
-        for dy in range(-deltas, deltas + 1):
-            for dx in range(-deltas, deltas + 1):
-                if (dx, dy) != (0, 0):
-                    out.append(Move("move-room", (room.id, dx, dy)))
-    for pipe in ast.pipes:
-        if pipe.min_capacity is not None:
-            out.append(Move("reroute", (pipe.id, pipe.min_capacity)))
+    if move_set in ("layout", "cuts", "all"):
+        for y in range(h):
+            out.append(Move("drop-row", (y,)))
+        for x in range(w):
+            out.append(Move("drop-col", (x,)))
+    if move_set in ("layout", "all"):
+        for room in ast.rooms:
+            if room.pinned:
+                continue
+            for dy in range(-deltas, deltas + 1):
+                for dx in range(-deltas, deltas + 1):
+                    if (dx, dy) != (0, 0):
+                        out.append(Move("move-room", (room.id, dx, dy)))
+        for pipe in ast.pipes:
+            if pipe.min_capacity is not None:
+                out.append(Move("reroute", (pipe.id, pipe.min_capacity)))
+    if move_set in ("squash", "all"):
+        # The report computes free interior lines without mutating the AST.
+        # Each move is still tried by `try_squash`; occupancy is a shortlist,
+        # never the verdict.
+        from .manfree import squash_report
+
+        for block in squash_report(ast, verify=False):
+            room_id = int(block.node.removeprefix("room"))
+            for index in block.free_cols:
+                out.append(Move("squash", (room_id, "col", index)))
+            for index in block.free_rows:
+                out.append(Move("squash", (room_id, "row", index)))
     return out
 
 
@@ -258,32 +286,57 @@ def search(
     caps: dict[tuple[int, ...], int],
     want_bindings: list,
     rounds: int = 100,
+    move_set: str = "layout",
+    problem: str | Path | dict | None = None,
+    tick_cap: int = 5_000_000,
     log=print,
 ) -> tuple[Ast, list[Move]]:
-    """Hill-climb on ``max(w,h)**2``, keeping only moves that preserve bindings.
+    """Hill-climb on geometry or the measured problem objective.
 
     A move that does not shrink the factor is still kept when it shrinks the
     *bounding box on one axis*, because the factor is ``max(w,h)**2``: trimming the
     short side pays nothing today and everything once the long side comes down.
+    With ``problem``, public cases and ``factor × avgTicks`` gate every move, so
+    a speed-for-space trade may grow one side only when its measured tick saving
+    more than pays for that growth.
     """
     best = ast
     applied: list[Move] = []
+    best_metric: float | None = None
+    scoring_kind = ""
+    if problem is not None:
+        from . import optimize, scoring
+
+        baseline = optimize.verify(render(best), problem, tick_cap=tick_cap)
+        if not baseline.passed:
+            raise MoveError("baseline does not pass every public case")
+        scoring_kind = scoring.load_problem(problem).get("scoring", "footprint-tick")
+        best_metric = (
+            float(best.geometry_factor)
+            if scoring_kind == "footprint"
+            else best.geometry_factor * float(baseline.avg_ticks or 0)
+        )
+        log(
+            f"  semantic baseline: avgTicks={baseline.avg_ticks} "
+            f"objective={best_metric:,.2f}"
+        )
     for rnd in range(1, rounds + 1):
         bw, bh = best.bbox
         bf = best.geometry_factor
         improved = False
         # score every candidate on geometry only -- no engine calls yet
         scored: list[tuple[int, int, Move, Ast]] = []
-        for mv in candidates(best):
+        for mv in candidates(best, move_set=move_set):
             got = _try(best, mv, caps)
             if isinstance(got, str):
                 continue
             gw, gh = got.bbox
-            if gw > bw or gh > bh:
+            if problem is None and (gw > bw or gh > bh):
                 continue  # never grow either side
             factor = got.geometry_factor
             area = gw * gh
-            if factor < bf or (factor == bf and area < bw * bh):
+            semantic_candidate = problem is not None
+            if factor < bf or (factor == bf and area < bw * bh) or semantic_candidate:
                 scored.append((factor, area, mv, got))
         scored.sort(key=lambda t: (t[0], t[1]))
         for factor, _area, mv, got in scored:
@@ -299,12 +352,41 @@ def search(
                 )
                 log(f"  round {rnd}: {mv} -> REJECTED, {nbad} op(s) re-bound")
                 continue
+            metric: float | None = None
+            avg_ticks: float | None = None
+            if problem is not None:
+                from . import optimize
+
+                result = optimize.verify(rows, problem, tick_cap=tick_cap)
+                if not result.passed:
+                    log(f"  round {rnd}: {mv} -> REJECTED, public cases failed")
+                    continue
+                avg_ticks = result.avg_ticks
+                metric = (
+                    float(factor)
+                    if scoring_kind == "footprint"
+                    else factor * float(avg_ticks or 0)
+                )
+                assert best_metric is not None
+                if metric >= best_metric:
+                    log(
+                        f"  round {rnd}: {mv} -> REJECTED, objective "
+                        f"{metric:,.2f} >= {best_metric:,.2f}"
+                    )
+                    continue
             gw, gh = got.bbox
+            tail = (
+                f", avgTicks {avg_ticks:,.2f}, objective {metric:,.2f}"
+                if metric is not None and avg_ticks is not None
+                else ""
+            )
             log(
                 f"  round {rnd}: {mv} -> {gw}x{gh} factor {factor:,} "
-                f"(was {bf:,}), ring {ring_capacity(got, (2, 3))}"
+                f"(was {bf:,}), ring {ring_capacity(got, (2, 3))}{tail}"
             )
             best, improved = got, True
+            if metric is not None:
+                best_metric = metric
             applied.append(mv)
             break
         if not improved:
@@ -317,8 +399,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("grid", type=Path)
     ap.add_argument("--rounds", type=int, default=100)
+    ap.add_argument(
+        "--moves",
+        choices=("layout", "cuts", "squash", "all"),
+        default="layout",
+        help="deterministic AST move family (default preserves the original layout search)",
+    )
     ap.add_argument("--capacity", action="append", default=[], metavar="PIPES=NEED")
     ap.add_argument("--pipe-min", action="append", default=[], metavar="ID=N")
+    ap.add_argument("--problem", help="run every public case before accepting each move")
+    ap.add_argument("--tick-cap", type=int, default=5_000_000)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--describe-only", action="store_true")
     args = ap.parse_args()
@@ -340,13 +430,21 @@ def main() -> None:
 
     want = _binding_signature(parse_program(args.grid))
     print(f"\nSEARCH  up to {args.rounds} rounds")
-    best, applied = search(ast, caps=caps, want_bindings=want, rounds=args.rounds)
+    best, applied = search(
+        ast,
+        caps=caps,
+        want_bindings=want,
+        rounds=args.rounds,
+        move_set=args.moves,
+        problem=args.problem,
+        tick_cap=args.tick_cap,
+    )
     w, h = best.bbox
     print(
         f"\nresult {w}x{h} factor {best.geometry_factor:,} after {len(applied)} moves: "
         + ", ".join(str(m) for m in applied)
     )
-    if args.out and best.geometry_factor < ast.geometry_factor:
+    if args.out and applied:
         args.out.write_text("\n".join(render(best)) + "\n", encoding="utf-8")
         print(f"wrote {args.out}")
 
