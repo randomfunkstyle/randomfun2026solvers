@@ -397,7 +397,7 @@ if __name__ == "__main__":
 # error rather than a grid that loads and quietly reads the wrong pipe.
 
 GLYPH = {E: ">", W: "<", N: "^", S: "v"}
-WW, WH = 40, 19                      # worker interior
+WW, WH = 39, 19                      # worker interior
 IN_COL, RET_COL = 0, 28              # north wall: input, ring-return
 FWD_COL, PNT_COL = 30, 38            # south wall: ring-forward, painter
 # binding regions that follow from those four columns: the boundary is the midpoint,
@@ -682,7 +682,7 @@ IN_C, RET_C, FWD_C, PNT_C = 1, 29, 31, 39     # grid columns of the four ports
 # locally and eats the one row a later pipe needed, so the collision only ever moves;
 # stating all seven and allocating the shared rows and columns up front is what closes
 # the box. `_PATHS` is checked against the ports as it is drawn.
-BLOCK_W, BLOCK_H = 50, 64
+BLOCK_W, BLOCK_H = 49, 64
 _DX, _DY = 9, 1                  # display walls: cols 9..42, rows 1..26
 _WX, _WY = 9, 31                 # worker walls:  cols 8..49, rows 30..50
 _PX, _PY = 9, 57                 # painter walls: cols 8..24, rows 56..62
@@ -769,56 +769,75 @@ def build_block() -> list[str]:
 
 
 def block_debug():
-    """A labelled overlay of the assembled block, for reading the layout by eye."""
+    """A labelled overlay of the assembled block, for reading the layout by eye.
+
+    Every rectangle is derived from the same constants `build_block` draws from, so it
+    cannot drift out of step with the grid the way hand-written coordinates did.
+    """
     from randomfun2026solvers.man_debug import DebugMap
 
-    d = DebugMap("plotter block — 20/20, score 66,665,235 (CPU version: 7,760,316,749)")
+    wi, pn = _WY, _PY - 1                    # worker interior row 0; painter north wall
+    d = DebugMap("plotter block — 20/20, 49x64, score 53,693,850 "
+                 "(CPU version: 7,760,316,749)")
     d.region("display", _DX, _DY, DISPLAY_W + 2, DISPLAY_H + 2,
              note="LM-75 32x24. Top wall = ADDR, left = DATA, bottom = SWAP. The panel "
                   "alone is 34x26, which is why a CPU here costs almost everything.",
              color="#334155")
     d.region("worker", _WX - 1, _WY - 1, WW + 2, WH + 2,
-             note="owns f in B; reads {step, den, U, U+V} off the ring each lap and "
-                  "sends the painter one increment per pixel. Spans nearly the full "
-                  "width, which is what makes pipe channels scarce.",
+             note=f"owns f in B; reads {{step, den, U, U+V}} off the ring each lap and "
+                  f"sends the painter one increment per pixel. {WW}x{WH} interior, and "
+                  "it spans nearly the full width — which is what makes channels scarce.",
              color="#0ea5e9")
-    d.region("worker:prologue", _WX + 2, _WY + 1, 14, 1,
-             note="all four input reads live here with only pushes between them: `r` "
-                  "takes the *nearest* incoming pipe, so an input read must never sit "
-                  "between two ring pops.",
+    d.region("worker:prologue", _WX, wi, 16, 1,
+             note="`>` turns the returning man east and `@` sits on this row rather than "
+                  "costing one of its own: it spawns heading east already, and is "
+                  "otherwise a nop, so the returner walks over it. All four input reads "
+                  "live here with only pushes between them — `r` takes the *nearest* "
+                  "incoming pipe, so an input read must never sit between two ring pops.",
              color="#22c55e")
-    d.region("worker:loop", _WX + 3, _WY + 14, 35, 5,
+    d.region("worker:bandB", _WX, wi + 4, WW, 2,
+             note="the two sign branches, sharing one row on disjoint column ranges. "
+                  "Each lane pushes its own sign literal: a lane's identity is the man's "
+                  "position, so it cannot survive the merge.",
+             color="#84cc16")
+    d.region("worker:bandC", _WX, wi + 6, WW, 3,
+             note="the major-axis compare. Its merge lands east of the lane on the row "
+                  "below, so the exit drops one row and turns straight back west.",
+             color="#06b6d4")
+    d.region("worker:loop", _WX + 3, wi + 12, WW - 3, 5,
              note="the pixel loop, five rows because four paths must not cross. `X` "
                   "branches on the sign of f+step; the carry lane owns the straight and "
-                  "the CW exit, so its hop back cannot double as a corridor.",
+                  "the CW exit, so its two-cell hop back cannot double as a corridor.",
              color="#f59e0b")
-    d.region("worker:drain", _WX + 2, _WY + 19, 18, 2,
+    d.region("worker:drain", _WX, wi + 17, 20, 2,
              note="four POPs. Each lap pushes all four constants back, so at BP==0 they "
                   "are still circulating and the next round would pop them instead of "
-                  "its own x0/y0. Every segment alone was perfect; sequences were "
+                  "its own x0/y0. Every segment alone was perfect and sequences were "
                   "garbage until this went in.",
              color="#ef4444")
-    d.region("painter", _PX - 1, _PY - 1, PAINTER_W + 2, PAINTER_H + 2,
+    d.region("painter", _PX - 1, pn, PAINTER_W + 2, PAINTER_H + 2,
              note="owns addr in B; one lap per pixel, 14 ticks. Commits with SWAP<-0, "
                   "which also clears `next`, so each round starts black.",
              color="#a855f7")
     d.region("relay", _RX - 1, _RY - 1, RELAY_W + 2, RELAY_H + 2,
-             note="the ring's turnaround, 4 values per 14-cell circuit. One pipe each "
-                  "way, so no send or receive in it needs a binding argument — which is "
-                  "why it can talk out of whichever walls the routing needs.",
+             note="the ring's turnaround, four values per 14-cell circuit. One pipe each "
+                  "way, so nothing in it needs a binding argument — which is why it can "
+                  "talk out of whichever walls the routing needs. It rides a row above "
+                  "the painter so both south walls line up.",
              color="#ec4899")
     d.region("input", _IX, _IY, 3, 3,
-             note="west of the worker, not above it: from above the input pipe would "
-                  "cross the ring-return in the two-row band over the north wall.",
+             note="west of the worker, not above it: from above, the input pipe would "
+                  "cross the ring-return in the band over the north wall.",
              color="#64748b")
-    d.region("band", 0, 27, BLOCK_W, 3,
-             note="the contended band: row 27 SWAP, row 28 ring-return, row 29 input — "
-                  "one row each, allocated before any pipe was drawn.",
+    d.region("band", 0, _WY - 4, BLOCK_W, 3,
+             note="the contended band: SWAP, then the ring-return, then the input — one "
+                  "row each, allocated before any pipe was drawn.",
              color="#eab308")
-    d.region("channels", 0, 0, 8, 57,
-             note="cols 2/4/6 carry ADDR/DATA/SWAP up past the worker. They nest "
-                  "against the bend rows 56/55/54 the opposite way round, which is what "
-                  "keeps the three from crossing.",
+    d.region("channels", 0, 0, 4, pn - 1,
+             note="cols 0/1/2 carry ADDR/DATA/SWAP up past the worker, and col 3 the "
+                  "ring-return. Adjacent, not spaced: a pipe carries its own arrowheads, "
+                  "so neighbouring flows never merge. They nest against the bend rows "
+                  "the opposite way round, which keeps the three from crossing.",
              color="#14b8a6")
     return d
 
