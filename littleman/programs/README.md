@@ -8,6 +8,8 @@ specs and public tests: [`../../tasks/problems/`](../../tasks/problems/).
 |---|---|---|
 | `memory.man` | `memory` (Semester 1) | **22/22** local (7 public + 5 heavy + 10 edge), 32x33, area² 1089 — expect ≈ **92M** |
 | `memory-v1-submitted.man` | `memory` | the 42x33 build that actually scored **158M** on the judge; kept as the known-good fallback |
+| `memory-v3-external-init.man` | `memory` | **22/22** independent initializer: paired zero fill lives in the relay room; 34x37, heavy avg 176,200 |
+| `memory-v3-upstream-init.man` | `memory` | **22/22** upstream initializer then ordinary relay; 34x37, heavy avg 177,200 |
 | `memory-n8.man` | — | N=8 build of the same generator; small enough to trace by hand |
 | `register-cell.man` | — | the 1-value register block (store `1 v`, fetch `-1`) |
 | `two-roms.man` | — | two looping ROMs feeding one room: code banks, see [`../ARCH.md`](../ARCH.md) §5.5 |
@@ -160,3 +162,42 @@ the area growth cancels the tick win. Not worth it before #1–#3.
 Head-room check: the step cap is 5,000,000 and the worst legal input (1000
 tokens, 411 ops) costs 392k ticks, so there is 12× slack — every remaining win is
 score, not correctness.
+
+## Independent relay initialization
+
+`memory-v3-external-init.man` removes zero filling from the worker. Its relay
+room starts with a paired counted ring that sends exactly 100 zeroes, then the
+known-even exit falls directly into the steady `r`/`s` relay loop. The worker
+starts command decode immediately; a tape `r` blocks if initialization has not
+produced enough values, so synchronization is entirely through dataflow.
+
+The handoff must enter at `r`, not `s`: entering at `s` emits stale `A=0` once
+more, creates 101 initial values, and shifts every write. The balanced 42/72-slot
+pipe layout passes all 22 cases and improves ticks over paired v3:
+
+| suite | paired v3 | independent fill |
+|---|---:|---:|
+| public | 13,519 | **12,871** |
+| heavy | 177,876 | **176,200** |
+| edge | 10,360 | **9,640** |
+
+The proof layout is 34x37, so its larger `37²` size factor still loses to the
+31x31 submitted best. The next useful move is placement: preserve this protocol
+and the balanced pipe capacities while fitting the fill/relay room into the
+worker's vacated initialization space.
+
+`memory-v3-upstream-init.man` tests the fully separated topology:
+
+```text
+worker -> initializer/pass-through -> ordinary relay -> worker
+```
+
+The initializer emits 100 zeroes and then loops forever on `r`/`s`; it does not
+become idle or change pipe ownership. A two-cell middle pipe feeds the unchanged
+compact relay. The three tape pipes hold 42 + 2 + 68 = 112 values, and every
+route is dataflow-synchronized.
+
+This version also passes all 22 cases, but the extra stage raises the heavy
+average from 176,200 to 177,200 ticks without reducing the 34x37 bounds. Keep it
+as the marked architecture experiment; the combined fill/relay room remains the
+better scoring candidate.

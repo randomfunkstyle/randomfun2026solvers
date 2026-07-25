@@ -697,7 +697,7 @@ V3_FWD_ROW = 8
 V3_RET_COL = 12
 
 
-def worker_v3(n: int) -> Circuit:
+def worker_v3(n: int, *, external_init: bool = False) -> Circuit:
     """Two-value-per-lap variant of :func:`worker_v2`.
 
     ``counted_ring`` exits east for an even count and west for an odd count.
@@ -709,12 +709,22 @@ def worker_v3(n: int) -> Circuit:
     gut = V3_IW - 1
     return_gut = gut - 1
 
-    x, _ = c.run(1, 0, "@" + L + "b")
-    c.turn(return_gut, 1, W)
-    c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
-    fill, _ = c.counted_loop(17, 5, "0s")
-    c.route((fill, 5), E, [(gut, 5), (gut, 1)], (0, 1), S)
-    c.turn(0, 2, E)
+    if external_init:
+        c.set(1, 0, "@")
+        c.route(
+            (2, 0),
+            E,
+            [(return_gut, 0), (return_gut, 1), (0, 1)],
+            (0, 2),
+            E,
+        )
+    else:
+        x, _ = c.run(1, 0, "@" + L + "b")
+        c.turn(return_gut, 1, W)
+        c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
+        fill, _ = c.counted_loop(17, 5, "0s")
+        c.route((fill, 5), E, [(gut, 5), (gut, 1)], (0, 1), S)
+        c.turn(0, 2, E)
 
     c.run(1, 2, "rX")
     read_setup, _ = c.run(3, 2, "rbM" + L + "-M")
@@ -842,6 +852,225 @@ def build_v3(n: int) -> list[str]:
             if "slots" not in str(exc):
                 raise
     raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def initializing_relay(n: int) -> list[str]:
+    """Relay that first injects ``n`` zeroes, then relays the tape forever.
+
+    The worker can start immediately. Its first tape receive blocks on this
+    room's output if initialization has not produced enough values yet, so the
+    handoff is synchronized by pipe data rather than elapsed ticks.
+    """
+    if n % 2:
+        raise Collision("paired relay initialization requires an even memory size")
+    c = Circuit(12, 5)
+    x, _ = c.run(0, 0, "@" + lit(n) + "b")
+    even_exit, _odd_exit = c.counted_ring(x, 0, "0s")
+
+    # The known-even count exits at the top. It enters steady `r` directly, so
+    # no stale A value can append an extra zero during the phase transition.
+    c.set(even_exit[0], even_exit[1], ">")
+    c.set(10, 0, "r")
+    c.set(11, 0, "v")
+    c.set(11, 1, "<")
+    c.set(10, 1, "s")
+    c.set(9, 1, "^")
+    return c.rows()
+
+
+def assemble_v3_external_init(n: int, fold: int = 0) -> list[str]:
+    """Paired-loop memory whose relay independently initializes the tape."""
+    iw, ih = V3_IW, V3_IH
+    g = Circuit(400, 200)
+    wk = worker_v3(n, external_init=True)
+    wx, wy = 7, 7
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    iy = wy + V3_IN_ROW
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+    ox = wx + V3_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    bottom_y = wy + ih
+    fy = wy + V3_FWD_ROW
+    ret_col = wx + V3_RET_COL
+    east = wx + iw + 2
+    relay = initializing_relay(n)
+    relay_x, relay_y = 1, bottom_y + 5
+    for i, row in enumerate(relay):
+        for j, ch in enumerate(row):
+            g.set(relay_x + j, relay_y + i, ch)
+    for x in range(len(relay[0]) + 2):
+        g.set(
+            relay_x - 1 + x,
+            relay_y - 1,
+            "+" if x in (0, len(relay[0]) + 1) else "-",
+        )
+        g.set(
+            relay_x - 1 + x,
+            relay_y + len(relay),
+            "+" if x in (0, len(relay[0]) + 1) else "-",
+        )
+    for y in range(len(relay)):
+        g.set(relay_x - 1, relay_y + y, "|")
+        g.set(relay_x + len(relay[0]), relay_y + y, "|")
+
+    # Both tape pipes use the relay's right wall. Keep the return endpoint above
+    # the forward endpoint so its capacity snake can climb back to the worker
+    # without crossing the forward pipe.
+    ret_y = relay_y
+    fwd_y = relay_y + len(relay) - 1
+    adj = relay_x + len(relay[0]) + 1
+    n_fwd = _draw_pipe(
+        g,
+        [(wx + iw + 1, fy), (east, fy), (east, fwd_y), (adj, fwd_y)],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (adj, ret_y),
+            (east - 1, ret_y),
+            (east - 1, bottom_y + 4),
+            (adj + fold, bottom_y + 4),
+            (adj + fold, bottom_y + 3),
+            (east - 1, bottom_y + 3),
+            (east - 1, bottom_y + 2),
+            (ret_col, bottom_y + 2),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    return [row.rstrip() for row in g.rows() if row.strip()]
+
+
+def build_v3_external_init(n: int) -> list[str]:
+    """Smallest independently initialized paired-loop build."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v3_external_init(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def assemble_v3_upstream_init(n: int) -> list[str]:
+    """Initialize upstream, then forward through a separate ordinary relay.
+
+    The initializer has one permanent job after startup: receive worker output
+    and send it to the short middle pipe. The ordinary relay receives that pipe
+    and sends to the worker return pipe. Both rooms therefore keep running and
+    the two relay stages pipeline naturally.
+    """
+    iw, ih = V3_IW, V3_IH
+    g = Circuit(400, 200)
+    wk = worker_v3(n, external_init=True)
+    wx, wy = 7, 7
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    iy = wy + V3_IN_ROW
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+    ox = wx + V3_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    bottom_y = wy + ih
+    fy = wy + V3_FWD_ROW
+    ret_col = wx + V3_RET_COL
+    east = wx + iw + 2
+
+    initializer = initializing_relay(n)
+    init_x, init_y = 1, bottom_y + 5
+    for i, row in enumerate(initializer):
+        for j, ch in enumerate(row):
+            g.set(init_x + j, init_y + i, ch)
+    for x in range(len(initializer[0]) + 2):
+        g.set(
+            init_x - 1 + x,
+            init_y - 1,
+            "+" if x in (0, len(initializer[0]) + 1) else "-",
+        )
+        g.set(
+            init_x - 1 + x,
+            init_y + len(initializer),
+            "+" if x in (0, len(initializer[0]) + 1) else "-",
+        )
+    for y in range(len(initializer)):
+        g.set(init_x - 1, init_y + y, "|")
+        g.set(init_x + len(initializer[0]), init_y + y, "|")
+
+    relay_x, relay_y = 16, bottom_y + 4
+    for i, row in enumerate(COMPACT_RELAY):
+        for j, ch in enumerate(row):
+            g.set(relay_x + j, relay_y + i, ch)
+
+    init_adj = init_x + len(initializer[0]) + 1
+    relay_adj = relay_x - 1
+    n_fwd = _draw_pipe(
+        g,
+        [(wx + iw + 1, fy), (east, fy), (east, init_y + 4), (init_adj, init_y + 4)],
+    )
+    n_middle = _draw_pipe(g, [(init_adj, init_y - 1), (relay_adj, init_y - 1)])
+    n_ret = _draw_pipe(
+        g,
+        [
+            (relay_x + len(COMPACT_RELAY[0]), relay_y + 3),
+            (east - 1, relay_y + 3),
+            (east - 1, bottom_y + 6),
+            (relay_x + len(COMPACT_RELAY[0]) + 1, bottom_y + 6),
+            (relay_x + len(COMPACT_RELAY[0]) + 1, bottom_y + 5),
+            (east - 1, bottom_y + 5),
+            (east - 1, bottom_y + 4),
+            (relay_x + len(COMPACT_RELAY[0]), bottom_y + 4),
+            (relay_x + len(COMPACT_RELAY[0]), bottom_y + 3),
+            (east - 1, bottom_y + 3),
+            (east - 1, bottom_y + 2),
+            (ret_col, bottom_y + 2),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_middle + n_ret < n + 1:
+        raise Collision(
+            f"tape holds {n_fwd + n_middle + n_ret} slots, need >= {n + 1}"
+        )
+    return [row.rstrip() for row in g.rows() if row.strip()]
+
+
+def build_v3_upstream_init(n: int) -> list[str]:
+    """Build the upstream-initializer plus ordinary-relay experiment."""
+    return assemble_v3_upstream_init(n)
 
 
 def assemble_v3_debug(n: int) -> tuple[list[str], DebugMap]:
@@ -1185,6 +1414,159 @@ def assemble_v2_debug(n: int) -> tuple[list[str], DebugMap]:
     return rows, dbg.translated(0, -first_row)
 
 
+def assemble_v3_external_init_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the independent initializer candidate with matching debug geometry."""
+    rows = build_v3_external_init(n)
+    _, dbg = assemble_v3_debug(n)
+    dbg.title = f"memory tape v3 independent relay initialization n={n}"
+    dbg.regions = [
+        region for region in dbg.regions if region.name not in ("init", "relay")
+    ]
+    dbg.lanes = [
+        lane
+        for lane in dbg.lanes
+        if lane.name not in ("tape-forward-pipe", "tape-return-pipe")
+    ]
+    dbg.region(
+        "independent-fill-relay",
+        0,
+        30,
+        14,
+        7,
+        note=(
+            "own room: emit two zeroes per lap until all n cells exist, then "
+            "fall directly into the steady receive/send relay"
+        ),
+        color="#facc15",
+    )
+    dbg.region(
+        "cpu-direct-start",
+        6,
+        5,
+        V3_IW + 2,
+        4,
+        note="CPU starts command decode immediately; tape receives provide synchronization",
+        color="#60a5fa",
+    )
+    dbg.lane(
+        "independent-zero-fill",
+        [(8, 31), (9, 31), (9, 35), (8, 35), (8, 31)],
+        kind="expected",
+        expect="known-even n: two zero sends per lap, exactly n values total",
+        color="#fde047",
+    )
+    dbg.lane(
+        "fill-to-steady-handoff",
+        [(10, 31), (11, 31), (12, 31), (12, 32), (11, 32)],
+        kind="expected",
+        expect="even exit enters r before s, preventing an extra stale zero",
+        color="#fb923c",
+    )
+    dbg.lane(
+        "tape-forward-pipe",
+        [(32, 14), (33, 14), (33, 35), (14, 35)],
+        kind="pipe",
+        expect="worker sends rotated values to the independent relay",
+        color="#34d399",
+    )
+    dbg.lane(
+        "tape-return-pipe",
+        [
+            (14, 31),
+            (32, 31),
+            (32, 30),
+            (14, 30),
+            (14, 29),
+            (32, 29),
+            (32, 28),
+            (19, 28),
+            (19, 27),
+        ],
+        kind="pipe",
+        expect="initializer and steady relay return values to the worker",
+        color="#10b981",
+    )
+    return rows, dbg
+
+
+def assemble_v3_upstream_init_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the split initializer/relay candidate with named dataflow."""
+    rows = build_v3_upstream_init(n)
+    _, dbg = assemble_v3_external_init_debug(n)
+    dbg.title = f"memory tape v3 upstream initialization n={n}"
+    dbg.regions = [
+        region
+        for region in dbg.regions
+        if region.name != "independent-fill-relay"
+    ]
+    dbg.lanes = [
+        lane
+        for lane in dbg.lanes
+        if lane.name
+        not in (
+            "tape-forward-pipe",
+            "tape-return-pipe",
+        )
+    ]
+    dbg.region(
+        "upstream-initializer",
+        0,
+        30,
+        14,
+        7,
+        note=(
+            "emit exactly n zeroes, then permanently forward CPU values to "
+            "the ordinary relay"
+        ),
+        color="#facc15",
+    )
+    dbg.region(
+        "ordinary-relay",
+        16,
+        30,
+        len(COMPACT_RELAY[0]),
+        len(COMPACT_RELAY),
+        note="steady receive/send stage; initialization is not part of this room",
+        color="#a78bfa",
+    )
+    dbg.lane(
+        "cpu-to-initializer",
+        [(32, 14), (33, 14), (33, 35), (14, 35)],
+        kind="pipe",
+        expect="all worker tape output enters the initializer pass-through",
+        color="#34d399",
+    )
+    dbg.lane(
+        "initializer-to-relay",
+        [(14, 30), (15, 30)],
+        kind="pipe",
+        expect="startup zeroes and later CPU values use the same short pipe",
+        color="#22d3ee",
+    )
+    dbg.lane(
+        "relay-to-cpu",
+        [
+            (22, 33),
+            (32, 33),
+            (32, 32),
+            (23, 32),
+            (23, 31),
+            (32, 31),
+            (32, 30),
+            (22, 30),
+            (22, 29),
+            (32, 29),
+            (32, 28),
+            (19, 28),
+            (19, 27),
+        ],
+        kind="pipe",
+        expect="ordinary relay returns the circulating tape to the worker",
+        color="#10b981",
+    )
+    return rows, dbg
+
+
 def assemble_v2_compact_relay_debug(n: int) -> tuple[list[str], DebugMap]:
     """Build the relay experiment with sidecar geometry matching its pipes."""
     rows = build_v2_compact_relay(n)
@@ -1519,13 +1901,20 @@ def assemble_v2_paced_init_debug(n: int) -> tuple[list[str], DebugMap]:
 
 
 if __name__ == "__main__" and any(
-    arg in ("--v2", "--v3") or arg.startswith("--debug-") for arg in sys.argv[1:]
+    arg in ("--v2", "--v3", "--v3-external-init", "--v3-upstream-init")
+    or arg.startswith("--debug-")
+    for arg in sys.argv[1:]
 ):
     numeric_args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
     n = int(numeric_args[0]) if numeric_args else 100
-    rows, debug = (
-        assemble_v3_debug(n) if "--v3" in sys.argv[1:] else assemble_v2_debug(n)
-    )
+    if "--v3-upstream-init" in sys.argv[1:]:
+        rows, debug = assemble_v3_upstream_init_debug(n)
+    elif "--v3-external-init" in sys.argv[1:]:
+        rows, debug = assemble_v3_external_init_debug(n)
+    elif "--v3" in sys.argv[1:]:
+        rows, debug = assemble_v3_debug(n)
+    else:
+        rows, debug = assemble_v2_debug(n)
     for arg in sys.argv[1:]:
         if arg.startswith("--debug-json="):
             debug.write_json(arg.split("=", 1)[1])
