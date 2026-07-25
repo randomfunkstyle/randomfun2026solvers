@@ -16,7 +16,15 @@ PKG = REPO / "solvers" / "python"
 if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
+from randomfun2026solvers.manstruct import Kind  # noqa: E402
 from randomfun2026solvers.manwalk import Step, Walk, flow_of  # noqa: E402
+
+
+class FakeCell:
+    """Minimal stand-in for a classified cell: flow_of only reads ``.kind``."""
+
+    def __init__(self, kind: Kind) -> None:
+        self.kind = kind
 
 
 def walk_of(*steps: tuple[int, int, int, int]) -> Walk:
@@ -41,17 +49,50 @@ def test_direction_comes_from_consecutive_positions() -> None:
     assert f.in_dirs[(2, 2)] == {(0, 1)}
 
 
-def test_a_cell_left_two_ways_is_a_split() -> None:
-    """A conditional turn is exactly this, so forks surface without parsing."""
-    f = flow_of(
-        walk_of(
-            (0, 0, 5, 5), (1, 0, 6, 5),  # first pass: leaves east
-            (2, 0, 5, 5), (3, 0, 5, 6),  # second pass: leaves south
-        )
+def test_a_blank_left_two_ways_is_a_crossing_not_a_fork() -> None:
+    """Two lanes sharing one blank is not a branch, and calling it one is wrong.
+
+    A blank is a nop in every heading, so an east-west lane and a north-south lane
+    can pass through the same cell. That shows up as two exit headings, which is
+    indistinguishable from a fork if you only look at the trace.
+    """
+    walk = walk_of(
+        (0, 0, 5, 5), (1, 0, 6, 5),  # first pass: leaves east
+        (2, 0, 5, 5), (3, 0, 5, 6),  # second pass: leaves south
     )
-    assert (5, 5) in f.splits
+    cells = {(5, 5): FakeCell(Kind.FLOOR), (6, 5): FakeCell(Kind.FLOOR)}
+    f = flow_of(walk, cells)
     assert f.out_dirs[(5, 5)] == {(1, 0), (0, 1)}
-    assert (6, 5) not in f.splits
+    assert (5, 5) in f.crossings
+    assert (5, 5) not in f.forks, "a blank is never a branch"
+
+
+def test_a_conditional_turn_is_a_fork_even_when_never_branched() -> None:
+    """`X` forks on the main hand, so it is a fork by construction.
+
+    Deriving forks from observed exits misses exactly this: a trace where the
+    condition happened to go one way every time would report no fork at all, and
+    an untaken arm is an untested branch — the thing most worth flagging.
+    """
+    walk = walk_of((0, 0, 3, 3), (1, 0, 4, 3))  # only ever leaves east
+    f = flow_of(walk, {(3, 3): FakeCell(Kind.BRANCH)})
+    assert (3, 3) in f.forks
+    assert f.exercised((3, 3)) == {(1, 0)}
+    assert (3, 3) in f.cold_forks, "one arm taken out of several is untested"
+    assert (3, 3) not in f.crossings, "a fork is not also a crossing"
+
+
+def test_a_fork_with_two_arms_taken_is_not_cold() -> None:
+    walk = walk_of((0, 0, 3, 3), (1, 0, 4, 3), (2, 0, 3, 3), (3, 0, 3, 4))
+    f = flow_of(walk, {(3, 3): FakeCell(Kind.BRANCH)})
+    assert f.exercised((3, 3)) == {(1, 0), (0, 1)}
+    assert (3, 3) not in f.cold_forks
+
+
+def test_forks_need_the_grid_so_no_cells_means_no_forks() -> None:
+    """Without the lattice the fork set is empty rather than guessed at."""
+    f = flow_of(walk_of((0, 0, 3, 3), (1, 0, 4, 3)))
+    assert f.forks == set()
 
 
 def test_a_cell_entered_two_ways_is_a_join() -> None:
@@ -72,7 +113,7 @@ def test_standing_still_is_a_stall_not_a_move() -> None:
     f = flow_of(walk_of((0, 0, 3, 3), (1, 0, 3, 3), (2, 0, 3, 3), (3, 0, 4, 3)))
     assert f.stalls[(3, 3)] == 2
     assert f.edges[((3, 3), (4, 3), 0)] == 1
-    assert not f.splits
+    assert not f.crossings and not f.forks
 
 
 def test_runners_never_share_an_edge() -> None:
