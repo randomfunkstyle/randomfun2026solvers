@@ -65,4 +65,4 @@ def test_local_turn_search_keeps_only_the_seed_on_its_frontier() -> None:
     frontier = search_local_turns(AND_GATE.read_text(encoding="utf-8"))
 
     assert [result.name for result in frontier] == ["seed"]
-    assert frontier[0].measurement.stream_ticks == 219
+    assert frontier[0].measurement.stream_ticks == 189

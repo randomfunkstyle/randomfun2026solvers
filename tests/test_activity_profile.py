@@ -64,7 +64,8 @@ def test_activity_profile_separates_useful_work_from_walking() -> None:
     assert baseline.total_ticks == 76
     assert compact.total_ticks == 66
     assert narrow.total_ticks == 62
-    assert and_gate.total_ticks == 51
+    assert and_gate.total_ticks == 45
+    assert and_gate.walking_ticks == 11
     assert and_gate.stall_ticks == 0
     assert compact.walking_ticks < baseline.walking_ticks
     assert narrow.walking_ticks < compact.walking_ticks
