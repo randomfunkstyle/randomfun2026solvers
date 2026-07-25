@@ -264,6 +264,13 @@ class PipeNode(Node):
     src: int = -1
     dst: int = -1
     min_capacity: int | None = None
+    #: Flow heading on the first and last cell. A path alone does not determine
+    #: the terminal glyphs: when the last cell is *also* a bend, the heading it
+    #: must show is the one that carries the value INTO the room, which is not
+    #: derivable from the path. Losing that is how a shortened pipe ends up
+    #: pointing along its own last leg instead of into its destination.
+    entry_dir: tuple[int, int] | None = None
+    exit_dir: tuple[int, int] | None = None
 
     @property
     def size(self) -> tuple[int, int]:
@@ -435,6 +442,8 @@ def parse_ast(
             glyphs=list(p.glyphs),
             src=p.src,
             dst=p.dst,
+            entry_dir=tuple(p.dirs[0]) if p.dirs else None,
+            exit_dir=tuple(p.dirs[-1]) if p.dirs else None,
             min_capacity=caps.get(p.id),
             pinned=p.id not in caps,
             note=(
