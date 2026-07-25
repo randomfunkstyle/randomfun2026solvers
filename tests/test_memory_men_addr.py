@@ -20,9 +20,9 @@ from randomfun2026solvers.memory_men_addr import (
     CELL_TILE,
     DECODER_TILE,
     ROUTER_ROWS,
-    TILE_X0,
     band_room,
     build_addr,
+    tile_x0,
 )
 
 
@@ -44,9 +44,9 @@ def _stream(n, ops, seed):
 def _tiles(rows, mains, tile):
     """The text actually stamped in each band, cropped to the tile's box."""
     w = max(len(r) for r in tile)
+    x0 = tile_x0(tile is DECODER_TILE)
     return [
-        tuple(rows[main - 1 + dy][TILE_X0 : TILE_X0 + w].ljust(w) for dy in range(BAND))
-        for main in mains
+        tuple(rows[main - 1 + dy][x0 : x0 + w].ljust(w) for dy in range(BAND)) for main in mains
     ]
 
 
@@ -62,12 +62,25 @@ def test_every_band_holds_the_identical_tile(tile):
 def test_the_decoder_compares_with_the_hand_a_cell_cannot_spare():
     # `~` reads B, and B is exactly what a value-holding cell has no room for —
     # which is why the decoder is a second man in a second room at all.
-    main = DECODER_TILE[1]
-    assert main.startswith(">r~X"), main
-    assert main.count("s") == 2, "forwards op and value, nothing else"
-    assert DECODER_TILE[2].count("r") == 2, "unselected: swallow both, branch-free"
+    assert DECODER_TILE[0].startswith(">r~X"), DECODER_TILE[0]
+    assert "".join(DECODER_TILE).count("s") == 2, "forwards op and value, nothing else"
+    assert DECODER_TILE[1].count("r") == 3, "two swallowed unselected, one op selected"
     # a cell never sees an address, only its own pipe
     assert "~" not in "".join(CELL_TILE)
+
+
+@pytest.mark.parametrize("tile", [DECODER_TILE, CELL_TILE])
+def test_a_tile_is_a_ring_that_wastes_no_cell_on_going_home(tile):
+    # The perimeter *is* the program: twelve cells, each one a glyph the man had
+    # to run or a turn he had to take. The lane-with-a-return-corridor it replaces
+    # spent 8 of its 20 ticks walking back west past nothing.
+    assert [len(r) for r in tile] == [5, 5, 5]
+    perimeter = tile[0] + tile[1][0] + tile[1][-1] + tile[2]
+    assert " " not in perimeter, f"a blank on the ring is a wasted tick: {tile}"
+    # the man is born facing east on the west side and turns straight into it
+    assert tile[1][0] == "^" and tile[2][0] == "^"
+    # ...and the other op is the three interior cells, entered off the ring
+    assert tile[1][1:4].strip(), "the interior lane has to do something"
 
 
 def test_the_spawner_hands_out_one_address_per_band():
@@ -87,13 +100,20 @@ def test_the_spawner_hands_out_one_address_per_band():
 
 def test_the_router_broadcasts_three_words_and_owns_no_other_pipe():
     joined = "\n".join(ROUTER_ROWS)
-    assert joined.count("S") == 6, "three per lane: addr, op, value"
-    # fixed width is what lets an unselected decoder swallow without branching:
-    # the READ lane sends its op and a dummy value from one `0`
-    assert ROUTER_ROWS[0].count("0") == 1
-    assert ROUTER_ROWS[0].count("S") == 3
+    # addr and op go out from the down leg; the third `S` is *shared* by both
+    # lanes on the way home, because after `W` a READ's A is still the 0 it sent
+    # as its op — the dummy value costs no literal and no second lane.
+    assert joined.count("S") == 3, "addr, op, and one shared final word"
+    assert "0" not in joined, "the dummy value is free, not a literal"
+    # `U` is a receive and a turn in one cell: the room's only incoming pipe is on
+    # the north wall, so every `U` here faces the man south, which is the turn
+    # both receives needed anyway.
+    assert joined.count("U") == 2, "the op and the value, each with its turn"
     # If the router had an outgoing pipe of its own, `S` would broadcast into it.
     assert "R" not in joined
+    # three columns. The room spans the field whatever happens — every band needs
+    # a pipe off its east wall — so rows here are free and columns are not.
+    assert max(len(r) for r in ROUTER_ROWS) == 3
 
 
 @pytest.mark.parametrize("n", [1, 2, 4])
@@ -156,15 +176,20 @@ def test_every_address_costs_the_same():
     src = build_addr(16).source()
     lm = Littleman()
 
-    def per_op(addr):
+    def per_op(addr, write):
         t = []
         for k in (4, 12):
-            snap = lm.judge(src, input=f"0 {addr} " * k, expected=[0] * k, max_ticks=300000)
-            assert snap.output == [0] * k
+            inp = (f"1 {addr} 5 " * k + f"0 {addr}") if write else f"0 {addr} " * k
+            want = [5] if write else [0] * k
+            snap = lm.judge(src, input=inp, expected=want, max_ticks=300000)
+            assert snap.output == want, (addr, snap.output)
             t.append(snap.step)
         return (t[1] - t[0]) / 8
 
-    assert [per_op(a) for a in (0, 1, 8, 15)] == [28.0] * 4
+    # The router's lap is the pacer and a tile's is 12, so both numbers are the
+    # router's: 16 for a READ, 18 for the WRITE's detour onto its second `U`.
+    assert [per_op(a, False) for a in (0, 1, 8, 15)] == [16.0] * 4
+    assert [per_op(a, True) for a in (0, 8, 15)] == [18.0] * 3
 
 
 def test_the_checked_in_grid_matches_the_generator():

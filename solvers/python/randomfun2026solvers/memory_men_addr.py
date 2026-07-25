@@ -62,7 +62,7 @@ from .memory_men import (
 
 __all__ = [
     "BAND",
-    "TILE_X0",
+    "tile_x0",
     "DECODER_TILE",
     "CELL_TILE",
     "ROUTER_ROWS",
@@ -74,47 +74,87 @@ __all__ = [
 #: Three, not five, because the only branch left in a tile is two-way.
 BAND = 3
 
-#: Interior column the tiles start at. Columns 0-2 belong to the spawner: the
-#: ``Y`` sits in column 2 so its east child lands on the tile's first cell, and
-#: the west child needs columns 0-1 to carry the increment back down.
-TILE_X0 = 3
+
+def tile_x0(increment: bool) -> int:
+    """Interior column the tiles start at; the columns west of it are the spawner's.
+
+    The ``Y`` sits immediately west of the tiles so its east child lands on the
+    first cell. Behind it the west child needs somewhere to turn around: one
+    column if he only has to walk (the cell room), two if he also has to carry
+    ``+`` ``M`` ``1`` (the decoder room).
+    """
+    return 3 if increment else 2
+
 
 #: One decoder, and every decoder is this. ``B`` holds his address forever.
 #:
-#: ``r`` takes the broadcast address, ``~`` XORs it against ``B`` — zero for
-#: exactly one man — and ``X`` turns on the result: straight is mine, clockwise
-#: is everyone else. Mine forwards ``op`` and ``value`` to its cell; not-mine
-#: swallows both and climbs home east of the mine lane, because the two paths may
-#: not cross.
+#: A **ring**, not a lane with a return corridor: the man walks the perimeter of a
+#: 3x5 box, so every cell he steps on is a cell that does something and a lap is 12
+#: ticks instead of 20. The three interior cells are the not-mine lane, which is
+#: the only branch a decoder has.
+#:
+#: ``r`` takes the broadcast address and ``~`` XORs it against ``B`` — zero for
+#: exactly one man. ``X`` turns on that: straight round the ring is mine (``r`` the
+#: op, ``s`` it on, ``r`` the value, ``s`` it on), clockwise is everyone else, who
+#: cuts across the middle swallowing both words in 8 ticks. Both paths rejoin at
+#: the west side, which is also where the ``Y`` puts the man — born facing east
+#: onto a ``^``, he turns straight into the ring.
 DECODER_TILE: tuple[str, ...] = (
-    "v       <<",
-    ">r~Xrsrs^ ",
-    "   >rr   ^",
+    ">r~Xv",
+    "^rr<r",
+    "^srs<",
 )
 
 #: One cell, and every cell is this. ``B`` holds the value; ``A`` starts at 0,
 #: which is the problem's "every cell starts at 0" for free.
 #:
-#: ``r`` takes the op word and ``X`` turns on it: READ is 0 (straight), WRITE is 1
-#: (clockwise). READ still has to swallow the dummy value word, then ``W M s``
-#: sends the value and puts it back in ``B``. WRITE is ``r`` then ``M``.
+#: The same 3x5 ring. Both ops read exactly the same two words — op, then value
+#: (a dummy on a READ) — so the *reads* are shared and only the tail differs; the
+#: branch is deferred to ``d`` at the south-east corner by parking the op in the
+#: backpack with ``b``. That is what lets one ring serve both:
+#:
+#:     READ   `r b r`, straight on: `W M s` — send the value, put it back in B
+#:     WRITE  `r b r`, `d` turns west: `M` — the value read is the value stored
 CELL_TILE: tuple[str, ...] = (
-    "v      <<",
-    ">rXrWMs^ ",
-    "  >rM   ^",
+    ">rbrv",
+    "^  Md",
+    "^sMW<",
 )
 
 #: The router: one op off the input stream becomes three broadcast words.
 #:
-#: ``r`` the op and ``X`` on it. The READ lane sends ``addr``, then ``0`` twice —
-#: the op word and the dummy value. The WRITE lane sends ``addr``, ``1``, and the
-#: value it reads next. The room must own **no other outgoing pipe**: ``S`` would
-#: broadcast into that one too, which is why answers go to a separate collector.
+#: Written **downwards**, three columns wide. The room has to span the field
+#: anyway — every band needs a pipe off its east wall — so its rows are already
+#: paid for and its columns are the only thing it can spend. Horizontally the same
+#: code was 12x4 and its lap was 28 ticks, which *was* the per-op cost of the whole
+#: memory. This is 3x8 and 17.
+#:
+#: ``U`` the op, ``M`` it into ``B``, ``r`` the address and ``S`` it, then ``W`` to
+#: bring the op back and ``S`` that. ``X`` turns on the op: READ walks straight out
+#: to the return column, WRITE turns west onto a second ``U``. Both then rise
+#: through the **same** final ``S``.
+#:
+#: Two things make it this short:
+#:
+#: * **``U`` is a receive and a turn in one cell.** The input pipe is the room's
+#:   only incoming one and it lands on the *north* wall, so every ``U`` here faces
+#:   the man south whatever he was doing — which is exactly the turn both receives
+#:   needed. ``v r`` twice becomes ``U`` twice.
+#: * **The dummy value is free.** After ``W`` a READ's ``A`` is still the ``0`` it
+#:   broadcast as its op, so the shared final ``S`` sends a correct third word with
+#:   no literal, no second lane and no extra row.
+#:
+#: The room must own **no other outgoing pipe**: ``S`` would broadcast into that
+#: one too, which is why answers go to a separate collector.
 ROUTER_ROWS: tuple[str, ...] = (
-    ">rXrS0SS   v",
-    "  >rS1SrS v ",
-    "            ",
-    "^    @    <<",
+    "@U<",
+    " M ",
+    " r ",
+    " S ",
+    " W ",
+    " S ",
+    "UXS",
+    ">>^",
 )
 
 #: Where the input pipe must arrive (interior row of the ``r`` that reads ``op``).
@@ -127,20 +167,24 @@ def band_room(n: int, tile: Sequence[str], *, increment: bool) -> tuple[list[str
     Returns the interior rows and each band's *main* row — the row a tile reads
     and sends on, and therefore the row both of its pipes bind to.
 
-    The spawner walks south down columns 0-2. Entering ``Y`` heading south puts
-    the order-preserving child one cell **west** (facing west) and the newest one
-    east (facing east), so the east child lands on his tile's ``>`` and starts
-    looping while the west child walks the increment and drops back into column 2
-    in time for the next band's ``Y``.
+    The spawner walks south down the columns west of the tiles. Entering ``Y``
+    heading south puts the order-preserving child one cell **west** (facing west)
+    and the newest one east (facing east), so the east child lands on his tile's
+    ``^`` and turns straight into the ring while the west child loops back into
+    the ``Y`` column in time for the next band.
 
     With ``increment`` that westward walk is ``+`` ``M`` ``1``: the spawner keeps
     ``A = 1``, so ``+`` makes ``A = 1 + B``, ``M`` writes it back to ``B`` and
-    ``1`` restores ``A``. Cell ``j`` is therefore born holding ``j``.
+    ``1`` restores ``A``. Cell ``j`` is therefore born holding ``j``. Those three
+    glyphs are the only reason the decoder room is a column wider than the cell
+    room: without them the child's turn-around fits in two columns.
     """
     if n < 1:
         raise ValueError("a memory needs at least one cell")
+    x0 = tile_x0(increment)
+    ycol = x0 - 1  # the `Y`, so that its east child lands on the tile
     tile_w = max(len(r) for r in tile)
-    iw = TILE_X0 + tile_w
+    iw = x0 + tile_w
     # one extra row on top: a man spawns facing east and has to be turned south
     # before he can enter the first `Y` heading south.
     ih = BAND * n + 1
@@ -154,7 +198,7 @@ def band_room(n: int, tile: Sequence[str], *, increment: bool) -> tuple[list[str
     put(0, 0, "@")
     if increment:
         put(1, 0, "1")  # A = 1 for the whole walk; every `+` is an increment
-    put(2, 0, "v")
+    put(ycol, 0, "v")
 
     main_rows: list[int] = []
     for j in range(n):
@@ -162,26 +206,58 @@ def band_room(n: int, tile: Sequence[str], *, increment: bool) -> tuple[list[str
         r_ret, r_main, r_alt = top, top + 1, top + 2
         main_rows.append(r_main)
 
-        put(2, r_main, "Y")
+        put(ycol, r_main, "Y")
         for dy, line in enumerate(tile):
             for dx, glyph in enumerate(line):
                 if glyph != " ":
-                    put(TILE_X0 + dx, r_ret + dy, glyph)
+                    put(x0 + dx, r_ret + dy, glyph)
 
         if j + 1 == n:
-            put(1, r_main, "H")  # no band left to seed, and no room to walk into
+            # no band left to seed, and no room to walk into
+            put(ycol - 1, r_main, "H")
             continue
-        # the west child: increment, round the corner, back to column 2 heading
-        # south. Blank cells are walked over, so the no-increment room is the
-        # same path with nothing on it.
+        # the west child, turning around: down the west column, back east under
+        # the tile, and south into the next `Y`.
         if increment:
-            put(1, r_main, "+")
+            put(1, r_main, "+")  # born on it, facing west
             put(0, r_alt, "M")
             put(1, r_ret + BAND, "1")
         put(0, r_main, "v")
         put(0, r_ret + BAND, ">")
-        put(2, r_ret + BAND, "v")
+        put(ycol, r_ret + BAND, "v")
     return ["".join(r) for r in rows], main_rows
+
+
+def build_router_probe() -> str:
+    """The router alone: input in, one pipe out, every broadcast word printed.
+
+    ``S`` writes to every outgoing pipe, so a router with exactly one of them is
+    the same program the field sees — and a sink that forwards each word to the
+    output makes the wire protocol readable directly:
+
+        ``0 5``     -> ``5 0 0``   (addr, op, dummy)
+        ``1 7 42``  -> ``7 1 42``  (addr, op, value)
+
+    Isolated on purpose: the router's lap *is* the memory's per-op cost, so it is
+    the one room worth shortening on its own, without 16 bands in the way.
+    """
+    grid = Circuit(28, 20)
+    rx, ry = 4, 6
+    iw = max(len(r) for r in ROUTER_ROWS)
+    _room(grid, rx, ry, list(ROUTER_ROWS))
+    _io_room(grid, rx + 1, ry - 5, "I")
+    draw_pipe(grid, [(rx + 1, ry - 3), (rx + 1, ry - 2), (rx + 1, ry - 1)])
+    sink_x = rx + iw + 4
+    draw_pipe(grid, [(x, ry + 1) for x in range(rx + iw + 1, sink_x)])
+    sink, _ = collector_rows(1)
+    _room(grid, sink_x, ry, list(sink))
+    ex = sink_x + max(len(r) for r in sink)
+    draw_pipe(grid, [(ex + 1, ry + 1), (ex + 2, ry + 1), (ex + 3, ry + 1)])
+    _io_room(grid, ex + 4, ry + 1, "O")
+    rows = [row.rstrip() for row in grid.rows()]
+    while rows and not rows[-1]:
+        rows.pop()
+    return "\n".join(rows)
 
 
 @dataclass(frozen=True)
@@ -228,18 +304,20 @@ def build_addr(n: int) -> Addr:
     dx = rox + router_iw + 4
     cx = dx + dec_iw + 4
     cox = cx + cell_iw + 4
-    grid = Circuit(cox + coll_iw + 2, roy + ih + 2)
+    # every room is as tall as the tallest, which for a small n is the router
+    span_h = max(ih, len(ROUTER_ROWS))
+    grid = Circuit(cox + coll_iw + 2, roy + span_h + 2)
 
     def spanned(body: Sequence[str], iw: int) -> list[str]:
         # A pipe's first cell must sit against its source room's wall, and its
         # last against the destination's — so every room in the chain has to be
         # as tall as the field, empty rows and all.
         out = [r.ljust(iw) for r in body]
-        return out + [" " * iw] * (ih - len(out))
+        return out + [" " * iw] * (span_h - len(out))
 
     _room(grid, rox, roy, spanned(ROUTER_ROWS, router_iw))
-    _room(grid, dx, roy, dec_body)
-    _room(grid, cx, roy, cell_body)
+    _room(grid, dx, roy, spanned(dec_body, dec_iw))
+    _room(grid, cx, roy, spanned(cell_body, cell_iw))
     _room(grid, cox, roy, spanned(coll_rows, coll_iw))
 
     # input drops into the router's north wall; the answer climbs out of the
@@ -338,7 +416,7 @@ def build_addr(n: int) -> Addr:
         )
         dbg.region(
             f"decoder addr {j}",
-            dx + TILE_X0,
+            dx + tile_x0(True),
             roy + main - 1,
             len(DECODER_TILE[1]),
             BAND,
@@ -351,7 +429,7 @@ def build_addr(n: int) -> Addr:
         )
         dbg.region(
             f"cell addr {j}",
-            cx + TILE_X0,
+            cx + tile_x0(False),
             roy + main - 1,
             len(CELL_TILE[1]),
             BAND,

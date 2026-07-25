@@ -1,56 +1,56 @@
- +-+                                               +-+
- |I|                                               |O|
- +-+                                               +-+
-  v                                                 ^
-  v                                                 ^
-+------------+  +-------------+  +------------+  +----+
-|>rXrS0SS   v|  |@1v          |  |@ v         |  |@>Rv|
-|  >rS1SrS v |  |   v       <<|  |   v      <<|  | ^s<|
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|^    @    <<|  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>|v+Y>r~Xrsrs^ |>>|v Y>rXrWMs^ |>>|    |
-|            |  |M     >rr   ^|  |     >rM   ^|  |    |
-|            |  |>1vv       <<|  |> vv      <<|  |    |
-|            |>>| HY>r~Xrsrs^ |>>| HY>rXrWMs^ |>>|    |
-|            |  |      >rr   ^|  |     >rM   ^|  |    |
-+------------+  +-------------+  +------------+  +----+
+ +-+                            +-+
+ |I|                            |O|
+ +-+                            +-+
+  v                              ^
+  v                              ^
++---+  +--------+  +-------+  +----+
+|@U<|  |@1v     |  |@v     |  |@>Rv|
+| M |  |   >r~Xv|  |  >rbrv|  | ^s<|
+| r |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+| S |  |M  ^srs<|  |  ^sMW<|  |    |
+| W |  |>1v>r~Xv|  |>v>rbrv|  |    |
+| S |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|UXS|  |M  ^srs<|  |  ^sMW<|  |    |
+|>>^|  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>|v+Y^rr<r|>>|vY^  Md|>>|    |
+|   |  |M  ^srs<|  |  ^sMW<|  |    |
+|   |  |>1v>r~Xv|  |>v>rbrv|  |    |
+|   |>>| HY^rr<r|>>|HY^  Md|>>|    |
+|   |  |   ^srs<|  |  ^sMW<|  |    |
++---+  +--------+  +-------+  +----+
