@@ -218,3 +218,16 @@ Brackets shrinks its binding side and lowers average ticks from 25,593 to
 25,510.777777777777 (objective −2.41%). These candidates derive from the
 current best submitted solutions; they are not themselves claimed to be
 submitted.
+
+## ROM-shape optimization
+
+More ROM rows make a CPU ROM narrower and taller; fewer make it wider and
+shorter. `lm1.romopt` deterministically tries both neighboring folds in
+binding-axis order, validates every public case, and repeats for up to 10
+rounds. `--handmade-top-rom` replaces only a generator-identical top ROM room
+and shifts the unchanged hand-made suffix.
+
+For `littleman/examples/snake-handmade.man`, 8 ROM rows are the local optimum:
+121×100 becomes 102×102 and the measured public objective falls from
+1,738,577,755.20 to 1,219,369,608.00. The lower 90-line hand-made suffix is
+otherwise byte-identical.
