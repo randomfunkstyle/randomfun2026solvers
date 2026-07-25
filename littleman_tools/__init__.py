@@ -4,9 +4,12 @@ __all__ = [
     "Littleman",
     "LittlemanError",
     "FanOut",
+    "LanguageError",
     "ProgramScore",
     "ScoringError",
     "Snapshot",
+    "parse_file",
+    "parse_program",
     "score_program",
 ]
 
@@ -25,4 +28,8 @@ def __getattr__(name: str) -> object:
         from . import composer
 
         return composer.FanOut
+    if name in {"LanguageError", "parse_file", "parse_program"}:
+        from . import language
+
+        return getattr(language, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
