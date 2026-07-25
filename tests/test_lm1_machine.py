@@ -42,7 +42,7 @@ slow = pytest.mark.skipif(
 #: The two graded problems this generator exists for, and the tape size each needs.
 #: Sized from the *problem constraints*, not the public data: ``tcp`` allows n=48,
 #: so addresses reach BUF+47 = 51 even though no public case goes past 35.
-TARGETS = {"brackets": 8, "tcp": 52}
+TARGETS = {"brackets": 8, "tcp": 52, "sudoku-validity": 37}
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────
@@ -186,6 +186,8 @@ def test_public_cases_pass_on_the_real_interpreter(slug: str, tape_n: int) -> No
     from randomfun2026solvers import optimize
 
     path = REPO / "tasks" / "solutions" / f"{slug}_cpu.man"
-    res = optimize.verify(path, slug, tick_cap=3_000_000)
+    # sudoku-validity's 81-round case settles at ~2.3M, so 3M left too little
+    # headroom for it to survive an unrelated slowdown.
+    res = optimize.verify(path, slug, tick_cap=5_000_000)
     failed = [c.name for c in res.cases if not c.passed]
     assert res.passed, f"{slug}: {failed}"

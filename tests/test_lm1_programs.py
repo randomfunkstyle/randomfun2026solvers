@@ -33,11 +33,15 @@ MAX_INSTRUCTIONS = 3_000_000
 
 #: Problems ARCH.md §4.1 leaves blocked on the STORE block, plus the two display
 #: problems. No program here should claim to solve one of these.
+#:
+#: ``sudoku-validity`` came off this list: it looked blocked because its natural
+#: encoding is 3 x 9 x 9 = 243 set-membership flags and the tape caps at 84 slots,
+#: but as 27 one-cell bitmasks it needs only 36 addresses. What unblocked it was an
+#: encoding change plus one opcode (`AND`), not a bigger STORE block.
 BLOCKED = {
     "memory",
     "reverse-a-list",
     "sort-numbers",
-    "sudoku-validity",
     "subset-sum",
     "gradebook",
     "matmul",
@@ -62,6 +66,7 @@ def test_the_expected_programs_exist() -> None:
         "tcp",
         "history-lesson",
         "plotter",
+        "sudoku-validity",
     }
 
 
@@ -111,6 +116,10 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # express; one opcode per LM-75 port gives each its own lane (see plotter.asm).
         "plotter": {"DSPA", "DSPD", "DSPS", "NEG"},
         "triangle-closed": {"MUL", "DIVI"},
+        # 27 one-cell bitmasks instead of 243 flags: `AND` tests membership, and
+        # the set is a plain ADD because the test proved the bit clear. LDA/MOVA
+        # index the masks; DIVI builds the box number (see sudoku-validity.asm).
+        "sudoku-validity": {"AND", "DIVI", "LDA", "MOVA"},
     }
 
 
