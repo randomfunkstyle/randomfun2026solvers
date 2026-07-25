@@ -1,22 +1,34 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: the synthesiser solves the problems that need memory and control flow.**
-`lm1/machine.py` takes an assembled program and emits a whole machine — looping
-ROM + CPU (depth-`k` trie, one lane per used opcode, a structures band for jumps
-and branches) + a request adapter + the 32×32 tape + I/O. On the reference
-interpreter it passes **`brackets` 9/9** (98×95, 62,930 avg ticks) and **`tcp`
-6/6** (112×78, 96,923 avg ticks), plus hand-built cases at both problems'
-constraint limits — `brackets` at depth-32 nesting and n=64, `tcp` at n=48 with a
-worst-case legal scramble (351k ticks against a 5M cap). §2.7 has the findings.
+**Status: Semesters 1 and 2 are complete — 10 of the 12 graded problems are
+solved**, every one passing all its public cases on the reference interpreter.
 
-That makes **four** problems solved by generated or bespoke grids, and the first
-two that need addressed memory *and* loops. `lm1/cpugen.py` remains the earlier
+| set | problem | grid | score | how |
+|---|---|---|---|---|
+| 1 | `triangle` | 8×8 | **960** | bespoke |
+| 1 | `memory` | 31×32 | 14,289,920 | bespoke (pipe tape) |
+| 1 | `reverse-a-list` | 21×21 | 482,564 | bespoke (value ring) |
+| 1 | `sort-numbers` | 25×25 | 2,083,304 | bespoke (value ring) |
+| 2 | `history-lesson` | 97×90 | **9,409** | bespoke (base-128 ROM) |
+| 2 | `brackets` | 98×75 | 308,880,647 | LM-1 |
+| 2 | `tcp` | 112×77 | 1,195,367,936 | LM-1 |
+| 2 | `plotter` | 112×116 | 2,749,462,237 | LM-1 + display |
+| 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
+| 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
+| — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
+
+`lm1/machine.py` takes an assembled program and emits the whole machine — looping
+ROM + CPU (depth-`k` trie, one lane per used opcode, a structures band for jumps
+and branches) + a request adapter + the tape + I/O, or an LM-75 panel instead of
+an `O` room for the display problems. `lm1/cpugen.py` remains the earlier
 hand-rolled 7-opcode instance (`triangle`, §2.6); `lm1/synth.py` is the
 straight-line-only generator it grew into. `machine.py` supersedes both.
 
-Two problems are solved *without* LM-1, as bespoke grids: `memory` (accepted by
-the judge) and `history-lesson`. LM-1 is the safety net for the rest, not the plan
-of record (§1).
+The five bespoke grids beat their LM-1 equivalents by orders of magnitude —
+`triangle` is 960 by hand against 471,744 generated — so LM-1 remains the safety
+net rather than the plan of record (§1). Still open: **`matmul`** (needs ~512
+cells against a 103-slot tape, so it is blocked on the store, not the ISA) and
+**`subset-sum`**.
 
 Visual walkthrough: [`arch.html`](arch.html) — the verified units, an animated
 run of the whole machine driven by real interpreter snapshots, the tick budget
@@ -335,6 +347,72 @@ need a pointer and a value live together. **`tcp` therefore needs no SPILL block
 all** — one fewer room, two fewer pipes, and every memory lane stays on the east
 bus, which is what keeps §7.1 tractable.
 
+### 2.9 Profiling: where the ticks actually go
+
+`tools/heatmap.mjs` samples every runner's cell as the engine steps, and
+`lm1/profile.py` attributes those cells to the regions `machine.py` records at
+generation time (`Machine.regions`, rendered through the memory worker's
+`man_debug` overlays). Two things had to be right before the numbers meant
+anything:
+
+- **Split by runner.** A *servant* blocked on its input — the adapter waiting for
+  a request, the tape waiting for the adapter, the relay waiting for the ring — is
+  **idle**, not a bottleneck, and pooling it with the CPU inverts the picture. The
+  first run pooled them and pointed at the adapter's `r` as 19 % of all time; it
+  is simply idle 89 % of its life. The tool now reports a stall fraction per
+  runner and treats the least-stalled man as the critical path.
+- **Name the cells.** A generated grid has ~10k cells and carries no comments, so a
+  list of hot coordinates is unreadable.
+
+`plotter`, sampled over one round (300k ticks), before any change:
+
+| bucket | share | note |
+|---|---|---|
+| lanes | 47 % | but ~80 % of each *memory* lane is its blocked `r` |
+| **return path** | **25 %** | pure walking — no work at all |
+| slabs | 7.7 % | |
+| trie | 6.1 % | |
+| fetch | 1.4 % | |
+
+**The return path was the first fix, and it was a placement mistake, not a
+necessity.** Every instruction walks from the collector row up a riser to the
+fetch row, and the collector had been placed *below* the structures band — so the
+riser was 38 cells where the lane band alone needs 16. Moving the collector
+directly under the lane band and making slab exits **rise** into it instead of
+dropping past it took the return path to 17.9 % and bought:
+
+| | before | after | |
+|---|---|---|---|
+| `brackets` | 62,930 | **55,986** | −11.0 % |
+| `plotter` | 482,933 | **421,917** | −12.6 % |
+| `tcp` | 96,923 | **92,383** | −4.7 % |
+| `gradebook` | 694,713 | **681,441** | −1.9 % |
+
+Two glyph rules fell out of it, both of which broke a program first:
+
+- **Only a turn cell may be an arrow; the body of a drop or riser must be `.`.**
+  A riser now crosses shallower slabs' westbound entry rows, and a `^` there sends
+  that man north. `.` is the only glyph two men crossing one cell in different
+  directions both survive.
+- **A branch's loop exit cannot rise at `base + 2`** — that is exactly the column
+  where each arm parks its `W`, so the returning man walked through a register
+  swap. It rises at `base + 11`, east of every arm.
+
+**Still on the table, measured.** The next two, with the numbers that justify them:
+
+1. **The CPU is 13–18 columns wider than it needs to be**, purely so a memory `r`
+   binds to the tape's response pipe (east) rather than the ROM pipe (west) — that
+   is what `mem_pad` is. The width is paid *twice per instruction* (east to the
+   drop column, west along the collector). Moving the response pipe to the **north**
+   wall, directly above the memory lanes, would let `mem_pad` be 0: it lengthens
+   one pipe (a per-*read* cost) to shorten every instruction's walk (a per-
+   *instruction* cost), and instructions outnumber reads ~2.7:1, so break-even is
+   ~70 extra pipe cells against ~26 saved per instruction.
+2. **Response-pipe latency is 5–9 %.** The pipe is 47–49 cells and a read is
+   strictly serial — `s` then `r`, one outstanding request — so the whole length is
+   paid on every read (§7.4b). It is that long only because the adapter sits
+   between the CPU and the tape, forcing a detour over the top.
+
 ## 3. Block diagram
 
 Every box is a `layout.py` `Container` with fixed ports; every arrow is a pipe
@@ -409,10 +487,38 @@ slot count. It is free on footprint and linear on ticks — there is no trade-of
 to weigh.** `tcp` at N=48 is 1.9× cheaper per access than the N=100 build,
 `brackets` at N=32 is 2.6×, `sort-numbers` at N=16 is 4.1×.
 
+**The rule holds but this formula understates it badly, and the mechanism is the
+ring's phase.** Measured end-to-end on generated machines, one extra slot costs
+**~999 ticks per case on `tcp`** and ~114 on `brackets` (`tcp` at 52/70/90 slots:
+99,456 / 116,894 / 137,410) — an order of magnitude above `8.3·N`, because a
+request does not pay a fixed latency, it *waits for its slot to come round*. Two
+consequences the formula hides:
+
+- **A tape-bound program's instruction count barely matters.** A `tcp` rewrite
+  that removed 158 executed instructions with an **identical** memory access
+  sequence scored **14.8% worse** (1,215,797,931 → 1,395,950,677), and a
+  byte-identical grid reached by a different route cost 2.6% more ticks. Removing
+  work re-times requests onto worse ring phases.
+- So **any tape-bound program must be judged on the engine, never modelled.** The
+  emulator's flat 6 ticks per store word and §7.3's budget are both fine for
+  comparing compute-bound programs and useless here. `brackets` is
+  instruction-bound (fetch+decode+return is 41% of its ticks) and `tcp` is
+  tape-bound; the same change can help one and hurt the other.
+
 Note the ~105-tick fixed overhead per operation (read op, read addr, arithmetic,
 dispatch) — it does not amortise away, which is why even an N=4 tape costs 138
 ticks and loses to a `register-cell` by 7× for scratch. The tiers are distinct
 mechanisms, not two sizes of the same one.
+
+**In a generated machine that fixed part is ~316 ticks, not ~105, and it dwarfs the
+slope.** Solving for per-unit costs against `plotter`'s engine total (§8.1) gives
+~316 ticks per access at N=11 while rebuilding the *same* program at N=11/21/31 moves
+it by only ~1.9 ticks per access per slot. So the two figures above answer different
+questions and both are needed: `8.3·N`-style slope arguments decide **how big** to make
+a tape, and the ~316 fixed cost decides **how often to touch it**. Sizing is worth a
+few percent; access count is worth multiples. The planning rule that falls out —
+**one tape access ≈ 7 instructions ≈ 40 recirculated ROM words** — is what turned
+`plotter` from 6 % over the step cap to 61 % under it.
 
 Further variants, in rough order of payoff (the first two are described in
 `programs/README.md` and not yet built):
@@ -960,6 +1066,49 @@ Footprint, for a 60-word program: ROM ≈ 300 cells (~20×15), ring ≈ 62 cells
 CPU ≈ 40×24, STORE stub small. Bounding box ~70×50 → `footprint ≈ 4900`, so a
 250k-tick run scores ~1.2e9. Ugly, and expected (§1).
 
+### 7.6 The lane-order shortcut is already spent — measured, not argued
+
+A lane that touches no memory does **not** walk out to the shared `mem_x`
+column: `_flat_lane` only pads a lane that contains a `Band.MEM` glyph, so short
+lanes already turn south early. That shortcut is in.
+
+The obvious refinement — order lanes by their *true* east extent rather than by
+micro-program length — **loses**. The two differ because a memory lane reaches
+`max_prefix + (len(micro) − first_mem) − 1` while a memory-free lane stops at
+`len(micro) − 1`, and the existing order is genuinely not monotone in the true
+extent (`ST` extent 4 sat above `SUB` extent 5). Reordering to fix that was
+measured on all three generated solutions:
+
+| | micro-length order | true-extent order |
+|---|---|---|
+| `brackets` | **363,687,473** | 364,229,566 |
+| `tcp` | **1,215,797,931** | 1,217,620,992 |
+| `sudoku-validity` | **12,712,904,437** | 12,739,766,825 |
+
+Uniformly ~0.2% worse, so it was reverted. The reason is that **the drop
+staircase is not what sets the width**: for `brackets` the width decomposes as
+`9 + 33 (cpu) + 4 + 13 (adapter) + 6 + 33 (tape) = 98` and is floored by the
+structures band (`struct_east = 28` against a maximum `lane_end` of 22), so lane
+order changes only *which* row each opcode gets, never the box.
+
+What that leaves as the real per-row lever is **vertical** travel, and its shape
+is worth knowing before anyone tries again. A lane costs
+`|row − centre|` to reach plus `collector − row` to drop. For `row > centre`
+those sum to `collector − centre`, a **constant**; for `row < centre` they sum to
+`collector + centre − 2·row`, which *decreases* as the row moves down. So rows
+above the trie centre are strictly worse than rows below it, and the only
+profitable ordering rule is to keep hot opcodes at or below centre — which needs
+dynamic opcode frequencies, not static lane geometry. Untested.
+
+Two other footprint facts fell out of the same measurement:
+
+- `rows_for_budget(..., max(40, W))` caps the ROM at 40 columns even when the
+  grid is 98 wide. Folding it to the true width would drop ~10 rows of height at
+  no footprint cost — and height slack is exactly what a depth-5 trie (+~32 rows)
+  would need to be affordable.
+- The tape is a fixed 33 columns at **any** `N` (checked at `tape_n` 5, 6, 8 —
+  all give 98×79 for `brackets`), so shrinking `tape_n` buys nothing.
+
 ## 8. Coverage by semester
 
 Semesters do not map onto capability tiers — the tiers cut across them. But
@@ -979,7 +1128,7 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 2 | `history-lesson` | no input; pure ROM dump (`footprint`-only) | 0 | 1/1 · P=8431 · 273k | **✔ solved bespoke** |
 | Sem 2 | `brackets` | typed stack depth 32; needs `MODI`/`DIVI` | 6 scalars | 9/9 · P=154 · 30k | **✔ solved by the synthesiser** (98×95, 62,930 ticks, score 604M) |
 | Sem 2 | `tcp` | indexed by `seq`; needs `LDA`/`MOVA` | 51 | 6/6 · P=45 · 30k | **✔ solved by the synthesiser** (112×78, 96,923 ticks, score 1.22bn) |
-| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 10 | 6/6 · P=151 · 173k | **✔ solved by the synthesiser** (112×106, 482,933 ticks avg, score 6.06bn) |
+| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 10 | 6/6 · P=243 · 74k | **✔ solved by the synthesiser** (112×116, 204,330 ticks avg, score 2.75bn) |
 | Sem 3 | `gradebook` | ids + N×K grades, search by id; needs `LDA`/`MOVA`/`DIVI` | 93 | 7/7 · P=460 · 318k | **✔ solved by the synthesiser** (112×103, 694,713 ticks, score 8.71bn) |
 | Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | — | **✕** |
 | Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
@@ -996,29 +1145,70 @@ engine's own `frameJudge` verdict, and `tools/display-frames.mjs` steps with
 `stopOnFrame` and compares the snapshots in Python. Neither is the old "no fatal, no
 output" check, which proved nothing on a problem that emits no output.
 
-**`plotter`'s tick margin is negative at the constraints' limit, and that is fine
-only because of `privateTestCount`.** Three figures for it get confused with each
-other, so all three, measured on the engine:
+### 8.1 `plotter` was 6 % over the step cap, and the fix was tape accesses per pixel
 
-| Load | Ticks | vs 5M cap |
+The margin used to be **negative** at the constraints' limit: 20 rounds of the worst
+legal segment cost **5,311,321** ticks against a 5,000,000 cap, and the only reason
+that shipped is that the number nobody had measured on the engine was the one everyone
+quoted. All figures below are `lm.mjs judge --frames`, never the emulator.
+
+| Load | before | after |
 |---|---|---|
-| worst **graded** case (`octant fan`, 8 rounds) | 857k | 0.17× |
-| 20 rounds averaging less than the worst segment | 4.78M | 0.96× |
-| 20 rounds of the **worst legal** segment (`dx=31, dy=23`) | 5.31M | **1.06× — cut off** |
+| worst **graded** case (`octant fan`, 8 rounds) | 857k | **378k** |
+| 20 rounds of the worst legal segment | **5.31M — 1.06× the cap** | **1.94M — 0.39×** |
+| score (`max(w,h)² × avg ticks`) | 12,544 × 483k = 6.06bn | 13,456 × 204k = **2.75bn** |
 
-The most expensive legal segment is the one with the largest minor-axis travel, at
-~265.5k ticks a round, so **18 rounds fit and 19 do not** (5.05M). The constraints
-allow 20. What makes `plotter` submittable anyway is that **every problem here has
-`privateTestCount: 0`** — the graded set *is* `publicTestData` — so the 857k figure
-is the one that scores. `test_lm1_display.py` asserts that, rather than leaving it as
-a comment, and asserts the 19-round overrun too; if a problem JSON ever grows private
-cases the margin has to be re-argued from scratch.
+**Where the ticks were, decomposed against the engine's total** (20 rounds,
+12,560 tape accesses, 19,220 instructions, 59,600 recirculated words): solving for the
+per-unit costs gives **~316 ticks per tape access**, ~45 per instruction and the known
+8 per skipped word — so the tape was **75 %** of the bill, instructions 16 % and jumps
+9 %.
 
-The middle row is the trap: it is the load `test_lm1_programs.py` uses, its segments
-average cheaper than the worst, and reading its 0.96× as *the* margin is how a machine
-that is 1.06× over the cap gets written down as being under it. The emulator's
-estimate for that same load is 3.8M — ~20 % optimistic against the engine — so it is
-not the margin either.
+That 316 is the load-bearing number and it is *not* §4.1's `105 + 8.3N`. §4.1's slope
+is real but small: rebuilding `plotter` at N = 11/21/31 moves the total by only
+~1.9 ticks per access per slot, so almost all of the 316 is fixed cost per access —
+adapter round trip plus the tape's own dispatch — and it does **not** amortise. The
+practical rule: **an access costs ~7 instructions. Count accesses, not instructions.**
+
+Three transformations got the inner loop from ~20 accesses per pixel to 4
+(`programs/plotter.asm` documents each; all three are verified against the spec's
+pseudocode over all 589,824 endpoint pairs):
+
+- **carry `addr = 32*y + x` instead of `(x, y)`** — the map is injective on the panel,
+  so the stop test `x==x1 and y==y1` is exactly `addr == addr1`;
+- **split on the major axis**, which makes one of Bresenham's two error tests
+  identically true, leaving two arms whose entire effect is *one addition of a
+  per-round constant* to (err, addr);
+- **pack err and addr into one word** at radix 1024, so that addition is one `ADD`.
+  The surviving error test becomes `sign(q)` by folding the threshold into the packed
+  value, which works because the threshold is a whole multiple of the radix and so
+  cannot disturb the low field. `MODI 1024` recovers `addr` with no access at all.
+
+The fourth lever is **unrolling, and it is worth stating on its own** because it is
+counter-intuitive: a backward jump recirculates `P − body` words at 8 ticks each, so
+**every iteration pays for the whole program's non-loop code whether it runs or not**
+(§5.4). `P − body` is just the setup, so `u` copies of the body divide that tax by `u`
+at a cost in ROM cells only — measured 2,485,405 / 2,075,485 / 1,894,525 / 1,846,233
+ticks at u = 1/2/4/6. Four is where it flattens and where `footprint × ticks` bottoms
+out; note the *footprint* cost is real here, because `plotter` is height-bound once the
+ROM is folded to 112 columns.
+
+Two smaller findings from the same rewrite:
+
+- **An `N`-slot tape addresses 1..N−1.** Ten live values fit an N=11 tape only after
+  aliasing four pairs whose live ranges do not overlap. Overrunning by one slot is not
+  a wrong answer, it is `fatal: wall` inside the tape room — the same failure `tcp`
+  hit at 51 slots.
+- **16 opcodes is free, 17 is not.** `k = ceil(log2 |used|)`, so the sixteenth opcode
+  (`MODI`, here) costs nothing while a seventeenth adds a trie level to *every*
+  instruction plus ~32 lane rows. That ceiling is what ruled out `DIVI`/a shift opcode
+  for the branch-free `sx = 2*floor((dx−1)/32) + 1` trick, which would otherwise have
+  shortened the setup.
+
+`privateTestCount: 0` is therefore no longer what makes `plotter` submittable — it says
+0 for every problem here, and it said 0 for `gradebook` too, which the judge then
+served a private case anyway. Measure the constraint limit on the engine and assert it:
+`test_lm1_display.py::test_the_worst_legal_20_round_load_fits_the_step_cap_on_the_engine`.
 
 Three findings that change the plan:
 

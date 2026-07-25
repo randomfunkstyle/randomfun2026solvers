@@ -183,6 +183,34 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("s", Band.MEM),
         ("W", None),  # ACC restored
     ),
+    # Read-modify-write by a constant. `M` spends ACC to keep a second copy of the
+    # address, which is what survives `r`; once the write marker is out the address
+    # is dead and a digit glyph can safely reload A. B still holds the old value, so
+    # ACC comes out as the *pre*-operation word — free, and worth an instruction at
+    # every loop head (`DECM n; BRZ done`). See isa.py's family note.
+    Sem.INC_MEM: (
+        ("M", None),  # B = addr
+        ("s", Band.MEM),  # +addr: read
+        ("r", Band.MEM),  # A = store[addr]
+        ("W", None),  # A = addr, B = the old value
+        ("N", None),  # -addr: the write marker
+        ("s", Band.MEM),
+        ("1", None),  # the address is dead; A = 1 costs one cell
+        ("+", None),  # A = 1 + old
+        ("s", Band.MEM),
+    ),
+    Sem.DEC_MEM: (
+        ("M", None),
+        ("s", Band.MEM),
+        ("r", Band.MEM),
+        ("W", None),
+        ("N", None),
+        ("s", Band.MEM),
+        ("1", None),
+        ("-", None),  # A = 1 - old
+        ("N", None),  # A = old - 1; cheaper than holding a negative literal
+        ("s", Band.MEM),
+    ),
     Sem.ADD_MEM: (("s", Band.MEM), ("r", Band.MEM), ("+", None), ("M", None)),
     Sem.SUB_MEM: (
         ("s", Band.MEM),
@@ -192,6 +220,17 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.MUL_MEM: (("s", Band.MEM), ("r", Band.MEM), ("*", None), ("M", None)),
+    # Exactly SUB_MEM's shape: `/` is native, and the `W` is there for the same
+    # reason — the divisor arrives in A from the tape and the dividend is ACC in B.
+    # `/` leaves the remainder in B; the trailing `M` overwrites it.
+    Sem.DIV_MEM: (
+        ("s", Band.MEM),
+        ("r", Band.MEM),
+        ("W", None),
+        ("/", None),
+        ("M", None),
+    ),
+    Sem.AND_MEM: (("s", Band.MEM), ("r", Band.MEM), ("&", None), ("M", None)),
     # ── indexed memory: `LDP`/`STP`, and *no SPILL block* ─────────────────────
     # ``isa.py`` gives both of these a spill slot, because in the ``0 addr`` /
     # ``1 addr value`` wire protocol the request-opening literal clobbers A while B
@@ -265,9 +304,13 @@ MEMORY_SEMS = frozenset(
     {
         Sem.LOAD,
         Sem.STORE,
+        Sem.INC_MEM,
+        Sem.DEC_MEM,
         Sem.ADD_MEM,
         Sem.SUB_MEM,
         Sem.MUL_MEM,
+        Sem.DIV_MEM,
+        Sem.AND_MEM,
         Sem.STORE_ACC_MEM,
         Sem.LOAD_IND,
         Sem.STORE_IND,
@@ -568,6 +611,9 @@ class _Cpu:
     has_out: bool = True  # False on a display problem: no `O` room at all
     dsp_cols: dict[str, int] = field(default_factory=dict)  # display band -> `s` column
     stream_cols: dict[str, int] = field(default_factory=dict)  # STREAM band -> glyph column
+    #: Named boxes in *interior* coordinates, for profiling and overlays. The grid
+    #: cannot carry comments, so this is the only record of what a cell means.
+    regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
 
 def _flat_lane(
@@ -686,12 +732,20 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
     order = sorted(structured, key=lambda m: drop_x[p.row[m]])
     slab_at: dict[str, int] = {}
     slab_base: dict[str, int] = {}
-    y = span + 2
+    # The collector sits **immediately** below the lane band, above the slabs, and
+    # slab exits *rise* into it rather than dropping past it. That is worth real
+    # ticks: every instruction walks the riser from the collector up to the fetch
+    # row, so putting the collector below ~21 rows of slabs made the riser 38 cells
+    # instead of 16 — paid once per instruction, for the whole program. A profile
+    # (`tools/heatmap.mjs` + `lm1.profile`) put the return path at 25 % of the CPU's
+    # time before this.
+    collector = span + 1
+    y = collector + 1
     for i, m in enumerate(order):
         slab_at[m] = y
         slab_base[m] = _STRUCT_X0 + i * _SLAB_PITCH
         y += slab_rows[m]
-    collector = y
+    bottom = y
 
     g = _Grid()
     pipe_glyphs: list[tuple[int, int, str, str]] = []
@@ -740,7 +794,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
         m = by_row.get(r)
         stop = slab_at[m] if (m is not None and m in slab_at) else collector
         for yy in range(r + 1, stop):
-            g.soft(drop_x[r], yy, ".")
+            g.soft(drop_x[r], yy, ".")  # crosses the collector row for a slab lane
 
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
@@ -758,6 +812,8 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
         g.put(base, s0, "v")
 
     # ── collector -> west riser -> back into the fetch cell ──────────────────
+    # `soft` after the drops, so a slab-entry column that has to pass *through* the
+    # collector keeps its `.` and is not turned west by a `<`.
     ret_x = max([*drop_x.values(), *struct_drops])
     for x in range(3, ret_x + 1):
         g.soft(x, collector, "<")
@@ -777,7 +833,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
         )
 
     width = ret_x + 1
-    height = collector
+    height = bottom
     mem_rows = sorted(
         r
         for r in all_rows
@@ -786,6 +842,23 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
     mem_out_row = mem_rows[len(mem_rows) // 2] if mem_rows else centre
     in_rows = [p.row[m] for m in used if p.sem[m] is Sem.INPUT]
     out_cols = [lane_x0 + 1]
+
+    # ── name every region, so a profile is readable ───────────────────────────
+    regions: dict[str, tuple[int, int, int, int]] = {
+        "fetch": (1, centre, 4, 1),
+        "trie": (5, 1, k, span),
+        "return:riser": (1, centre + 1, 1, collector - centre),
+        "return:collector": (2, collector, ret_x - 1, 1),
+    }
+    for r in all_rows:
+        m = by_row.get(r)
+        if m is None:
+            continue
+        end = drop_x.get(r, lane_end[r])
+        regions[f"lane:{m}"] = (lane_x0, r, max(1, end - lane_x0 + 1), 1)
+    for m in order:
+        regions[f"slab:{m}"] = (slab_base[m], slab_at[m], _SLAB_PITCH, slab_rows[m])
+
     return _Cpu(
         cells=g.c,
         width=width,
@@ -807,6 +880,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
         # instead of the tape's answers.
         mem_in_row=max(mem_out_row - 4, 1),
         ports={},
+        regions=regions,
         pipe_glyphs=pipe_glyphs,
         has_in=bool(in_rows),
         has_out=any(p.sem[m] is Sem.OUTPUT for m in used),
@@ -845,8 +919,10 @@ def _slab(
     if sem in _JUMP_SEMS:
         _discard_loop(g, base, s0 + 2, pipe_glyphs)
         exit_col = base + 2
-        g.put(exit_col, s0 + 2, "v")
-        for y in range(s0 + 3, collector):
+        # Rise back to the collector, which is now *above* the slabs: the exit is a
+        # `^` column, and the collector's own `<` turns the arriving man west.
+        g.put(exit_col, s0 + 2, "^")
+        for y in range(collector + 1, s0 + 2):
             g.soft(exit_col, y, ".")
         return {exit_col}
 
@@ -873,11 +949,15 @@ def _slab(
             x += 1
         for c in range(x, cols[arm]):
             g.soft(c, row, ".")
-        g.put(cols[arm], row, "v")
-        end = turn_row if arm == taken else collector
-        for y in range(row + 1, end):
-            g.soft(cols[arm], y, ".")
-        if arm != taken:
+        if arm == taken:
+            g.put(cols[arm], row, "v")
+            for y in range(row + 1, turn_row):
+                g.soft(cols[arm], y, ".")
+        else:
+            # Not-taken arms rise to the collector above the slab.
+            g.put(cols[arm], row, "^")
+            for y in range(collector + 1, row):
+                g.soft(cols[arm], y, ".")
             drops.add(cols[arm])
 
     # The taken arm turns west along `turn_row` and runs back to the slab's west
@@ -892,9 +972,16 @@ def _slab(
     g.put(base, turn_row, "v")
 
     _discard_loop(g, base, loop_y, pipe_glyphs)
-    exit_col = base + 2
-    g.put(exit_col, loop_y, "v")
-    for y in range(loop_y + 1, collector):
+    # East of every arm, which is not cosmetic. The exit now *rises* to the
+    # collector, so it crosses all three arm rows on the way — and `base + 2` is
+    # exactly where each arm keeps its `W`, so a riser there walks the returning man
+    # through a register swap. `base + 11` clears `cols["neg"]` (`base + 9`) and
+    # still fits inside _SLAB_PITCH.
+    exit_col = base + 11
+    # Only the turn cell is an arrow: the body must be `.` because it also crosses
+    # shallower slabs' westbound entry rows, where a `^` would send that man north.
+    g.put(exit_col, loop_y, "^")
+    for y in range(collector + 1, loop_y):
         g.soft(exit_col, y, ".")
     drops.add(exit_col)
     return drops
@@ -1107,6 +1194,53 @@ class Machine:
     dsp_glyphs: dict[str, tuple[int, int]] = field(default_factory=dict)
     #: The placed STREAM block, when the program uses one (see ``stream.py``).
     stream: object | None = None
+    #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
+    #: the only thing that knows what any cell *means* — the grid carries no
+    #: comments — so it records that here for ``man_debug`` overlays and for
+    #: ``tools/heatmap.mjs``, which is otherwise a profile of anonymous cells.
+    regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
+
+    def debug_map(self):  # -> man_debug.DebugMap
+        """A ``man_debug.DebugMap`` naming every region, for overlays and profiling.
+
+        A generated grid carries no comments, so this sidecar is the *only* record of
+        what any cell means. Emitting it alongside the ``.man`` (``--html`` /
+        ``--json``) is what makes ``tools/debug-trace.mjs`` and the heat map readable
+        on a machine nobody drew by hand.
+        """
+        from ..man_debug import DebugMap
+
+        dbg = DebugMap(f"{self.program.name} — generated by lm1.machine")
+        palette = {
+            "rom": "#a855f7",
+            "cpu": "#3b82f6",
+            "adapter": "#22c55e",
+            "tape": "#0ea5e9",
+            "display": "#ec4899",
+            "io": "#94a3b8",
+            "stream": "#f59e0b",
+        }
+        notes = {
+            "rom": f"looping ROM: {self.program.P} words, {self.rom_rows} rows, re-emitted forever",
+            "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
+            "tape": f"rotating pipe tape, N={self.tape_n} (~105+8.3N ticks/access)",
+            "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
+            "display": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
+            "cpu:fetch": ">rbr — opcode into BP, then the operand into A (fixed-width 2 words)",
+            "cpu:trie": f"depth-{self.plan.k} backpack trie; leaves are bit-reversed",
+            "cpu:return:collector": "every lane funnels west along here",
+            "cpu:return:riser": "up to the fetch row — paid once per instruction",
+        }
+        for name, (x, y, w, h) in sorted(self.regions.items()):
+            kind = name.split(":", 1)[0]
+            note = notes.get(name, "")
+            if not note and name.startswith("cpu:lane:"):
+                mnemonic = name.rsplit(":", 1)[1]
+                note = f"opcode {self.plan.number.get(mnemonic, '?')} — {mnemonic}"
+            elif not note and name.startswith("cpu:slab:"):
+                note = f"{name.rsplit(':', 1)[1]}: discard loop / X fan-out (2-D, so not a lane)"
+            dbg.region(name, x, y, w, h, note=note, color=palette.get(kind, "#64748b"), tags=[kind])
+        return dbg
 
     @property
     def width(self) -> int:
@@ -1339,9 +1473,39 @@ def _assemble(
                 "the program drives the STREAM block but no ring sizes were given; "
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
-        blk, stream_touches = _stream(g, cpu, CX, CY + H + 1, stream)
+        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream)
 
     rows = g.rows()
+
+    # ── name every block in grid coordinates ─────────────────────────────────
+    regions: dict[str, tuple[int, int, int, int]] = {
+        f"cpu:{n}": (CX + x, CY + y, w, h) for n, (x, y, w, h) in cpu.regions.items()
+    }
+    regions["rom"] = (RX, RY, romlay.width + 1, romlay.height + 2)
+    regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
+    regions["tape"] = (TX, TY, tape.width, tape.height)
+    if cpu.has_in:
+        regions["io:I"] = (3, iy - 1, 3, 3)
+    if cpu.has_out:
+        regions["io:O"] = (CX + cpu.out_col - 1, oy + 2, 3, 3)
+    if blk is not None:
+        # One box per sub-block, so a heat map of a STREAM machine says *which* ring
+        # the ticks went into rather than colouring 989 anonymous pipe cells.
+        for name, (bx, by, bw, bh) in blk.regions.items():
+            regions[f"stream:{name}"] = (SX + bx, SY + by, bw, bh)
+    # The panel is the only thing that uses `=`/`:`, so its box can just be read
+    # back off the grid rather than threaded out of the routing helper.
+    panel = [(x, y) for y, row in enumerate(rows) for x, ch in enumerate(row) if ch in "=:"]
+    if panel:
+        px = min(x for x, _ in panel)
+        py = min(y for _, y in panel)
+        regions["display"] = (
+            px,
+            py,
+            max(x for x, _ in panel) - px + 1,
+            max(y for _, y in panel) - py + 1,
+        )
+
     touches = {
         "rom": (CX - 1, CY + cpu.centre),
         "mem_req": (CX + W + 2, req_row),
@@ -1368,6 +1532,7 @@ def _assemble(
     _check_pipe_count(rows, expected=len(touches) + 3 + extra)
     return Machine(
         rows=rows,
+        regions=regions,
         program=program,
         plan=p,
         tape_n=tape_n,
@@ -1376,9 +1541,7 @@ def _assemble(
         stream_pad=stream_pad,
         display=display if dsp_touches else None,
         dsp_glyphs={
-            band: (CX + x, CY + y)
-            for x, y, _glyph, band in cpu.pipe_glyphs
-            if band in DSP_BANDS
+            band: (CX + x, CY + y) for x, y, _glyph, band in cpu.pipe_glyphs if band in DSP_BANDS
         },
         stream=blk,
     )
@@ -1386,7 +1549,7 @@ def _assemble(
 
 def _stream(
     g: _Grid, cpu: _Cpu, cx: int, wall_y: int, sizes: tuple[int, int, int]
-) -> tuple[object, dict[str, tuple[int, int]]]:
+) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the STREAM block below the CPU and wire its two pipes. Returns touches.
 
     The command pipe drops straight out of the CPU's south wall into the block's
@@ -1416,10 +1579,14 @@ def _stream(
     route = [(cmd_col, wall_y + 1), (cmd_col, lane - 1), (cmd_x, lane - 1), (cmd_x, cmd_y)]
     g.draw_pipe([p for i, p in enumerate(route) if i == 0 or p != route[i - 1]])
     g.draw_pipe([(resp_x, resp_y), (resp_x, lane), (resp_col, lane), (resp_col, wall_y + 1)])
-    return blk, {
-        Band.STREAM_CMD: (cmd_col, wall_y + 1),
-        Band.STREAM_RESP: (resp_col, wall_y + 1),
-    }
+    return (
+        blk,
+        {
+            Band.STREAM_CMD: (cmd_col, wall_y + 1),
+            Band.STREAM_RESP: (resp_col, wall_y + 1),
+        },
+        (bx, by),
+    )
 
 
 def _display(
@@ -1559,21 +1726,32 @@ def _check_pipe_count(rows: list[str], *, expected: int) -> None:
 #: A program that computes addresses at runtime (``LDA``/``MOVA``) has no *static*
 #: high address, so this is the only place its tape size is stated.
 #:
-#: ``matmul`` is the exception to the "size it to the maximum" rule: it wants 512
-#: slots for A and B at 16x16x16 and :func:`tape_block` tops out at **108**
-#: (fold=0; every larger fold shortens the return pipe, it does not lengthen it),
-#: so its number is a ceiling rather than a choice. See ``programs/matmul.asm``'s
-#: header and ``tests/test_lm1_matmul.py``.
+#: **Size it to the highest address actually reached**, and note this matters more
+#: than §4.1's "~105 + 8.3N" implies: the tape is a *rotating* ring, so a request
+#: waits for its slot to come round. Measured on the real engine, one extra slot
+#: costs ~114 ticks per case on ``brackets`` and ~999 on ``tcp`` — the difference
+#: being how many accesses each program makes. It is not a footprint trade at all:
+#: the tape block is 33 columns wide at every N.
+#:
+#: The rule is enforced in :func:`build`, not just documented: a tape sized to
+#: *exactly* its top address does not fault, it stalls, which is the hardest kind of
+#: bug to see. See ``tests/test_lm1_machine.py``.
 TAPE_SIZE = {
-    "brackets": 8,
-    "tcp": 52,  # BUF + 47, the constraint's n=48
-    "gradebook": 94,  # ids[16] + grades[16*4] + scalars
-    "plotter": 11,
+    "brackets": 5,  # reaches address 4
+    # 52, NOT 51. tcp's highest address is BUF + 47 = 51, and a tape sized to
+    # exactly that **crashes** (`fatal: wall`) at n=48 after 32 of 48 values —
+    # verified: 51 fails, 52 and 53 pass. The public cases only reach seq ~35, so
+    # nothing catches it there. The rule is `highest address + 1`, which is also
+    # what brackets follows (reaches 4, sized 5).
+    "tcp": 52,
+    "gradebook": 32,  # one packed cell per student (16) + 15 scalars
+    "plotter": 11,  # reaches address 10 — ten names aliased onto ten slots
     "palette": 3,  # one colour counter; the pixels need no tape at all
     "sudoku-validity": 31,  # 27 unit masks + 3 cursors, one slot of slack
-    # matmul keeps its matrices in the STREAM block's rings, so the tape holds only
-    # the dozen scalars the loops need. That is the whole point of the new tier: at
-    # n=12 an access is ~205 ticks instead of ~800, and none of them are inner loop.
+    # matmul keeps both matrices in the STREAM block's rings, so its tape holds only
+    # the fourteen scalars the loops need (top address 14, plus a slot of slack).
+    # That is the whole point of the new tier: at n=16 an access is ~185 ticks rather
+    # than the ~830 a 104-slot tape costs, and *none* of them is in the inner loop.
     "matmul": 16,
 }
 
@@ -1598,13 +1776,20 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: Kept per-slug rather than folded into the heuristic so the checked-in
 #: ``brackets``/``tcp`` grids stay byte-identical.
 ROM_ROWS = {
-    # The panel adds ~30 rows and makes height competitive: 112x106 (12,544) against
-    # the default's 112x119 (14,161). See tests/test_lm1_display.py.
-    "plotter": 10,
-    # A 460-word ROM folded to the CPU's own ~48 columns is 83 rows tall (112x153,
-    # footprint 23,409); 34 rows makes it no wider than the rest of the machine and
-    # gives 112x103, the width-bound floor. See tests/test_lm1_gradebook.py.
-    "gradebook": 34,
+    # The panel adds ~30 rows and makes height the binding dimension, so this is the
+    # minimum over every fold: 112x116 (13,456) against the default's 112x148 (21,904).
+    # 20 rows is where the ROM stops being what sets the width (112 is the adapter plus
+    # the 32-wide tape); folding further only adds height. `plotter` is height-bound
+    # past that point, which is why unrolling its inner loop (see plotter.asm) is a real
+    # footprint trade rather than a free one — it is still a large net win on score,
+    # since it cuts ticks 24% for 7% more area. See tests/test_lm1_display.py.
+    "plotter": 20,
+    # gradebook's three per-student scans are unrolled 16 ways (see gradebook.asm on
+    # why a loop iteration costs a whole ROM lap), so its image is 836 words and the
+    # ROM, not the tape, sets the box. The minimum over every fold is 117x123
+    # (15,129); the default's 48-column fold is 279x89 (77,841). Height-bound past
+    # ~56 rows, width-bound below ~50. See tests/test_lm1_gradebook.py.
+    "gradebook": 53,
     # 89x94 at 37 rows against 84x146 at the default: no display and a 30-slot tape
     # leave the machine narrow enough that the default fold makes height binding.
     # See tests/test_lm1_sudoku.py.
@@ -1653,10 +1838,16 @@ def build_for(slug: str) -> Machine:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    from pathlib import Path as _Path
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("slug", choices=sorted(TAPE_SIZE), help="task program to synthesise")
-    ap.add_argument("--out", help="write the grid here instead of stdout")
+    # `--man/--html/--json` is the house convention for a generator (see
+    # `memory_onepass_v2.py`): the grid and its debug sidecars come out of one
+    # invocation, so an overlay can never drift from the ASCII it describes.
+    ap.add_argument("--man", "--out", dest="man", type=_Path, help="write the grid here")
+    ap.add_argument("--html", type=_Path, help="write a labelled debug overlay here")
+    ap.add_argument("--json", type=_Path, help="write the debug region sidecar here")
     ap.add_argument("--report", action="store_true", help="print the size report to stderr")
     args = ap.parse_args(argv)
 
@@ -1666,11 +1857,13 @@ def main(argv: list[str] | None = None) -> int:
 
         print(m.report(), file=_sys.stderr)
     text = "\n".join(m.rows) + "\n"
-    if args.out:
-        from pathlib import Path as _Path
-
-        _Path(args.out).write_text(text, encoding="utf-8")
-    else:
+    if args.man:
+        args.man.write_text(text, encoding="utf-8")
+    if args.html:
+        m.debug_map().write_html(m.rows, args.html)
+    if args.json:
+        m.debug_map().write_json(args.json)
+    if not (args.man or args.html or args.json):
         print(text, end="")
     return 0
 

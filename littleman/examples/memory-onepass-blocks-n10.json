@@ -1,0 +1,674 @@
+{
+  "title": "one-pass compact n=10: container placement preview",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "index",
+      "x": 2,
+      "y": 3,
+      "w": 6,
+      "h": 7,
+      "note": "persistent tape-head address",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "setup-fetch",
+      "x": 10,
+      "y": 2,
+      "w": 7,
+      "h": 1,
+      "note": "fetch old current",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "shared-delta",
+      "x": 16,
+      "y": 4,
+      "w": 1,
+      "h": 11,
+      "note": "current/address to relative delta; opcode remains in BP",
+      "color": "#60a5fa",
+      "tags": []
+    },
+    {
+      "name": "opcode-branch",
+      "x": 16,
+      "y": 15,
+      "w": 2,
+      "h": 2,
+      "note": "zero/read, positive/write",
+      "color": "#f59e0b",
+      "tags": []
+    },
+    {
+      "name": "read-index-fetch",
+      "x": 3,
+      "y": 19,
+      "w": 7,
+      "h": 1,
+      "note": "re-fetch current for read commit",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "read-commit",
+      "x": 12,
+      "y": 19,
+      "w": 1,
+      "h": 18,
+      "note": "read arm: BP=delta, commit current before its only pass",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "write-index-fetch",
+      "x": 28,
+      "y": 19,
+      "w": 7,
+      "h": 1,
+      "note": "re-fetch current for write commit",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "write-commit",
+      "x": 37,
+      "y": 19,
+      "w": 1,
+      "h": 18,
+      "note": "write arm: BP=delta, commit current before its only pass",
+      "color": "#fb923c",
+      "tags": []
+    },
+    {
+      "name": "read-pass",
+      "x": 9,
+      "y": 39,
+      "w": 3,
+      "h": 4,
+      "note": "read arm rotates exactly delta tape values",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "write-pass",
+      "x": 31,
+      "y": 39,
+      "w": 3,
+      "h": 4,
+      "note": "write arm rotates exactly delta tape values",
+      "color": "#14b8a6",
+      "tags": []
+    },
+    {
+      "name": "read-target-fork",
+      "x": 14,
+      "y": 39,
+      "w": 1,
+      "h": 3,
+      "note": "separate output/tape copies",
+      "color": "#a78bfa",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "write-read-7",
+      "input": "1 7 42 0 7",
+      "from_tick": 0,
+      "to_tick": 0,
+      "watch": [
+        "shared-current",
+        "delta-write-arm",
+        "write-single-pass",
+        "delta-read-arm",
+        "read-single-pass"
+      ],
+      "note": "one pass per access; the index moves to address + 1 before each pass"
+    }
+  ],
+  "lanes": [
+    {
+      "name": "shared-current",
+      "points": [
+        [
+          8,
+          6
+        ],
+        [
+          8,
+          2
+        ],
+        [
+          10,
+          2
+        ]
+      ],
+      "note": "",
+      "color": "#facc15",
+      "kind": "expected",
+      "expect": "index fetch supplies current to the shared delta block",
+      "tags": [],
+      "cells": [
+        [
+          8,
+          6
+        ],
+        [
+          8,
+          5
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          3
+        ],
+        [
+          8,
+          2
+        ],
+        [
+          9,
+          2
+        ],
+        [
+          10,
+          2
+        ]
+      ]
+    },
+    {
+      "name": "delta-read-arm",
+      "points": [
+        [
+          17,
+          15
+        ],
+        [
+          17,
+          19
+        ],
+        [
+          3,
+          19
+        ]
+      ],
+      "note": "",
+      "color": "#a78bfa",
+      "kind": "expected",
+      "expect": "opcode zero selects the read arm; delta stays in BP",
+      "tags": [],
+      "cells": [
+        [
+          17,
+          15
+        ],
+        [
+          17,
+          16
+        ],
+        [
+          17,
+          17
+        ],
+        [
+          17,
+          18
+        ],
+        [
+          17,
+          19
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          15,
+          19
+        ],
+        [
+          14,
+          19
+        ],
+        [
+          13,
+          19
+        ],
+        [
+          12,
+          19
+        ],
+        [
+          11,
+          19
+        ],
+        [
+          10,
+          19
+        ],
+        [
+          9,
+          19
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          7,
+          19
+        ],
+        [
+          6,
+          19
+        ],
+        [
+          5,
+          19
+        ],
+        [
+          4,
+          19
+        ],
+        [
+          3,
+          19
+        ]
+      ]
+    },
+    {
+      "name": "delta-write-arm",
+      "points": [
+        [
+          16,
+          16
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          28,
+          19
+        ]
+      ],
+      "note": "",
+      "color": "#fb923c",
+      "kind": "expected",
+      "expect": "opcode positive selects the write arm; delta stays in BP",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          16
+        ],
+        [
+          16,
+          17
+        ],
+        [
+          16,
+          18
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          17,
+          19
+        ],
+        [
+          18,
+          19
+        ],
+        [
+          19,
+          19
+        ],
+        [
+          20,
+          19
+        ],
+        [
+          21,
+          19
+        ],
+        [
+          22,
+          19
+        ],
+        [
+          23,
+          19
+        ],
+        [
+          24,
+          19
+        ],
+        [
+          25,
+          19
+        ],
+        [
+          26,
+          19
+        ],
+        [
+          27,
+          19
+        ],
+        [
+          28,
+          19
+        ]
+      ]
+    },
+    {
+      "name": "read-single-pass",
+      "points": [
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          39
+        ],
+        [
+          9,
+          39
+        ]
+      ],
+      "note": "",
+      "color": "#22c55e",
+      "kind": "expected",
+      "expect": "read arm commits current, then rotates delta values once",
+      "tags": [],
+      "cells": [
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          20
+        ],
+        [
+          12,
+          21
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          23
+        ],
+        [
+          12,
+          24
+        ],
+        [
+          12,
+          25
+        ],
+        [
+          12,
+          26
+        ],
+        [
+          12,
+          27
+        ],
+        [
+          12,
+          28
+        ],
+        [
+          12,
+          29
+        ],
+        [
+          12,
+          30
+        ],
+        [
+          12,
+          31
+        ],
+        [
+          12,
+          32
+        ],
+        [
+          12,
+          33
+        ],
+        [
+          12,
+          34
+        ],
+        [
+          12,
+          35
+        ],
+        [
+          12,
+          36
+        ],
+        [
+          12,
+          37
+        ],
+        [
+          12,
+          38
+        ],
+        [
+          12,
+          39
+        ],
+        [
+          11,
+          39
+        ],
+        [
+          10,
+          39
+        ],
+        [
+          9,
+          39
+        ]
+      ]
+    },
+    {
+      "name": "write-single-pass",
+      "points": [
+        [
+          37,
+          19
+        ],
+        [
+          37,
+          39
+        ],
+        [
+          31,
+          39
+        ]
+      ],
+      "note": "",
+      "color": "#14b8a6",
+      "kind": "expected",
+      "expect": "write arm commits current, then rotates delta values once",
+      "tags": [],
+      "cells": [
+        [
+          37,
+          19
+        ],
+        [
+          37,
+          20
+        ],
+        [
+          37,
+          21
+        ],
+        [
+          37,
+          22
+        ],
+        [
+          37,
+          23
+        ],
+        [
+          37,
+          24
+        ],
+        [
+          37,
+          25
+        ],
+        [
+          37,
+          26
+        ],
+        [
+          37,
+          27
+        ],
+        [
+          37,
+          28
+        ],
+        [
+          37,
+          29
+        ],
+        [
+          37,
+          30
+        ],
+        [
+          37,
+          31
+        ],
+        [
+          37,
+          32
+        ],
+        [
+          37,
+          33
+        ],
+        [
+          37,
+          34
+        ],
+        [
+          37,
+          35
+        ],
+        [
+          37,
+          36
+        ],
+        [
+          37,
+          37
+        ],
+        [
+          37,
+          38
+        ],
+        [
+          37,
+          39
+        ],
+        [
+          36,
+          39
+        ],
+        [
+          35,
+          39
+        ],
+        [
+          34,
+          39
+        ],
+        [
+          33,
+          39
+        ],
+        [
+          32,
+          39
+        ],
+        [
+          31,
+          39
+        ]
+      ]
+    },
+    {
+      "name": "read-target-split",
+      "points": [
+        [
+          9,
+          39
+        ],
+        [
+          14,
+          39
+        ]
+      ],
+      "note": "",
+      "color": "#a78bfa",
+      "kind": "expected",
+      "expect": "Y sends the target separately to output and tape",
+      "tags": [],
+      "cells": [
+        [
+          9,
+          39
+        ],
+        [
+          10,
+          39
+        ],
+        [
+          11,
+          39
+        ],
+        [
+          12,
+          39
+        ],
+        [
+          13,
+          39
+        ],
+        [
+          14,
+          39
+        ]
+      ]
+    }
+  ]
+}

@@ -24,8 +24,9 @@ class Collision(RuntimeError):
 class Circuit:
     """A grid of cells; every write is checked against what is already there."""
 
-    def __init__(self, width: int, height: int) -> None:
+    def __init__(self, width: int, height: int, *, strict_corridors: bool = False) -> None:
         self.w, self.h = width, height
+        self.strict_corridors = strict_corridors
         self.cell: dict[tuple[int, int], str] = {}
         # Cells a corridor walks straight through. Code may not later land on
         # one: the man would execute it mid-transit. Tracked separately because a
@@ -37,12 +38,17 @@ class Circuit:
         if not (0 <= x < self.w and 0 <= y < self.h):
             raise Collision(f"({x},{y}) outside the {self.w}x{self.h} interior")
         old = self.cell.get((x, y))
+        if (
+            self.strict_corridors
+            and ch != " "
+            and (x, y) in self.reserved
+            and old != ch
+        ):
+            raise Collision(
+                f"({x},{y}) is reserved as a corridor; placing {ch!r} there "
+                "would run mid-transit"
+            )
         if old is None or old == ch:
-            if old is None and ch != " " and (x, y) in self.reserved:
-                raise Collision(
-                    f"({x},{y}) is reserved as a corridor; placing {ch!r} there "
-                    "would run mid-transit"
-                )
             self.cell[(x, y)] = ch
             return
         # A blank is compatible with anything: a man just walks over it.
@@ -101,7 +107,10 @@ class Circuit:
                         f"while heading {GLYPH[d]}"
                     )
                 self.set(x, y, cur if cur != " " else " ")
-                self.reserved.add((x, y))
+                # Endpoints are named handoffs: a following code block may own
+                # either one. Only a corridor's interior is permanently transit.
+                if i not in (0, len(cells) - 1):
+                    self.reserved.add((x, y))
 
     def vertical(self, x: int, y0: int, y1: int) -> None:
         """Reserve a straight vertical run of blanks (exclusive of endpoints)."""
@@ -187,6 +196,35 @@ class Circuit:
         self.blanks(x, y + 2, k - 1, d=S)
         return x + 2, y
 
+    def counted_loop_horizontal(
+        self,
+        x: int,
+        y: int,
+        body: str,
+    ) -> tuple[int, int]:
+        """Rotate :meth:`counted_loop` clockwise into a two-row block.
+
+        Enter heading SOUTH at the top-right cell. A positive BP turns west
+        through ``body``; zero continues south through the bottom-right exit.
+
+        For ``body="rs"``::
+
+            > mv
+            ^srd
+        """
+        k = len(body)
+        if not k:
+            raise ValueError("counted loop body cannot be empty")
+        right = x + k + 1
+        self.set(x, y, ">")
+        self.blanks(x + 1, y, k - 1, d=E)
+        self.set(x + k, y, "m")
+        self.set(right, y, "v")
+        self.set(x, y + 1, "^")
+        self.run(x + k, y + 1, body, d=W)
+        self.set(right, y + 1, "d")
+        return right, y + 2
+
     # -- render --------------------------------------------------------------
     def rows(self) -> list[str]:
         return ["".join(self.get(x, y) for x in range(self.w)) for y in range(self.h)]
@@ -203,8 +241,8 @@ class Circuit:
 
         A clockwise ring can host a `d` test at every corner (arriving east, CW is
         south; arriving south, CW is west; and so on), so both side columns carry
-        their own `[body, m]` with a test in front of it. BP still counts *values*,
-        exactly like :meth:`counted_loop` — no division, just cheaper:
+        their own `[body, m]` with a test in front of it. BP still counts passes,
+        exactly like :meth:`counted_loop`. For the usual two-cell body:
 
             (x,y)=`>`      (x+1,y)=`d`        <- test, then the right column
             (x,y+1)=`m`    (x+1,y+1)=body[0]
@@ -213,16 +251,19 @@ class Circuit:
             (x,y+4)=`d`    (x+1,y+4)=`<`      <- test, then the left column (going up)
 
         10 cells, 2 values/lap = 5 ticks/value against 8 for :meth:`counted_loop`.
-        Returns the two exit cells: [east of the top-right `d`, west of the
-        bottom-left `d`]. Both must be routed to the same continuation.
+        A longer body grows both columns symmetrically. Returns the two exit
+        cells: [east of the top-right `d`, west of the bottom-left `d`]. Both
+        must be routed to the same continuation.
         """
-        assert len(body) == 2, "body is one (recv, send) pair"
+        k = len(body)
+        if not k:
+            raise ValueError("counted ring body cannot be empty")
         # right column, walked downward: test, body, m
         self.set(x + 1, y, "d")
         self.run(x + 1, y + 1, body + "m", d=S)
-        self.set(x + 1, y + 4, "<")
+        self.set(x + 1, y + k + 2, "<")
         # left column, walked upward: test, body, m
-        self.set(x, y + 4, "d")
-        self.run(x, y + 3, body + "m", d=N)
+        self.set(x, y + k + 2, "d")
+        self.run(x, y + k + 1, body + "m", d=N)
         self.set(x, y, ">")
-        return [(x + 2, y), (x - 1, y + 4)]
+        return [(x + 2, y), (x - 1, y + k + 2)]

@@ -12,6 +12,8 @@ and the submission API · [`reference/`](reference/) raw official text +
 interpreter probe · [`../tasks/problems/`](../tasks/problems/) all 16 problem
 statements with public test data.
 
+See [`DEBUGGING.md`](DEBUGGING.md) for the overlay, trace and profiling workflow.
+
 ## Requirements
 - Node.js 24+ (uses only the stdlib: `fs`, `vm`, `path`, `url`, `WebAssembly`).
 - The wasm engine + Go runtime, bundled in this folder (self-contained):

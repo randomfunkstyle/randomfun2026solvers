@@ -361,6 +361,7 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
     )
 
 
+@pytest.mark.slow  # drives the engine over a whole problem
 @node_required
 def test_the_rom_fold_is_the_footprint_minimum() -> None:
     """The default fold aims the ROM at the CPU's ~45 columns, which is wrong here.

@@ -36,9 +36,14 @@ MAX_INSTRUCTIONS = 3_000_000
 #: Problems ARCH.md §4.1 leaves blocked on the STORE block. No program here should
 #: claim to solve one of these.
 #:
-#: ``gradebook`` is *not* here any more: the STORE block exists (``machine.py``'s tape),
-#: so a problem that needs indexed memory is only blocked on having a program written
-#: against ``LDA``/``MOVA`` — see ``tests/test_lm1_gradebook.py``.
+#: ``gradebook`` is *not* here any more: the STORE block exists (``machine.py``'s
+#: tape), so a problem that needs indexed memory is only blocked on having a program
+#: written against ``LDA``/``MOVA`` — see ``tests/test_lm1_gradebook.py``.
+#:
+#: ``sudoku-validity`` came off it for a different reason: it looked blocked because
+#: its natural encoding is 3 x 9 x 9 = 243 set-membership flags against a tape that
+#: caps at 103 slots, but as 27 one-cell bitmasks it needs only 36 addresses. What
+#: unblocked it was an encoding change plus one opcode (`AND`), not a bigger tape.
 BLOCKED = {
     "memory",
     "reverse-a-list",
@@ -117,18 +122,32 @@ def test_programs_without_extensions_also_run_on_arch_v1(stem: str) -> None:
 def test_extension_users_are_exactly_the_ones_we_expect() -> None:
     ext = {stem: set(load(stem).ext_ops) for stem in PROGRAMS}
     assert {k: v for k, v in ext.items() if v} == {
-        "brackets": {"DIVI", "MODI"},
+        # `DECM n` fuses `LD n; SUBI 1; ST n` at the loop head *and* leaves ACC at
+        # the pre-decrement value, so the end-of-string test comes free with it.
+        "brackets": {"DECM", "DIVI", "MODI"},
         # LDA/MOVA in place of LDP/STP: keeping the address in ACC means the
         # `0`/`1` request literal never has to coexist with it, so tcp needs no
         # SPILL block at all (see tcp.asm's header).
+        #
+        # `INCM` is deliberately NOT here. It measured -0.9% on the public cases but
+        # the judge scored that build 1,927,262,669 against 1,849,876,224 for this
+        # one -- tcp is tape-bound, so removing an instruction re-times requests onto
+        # worse ring phases. Reverted; see ARCH.md §4.1 on judging rather than
+        # modelling a tape-bound program.
         "tcp": {"LDA", "MOVA"},
-        # Two arrays (ids, grades) indexed by a runtime student number. `DIVI 4`
-        # turns a grade address back into that number, which is what lets the whole
-        # program run on one cursor (see gradebook.asm).
-        "gradebook": {"DIVI", "LDA", "MOVA"},
+        # One packed cell per student: `AND` masks a field out of it (that is what
+        # deletes the ids array and TOP's tie-break), `MUL`/`DIV` scale a grade by a
+        # field weight the *operation* names, and `MOVA` is how the roster fills a
+        # cell it addresses at runtime. `DIV` rather than `DIVI` because AVG divides
+        # by N; `ADDI` was dropped to keep the count at 16 (see gradebook.asm).
+        "gradebook": {"AND", "DIV", "MOVA", "MUL"},
         # `DSP p` picks a pipe from its operand, which nearest-pipe binding cannot
         # express; one opcode per LM-75 port gives each its own lane (see plotter.asm).
-        "plotter": {"DSPA", "DSPD", "DSPS", "NEG"},
+        # `MODI 1024` unpacks the cursor out of the word that also carries the
+        # Bresenham error, which is what gets the inner loop to four tape accesses.
+        # This is exactly 16 opcodes and so still a depth-4 trie — a 17th would add a
+        # whole trie level to every instruction plus ~32 lane rows.
+        "plotter": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
         "triangle-closed": {"MUL", "DIVI"},
         # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
@@ -179,22 +198,86 @@ def test_display_programs_commit_the_expected_frames_on_every_public_case(slug: 
         assert not res.output, f"{slug}/{case}: emitted output on a display problem"
 
 
+def test_plotter_draws_exactly_bresenham_on_every_public_case() -> None:
+    """The public cases cover 6 shapes; the restructured loop needs more than that.
+
+    ``plotter.asm`` no longer runs the spec's pseudocode — it carries a packed
+    ``2*err*1024 + addr - THR`` and branches on its sign — so "matches the committed
+    frames" only proves the six shapes anyone thought to commit. This runs the real
+    program on the emulator over every corner combination plus 400 pseudo-random
+    segments and compares against the spec's own loop, transcribed below.
+
+    Direction sensitivity is the point of the corner grid: A->B and B->A select
+    different pixels, and a rewrite that quietly symmetrised the error term would pass
+    the public cases and fail here.
+    """
+    import random
+
+    from randomfun2026solvers.lm1.display import frames_from_writes
+
+    width, height = display_size("plotter")
+
+    def bresenham(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
+        dx, dy = abs(x1 - x0), -abs(y1 - y0)
+        sx, sy = (1 if x0 < x1 else -1), (1 if y0 < y1 else -1)
+        err, out = dx + dy, []
+        while True:
+            out.append((x0, y0))
+            if (x0, y0) == (x1, y1):
+                return out
+            e2 = 2 * err
+            if e2 >= dy:
+                err, x0 = err + dy, x0 + sx
+            if e2 <= dx:
+                err, y0 = err + dx, y0 + sy
+
+    edges = ((0, 1, 15, 31), (0, 1, 11, 23))
+    segments = [
+        (x0, y0, x1, y1) for x0 in edges[0] for y0 in edges[1] for x1 in edges[0] for y1 in edges[1]
+    ]
+    rng = random.Random(7)
+    segments += [
+        (rng.randrange(width), rng.randrange(height), rng.randrange(width), rng.randrange(height))
+        for _ in range(400)
+    ]
+
+    prog = load("plotter")
+    for i in range(0, len(segments), 20):  # 20 rounds is the constraints' limit
+        chunk = segments[i : i + 20]
+        res = Emulator(prog).run(
+            [Round(input=s) for s in chunk], max_instructions=MAX_INSTRUCTIONS
+        )
+        got = frames_from_writes(res.display_writes, width=width, height=height)
+        assert len(got) == len(chunk), res.reason
+        for segment, frame in zip(chunk, got, strict=True):
+            grid = [[0] * width for _ in range(height)]
+            for x, y in bresenham(*segment):
+                grid[y][x] = 15
+            want = ["".join(format(v, "x") for v in row) for row in grid]
+            assert list(frame) == want, f"{segment}: pixels differ from Bresenham"
+
+
 def test_palette_asm_is_up_to_date_with_the_problem_json() -> None:
     assert available()["palette"].read_text(encoding="utf-8") == palette_source()
 
 
-def test_the_emulator_estimate_for_a_20_round_plotter_load_is_optimistic() -> None:
-    """20 rounds of a long segment, with *real* tape latency — and still optimistic.
+def test_the_plotter_inner_loop_stays_at_four_tape_accesses_a_pixel() -> None:
+    """The one thing about ``plotter`` that must not regress, counted not modelled.
 
-    Store accesses are billed at ``ARCH.md`` §4.1's ``105 + 8.3N`` rather than the
-    emulator's flat 6 ticks/word, which understates them ~30x. Even so this estimate
-    comes out at ~3.8M against the 5M cap where the generated machine really takes
-    ~4.78M for the same load: **the estimate is ~20% optimistic and is not the
-    margin.** ``tests/test_lm1_display.py`` measures the engine, and finds that the
-    genuinely worst legal 20-round load overruns the cap outright.
+    **This test deliberately does not assert a tick figure.** The one it used to
+    assert — the emulator's estimate with store accesses billed at ``ARCH.md``
+    §4.1's ``105 + 8.3N`` — read 3.8M for a 20-round load the engine ran in 5.31M
+    against a 5,000,000 cap, and that is exactly how a machine 6% over the cap
+    shipped as "1.05x under" it. ``105 + 8.3N`` understates the rotating tape by an
+    order of magnitude, and no arithmetic over it is a margin.
+    ``tests/test_lm1_display.py::test_the_worst_legal_20_round_load_fits_the_step_cap_on_the_engine``
+    is the margin; it runs the engine.
 
-    Kept because it is the only tick figure available without Node, and because a
-    regression big enough to break *this* bound is worth catching in the fast tier.
+    What *is* worth pinning without Node is the quantity the rewrite bought, because
+    it is a property of the program rather than of the hardware: tape accesses per
+    pixel. At ~316 ticks each on the engine against ~45 for an instruction, they were
+    75% of the bill at ~20 per pixel. The packed single-add loop makes it 4, and 4 is
+    the floor for this shape (`ST Q`, `SUB ADDR1`, `LD Q`, `ADD DEL`).
     """
     from randomfun2026solvers.lm1.store import DictStore
 
@@ -211,9 +294,30 @@ def test_the_emulator_estimate_for_a_20_round_plotter_load_is_optimistic() -> No
             self.ops += 1
             super()._write(addr, value)
 
-    tape_n = 11
-    rounds = [Round(input=(0, i % 24, 31, (i * 7 + 3) % 24)) for i in range(20)]
-    store = Counting()
-    res = Emulator(load("plotter"), store=store).run(rounds, max_instructions=MAX_INSTRUCTIONS)
-    ticks = res.ticks + store.ops * (105 + 8.3 * tape_n)
-    assert ticks < TICK_CAP, f"{ticks:,.0f} ticks over the {TICK_CAP:,} cap"
+    def run(segment: tuple[int, ...]) -> tuple[int, int]:
+        store = Counting()
+        res = Emulator(load("plotter"), store=store).run(
+            [Round(input=segment)] * 20, max_instructions=MAX_INSTRUCTIONS
+        )
+        assert res.reason == "input-exhausted", res.reason
+        return store.ops, res.words_skipped
+
+    # Measured as a *slope*, so the per-round setup cancels and no arithmetic here
+    # depends on knowing how big it is. The two shapes must agree in both step signs
+    # and in the major axis, or their setups differ by the `NEG` arms and the slope
+    # picks that up as loop cost.
+    long_ops, long_skips = run((0, 0, 31, 1))  # 32 pixels, x-major, both steps +1
+    short_ops, short_skips = run((0, 0, 1, 1))  # 2 pixels, ditto
+    extra = 20 * 30
+    assert (long_ops - short_ops) / extra == 4, (long_ops, short_ops)
+
+    # The per-round setup, whatever is left once the loop is accounted for (one full
+    # iteration plus the two accesses `final` exits through). It runs 20 times at ~316
+    # ticks an access, i.e. ~11% of the 20-round bill, so it is worth its own ceiling.
+    setup = short_ops // 20 - (4 + 2)
+    assert setup <= 34, f"{setup} tape accesses a round of setup"
+
+    # The tape is only half the story: the other half is the ROM lap a backward jump
+    # pays (8 ticks a word, ARCH.md §5.4), which is why the loop is unrolled 4x — one
+    # lap per four pixels rather than per pixel.
+    assert (long_skips - short_skips) / extra < 45, (long_skips, short_skips)

@@ -13,7 +13,6 @@ Three tiers, cheapest first:
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -34,15 +33,19 @@ node_required = pytest.mark.skipif(
     shutil.which("node") is None or not LM_MJS.exists(),
     reason="node and littleman/lm.mjs required",
 )
-slow = pytest.mark.skipif(
-    os.environ.get("LM1_SLOW") != "1",
-    reason="set LM1_SLOW=1 to run the full public-case sweeps",
-)
+# One mechanism for "too slow for the default run", registered in pyproject.
+slow = pytest.mark.slow
 
-#: The two graded problems this generator exists for, and the tape size each needs.
-#: Sized from the *problem constraints*, not the public data: ``tcp`` allows n=48,
-#: so addresses reach BUF+47 = 51 even though no public case goes past 35.
-TARGETS = {"brackets": 8, "tcp": 52}
+#: Every task the generator can build, with the tape size each needs — read from
+#: the generator so the two cannot drift apart. Sizes come from the *problem
+#: constraints*, not the public data: ``tcp`` allows n=48, so addresses reach
+#: BUF+47 = 51 even though no public case goes past seq 35.
+#:
+#: The sizes are **highest address reached + 1**, and the ``+ 1`` is load-bearing:
+#: a tape of exactly 51 crashes tcp at n=48 after 32 of 48 values (see
+#: :func:`test_tcp_survives_the_constraint_limit`), and plotter hit the same wall
+#: with 11 live values against ``tape_n=11``.
+TARGETS = machine.TAPE_SIZE
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────
@@ -179,19 +182,33 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     between the ROM pipe and the tape's response pipe that stalled every jump was
     caught exactly here.
     """
-    m = machine.build(programs.load(slug), tape_n=tape_n)
+    # build_for supplies the tape size *and* the panel resolution, which a display
+    # program now requires: the panel is the problem's, not the program's.
+    m = machine.build_for(slug)
     assert m.width > 0 and m.height > 0
-    assert m.plan.k == 4
+    # The trie's depth is ceil(log2 |opcodes used|) — derived, not fixed at 4. It is
+    # 3 for `matmul`, whose eight opcodes are what let the STREAM block replace the
+    # inner loop; asserting a constant here would forbid ever getting smaller.
+    used = len(m.plan.number)
+    assert m.plan.k == max(1, (used - 1).bit_length())
+    assert m.plan.lanes == 1 << m.plan.k >= used
     assert m.tape_n == tape_n
     assert "@" in "".join(m.rows)
+    # A display problem gets a panel and no `O` room: SPEC.md makes emitting any
+    # program output an error there. A STREAM problem has an `O` room too, but the
+    # block owns it rather than the CPU (see stream.py).
+    grid = "".join(m.rows)
+    display = any(s.value.startswith("display") for s in m.plan.sem.values())
+    assert (":" in grid and "=" in grid) is display
+    assert ("O" in grid) is not display
 
 
 @node_required
 def test_checked_in_grids_match_the_generator() -> None:
     """The ``.man`` files under ``tasks/solutions`` are generated, not hand-edited."""
-    for slug, tape_n in TARGETS.items():
+    for slug in TARGETS:
         path = REPO / "tasks" / "solutions" / f"{slug}_cpu.man"
-        expected = "\n".join(machine.build(programs.load(slug), tape_n=tape_n).rows) + "\n"
+        expected = "\n".join(machine.build_for(slug).rows) + "\n"
         assert path.read_text(encoding="utf-8") == expected, (
             f"{path.name} is stale; regenerate with "
             f"`python -m randomfun2026solvers.lm1.machine {slug} --out {path}`"
@@ -206,6 +223,55 @@ def test_public_cases_pass_on_the_real_interpreter(slug: str, tape_n: int) -> No
     from randomfun2026solvers import optimize
 
     path = REPO / "tasks" / "solutions" / f"{slug}_cpu.man"
-    res = optimize.verify(path, slug, tick_cap=3_000_000)
+    # sudoku-validity's 81-round case settles at ~2.3M, so 3M left too little
+    # headroom for it to survive an unrelated slowdown.
+    res = optimize.verify(path, slug, tick_cap=5_000_000)
     failed = [c.name for c in res.cases if not c.passed]
     assert res.passed, f"{slug}: {failed}"
+
+
+@node_required
+def test_tcp_survives_the_constraint_limit() -> None:
+    """n=48 with the maximum legal delay — the case a tape of 51 slots crashes on.
+
+    The public cases only reach seq ~35, so nothing there exercises the top of the
+    buffer. Sized to exactly its highest address (BUF + 47 = 51) the machine dies
+    ``fatal: wall`` after 32 of the 48 values, with the first 32 correct; 52 and 53
+    both pass. That is why ``TARGETS``/``TAPE_SIZE`` use highest-address **+ 1**.
+
+    The delay pattern is reversed blocks of 16 — the most out-of-order a stream can
+    be without tripping the max-delay rule, since a packet 16 or more above the
+    wanted seq must answer -1 and stop.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    n = 48
+    order: list[int] = []
+    for base in range(0, n, 16):
+        block = list(range(base, min(base + 16, n)))
+        block.reverse()
+        order += block
+    values = {s: 1 + (s * 37) % 999 for s in range(n)}
+
+    buffered: dict[int, int] = {}
+    want = 0
+    rounds_in: list[str] = []
+    rounds_out: list[str] = []
+    for i, seq in enumerate(order):
+        rounds_in.append(f"{n} {seq} {values[seq]}" if i == 0 else f"{seq} {values[seq]}")
+        buffered[seq] = values[seq]
+        drained = []
+        while want in buffered:
+            drained.append(buffered[want])
+            want += 1
+        rounds_out.append(" ".join(str(v) for v in drained))
+
+    snap = Littleman().judge(
+        REPO / "tasks" / "solutions" / "tcp_cpu.man",
+        input=" / ".join(rounds_in),
+        expected=" / ".join(rounds_out),
+        max_ticks=5_000_000,
+    )
+    assert snap.fatal is None, f"fatal: {snap.fatal}"
+    assert list(snap.output) == [values[s] for s in range(n)]
+    assert snap.step < 5_000_000, f"{snap.step:,} ticks against the 5,000,000 step cap"

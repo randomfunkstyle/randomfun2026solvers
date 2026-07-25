@@ -383,6 +383,9 @@ class StreamBlock:
     pipes: int  # pipes the block draws (the engine must find exactly these + 1)
     glyphs: list[tuple[int, int, str, str]] = field(default_factory=list)
     codes: dict[str, int] = field(default_factory=dict)
+    #: ``name -> (x, y, w, h)`` in block coordinates, for ``Machine.debug_map`` and
+    #: the heat map. Without it a profile of this block is 989 anonymous pipe cells.
+    regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
 
 # ── placement ────────────────────────────────────────────────────────────────
@@ -601,6 +604,16 @@ def _place(
 
     rows = g.rows()
     width = max(len(r) for r in rows)
+    regions = {
+        "unit": (UX, UY, UNIT_IW + 2, UNIT_IH + 2),
+        "adder": (ADDER_X, ADDER_Y, ADDER_IW + 2, ADDER_IH + 2),
+        "relay:A": (ROOM_X, RELAY_A_Y, RELAY_IW + 2, RELAY_IH + 2),
+        "relay:B": (ROOM_X, RELAY_B_Y, RELAY_IW + 2, RELAY_IH + 2),
+        "io:I": (ROOM_X, IO_IN_Y, 3, 3),
+        "io:O": (O_ROOM[0], O_ROOM[1], 3, 3),
+        "ring:A": (CLIMB["a"], band_a, LEG_E, rows_a),
+        "ring:B": (CLIMB["b"], BAND_B, LEG_E, rows_b),
+    }
     return StreamBlock(
         cells=g.c,
         width=width,
@@ -612,6 +625,7 @@ def _place(
         ring_c=min(p1, p2),
         rows_a=rows_a,
         rows_b=rows_b,
+        regions=regions,
         pipes=npipes,
         glyphs=[(UX + x, UY + y, gl, band) for x, y, gl, band in unit.glyphs],
         codes=unit.codes,

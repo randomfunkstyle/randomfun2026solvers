@@ -18,16 +18,16 @@ streaming problem, and ``tests/test_lm1_stream.py`` for the block itself.
 Measured on the reference interpreter, 96x96 (footprint 9216), tape N=16:
 
     case                   settles at    vs 5M cap   instructions   MACs
-    2x2 warm up                15,103       0.003x             98      8
-    non-square 2x3x2           19,617       0.004x            116     12
-    identity (4x4x4)           42,043       0.008x            216     64
-    negative heavy (5x6x4)     73,559       0.015x            347    120
-    skinny 16x2x16             77,291       0.015x            420    512
-    max magnitude 7x5x9        84,730       0.017x            402    315
-    16x16x16 full size        582,859       0.117x          2,436  4,096
+    2x2 warm up                14,153       0.003x             98      8
+    non-square 2x3x2           18,439       0.004x            116     12
+    identity (4x4x4)           39,533       0.008x            216     64
+    negative heavy (5x6x4)     69,357       0.014x            347    120
+    skinny 16x2x16             71,805       0.014x            420    512
+    max magnitude 7x5x9        79,766       0.016x            402    315
+    16x16x16 full size        551,837       0.110x          2,436  4,096
 
-**7/7 public cases on the real engine**, worst case 8.6x inside the cap, and
-``scoring.score_program`` returns 9216 x 127,886 = **1,178,597,376**.
+**7/7 public cases on the real engine**, worst case 9.1x inside the cap, and
+``scoring.score_program`` returns 9216 x 120,699 = **1,112,358,034**.
 
 The instruction column is the one to watch. A parallel measurement put the
 engine's non-memory instruction at ~46 ticks, which makes instruction *issue* a
@@ -75,13 +75,13 @@ slow = pytest.mark.skipif(
 #: are the deliverable, so they are pinned exactly (with 5 % of slack in the
 #: assertion below, to allow an improvement without a test edit).
 REAL_TICKS = {
-    "2x2 warm up": 15_103,
-    "non-square 2x3x2": 19_617,
-    "identity": 42_043,
-    "negative heavy": 73_559,
-    "skinny 16x2x16": 77_291,
-    "max magnitude 7x5x9": 84_730,
-    "16x16x16 full size": 582_859,
+    "2x2 warm up": 14_153,
+    "non-square 2x3x2": 18_439,
+    "identity": 39_533,
+    "negative heavy": 69_357,
+    "skinny 16x2x16": 71_805,
+    "max magnitude 7x5x9": 79_766,
+    "16x16x16 full size": 551_837,
 }
 
 #: ``(instructions, multiply-accumulates)`` per case, from the emulator. The ratio
@@ -378,5 +378,5 @@ def test_the_score_is_real() -> None:
     got = score_program(GRID, SLUG)
     assert got.area2 == 9216
     assert abs(got.avg_ticks - sum(REAL_TICKS.values()) / 7) < 500
-    assert 1.0e9 < got.score < 1.3e9
+    assert 0.9e9 < got.score < 1.25e9
     assert max(c.ticks for c in got.cases) < TICK_CAP

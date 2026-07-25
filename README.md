@@ -105,6 +105,54 @@ decodes `action_b64`/`answer_b64` as opaque bytes and interprets nothing — dec
 and interpret them in the solver per `task.contest_key`. Full contract:
 `randomfun2026claude/contracts.md §3.2`.
 
+## Debugging a `.man`
+
+Generated grids carry no comments. `littleman/DEBUGGING.md` covers the overlay/trace/
+profile workflow and the `--man/--html/--json` convention every generator follows.
+
+## Submitting to the contest
+
+You need **one thing**: the team API key, in either
+`ICFP_TOKEN` or an untracked `.icfp-token` at the repo root (already gitignored —
+never commit it).
+
+```sh
+export ICFP_TOKEN=icfp_...                       # or: echo 'icfp_...' > .icfp-token
+
+uv run python -m randomfun2026solvers.submit send brackets --note "what this is"
+uv run python -m randomfun2026solvers.submit send brackets --dry-run   # check only
+uv run python -m randomfun2026solvers.submit list                      # what is archived
+uv run python -m randomfun2026solvers.submit get <submission-id>       # re-read a verdict
+```
+
+`send` guards two ways before spending a submission — only 5 may be pending at
+once, so a wasted one costs real time:
+
+- **refuses a failing grid** (`--force` overrides), and
+- **refuses a grid already submitted**, matched by hash against the archive, and
+  prints the verdict it got last time (`--resend` overrides).
+
+It defaults to `tasks/solutions/<slug>_cpu.man`; use `--file` for anything else.
+
+Every graded submission is archived so nothing is ever lost:
+
+```
+solutions/<slug>/<server-verified-score>_<slug>.man
+solutions/<slug>/<server-verified-score>_<slug>.descr   # free-form note + provenance
+```
+
+The score is in the filename and zero-padded, so a listing sorts best-first and a
+worse run can never overwrite a better one. A submission that does not pass every
+case gets no score and is archived as `unscored_<slug>`.
+
+Two gotchas worth knowing:
+
+- **Cloudflare 403 `error code: 1010` is not an auth failure.** It is a
+  browser-signature ban on the default `Python-urllib` User-Agent; any ordinary UA
+  gets through, which is why the `curl` examples work.
+- **Local scores understate.** The server runs private cases too — `brackets` is
+  9 public but 26 graded, and its server `avgTicks` came out ~2x the local figure.
+
 ## Solver Layout
 
 The root `./solve` script dispatches by solver name to language-specific

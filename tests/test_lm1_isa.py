@@ -63,6 +63,7 @@ def test_v1_has_no_ext_rows_and_ext_extends_it() -> None:
     assert not any(op.ext for op in LM1_V1)
     assert all(op in LM1_EXT.ops for op in LM1_V1.ops)
     assert {op.mnemonic for op in LM1_EXT if op.ext} == {
+        "DIV",
         "DIVI",
         "MODI",
         "MUL",
@@ -78,6 +79,9 @@ def test_v1_has_no_ext_rows_and_ext_extends_it() -> None:
         "NEG",
         "PUSH",
         "POP",
+        "AND",
+        "INCM",
+        "DECM",
     }
 
 
@@ -194,7 +198,12 @@ def test_restricted_isa_is_a_subset() -> None:
 
 def test_decode_trie_depth_tracks_the_table() -> None:
     assert LM1_V1.decode_bits == 4  # ARCH §7.2's depth-4 trie
-    assert LM1_EXT.decode_bits == 5  # eight more opcodes cost one more bit
+    # 0..31 were all taken, so `DIV` (a *memory* divide, which gradebook needs
+    # because its divisors are runtime values) had to be code 32 — and one opcode
+    # past a power of two is one more trie bit. It costs nothing in practice: the
+    # depth is planned per program from the opcodes it actually uses, and every
+    # program still fits 16.
+    assert LM1_EXT.decode_bits == 6
     assert Isa(name="two", ops=LM1_V1.ops[:2]).decode_bits == 1
 
 

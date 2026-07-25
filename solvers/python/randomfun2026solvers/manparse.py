@@ -26,6 +26,7 @@ optimizer can verify bindings are preserved.
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -240,9 +241,16 @@ def _classify(rows: list[str], mn: Cell, mx: Cell) -> str:
 
 
 def parse_program(
-    program: str | os.PathLike[str], *, lm: Littleman | None = None
+    program: str | os.PathLike[str], *, lm: Littleman | None = None, bind: bool = True
 ) -> Program:
-    """Parse a ``.man`` grid into a :class:`Program` using the engine's analysis."""
+    """Parse a ``.man`` grid into a :class:`Program` using the engine's analysis.
+
+    `bind` resolves each send/recv to its pipe via the ``route`` oracle, which
+    costs one engine call *per pipe-op cell* — the dominant cost on a real grid
+    (189 such cells in ``palette_cpu``). Pass ``bind=False`` when only room and
+    pipe geometry matters, e.g. while searching for a compaction, and re-parse
+    with bindings once to verify the result preserved them.
+    """
     lm = lm or Littleman()
     rows = _read_rows(program)
     # analyze/route need a concrete file; pass the rendered source as inline text
@@ -300,22 +308,38 @@ def parse_program(
         for c in cells:
             pipe_cell_owner[c] = pid
 
-    # Bind each send/recv instruction cell to its target pipe via route().
-    for room in rooms:
-        mn, mx = room.min_, room.max_
-        for y in range(mn[1] + 1, mx[1]):
-            for x in range(mn[0] + 1, mx[0]):
-                glyph = _char(rows, x, y)
-                if glyph not in PIPE_OP_GLYPHS:
-                    continue
-                targeted = lm.route(src, x, y)
-                pipe_id = -1
-                for c in targeted:
-                    owner = pipe_cell_owner.get(c.as_tuple())
-                    if owner is not None:
-                        pipe_id = owner
-                        break
-                room.pipe_ops.append(PipeOp(cell=(x, y), glyph=glyph, pipe_id=pipe_id))
+    # Bind each send/recv instruction cell to its target pipe via route(). Each
+    # call is a separate engine process, so a grid with a hundred pipe ops spends
+    # ~10s here; they are independent, and the subprocess releases the GIL, so a
+    # small thread pool turns that into ~1s without touching the oracle itself.
+    if bind:
+        targets: list[tuple[Room, int, int, str]] = []
+        for room in rooms:
+            mn, mx = room.min_, room.max_
+            for y in range(mn[1] + 1, mx[1]):
+                for x in range(mn[0] + 1, mx[0]):
+                    glyph = _char(rows, x, y)
+                    if glyph in PIPE_OP_GLYPHS:
+                        targets.append((room, x, y, glyph))
+
+        def _bind(job: tuple[Room, int, int, str]) -> tuple[Room, PipeOp]:
+            room, x, y, glyph = job
+            pipe_id = -1
+            for c in lm.route(src, x, y):
+                owner = pipe_cell_owner.get(c.as_tuple())
+                if owner is not None:
+                    pipe_id = owner
+                    break
+            return room, PipeOp(cell=(x, y), glyph=glyph, pipe_id=pipe_id)
+
+        if targets:
+            workers = min(8, len(targets))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for room, op in pool.map(_bind, targets):
+                    room.pipe_ops.append(op)
+            # keep reading order regardless of completion order
+            for room in rooms:
+                room.pipe_ops.sort(key=lambda o: (o.cell[1], o.cell[0]))
 
     width = max((len(r) for r in rows), default=0)
     height = len(rows)

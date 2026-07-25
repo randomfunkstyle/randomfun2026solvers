@@ -31,6 +31,7 @@ from __future__ import annotations
 import sys
 
 from randomfun2026solvers.circuit import GLYPH, Circuit, Collision, E, W, N, S
+from randomfun2026solvers.man_debug import DebugMap
 
 # ── rows (worker interior) ────────────────────────────────────────────────────
 R_INIT, R_TRANSIT1 = 0, 4
@@ -119,6 +120,12 @@ RELAY = ["+----+",
          "|  sr|",
          "|  ^<|",
          "+----+"]
+COMPACT_RELAY = [
+    "+----+",
+    "|@>rv|",
+    "| ^s<|",
+    "+----+",
+]
 RELAY_IN_ROW = 2
 
 
@@ -215,7 +222,9 @@ def tape_slots_of(n: int) -> tuple[int, int]:
     return sum(r.count("-") + r.count("|") for r in rows), n + 1
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and not any(
+    arg == "--v2" or arg.startswith("--debug-") for arg in sys.argv[1:]
+):
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     if "--worker" in sys.argv[2:]:
         print(worker(n).ruler())
@@ -245,27 +254,62 @@ V2_FWD_ROW = 8              # right wall
 V2_RET_COL = 12             # bottom wall
 
 
-def worker_v2(n: int) -> Circuit:
-    c = Circuit(V2_IW, V2_IH)
+def worker_v2(
+    n: int,
+    *,
+    init_body: str | None = None,
+    constant_input: bool = False,
+    width: int = V2_IW,
+    height: int = V2_IH,
+) -> Circuit:
+    c = Circuit(width, height)
     L = lit(n)
-    GUT = V2_IW - 1                       # right gutter: P2 exit climbs to MAIN
+    GUT = width - 1                       # right gutter: P2 exit climbs to MAIN
 
     # ── INIT (row 0) ──────────────────────────────────────────────────────
-    x, _ = c.run(1, 0, "@" + L + "b")     # A=N, BP=N
+    init_n = "r" if constant_input else L
+    x, _ = c.run(1, 0, "@" + init_n + "b")  # A=N, BP=N
     c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
-    fill, _ = c.counted_loop(17, 5, "0s")  # fill the ring with N zeros
-    c.route((fill, 5), E, [(GUT, 5), (GUT, 1)], (0, 1), S)
+    if init_body is not None:
+        if n % 2:
+            raise Collision("paired initialization requires an even memory size")
+        fill_exit, _odd_fill = c.counted_ring(17, 5, init_body)
+    else:
+        fill, _ = c.counted_loop(17, 5, "0s")
+        fill_exit = (fill, 5)
+    c.route(fill_exit, E, [(GUT, 5), (GUT, 1)], (0, 1), S)
     c.turn(0, 2, E)                        # left gutter -> MAIN
 
-    # ── MAIN (row 2): r(in)->op ; X  (op==0 straight = READ, 1 = CW = WRITE)
-    c.run(1, 2, "rX")
-    rx, _ = c.run(3, 2, "rbM" + L + "-M")      # BP=addr, B=+(N-addr)
-    c.turn(2, 3, E)
-    wx, _ = c.run(3, 3, "rbM" + L + "-NM")     # BP=addr, B=-(N-addr)
+    if constant_input:
+        # Keep op in B while both input values are received near the lower port.
+        c.run(1, 2, "rM")
+        c.turn(3, 2, S)
+        c.turn(3, 3, W)
+        c.run(1, 3, "r", d=W)                  # lower input -> addr
+        c.turn(0, 3, S)
+        c.turn(0, 4, E)
+        c.run(1, 4, "bWX")                     # BP=addr; branch on saved op
+        read_setup, _ = c.run(4, 4, "r-M")
+        c.horizontal(4, read_setup - 1, 10)
+        c.turn(3, 5, E)
+        write_setup, _ = c.run(4, 5, ".r-NM")
+        c.route(
+            (write_setup, 5),
+            E,
+            [(9, 5), (9, 4)],
+            (10, 4),
+            E,
+        )
+    else:
+        # ── MAIN: op==0 goes straight to READ; op==1 turns CW to WRITE.
+        c.run(1, 2, "rX")
+        rx, _ = c.run(3, 2, "rbM" + L + "-M")
+        c.turn(2, 3, E)
+        wx, _ = c.run(3, 3, "rbM" + L + "-NM")
+        c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
+        c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
 
-    # both arms drop to row 4, run west, then enter P1 heading east
-    c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
-    c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+    # Both arms reach the shared absolute south turn into P1.
     c.turn(10, 4, S)
     c.turn(10, 5, E)
     p1, _ = c.counted_loop(11, 5, "rs")        # pass `addr` values through
@@ -278,26 +322,76 @@ def worker_v2(n: int) -> Circuit:
     # ── READ target (row 11, CW/south) ───────────────────────────────────
     c.turn(15, 11, E)
     c.run(16, 11, "bm")                        # BP = N-1-addr
-    c.run(18, 11, "rS")                        # cell[addr] -> output AND tape
+    if constant_input:
+        c.turn(18, 11, S)
+        c.turn(18, 12, W)
+        c.run(17, 12, "rS", d=W)               # target -> output AND tape
+        read_exit = (15, 12)
+    else:
+        c.run(18, 11, "rS")                    # target -> output AND tape
+        read_exit = (20, 11)
 
     # ── WRITE target (row 9, CCW/north) ──────────────────────────────────
     c.turn(15, 9, W)
     c.run(14, 9, "N", d=W)                     # A = N-addr  (col 13 stays clear:
     c.run(12, 9, "bm", d=W)                    # the P1->dispatch descent crosses it)
-    c.horizontal(9, 10, 2)
-    c.run(2, 9, "r", d=W)                      # r(in) -> value
-    c.route((1, 9), W, [(1, 12)], (10, 12), E)
-    c.run(11, 12, "sr")                        # new value in, old one out
+    if constant_input:
+        c.horizontal(9, 10, 5)
+        c.run(5, 9, "r", d=W)
+        c.route((4, 9), W, [(4, 12)], (8, 12), E)
+        c.run(9, 12, "sr")
+        write_exit = 11
+    else:
+        c.horizontal(9, 10, 2)
+        c.run(2, 9, "r", d=W)                  # r(in) -> value
+        c.route((1, 9), W, [(1, 12)], (10, 12), E)
+        c.run(11, 12, "sr")                    # new value in, old one out
+        write_exit = 13
 
-    # ── both arms -> P2 entry (row 14) ───────────────────────────────────
-    c.route((20, 11), E, [(20, 13), (10, 13), (10, 14)], (11, 14), E)
-    c.route((13, 12), E, [(14, 12), (14, 13), (10, 13), (10, 14)], (11, 14), E)
-    p2, _ = c.counted_loop(11, 14, "rs")       # pass N-1-addr values through
-    c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+    # ── both arms -> P2 entry ─────────────────────────────────────────────
+    if constant_input:
+        c.route(
+            read_exit,
+            W,
+            [(15, 13)],
+            (14, 13),
+            W,
+        )
+    else:
+        c.route(
+            read_exit,
+            E,
+            [(20, 13), (10, 13), (10, 14)],
+            (11, 14),
+            E,
+        )
+    if constant_input:
+        c.route(
+            (write_exit, 12),
+            E,
+            [(write_exit, 13)],
+            (14, 13),
+            E,
+        )
+    else:
+        c.route(
+            (write_exit, 12),
+            E,
+            [(14, 12), (14, 13), (10, 13), (10, 14)],
+            (11, 14),
+            E,
+        )
+    if constant_input:
+        c.turn(14, 13, S)
+        p2 = c.counted_loop_horizontal(11, 14, "rs")
+        c.route(p2, S, [(GUT, 16), (GUT, 1)], (0, 1), S)
+    else:
+        p2, _ = c.counted_loop(11, 14, "rs")
+        c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
     return c
 
 
-def assemble_v2(n: int, fold: int = 2) -> list[str]:
+def assemble_v2(n: int, fold: int = 2, *, init_body: str | None = None) -> list[str]:
     """Compact build: worker_v2 + I/O rooms + relay + the folded tape ring.
 
     `fold` widens the return pipe's zig-zag; :func:`build_v2` searches it for the
@@ -306,7 +400,7 @@ def assemble_v2(n: int, fold: int = 2) -> list[str]:
     """
     IW, IH = V2_IW, V2_IH
     g = Circuit(400, 200)
-    wk = worker_v2(n)
+    wk = worker_v2(n, init_body=init_body)
     WX, WY = 7, 7
     for (x, y), ch in wk.cell.items():
         g.set(WX + x, WY + y, ch)
@@ -369,3 +463,1072 @@ def build_v2(n: int) -> list[str]:
             if "slots" not in str(exc):
                 raise
     raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def build_v2_fast_init(n: int) -> list[str]:
+    """Build v2 with a two-zero-per-lap initializer for even memory sizes."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2(n, fold, init_body="0s")
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def build_v2_paced_init(n: int) -> list[str]:
+    """Pair zero writes while matching the relay's six-tick throughput."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2(n, fold, init_body="0.s")
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def assemble_v2_compact_relay(n: int, fold: int = 0) -> list[str]:
+    """Fit v2 in 31x31 by tightening both the relay and its pipe band.
+
+    The steady relay cycle is still the minimum six ticks: receive, send, and
+    four turns. Its smaller box frees one row and lets the east tape columns
+    move one cell toward the worker without reducing the ring below N+1 slots.
+    """
+    iw, ih = V2_IW, V2_IH
+    g = Circuit(400, 200)
+    wk = worker_v2(n)
+    wx, wy = 7, 7
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    iy = wy + V2_IN_ROW
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+    ox = wx + V2_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    bottom_y = wy + ih
+    fy = wy + V2_FWD_ROW
+    ret_col = wx + V2_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 5
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    for i, row in enumerate(COMPACT_RELAY):
+        for j, ch in enumerate(row):
+            g.set(1 + j, relay_y + i, ch)
+    adj = 1 + len(COMPACT_RELAY[0])
+
+    n_fwd = _draw_pipe(
+        g,
+        [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (adj, r_a),
+            (east - 1, r_a),
+            (east - 1, r_b),
+            (adj + fold, r_b),
+            (adj + fold, r_c),
+            (ret_col, r_c),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    return [row.rstrip() for row in g.rows() if row.strip()]
+
+
+def build_v2_compact_relay(n: int) -> list[str]:
+    """Smallest v2 build using the compact relay."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2_compact_relay(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def build_v2_compact_relay_31(n: int) -> list[str]:
+    """Remove the compact relay build's structurally dead leading columns."""
+    rows = build_v2_compact_relay(n)
+    left = min(i for row in rows for i, ch in enumerate(row) if not ch.isspace())
+    return [row[left:].rstrip() for row in rows]
+
+
+def constant_source(n: int) -> list[str]:
+    """A compact room that walks N once per lap and offers it forever."""
+    top = ">@" + lit(n) + "sv"
+    bottom = "^" + " " * (len(top) - 3) + "s<"
+    wall = "+" + "-" * len(top) + "+"
+    return [wall, "|" + top + "|", "|" + bottom + "|", wall]
+
+
+def assemble_v2_constant_register(n: int, fold: int = 0) -> list[str]:
+    """Supply N from a dedicated repeating register instead of inline literals.
+
+    The source continuously fills a short pipe into the worker's top wall. The
+    two setup arms consume one value per operation; all other receives remain
+    closer to either the input or tape-return pipe.
+    """
+    iw, ih = V2_IW - 2, V2_IH - 1
+    g = Circuit(400, 200)
+    wk = worker_v2(n, constant_input=True, width=iw, height=ih)
+    wx, wy = 7, 8
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    constant_in_row = 7
+    iy = wy + constant_in_row
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+
+    ox = wx + V2_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    source = constant_source(n)
+    source_x, source_y = wx + 5, wy - 7
+    for i, row in enumerate(source):
+        for j, ch in enumerate(row):
+            g.set(source_x + j, source_y + i, ch)
+    constant_col = wx + 6
+    g.set(constant_col, wy - 3, "v")
+    g.set(constant_col, wy - 2, "v")
+
+    bottom_y = wy + ih
+    fy = wy + V2_FWD_ROW
+    ret_col = wx + V2_RET_COL + 1
+    east = wx + iw + 2
+    b_fwd = bottom_y + 5
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    for i, row in enumerate(COMPACT_RELAY):
+        for j, ch in enumerate(row):
+            g.set(1 + j, relay_y + i, ch)
+    adj = 1 + len(COMPACT_RELAY[0])
+
+    n_fwd = _draw_pipe(
+        g,
+        [
+            (wx + iw + 1, fy),
+            (east, fy),
+            (east, fy + 2),
+            (east - 1, fy + 2),
+            (east - 1, fy + 4),
+            (east, fy + 4),
+            (east, fy + 6),
+            (east - 1, fy + 6),
+            (east - 1, fy + 8),
+            (east, fy + 8),
+            (east, b_fwd),
+            (adj, b_fwd),
+        ],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (adj, r_a),
+            (east - 1, r_a),
+            (east - 1, r_b),
+            (adj + fold, r_b),
+            (adj + fold, r_c),
+            (ret_col, r_c),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    rows = [row.rstrip() for row in g.rows() if row.strip()]
+    left = min(i for row in rows for i, ch in enumerate(row) if not ch.isspace())
+    return [row[left:].rstrip() for row in rows]
+
+
+def build_v2_constant_register(n: int) -> list[str]:
+    """Smallest compact-relay build with a dedicated repeating N register."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2_constant_register(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+V3_IW, V3_IH = 24, 20
+V3_IN_ROW = 2
+V3_OUT_COL = 2
+V3_FWD_ROW = 8
+V3_RET_COL = 12
+
+
+def worker_v3(n: int) -> Circuit:
+    """Two-value-per-lap variant of :func:`worker_v2`.
+
+    ``counted_ring`` exits east for an even count and west for an odd count.
+    Each pair of exits is explicitly merged after the loop; no branch relies on
+    a particular address parity.
+    """
+    c = Circuit(V3_IW, V3_IH, strict_corridors=True)
+    L = lit(n)
+    gut = V3_IW - 1
+    return_gut = gut - 1
+
+    x, _ = c.run(1, 0, "@" + L + "b")
+    c.turn(return_gut, 1, W)
+    c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
+    fill, _ = c.counted_loop(17, 5, "0s")
+    c.route((fill, 5), E, [(gut, 5), (gut, 1)], (0, 1), S)
+    c.turn(0, 2, E)
+
+    c.run(1, 2, "rX")
+    read_setup, _ = c.run(3, 2, "rbM" + L + "-M")
+    c.turn(2, 3, E)
+    write_setup, _ = c.run(3, 3, "rbM" + L + "-NM")
+    c.route((write_setup, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+    c.route((read_setup, 2), E, [(15, 2), (15, 4)], (10, 4), W)
+    c.turn(10, 4, S)
+    c.turn(10, 5, E)
+
+    p1_even, p1_odd = c.counted_ring(11, 5, "rs")
+    c.route(p1_even, E, [], (13, 10), E)
+    c.route(p1_odd, W, [(9, 9), (9, 10)], (13, 10), E)
+
+    # Negating only A swaps the branch directions while preserving B's sign.
+    # READ goes north and restores A before deriving N-1-addr; WRITE goes south
+    # with A already positive.
+    c.run(14, 10, "WNX")
+
+    c.turn(16, 9, E)
+    read_target, _ = c.run(17, 9, "NbmrS")
+
+    c.turn(16, 11, W)
+    c.run(15, 11, "bm", d=W)
+    c.horizontal(11, 13, 2)
+    c.run(2, 11, "r", d=W)
+    c.route((1, 11), W, [(1, 12)], (10, 12), E)
+    c.run(11, 12, "sr")
+
+    c.route(
+        (13, 12),
+        E,
+        [(14, 12), (14, 13), (10, 13), (10, 14)],
+        (11, 14),
+        E,
+    )
+    c.route(
+        (read_target, 9),
+        E,
+        [(gut, 9), (gut, 13), (10, 13), (10, 14)],
+        (11, 14),
+        E,
+    )
+
+    p2_even, p2_odd = c.counted_ring(11, 14, "rs")
+    c.route(p2_even, E, [(return_gut, 14), (return_gut, 1)], (0, 1), S)
+    c.route(
+        p2_odd,
+        W,
+        [(9, 18), (9, 19), (return_gut, 19)],
+        (return_gut, 14),
+        N,
+    )
+    return c
+
+
+def assemble_v3(n: int, fold: int = 2) -> list[str]:
+    """Assemble :func:`worker_v3` with the same persistent tape protocol."""
+    iw, ih = V3_IW, V3_IH
+    g = Circuit(400, 200)
+    wk = worker_v3(n)
+    wx, wy = 7, 7
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    iy = wy + V3_IN_ROW
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+    ox = wx + V3_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    bottom_y = wy + ih
+    fy = wy + V3_FWD_ROW
+    ret_col = wx + V3_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 6
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    for i, row in enumerate(RELAY):
+        for j, ch in enumerate(row):
+            g.set(1 + j, relay_y + i, ch)
+    adj = len(RELAY[0]) + 1
+    n_fwd = _draw_pipe(
+        g,
+        [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (adj, r_a),
+            (east - 1, r_a),
+            (east - 1, r_b),
+            (adj + fold, r_b),
+            (adj + fold, r_c),
+            (ret_col, r_c),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    return [row.rstrip() for row in g.rows() if row.strip()]
+
+
+def build_v3(n: int) -> list[str]:
+    """Smallest two-value-loop build whose tape holds at least N+1 values."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v3(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def assemble_v3_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build v3 together with the geometry used to generate it."""
+    last: Collision | None = None
+    fold = 0
+    rows: list[str] | None = None
+    for candidate in (0, 2, 4, 6, 8, 10):
+        try:
+            rows = assemble_v3(n, candidate)
+            fold = candidate
+            break
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    if rows is None:
+        raise Collision(f"no fold gives enough tape slots: {last}")
+
+    wx, wy = 7, 7
+    iw, ih = V3_IW, V3_IH
+    worker = (wx, wy)
+    dbg = DebugMap(f"memory tape v3 n={n}, fold={fold}")
+    dbg.region(
+        "worker",
+        wx,
+        wy,
+        iw,
+        ih,
+        note="operation decode, paired tape passes, and target access",
+        color="#38bdf8",
+    )
+    dbg.region_relative(
+        "init",
+        worker,
+        0,
+        0,
+        24,
+        7,
+        note="fill the tape with n zero values",
+        color="#64748b",
+    )
+    dbg.region_relative(
+        "main-dispatch",
+        worker,
+        0,
+        2,
+        16,
+        3,
+        note="opcode 0 enters read setup; opcode 1 enters write setup",
+        color="#60a5fa",
+    )
+    dbg.region_relative(
+        "first-pass",
+        worker,
+        9,
+        5,
+        5,
+        6,
+        note="two values are rotated per lap; parity exits merge below",
+        color="#22c55e",
+    )
+    dbg.region_relative(
+        "target-dispatch",
+        worker,
+        14,
+        9,
+        3,
+        3,
+        note="read turns north; write turns south",
+        color="#f59e0b",
+    )
+    dbg.region_relative(
+        "read-target",
+        worker,
+        17,
+        9,
+        7,
+        5,
+        note="read target; S emits it and returns it to tape",
+        color="#a78bfa",
+    )
+    dbg.region_relative(
+        "write-target",
+        worker,
+        1,
+        11,
+        14,
+        3,
+        note="receive new input, append it, consume old target",
+        color="#fb923c",
+    )
+    dbg.region_relative(
+        "second-pass",
+        worker,
+        9,
+        14,
+        14,
+        6,
+        note="paired loop returns the remaining values and restores alignment",
+        color="#14b8a6",
+    )
+
+    iy = wy + V3_IN_ROW
+    ox = wx + V3_OUT_COL
+    dbg.region(
+        "input-room",
+        wx - 6,
+        iy - 1,
+        3,
+        3,
+        note="operation stream",
+        color="#22c55e",
+    )
+    dbg.region(
+        "output-room",
+        ox - 1,
+        wy - 6,
+        3,
+        3,
+        note="read results",
+        color="#a78bfa",
+    )
+
+    bottom_y = wy + ih
+    fy = wy + V3_FWD_ROW
+    ret_col = wx + V3_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 6
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    adj = len(RELAY[0]) + 1
+    fwd = [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)]
+    ret = [
+        (adj, r_a),
+        (east - 1, r_a),
+        (east - 1, r_b),
+        (adj + fold, r_b),
+        (adj + fold, r_c),
+        (ret_col, r_c),
+        (ret_col, bottom_y + 1),
+    ]
+    dbg.region(
+        "relay",
+        1,
+        relay_y,
+        len(RELAY[0]),
+        len(RELAY),
+        note="turnaround room for the value ring",
+        color="#fb7185",
+    )
+    dbg.lane(
+        "tape-forward-pipe",
+        fwd,
+        kind="pipe",
+        expect="worker sends values toward relay",
+        color="#34d399",
+    )
+    dbg.lane(
+        "tape-return-pipe",
+        ret,
+        kind="pipe",
+        expect="relay returns values into worker bottom wall",
+        color="#10b981",
+    )
+    dbg.lane(
+        "input-pipe",
+        [(wx - 3, iy), (wx - 1, iy)],
+        kind="pipe",
+        expect="operations enter worker",
+        color="#22c55e",
+    )
+    dbg.lane(
+        "output-pipe",
+        [(ox, wy - 2), (ox, wy - 5)],
+        kind="pipe",
+        expect="read values leave worker",
+        color="#a78bfa",
+    )
+
+    dbg.lane_relative(
+        "read-setup",
+        worker,
+        [(3, 2), (15, 2), (15, 4), (10, 4)],
+        kind="expected",
+        expect="op=0: prepare addr for the first paired pass",
+        color="#60a5fa",
+    )
+    dbg.lane_relative(
+        "write-setup",
+        worker,
+        [(3, 3), (15, 3), (15, 4), (10, 4)],
+        kind="expected",
+        expect="op=1: preserve write state while preparing addr",
+        color="#fb923c",
+    )
+    dbg.lane_relative(
+        "first-paired-loop",
+        worker,
+        [(11, 5), (12, 5), (12, 9), (11, 9), (11, 5)],
+        kind="expected",
+        expect="rotate exactly addr values, two per full lap",
+        color="#22c55e",
+    )
+    dbg.lane_relative(
+        "first-odd-exit",
+        worker,
+        [(10, 9), (9, 9), (9, 10), (13, 10)],
+        kind="expected",
+        expect="odd addr exits west and rejoins the even path",
+        color="#84cc16",
+    )
+    dbg.lane_relative(
+        "read-target-access",
+        worker,
+        [(16, 10), (16, 9), (22, 9)],
+        kind="expected",
+        expect="target read is sent to output and back to tape",
+        color="#a78bfa",
+    )
+    dbg.lane_relative(
+        "write-target-access",
+        worker,
+        [(16, 10), (16, 11), (1, 11), (1, 12), (13, 12)],
+        kind="expected",
+        expect="new value enters before old target is discarded",
+        color="#fb923c",
+    )
+    dbg.lane_relative(
+        "second-paired-loop",
+        worker,
+        [(11, 14), (12, 14), (12, 18), (11, 18), (11, 14)],
+        kind="expected",
+        expect="restore alignment, two values per full lap",
+        color="#14b8a6",
+    )
+    dbg.lane_relative(
+        "second-odd-exit",
+        worker,
+        [(10, 18), (9, 18), (9, 19), (22, 19), (22, 14)],
+        kind="expected",
+        expect="odd remainder exits west and rejoins the even return",
+        color="#2dd4bf",
+    )
+    dbg.scenario(
+        "write-read-7",
+        "1 7 42 0 7",
+        500,
+        1600,
+        watch=[
+            "write-setup",
+            "first-paired-loop",
+            "write-target-access",
+            "second-paired-loop",
+            "tape-forward-pipe",
+            "tape-return-pipe",
+        ],
+        note="write 42 at address 7, then read address 7",
+    )
+
+    first_row = wy - 6
+    return rows, dbg.translated(0, -first_row)
+
+
+def assemble_v2_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the compact tape machine plus named regions, pipes, and routes.
+
+    The .man grid has no comment syntax.  This sidecar deliberately keeps the
+    geometry in one place, including the fold picked for the requested capacity.
+    """
+    last: Collision | None = None
+    fold = 0
+    rows: list[str] | None = None
+    for candidate in (0, 2, 4, 6, 8, 10):
+        try:
+            rows = assemble_v2(n, candidate)
+            fold = candidate
+            break
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    if rows is None:
+        raise Collision(f"no fold gives enough tape slots: {last}")
+
+    wx, wy = 7, 7
+    iw, ih = V2_IW, V2_IH
+    dbg = DebugMap(f"memory tape v2 n={n}, fold={fold}")
+    dbg.region("worker", wx, wy, iw, ih, note="operation decode, two tape passes, and target access", color="#38bdf8")
+    dbg.region("init", wx, wy, 20, 6, note="fill the tape with n zero values", color="#64748b")
+    dbg.region("main-dispatch", wx, wy + 2, 15, 3, note="opcode 0 enters read setup; opcode 1 enters write setup", color="#60a5fa")
+    dbg.region("first-pass", wx + 10, wy + 4, 4, 7, note="rotate addr values from tape head to target", color="#22c55e")
+    dbg.region("target-dispatch", wx + 13, wy + 8, 4, 4, note="sign of B selects read or write target", color="#f59e0b")
+    dbg.region("read-target", wx + 15, wy + 10, 7, 3, note="read target; S emits it and returns it to tape", color="#a78bfa")
+    dbg.region("write-target", wx + 1, wy + 8, 14, 6, note="receive new input, append it, consume old target", color="#fb923c")
+    dbg.region("second-pass", wx + 10, wy + 13, 4, 5, note="return remaining n-1-addr values to their original alignment", color="#14b8a6")
+
+    iy = wy + V2_IN_ROW
+    ox = wx + V2_OUT_COL
+    dbg.region("input-room", wx - 6, iy - 1, 3, 3, note="operation stream", color="#22c55e")
+    dbg.region("output-room", ox - 1, wy - 6, 3, 3, note="read results", color="#a78bfa")
+
+    bottom_y = wy + ih
+    fy = wy + V2_FWD_ROW
+    ret_col = wx + V2_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 6
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    adj = len(RELAY[0]) + 1
+    fwd = [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)]
+    ret = [
+        (adj, r_a), (east - 1, r_a), (east - 1, r_b), (adj + fold, r_b),
+        (adj + fold, r_c), (ret_col, r_c), (ret_col, bottom_y + 1),
+    ]
+    dbg.region("relay", 1, relay_y, len(RELAY[0]), len(RELAY), note="turnaround room for the value ring", color="#fb7185")
+    dbg.lane("tape-forward-pipe", fwd, kind="pipe", expect="worker sends values toward relay", color="#34d399")
+    dbg.lane("tape-return-pipe", ret, kind="pipe", expect="relay returns values into worker bottom wall", color="#10b981")
+    dbg.lane("input-pipe", [(wx - 3, iy), (wx - 1, iy)], kind="pipe", expect="operations enter worker", color="#22c55e")
+    dbg.lane("output-pipe", [(ox, wy - 2), (ox, wy - 5)], kind="pipe", expect="read values leave worker", color="#a78bfa")
+
+    # These are semantic lanes, not additional tracks: they state the intended
+    # runner route used by the focused tracer.
+    dbg.lane("read-setup", [(wx + 3, wy + 2), (wx + 15, wy + 2), (wx + 15, wy + 4), (wx + 10, wy + 4)], kind="expected", expect="op=0: addr -> B=+(n-addr), BP=addr", color="#60a5fa")
+    dbg.lane("write-setup", [(wx + 3, wy + 3), (wx + 15, wy + 3), (wx + 15, wy + 4), (wx + 10, wy + 4)], kind="expected", expect="op=1: addr -> B=-(n-addr), BP=addr", color="#fb923c")
+    dbg.lane("first-tape-pass", [(wx + 11, wy + 5), (wx + 12, wy + 5), (wx + 12, wy + 8), (wx + 11, wy + 8), (wx + 11, wy + 5)], kind="expected", expect="pass exactly addr values through the ring", color="#22c55e")
+    dbg.lane("read-target-access", [(wx + 15, wy + 10), (wx + 15, wy + 11), (wx + 20, wy + 11)], kind="expected", expect="target read is sent to output and tape", color="#a78bfa")
+    dbg.lane("write-target-access", [(wx + 15, wy + 9), (wx + 2, wy + 9), (wx + 2, wy + 12), (wx + 12, wy + 12)], kind="expected", expect="new value enters before old target is discarded", color="#fb923c")
+    dbg.lane("second-tape-pass", [(wx + 11, wy + 14), (wx + 12, wy + 14), (wx + 12, wy + 17), (wx + 11, wy + 17), (wx + 11, wy + 14)], kind="expected", expect="pass n-1-addr remaining values; alignment is restored", color="#14b8a6")
+    dbg.scenario(
+        "write-read-7",
+        "1 7 42 0 7",
+        700,
+        2100,
+        watch=["write-setup", "first-tape-pass", "write-target-access", "second-tape-pass", "tape-forward-pipe", "tape-return-pipe"],
+        note="write 42 at address 7, then read address 7",
+    )
+
+    # assemble_v2 removes leading all-blank rows, so translate the sidecar too.
+    first_row = wy - 6
+    return rows, dbg.translated(0, -first_row)
+
+
+def assemble_v2_compact_relay_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the relay experiment with sidecar geometry matching its pipes."""
+    rows = build_v2_compact_relay(n)
+    _, dbg = assemble_v2_debug(n)
+    dbg.title = f"memory tape v2 compact relay n={n}"
+    dbg.regions = [region for region in dbg.regions if region.name != "relay"]
+    dbg.lanes = [
+        lane
+        for lane in dbg.lanes
+        if lane.name not in ("tape-forward-pipe", "tape-return-pipe")
+    ]
+
+    wx, wy = 7, 7
+    bottom_y = wy + V2_IH
+    east = wx + V2_IW + 2
+    adj = 1 + len(COMPACT_RELAY[0])
+    first_row = wy - 6
+    dbg.region(
+        "compact-relay",
+        1,
+        bottom_y + 3 - first_row,
+        len(COMPACT_RELAY[0]),
+        len(COMPACT_RELAY),
+        note="minimum six-tick receive/send loop with a one-time @ entry tail",
+        color="#fb7185",
+    )
+    dbg.lane(
+        "tape-forward-pipe",
+        [
+            (wx + V2_IW + 1, wy + V2_FWD_ROW - first_row),
+            (east, wy + V2_FWD_ROW - first_row),
+            (east, bottom_y + 5 - first_row),
+            (adj, bottom_y + 5 - first_row),
+        ],
+        kind="pipe",
+        expect="worker sends values toward compact relay",
+        color="#34d399",
+    )
+    dbg.lane(
+        "tape-return-pipe",
+        [
+            (adj, bottom_y + 4 - first_row),
+            (east - 1, bottom_y + 4 - first_row),
+            (east - 1, bottom_y + 3 - first_row),
+            (adj, bottom_y + 3 - first_row),
+            (adj, bottom_y + 2 - first_row),
+            (wx + V2_RET_COL, bottom_y + 2 - first_row),
+            (wx + V2_RET_COL, bottom_y + 1 - first_row),
+        ],
+        kind="pipe",
+        expect="compact relay returns values into worker bottom wall",
+        color="#10b981",
+    )
+    return rows, dbg
+
+
+def assemble_v2_compact_relay_31_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the 31x31 relay variant and translate its generated sidecar."""
+    untrimmed, dbg = assemble_v2_compact_relay_debug(n)
+    left = min(
+        i for row in untrimmed for i, ch in enumerate(row) if not ch.isspace()
+    )
+    rows = [row[left:].rstrip() for row in untrimmed]
+    dbg.title = f"memory tape v2 compact relay 31x31 n={n}"
+    return rows, dbg.translated(-left, 0)
+
+
+def assemble_v2_constant_register_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the repeating-N experiment with its source and setup lanes marked."""
+    rows = build_v2_constant_register(n)
+    _, dbg = assemble_v2_compact_relay_31_debug(n)
+    dbg = dbg.translated(0, 1)
+    dbg.title = f"memory tape v2 dedicated constant register n={n}"
+    dbg.regions = [
+        region
+        for region in dbg.regions
+        if region.name
+        not in (
+            "worker",
+            "input-room",
+            "main-dispatch",
+            "read-target",
+            "write-target",
+            "second-pass",
+            "compact-relay",
+        )
+    ]
+    dbg.lanes = [
+        lane
+        for lane in dbg.lanes
+        if lane.name
+        not in (
+            "input-pipe",
+            "read-setup",
+            "write-setup",
+            "read-target-access",
+            "write-target-access",
+            "second-tape-pass",
+            "tape-forward-pipe",
+            "tape-return-pipe",
+        )
+    ]
+    dbg.region(
+        "worker",
+        6,
+        7,
+        V2_IW - 2,
+        V2_IH - 1,
+        note="narrow worker with shared decode and horizontal second pass",
+        color="#38bdf8",
+    )
+    dbg.region(
+        "constant-register",
+        11,
+        0,
+        len(constant_source(n)[0]),
+        len(constant_source(n)),
+        note="walk N once per lap; initialization and every operation consume it",
+        color="#facc15",
+    )
+    dbg.region(
+        "input-room",
+        0,
+        13,
+        3,
+        3,
+        note="lowered beside command decode and the write-value receive",
+        color="#22c55e",
+    )
+    dbg.region(
+        "shared-command-setup",
+        6,
+        9,
+        12,
+        4,
+        note="receive op and addr once; BP keeps addr while op selects an arm",
+        color="#60a5fa",
+    )
+    dbg.region(
+        "folded-read-target",
+        21,
+        18,
+        4,
+        3,
+        note="b,m on the top row; tape receive and fan-out run back to the left",
+        color="#a78bfa",
+    )
+    dbg.region(
+        "write-target",
+        10,
+        16,
+        13,
+        5,
+        note="short path to lower input, then append new value and discard old",
+        color="#fb923c",
+    )
+    dbg.region(
+        "horizontal-second-pass",
+        17,
+        20,
+        9,
+        4,
+        note="clockwise rotation of the same eight-tick counted rs loop",
+        color="#14b8a6",
+    )
+    dbg.region(
+        "compact-relay",
+        0,
+        27,
+        len(COMPACT_RELAY[0]),
+        len(COMPACT_RELAY),
+        note="minimum six-tick receive/send turnaround",
+        color="#fb7185",
+    )
+    dbg.lane(
+        "constant-pipe",
+        [(12, 4), (12, 5)],
+        kind="pipe",
+        expect="a ready N value enters the worker above both setup receives",
+        color="#fde047",
+    )
+    dbg.lane(
+        "input-pipe",
+        [(3, 14), (5, 14)],
+        kind="pipe",
+        expect="operations enter near command decode and the write target",
+        color="#22c55e",
+    )
+    dbg.lane(
+        "shared-command-decode",
+        [(7, 9), (9, 9), (9, 10), (6, 10), (6, 11), (9, 11)],
+        kind="expected",
+        expect="retain op in B, receive addr, put addr in BP, restore op, branch",
+        color="#60a5fa",
+    )
+    dbg.lane(
+        "read-setup",
+        [(9, 11), (16, 11), (16, 12), (17, 12)],
+        kind="expected",
+        expect="op=0: fetch N, derive B=+(N-addr), enter first tape pass",
+        color="#60a5fa",
+    )
+    dbg.lane(
+        "write-setup",
+        [(9, 11), (9, 12), (15, 12), (15, 11), (16, 11)],
+        kind="expected",
+        expect="op=1: fetch N, derive B=-(N-addr), enter first tape pass",
+        color="#fb923c",
+    )
+    dbg.lane(
+        "read-target-access",
+        [
+            (21, 17),
+            (21, 18),
+            (24, 18),
+            (24, 19),
+            (21, 19),
+            (21, 20),
+            (20, 20),
+            (20, 21),
+        ],
+        kind="expected",
+        expect="folded bm/down/left-rS reaches P2 without the old east corridor",
+        color="#a78bfa",
+    )
+    dbg.lane(
+        "write-target-access",
+        [(21, 16), (10, 16), (10, 19), (17, 19), (17, 20), (20, 20)],
+        kind="expected",
+        expect="receive new value nearby, append it, then consume old target",
+        color="#fb923c",
+    )
+    dbg.lane(
+        "second-tape-pass",
+        [(20, 20), (20, 22), (17, 22), (17, 21), (20, 21), (20, 22)],
+        kind="expected",
+        expect="horizontal eight-tick loop passes exactly n-1-addr values",
+        color="#14b8a6",
+    )
+    dbg.lane(
+        "tape-forward-pipe",
+        [
+            (27, 15),
+            (28, 15),
+            (28, 17),
+            (27, 17),
+            (27, 19),
+            (28, 19),
+            (28, 21),
+            (27, 21),
+            (27, 23),
+            (28, 23),
+            (28, 29),
+            (6, 29),
+        ],
+        kind="pipe",
+        expect="43-slot worker-to-relay lane with two inward capacity notches",
+        color="#34d399",
+    )
+    dbg.lane(
+        "tape-return-pipe",
+        [(6, 28), (27, 28), (27, 27), (6, 27), (6, 26), (19, 26), (19, 25)],
+        kind="pipe",
+        expect="58-slot relay-to-worker lane; total ring capacity is 101",
+        color="#10b981",
+    )
+    return rows, dbg
+
+
+def assemble_v2_fast_init_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build v2 with the paired initializer and mark its two-value loop."""
+    rows = build_v2_fast_init(n)
+    _, dbg = assemble_v2_debug(n)
+    dbg.title = f"memory tape v2 paired zero initialization n={n}"
+    for i, region in enumerate(dbg.regions):
+        if region.name == "init":
+            dbg.regions[i] = type(region)(
+                region.name,
+                region.x,
+                region.y,
+                region.w,
+                region.h,
+                "fill the tape with two zero values per loop lap",
+                region.color,
+                region.tags,
+            )
+            break
+    first_row = 1
+    dbg.lane(
+        "paired-zero-fill",
+        [
+            (24, 12 - first_row),
+            (25, 12 - first_row),
+            (25, 16 - first_row),
+            (24, 16 - first_row),
+            (24, 12 - first_row),
+        ],
+        kind="expected",
+        expect="N=100 is even: emit two zero values per full lap, then exit east",
+        color="#facc15",
+    )
+    return rows, dbg
+
+
+def assemble_v2_paced_init_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the relay-paced paired initializer with matching sidecar geometry."""
+    rows = build_v2_paced_init(n)
+    _, dbg = assemble_v2_fast_init_debug(n)
+    dbg.title = f"memory tape v2 relay-paced zero initialization n={n}"
+    for i, region in enumerate(dbg.regions):
+        if region.name == "init":
+            dbg.regions[i] = type(region)(
+                region.name,
+                region.x,
+                region.y,
+                region.w,
+                region.h,
+                "fill two zeros per lap, spaced at the relay's six-tick throughput",
+                region.color,
+                region.tags,
+            )
+            break
+    dbg.lanes = [lane for lane in dbg.lanes if lane.name != "paired-zero-fill"]
+    dbg.lane(
+        "relay-paced-zero-fill",
+        [(24, 11), (25, 11), (25, 16), (24, 16), (24, 11)],
+        kind="expected",
+        expect="emit two zeros per lap with six ticks between sends",
+        color="#facc15",
+    )
+    return rows, dbg
+
+
+if __name__ == "__main__" and any(
+    arg in ("--v2", "--v3") or arg.startswith("--debug-") for arg in sys.argv[1:]
+):
+    numeric_args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    n = int(numeric_args[0]) if numeric_args else 100
+    rows, debug = (
+        assemble_v3_debug(n) if "--v3" in sys.argv[1:] else assemble_v2_debug(n)
+    )
+    for arg in sys.argv[1:]:
+        if arg.startswith("--debug-json="):
+            debug.write_json(arg.split("=", 1)[1])
+        elif arg.startswith("--debug-html="):
+            debug.write_html(rows, arg.split("=", 1)[1])
+    print("\n".join(rows))

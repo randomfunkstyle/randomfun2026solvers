@@ -47,8 +47,8 @@ SLUG = "gradebook"
 GRID = REPO / "tasks" / "solutions" / f"{SLUG}_cpu.man"
 MAX_INSTRUCTIONS = 3_000_000
 
-#: Slots the generated machine's tape must hold: scratch 1..13, ids 14..29, grades
-#: 30..93 (``GRD + 4*15 + 3``), sized from the *constraints* (N <= 16, K <= 4).
+#: Slots the generated machine's tape must hold: 15 scalars plus **one packed cell
+#: per student** (16..31) — the whole grade book, ids included, is the 16 cells.
 TAPE_N = machine.TAPE_SIZE[SLUG]
 
 CASES = rounds_for_problem(SLUG)
@@ -138,19 +138,42 @@ def test_public_case_matches_round_by_round(name: str, rounds: list[Round]) -> N
 
 
 def test_every_public_case_leaves_the_roster_where_the_layout_says() -> None:
-    """Ids land in 14..29 and grades in 30..93 — never on a scratch slot.
+    """The roster occupies cells 16..16+N-1 and nothing above; the rest stay 0.
 
-    A cursor bug that walked one slot low would corrupt ``GEND`` and still pass
-    some cases; this pins the arrays inside their own address ranges.
+    Both halves matter. A cursor bug that walked one slot low would corrupt a
+    scalar and still pass some cases, and the unrolled scans *rely* on every cell
+    above N-1 holding 0 — that is what makes a slot for a student who does not
+    exist lose every comparison and add nothing to a sum.
     """
     for name, rounds in CASES:
         _, store = _run(rounds)
-        n, k = rounds[0].input[0], rounds[0].input[1]
-        ids = {14 + i for i in range(n)}
-        grades = {30 + 4 * i + s for i in range(n) for s in range(k)}
-        touched = {a for a, v in store.snapshot().items() if a >= 14}
-        assert touched <= ids | grades, f"{name}: wrote outside the arrays: {sorted(touched)}"
-        assert ids <= touched, f"{name}: not every id slot was written"
+        n = rounds[0].input[0]
+        used = {16 + i for i in range(n)}
+        cells = {a: v for a, v in store.snapshot().items() if a >= 16}
+        assert set(cells) <= used, f"{name}: wrote past the roster: {sorted(cells)}"
+        assert set(cells) == used, f"{name}: not every cell was written"
+        empty = {16 + i for i in range(n, 16)}
+        assert all(store.snapshot().get(a, 0) == 0 for a in empty), f"{name}: dirty tail"
+
+
+def test_a_cell_really_is_the_whole_record() -> None:
+    """Unpack the tape by hand: one slot holds K grades *and* the id.
+
+    ``cell = packed * 2^14 + (16384 - id)`` with ``packed`` built by Horner in
+    subject order, so subject s sits at bit ``14 + 11*(K - s)``. If this drifts,
+    every mask in the program is wrong — and the program would still pass some
+    cases, since K=1 makes most of the layout degenerate.
+    """
+    students = [(4321, 11, 22, 33, 44), (8765, 100, 0, 7, 99), (1000, 1, 2, 3, 4)]
+    rounds = [_roster([*students, (9999, 5, 6, 7, 8)], subjects=4), _batch([(3, 1)], (29,))]
+    _, store = _run(rounds)
+    cells = {a: v for a, v in store.snapshot().items() if a >= 16}
+    for sid, *grades in students:
+        packed = 0
+        for g in grades:
+            packed = packed * 2048 + g
+        want = packed * 16384 + (16384 - sid)
+        assert want in cells.values(), f"id {sid}: no cell equals {want}"
 
 
 # ── operation semantics, on hand-built rosters ────────────────────────────────
@@ -242,10 +265,11 @@ def test_set_emits_nothing_and_get_sees_it() -> None:
 def test_public_cases_fit_the_tick_cap_with_real_tape_latency() -> None:
     """Re-bill STORE at the tape's real cost, not the emulator's flat 6/word.
 
-    ``ARCH.md`` §4.1 puts one tape access at ``105 + 8.3N`` ticks; with N=94 that is
-    ~885, against the emulator's 12-18 for the same access. Every variable in this
-    program is a tape slot, so this is the whole tick bill and the flat model
-    understates it ~50x.
+    ``ARCH.md`` §4.1 puts one tape access at ``105 + 8.3N`` ticks, against the
+    emulator's 12-18 for the same access. This is a floor, not the real bill — the
+    measured cost of an access on this machine is ~340 ticks and the *ROM* is the
+    other half of the total (see ``gradebook.asm``) — but it is the part the
+    emulator can see, and it catches an edit that doubles the access count.
     """
     per_access = 105 + 8.3 * TAPE_N
     worst = 0.0
@@ -254,17 +278,71 @@ def test_public_cases_fit_the_tick_cap_with_real_tape_latency() -> None:
         ticks = res.ticks + store.ops * per_access
         worst = max(worst, ticks)
         assert ticks < TICK_CAP, f"{name}: ~{ticks:,.0f} ticks over the {TICK_CAP:,} cap"
-    # The measured worst case on the real interpreter is ~2.2M; leave a real margin
-    # so a future edit that doubles the access count fails here rather than silently
-    # on the judge.
-    assert worst < TICK_CAP / 1.5, f"only {TICK_CAP / worst:.2f}x of margin left"
+    assert worst < TICK_CAP / 4, f"only {TICK_CAP / worst:.2f}x of margin left"
+
+
+#: 10 batch rounds x 8 operations is the heaviest batch the constraints allow, and
+#: the *public* data's worst case is 5 rounds — which is how this program shipped
+#: passing 7/7 in public and failing a private test on the step cap. Measured on the
+#: real engine, the three observable worst cases are ~3.35M / 2.12M / 1.83M ticks
+#: against the 5,000,000 cap (the old two-array layout was 17.5M / 13.8M / 10.0M).
+WORST_LEGAL_TICKS = {"TOP": 3_500_000, "AVG": 2_300_000, "GET": 2_000_000, "SET": 2_200_000}
+
+
+def _worst_legal_case(op: str) -> tuple[str, str, list[int]]:
+    """N=16, K=4, ten rounds of eight ``op``s: input, expected, flat expected."""
+    n, k = 16, 4
+    ids = [1000 + (i * 563) % 9000 for i in range(n)]
+    grades = [[(i * 7 + s * 13) % 101 for s in range(k)] for i in range(n)]
+    roster: list[int] = [n, k]
+    for i in range(n):
+        roster += [ids[i], *grades[i]]
+
+    rounds_in, rounds_out = [], []
+    for _ in range(10):
+        rin: list[int] = [8]
+        rout: list[int] = []
+        for j in range(8):
+            s = (j % k) + 1
+            if op == "TOP":
+                rin += [4, s]
+                rout.append(ids[max(range(n), key=lambda i: (grades[i][s - 1], -ids[i]))])
+            elif op == "AVG":
+                rin += [3, s]
+                rout.append(sum(grades[i][s - 1] for i in range(n)) // n)
+            elif op == "GET" or j == 7:  # a round of pure SETs emits nothing to gate on
+                rin += [1, ids[n - 1], s]
+                rout.append(grades[n - 1][s - 1])
+            else:
+                rin += [2, ids[n - 1], s, 50]
+                grades[n - 1][s - 1] = 50
+        rounds_in.append(rin)
+        rounds_out.append(rout)
+
+    joined = " / ".join([" ".join(map(str, roster))] + [" ".join(map(str, r)) for r in rounds_in])
+    expected = " / ".join([""] + [" ".join(map(str, r)) for r in rounds_out])
+    return joined, expected, [v for r in rounds_out for v in r]
+
+
+@node_required
+@pytest.mark.parametrize("op", sorted(WORST_LEGAL_TICKS))
+def test_the_worst_legal_batch_fits_the_step_cap(op: str) -> None:
+    """The gap that shipped this broken: public data never reaches 80 operations."""
+    from randomfun2026solvers.littleman import Littleman
+
+    inp, expected, want = _worst_legal_case(op)
+    snap = Littleman().judge(GRID, input=inp, expected=expected, max_ticks=TICK_CAP)
+    assert snap.fatal is None, f"80x {op}: fatal {snap.fatal}"
+    assert list(snap.output) == want, f"80x {op}: wrong answers"
+    assert snap.step < WORST_LEGAL_TICKS[op], f"80x {op}: {snap.step:,} ticks"
+    assert snap.step < TICK_CAP, f"80x {op}: {snap.step:,} over the {TICK_CAP:,} cap"
 
 
 def test_the_program_stays_on_the_depth_four_trie() -> None:
-    """15 opcodes -> k=4 -> 16 lanes. A 17th would double the CPU's height."""
+    """16 opcodes -> k=4 -> 16 lanes, exactly the budget. A 17th doubles the CPU."""
     prog = load(SLUG)
     p = machine.plan(prog)
-    assert len(p.number) == 15
+    assert len(p.number) == 16
     assert p.k == 4 and p.lanes == 16
     for op in prog.ops_used:
         structured = op.sem in {Sem.JUMP, Sem.BR_ZERO, Sem.BR_NEG}
@@ -276,8 +354,12 @@ def test_the_program_stays_on_the_depth_four_trie() -> None:
 def test_checked_in_grid_matches_the_generator() -> None:
     """``build_for`` runs the engine's structural analysis: every pipe must bind."""
     m = machine.build_for(SLUG)
-    assert (m.width, m.height) == (112, 103)
-    assert m.footprint == 112**2  # width-bound: the CPU, adapter and 32-wide tape
+    assert (m.width, m.height) == (117, 123)
+    # Height-bound now: the unrolled scans make the ROM image 836 words, and 53 rows
+    # is the minimum over every fold (see ROM_ROWS). Trading 20% more area for 5x
+    # fewer ticks is a 1.7x better score, and it is what fits the step cap at all.
+    assert m.footprint == 123**2
+    assert m.rom_rows == machine.ROM_ROWS[SLUG]
     assert m.tape_n == TAPE_N
     expected = "\n".join(m.rows) + "\n"
     assert GRID.read_text(encoding="utf-8") == expected, (
