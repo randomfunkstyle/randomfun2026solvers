@@ -165,7 +165,7 @@ _BASE_DIGITS = 3
 
 def _init_height(base: int | None) -> int:
     """Rows the igniter's preamble needs above the first band."""
-    return 1 if base is None else _BASE_DIGITS + 6
+    return 1 if base is None else 2
 
 
 def band_room(
@@ -214,15 +214,18 @@ def band_room(
     put(0, 0, "@")
     if base is not None:
         # A whole column of memory starts at `base`, so the igniter is handed one
-        # number and counts up from it. The literal is read walking *south* — big
-        # literals work in any direction — and is zero-padded to a fixed width so
-        # every column's bands sit on the same rows whatever its base.
-        put(1, 0, "v")
-        literal = f"`{base:0{_BASE_DIGITS}d}`M1"
-        for dy, glyph in enumerate(literal):
-            put(1, 1 + dy, glyph)
-        put(1, 1 + len(literal), ">")
-        put(ycol, 1 + len(literal), "v")
+        # number and counts up from it. Read the literal walking *east* and snake
+        # back west for the `1` — a room this wide has the columns to spare and
+        # rows are what a column costs. Zero-padded to a fixed width so every
+        # column's bands sit on the same rows whatever its base.
+        literal = f"`{base:0{_BASE_DIGITS}d}`M"
+        for dx, glyph in enumerate(literal):
+            put(1 + dx, 0, glyph)
+        turn = 1 + len(literal)
+        put(turn, 0, "v")
+        put(turn, 1, "<")
+        put(turn - 1, 1, "1")  # A = 1 again, picked up on the way back
+        put(ycol, 1, "v")
     else:
         if increment:
             put(1, 0, "1")  # A = 1 for the whole walk; every `+` is an increment

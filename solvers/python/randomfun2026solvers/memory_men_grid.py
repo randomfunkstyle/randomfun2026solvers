@@ -82,9 +82,12 @@ __all__ = ["REPEATER", "Grid", "build_grid", "shapes_for"]
 #: outgoing pipes are the ``N`` stubs into its own decoder room, so ``S`` reaches
 #: exactly that column. Lap 10 against the router's 16, so it never paces.
 REPEATER: tuple[str, ...] = (
-    "@>rSv",
-    " S  r",
-    " ^rS<",
+    "v<",
+    "Sr",
+    "rS",
+    "Sr",
+    ">^",
+    "@^",
 )
 
 #: Interior width of each room in a column, in order.
