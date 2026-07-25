@@ -125,6 +125,20 @@ class DebugMap:
             x, y = self.xy(x, y)
         self.regions.append(Region(name, x, y, w, h, note, color, tags or []))
 
+    def region_relative(
+        self,
+        name: str,
+        origin: Point,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        **kwargs: object,
+    ) -> None:
+        """Add a region in coordinates local to an explicit container origin."""
+        ox, oy = origin
+        self.region(name, ox + x, oy + y, w, h, **kwargs)
+
     def circle(
         self,
         name: str,
@@ -155,6 +169,17 @@ class DebugMap:
     ) -> None:
         pts = self.points(points) if local else points
         self.lanes.append(Lane(name, pts, note, color, kind, expect, tags or []))
+
+    def lane_relative(
+        self,
+        name: str,
+        origin: Point,
+        points: Iterable[Point],
+        **kwargs: object,
+    ) -> None:
+        """Add a lane in coordinates local to an explicit container origin."""
+        ox, oy = origin
+        self.lane(name, [(ox + x, oy + y) for x, y in points], **kwargs)
 
     def scenario(
         self,
