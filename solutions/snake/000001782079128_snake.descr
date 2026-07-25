@@ -1,0 +1,16 @@
+# snake — submission 779c0ada-6edc-40d0-8463-03e4c3905a3c
+
+verdict      done: 17/17 cases, area2 10404, avgTicks 171,288, score 1,782,079,128
+submitted    2026-07-26T00:49:28+0300
+grid         102x102
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  dd59075082902c9c6a3b506d82e3bfb3320fe0da6df95565e11a8f10b3528417
+commit       bdec33e
+local        snake: all public frame cases match (emulator)
+source       tasks/compacted/snake_submitted_ast_rom10.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+AST10 row cut plus ROM10 8-to-9 fold on best submitted handmade CPU
