@@ -4,15 +4,24 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from littleman_tools.composer import (
+    ActiveRoom,
     Gate,
     Netlist,
+    _AdapterFlow,
+    _Connection,
     _Layout,
     _PortAnchor,
+    _PortRef,
+    _Rect,
     _render_raw_grid,
+    _RoomPlacement,
+    _RoomRole,
     _route_layout,
     _RoutedConnection,
+    _routing_search_bounds,
     _UnroutableError,
 )
+from littleman_tools.primitive_contracts import Side
 from littleman_tools.runner import Littleman
 
 
@@ -28,6 +37,80 @@ def _dependent_layout() -> _Layout:
             ),
             outputs=("result",),
         )
+    )
+
+
+def _bottleneck_layout() -> _Layout:
+    def endpoint(
+        name: str,
+        flow: _AdapterFlow,
+        wall: tuple[int, int],
+        side: Side,
+        direction: tuple[int, int],
+    ) -> _RoomPlacement:
+        stub = tuple(
+            (wall[0] + distance * direction[0], wall[1] + distance * direction[1])
+            for distance in (1, 2)
+        )
+        escape = tuple(
+            (wall[0] + distance * direction[0], wall[1] + distance * direction[1])
+            for distance in (3, 4)
+        )
+        port = _PortAnchor(
+            name="pipe",
+            flow=flow,
+            side=side,
+            wall=wall,
+            stub=stub,
+            anchor=stub[-1],
+            direction=direction,
+            escape=escape,
+            instructions=(),
+        )
+        footprint = _Rect(
+            left=min(wall[0], escape[-1][0]),
+            top=min(wall[1], escape[-1][1]),
+            width=abs(wall[0] - escape[-1][0]) + 1,
+            height=abs(wall[1] - escape[-1][1]) + 1,
+        )
+        return _RoomPlacement(
+            name=name,
+            role=_RoomRole.PRIMITIVE,
+            level=0,
+            room=ActiveRoom(text="@", grid=("@",), width=1, height=1, runner=(0, 0)),
+            origin=wall,
+            bounds=_Rect(wall[0], wall[1], 1, 1),
+            footprint=footprint,
+            ports=(port,),
+            keepout=footprint.cells,
+        )
+
+    placements = (
+        endpoint("left", _AdapterFlow.OUTGOING, (-6, 0), Side.EAST, (1, 0)),
+        endpoint("right", _AdapterFlow.INCOMING, (6, 0), Side.WEST, (-1, 0)),
+        endpoint("top", _AdapterFlow.OUTGOING, (0, -6), Side.SOUTH, (0, 1)),
+        endpoint("bottom", _AdapterFlow.INCOMING, (0, 6), Side.NORTH, (0, -1)),
+    )
+    connections = (
+        _Connection("horizontal", _PortRef("left", "pipe"), _PortRef("right", "pipe")),
+        _Connection("vertical", _PortRef("top", "pipe"), _PortRef("bottom", "pipe")),
+    )
+    unconstrained = _Layout(
+        placements=placements,
+        connections=connections,
+        routing_aisles=(),
+        keepout=frozenset(),
+    )
+    bounds = _routing_search_bounds(unconstrained)
+    only_open_corridors = frozenset(
+        {(coordinate, 0) for coordinate in range(-2, 3)}
+        | {(0, coordinate) for coordinate in range(-2, 3)}
+    )
+    return _Layout(
+        placements=placements,
+        connections=connections,
+        routing_aisles=(),
+        keepout=bounds.cells - only_open_corridors,
     )
 
 
@@ -115,6 +198,14 @@ def test_routing_reports_a_clear_no_crossover_failure() -> None:
         match=r"Unroutable .*no-crossover",
     ):
         _route_layout(sealed)
+
+
+def test_routing_exhausts_negotiated_retries_for_an_unavoidable_bottleneck() -> None:
+    with pytest.raises(
+        _UnroutableError,
+        match=r"Unroutable .*no-crossover.*96 deterministic conflict retries",
+    ):
+        _route_layout(_bottleneck_layout())
 
 
 def test_rendered_raw_grid_preserves_every_nearest_pipe_binding() -> None:
