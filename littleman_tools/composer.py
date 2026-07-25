@@ -4,11 +4,87 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from os import PathLike
+from pathlib import Path
 from types import MappingProxyType
 
 from .primitive_contracts import contracts_by_artifact
 
-__all__ = ["Gate", "Netlist"]
+__all__ = ["ActiveRoom", "Gate", "Netlist", "extract_active_room"]
+
+
+@dataclass(frozen=True)
+class ActiveRoom:
+    """A closed runner room, normalized to its own local grid."""
+
+    text: str
+    grid: tuple[str, ...]
+    width: int
+    height: int
+    runner: tuple[int, int]
+
+
+def extract_active_room(source: str | PathLike[str]) -> ActiveRoom:
+    """Extract the closed room containing the sole reusable ``@`` runner.
+
+    ``source`` may be inline Little Man text or an existing artifact path.  The
+    selection is based solely on the enclosing room walls, never on source
+    order or a primitive-specific coordinate.
+    """
+
+    if isinstance(source, PathLike):
+        text = Path(source).read_text(encoding="utf-8")
+    elif "\n" not in source and Path(source).is_file():
+        text = Path(source).read_text(encoding="utf-8")
+    else:
+        text = source
+
+    rows = tuple(text.splitlines())
+    runners = [(x, y) for y, row in enumerate(rows) for x, cell in enumerate(row) if cell == "@"]
+    if not runners:
+        raise ValueError("No runner '@' found in primitive artifact")
+
+    rooms: dict[tuple[int, int, int, int], tuple[int, int]] = {}
+    for runner_x, runner_y in runners:
+        for top in range(runner_y):
+            for bottom in range(runner_y + 1, len(rows)):
+                for left in range(runner_x):
+                    for right in range(runner_x + 1, max(len(row) for row in rows) if rows else 0):
+                        if _is_closed_room(rows, left, top, right, bottom):
+                            rooms[(left, top, right, bottom)] = (runner_x, runner_y)
+
+    if not rooms:
+        raise ValueError("Active room containing '@' is not closed")
+    if len(rooms) != 1 or len(runners) != 1:
+        raise ValueError("Multiple closed rooms contain '@' runners; active room is ambiguous")
+
+    (left, top, right, bottom), (runner_x, runner_y) = next(iter(rooms.items()))
+    grid = tuple(row[left : right + 1] for row in rows[top : bottom + 1])
+    return ActiveRoom(
+        text="\n".join(grid),
+        grid=grid,
+        width=right - left + 1,
+        height=bottom - top + 1,
+        runner=(runner_x - left, runner_y - top),
+    )
+
+
+def _is_closed_room(rows: tuple[str, ...], left: int, top: int, right: int, bottom: int) -> bool:
+    """Return whether bounds are a Little Man room rectangle containing walls."""
+
+    if right - left < 2 or bottom - top < 2:
+        return False
+    if any(len(rows[y]) <= right for y in range(top, bottom + 1)):
+        return False
+    if rows[top][left] != "+" or rows[top][right] != "+":
+        return False
+    if rows[bottom][left] != "+" or rows[bottom][right] != "+":
+        return False
+    if any(rows[top][x] != "-" for x in range(left + 1, right)):
+        return False
+    if any(rows[bottom][x] != "-" for x in range(left + 1, right)):
+        return False
+    return all(rows[y][left] == "|" and rows[y][right] == "|" for y in range(top + 1, bottom))
 
 
 @dataclass(frozen=True)
