@@ -197,7 +197,7 @@ uv run python -m randomfun2026solvers.manopt \
 | Order | Submitted family | Best submitted source | Effective rounds | Result |
 |---:|---|---:|---:|---|
 | 1 | `gradebook` | 114×101, score 10,082,933,604 | 2 | removed row 74; 114×100, public objective 3,912,488,501.14 → 3,907,925,048.57 |
-| 2 | `snake` | 121×136, score 3,369,020,288 | 6 | removed rows 49, 68, 110, 112, and 130; 121×131, public objective 2,261,394,944 → 2,093,092,848 |
+| 2 | `snake` | 102×102, score 1,816,016,976 | 2 | removed row 46; 102×101, public objective 1,219,369,608 → 1,216,373,256 |
 | 3 | `sudoku-validity` | 83×80, score 3,043,333,207 | 1 | fixed point; internal cuts rebound 24 ops and the behavior-preserving bottom cut had zero objective value |
 | 4 | `tcp` | 109×74, score 1,678,313,030 | 2 | removed row 47; 109×73, public objective 1,051,587,310 → 1,050,755,640 |
 | 5 | `matmul` | 88×90, score 1,464,201,360 | 1 | fixed point; the only compacting row cuts rebound 48 ops |
@@ -211,13 +211,13 @@ The verified candidates are
 `tasks/compacted/tcp_submitted_ast10.man`, and
 `tasks/compacted/brackets_submitted_ast10.man`. Gradebook average ticks improve
 from 301,053.28571428574 to 300,702.14285714284 at the same 114² footprint
-(objective −0.12%). Snake average ticks improve from 122,264 to 121,968 while
-its binding side falls by five rows (objective −7.44%). TCP average ticks
-improve from 88,510 to 88,440 at the same 109² footprint (objective −0.079%).
-Brackets shrinks its binding side and lowers average ticks from 25,593 to
-25,510.777777777777 (objective −2.41%). These candidates derive from the
-current best submitted solutions; they are not themselves claimed to be
-submitted.
+(objective −0.12%). The current snake submission improves from 117,202 to
+116,914 average ticks at the same 102² footprint (objective −0.246%). TCP
+average ticks improve from 88,510 to 88,440 at the same 109² footprint
+(objective −0.079%). Brackets shrinks its binding side and lowers average ticks
+from 25,593 to 25,510.777777777777 (objective −2.41%). These candidates derive
+from the current best submitted solutions; they are not themselves claimed to
+be submitted.
 
 ## ROM-shape optimization
 
