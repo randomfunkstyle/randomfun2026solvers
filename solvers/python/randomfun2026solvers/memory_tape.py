@@ -126,6 +126,12 @@ COMPACT_RELAY = [
     "| ^s<|",
     "+----+",
 ]
+MERGE_RELAY = [
+    "+----+",
+    "|@>Rv|",
+    "| ^s<|",
+    "+----+",
+]
 RELAY_IN_ROW = 2
 
 
@@ -878,6 +884,17 @@ def initializing_relay(n: int) -> list[str]:
     return c.rows()
 
 
+def one_shot_initializer(n: int) -> list[str]:
+    """Emit ``n`` zeroes to the nearest pipe, then halt permanently."""
+    if n % 2:
+        raise Collision("paired one-shot initialization requires an even memory size")
+    c = Circuit(10, 5)
+    x, _ = c.run(0, 0, "@" + lit(n) + "b")
+    even_exit, _odd_exit = c.counted_ring(x, 0, "0s")
+    c.set(even_exit[0], even_exit[1], "H")
+    return c.rows()
+
+
 def assemble_v3_external_init(n: int, fold: int = 0) -> list[str]:
     """Paired-loop memory whose relay independently initializes the tape."""
     iw, ih = V3_IW, V3_IH
@@ -1071,6 +1088,116 @@ def assemble_v3_upstream_init(n: int) -> list[str]:
 def build_v3_upstream_init(n: int) -> list[str]:
     """Build the upstream-initializer plus ordinary-relay experiment."""
     return assemble_v3_upstream_init(n)
+
+
+def assemble_v3_one_shot_init(n: int, east_extension: int = 2) -> list[str]:
+    """Use a one-shot zero producer beside the persistent tape relay."""
+    iw, ih = V3_IW, V3_IH
+    g = Circuit(400, 200)
+    wk = worker_v3(n, external_init=True)
+    wx, wy = 7, 7
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    iy = wy + V3_IN_ROW
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+    ox = wx + V3_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    bottom_y = wy + ih
+    fy = wy + V3_FWD_ROW
+    ret_col = wx + V3_RET_COL
+    east = wx + iw + 2
+    merge_east = east + east_extension
+
+    filler = one_shot_initializer(n)
+    fill_x, fill_y = 1, bottom_y + 5
+    for i, row in enumerate(filler):
+        for j, ch in enumerate(row):
+            g.set(fill_x + j, fill_y + i, ch)
+    for x in range(len(filler[0]) + 2):
+        g.set(
+            fill_x - 1 + x,
+            fill_y - 1,
+            "+" if x in (0, len(filler[0]) + 1) else "-",
+        )
+        g.set(
+            fill_x - 1 + x,
+            fill_y + len(filler),
+            "+" if x in (0, len(filler[0]) + 1) else "-",
+        )
+    for y in range(len(filler)):
+        g.set(fill_x - 1, fill_y + y, "|")
+        g.set(fill_x + len(filler[0]), fill_y + y, "|")
+
+    relay_x, relay_y = 16, bottom_y + 4
+    for i, row in enumerate(MERGE_RELAY):
+        for j, ch in enumerate(row):
+            g.set(relay_x + j, relay_y + i, ch)
+
+    # The relay merges two incoming pipes with `R`: the filler pipe closes
+    # forever after startup, while the CPU pipe remains the rotating tape.
+    n_fwd = _draw_pipe(
+        g,
+        [
+            (wx + iw + 1, fy),
+            (merge_east, fy),
+            (merge_east, fill_y + 3),
+            (relay_x + 8, fill_y + 3),
+            (relay_x + 8, fill_y + 4),
+            (relay_x + 2, fill_y + 4),
+            (relay_x + 2, relay_y + len(MERGE_RELAY)),
+        ],
+    )
+    n_fill = _draw_pipe(
+        g,
+        [
+            (fill_x + len(filler[0]) + 1, relay_y + 1),
+            (relay_x - 1, relay_y + 1),
+        ],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (relay_x + len(MERGE_RELAY[0]), relay_y + 3),
+            (merge_east - 1, relay_y + 3),
+            (merge_east - 1, bottom_y + 6),
+            (relay_x + len(MERGE_RELAY[0]) + 1, bottom_y + 6),
+            (relay_x + len(MERGE_RELAY[0]) + 1, bottom_y + 5),
+            (merge_east - 1, bottom_y + 5),
+            (merge_east - 1, bottom_y + 4),
+            (relay_x + len(MERGE_RELAY[0]), bottom_y + 4),
+            (relay_x + len(MERGE_RELAY[0]), bottom_y + 3),
+            (merge_east - 1, bottom_y + 3),
+            (merge_east - 1, bottom_y + 2),
+            (ret_col, bottom_y + 2),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    if n_fill < 2:
+        raise Collision("filler pipe must have at least two cells")
+    return [row.rstrip() for row in g.rows() if row.strip()]
+
+
+def build_v3_one_shot_init(n: int) -> list[str]:
+    """Build the one-shot filler plus persistent relay experiment."""
+    return assemble_v3_one_shot_init(n)
 
 
 def assemble_v3_debug(n: int) -> tuple[list[str], DebugMap]:
@@ -1567,6 +1694,92 @@ def assemble_v3_upstream_init_debug(n: int) -> tuple[list[str], DebugMap]:
     return rows, dbg
 
 
+def assemble_v3_one_shot_init_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the one-shot filler candidate with both pipe producers marked."""
+    rows = build_v3_one_shot_init(n)
+    _, dbg = assemble_v3_external_init_debug(n)
+    dbg.title = f"memory tape v3 one-shot initialization n={n}"
+    dbg.regions = [
+        region
+        for region in dbg.regions
+        if region.name != "independent-fill-relay"
+    ]
+    dbg.lanes = [
+        lane
+        for lane in dbg.lanes
+        if lane.name not in ("tape-forward-pipe", "tape-return-pipe")
+    ]
+    dbg.region(
+        "one-shot-filler",
+        0,
+        30,
+        12,
+        7,
+        note="second producer: emit exactly n zeroes to the forward pipe, then halt",
+        color="#facc15",
+    )
+    dbg.region(
+        "ordinary-relay",
+        16,
+        30,
+        len(MERGE_RELAY[0]),
+        len(MERGE_RELAY),
+        note="R merges startup zeroes and the persistent CPU tape stream",
+        color="#a78bfa",
+    )
+    dbg.lane(
+        "cpu-forward-pipe",
+        [
+            (32, 14),
+            (35, 14),
+            (35, 34),
+            (24, 34),
+            (24, 35),
+            (18, 35),
+            (18, 34),
+        ],
+        kind="pipe",
+        expect="persistent CPU producer enters one side of the relay merge",
+        color="#34d399",
+    )
+    dbg.lane(
+        "filler-pipe",
+        [(12, 31), (15, 31)],
+        kind="pipe",
+        expect="one-shot producer sends exactly n zeroes, then closes by halting",
+        color="#fde047",
+    )
+    dbg.lane(
+        "filler-halt",
+        [(9, 31)],
+        kind="expected",
+        expect="known-even loop exit executes H; filler never enters steady dataflow",
+        color="#fb923c",
+    )
+    dbg.lane(
+        "relay-to-cpu",
+        [
+            (22, 33),
+            (34, 33),
+            (34, 32),
+            (23, 32),
+            (23, 31),
+            (34, 31),
+            (34, 30),
+            (22, 30),
+            (22, 29),
+            (34, 29),
+            (34, 28),
+            (19, 28),
+            (19, 27),
+        ],
+        kind="pipe",
+        expect="ordinary relay returns the circulating tape to the worker",
+        color="#10b981",
+    )
+    return rows, dbg
+
+
 def assemble_v2_compact_relay_debug(n: int) -> tuple[list[str], DebugMap]:
     """Build the relay experiment with sidecar geometry matching its pipes."""
     rows = build_v2_compact_relay(n)
@@ -1901,13 +2114,22 @@ def assemble_v2_paced_init_debug(n: int) -> tuple[list[str], DebugMap]:
 
 
 if __name__ == "__main__" and any(
-    arg in ("--v2", "--v3", "--v3-external-init", "--v3-upstream-init")
+    arg
+    in (
+        "--v2",
+        "--v3",
+        "--v3-external-init",
+        "--v3-upstream-init",
+        "--v3-one-shot-init",
+    )
     or arg.startswith("--debug-")
     for arg in sys.argv[1:]
 ):
     numeric_args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
     n = int(numeric_args[0]) if numeric_args else 100
-    if "--v3-upstream-init" in sys.argv[1:]:
+    if "--v3-one-shot-init" in sys.argv[1:]:
+        rows, debug = assemble_v3_one_shot_init_debug(n)
+    elif "--v3-upstream-init" in sys.argv[1:]:
         rows, debug = assemble_v3_upstream_init_debug(n)
     elif "--v3-external-init" in sys.argv[1:]:
         rows, debug = assemble_v3_external_init_debug(n)
