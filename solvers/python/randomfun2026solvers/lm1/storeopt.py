@@ -89,9 +89,7 @@ def _objective(width: int, height: int, avg_ticks: float, problem_slug: str) -> 
 
 def _room_signature(room: RoomNode) -> tuple:
     """Translation-invariant room content used to find a moved store block."""
-    cells = tuple(
-        sorted((x - room.x, y - room.y, glyph) for (x, y), glyph in room.paint().items())
-    )
+    cells = tuple(sorted((x - room.x, y - room.y, glyph) for (x, y), glyph in room.paint().items()))
     return room.kind, room.size, cells
 
 
@@ -162,9 +160,7 @@ def _seam(ast: Ast, room_ids: tuple[int, ...]) -> StoreSeam:
             outside_id = pipe.dst if src_inside else pipe.src
             outside = by_id.get(outside_id)
             if outside is None:
-                raise ValueError(
-                    f"STORE boundary pipe {pipe.id} terminates outside every room"
-                )
+                raise ValueError(f"STORE boundary pipe {pipe.id} terminates outside every room")
             boundary.append(
                 BoundaryRoute(
                     direction="out" if src_inside else "in",
@@ -191,9 +187,7 @@ def detach_store(ast: Ast, seam: StoreSeam) -> DetachedStore:
     """Remove the located memory rooms and every attached route from a copy."""
     detached = copy.deepcopy(ast)
     removed_rooms = set(seam.room_ids)
-    removed_pipes = set(seam.internal_pipe_ids) | {
-        route.pipe_id for route in seam.boundary_routes
-    }
+    removed_pipes = set(seam.internal_pipe_ids) | {route.pipe_id for route in seam.boundary_routes}
     detached.rooms = [room for room in detached.rooms if room.id not in removed_rooms]
     detached.pipes = [pipe for pipe in detached.pipes if pipe.id not in removed_pipes]
     return DetachedStore(ast=detached, seam=seam)
@@ -208,22 +202,22 @@ def _machine_seam(built: machine.Machine) -> StoreSeam:
     return _seam(ast, ids)
 
 
-def _logical_routes(seam: StoreSeam) -> tuple[tuple[str, tuple[str, int, int, int]], ...]:
-    return tuple(sorted((route.direction, route.outside_role) for route in seam.boundary_routes))
+def _logical_routes(seam: StoreSeam) -> tuple[tuple[str, str], ...]:
+    """Logical STORE attachments, independent of placement padding.
+
+    ``mem_pad`` legitimately widens the CPU room to keep nearest-pipe bindings
+    unambiguous, so its exact dimensions and live-cell count are not a stable
+    identity across backend replacements.  The seam itself is stricter: exactly
+    one route enters and one leaves, and both must still terminate at compute
+    rooms (adapter/CPU respectively).
+    """
+    return tuple(sorted((route.direction, route.outside_role[0]) for route in seam.boundary_routes))
 
 
 def inspect(grid: Path, *, program_slug: str) -> MemoryTopology:
     """Locate the registered adapter/store seam and fingerprint the source."""
     program = programs.load(program_slug)
-    used = tuple(
-        sorted(
-            {
-                instr.sem.name
-                for instr in program.instrs
-                if instr.sem in _MEMORY_SEMS
-            }
-        )
-    )
+    used = tuple(sorted({instr.sem.name for instr in program.instrs if instr.sem in _MEMORY_SEMS}))
     if not used:
         raise ValueError(f"{program_slug!r} does not use the STORE interface")
 
@@ -275,18 +269,20 @@ def replace(
     if not baseline.passed or baseline.avg_ticks is None:
         raise ValueError("source grid does not pass every public case")
     bw, bh = _shape(source_rows)
-    baseline_objective = _objective(
-        bw, bh, float(baseline.avg_ticks), problem_slug
-    )
+    baseline_objective = _objective(bw, bh, float(baseline.avg_ticks), problem_slug)
 
     log(
         f"found STORE: ops={','.join(topology.memory_ops)} slots={topology.tape_n} "
         f"adapter={topology.adapter_region} store={topology.store_region}"
     )
+    boundary = [
+        (r.direction, r.pipe_id, r.stub_cell, r.heading, r.outside_role)
+        for r in topology.source_seam.boundary_routes
+    ]
     log(
         f"remove AST rooms={topology.source_seam.room_ids} "
         f"internal_pipes={topology.source_seam.internal_pipe_ids}; remember "
-        f"boundary={[(r.direction, r.pipe_id, r.stub_cell, r.heading, r.outside_role) for r in topology.source_seam.boundary_routes]}"
+        f"boundary={boundary}"
     )
     detached = detach_store(
         parse_ast(parse_program("\n".join(source_rows) + "\n", bind=False), refine=Refine.BLOCKS),
@@ -319,8 +315,7 @@ def replace(
         problem_slug,
     )
     log(
-        f"baseline {bw}x{bh} avgTicks={baseline.avg_ticks:,.2f} "
-        f"objective={baseline_objective:,.2f}"
+        f"baseline {bw}x{bh} avgTicks={baseline.avg_ticks:,.2f} objective={baseline_objective:,.2f}"
     )
     log(
         f"{store} {candidate.width}x{candidate.height} "
@@ -341,7 +336,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("grid", type=Path, help="current best submitted grid")
     ap.add_argument("--program", required=True, choices=sorted(machine.TAPE_SIZE))
-    ap.add_argument("--store", choices=("tape", "men"), default="men")
+    ap.add_argument("--store", choices=("tape", "men", "men-y"), default="men")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
 

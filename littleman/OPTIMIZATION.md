@@ -250,28 +250,37 @@ average ticks, and objective 225,289,528.44.
 
 ```sh
 uv run python -m randomfun2026solvers.lm1.storeopt BEST.man \
-  --program SLUG --store men --out tasks/compacted/SLUG_men.man
+  --program SLUG --store men-y --out tasks/compacted/SLUG_men_y.man
 ```
 
 It locates the registered memory rooms by translation-invariant room signatures,
 records the request/response boundary pipe cells, headings, and outside room
 roles, and can return an AST with the old store rooms plus all attached routes
-removed. `machine.build_for(..., store="men")` places the replacement and routes
-both seams; `storeopt` then asserts the new AST attaches to the same logical
-outside roles, validates all public cases, and writes only a strict objective
-improvement. A hand-packed source is accepted when its memory room group is a
-rigidly moved copy of the registered drop-in block.
+removed. `machine.build_for(..., store="men" | "men-y")` places the replacement
+and routes both seams; `storeopt` then asserts the new AST retains one incoming
+and one outgoing compute-room attachment, validates all public cases, and writes
+only a strict objective improvement. Exact CPU room dimensions are deliberately
+not seam identity: legal `mem_pad` placement can widen that room. A hand-packed
+source is accepted when its memory room group is a rigidly moved copy of the
+registered drop-in block.
 
-The current best-submission sweep found no man-memory winner:
+`men` is the one-line backend. `men-y` rounds the slot count up to two equal
+banks, uses a `Y` selector, and changes the adapter to emit
+`addr op [value]`; this lets it omit the standalone memory program's serialized
+head because a CPU load already blocks waiting for its response. The current
+best-submission sweep found no man-memory winner:
 
-| CPU program | Slots | Result |
-|---|---:|---|
-| `gradebook` | 32 | line backend unavailable (declared 24-cell limit) |
-| `sudoku-validity` | 31 | line backend unavailable (declared 24-cell limit) |
-| `tcp` | 52 | line backend unavailable (declared 24-cell limit) |
-| `snake-ring` | 9 | valid; 146×136 and objective 2,819,305,318.40, worse than 1,219,369,608 |
-| `matmul` | 16 | valid; 165×90 and objective 3,623,044,660.71, worse than 972,863,228.57 |
-| `brackets` | 5 | valid; 106×69 and objective 298,042,390.67, worse than 230,976,825 |
+| CPU program | Slots | Line backend | `Y` backend: shape; average ticks; objective change |
+|---|---:|---|---|
+| `brackets` | 5 | valid, objective +29.0% | 101×81; 30,922.44 (+20.82% ticks); **+36.57%** |
+| `snake-ring` | 9 | valid, objective +131.2% | 129×136; 147,743 (+26.06% ticks); **+124.10%** |
+| `matmul` | 16 | valid, objective +272.4% | 130×90; 150,473.86 (+25.28% ticks); **+161.39%** |
+| `sudoku-validity` | 31 | unavailable above 24 cells | 167×97; 463,293 (+6.68% ticks); **+331.90%** |
+| `gradebook` | 32 | unavailable above 24 cells | 198×105; 351,246.71 (+16.67% ticks); **+251.96%** |
+| `tcp` | 52 | unavailable above 24 cells | 253×78; 81,920.50 (**−7.44% ticks**); **+398.64%** |
 
-Because none improves its best submitted source, no man-memory candidate is
-retained and no follow-up AST10/ROM10 pass is warranted for this backend.
+All six `Y` grids pass every public case, including their writes and later reads.
+TCP proves the parallel banks can win on CPU time, but its 253-column leaf-bank
+layout overwhelms that gain under squared-footprint scoring. Because no backend
+improves its best submitted source, no man-memory candidate is retained and no
+follow-up AST10/ROM10 pass is warranted.
