@@ -50,9 +50,11 @@ class Micro(StrEnum):
     RING_READ = "r↺"  # read the next ring word into A *and* send it back
     RING_SEND = "s→ring"  # bare recirculation (skip cycle emits these)
     READ_IN = "r→in"
+    READ_STREAM = "r→stream"  # one word back from the STREAM unit
     READ_MEM = "r→mem"
     READ_SPILL = "r→spill"
     SEND_OUT = "s→out"
+    SEND_STREAM = "s→stream"  # one command word to the STREAM unit
     SEND_MEM = "s→mem"
     SEND_SPILL = "s→spill"
     SEND_DSP = "s→addr/data/swap"
@@ -61,6 +63,7 @@ class Micro(StrEnum):
     SWAP = "W"  # A <-> B
     ADD = "+"
     SUB = "-"
+    BITAND = "&"
     MUL = "*"
     DIV = "/"
     MOD = "%"
@@ -100,14 +103,20 @@ class Sem(StrEnum):
     SET_IMM = "set-imm"
     INPUT = "input"
     OUTPUT = "output"
+    STREAM_SEND = "stream-send"
+    STREAM_RECV = "stream-recv"
     ADD_IMM = "add-imm"
     SUB_IMM = "sub-imm"
     MUL_IMM = "mul-imm"
     DIV_IMM = "div-imm"
     MOD_IMM = "mod-imm"
+    DIV_MEM = "div-mem"
     LOAD = "load"
     STORE = "store"
+    INC_MEM = "inc-mem"
+    DEC_MEM = "dec-mem"
     ADD_MEM = "add-mem"
+    AND_MEM = "and-mem"
     SUB_MEM = "sub-mem"
     MUL_MEM = "mul-mem"
     LOAD_IND = "load-ind"
@@ -577,6 +586,29 @@ _EXT_OPS: tuple[Op, ...] = (
         sem=Sem.DISPLAY_SWAP,
         ext=True,
     ),
+    # ── the STREAM block (stream.py): rings, and a fused multiply-accumulate ──
+    # One command word per `SND`, encoded ``8 * arg + code``: the unit's own decode
+    # trie reads the low three bits and `/ 8` recovers the argument (floored, so a
+    # negative argument survives). Two opcodes and the whole block is reachable —
+    # which is the point of putting the loop in the unit rather than in the ROM.
+    Op(
+        code=33,
+        mnemonic="SND",
+        operands=0,
+        description="send ACC to the STREAM unit as a command word (ACC preserved)",
+        micro=(Micro.SWAP, Micro.SEND_STREAM, Micro.SWAP),
+        sem=Sem.STREAM_SEND,
+        ext=True,
+    ),
+    Op(
+        code=34,
+        mnemonic="RCV",
+        operands=0,
+        description="ACC = the STREAM unit's next response word",
+        micro=(Micro.READ_STREAM, Micro.MOV),
+        sem=Sem.STREAM_RECV,
+        ext=True,
+    ),
     Op(
         code=21,
         mnemonic="NEG",
@@ -584,6 +616,118 @@ _EXT_OPS: tuple[Op, ...] = (
         description="ACC = -ACC — the ROM can only hold non-negative literals",
         micro=(Micro.SWAP, Micro.NEG, Micro.MOV),
         sem=Sem.NEGATE,
+        ext=True,
+    ),
+    Op(
+        # `&` is a native single glyph, so this costs exactly what ADD costs, and
+        # the decode trie is sized per program (ceil(log2(ops used))) -- so for any
+        # program with a spare lane it is free. It turns a set-membership array of
+        # `n * bits` cells into `n` bitmask cells, which is what lets
+        # sudoku-validity fit the 84-slot tape (243 flags -> 27 masks).
+        code=29,
+        mnemonic="AND",
+        operands=1,
+        description="ACC &= store[addr] — bitmask set-membership without an array",
+        micro=(
+            Micro.LIT0,
+            Micro.SEND_MEM,
+            Micro.RING_READ,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.BITAND,
+            Micro.MOV,
+        ),
+        sem=Sem.AND_MEM,
+        ext=True,
+    ),
+    # ── store-side read-modify-write ────────────────────────────────────────
+    # The *only* RMW family a two-register machine can build, and the reason is
+    # worth writing down. A lane that wants `store[a] = f(store[a])` has three
+    # things to keep alive — the address (needed twice: once for the read request,
+    # once for the write marker), the value, and the new value — and only A and B
+    # to keep them in. `LDP`/`STP` solve that by parking a word in the SPILL pipe;
+    # `LDA`/`MOVA` solve it by never having two live at once. Neither works here.
+    #
+    # What does work: the address dies the moment the write marker has been sent,
+    # so the *second* operand can be a bare digit glyph loaded after that point.
+    #
+    #   M              B = addr          (ACC is spent; both handlers say so)
+    #   s→mem  r→mem   A = store[addr],  B = addr
+    #   W  N   s→mem   send -addr: the write marker. The address is now dead.
+    #   1              A = 1             — free, a digit glyph *is* a load (SPEC §3.1)
+    #   +      s→mem   send store[addr] + 1
+    #
+    # B still holds the *old* value, so `INCM n; BRZ done` tests the pre-increment
+    # word for free — which is what lets brackets' loop counter be one instruction.
+    # An `ADDM addr` (`store[addr] += ACC`) is NOT constructible: its second operand
+    # is a register, not a glyph, so it would have to survive `r→mem`, and nothing
+    # can. That asymmetry is the whole design rule for this family.
+    Op(
+        code=30,
+        mnemonic="INCM",
+        operands=1,
+        description="store[addr] += 1; ACC = the *old* value (see the family note)",
+        micro=(
+            Micro.RING_READ,
+            Micro.MOV,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.SWAP,
+            Micro.NEG,
+            Micro.SEND_MEM,
+            Micro.LIT1,
+            Micro.ADD,
+            Micro.SEND_MEM,
+        ),
+        sem=Sem.INC_MEM,
+        ext=True,
+    ),
+    Op(
+        code=31,
+        mnemonic="DECM",
+        operands=1,
+        description="store[addr] -= 1; ACC = the *old* value (see the family note)",
+        # `1 - v` then `N` rather than a `-1` literal: the ROM holds no negatives
+        # and `N` is one glyph, the same trick SUBI uses to avoid needing one.
+        micro=(
+            Micro.RING_READ,
+            Micro.MOV,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.SWAP,
+            Micro.NEG,
+            Micro.SEND_MEM,
+            Micro.LIT1,
+            Micro.SUB,
+            Micro.NEG,
+            Micro.SEND_MEM,
+        ),
+        sem=Sem.DEC_MEM,
+        ext=True,
+    ),
+    # `/` is a native glyph, so a *memory* divide is exactly `SUB`'s shape and
+    # costs exactly what `SUB` costs. It exists because a divisor computed at
+    # runtime cannot reach `DIVI`: `gradebook` divides by `N` (the roster size) and
+    # by a subject's field weight, and the immediate-only form forced a 13-way
+    # dispatch on `N` — ~40 instructions whose only job was to name a literal.
+    # One row here deletes all of them, and the ROM word count is a *first-order*
+    # tick cost (see the ``gradebook.asm`` header), not just area.
+    Op(
+        code=32,
+        mnemonic="DIV",
+        operands=1,
+        description="ACC = floor(ACC / store[addr]) — a runtime divisor cannot reach DIVI",
+        micro=(
+            Micro.LIT0,
+            Micro.SEND_MEM,
+            Micro.RING_READ,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.SWAP,
+            Micro.DIV,
+            Micro.MOV,
+        ),
+        sem=Sem.DIV_MEM,
         ext=True,
     ),
     Op(

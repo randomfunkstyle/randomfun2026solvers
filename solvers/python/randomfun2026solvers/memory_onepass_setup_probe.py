@@ -52,7 +52,7 @@ def build_setup_probe(size: int = 10, *, commit: bool = False) -> tuple[list[str
     worker_w, worker_h = 30, 22
     wx, wy = 10, 10
     grid = Circuit(60, 40)
-    worker = Circuit(worker_w, worker_h)
+    worker = Circuit(worker_w, worker_h, strict_corridors=True)
     debug = DebugMap(f"one-pass {'commit' if commit else 'setup'} probe n={size}")
 
     # Input current -> store in index.  This is a FIFO transaction, followed

@@ -1,0 +1,16 @@
+# plotter — submission f9e9b83e-d29c-4798-95be-016d4a354034
+
+verdict      done: 20/20 cases, area2 13456, avgTicks 253,408, score 3,409,860,739
+submitted    2026-07-25T10:36:43+0300
+grid         112x116
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  1500caf8749095f1599a7f20bde8432e8c5f99878c62db2724b172f5b7b5bfb4
+commit       811c09f
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Regenerated after merging origin/main: the collector/riser return-path fix (found with tools/heatmap.mjs) is generator-wide, so every machine got faster with an unchanged program.

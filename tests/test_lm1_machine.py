@@ -39,7 +39,12 @@ slow = pytest.mark.slow
 #: Every task the generator can build, with the tape size each needs — read from
 #: the generator so the two cannot drift apart. Sizes come from the *problem
 #: constraints*, not the public data: ``tcp`` allows n=48, so addresses reach
-#: BUF+47 = 51 even though no public case goes past 35.
+#: BUF+47 = 51 even though no public case goes past seq 35.
+#:
+#: The sizes are **highest address reached + 1**, and the ``+ 1`` is load-bearing:
+#: a tape of exactly 51 crashes tcp at n=48 after 32 of 48 values (see
+#: :func:`test_tcp_survives_the_constraint_limit`), and plotter hit the same wall
+#: with 11 live values against ``tape_n=11``.
 TARGETS = machine.TAPE_SIZE
 
 
@@ -125,6 +130,26 @@ def test_store_address_zero_is_rejected() -> None:
         machine.rom_words(prog, p)
 
 
+def test_a_tape_one_slot_too_small_is_rejected() -> None:
+    """``tape_n`` is a slot *count*, so slot ``tape_n`` does not exist.
+
+    Addressing it does not fault: the tape's worker walks past the end of its own
+    ring and the machine stalls with no output at all, which looks exactly like a
+    logic bug in the program. Cheap to catch here, and every recorded ``TAPE_SIZE``
+    is checked against its program below.
+    """
+    prog = assemble("LDI 1\nST 4\nHALT\n")
+    with pytest.raises(machine.MachineError, match="only reaches"):
+        machine.build(prog, tape_n=4)
+    machine.build(prog, tape_n=5)  # one more slot and it is legal
+
+
+def test_every_recorded_tape_size_clears_its_programs_top_address() -> None:
+    for slug, tape_n in machine.TAPE_SIZE.items():
+        top = machine._highest_address(programs.load(slug))
+        assert top < tape_n, f"{slug}: top slot {top} against a {tape_n}-slot tape"
+
+
 def test_opcode_numbers_come_from_the_lane_rows() -> None:
     """The trie sorts leaves bit-reversed, so choosing a row chooses the number."""
     prog = programs.load("brackets")
@@ -161,11 +186,17 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     # program now requires: the panel is the problem's, not the program's.
     m = machine.build_for(slug)
     assert m.width > 0 and m.height > 0
-    assert m.plan.k == 4
+    # The trie's depth is ceil(log2 |opcodes used|) — derived, not fixed at 4. It is
+    # 3 for `matmul`, whose eight opcodes are what let the STREAM block replace the
+    # inner loop; asserting a constant here would forbid ever getting smaller.
+    used = len(m.plan.number)
+    assert m.plan.k == max(1, (used - 1).bit_length())
+    assert m.plan.lanes == 1 << m.plan.k >= used
     assert m.tape_n == tape_n
     assert "@" in "".join(m.rows)
     # A display problem gets a panel and no `O` room: SPEC.md makes emitting any
-    # program output an error there.
+    # program output an error there. A STREAM problem has an `O` room too, but the
+    # block owns it rather than the CPU (see stream.py).
     grid = "".join(m.rows)
     display = any(s.value.startswith("display") for s in m.plan.sem.values())
     assert (":" in grid and "=" in grid) is display
@@ -192,6 +223,55 @@ def test_public_cases_pass_on_the_real_interpreter(slug: str, tape_n: int) -> No
     from randomfun2026solvers import optimize
 
     path = REPO / "tasks" / "solutions" / f"{slug}_cpu.man"
-    res = optimize.verify(path, slug, tick_cap=3_000_000)
+    # sudoku-validity's 81-round case settles at ~2.3M, so 3M left too little
+    # headroom for it to survive an unrelated slowdown.
+    res = optimize.verify(path, slug, tick_cap=5_000_000)
     failed = [c.name for c in res.cases if not c.passed]
     assert res.passed, f"{slug}: {failed}"
+
+
+@node_required
+def test_tcp_survives_the_constraint_limit() -> None:
+    """n=48 with the maximum legal delay — the case a tape of 51 slots crashes on.
+
+    The public cases only reach seq ~35, so nothing there exercises the top of the
+    buffer. Sized to exactly its highest address (BUF + 47 = 51) the machine dies
+    ``fatal: wall`` after 32 of the 48 values, with the first 32 correct; 52 and 53
+    both pass. That is why ``TARGETS``/``TAPE_SIZE`` use highest-address **+ 1**.
+
+    The delay pattern is reversed blocks of 16 — the most out-of-order a stream can
+    be without tripping the max-delay rule, since a packet 16 or more above the
+    wanted seq must answer -1 and stop.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    n = 48
+    order: list[int] = []
+    for base in range(0, n, 16):
+        block = list(range(base, min(base + 16, n)))
+        block.reverse()
+        order += block
+    values = {s: 1 + (s * 37) % 999 for s in range(n)}
+
+    buffered: dict[int, int] = {}
+    want = 0
+    rounds_in: list[str] = []
+    rounds_out: list[str] = []
+    for i, seq in enumerate(order):
+        rounds_in.append(f"{n} {seq} {values[seq]}" if i == 0 else f"{seq} {values[seq]}")
+        buffered[seq] = values[seq]
+        drained = []
+        while want in buffered:
+            drained.append(buffered[want])
+            want += 1
+        rounds_out.append(" ".join(str(v) for v in drained))
+
+    snap = Littleman().judge(
+        REPO / "tasks" / "solutions" / "tcp_cpu.man",
+        input=" / ".join(rounds_in),
+        expected=" / ".join(rounds_out),
+        max_ticks=5_000_000,
+    )
+    assert snap.fatal is None, f"fatal: {snap.fatal}"
+    assert list(snap.output) == [values[s] for s in range(n)]
+    assert snap.step < 5_000_000, f"{snap.step:,} ticks against the 5,000,000 step cap"

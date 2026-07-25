@@ -176,9 +176,11 @@ def test_pop_from_empty_spill_is_an_error() -> None:
 def test_every_opcode_has_a_handler() -> None:
     for op in LM1_EXT:
         source = f"{op.mnemonic} 0" if op.operands else op.mnemonic
-        # Preamble: a pointer cell for LDP/STP and a parked word for POP.
-        prog = assemble(f"LDI 1\nST 0\nPUSH\n{source}\nHALT")
-        Emulator(prog).run()  # must not raise "no handler"
+        # Preamble: a pointer cell for LDP/STP, a parked word for POP, and one
+        # STREAM round trip queued so RCV has a reply — an empty response pipe is a
+        # hang in hardware, so the model raises rather than inventing a value.
+        prog = assemble(f"LDI 1\nST 0\nPUSH\nLDI 7\nSND\n{source}\nHALT")
+        Emulator(prog).run(input=[42])  # must not raise "no handler"
 
 
 # ── the ring is the PC (ARCH §5.3) ──────────────────────────────────────────

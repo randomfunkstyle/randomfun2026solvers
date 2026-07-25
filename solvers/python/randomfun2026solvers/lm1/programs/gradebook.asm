@@ -7,335 +7,565 @@
 ;   3 s         AVG — emit floor(sum of subject s over all students / N)
 ;   4 s         TOP — emit the id of the best grade in subject s, ties -> smallest id
 ;
-; NOT ISA v1: needs `LDA`/`MOVA` (indexed load/store through ACC) and `DIVI`.
-; A grade book is two arrays and there is no way to address an array with
-; ARCH.md's immediate-only `LD`/`ST`. `LDA`/`MOVA` rather than `LDP`/`STP` for the
-; reason tcp.asm gives: keeping the address in ACC means no SPILL block is needed,
-; and every memory glyph stays on the CPU's east bus (ARCH.md §7.1).
-;
-; Addresses start at 1: the generated hardware encodes the operation in the *sign*
-; of the address word (+a = read, -a = write), so slot 0 would be ambiguous.
-;
-; ── layout ──────────────────────────────────────────────────────────────────
-; Grades get a **fixed stride 4** row per student rather than stride K, so a grade
-; address is `GRD + 4*i + s - 1` and needs no runtime multiply. Dropping `MULI`
-; keeps the opcode count at 15, i.e. the depth-4 decode trie and 16 lanes the
-; generator budgets for; the wasted cells cost nothing, since N <= 16 and K <= 4
-; means 64 slots either way once the tape is sized from the constraints.
+; NOT ISA v1: needs `MOVA` (indexed store), `MUL`, `AND`, and `DIV` (see isa.py's
+; row for it: the divisors here are runtime values, so `DIVI` cannot reach them).
+; 16 opcodes exactly, which is the depth-4 decode trie's whole budget — every one
+; below is load-bearing, and `ADDI` was *dropped* to make room for `MUL` (the
+; roster fills its cells downwards so its cursor only ever needs `SUBI`).
 ;
 ; ── what the ticks are made of ──────────────────────────────────────────────
-; Two costs dwarf everything else, and every choice below is one of them:
+; Measured on the real engine, not modelled. Two costs dominate, and they are not
+; the two `ARCH.md` §4.1 leads you to expect:
 ;
-; * **A tape access is ~105 + 8.3*94 = 885 ticks** (ARCH.md §4.1) and *every*
-;   variable lives in the tape, since A dies on each fetch and B is the only
-;   register. So loops are bounded by pointer equality against a precomputed end
-;   address (one access a lap) instead of by a counter (two), the cursor bump is
-;   fused into the read that the lane needs anyway (`LD p / ADDI d / ST p / SUBI d`
-;   is one access cheaper than reading `p` twice), and there is exactly **one**
-;   cursor: the id of student `i` is reached as `IDS + (PG - GRD)/4`, which is
-;   arithmetic on a value already in ACC rather than a second pointer to keep.
-; * **A backward jump costs a whole ROM lap** — the discard loop recirculates
-;   `2*(n - body)` words, so with n instructions every loop iteration pays ~12n
-;   ticks whatever it does. That makes the *total* instruction count part of the
-;   cost of every inner loop, which is why GET/SET/AVG/TOP share the addressing
-;   idiom rather than each carrying its own.
+; * **A jump costs ~20 ticks per ROM word it skips, so the ROM word count is a
+;   first-order cost of every loop iteration.** The image is fixed-width two
+;   words per instruction and the ring is closed, so any jump from a to b skips
+;   `(b - a) mod 2n` words: an operation that dispatches to a handler and returns
+;   traverses the ring exactly once, i.e. pays ~`2n * 20` ticks *whatever it
+;   does*. Padding this program with 60 unreachable `NOP`s cost 27,327 ticks per
+;   added word on an 80-operation workload — 1.6M ticks for 60 instructions.
+;   Consequence: **an inner loop is ~16x more expensive than the straight-line
+;   code it saves**, because each of its iterations pays a whole ring lap. So the
+;   three per-student scans are *fully unrolled* to 16 static blocks, and always
+;   run all 16 — a slot for a student that does not exist holds 0, which loses
+;   every comparison and adds nothing to a sum. There is no loop counter, no end
+;   pointer and no `LDA`: every cell address is an immediate.
+; * **A tape access costs ~14 ticks per tape slot**, so the slot count multiplies
+;   the access count. Same workload: 94 slots -> 104 cost 106,638 ticks per slot.
+;   Consequence: pack, and never keep a second array.
 ;
-; AVG divides by N, which is a *runtime* value, and the ISA has only immediate
-; division. Repeated subtraction is O(sum/N) ~ 400 laps and shift-and-subtract long
-; division is ~110 accesses plus 11 laps per AVG; a 13-way dispatch on N (4..16 by
-; the constraints) into 13 `DIVI k` sites costs one tape read plus a straight-line
-; compare chain — ~50x cheaper in ticks, at 128 ROM words that are *free* here
-; because the machine is 112 columns wide before the ROM is folded at all.
+; ── the packed cell ─────────────────────────────────────────────────────────
+; One tape slot per student holds the whole record:
+;
+;   cell(i) = packed(i) * 2^14 + (16384 - id(i))
+;   packed(i) = g1 * 2^(11*(K-1)) + g2 * 2^(11*(K-2)) + ... + gK
+;
+; Fields are power-of-two aligned, so every extraction is one `AND` with a mask
+; held in a tape slot, and three separate facts fall out for free:
+;
+; * **The ids array disappears.** `id(i) = 16384 - (cell(i) & 16383)`, so the scan
+;   that looks a student up reads the same slot the grades live in. That is the
+;   second access per student gone, and 16 slots off the tape.
+; * **TOP needs no comparison of ids at all.** With subject s's field *above* the
+;   id field, `key = cell & (grade-field(s) | 16383)` orders lexicographically by
+;   (grade, 16384 - id) — so the largest key is the highest grade and, on a tie,
+;   the *smallest* id, which is exactly the required tie-break. `16384 - id` is
+;   also >= 6385 for every legal id, so a real student always beats an empty
+;   slot's 0.
+; * **AVG never looks at a student individually.** Sum the 16 raw cells with one
+;   `LD` and fifteen `ADD`s — one access per student, no mask, no accumulator
+;   slot — then `sum - IDSUM` is exactly `(sum of packed) * 2^14` (IDSUM being the
+;   roster's sum of `16384 - id`, which is known at load time). Grade fields are
+;   11 bits and 16 grades sum to at most 1600 < 2048, so the fields of that total
+;   do not carry into each other and subject s's column total is one `AND 2047`
+;   away. `DIV NN` then divides by the runtime roster size.
+;
+; Subject 1 sits at the *top* of the packed word rather than the bottom, which is
+; what lets the roster build it with Horner's rule in reading order
+; (`packed = packed * 2048 + g`) and so needs no runtime multiplier. The price is
+; that a subject's field weight depends on K as well as s: it is
+; `2^(14 + 11*(K-s))`, built per operation by a 4-way dispatch on `K - s` into a
+; chain of `MULI`s. That dispatch is also why no literal here exceeds 999: the ROM
+; image is one fixed digit width for every word, so a single 4-digit literal would
+; widen all 822 of them.
+;
+; Widest cell: 100 * 2^(33+14) = 1.4e16, and 16 of them sum to 2.3e17 — both well
+; inside the signed 64 bits `SPEC.md` gives every value.
 
-.equ N     1                ; student count
-.equ KK    2                ; subject count K
-.equ PG    3                ; the one cursor: a grade address, always GRD + 4*i + c
-.equ CNT   4                ; students left (roster) / operations left (batch)
-.equ T     5                ; subjects left for this student (roster only)
-.equ TID   6                ; the id an operation names
-.equ S     7                ; the subject an operation names, 1..K
-.equ V     8                ; value staged for MOVA (the only way to write it)
-.equ SUM   9                ; AVG accumulator
-.equ BEST 10                ; TOP: best grade seen
-.equ BID  11                ; TOP: id owning it (smallest on a tie)
-.equ END  12                ; cursor value that ends a subject scan
-.equ GEND 13                ; GRD + 4*N — one past the last grade row
-.equ IDS  14                ; ids[i]                  at IDS + i         (14..29)
-.equ GRD  30                ; grade of i in subject s at GRD + 4*i + s-1 (30..93)
+; ── layout ──────────────────────────────────────────────────────────────────
+.equ NN     1               ; N, the roster size (AVG divides by it)
+.equ KK     2               ; K, the subject count
+.equ TMP    3               ; scratch
+.equ BEST   3               ;   = TMP: TOP's best key so far
+.equ IDM    4               ; 16383 — the id field's mask
+.equ M2047  5               ; 2047 — one grade field's mask
+.equ IDSUM  6               ; sum over the roster of (16384 - id)
+.equ F      7               ; this operation's field weight, 2^(14 + 11*(K-s))
+.equ PACK   7               ;   = F: the roster's Horner accumulator
+.equ GMASK  8               ; F * 2047 — subject s's grade field alone
+.equ IDACC  8               ;   = GMASK: the roster's 16384 - id
+.equ TMSK   9               ; GMASK | 16383 — TOP's comparison mask
+.equ OP    10               ; the operation code, kept for the second dispatch
+.equ TARG  11               ; 16384 - id: the id field a scan is looking for
+.equ V     12               ; SET's new grade
+.equ CUR   13               ; the cell a scan found
+.equ RCNT  13               ;   = CUR: the roster's students-left counter
+.equ PTR   14               ; that cell's address (roster: the fill cursor)
+.equ OCNT  15               ; operations left in this batch round
+;
+; The 16 student cells. Nothing is stored per subject and nothing per id: this is
+; the entire grade book, and the tape is 32 slots against the old layout's 94.
+.equ C0  16
+.equ C1  17
+.equ C2  18
+.equ C3  19
+.equ C4  20
+.equ C5  21
+.equ C6  22
+.equ C7  23
+.equ C8  24
+.equ C9  25
+.equ C10 26
+.equ C11 27
+.equ C12 28
+.equ C13 29
+.equ C14 30
+.equ C15 31
 
-; ── round 1: load the roster ────────────────────────────────────────────────
-; PG is the only cursor here too: the id slot is `IDS + (PG - GRD)/4`, and at the
-; head of a student's row that quotient is exactly i.
-        IN                  ; N
-        ST  N
-        IN                  ; K
+; ── constants ───────────────────────────────────────────────────────────────
+; Both are built from three-digit literals rather than held as literals: 16383
+; written out would widen every word of the ROM image (see the header).
+        LDI 128
+        MULI 128
+        SUBI 1
+        ST  IDM             ; 16383
+        LDI 128
+        MULI 16
+        SUBI 1
+        ST  M2047           ; 2047
+
+; ── round 1: the roster ─────────────────────────────────────────────────────
+; Cells are filled *downwards*, from C0 + N - 1 to C0, so the cursor only needs
+; `SUBI 1` — which is what lets the opcode budget spend its 16th row on `MUL`
+; instead of `ADDI`. Order does not matter: TOP's tie-break is in the id field,
+; AVG's sum is commutative, and the cells above N - 1 keep their initial 0.
+        IN
+        ST  NN
+        IN
         ST  KK
-        LDI GRD
-        ST  PG
-        LD  N
-        ST  CNT
+        LDI C0
+        ADD NN
+        SUBI 1
+        ST  PTR
+        LD  NN
+        ST  RCNT
 
 rstu:   IN                  ; id
-        ST  V
-        LD  PG
-        SUBI GRD
-        DIVI 4              ; ACC = i
-        ADDI IDS
-        MOVA V              ; ids[i] = id
-
+        ST  TMP
+        LDI 128
+        MULI 128
+        SUB TMP             ; 16384 - id
+        ST  IDACC
+        ADD IDSUM
+        ST  IDSUM           ; AVG's correction term, accumulated as we read
+        IN                  ; g1 — Horner's rule in reading order
+        ST  PACK
         LD  KK
-        ST  T
-rgrd:   IN                  ; g_s
-        ST  V
-        LD  PG
-        ADDI 1
-        ST  PG              ; bump first, then step back: one access saved
         SUBI 1
-        MOVA V              ; grades[i][s] = g_s
-        LD  T
+        BRZ rfin            ; K == 1: this record has no subject 2
+        IN                  ; g2
+        ST  TMP
+        LD  PACK
+        MULI 128
+        MULI 16             ; PACK *= 2048 (no 4-digit literal)
+        ADD TMP
+        ST  PACK
+        LD  KK
+        SUBI 2
+        BRZ rfin            ; K == 2: this record has no subject 3
+        IN                  ; g3
+        ST  TMP
+        LD  PACK
+        MULI 128
+        MULI 16             ; PACK *= 2048 (no 4-digit literal)
+        ADD TMP
+        ST  PACK
+        LD  KK
+        SUBI 3
+        BRZ rfin            ; K == 3: this record has no subject 4
+        IN                  ; g4
+        ST  TMP
+        LD  PACK
+        MULI 128
+        MULI 16             ; PACK *= 2048 (no 4-digit literal)
+        ADD TMP
+        ST  PACK
+rfin:   LD  PACK
+        MULI 128
+        MULI 128            ; make room for the id field
+        ADD IDACC
+        ST  TMP
+        LD  PTR
+        MOVA TMP            ; store[PTR] = the whole record
+        LD  PTR
         SUBI 1
-        ST  T
-        BRZ rstep
-        JMP rgrd
-
-rstep:  LDI 4               ; the row is stride 4 but only K grades were read
-        SUB KK
-        ADD PG
-        ST  PG              ; PG = next student's row
-        LD  CNT
+        ST  PTR
+        LD  RCNT
         SUBI 1
-        ST  CNT
-        BRZ rdone
+        ST  RCNT
+        BRZ round
         JMP rstu
 
-rdone:  LD  PG
-        ST  GEND            ; = GRD + 4*N
-
-; ── batch rounds: O then O operations ───────────────────────────────────────
-round:  IN                  ; O
-        ST  CNT
-oploop: IN                  ; op
-        SUBI 1
-        BRZ opget
-        SUBI 1
-        BRZ opset
-        SUBI 1
-        BRZ opavg
-        JMP optop           ; op == 4 by elimination
-
-nextop: LD  CNT
-        SUBI 1
-        ST  CNT
-        BRZ round           ; the round's output is complete; unlock the next
-        JMP oploop
-
-; ── GET: 1 id s ─────────────────────────────────────────────────────────────
-; The scan walks the *grade* rows and reaches the id it is testing through
-; `IDS + (PG - GRD)/4`, so the hit needs no index -> address conversion: the grade
-; is `PG + s - 1` on the row the scan stopped on.
-opget:  IN
-        ST  TID
-        IN
-        ST  S
-        LDI GRD
-        ST  PG
-gscan:  LD  PG
-        ADDI 4
-        ST  PG
-        SUBI 4              ; ACC = the row under test
-        SUBI GRD
-        DIVI 4              ; ACC = i
-        ADDI IDS
-        LDA                 ; ACC = ids[i]
-        SUB TID
-        BRZ ghit
-        JMP gscan
-ghit:   LD  PG
-        SUBI 4              ; back onto the hit's row
-        ADD S
-        SUBI 1              ; ACC = GRD + 4i + s - 1
-        LDA
-        OUT
-        JMP nextop
-
-; ── SET: 2 id s v ───────────────────────────────────────────────────────────
-opset:  IN
-        ST  TID
-        IN
-        ST  S
-        IN
+; ── one operation ───────────────────────────────────────────────────────────
+; Arguments are read in a single shared path — `op`, then `id` only for GET/SET,
+; then `s`, then `v` only for SET — and the field weight is derived once here for
+; all four handlers. Everything from `round`/`oploop` to `nextop` is exactly one
+; trip round the ROM ring, which is the floor on an operation's cost; `nextop`
+; sits at the *end* of the program so that a handler reaching it, and it reaching
+; back to `oploop`, together close that one lap instead of opening a second.
+round:  IN                  ; O, the batch's operation count
+        ST  OCNT
+oploop: IN
+        ST  OP
+        SUBI 3
+        BRN rdid            ; GET/SET name a student
+        JMP rds
+rdid:   IN                  ; id
+        ST  TMP
+        LDI 128
+        MULI 128
+        SUB TMP
+        ST  TARG            ; 16384 - id, the form the cells hold
+rds:    IN                  ; s
+        ST  TMP
+        LD  OP
+        SUBI 2
+        BRZ rdv
+        JMP have
+rdv:    IN                  ; v
         ST  V
-        LDI GRD
-        ST  PG
-sscan:  LD  PG
-        ADDI 4
-        ST  PG
-        SUBI 4
-        SUBI GRD
-        DIVI 4
-        ADDI IDS
-        LDA
-        SUB TID
-        BRZ shit
-        JMP sscan
-shit:   LD  PG
-        SUBI 4
-        ADD S
+have:   LD  KK
+        SUB TMP             ; K - s, the field's index from the bottom
+        BRZ e0
         SUBI 1
-        MOVA V              ; grades[i][s] = v
+        BRZ e1
+        SUBI 1
+        BRZ e2
+e3:     LDI 128             ; F = 2^14 * 2048^(K-s)
+        MULI 128
+        MULI 128
+        MULI 16
+        MULI 128
+        MULI 16
+        MULI 128
+        MULI 16
+        JMP emask
+e2:     LDI 128
+        MULI 128
+        MULI 128
+        MULI 16
+        MULI 128
+        MULI 16
+        JMP emask
+e1:     LDI 128
+        MULI 128
+        MULI 128
+        MULI 16
+        JMP emask
+e0:     LDI 128
+        MULI 128
+emask:  ST  F
+        MULI 128
+        MULI 16
+        SUB F               ; F*2048 - F = F*2047, the grade field's mask
+        ST  GMASK
+        ADD IDM             ; the fields are disjoint, so + is |
+        ST  TMSK
+        LD  OP
+        SUBI 3
+        BRN hgs
+        BRZ havg
+        JMP htop
+
+; ── GET (1 id s) and SET (2 id s v): one shared scan ────────────────────────
+; Both have to find the student first, and the scan is 64 of this program's
+; instructions, so they share it: it leaves the cell's *address* in PTR and its
+; *value* in CUR, and only then does the second dispatch on OP split them. An
+; empty slot's id field is 0 and TARG is never below 6385, so unused cells simply
+; never match.
+hgs:    LD  C0
+        AND IDM
+        SUB TARG
+        BRZ h0
+        LD  C1
+        AND IDM
+        SUB TARG
+        BRZ h1
+        LD  C2
+        AND IDM
+        SUB TARG
+        BRZ h2
+        LD  C3
+        AND IDM
+        SUB TARG
+        BRZ h3
+        LD  C4
+        AND IDM
+        SUB TARG
+        BRZ h4
+        LD  C5
+        AND IDM
+        SUB TARG
+        BRZ h5
+        LD  C6
+        AND IDM
+        SUB TARG
+        BRZ h6
+        LD  C7
+        AND IDM
+        SUB TARG
+        BRZ h7
+        LD  C8
+        AND IDM
+        SUB TARG
+        BRZ h8
+        LD  C9
+        AND IDM
+        SUB TARG
+        BRZ h9
+        LD  C10
+        AND IDM
+        SUB TARG
+        BRZ h10
+        LD  C11
+        AND IDM
+        SUB TARG
+        BRZ h11
+        LD  C12
+        AND IDM
+        SUB TARG
+        BRZ h12
+        LD  C13
+        AND IDM
+        SUB TARG
+        BRZ h13
+        LD  C14
+        AND IDM
+        SUB TARG
+        BRZ h14
+        LD  C15
+        AND IDM
+        SUB TARG
+        BRZ h15
+        JMP nextop          ; unreachable: every operation names a real id
+h0:      LDI C0
+        ST  PTR
+        LD  C0
+        JMP gsf
+h1:      LDI C1
+        ST  PTR
+        LD  C1
+        JMP gsf
+h2:      LDI C2
+        ST  PTR
+        LD  C2
+        JMP gsf
+h3:      LDI C3
+        ST  PTR
+        LD  C3
+        JMP gsf
+h4:      LDI C4
+        ST  PTR
+        LD  C4
+        JMP gsf
+h5:      LDI C5
+        ST  PTR
+        LD  C5
+        JMP gsf
+h6:      LDI C6
+        ST  PTR
+        LD  C6
+        JMP gsf
+h7:      LDI C7
+        ST  PTR
+        LD  C7
+        JMP gsf
+h8:      LDI C8
+        ST  PTR
+        LD  C8
+        JMP gsf
+h9:      LDI C9
+        ST  PTR
+        LD  C9
+        JMP gsf
+h10:     LDI C10
+        ST  PTR
+        LD  C10
+        JMP gsf
+h11:     LDI C11
+        ST  PTR
+        LD  C11
+        JMP gsf
+h12:     LDI C12
+        ST  PTR
+        LD  C12
+        JMP gsf
+h13:     LDI C13
+        ST  PTR
+        LD  C13
+        JMP gsf
+h14:     LDI C14
+        ST  PTR
+        LD  C14
+        JMP gsf
+h15:     LDI C15
+        ST  PTR
+        LD  C15
+        JMP gsf
+gsf:    ST  CUR
+        LD  OP
+        SUBI 1
+        BRZ hget
+        LD  CUR             ; SET: replace subject s's field in place
+        AND GMASK
+        ST  TMP             ; the old grade, still scaled by F
+        LD  V
+        MUL F
+        SUB TMP             ; (v - old) * F
+        ADD CUR
+        ST  TMP
+        LD  PTR
+        MOVA TMP
         JMP nextop
-
-; ── AVG: 3 s ────────────────────────────────────────────────────────────────
-opavg:  IN
-        ST  S
-        LDI 0
-        ST  SUM
-        LDI GRD
-        ADD S
-        SUBI 1
-        ST  PG              ; first student's grade in subject s
-        LD  GEND
-        ADD S
-        SUBI 1
-        ST  END             ; one row past the last
-ascan:  LD  PG
-        LDA
-        ADD SUM
-        ST  SUM
-        LD  PG
-        ADDI 4
-        ST  PG
-        SUB END
-        BRZ adiv
-        JMP ascan
-
-; floor(SUM / N) with N runtime and only immediate division: dispatch on N.
-; The `SUBI 1` chain keeps N - k in ACC, so the whole chain costs one tape read.
-adiv:   LD  N
-        SUBI 4
-        BRZ d4
-        SUBI 1
-        BRZ d5
-        SUBI 1
-        BRZ d6
-        SUBI 1
-        BRZ d7
-        SUBI 1
-        BRZ d8
-        SUBI 1
-        BRZ d9
-        SUBI 1
-        BRZ d10
-        SUBI 1
-        BRZ d11
-        SUBI 1
-        BRZ d12
-        SUBI 1
-        BRZ d13
-        SUBI 1
-        BRZ d14
-        SUBI 1
-        BRZ d15
-        LD  SUM             ; N == 16 by elimination (4 <= N <= 16)
-        DIVI 16
-        JMP aout
-d4:     LD  SUM
-        DIVI 4
-        JMP aout
-d5:     LD  SUM
-        DIVI 5
-        JMP aout
-d6:     LD  SUM
-        DIVI 6
-        JMP aout
-d7:     LD  SUM
-        DIVI 7
-        JMP aout
-d8:     LD  SUM
-        DIVI 8
-        JMP aout
-d9:     LD  SUM
-        DIVI 9
-        JMP aout
-d10:    LD  SUM
-        DIVI 10
-        JMP aout
-d11:    LD  SUM
-        DIVI 11
-        JMP aout
-d12:    LD  SUM
-        DIVI 12
-        JMP aout
-d13:    LD  SUM
-        DIVI 13
-        JMP aout
-d14:    LD  SUM
-        DIVI 14
-        JMP aout
-d15:    LD  SUM
-        DIVI 15
-aout:   OUT
-        JMP nextop
-
-; ── TOP: 4 s ────────────────────────────────────────────────────────────────
-; Seeded from student 0 rather than from a sentinel: the sentinel a tie needs is
-; "larger than any id" = 10000, and a five-digit ROM literal would widen *every*
-; word of the fixed-width ROM image. Re-visiting student 0 in the loop is a tie
-; against itself and changes nothing.
-;
-; The scan keeps only the grade cursor. Reaching the id costs three instructions of
-; arithmetic on ACC and is only done when the best actually changes, so the common
-; lap is 6 accesses rather than the 8 a second cursor would need.
-optop:  IN
-        ST  S
-        LDI GRD
-        ADD S
-        SUBI 1
-        ST  PG
-        LD  GEND
-        ADD S
-        SUBI 1
-        ST  END
-        LDI IDS
-        LDA
-        ST  BID             ; ids[0]
-        LD  PG
-        LDA
-        ST  BEST            ; student 0's grade in subject s
-
-tscan:  LD  PG
-        LDA
-        SUB BEST
-        BRN tstep           ; worse
-        BRZ ttie            ; equal: keep the smaller id
-        LD  PG              ; strictly better: take grade, then id
-        LDA
-        ST  BEST
-        JMP tid
-ttie:   LD  PG
-        SUBI GRD
-        SUB S
-        ADDI 1
-        DIVI 4              ; ACC = i
-        ADDI IDS
-        LDA
-        SUB BID
-        BRN tid
-        JMP tstep
-tid:    LD  PG
-        SUBI GRD
-        SUB S
-        ADDI 1
-        DIVI 4
-        ADDI IDS
-        LDA
-        ST  BID
-tstep:  LD  PG
-        ADDI 4
-        ST  PG
-        SUB END
-        BRZ tout
-        JMP tscan
-tout:   LD  BID
+hget:   LD  CUR
+        AND GMASK
+        DIV F
         OUT
         JMP nextop
+
+; ── AVG (3 s) ───────────────────────────────────────────────────────────────
+; One access per student and no per-student arithmetic at all: see the header on
+; why the raw cells can be summed and unpicked afterwards.
+havg:   LD  C0
+        ADD C1
+        ADD C2
+        ADD C3
+        ADD C4
+        ADD C5
+        ADD C6
+        ADD C7
+        ADD C8
+        ADD C9
+        ADD C10
+        ADD C11
+        ADD C12
+        ADD C13
+        ADD C14
+        ADD C15
+        SUB IDSUM           ; = (sum of packed) * 2^14, exactly
+        DIV F
+        AND M2047           ; subject s's column total; 16*100 < 2048, so no carry
+        DIV NN
+        OUT
+        JMP nextop
+
+; ── TOP (4 s) ───────────────────────────────────────────────────────────────
+; The masked cell *is* the answer's key (header), so the scan is a plain running
+; maximum with no id lookup, no tie comparison and no seed student: 0 is a legal
+; starting best because every real key is at least 6385.
+htop:   LDI 0
+        ST  BEST
+        LD  C0
+        AND TMSK
+        SUB BEST
+        BRN t1
+        ADD BEST
+        ST  BEST
+t1:      LD  C1
+        AND TMSK
+        SUB BEST
+        BRN t2
+        ADD BEST
+        ST  BEST
+t2:      LD  C2
+        AND TMSK
+        SUB BEST
+        BRN t3
+        ADD BEST
+        ST  BEST
+t3:      LD  C3
+        AND TMSK
+        SUB BEST
+        BRN t4
+        ADD BEST
+        ST  BEST
+t4:      LD  C4
+        AND TMSK
+        SUB BEST
+        BRN t5
+        ADD BEST
+        ST  BEST
+t5:      LD  C5
+        AND TMSK
+        SUB BEST
+        BRN t6
+        ADD BEST
+        ST  BEST
+t6:      LD  C6
+        AND TMSK
+        SUB BEST
+        BRN t7
+        ADD BEST
+        ST  BEST
+t7:      LD  C7
+        AND TMSK
+        SUB BEST
+        BRN t8
+        ADD BEST
+        ST  BEST
+t8:      LD  C8
+        AND TMSK
+        SUB BEST
+        BRN t9
+        ADD BEST
+        ST  BEST
+t9:      LD  C9
+        AND TMSK
+        SUB BEST
+        BRN t10
+        ADD BEST
+        ST  BEST
+t10:     LD  C10
+        AND TMSK
+        SUB BEST
+        BRN t11
+        ADD BEST
+        ST  BEST
+t11:     LD  C11
+        AND TMSK
+        SUB BEST
+        BRN t12
+        ADD BEST
+        ST  BEST
+t12:     LD  C12
+        AND TMSK
+        SUB BEST
+        BRN t13
+        ADD BEST
+        ST  BEST
+t13:     LD  C13
+        AND TMSK
+        SUB BEST
+        BRN t14
+        ADD BEST
+        ST  BEST
+t14:     LD  C14
+        AND TMSK
+        SUB BEST
+        BRN t15
+        ADD BEST
+        ST  BEST
+t15:     LD  C15
+        AND TMSK
+        SUB BEST
+        BRN tout
+        ADD BEST
+        ST  BEST
+tout:   LD  BEST
+        AND IDM
+        ST  CUR
+        LDI 128
+        MULI 128
+        SUB CUR             ; id = 16384 - the winning key's id field
+        OUT
+        JMP nextop
+
+; ── the round's bookkeeping ─────────────────────────────────────────────────
+; Last in the program on purpose: every handler falls out here, and `BRZ round` /
+; `JMP oploop` then wrap forward over only the first ~20 instructions. Put this
+; block at the top instead and each operation would pay a second ROM lap.
+nextop: LD  OCNT
+        SUBI 1
+        ST  OCNT
+        BRZ round           ; the round's replies are complete; unlock the next
+        JMP oploop

@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .asm import Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
-from .store import DictStore, SpillRing, Store
+from .store import DictStore, SpillRing, Store, StreamUnit
 
 __all__ = [
     "Round",
@@ -152,6 +152,7 @@ class Emulator:
         self.words = list(program.words)
         self.store: Store = store if store is not None else DictStore()
         self.spill = spill if spill is not None else SpillRing()
+        self._stream: StreamUnit | None = None
         self.tick_model = ticks
 
         self.a = 0
@@ -289,6 +290,19 @@ class Emulator:
             display_writes=tuple(self.display_writes),
         )
 
+    # ── STREAM: created on first use, since it owns the I and O rooms ────────
+    @property
+    def stream(self) -> StreamUnit:
+        """The STREAM block, wired to this run's input and output.
+
+        Lazily built because the unit *is* the machine's I/O on a program that has
+        one: its ``RDIN`` arm hands input words to the CPU and its ``EMIT`` arm
+        writes the output room, so the hooks have to be this emulator's own.
+        """
+        if self._stream is None:
+            self._stream = StreamUnit(self._next_input, self._emit)
+        return self._stream
+
     # ── STORE helpers (the memory-problem wire protocol) ────────────────────
     def _mem_read(self, addr: int) -> int:
         self.store.send(0)
@@ -317,6 +331,19 @@ def _set_imm(em: Emulator, n: int | None) -> None:
 @_handler(Sem.INPUT)
 def _input(em: Emulator, _: int | None) -> None:
     em.a = wrap(em._next_input())  # `r→in`
+    em.b = em.a  # `M`
+
+
+@_handler(Sem.STREAM_SEND)
+def _stream_send(em: Emulator, _: int | None) -> None:
+    em.a, em.b = em.b, em.a  # `W`
+    em.stream.send(em.a)  # `s→stream`
+    em.a, em.b = em.b, em.a  # `W` — ACC survives, as with OUT
+
+
+@_handler(Sem.STREAM_RECV)
+def _stream_recv(em: Emulator, _: int | None) -> None:
+    em.a = wrap(em.stream.recv())  # `r→stream`
     em.b = em.a  # `M`
 
 
@@ -384,11 +411,39 @@ def _store(em: Emulator, addr: int | None) -> None:
     em.a = wrap(addr)  # the `W` … `W` sandwich leaves A = addr, ACC intact
 
 
+@_handler(Sem.INC_MEM)
+def _inc_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    old = em._mem_read(addr)
+    em._mem_write(addr, wrap(old + 1))
+    # `M` spent the incoming ACC on the address, and B has held the *old* value
+    # since the `W` before the write marker. A is what the last `s→mem` sent.
+    em.a = wrap(old + 1)
+    em.b = old
+
+
+@_handler(Sem.DEC_MEM)
+def _dec_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    old = em._mem_read(addr)
+    em._mem_write(addr, wrap(old - 1))
+    em.a = wrap(old - 1)
+    em.b = old
+
+
 @_handler(Sem.ADD_MEM)
 def _add_mem(em: Emulator, addr: int | None) -> None:
     assert addr is not None
     em.a = em._mem_read(addr)
     em.a = wrap(em.a + em.b)  # `+`
+    em.b = em.a  # `M`
+
+
+@_handler(Sem.AND_MEM)
+def _and_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    em.a = em._mem_read(addr)
+    em.a = wrap(em.a & em.b)  # `&` — commutative, so no `W` needed
     em.b = em.a  # `M`
 
 
@@ -398,6 +453,15 @@ def _sub_mem(em: Emulator, addr: int | None) -> None:
     em.a = em._mem_read(addr)
     em.a, em.b = em.b, em.a  # `W`
     em.a = wrap(em.a - em.b)  # `-`
+    em.b = em.a  # `M`
+
+
+@_handler(Sem.DIV_MEM)
+def _div_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    em.a = em._mem_read(addr)
+    em.a, em.b = em.b, em.a  # `W` — the dividend is ACC, so the operands swap
+    em.a, em.b = floor_div(em.a, em.b)  # `/`
     em.b = em.a  # `M`
 
 

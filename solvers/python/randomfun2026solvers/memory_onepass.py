@@ -80,9 +80,14 @@ def compact_shared_setup_draft(size: int = 10) -> tuple[Circuit, DebugMap]:
     c.turn(24, 15, E)
     c.run(25, 15, "WX")
 
-    # READ consumes target and emits/re-appends it. B is still +delta.
-    c.run(26, 16, "rS", d=S)
-    c.run(26, 18, "WM1+M", d=S)  # B=delta+1 for the shared current-store.
+    # READ consumes the target, then performs two explicit sends: first back
+    # to the value ring, then to output.  ``S`` would also broadcast the value
+    # into the current-register command pipe once this draft is assembled.
+    c.run(26, 16, "rs", d=S)
+    c.route((26, 18), S, [], (3, 18), W)
+    c.run(2, 18, "s", d=W)
+    c.route((1, 18), W, [(0, 18), (0, 19)], (2, 19), E)
+    c.run(2, 19, "WM1+M", d=S)  # B=delta+1 for the shared current-store.
     # WRITE consumes target, then will route through the input/value lane.
     c.turn(26, 14, W)
     c.horizontal(14, 26, 2)
@@ -91,7 +96,7 @@ def compact_shared_setup_draft(size: int = 10) -> tuple[Circuit, DebugMap]:
     c.run(22, 24, "srWNMNb")  # append new, drop old, then B=delta+1.
 
     # Both paths now carry B=delta+1. They join at one current-register fetch.
-    c.route((26, 23), S, [(20, 23), (20, 28), (5, 28)], (5, 29), E)
+    c.route((2, 24), S, [(2, 25), (5, 25), (5, 28)], (5, 29), E)
     c.route((29, 24), E, [(30, 24), (30, 30), (5, 30)], (5, 29), E)
     c.run(6, 29, "1Ns")
     c.route((9, 29), E, [], (15, 29), E)
