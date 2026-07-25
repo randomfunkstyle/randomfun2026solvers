@@ -1,0 +1,16 @@
+# snake — submission c70e04a4-4448-442d-9cf1-d0443e81b248
+
+verdict      done: 17/17 cases, area2 16641, avgTicks 954,945, score 15,891,242,682
+submitted    2026-07-25T21:25:31+0300
+grid         123x129
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  a4e45aa9f327b7035376d9bf0861ba07c254ed3e7edd64509fab075330dae5fc
+commit       1bacc66
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_cpu.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+v1.1: body ring 64->50 slots (a tape read costs 105+8.3N, measured 8.06 ticks/slot/read) and the scan's loop control is a DECM countdown instead of a compare against HD, so an iteration is 5 reads not 6. 123x129, local avg 611,152 (was 640,777).

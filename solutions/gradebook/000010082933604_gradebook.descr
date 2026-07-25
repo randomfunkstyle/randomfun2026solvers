@@ -1,0 +1,16 @@
+# gradebook — submission 55628541-2a33-47ca-a8c1-a8591f791177
+
+verdict      done: 20/20 cases, area2 12996, avgTicks 775,849, score 10,082,933,604
+submitted    2026-07-25T18:00:20+0300
+grid         114x101
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  1cfdbafa49762becdf60ff4bc040cd884b0a2f1ffd2eb7b1adc397e183df2a9e
+commit       eef2324
+local        gradebook: 7/7 public cases, avg 301,053 ticks
+source       tasks/solutions/gradebook_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+short return path + min-footprint pad search

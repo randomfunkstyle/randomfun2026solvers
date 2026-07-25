@@ -641,8 +641,20 @@ def _flat_lane(
     return out
 
 
-def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int = 0) -> _Cpu:
-    """Lay the CPU: fetch, decode trie, lanes, structures band, return path."""
+def build_cpu(
+    program: Program,
+    p: _Plan,
+    *,
+    mem_pad: int = 0,
+    stream_pad: int = 0,
+    short_return: bool = True,
+) -> _Cpu:
+    """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
+
+    ``short_return`` lets a simple lane drop at the end of its own micro-program
+    rather than east of the slab band; see the drop-column comment. It narrows the
+    CPU, which ``matmul``'s STREAM wiring does not currently survive.
+    """
     k, lanes = p.k, p.lanes
     centre = 1 << k
     span = 2 * lanes - 1
@@ -706,26 +718,70 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
             lane_cells[(lane_x0, r)] = (pre, None)
             lane_end[r] = lane_x0
 
-    # ── drop columns: strictly ordered bottom-to-top, floored east of the slabs
+    # ── drop columns: turn south the moment every lane below allows it ───────
+    # A drop is only ever a `v` at its head and `.` below, and a southbound man keeps
+    # his heading over a `.` — so the only hard constraint is that the column be clear
+    # of *glyphs* on every row the drop crosses. Going bottom-to-top, that is the
+    # running suffix maximum of ``lane_end``, and nothing more.
+    #
+    # It used to be floored at ``struct_east + 1`` for every lane, which is the
+    # slabs' east edge. A **structured** lane does need that: its drop continues past
+    # the collector into its own slab. A simple lane's drop *stops* at the collector,
+    # which sits above the slabs, so it never enters the band it was clearing. The
+    # floor cost every simple instruction ~22 columns east and the same ~22 back west
+    # along the collector, twice over, once per instruction, forever.
+    #
+    # Simple and structured columns must stay disjoint for a subtler reason: a
+    # structured drop needs the collector row to show `.` where it passes through, so a
+    # simple man arriving on that column would sail *past* the collector and be
+    # swallowed by the wrong slab. Keeping simple lanes west of ``struct_east`` and
+    # structured ones east of it makes that disjointness structural.
     drop_x: dict[int, int] = {}
-    cur = struct_east + 1
     assigned: set[int] = set()
-    for r in sorted(all_rows, reverse=True):
-        if r in halting:
-            continue
-        c = max(cur, lane_end[r] + 1)
-        m = by_row.get(r)
-        if m is not None and m in slab_rows:
-            # A slab's entry column must be unique in *both* directions: its `<`
-            # turns an arriving man west, so any other drop sharing the column
-            # would be swallowed by this slab's entry row.
-            while c in assigned:
-                c += 1
-            cur = c + 1
-        else:
-            cur = c
-        drop_x[r] = c
-        assigned.add(c)
+    if short_return:
+        floor = lane_x0
+        for r in sorted(all_rows, reverse=True):
+            # Halting rows carry no drop but do carry glyphs, so they still raise the
+            # floor for everything above them.
+            floor = max(floor, lane_end[r] + 1)
+            if r in halting:
+                continue
+            m = by_row.get(r)
+            if m is not None and m in slab_rows:
+                # A slab's entry column must be unique in *both* directions: its `<`
+                # turns an arriving man west, so any other drop sharing the column
+                # would be swallowed by this slab's entry row.
+                c = max(floor, struct_east + 1)
+                while c in assigned:
+                    c += 1
+            else:
+                c = floor
+                if c > struct_east:
+                    # A micro-program long enough to reach the slabs has to join the
+                    # structured lanes' discipline rather than risk their columns.
+                    c = struct_east + 1
+                    while c in assigned:
+                        c += 1
+            drop_x[r] = c
+            assigned.add(c)
+    else:
+        # The original rule, kept verbatim so a slug on the long path regenerates
+        # byte-for-byte: every column floored east of the slabs, strictly ordered
+        # bottom-to-top, and a structured lane pushing everything above it one further.
+        cur = struct_east + 1
+        for r in sorted(all_rows, reverse=True):
+            if r in halting:
+                continue
+            c = max(cur, lane_end[r] + 1)
+            m = by_row.get(r)
+            if m is not None and m in slab_rows:
+                while c in assigned:
+                    c += 1
+                cur = c + 1
+            else:
+                cur = c
+            drop_x[r] = c
+            assigned.add(c)
 
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
@@ -826,10 +882,19 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
     # east wall, since nothing down there steers him.
     g.put(2, collector, "@")
 
-    if struct_east >= min(drop_x.values(), default=struct_east + 1):
+    # A simple drop *stops* at the collector, and the collector sits above the slabs,
+    # so being west of ``struct_east`` is harmless — that used to be forbidden back
+    # when the collector was below the slab band and a drop really did cross one.
+    # What must still hold is column disjointness against the drops that pass
+    # *through* the collector on their way to a slab: those leave `.` on the collector
+    # row, so a simple man sharing the column would sail past his turn west and be
+    # swallowed by that slab.
+    through = {drop_x[p.row[m]] for m in order}
+    clash = {r: c for r, c in drop_x.items() if c in through and by_row.get(r) not in order}
+    if clash:
         raise MachineError(
-            f"slabs reach column {struct_east} but the westmost drop column is "
-            f"{min(drop_x.values())}: a simple lane's drop would cross a slab"
+            f"simple lane drop column(s) {sorted(set(clash.values()))} collide with a "
+            f"slab entry column; a simple lane would drop past the collector"
         )
 
     width = ret_x + 1
@@ -1282,6 +1347,8 @@ def build(
     display: tuple[int, int] | None = None,
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
+    packed_rom: bool = True,
+    short_return: bool | None = None,
     store: str = "tape",
 ) -> Machine:
     """Assemble the whole machine for ``program``.
@@ -1306,7 +1373,14 @@ def build(
     own ring and the machine stalls, emitting nothing — so the off-by-one is checked
     here instead. Only *static* addresses can be checked; a program computing them at
     run time has to size its own tape and is trusted to.
+
+    ``packed_rom`` lays the ROM with :func:`rom.build_packed_rom` — variable-width
+    tokens instead of one padded fixed width, which roughly halves it. Pass ``False``
+    for the original fixed-width fold; the word stream is identical either way, so it
+    is purely a size/speed choice.
     """
+    if short_return is None:
+        short_return = program.name not in _LONG_RETURN
     p = plan(program)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
@@ -1326,10 +1400,11 @@ def build(
     pads = [mem_pad] if mem_pad is not None else range(0, 40)
     spads = range(0, 40, 2) if stream else [0]
     last: MachineError | None = None
+    best: Machine | None = None
     for spad in spads:
         for pad in pads:
             try:
-                return _assemble(
+                m = _assemble(
                     program,
                     p,
                     words,
@@ -1340,11 +1415,42 @@ def build(
                     stream,
                     resp_pad,
                     spad,
+                    packed_rom,
+                    short_return,
                     store,
                 )
             except MachineError as exc:
                 last = exc
-    raise MachineError(f"no pad pair makes every pipe bind; last: {last}")
+                continue
+            # Every feasible pad is *correct*, so take the smallest rather than the
+            # first. They differ by more than a column: the pad shifts the memory
+            # block east, which moves every pipe that binds to it, so which pad binds
+            # is not monotone and the first feasible one is an arbitrary pick. Ties
+            # break on height, which is free on a width-bound machine but never hurts.
+            if best is None or (m.footprint, m.height) < (best.footprint, best.height):
+                best = m
+    if best is None:
+        raise MachineError(f"no pad pair makes every pipe bind; last: {last}")
+    return best
+
+
+def _packed_fold(words: list[int], budget: int) -> int:
+    """Fewest rows that keep a packed ROM within ``budget`` columns.
+
+    The packed builder is driven by row count and derives the narrowest width that
+    fits, so this inverts it: width falls monotonically as rows rise, which makes
+    the search a bisection. Same intent as :func:`rom.rows_for_budget` — trade width
+    into height only until the ROM stops being the widest thing in the machine.
+    """
+    room = budget - 5  # two turn columns, the riser, and two walls
+    lo, hi = 1, max(1, len(words))
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if rommod.width_for_rows(words, mid) <= room:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
 
 
 def _assemble(
@@ -1358,19 +1464,28 @@ def _assemble(
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
     stream_pad: int = 0,
+    packed_rom: bool = True,
+    short_return: bool = True,
     store: str = "tape",
 ) -> Machine:
-    cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad)
+    cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
     # from the other (footprint is max(w, h)^2, ARCH.md §7.4).
-    nrows = (
-        rom_rows
-        if rom_rows is not None
-        else rommod.rows_for_budget(len(words), rommod.digit_width(words), max(40, W))
-    )
-    romlay = rommod.build_rom(words, rows=nrows)
+    if packed_rom:
+        # Packed tokens are ~half the cells, so the same column budget swallows
+        # roughly twice as many words per row and the default fold is that much
+        # shallower (rom.build_packed_rom).
+        nrows = rom_rows if rom_rows is not None else _packed_fold(words, max(40, W))
+        romlay = rommod.build_packed_rom(words, rows=nrows)
+    else:
+        nrows = (
+            rom_rows
+            if rom_rows is not None
+            else rommod.rows_for_budget(len(words), rommod.digit_width(words), max(40, W))
+        )
+        romlay = rommod.build_rom(words, rows=nrows)
 
     g = _Grid()
 
@@ -1495,12 +1610,14 @@ def _assemble(
     stream_touches: dict[str, tuple[int, int]] = {}
     blk = None
     if cpu.stream_cols:
-        if stream is None:
+        # The snake unit's ring is sized to the problem's own bound (50 cells) inside
+        # its builder, so only the STREAM block takes sizes from the caller.
+        if stream is None and program.unit == "stream":
             raise MachineError(
                 "the program drives the STREAM block but no ring sizes were given; "
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
-        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream)
+        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
 
     rows = g.rows()
 
@@ -1554,8 +1671,9 @@ def _assemble(
     #
     # The STREAM block adds its own pipes, all of them internal except the two
     # already counted in ``touches`` — so ``blk.pipes - 1`` (the response pipe is
-    # drawn half here, half there, and is one pipe).
-    extra = (blk.pipes - 1) if blk else 0
+    # drawn half here, half there, and is one pipe). A unit that answers nothing has
+    # no response pipe to double-count, so nothing is subtracted for it.
+    extra = (blk.pipes - (1 if Band.STREAM_RESP in stream_touches else 0)) if blk else 0
     # The memory tier's own internal pipes: the tape's two ring legs, or the
     # man-memory's command and answer pipe per cell. Everything the machine itself
     # drew is already in ``touches``, plus the one response pipe drawn half here.
@@ -1579,45 +1697,66 @@ def _assemble(
 
 
 def _stream(
-    g: _Grid, cpu: _Cpu, cx: int, wall_y: int, sizes: tuple[int, int, int]
+    g: _Grid,
+    cpu: _Cpu,
+    cx: int,
+    wall_y: int,
+    sizes: tuple[int, int, int] | None,
+    *,
+    unit: str = "stream",
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
-    """Place the STREAM block below the CPU and wire its two pipes. Returns touches.
+    """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
     The command pipe drops straight out of the CPU's south wall into the block's
-    north wall; the response pipe climbs the block's *east* side, runs west above
-    it and turns north into its own lane's column. That is why ``STREAM_BANDS`` puts
-    the response lane east of the command lane: the westward leg then stops east of
-    the command pipe's descent instead of crossing it.
-    """
-    from . import stream as streammod
+    north wall; a response pipe, if the unit has one, climbs the block's *east* side,
+    runs west above it and turns north into its own lane's column. That is why
+    ``STREAM_BANDS`` puts the response lane east of the command lane: the westward leg
+    then stops east of the command pipe's descent instead of crossing it.
 
-    a_slots, b_slots, c_slots = sizes
-    blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
+    Which block is placed comes from the program's ``.unit`` (``asm.UNITS``). The
+    snake unit brings its own ring *and* the LM-75 panel, so on that machine there is
+    no separate ``_display`` call and the CPU has no display lanes at all.
+    """
+    if unit == "snake":
+        from . import snake_unit
+
+        blk = snake_unit.build_snake()
+    else:
+        from . import stream as streammod
+
+        assert sizes is not None
+        a_slots, b_slots, c_slots = sizes
+        blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
     bx, by = 1, wall_y + 5
     g.blit(bx, by, blk.cells)
 
     cmd_col = cx + cpu.stream_cols[Band.STREAM_CMD]
-    resp_col = cx + cpu.stream_cols[Band.STREAM_RESP]
     cmd_x, cmd_y = bx + blk.cmd_cell[0], by + blk.cmd_cell[1]
-    resp_x, resp_y = bx + blk.resp_cell[0], by + blk.resp_cell[1]
-    if resp_col <= cmd_x:
-        raise MachineError(
-            f"the response lane's column {resp_col} is not east of the command pipe's "
-            f"descent at {cmd_x}: the two pipes would cross"
-        )
     lane = by - 2  # the corridor the response pipe runs west along
+
+    # A unit that answers nothing has no response pipe, and that is a *binding*
+    # property rather than a saving: §7.1 makes an incoming pipe a rival for every
+    # `r` in the CPU, so a response landing on the south wall competes with the jump
+    # slab's ROM read. `matmul` gets away with it only by having no `JMPF` at all;
+    # measured on `snake`, all 4,800 (fold, mem_pad, stream_pad) combinations fail on
+    # exactly that binding. An outgoing command pipe has no such competition.
+    talks_back = Band.STREAM_RESP in cpu.stream_cols
+    touches = {Band.STREAM_CMD: (cmd_col, wall_y + 1)}
+    if talks_back:
+        resp_col = cx + cpu.stream_cols[Band.STREAM_RESP]
+        resp_x, resp_y = bx + blk.resp_cell[0], by + blk.resp_cell[1]
+        if resp_col <= cmd_x:
+            raise MachineError(
+                f"the response lane's column {resp_col} is not east of the command pipe's "
+                f"descent at {cmd_x}: the two pipes would cross"
+            )
+        touches[Band.STREAM_RESP] = (resp_col, wall_y + 1)
 
     route = [(cmd_col, wall_y + 1), (cmd_col, lane - 1), (cmd_x, lane - 1), (cmd_x, cmd_y)]
     g.draw_pipe([p for i, p in enumerate(route) if i == 0 or p != route[i - 1]])
-    g.draw_pipe([(resp_x, resp_y), (resp_x, lane), (resp_col, lane), (resp_col, wall_y + 1)])
-    return (
-        blk,
-        {
-            Band.STREAM_CMD: (cmd_col, wall_y + 1),
-            Band.STREAM_RESP: (resp_col, wall_y + 1),
-        },
-        (bx, by),
-    )
+    if talks_back:
+        g.draw_pipe([(resp_x, resp_y), (resp_x, lane), (resp_col, lane), (resp_col, wall_y + 1)])
+    return blk, touches, (bx, by)
 
 
 def _display(
@@ -1784,6 +1923,20 @@ TAPE_SIZE = {
     # That is the whole point of the new tier: at n=16 an access is ~185 ticks rather
     # than the ~830 a 104-slot tape costs, and *none* of them is in the inner loop.
     "matmul": 16,
+    # snake keeps eleven scalars plus a 50-slot body ring (BODY+49 = 65, so 66). The
+    # ring is sized to the *constraint*, not the public cases: 100 rounds allow at most
+    # 49 growths, so the snake cannot exceed 50 cells, and `MODI 50` wraps a ring of any
+    # size just as cheaply as a power of two. The addresses are computed at run time, so
+    # this line is the only place the tape's real extent is stated.
+    #
+    # It is worth ~4% on its own: measured on the engine, the same program at N=66/90
+    # runs the longest public case in 2,169,980 / 2,617,836 ticks — 18.7k ticks per slot
+    # per case, i.e. ~8.3 ticks per slot on every one of its ~2,250 accesses (§4.1).
+    "snake": 66,
+    # snake-ring keeps *only* scalars: the body lives in the coprocessor's ring, so the
+    # tape is eight slots and a read costs ~180 ticks instead of ~653. That is the whole
+    # point of the rewrite — see snake-ring.asm's header.
+    "snake-ring": 9,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
@@ -1792,45 +1945,61 @@ TAPE_SIZE = {
 #: because a ring is briefly holding one more than it stores.
 STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 
-#: ROM fold overrides, where ``rom.rows_for_budget``'s default is not the footprint
-#: optimum. The default folds the ROM toward the *CPU's own* width, which is right
-#: only while the CPU and the tape are the sole things setting the bounding box.
-#: ``brackets`` and ``tcp`` come out width-bound, so their height is free and the
-#: default costs nothing; the two below are height-bound and had to be folded flatter
-#: and wider. Every machine here is ~112 columns (adapter + the 32-wide tape), so the
-#: rule of thumb is: fold until the ROM is no wider than that, and no further.
+#: ROM fold overrides, where the default heuristic is not the footprint optimum.
+#: The default folds the ROM toward the *CPU's own* width, which is right only while
+#: the CPU and the tape are the sole things setting the bounding box.
 #:
-#: Both numbers are the minimum over every fold, and both are checked against the
-#: default in the tests, so a regression in the heuristic is a failure rather than a
-#: quietly worse score.
+#: Every number here is the minimum over a full fold sweep, and every one is checked
+#: against the default in the tests, so a regression in the heuristic is a failure
+#: rather than a quietly worse score.
 #:
-#: Kept per-slug rather than folded into the heuristic so the checked-in
-#: ``brackets``/``tcp`` grids stay byte-identical.
+#: All of them were re-swept for the **packed** ROM (``rom.build_packed_rom``), which
+#: is the default. Packed tokens are roughly half the cells, so the same word count
+#: wants about half as many rows and every entry moved: a fold tuned for the padded
+#: fixed-width ROM now overshoots and makes height binding again. ``brackets`` and
+#: ``tcp`` still need no entry — they are width-bound by the machine, not the ROM, so
+#: their height is free and the default costs nothing.
 ROM_ROWS = {
-    # The panel adds ~30 rows and makes height the binding dimension, so this is the
-    # minimum over every fold: 112x116 (13,456) against the default's 112x148 (21,904).
-    # 20 rows is where the ROM stops being what sets the width (112 is the adapter plus
-    # the 32-wide tape); folding further only adds height. `plotter` is height-bound
-    # past that point, which is why unrolling its inner loop (see plotter.asm) is a real
-    # footprint trade rather than a free one — it is still a large net win on score,
-    # since it cuts ticks 24% for 7% more area. See tests/test_lm1_display.py.
-    "plotter": 20,
+    # The panel adds ~30 rows and makes height binding, so the ROM has to stop being
+    # what sets the width and then stop: 111x104 (12,321) at 8 rows, against the
+    # default's 111x123 (15,129). `plotter` is height-bound past that point, which is
+    # why unrolling its inner loop (see plotter.asm) is a real footprint trade rather
+    # than a free one. See tests/test_lm1_display.py.
+    "plotter": 8,
     # gradebook's three per-student scans are unrolled 16 ways (see gradebook.asm on
     # why a loop iteration costs a whole ROM lap), so its image is 836 words and the
-    # ROM, not the tape, sets the box. The minimum over every fold is 117x123
-    # (15,129); the default's 48-column fold is 279x89 (77,841). Height-bound past
-    # ~56 rows, width-bound below ~50. See tests/test_lm1_gradebook.py.
-    "gradebook": 53,
-    # 89x94 at 37 rows against 84x146 at the default: no display and a 30-slot tape
-    # leave the machine narrow enough that the default fold makes height binding.
-    # See tests/test_lm1_sudoku.py.
-    "sudoku-validity": 37,
-    # matmul is the one machine that comes out *square* (96x96): the STREAM block's
-    # ring band is as wide as the tape row above it, and its height is what the ROM
-    # trades against. 11 rows is the sweep minimum, and the sweep is not flat here —
-    # 10 rows costs 15 % and 18 rows (the old, tape-only build's fold) costs 15 %.
-    "matmul": 11,
+    # ROM, not the tape, sets the box. 31 rows is the first fold that gets the ROM
+    # under the machine's own 113 columns; wider costs width, narrower only costs
+    # height. 113x101 (12,769). See tests/test_lm1_gradebook.py.
+    "gradebook": 31,
+    # No display and a 30-slot tape leave the machine 83 columns wide, so the same
+    # rule applies one size down: 23 rows is where the ROM stops setting the width.
+    # 83x80 (6,889). See tests/test_lm1_sudoku.py.
+    "sudoku-validity": 23,
+    # matmul is the one machine that came out *square* on the padded ROM (96x96). The
+    # STREAM block's ring band is as wide as the tape row above it, and its height is
+    # what the ROM trades against; packed, the trade lands at 88x90 (8,100) on 5 rows.
+    "matmul": 5,
+    # Like plotter: the panel adds rows, so height is binding and the fold has to stop
+    # trading width for it. 9 rows is the minimum of a full sweep — 123x129 (16,641),
+    # against the default's 119x142 (20,164). One row either side is worse (8 rows is
+    # 135 wide, 10 rows is 130 tall), so this is a real optimum, not a plateau.
+    "snake": 9,
+    # snake-ring is height-bound: the coprocessor block is 66x60 and sits below the
+    # CPU, so the box is set by rows whatever the fold does to the width. 6 rows is the
+    # sweep minimum at 122x136; 5 is 144x135 and 7 is 111x137, so this is a real
+    # optimum rather than a plateau.
+    "snake-ring": 6,
 }
+
+
+#: Slugs that must keep the old, long return path. Letting a simple lane drop early
+#: narrows the CPU, and ``matmul``'s STREAM wiring does not survive that: every one of
+#: 3,600 (fold, mem_pad, stream_pad) combinations fails to place its pipes, all of them
+#: a `v` landing on an occupied cell near the top of the grid. The short path is worth
+#: a few percent of ticks here, so this is a deferred fix rather than a dead end --
+#: matmul keeps the grid that scored 1,464,201,360.
+_LONG_RETURN = {"matmul"}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:

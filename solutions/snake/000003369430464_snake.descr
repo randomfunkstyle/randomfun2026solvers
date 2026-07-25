@@ -1,0 +1,16 @@
+# snake — submission 6d49ab8d-81c0-47ca-8400-89f15cd8018c
+
+verdict      done: 17/17 cases, area2 18496, avgTicks 182,171, score 3,369,430,464
+submitted    2026-07-25T22:40:29+0300
+grid         122x136
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  b2d1216f49c33042ac2a4ad406be3ea381703835b9d83c41a88fafa918f20ea2
+commit       d452156
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_ring.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Coprocessor + exactly sixteen opcodes, so a depth-4 decode trie: 122x136 (was 158x167) and avg 122,281 ticks (was 151,544). NEG became LDI 0/SUBI n and HALT became a spin, because the 17th opcode costs a whole trie level plus its lane rows.

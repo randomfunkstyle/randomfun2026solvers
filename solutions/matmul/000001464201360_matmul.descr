@@ -1,0 +1,16 @@
+# matmul — submission 84adecc1-d6d6-4ea9-ac2b-3d7370c71926
+
+verdict      done: 20/20 cases, area2 8100, avgTicks 180,766, score 1,464,201,360
+submitted    2026-07-25T17:37:36+0300
+grid         88x90
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  371a14dfcd2e428f2449627647a3cef059249c00077dc93e141fd048d6ffaf00
+commit       2318f09
+local        matmul: 7/7 public cases, avg 120,107 ticks
+source       tasks/solutions/matmul_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+packed ROM: variable-width tokens, parity-safe placement

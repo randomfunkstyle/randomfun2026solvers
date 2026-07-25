@@ -48,6 +48,12 @@ Semester 4 also added an `uberStrict` field to the per-problem response
 (`false` on every problem so far, and undocumented in the API reference). The
 four Semester 4 files carry it; the sixteen older files predate it and do not.
 
+**`privateTestCount: 0` is not a promise.** `snake` reports 0 and the judge graded
+**17** cases against its 5 public ones, and the hidden ones are dearer than the public
+set (avgTicks 1,000,411 against the 640,777 the same grid measures locally, i.e. 1.6x).
+Size hardware to the *constraint box*, never to the public data — the same lesson
+`gradebook` taught, now with a number attached.
+
 ## Rival scores seen on the leaderboard (2026-07-25)
 
 Not from the API — the API never serves other teams' submissions. These were read
@@ -56,7 +62,7 @@ still has. Lower is better; `max(w,h)² × avg ticks`.
 
 | Slug | Best rival scores | Implied footprint (score ÷ tick cap) | Our best |
 |---|---|---|---|
-| `snake` | 200,000,000 · 2,500,000,000 | ≥ 13² at 15M ticks | — |
+| `snake` | 200,000,000 · 2,500,000,000 | ≥ 13² at 15M ticks | **3,369,020,288** (17/17) |
 | `pathfinder` | 50,000,000,000 · 300,000,000,000 | ≥ 58² at 15M ticks | — |
 | `little-little-little-man` | 1,300,000,000,000 | ≥ 295² at 15M ticks | — |
 | `little-little-man` | not seen yet | — | — |
@@ -67,3 +73,8 @@ is a hard lower bound on the leader's `area2`, because avg ticks cannot exceed t
 cap. `little-little-little-man`'s 1.3T therefore means the best team is running a
 program at least ~295 cells on a side — nobody has a compact interpreter yet, on
 by far the simplest of the four. That is the largest open gap in the contest.
+
+`snake`'s 200M leader implies a grid no bigger than ~13 cells on a side at the cap, or
+a bigger one that is much faster; ours is 121x136 = 18,496 at 182k ticks, so the gap is
+footprint, not speed. A bespoke machine — no ISA, no ROM, a few men around the panel —
+is the only thing that closes it (§1's trade, and `plotter_block` is the precedent).

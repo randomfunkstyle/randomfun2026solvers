@@ -1,7 +1,11 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: Semesters 1 and 2 are complete — 10 of the 12 graded problems are
-solved**, every one passing all its public cases on the reference interpreter.
+**Status: Semesters 1 and 2 are complete — 11 of the 16 graded problems are
+solved**, every one passing all its public cases on the reference interpreter, and
+`snake` opens Semester 4 by passing all **17** the judge actually runs. It is also the
+first problem solved on a *third* tier — a coprocessor that holds the data structure
+the program iterates and owns the display (§8.0, `lm1/snake_unit.py`), which took it
+from 15.9bn to **3.37bn**.
 
 | set | problem | grid | score | how |
 |---|---|---|---|---|
@@ -15,6 +19,7 @@ solved**, every one passing all its public cases on the reference interpreter.
 | 2 | `plotter` | 112×116 | 2,749,462,237 | LM-1 + display |
 | 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
 | 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
+| 4 | `snake` | 121×136 | **3,369,020,288** | LM-1 + body-ring coprocessor (17/17, judged) |
 | — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
 
 `lm1/machine.py` takes an assembled program and emits the whole machine — looping
@@ -509,6 +514,46 @@ dispatch) — it does not amortise away, which is why even an N=4 tape costs 138
 ticks and loses to a `register-cell` by 7× for scratch. The tiers are distinct
 mechanisms, not two sizes of the same one.
 
+#### A read costs 523 ticks and a write costs 19 — the asymmetry is the whole game
+
+Measured per *cell* on `snake` (`tools/heatmap.mjs` + `lm1/profile.py`, gated so the
+run ends at the scored tick), and it re-prices every program on this page:
+
+| unit | cost | how it was measured |
+|---|---|---|
+| one tape **read** | **523 ticks** (512–637 across five cases) | 100.0% of the tape's marginal cost lands on one cell — the mem-response `r` in the CPU's memory lanes. Rebuilding at N+16 moved *only* that cell. |
+| one tape **write** | **~19 ticks** | the whole `ST` lane is 5,375 ticks for 276 writes: a write is fire-and-forget, the CPU never waits for it |
+| one **instruction** | **162 ticks** | fetch + trie + lane walk + return, summed over the CPU's own regions |
+| one **taken branch** | **155 + 5.88 per discarded word** | solved from the JMPF and BRZ slabs (253 jumps/45,325 words and 161/8,672) |
+| one tape **slot** | **8.06 ticks per read** | N=66 → 90 on a fixed program: 2,169,980 → 2,617,836 ticks |
+
+Four consequences, all of them design rules rather than trivia:
+
+- **Spend writes freely and hunt reads.** `ST` is nearly free, so parking a value in a
+  scratch slot costs nothing and re-reading it costs 523. Prefer any encoding that
+  reads once and writes twice over one that reads twice.
+- **A read-modify-write opcode is cheap and a re-read is not** — which is what makes
+  the `INCM`/`DECM` family (§6.1) worth its lanes: `DECM n` is one read where
+  `LD n; SUBI 1; ST n` is two.
+- **Each word of `P` costs ~2,433 ticks per case** on a program taking ~414 branches,
+  so ROM size is a tick cost and not only an area cost. And the skip is `P − L`
+  wherever the loop sits — the ring is circular, so "put the hot loop last" is really
+  "make the loop body long and `P` short".
+- **Sizing the tape is worth multiples, not percent, once a structure is in it.** A
+  50-cell array taxes every unrelated scalar read by 8.06 × 50 = 403 ticks. That is the
+  argument for the STREAM tier below, and for `snake` it is the difference between a
+  523-tick read and a ~196-tick one.
+
+Two traps in the profiler itself, both hit on `snake`:
+
+- `profile.py`'s `critical_runner()` takes the **least-stalled** runner, and on a
+  machine whose tape ring never stops walking that is the *tape's* man — reported as
+  `tape 100%` with an all-zero rollup. Pin the CPU's runner by hand.
+- `heatmap.mjs` passes no expected frames, so **input is never gated** and the CPU
+  parks on the `IN` lane's `r` forever once the input runs out. At `--cap 3000000` that
+  fabricated 720,069 ticks — 24% of the profile — as a lane that does no work in the
+  scored run. Gate the run, or cap it at the final commit's tick.
+
 **In a generated machine that fixed part is ~316 ticks, not ~105, and it dwarfs the
 slope.** Solving for per-unit costs against `plotter`'s engine total (§8.1) gives
 ~316 ticks per access at N=11 while rebuilding the *same* program at N=11/21/31 moves
@@ -685,6 +730,34 @@ ADDR is the one pipe with no corridor row to turn on, so the panel must **span
 ADDR's column**. A 32×24 panel under a 48-wide CPU does that where it sits
 (`plotter`); `palette`'s 8×8 one does not, and the panel slides east until it does
 (`machine._panel_x`).
+
+#### The panel is a persistent framebuffer — measured, and it changes the cost model
+
+`plotter` and `palette` both commit with `SWAP ← 0`, which clears `next`, so both
+repaint every pixel they want in every frame. That is not the only mode. Probed on
+the engine (4×4 and 8×8 panels, single-stepped, frames dumped at every commit):
+
+- **`SWAP ← 1` keeps `next` *and* the cursor.** Paint one pixel, commit 1, paint a
+  second, commit 1: frame 2 holds **both**. So a round-based display problem can treat
+  the panel as a framebuffer that survives commits and write only the pixels that
+  *changed* — `snake`'s tick is 2 pixels rather than 256, which is the whole reason its
+  ticks are dominated by the tape and not by the panel.
+- **`next` starts all-zero**, so the first frame may paint a few pixels and commit.
+- **`ADDR ← row*w+col`, then `DATA` paints there and advances by one**; at the last
+  cell it wraps to 0 with no error. Row-major, verified on a non-square panel.
+- **Every `SWAP` emits exactly one frame, even an unchanged one**, and one `SWAP`
+  never emits two. There is no way to commit "silently", which is what makes a
+  no-frame round (`snake`'s direction rounds) a *hardware* obligation rather than an
+  optimisation: an extra commit desynchronises every later frame.
+- **The panel costs 0 ticks beyond pipe transit.** A value sent on tick *T* is
+  consumed during tick `T + (L-1)` for a pipe of `L` cells; all three ports can be made
+  to land on the same tick, and the same-tick order is ADDR → DATA → SWAP, so the pixel
+  written on a tick *is* in the frame committed on that tick. Unequal pipe lengths
+  reorder writes — plan latency, not send order. Values still in flight are processed
+  after the last man halts.
+- **Range faults are fatal on the arrival tick**, each with its own reason:
+  `display-value` for `DATA` outside 0–15, `display-addr` for `ADDR` outside
+  `0 … w*h-1`, `display-swap` for anything but 0/1.
 
 ## 5. Registers, words, and the code ring
 
@@ -1205,6 +1278,7 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
 | Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | — | C |
 | Practice | `hello-world` · `max-element` · `atoi` | 0–1 slots | ≤1 | 1/1 · 10/10 · 2/2 | A |
+| Sem 4 | `snake` | persistent framebuffer + a body FIFO; the tape version needs `LDA`/`MOVA`/`INCM`/`DECM`/`DIV`, the coprocessor version needs none of them | 8 scalars (was 11 + 50) | 5/5 · P=183 · 122k | **✔ solved twice**: `snake.asm` on the tape alone (123×129, score 15.9bn) and `snake-ring.asm` on the SNAKE unit (121×136, avg 182,149, **score 3.37bn**, 17/17) |
 | Practice | `palette` | display ADDR/DATA/SWAP, 16 solid frames | 1 | 1/1 · P=89 · 59k | **✔ solved by the synthesiser** (98×98, 151,147 ticks, score 1.45bn) |
 
 Stages: **A** = CPU + SPILL only · **B** = SPILL + the tape · **C** = tape +
@@ -1215,6 +1289,55 @@ frame on the wasm* — twice over, in fact: `lm.mjs judge --frames` reads back t
 engine's own `frameJudge` verdict, and `tools/display-frames.mjs` steps with
 `stopOnFrame` and compares the snapshots in Python. Neither is the old "no fatal, no
 output" check, which proved nothing on a problem that emits no output.
+
+### 8.0 `snake`: what a coprocessor is worth, measured twice
+
+`snake` is the only problem solved both ways on the same ISA, so it prices the tiers
+against each other on one program. Both pass all 17 cases the judge runs.
+
+| | `snake.asm` | `snake-ring.asm` |
+|---|---|---|
+| body of ≤50 cells lives in | the tape, a 50-slot ring | the unit's value ring |
+| self-collision test | a scan: 5 reads **and a ROM lap** per cell | one `STEP` command |
+| the panel is driven by | the CPU (3 lanes, 3 pipes) | the unit |
+| opcodes | 23 (depth-5 trie) | **16 (depth-4)** |
+| tape | N=66, ~653 ticks a read | N=9, ~180 |
+| grid | 123×129 = 16,641 | 121×136 = 18,496 |
+| judge avg ticks | 954,945 | **182,149** |
+| **judge score** | 15,891,242,682 | **3,369,020,288** |
+
+Three results worth keeping:
+
+- **A `STEP` on a six-cell body costs 218 engine ticks — about 1.35 CPU
+  instructions** — where the tape scan it replaces cost ~5,300. Rotating a ring is a
+  pipe's cost; a tape read is 523 ticks and a ROM lap ~1,000 more.
+- **The box got bigger and the score fell 4.7×.** 18,496 against 16,641: a
+  coprocessor is not a footprint optimisation, and `max(w,h)²` is worth paying when
+  the tick factor moves by 5×.
+- **The 17th opcode costs a trie level *plus* its lane rows.** Dropping `NEG` (build
+  it as `LDI 0` / `SUBI n`) and the final `HALT` (a blocking `IN` instead — the case
+  has ended, so no input ever comes) took exactly 17 opcodes to 16 and the machine
+  from **158×167 to 121×136, and the average from 151,544 ticks to 122,264** — the
+  footprint *and* every instruction's decode. Sixteen is the number to design to.
+
+Where the ticks now are (gated profile, longest public case): lanes 33.6 %, jump/branch
+slabs **25.7 %**, return path 20.5 %, trie 9.2 %, fetch 2.0 %. The tape has stopped
+being the story; `P` = 183 words and the return path are what is left.
+
+Two rules the build produced, both of which generalise beyond `snake`:
+
+- **A coprocessor should not answer back.** §7.1 makes an incoming pipe a rival for
+  every `r` in the CPU, including the jump slab's ROM read — so a *replying* unit
+  cannot be placed on a machine that has jumps at all. Measured: all 4,800 (fold,
+  `mem_pad`, `stream_pad`) combinations fail, always on that binding, and `matmul`
+  escapes it only by containing no `JMPF`. Give the unit enough authority to act on
+  what it finds — `STEP` either moves the snake or ends the game — and the machine
+  places at once.
+- **A unit that owns the display costs the CPU nothing.** The three port lanes and
+  their pipes disappear from the CPU, the panel is placed inside the block where its
+  three pipe *lengths* can be asserted against each other (`addr` = `data`, `swap` ≥
+  `data`, or a commit overtakes the pixels it commits), and the drawing fuses into the
+  ring commands — `GROW` appends *and* paints *and* commits.
 
 ### 8.1 `plotter` was 6 % over the step cap, and the fix was tape accesses per pixel
 

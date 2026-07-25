@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .asm import Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
-from .store import DictStore, SpillRing, Store, StreamUnit
+from .store import DictStore, SnakeUnit, SpillRing, Store, StreamUnit
 
 __all__ = [
     "Round",
@@ -152,7 +152,7 @@ class Emulator:
         self.words = list(program.words)
         self.store: Store = store if store is not None else DictStore()
         self.spill = spill if spill is not None else SpillRing()
-        self._stream: StreamUnit | None = None
+        self._stream: StreamUnit | SnakeUnit | None = None
         self.tick_model = ticks
 
         self.a = 0
@@ -292,15 +292,23 @@ class Emulator:
 
     # ── STREAM: created on first use, since it owns the I and O rooms ────────
     @property
-    def stream(self) -> StreamUnit:
-        """The STREAM block, wired to this run's input and output.
+    def stream(self) -> StreamUnit | SnakeUnit:
+        """The coprocessor the program named with ``.unit``, wired to this run.
 
-        Lazily built because the unit *is* the machine's I/O on a program that has
-        one: its ``RDIN`` arm hands input words to the CPU and its ``EMIT`` arm
-        writes the output room, so the hooks have to be this emulator's own.
+        Lazily built because a unit *is* part of the machine's I/O on a program that
+        has one: the STREAM block's ``RDIN`` arm hands input words to the CPU and its
+        ``EMIT`` arm writes the output room, and the snake unit owns the LM-75 — so in
+        both cases the hooks have to be this emulator's own. Recording the snake
+        unit's port writes in ``display_writes`` is what lets
+        ``display.frames_from_writes`` grade a machine whose CPU never draws.
         """
         if self._stream is None:
-            self._stream = StreamUnit(self._next_input, self._emit)
+            if self.program.unit == "snake":
+                self._stream = SnakeUnit(
+                    lambda port, value: self.display_writes.append((port, value))
+                )
+            else:
+                self._stream = StreamUnit(self._next_input, self._emit)
         return self._stream
 
     # ── STORE helpers (the memory-problem wire protocol) ────────────────────

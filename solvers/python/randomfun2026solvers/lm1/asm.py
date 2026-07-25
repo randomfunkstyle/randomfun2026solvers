@@ -43,7 +43,15 @@ __all__ = [
     "strip_comment",
     "RING_SLACK_MIN",
     "RING_SLACK_MAX",
+    "UNITS",
 ]
+
+#: Coprocessors a program may name with ``.unit``. ``SND``/``RCV`` are the whole
+#: interface to whichever one is wired in, so the *program* has to say which — the
+#: emulator picks a model and the generator picks a block from this one word.
+#: ``stream`` is ``lm1/stream.py``'s three rings and a MAC (``matmul``); ``snake`` is
+#: ``lm1/snake_unit.py``'s body FIFO, which also owns the display and answers nothing.
+UNITS = frozenset({"stream", "snake"})
 
 #: ``ARCH.md`` §2.1: ring capacity must be ``P + slack``; too small deadlocks,
 #: too large starves the CPU.
@@ -148,6 +156,8 @@ class Program(BaseModel):
     labels: dict[str, int]
     equs: dict[str, int]
     source: str = ""
+    unit: str = "stream"
+    """Which coprocessor ``SND``/``RCV`` talk to (``.unit``; see :data:`UNITS`)."""
 
     # ring geometry ----------------------------------------------------------
     @property
@@ -236,6 +246,7 @@ def assemble(
     equs: dict[str, int] = {}
     labels: dict[str, int] = {}
     parsed: list[_Parsed] = []
+    unit = "stream"
     pos = 0
 
     for lineno, raw in enumerate(source.splitlines(), start=1):
@@ -255,6 +266,14 @@ def assemble(
         head, _, rest = line.partition(" ")
         head_upper = head.upper()
         rest = rest.strip()
+
+        if head.lower() == ".unit":
+            if rest not in UNITS:
+                raise AsmError(
+                    f"unknown coprocessor {rest!r}; have {sorted(UNITS)}", line=lineno, text=raw
+                )
+            unit = rest
+            continue
 
         if head.startswith("."):
             for op, token in _expand_directive(head.lower(), rest, isa, equs, lineno, raw):
@@ -315,6 +334,7 @@ def assemble(
         labels=labels,
         equs=equs,
         source=source,
+        unit=unit,
     )
 
 

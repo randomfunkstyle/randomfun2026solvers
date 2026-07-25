@@ -65,10 +65,17 @@ def test_generator_reproduces_the_committed_grid() -> None:
 
 
 def test_the_cpu_build_is_left_alone() -> None:
-    """The ring machine is a second solution, not a replacement in place."""
+    """The ring machine is a second solution, not a replacement in place.
+
+    111x78 when this was written; 109x74 since the CPU generator started packing the
+    ROM with variable-width tokens and letting a simple lane drop at its own
+    micro-program's end. The point of the assertion is that the LM-1 grid is still
+    *there* and still generator-consistent (``test_lm1_machine.py`` pins it against the
+    generator), not that its shape never improves.
+    """
     cpu = ROOT / "tasks" / "solutions" / "tcp_cpu.man"
     rows = cpu.read_text().rstrip("\n").split("\n")
-    assert (max(len(r) for r in rows), len(rows)) == (111, 78)
+    assert (max(len(r) for r in rows), len(rows)) == (109, 74)
 
 
 def test_footprint_does_not_regress() -> None:

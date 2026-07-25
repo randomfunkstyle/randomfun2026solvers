@@ -1,0 +1,16 @@
+# brackets — submission 9be0418d-e9d9-4bb8-8dde-fc6736c28f1d
+
+verdict      done: 26/26 cases, area2 9409, avgTicks 54,646, score 514,163,490
+submitted    2026-07-25T17:36:33+0300
+grid         97x69
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  42606fd24b505bcd9a5984fc39533b9f874ac68e8628adcae745f92ce7c555fc
+commit       2318f09
+local        brackets: 9/9 public cases, avg 28,365 ticks
+source       tasks/solutions/brackets_cpu.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+packed ROM: variable-width tokens, parity-safe placement

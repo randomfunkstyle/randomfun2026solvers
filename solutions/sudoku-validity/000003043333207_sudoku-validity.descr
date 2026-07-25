@@ -1,0 +1,16 @@
+# sudoku-validity — submission aa4f5b78-a50c-4a7b-b4d3-c8d2d04321c1
+
+verdict      done: 20/20 cases, area2 6889, avgTicks 441,767, score 3,043,333,207
+submitted    2026-07-25T17:53:44+0300
+grid         83x80
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  3e578a9161d6edd31480f0bb3a3682516a91816313f38d30577c7446066fe6d4
+commit       66ee97d
+local        sudoku-validity: 6/6 public cases, avg 434,263 ticks
+source       tasks/solutions/sudoku-validity_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+short return path: simple lanes drop at their own micro-program's end
