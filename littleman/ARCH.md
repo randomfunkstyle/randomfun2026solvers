@@ -1,22 +1,34 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: the synthesiser solves the problems that need memory and control flow.**
-`lm1/machine.py` takes an assembled program and emits a whole machine — looping
-ROM + CPU (depth-`k` trie, one lane per used opcode, a structures band for jumps
-and branches) + a request adapter + the 32×32 tape + I/O. On the reference
-interpreter it passes **`brackets` 9/9** (98×95, 62,930 avg ticks) and **`tcp`
-6/6** (112×78, 96,923 avg ticks), plus hand-built cases at both problems'
-constraint limits — `brackets` at depth-32 nesting and n=64, `tcp` at n=48 with a
-worst-case legal scramble (351k ticks against a 5M cap). §2.7 has the findings.
+**Status: Semesters 1 and 2 are complete — 10 of the 12 graded problems are
+solved**, every one passing all its public cases on the reference interpreter.
 
-That makes **four** problems solved by generated or bespoke grids, and the first
-two that need addressed memory *and* loops. `lm1/cpugen.py` remains the earlier
+| set | problem | grid | score | how |
+|---|---|---|---|---|
+| 1 | `triangle` | 8×8 | **960** | bespoke |
+| 1 | `memory` | 31×32 | 14,289,920 | bespoke (pipe tape) |
+| 1 | `reverse-a-list` | 21×21 | 482,564 | bespoke (value ring) |
+| 1 | `sort-numbers` | 25×25 | 2,083,304 | bespoke (value ring) |
+| 2 | `history-lesson` | 97×90 | **9,409** | bespoke (base-128 ROM) |
+| 2 | `brackets` | 98×75 | 308,880,647 | LM-1 |
+| 2 | `tcp` | 112×77 | 1,195,367,936 | LM-1 |
+| 2 | `plotter` | 112×106 | 6,057,915,733 | LM-1 + display |
+| 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
+| 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
+| — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
+
+`lm1/machine.py` takes an assembled program and emits the whole machine — looping
+ROM + CPU (depth-`k` trie, one lane per used opcode, a structures band for jumps
+and branches) + a request adapter + the tape + I/O, or an LM-75 panel instead of
+an `O` room for the display problems. `lm1/cpugen.py` remains the earlier
 hand-rolled 7-opcode instance (`triangle`, §2.6); `lm1/synth.py` is the
 straight-line-only generator it grew into. `machine.py` supersedes both.
 
-Two problems are solved *without* LM-1, as bespoke grids: `memory` (accepted by
-the judge) and `history-lesson`. LM-1 is the safety net for the rest, not the plan
-of record (§1).
+The five bespoke grids beat their LM-1 equivalents by orders of magnitude —
+`triangle` is 960 by hand against 471,744 generated — so LM-1 remains the safety
+net rather than the plan of record (§1). Still open: **`matmul`** (needs ~512
+cells against a 103-slot tape, so it is blocked on the store, not the ISA) and
+**`subset-sum`**.
 
 Visual walkthrough: [`arch.html`](arch.html) — the verified units, an animated
 run of the whole machine driven by real interpreter snapshots, the tick budget
@@ -408,6 +420,24 @@ That gives an unusually clean generator rule: **size N to the problem's actual
 slot count. It is free on footprint and linear on ticks — there is no trade-off
 to weigh.** `tcp` at N=48 is 1.9× cheaper per access than the N=100 build,
 `brackets` at N=32 is 2.6×, `sort-numbers` at N=16 is 4.1×.
+
+**The rule holds but this formula understates it badly, and the mechanism is the
+ring's phase.** Measured end-to-end on generated machines, one extra slot costs
+**~999 ticks per case on `tcp`** and ~114 on `brackets` (`tcp` at 52/70/90 slots:
+99,456 / 116,894 / 137,410) — an order of magnitude above `8.3·N`, because a
+request does not pay a fixed latency, it *waits for its slot to come round*. Two
+consequences the formula hides:
+
+- **A tape-bound program's instruction count barely matters.** A `tcp` rewrite
+  that removed 158 executed instructions with an **identical** memory access
+  sequence scored **14.8% worse** (1,215,797,931 → 1,395,950,677), and a
+  byte-identical grid reached by a different route cost 2.6% more ticks. Removing
+  work re-times requests onto worse ring phases.
+- So **any tape-bound program must be judged on the engine, never modelled.** The
+  emulator's flat 6 ticks per store word and §7.3's budget are both fine for
+  comparing compute-bound programs and useless here. `brackets` is
+  instruction-bound (fetch+decode+return is 41% of its ticks) and `tcp` is
+  tape-bound; the same change can help one and hurt the other.
 
 Note the ~105-tick fixed overhead per operation (read op, read addr, arithmetic,
 dispatch) — it does not amortise away, which is why even an N=4 tape costs 138
