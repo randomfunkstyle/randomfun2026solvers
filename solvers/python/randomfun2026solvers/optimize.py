@@ -85,6 +85,14 @@ def _expected_flat(case: dict[str, Any]) -> list[int]:
     return [int(t) for r in scoring._rounds(case) for t in (r.get("out", []) or [])]
 
 
+def _expected_frames(case: dict[str, Any]) -> list[list[list[str]]]:
+    """Expected display frames, nested per round — the engine's ``--frames`` shape."""
+    return [
+        [[str(row) for row in frame] for frame in (r.get("frames") or [])]
+        for r in scoring._rounds(case)
+    ]
+
+
 @dataclass
 class CaseVerdict:
     name: str
@@ -98,8 +106,9 @@ class VerifyResult:
     passed: bool
     cases: list[CaseVerdict] = field(default_factory=list)
     avg_ticks: float | None = None
-    # True when some case is display-judged (frames), which we can only check
-    # weakly here (no fatal + no stray program output).
+    # True when some case is display-judged (frames): the *pass* is exact (the
+    # engine compares every committed frame), but the tick figure is the settle
+    # tick rather than the tick the final frame matched.
     approx: bool = False
 
     @property
@@ -127,9 +136,11 @@ def verify(
 ) -> VerifyResult:
     """Run every public case through the engine; require exact output match.
 
-    Display cases (``frames``) are checked weakly: no fatal and no stray program
-    output (display problems must emit none). ``avg_ticks`` averages the settle
-    tick over all cases.
+    Display cases (``frames``) are judged by the engine frame for frame: the
+    expected frames go in with ``--frames`` and the run passes when every
+    committed frame matched *and* nothing was written to program output (a
+    display problem emitting output is an error). ``avg_ticks`` averages the
+    settle tick over all cases.
     """
     lm = lm or Littleman()
     prob = load_problem(problem)
@@ -146,7 +157,9 @@ def verify(
         display = scoring._is_display_case(case)
         try:
             if display:
-                snap = lm.judge(source, input=inp, max_ticks=tick_cap)
+                snap = lm.judge(
+                    source, input=inp, frames=_expected_frames(case), max_ticks=tick_cap
+                )
             else:
                 snap = lm.judge(
                     source, input=inp, expected=_expected_string(case), max_ticks=tick_cap
@@ -162,9 +175,17 @@ def verify(
             continue
 
         if display:
-            approx = True
-            ok = not snap.output  # display problems must emit no program output
-            detail = "" if ok else f"emitted output on a display problem: {snap.output}"
+            approx = True  # the *tick* is the settle tick, not the final-frame tick
+            judged = snap.frame_judge
+            ok = judged is not None and judged.passed and not snap.output
+            if snap.output:
+                detail = f"emitted output on a display problem: {snap.output}"
+            elif judged is None:
+                detail = "engine reported no frame verdict"
+            elif not judged.passed:
+                detail = f"{judged.matched}/{judged.total} frames matched: {judged.mismatch}"
+            else:
+                detail = ""
         else:
             want = _expected_flat(case)
             ok = list(snap.output) == want

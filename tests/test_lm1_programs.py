@@ -22,34 +22,37 @@ from randomfun2026solvers.lm1.isa import LM1_V1  # noqa: E402
 from randomfun2026solvers.lm1.programs import (  # noqa: E402
     PROBLEM_DIR,
     available,
+    display_size,
+    frames_for_problem,
     history_lesson_source,
     load,
-    problem_json,
+    palette_source,
     problem_of,
     rounds_for_problem,
 )
 
 MAX_INSTRUCTIONS = 3_000_000
 
-#: Problems ARCH.md §4.1 leaves blocked on the STORE block, plus the two display
-#: problems. No program here should claim to solve one of these.
+#: Problems ARCH.md §4.1 leaves blocked on the STORE block. No program here should
+#: claim to solve one of these.
+#:
+#: ``gradebook`` is *not* here any more: the STORE block exists (``machine.py``'s tape),
+#: so a problem that needs indexed memory is only blocked on having a program written
+#: against ``LDA``/``MOVA`` — see ``tests/test_lm1_gradebook.py``.
 BLOCKED = {
     "memory",
     "reverse-a-list",
     "sort-numbers",
-    "sudoku-validity",
     "subset-sum",
-    "gradebook",
-    "palette",
 }
 
+#: Problems graded on committed frames rather than on program output.
+DISPLAY_PROBLEMS = {"plotter", "palette"}
+
 #: Programs whose *emulated* tick estimate exceeds ``TICK_CAP`` on the largest
-#: public case. ``matmul`` at 16x16x16 is 4096 multiply-accumulates and the
-#: generated machine has one accumulator, so every operand round-trips through
-#: STORE; ``tests/test_lm1_matmul.py`` measures the wall in detail. The program
-#: itself is correct — this is a hardware budget, not a bug — so the generic
-#: assertion below is relaxed for it and pinned precisely over there instead.
-OVER_TICK_CAP = {"matmul"}
+#: public case. ``tests/test_lm1_matmul.py`` measures matmul's wall in detail, so
+#: the generic assertion below is relaxed for it and pinned precisely over there.
+OVER_TICK_CAP: set[str] = {"matmul"}
 
 PROGRAMS = sorted(available())
 CASES = [
@@ -69,6 +72,9 @@ def test_the_expected_programs_exist() -> None:
         "tcp",
         "history-lesson",
         "plotter",
+        "palette",
+        "gradebook",
+        "sudoku-validity",
         "matmul",
     }
 
@@ -116,10 +122,19 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # `0`/`1` request literal never has to coexist with it, so tcp needs no
         # SPILL block at all (see tcp.asm's header).
         "tcp": {"LDA", "MOVA"},
+        # Two arrays (ids, grades) indexed by a runtime student number. `DIVI 4`
+        # turns a grade address back into that number, which is what lets the whole
+        # program run on one cursor (see gradebook.asm).
+        "gradebook": {"DIVI", "LDA", "MOVA"},
         # `DSP p` picks a pipe from its operand, which nearest-pipe binding cannot
         # express; one opcode per LM-75 port gives each its own lane (see plotter.asm).
         "plotter": {"DSPA", "DSPD", "DSPS", "NEG"},
+        "palette": {"DSPA", "DSPD", "DSPS"},
         "triangle-closed": {"MUL", "DIVI"},
+        # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
+        # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
+        # indexed opcodes are drawn *without* a SPILL block — see machine.py's `_HW`.
+        "sudoku-validity": {"DIVI", "MODI", "LDP", "STP"},
         # Every matmul address is computed from N/M/K at run time, so the
         # immediate-only `LD`/`ST` cannot reach the matrices at all; `MUL` then
         # multiplies the accumulator by a slot with no spill (see matmul.asm).
@@ -142,37 +157,43 @@ def test_cli_grades_every_program_green() -> None:
 
 
 # ── display problems are graded on frames, not on output ─────────────────────
-def test_plotter_draws_exactly_bresenham_on_every_public_case() -> None:
-    """``plotter`` emits no program output, so the generic test above proves nothing.
+@pytest.mark.parametrize("slug", sorted(DISPLAY_PROBLEMS))
+def test_display_programs_commit_the_expected_frames_on_every_public_case(slug: str) -> None:
+    """A display program emits no output, so the generic test above proves nothing.
 
-    Replay its LM-75 port writes through the panel model and compare committed
-    frames pixel for pixel. Bresenham is direction-sensitive, so a case drawn B->A
-    has different pixels from A->B and this catches getting that backwards.
+    Replay the LM-75 port writes through the panel model and compare committed
+    frames pixel for pixel. For ``plotter`` that also pins Bresenham's
+    direction-sensitivity: a case drawn B->A selects different pixels from A->B.
     """
     from randomfun2026solvers.lm1.display import frames_from_writes
 
-    prob = problem_json("plotter")
-    width = prob["io"]["display"]["width"]
-    height = prob["io"]["display"]["height"]
-    for case in prob["publicTestData"]:
-        prog = load("plotter")
-        rounds = [
-            Round(input=tuple(int(v) for v in (r.get("in") or [])), expected=())
-            for r in case["rounds"]
-        ]
-        res = Emulator(prog).run(rounds, max_instructions=MAX_INSTRUCTIONS)
+    width, height = display_size(slug)
+    for (case, rounds), (_same, expected) in zip(
+        rounds_for_problem(slug), frames_for_problem(slug), strict=True
+    ):
+        res = Emulator(load(slug)).run(rounds, max_instructions=MAX_INSTRUCTIONS)
         got = frames_from_writes(res.display_writes, width=width, height=height)
-        want = [r["frames"][0] for r in case["rounds"] if r.get("frames")]
-        assert got == want, f"plotter/{case['name']}: frame mismatch"
-        assert not res.output, f"plotter/{case['name']}: emitted output on a display problem"
+        want = [frame for round_frames in expected for frame in round_frames]
+        assert got == want, f"{slug}/{case}: frame mismatch"
+        assert not res.output, f"{slug}/{case}: emitted output on a display problem"
 
 
-def test_plotter_fits_the_tick_cap_at_the_worst_legal_case() -> None:
-    """20 rounds of the longest possible segment, with *real* tape latency.
+def test_palette_asm_is_up_to_date_with_the_problem_json() -> None:
+    assert available()["palette"].read_text(encoding="utf-8") == palette_source()
 
-    The public cases top out at 8 rounds, so they say nothing about the private
-    ones. Store accesses are billed at ``ARCH.md`` §4.1's ``105 + 8.3N`` rather
-    than the emulator's flat 6 ticks/word, which understates them ~30x.
+
+def test_the_emulator_estimate_for_a_20_round_plotter_load_is_optimistic() -> None:
+    """20 rounds of a long segment, with *real* tape latency — and still optimistic.
+
+    Store accesses are billed at ``ARCH.md`` §4.1's ``105 + 8.3N`` rather than the
+    emulator's flat 6 ticks/word, which understates them ~30x. Even so this estimate
+    comes out at ~3.8M against the 5M cap where the generated machine really takes
+    ~4.78M for the same load: **the estimate is ~20% optimistic and is not the
+    margin.** ``tests/test_lm1_display.py`` measures the engine, and finds that the
+    genuinely worst legal 20-round load overruns the cap outright.
+
+    Kept because it is the only tick figure available without Node, and because a
+    regression big enough to break *this* bound is worth catching in the fast tier.
     """
     from randomfun2026solvers.lm1.store import DictStore
 

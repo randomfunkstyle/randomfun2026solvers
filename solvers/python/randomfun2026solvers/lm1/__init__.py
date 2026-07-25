@@ -15,6 +15,7 @@ array. Proves the ISA is sufficient before any ASCII is drawn.
 from __future__ import annotations
 
 from .asm import AsmError, Instr, Program, assemble, assemble_file, check_ring_writeback
+from .display import ADDR, DATA, SWAP, Display, frames_from_writes
 from .emulator import (
     Emulator,
     EmulatorError,
@@ -42,6 +43,11 @@ __all__ = [
     "assemble",
     "assemble_file",
     "check_ring_writeback",
+    "ADDR",
+    "DATA",
+    "SWAP",
+    "Display",
+    "frames_from_writes",
     "Emulator",
     "EmulatorError",
     "InputWithheld",
