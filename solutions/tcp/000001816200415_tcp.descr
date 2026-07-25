@@ -1,0 +1,16 @@
+# tcp — submission 0fc27796-8daf-4374-a130-8caaa51072dc
+
+verdict      done: 20/20 cases, area2 12321, avgTicks 147,407, score 1,816,200,415
+submitted    2026-07-25T15:46:47+0300
+grid         111x78
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  f9aeb0381d5bc8c9e9e17c715a719aa689b6d5c2b21bea9fa070a95f3df0e2a2
+commit       e8dd233
+local        tcp: 6/6 public cases, avg 92,342 ticks
+source       tasks/solutions/tcp_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+compact 12-column U adapter: receive and steer fused; adapter moved left one column

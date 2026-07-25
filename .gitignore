@@ -9,3 +9,6 @@ __pycache__/
 
 # contest API key — never commit
 .icfp-token
+
+# Swift build output — never commit (module caches bake in absolute worktree paths)
+solvers/swift/.build/

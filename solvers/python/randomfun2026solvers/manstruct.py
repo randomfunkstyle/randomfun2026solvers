@@ -296,6 +296,15 @@ def _exits_for(kind: Kind, glyph: str) -> dict[str, str | None]:
         return {}  # the man may never be here
     if kind is Kind.HALT:
         return dict.fromkeys(DIRS)  # enterable, never leaves
+    if glyph == "Y":
+        # The parent has no exit: two children are born perpendicular to its
+        # entry heading. A single-exit transit table cannot describe that.
+        return dict.fromkeys(DIRS)
+    if glyph == "U":
+        # A successful receive leaves *away from the selected incoming pipe*.
+        # That may preserve, quarter-turn, or reverse the entry heading, and in
+        # a multi-pipe room it also depends on which pipe has a ready value.
+        return dict.fromkeys(DIRS)
     if kind is Kind.STEER:
         out = _STEER_EXIT[glyph]
         return {d: out for d in DIRS}

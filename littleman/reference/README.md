@@ -17,7 +17,8 @@ official wording.
 | `contest-rules.txt` | `/rules` | official contest rules |
 | `api.txt` | `/api-help` | submission API: endpoints, result fields, error codes |
 | `textbook.txt` | `/textbook` | tutorial prose plus a pile of worked example grids (arithmetic, backpack loops, pipe rings, multi-room fan-out) — good source of idioms |
-| `interpreter-probe.txt` | — | our own empirical probe: every glyph in `validOps` run against four preset (A, B, BP) states through `littleman.wasm`, showing the exact state delta. This is what verifies `SPEC.md`, and how `Y` (split) was identified. |
+| `split.txt` | `/split` | supplemental official `Y` split semantics: birth timing, creation order, collisions, wall errors, and the 65,536-runner limit |
+| `interpreter-probe.txt` | — | our own empirical probe: every glyph in `validOps` run against four preset (A, B, BP) states through `littleman.wasm`, showing the exact state delta. This originally identified `Y`; its full creation-order and collision rules are now published at [`/split`](https://icfpcontest2026.com/split). |
 
 Problem statements and public test data live in
 [`../../tasks/problems/`](../../tasks/problems/).

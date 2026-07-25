@@ -1,0 +1,16 @@
+# plotter — submission b94d5da4-c857-4584-937e-f87a3d740701
+
+verdict      done: 20/20 cases, area2 13456, avgTicks 253,038, score 3,404,872,600
+submitted    2026-07-25T15:47:21+0300
+grid         111x116
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  f3d785e61880110b2055e8a30188aadcbaec818788f97e9079d05f7f78469fe4
+commit       e8dd233
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+compact 12-column U adapter: receive and steer fused; lower ticks

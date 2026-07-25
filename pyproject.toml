@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 randomfun2026solvers = "randomfun2026solvers.cli:main"
+littleman-validate = "randomfun2026solvers.fast_littleman:main"
 
 [dependency-groups]
 dev = [

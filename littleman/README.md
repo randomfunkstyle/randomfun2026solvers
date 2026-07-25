@@ -8,7 +8,8 @@ editor byte-for-byte.
 
 **Docs (saved locally — no need to hit the contest site):**
 [`SPEC.md`](SPEC.md) the language · [`GRADING.md`](GRADING.md) scoring, limits
-and the submission API · [`reference/`](reference/) raw official text +
+and the submission API · [`ARCH.md`](ARCH.md#82-split-y-audit) architecture and
+the all-task split audit · [`reference/`](reference/) raw official text +
 interpreter probe · [`../tasks/problems/`](../tasks/problems/) all 16 problem
 statements with public test data.
 
@@ -117,6 +118,36 @@ r.pos.x, r.pos.y, r.a, r.b, r.backpack             # Vec2 coords + hands + backp
 - A **fatal** runtime error is reported on `snap.fatal` (a `Fatal` model); a
   **load/usage** error raises `LittlemanError` (with `.pos`).
 - Override the engine via `Littleman(script=..., node=...)` or env `LM_SCRIPT`/`LM_NODE`.
+
+## Fast in-memory validator
+
+Repeated public-case validation uses
+`randomfun2026solvers.fast_littleman.FastLittleman`, an independent
+implementation of the language. It parses a grid once and accepts inputs,
+expected outputs, and display frames as ordinary Python values. Its hot tick
+loop is a small dependency-free C++ library loaded in-process; it neither starts
+Node nor writes per-case program/input/output files. The library is compiled
+once with the system C++ compiler and cached in the platform temporary
+directory by source hash.
+
+```sh
+uv run littleman-validate tasks/solutions/triangle_cpu.man triangle
+uv run littleman-validate tasks/solutions/plotter_cpu.man plotter --json
+```
+
+```python
+from randomfun2026solvers.fast_littleman import FastLittleman
+
+machine = FastLittleman("+-+  +----+  +-+\n|I|>>|@rsH|>>|O|\n+-+  +----+  +-+")
+first = machine.run([7], expected=[7])
+second = machine.run([-42], expected=[-42])  # same parsed machine
+```
+
+`optimize.verify` selects this backend by default. Pass an explicit
+`Littleman` instance (including a test double), or set
+`LM_VALIDATOR=reference`, to force the Node/WASM oracle. The pure-Python version
+of the same interpreter is available with `machine.run(..., native=False)` for
+debugging and differential tests.
 
 Mirrored Python CLI (full parity with `lm.mjs`):
 ```

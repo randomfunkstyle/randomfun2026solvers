@@ -1233,6 +1233,96 @@ hopeless, so it shipped as a **bespoke 144×148 grid** instead
 are now solved *without* the CPU — a reminder that LM-1 is the safety net, not
 the plan of record.
 
+### 8.2 Split (`Y`) audit
+
+The supplemental [official split reference](https://icfpcontest2026.com/split)
+changes the architecture search space in one very specific way: `Y` duplicates
+the current A, B, and BP into two runners **without adding a room or a pipe**.
+It does not duplicate pipe values or tape state and provides no join
+instruction. Consequently, the profitable shape is:
+
+1. build shared state in registers;
+2. split into disjoint corridors;
+3. let both children perform independent side effects, usually sends to
+   different devices or deterministic writes to one output pipe;
+4. halt the children separately.
+
+The right child retains the parent's creation-order position and the left child
+runs last. That gives deterministic ordering when both reach side effects on the
+same tick; it is useful, but it is not mutual exclusion. A child blocked on a
+pipe remains live, and runners which meet, swap cells, or arrive at the same cell
+kill one another. Split layouts therefore need disjoint lanes except where a
+collision is deliberately the result.
+
+The complete released-task audit is:
+
+| Task | `Y` value | Assessment |
+|---|---|---|
+| `triangle` | none | The closed form is already a short dependency chain. Forking multiplication/addition adds setup and a join, so the 24×3 bespoke grid wins. |
+| `reverse-a-list` | low | Input and output order are both serial and the current ring is the storage. A feeder could alternate values between workers, but merging them in reverse order needs the same count/state and adds pipes. |
+| `sort-numbers` | low | Parallel compare/search needs either duplicated arrays or a reduction. The single ring/tape remains the bottleneck; split workers cannot safely mutate it independently. |
+| `memory` | **implemented local gadget** | `memory_blocks.east_fork` uses `Y` to give a fetched read value to the output arm and tape arm without `S` accidentally broadcasting to the index device. This is exactly the independent-side-effect pattern. The gadget and validator semantics are proven, but it is not in the current 31×31 winning ring and has not shown a score win; it removes a routing ambiguity, not the 100-cell storage cost. |
+| `history-lesson` | none for score | Two emitters can produce the fixed text faster, but scoring ignores ticks. They duplicate or complicate the compressed stream and cannot reduce the 144×148 footprint bound. |
+| `brackets` | low | Stack state is a prefix recurrence. Splitting chunks requires exporting each chunk's unmatched prefix/suffix and joining summaries; at length 32 that machinery is larger than the packed-stack loop. |
+| `tcp` | low | Packet arrival, reorder-buffer mutation, and earliest-possible ordered output share one moving frontier. Split lookup/output servants can overlap locally, but both still serialize on the same tape and output pipe. |
+| `plotter` | low | The four unrolled pixel bodies look identical but each consumes the previous pixel's packed `(err,addr)`. Separate rounds are withheld until the frame commits, and display writes/commit are side effects on one device. |
+| `gradebook` | medium in a banked rewrite | Student scans and per-subject aggregates are independent and can be split by roster half. The current build has one tape adapter, so two CPU runners merely queue the same expensive accesses; a win requires two memory banks plus a small min/max/sum join. GET/SET remain serial operations. |
+| `matmul` | **high** | Output cells and dot-product partials are independent. A split tree can create row/cell workers with copied dimensions, while banked A/B stores feed them. Ordered output needs a collector, but the work per result is large enough to amortise it. This is the best large-room target and the likely route under the tick cap; adding `Y` only to the current one-tape CPU is not enough. |
+| `subset-sum` | **conditional** | Include/exclude search maps directly to `Y`, copied registers give both branches the same prefix state, and BP can hold the 20-bit choice mask. But the values are dynamic input: every live branch still needs the next value, and neither a tape read nor an input receive broadcasts inside a room. A full depth-20 tree also exceeds the 65,536-live-runner cap. Split is useful only after solving value distribution (staged broadcast or replicated banks), and lexicographic output still needs an ordered winner protocol. |
+| `sudoku-validity` | **high local shape** | Row, column, and box are three identical test-and-set operations. Two splits can make three workers and combine failure as a side effect (any duplicate writes a sticky invalid flag). The current single tape serializes all three, so the practical rewrite needs three independent 9-word banks or three bitset servants. This is the clearest small-room prototype. |
+| `hello-world` | none | Independent constant emitters immediately serialize on the one output pipe; deterministic creation order is possible but the fork corridors cost more cells than the tiny literal stream. |
+| `atoi` | none | `acc = 10*acc + digit` is a strict recurrence and rounds withhold the next input. Chunked parsing needs powers and a join, which is larger for at most ten digits. |
+| `max-element` | low | Two reducers plus one final max are possible, but distributing a length-16 stream and joining costs more than the register-only single reducer. |
+| `palette` | low | Fill and commit for colors 0…15 are externally ordered. Workers may prepare constants, but all display side effects still serialize and the practice task is not worth a larger split fabric. |
+
+This yields three implementation rules:
+
+- **Small rooms:** use `Y` as a one-cell register fan-out when each child can
+  terminate in a different side effect. The memory read-target fork is the
+  reference gadget; Sudoku's row/column/box update is the next candidate.
+- **Large rooms:** do not split the CPU while leaving one tape. Split the data
+  plane too—banked stores and one collector for `matmul`, a bounded search tree
+  and winner collector for `subset-sum`.
+- **Identical subfunctions are not sufficient.** They must have independent
+  inputs/state or commute through a side effect. Plotter's repeated bodies and
+  gradebook's scans are syntactically alike, but their current data paths remain
+  serial.
+
+Concrete probes and budgets keep this audit falsifiable:
+
+- **Creation order / side effects:** `tests/test_split_instruction.py` has a
+  two-child output probe. Both children reach the same pipe on the same tick;
+  the right child sends `2`, the left blocks and later sends `1`, producing
+  exactly `[2, 1]` on the wasm, Python, and native validators. This proves a
+  deterministic side-effect fan-out, not just two runners in a snapshot.
+- **Memory:** `littleman/examples/memory-onepass-v2-tight.man` still passes 7/7
+  public cases after the corrected split/collision implementation, averaging
+  15,879 ticks. At 78×47 its local footprint-tick product is roughly 96.6M,
+  versus roughly 12.7M for the submitted 31×31 ring at its recorded 13,248
+  local ticks. The split gadget stays a routing building block; this machine is
+  not a submission candidate.
+- **Sudoku go/no-go budget:** the current CPU performs **17 tape transactions
+  per cell**: five to materialize addresses and four for each row/column/box
+  test-and-set. Three split workers with three independent 9-mask banks reduce
+  the storage critical path to four transactions and run the identical unit
+  arithmetic concurrently. Using the measured 47% tape / 37% execute / 16% ROM
+  decomposition, the optimistic time ratio is
+  `0.47×4/17 + 0.37/3 + 0.16 ≈ 0.394`, or **2.54× faster**. It can beat the
+  current 89×94 grid only if the tiled three-bank machine stays below about
+  `sqrt(2.54)×94 ≈ 150` cells on its longest side. That is a useful geometry
+  acceptance test before implementing the full generator.
+- **Matmul architecture:** keep 16 row workers. While A arrives, route each
+  16-value row into its worker's local ring. Then broadcast each B row to all
+  workers; worker `i` combines it with its resident `A[i,t]` and maintains 16
+  local accumulators. This parallelises the 16 output rows, makes the dynamic
+  value distribution explicit, and lets a collector drain completed rows in
+  row-major order. A generic CPU plus one tape cannot express this win.
+- **Subset-sum stop condition:** do not draw the exponential fork tree until a
+  value-distribution probe can deliver one dynamic `v_i` to every live branch
+  cheaper than those branches can read it serially from the tape. At depth 16
+  there are already 65,536 runners—the entire live limit—and blindly giving
+  each one 20 tape reads is worse than a sequential meet-in-the-middle solver.
+
 ## 9. Build order
 
 1. ~~**ARCH.md**~~ — **done**, and revised twice since: §7.1 (ports are declared,
@@ -1283,9 +1373,10 @@ command), `tools/run-cases.mjs` scores a grid against a case file, and
 - **ROM serpentine density** — reversed literals on alternating rows halve the
   ROM's height but add a whole class of load errors (§4.2). Ship the safe
   version first.
-- **`Y` (split)** is unused so far. It is the only way to get a second man in
-  one room, and a second man could run the ring's recirculation in parallel with
-  execution — potentially cutting the 6-tick fetch. Worth a probe once the slice
-  works.
+- **`Y` (split) beyond the proven memory fork.** Prototype Sudoku's three
+  independent bitset servants first. For the two unsolved problems, design
+  `matmul` around banked stores and `subset-sum` around a bounded split tree;
+  merely adding a second runner to LM-1 leaves its single tape and ring
+  serialized (§8.2).
 - **Second "loop ring"** for hot bodies, if §5.4's jump cost dominates real
   programs.

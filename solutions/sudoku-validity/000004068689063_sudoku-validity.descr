@@ -1,0 +1,16 @@
+# sudoku-validity — submission 131a9eec-6cec-4650-8d21-92314760ed43
+
+verdict      done: 20/20 cases, area2 8836, avgTicks 460,467, score 4,068,689,063
+submitted    2026-07-25T15:47:45+0300
+grid         89x94
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  410ae13a7185a785cce42b16b5089a260f5115e8dff76a88941d6e5fb17a8597
+commit       e8dd233
+local        sudoku-validity: 6/6 public cases, avg 452,654 ticks
+source       tasks/solutions/sudoku-validity_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+compact 12-column U adapter: receive and steer fused; lower ticks

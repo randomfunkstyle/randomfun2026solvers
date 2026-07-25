@@ -9,11 +9,12 @@ search, keeping the best grid that still passes every public test case.
 
 Two gates protect correctness:
 
-* :func:`verify` — the ground truth. Runs each public case through the real
-  engine (:meth:`Littleman.judge`, engine-side round-gating) and requires the
-  emitted output to match the expected output exactly. A candidate that fails
-  verification is never accepted (worst case, the optimizer returns the input
-  unchanged).
+* :func:`verify` — the semantic gate. Runs each public case through the fast
+  independent in-memory engine (differentially tested against
+  :meth:`Littleman.judge`) and requires the emitted output or display frames to
+  match exactly. An explicit ``Littleman`` or ``LM_VALIDATOR=reference`` selects
+  the reference Node/WASM engine instead. A candidate that fails verification is
+  never accepted (worst case, the optimizer returns the input unchanged).
 * :func:`bindings_preserved` — a fast structural pre-filter. After a re-layout
   it re-checks, via the ``route`` oracle, that every send/recv instruction still
   binds to the *same* pipe (SPEC "nearest, not nearest-ready"), catching a
@@ -34,6 +35,7 @@ from typing import Any
 import networkx as nx
 
 from . import scoring
+from .fast_littleman import FastLittleman, FastLittlemanError
 from .layout import (
     AStarRouter,
     Canvas,
@@ -142,10 +144,26 @@ def verify(
     display problem emitting output is an error). ``avg_ticks`` averages the
     settle tick over all cases.
     """
-    lm = lm or Littleman()
     prob = load_problem(problem)
     cases = prob.get("publicTestData") or []
     source = _grid_source(grid)
+    # An explicitly supplied Littleman is commonly a test double and always
+    # means "use this backend".  Otherwise the independent in-memory engine
+    # handles both output and display problems and avoids one Node/WASM boot per
+    # case.
+    use_fast = (
+        lm is None
+        and os.environ.get("LM_VALIDATOR", "fast").lower() != "reference"
+    )
+    fast: FastLittleman | None = None
+    fast_load_error: FastLittlemanError | None = None
+    if use_fast:
+        try:
+            fast = FastLittleman(source)
+        except FastLittlemanError as exc:
+            fast_load_error = exc
+    if not use_fast:
+        lm = lm or Littleman()
 
     verdicts: list[CaseVerdict] = []
     total_ticks = 0
@@ -155,16 +173,49 @@ def verify(
         name = case.get("name", "?")
         inp = scoring._case_input(case)
         display = scoring._is_display_case(case)
+        if fast_load_error is not None:
+            verdicts.append(CaseVerdict(name, False, 0, f"engine: {fast_load_error}"))
+            all_passed = False
+            continue
         try:
+            if fast is not None:
+                result = (
+                    fast.run(inp, frames=_expected_frames(case), max_ticks=tick_cap)
+                    if display
+                    else fast.run(
+                        inp,
+                        expected=_expected_string(case),
+                        max_ticks=tick_cap,
+                    )
+                )
+                if result.fatal is not None:
+                    verdicts.append(
+                        CaseVerdict(name, False, result.step, f"fatal: {result.fatal}")
+                    )
+                    all_passed = False
+                    continue
+                want = [] if display else _expected_flat(case)
+                ok = result.passed is True and result.output == want
+                detail = "" if ok else (
+                    f"emitted output on a display problem: {result.output}"
+                    if display and result.output
+                    else f"output {result.output} != expected {want}"
+                )
+                verdicts.append(CaseVerdict(name, ok, result.step, detail))
+                total_ticks += result.step
+                all_passed = all_passed and ok
+                continue
             if display:
+                assert lm is not None
                 snap = lm.judge(
                     source, input=inp, frames=_expected_frames(case), max_ticks=tick_cap
                 )
             else:
+                assert lm is not None
                 snap = lm.judge(
                     source, input=inp, expected=_expected_string(case), max_ticks=tick_cap
                 )
-        except LittlemanError as exc:
+        except (LittlemanError, FastLittlemanError) as exc:
             verdicts.append(CaseVerdict(name, False, 0, f"engine: {exc}"))
             all_passed = False
             continue
