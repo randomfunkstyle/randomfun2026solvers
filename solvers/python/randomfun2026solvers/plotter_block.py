@@ -148,14 +148,22 @@ def worker_round(m):
     # diff + 2D, so no copy has to be parked anywhere.
     # U and V depend on the major axis as well, so the whole of it lives inside the
     # lanes: a lane's identity is the man's position and cannot survive the merge.
+    # Each lane ends by leaving the *major* axis step in A and the minor in B — x-major
+    # already has them that way, y-major needs one `W` — and from there the three ops
+    # that push U and U+V are the same ops in both lanes, because U is whatever is in A
+    # and the sum does not care which way round it is. So they are hoisted out of the
+    # branch, and they are placed on the corridor the man walks west along afterwards,
+    # where the row is blank anyway. That is three columns off band C, and band C's
+    # easternmost push is what pins the send boundary — hence PAINT_MIN, hence how far
+    # the pixel loop walks for every pixel, hence the room's width.
     if m.A <= 0:                                            # X: x-major
         m.run(["ADD", "PUSH", "W", "PUSH"])                 # step = 2Dy, den = 2D
         m.run(["POP", "M", "POP"])                           # A = sx, B = psy
-        m.run(["PUSH", "ADD", "PUSH"])                       # U = sx, UV = sx + psy
     else:                                                   # y-major
         m.run(["W", "PUSH", "ADD", "PUSH"])                 # step = 2D,  den = 2Dy
         m.run(["POP", "M", "POP"])                           # A = sx, B = psy
-        m.run(["W", "PUSH", "ADD", "PUSH"])                  # U = psy, UV = psy + sx
+        m.run(["W"])                                         # major step into A
+    m.run(["PUSH", "ADD", "PUSH"])                # U = A, then UV = sx + psy
     # ring: [step, den, U, UV]
     m.run(["POP", "PUSH", ("LIT", 1), "M", "POP", "PUSH", "SHR"])     # A = M
     m.run(["ADD", "PAINT", "BP", "SUB", "NEG", "M"])        # n -> painter, BP, B = f
@@ -418,6 +426,15 @@ RET_COL, FWD_COL, PNT_COL = 15, 28, 32   # south wall: ring-return, ring-fwd, pa
 # west of it, so the boundary is pinned just east of the easternmost push in the
 # widest band — and the pixel loop then has to walk out to `PAINT_MIN` and back, twice
 # for every pixel drawn. Four columns off the gap is four ticks off every pixel.
+#
+# `PAINT_MIN` is 31 and cannot be less. Searched exhaustively over BAND_X0 9..16,
+# RET_COL 11..21, IN_ROW 1..9, the prologue's first column, and the drain's, every
+# combination built and its bindings checked: 688 layouts at 31, none at 30 or below.
+# What stops it is *band B's width*, not the send binding — it is 4 ops, a 7-op branch,
+# 4 more ops and a 10-op branch on one row, 31 columns, and it is laid westward from
+# `PAINT_MIN + 1`, so a smaller PAINT_MIN runs it off the west wall. Band B has no
+# blank corridor to hoist ops onto the way band C does, and its two branches already
+# share a row. Getting below 31 needs *fewer ops*, not a different layout.
 _S_BOUND = (FWD_COL + PNT_COL) // 2
 PUSH_MAX, PAINT_MIN = _S_BOUND - 1, _S_BOUND + 1
 # Where the east-running code bands start. This used to be forced — with the return on
@@ -429,6 +446,11 @@ PUSH_MAX, PAINT_MIN = _S_BOUND - 1, _S_BOUND + 1
 # as it is: dragging the ring's port west drags that limit west with it, until the base
 # block's own pop on row 0 becomes the binding one instead.
 BAND_X0 = 12
+# Where the prologue's first op sits. At 2 the spawn takes column 1 of this row; at 1
+# it has to live somewhere else (see `build_worker`). Moving it west moves the *last*
+# input read west, and that read is what pins `IN_ROW`.
+PRO_X0 = 2
+DRAIN_X0 = 3                         # first of the drain's four pops
 # Where each incoming pipe meets the room, in interior coordinates: one cell beyond
 # the wall it crosses. `test_plotter_block` re-checks every glyph against the *built*
 # grid with the interpreter's own `route` oracle, so this stays honest.
@@ -561,7 +583,8 @@ def build_worker():
     # loop's descent, four columns further east), and starting sixteen rows lower costs
     # a measured 30 ticks in every case while saving nothing.
     c.set(0, 0, ">")
-    c.set(1, 0, "@")
+    if PRO_X0 > 1:
+        c.set(PRO_X0 - 1, 0, "@")
 
     # ── prologue and base, row 0 (east): the reads, then addr = y0<<5 + x0 ────
     # One row, not two. The prologue's four reads end at column 14 and the base block's
@@ -569,7 +592,7 @@ def build_worker():
     # the input's, so it binds the ring — the two blocks are separated by the *columns*
     # they occupy and need no row of their own. That only became true when the input
     # moved to the west wall: the boundary on this row now falls at column 16.
-    cur = Cur(c, 2, 0, E)
+    cur = Cur(c, PRO_X0, 0, E)
     cur.seq([P(o) for o in ["RIN", "M", "RIN", "PUSH", "W", "PUSH", "PUSH",
                             "RIN", "PUSH", "W", "PUSH", "RIN", "PUSH"]])
     cur.seq([P(o) for o in [("LIT", 5), "M", "POP", "SHL", "M", "POP", "ADD"]])
@@ -601,9 +624,8 @@ def build_worker():
     cur.to(BAND_X0)
     cur.seq([P(o) for o in ["POP", "M", "POP", "PUSH", "POP", "SUB"]])
     branch(c, cur, E,
-           neg=["ADD", "PUSH", "W", "PUSH", "POP", "M", "POP", "PUSH", "ADD", "PUSH"],
-           pos=["W", "PUSH", "ADD", "PUSH", "POP", "M", "POP", "W", "PUSH", "ADD",
-                "PUSH"],
+           neg=["ADD", "PUSH", "W", "PUSH", "POP", "M", "POP"],
+           pos=["W", "PUSH", "ADD", "PUSH", "POP", "M", "POP", "W"],
            neg_is_le=True)
     # Band C's merge already lands east of the lane on the row below, so the exit can
     # drop one row and turn straight back west — no need to run out to the east wall
@@ -614,7 +636,12 @@ def build_worker():
     # ── preamble: recover M as den>>1, send n, set BP, leave B = f ────────────
     # Row 7 is only a corridor: the block needs a POP first and a PAINT last, so it
     # has to run west-to-east, and band C left the man on the east side.
-    Cur(c, cur.x - 1, 7, W).to(BAND_X0)
+    # ...and it carries the three ops hoisted out of both lanes, which cost nothing
+    # here: the man walks this row either way, and every column of band C they save is
+    # a column off `PAINT_MIN`.
+    corr = Cur(c, cur.x - 1, 7, W)
+    corr.to(BAND_X0 + 3)
+    corr.seq([P(o) for o in ["PUSH", "ADD", "PUSH"]])
     c.set(BAND_X0, 7, "v")
     c.set(BAND_X0, 8, ">")
     cur = Cur(c, BAND_X0 + 1, 8, E)
@@ -698,12 +725,15 @@ def build_worker():
     # a pop on this row binds it from column 2 east — and the drain is walked once per
     # round, out and back, so every column of it is two ticks.
     drain = Cur(c, 3, 15, E)
+    drain.to(DRAIN_X0)
     drain.seq([P("POP")] * 4)
     drain.turn(S)
     c.set(drain.x, 16, "<")
     Cur(c, drain.x - 1, 16, W).to(1)
     c.set(0, 16, "^")                             # up column 0 into the prologue
     _riser(c, 0, 1, 15)
+    if PRO_X0 == 1:                               # nowhere on the prologue row for it
+        c.set(1, 16, "@")
     return c
 
 

@@ -1,0 +1,16 @@
+# plotter — submission 5b3df73a-ad3e-4e32-bedc-f567d080e5e8
+
+verdict      done: 20/20 cases, area2 3136, avgTicks 7,262, score 22,774,730
+submitted    2026-07-25T17:00:21+0300
+grid         44x56
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  16186f8565613383979fd35ac2ec0313cf49723608b34a346707045dacf81ee0
+commit       5f70b46
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+hoist band C's shared tail onto the corridor it already walks: 3 columns off band C, -6 ticks/round
