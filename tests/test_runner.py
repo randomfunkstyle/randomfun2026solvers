@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,17 @@ def test_snapshot_normalizes_null_collections() -> None:
     assert snapshot.entities.pipes == []
     assert snapshot.entities.rooms == []
     assert snapshot.output == []
+
+
+def test_runner_module_help_has_no_import_warning() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "littleman_tools.runner", "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert "RuntimeWarning" not in proc.stderr
 
 
 @pytest.mark.slow
