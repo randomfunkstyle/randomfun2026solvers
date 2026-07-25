@@ -125,11 +125,30 @@ def _line_cells(
     return out
 
 
-def _cut_for(struct: Structure, axis: str, index: int) -> Cut | None:
-    """Is this whole line removable? Returns the cut, or ``None`` with no reason.
+#: Room kinds whose *interior size is itself a specification*, so narrowing the
+#: box changes what the program means even though every glyph survives.
+#:
+#: A display's interior is its pixel resolution (SPEC: max 64x64), so dropping a
+#: column silently re-flows every subsequent pixel: the cursor advances
+#: left-to-right over a row that is now one shorter. An IO room is mandated 3x3.
+#: Both were caught the expensive way — the cut preserved every pipe binding and
+#: still broke 6 of plotter's cases and palette's full-panel case.
+_SHAPE_IS_SPEC = frozenset({"display", "input", "output"})
 
-    Use :func:`explain_cut` when the reason matters.
-    """
+
+def _protected(struct: Structure, axis: str, index: int) -> bool:
+    """Does this line cross a room whose interior size is part of the spec?"""
+    lo = 0 if axis == "col" else 1
+    for room in struct.program.rooms:
+        if room.kind in _SHAPE_IS_SPEC and room.min_[lo] <= index <= room.max_[lo]:
+            return True
+    return False
+
+
+def _cut_for(struct: Structure, axis: str, index: int) -> Cut | None:
+    """Is this whole line removable? Returns the cut, or ``None``."""
+    if _protected(struct, axis, index):
+        return None
     parallel_wall = _H_WALL if axis == "col" else _V_WALL
     pipes: list[int] = []
     for _c, glyph, kind, pipe in _line_cells(struct, axis, index):
