@@ -440,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
         program,
         verdict,
         note=args.note,
-        extra={"commit": commit, "local": detail, "source": str(path.relative_to(REPO))},
+        extra={"commit": commit, "local": detail, "source": str(path.resolve().relative_to(REPO))},
     )
     print(f"archived {man.relative_to(REPO)}")
     return 0 if verdict.accepted else 2

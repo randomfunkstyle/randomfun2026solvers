@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Compact control worker for the current-index one-pass MEMORY machine.
+"""Current-index, one-pass MEMORY machine with compact debug-marked layouts.
 
-This builder intentionally contains no physical pipe placement yet.  Its sole
-job is to make the control graph collision-checked before ring geometry is
-introduced: the current-register commit happens in the shared top band, then
-the read and write arms each consume exactly ``BP=delta`` values.
+The current-register commit happens before each relative access, then the read
+and write arms consume exactly ``BP=delta`` values from the persistent ring.
 """
 from __future__ import annotations
 
@@ -68,9 +66,9 @@ def compact_run(
 ) -> tuple[int, int]:
     """Execute ``ops`` east, then west on the row below.
 
-    The westbound suffix is drawn in reverse character order, so walking it
-    west executes exactly the original opcode sequence, including literals.
-    Returns the first cell after the suffix while still heading west.
+    Walking west makes the suffix appear reversed in the rendered row, while
+    the man still encounters the opcodes in their original order. Returns the
+    first cell after the suffix while still heading west.
     """
     east_count = _compact_split(ops, east_weight)
     east = ops[:east_count]
@@ -81,7 +79,7 @@ def compact_run(
     turn_x, _ = c.run(x, y, east)
     c.turn(turn_x, y, fold)
     c.turn(turn_x, suffix_y, W)
-    return c.run(turn_x - 1, suffix_y, west[::-1], d=W)
+    return c.run(turn_x - 1, suffix_y, west, d=W)
 
 
 def worker(size: int = 10) -> Circuit:
@@ -149,7 +147,7 @@ def worker_snake(size: int = 10) -> Circuit:
     """Narrow worker with both current-index commits folded into snakes."""
     if size <= 0:
         raise ValueError("size must be positive")
-    c = Circuit(42, 32, strict_corridors=True)
+    c = Circuit(46, 32, strict_corridors=True)
 
     c.run(1, 15, "@rbrM")
     c.route((6, 15), E, [(8, 15), (8, 4)], (10, 4), E)
@@ -170,42 +168,59 @@ def worker_snake(size: int = 10) -> Circuit:
         east_weight=6,
         fold=N,
     )
-    c.route((read_after, read_y), W, [(15, read_y), (15, 6)], (15, 6), E)
-    read_loop_x = 16
+    c.route(
+        (read_after, read_y),
+        W,
+        [(read_after - 1, read_y), (read_after - 1, 0), (41, 0), (41, 6)],
+        (42, 6),
+        E,
+    )
+    read_loop_x = 42
     read_exit, _ = c.counted_loop(read_loop_x, 6, "rs")
 
     # WRITE: the opcode branch drops below the read loop, then folds the same
     # commit sequence back west before entering its own pass.
     c.run(delta_branch_x, 5, "b", d=S)
-    c.route((delta_branch_x, 6), S, [(30, 6), (30, 11)], (30, 11), E)
-    c.run(31, 11, "1Ns")
+    c.route((delta_branch_x, 6), S, [(27, 6), (27, 11)], (27, 11), E)
+    c.run(28, 11, "1Ns")
     write_after, write_y = compact_run(
         c,
-        34,
+        31,
         11,
         commit,
         east_weight=6,
     )
-    c.turn(write_after, write_y, S)
-    c.turn(write_after, write_y + 1, E)
-    write_loop_x = write_after + 1
+    c.route(
+        (write_after, write_y),
+        W,
+        [(write_after, write_y + 1)],
+        (39, write_y + 1),
+        E,
+    )
+    write_loop_x = 40
     write_exit, _ = c.counted_loop(write_loop_x, write_y + 1, "rs")
 
     # READ target, reappend, then emit from the south-side output port.
-    c.route((read_exit, 6), E, [(40, 6), (40, 10)], (39, 10), W)
-    c.run(38, 10, "rs", d=W)
-    c.route((36, 10), W, [(20, 10), (20, 27)], (20, 27), E)
-    c.run(21, 27, "s")
-    c.route((22, 27), E, [(41, 27), (41, 30), (0, 30)], (0, 15), E)
+    c.route(
+        (read_exit, 6),
+        E,
+        [(45, 6), (45, 10), (41, 10), (41, 11)],
+        (42, 11),
+        E,
+    )
+    c.run(43, 11, "rs")
+    c.route((45, 11), E, [(45, 27)], (7, 27), W)
+    c.run(6, 27, "s", d=W)
+    c.route((5, 27), W, [(4, 27), (4, 30), (0, 30)], (0, 15), E)
 
     # WRITE target, deferred input fetch, replacement, then main.
-    c.route((write_exit, write_y + 1), E, [(40, write_y + 1), (40, 18)], (39, 18), W)
-    c.run(38, 18, "r", d=W)
-    c.route((37, 18), W, [], (6, 18), W)
+    c.route((write_exit, write_y + 1), E, [(44, write_y + 1), (44, 18)], (43, 18), W)
+    c.run(42, 18, "r", d=W)
+    c.route((41, 18), W, [], (6, 18), W)
     c.run(5, 18, "r", d=W)
-    c.route((4, 18), W, [(3, 18), (3, 24), (39, 24)], (39, 24), E)
-    c.run(40, 24, "s")
-    c.route((41, 24), E, [(41, 30), (0, 30)], (0, 15), E)
+    c.route((4, 18), W, [(3, 18), (3, 24), (36, 24)], (36, 24), E)
+    c.run(37, 24, "s")
+    c.route((38, 24), E, [(38, 30), (0, 30)], (0, 15), E)
     return c
 
 
@@ -333,15 +348,72 @@ def build_tight(size: int = 10) -> tuple[list[str], DebugMap]:
     return [row.rstrip() for row in grid.rows() if row.strip()], debug
 
 
+def build_snake(size: int = 10) -> tuple[list[str], DebugMap]:
+    """Assemble the folded worker with adjacent, spacer-free pipe folds."""
+    c = worker_snake(size)
+    grid = Circuit(56, 53)
+    wx, wy = 6, 10
+    _stamp(grid, c, (wx, wy))
+    _walls(grid, (wx, wy), c.w, c.h)
+    debug = DebugMap(f"one-pass snake n={size}")
+    debug.region_relative("worker", (wx, wy), 0, 0, c.w, c.h, note="folded delta/commit rails and one relative pass", color="#38bdf8")
+    debug.region_relative("shared-setup", (wx, wy), 8, 3, 22, 13, note="input, current fetch, delta, opcode split", color="#60a5fa")
+    debug.region_relative("read-arm", (wx, wy), 28, 3, 18, 25, note="folded commit, pass, target, output", color="#a78bfa")
+    debug.region_relative("write-arm", (wx, wy), 24, 11, 22, 20, note="folded commit, pass, replace", color="#fb923c")
+
+    _room(grid, 0, wy + 14, "I")
+    input_pipe = [(3, wy + 15), (4, wy + 15)]
+    _draw_pipe(grid, input_pipe)
+    debug.region("input", 0, wy + 14, 3, 3, note="operation stream", color="#22c55e")
+    debug.lane("input-pipe", input_pipe, kind="pipe", expect="op, address, deferred write value", color="#22c55e")
+
+    _room(grid, 0, wy + 26, "O")
+    output_pipe = [(4, wy + 27), (3, wy + 27)]
+    _draw_pipe(grid, output_pipe)
+    debug.region("output", 0, wy + 26, 3, 3, note="read results", color="#a78bfa")
+    debug.lane("output-pipe", output_pipe, kind="pipe", expect="read value only", color="#a78bfa")
+
+    index = register_cell("current", note="logical ring head", color="#facc15")
+    ix, iy = 40, 2
+    _stamp(grid, index.circuit, (ix, iy))
+    command = [(wx + 28, wy - 2), (wx + 28, wy - 3), (38, wy - 3), (38, iy + 3), (39, iy + 3)]
+    response = [(ix + index.width, iy + 3), (47, iy + 3), (47, 1), (wx + 26, 1), (wx + 26, wy - 2)]
+    _draw_pipe(grid, command)
+    _draw_pipe(grid, response)
+    debug.region("current-index", ix, iy, index.width, index.height, note=index.note, color=index.color)
+    debug.lane("index-command", command, kind="pipe", expect="fetch/store current in FIFO order", color="#facc15")
+    debug.lane("index-response", response, kind="pipe", expect="current response", color="#fde68a")
+
+    relay = zero_fill_relay("relay", size, note="zero fill and ring turnaround", color="#fb7185")
+    rx, ry = 2, 43
+    _stamp(grid, relay.circuit, (rx, ry))
+    forward = [(wx + c.w + 1, wy + 16), (54, wy + 16), (54, 46), (12, 46), (12, ry + 6), (11, ry + 6)]
+    returned = [
+        (rx - 1, ry + 4), (0, ry + 4), (0, 51),
+        (55, 51), (55, wy + 14), (wx + c.w + 1, wy + 14),
+    ]
+    forward_slots = _draw_pipe(grid, forward)
+    return_slots = _draw_pipe(grid, returned)
+    if forward_slots + return_slots < size + 1:
+        raise ValueError("ring capacity is too small")
+    debug.region("relay", rx, ry, relay.width, relay.height, note=relay.note, color=relay.color)
+    debug.lane("ring-forward", forward, kind="pipe", expect="passed and appended values", color="#34d399")
+    debug.lane("ring-return", returned, kind="pipe", expect="ring head values", color="#10b981")
+    debug.lane_relative("read-pass", (wx, wy), [(42, 6), (43, 6), (43, 9), (42, 9), (42, 6)], kind="expected", expect="BP=delta", color="#22c55e")
+    debug.lane_relative("write-pass", (wx, wy), [(40, 13), (41, 13), (41, 16), (40, 16), (40, 13)], kind="expected", expect="BP=delta", color="#f97316")
+    return [row.rstrip() for row in grid.rows() if row.strip()], debug
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--size", type=int, default=10)
     parser.add_argument("--man", type=Path)
     parser.add_argument("--html", type=Path)
     parser.add_argument("--json", type=Path)
-    parser.add_argument("--layout", choices=("wide", "tight"), default="wide")
+    parser.add_argument("--layout", choices=("wide", "tight", "snake"), default="snake")
     args = parser.parse_args()
-    rows, debug = (build_tight if args.layout == "tight" else build)(args.size)
+    builders = {"wide": build, "tight": build_tight, "snake": build_snake}
+    rows, debug = builders[args.layout](args.size)
     if args.man:
         args.man.write_text("\n".join(rows) + "\n", encoding="utf-8")
     if args.html:
