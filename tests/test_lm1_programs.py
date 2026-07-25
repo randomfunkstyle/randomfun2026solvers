@@ -43,7 +43,6 @@ BLOCKED = {
     "memory",
     "reverse-a-list",
     "sort-numbers",
-    "sudoku-validity",
     "subset-sum",
     "matmul",
 }
@@ -71,6 +70,7 @@ def test_the_expected_programs_exist() -> None:
         "plotter",
         "palette",
         "gradebook",
+        "sudoku-validity",
     }
 
 
@@ -125,6 +125,10 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         "plotter": {"DSPA", "DSPD", "DSPS", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
         "triangle-closed": {"MUL", "DIVI"},
+        # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
+        # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
+        # indexed opcodes are drawn *without* a SPILL block — see machine.py's `_HW`.
+        "sudoku-validity": {"DIVI", "MODI", "LDP", "STP"},
     }
 
 
