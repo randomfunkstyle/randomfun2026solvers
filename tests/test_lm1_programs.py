@@ -193,13 +193,32 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # `IN`, because a seventeenth costs a trie level plus its lane rows (measured:
         # 158x167 against 121x136).
         "snake-ring": {"DIV", "INCM", "MODI", "SND"},
-        # pathfinder is a bitset program, so its extensions are the bitwise pair and
-        # the two things a bitset needs to be addressed by: `AND`/`OR` intersect and
-        # merge the neighbour masks, `MODI` splits a cell index into (word, bit) —
-        # `LDA` then indexes the four direction masks by the robot's word, which is the
-        # one indexed read left once the board stops being an array. `SND` is the whole
-        # display interface. Sixteen opcodes exactly, i.e. a depth-4 trie.
-        "pathfinder": {"AND", "OR", "MODI", "LDA", "SND"},
+        # pathfinder is a bitset program, so its extensions are the bitwise pair plus
+        # what a bitset needs to be addressed by: `AND`/`OR` intersect and merge the
+        # neighbour masks, `MODI` splits a cell index into (word, bit), and `LDA`
+        # indexes the four direction masks by the robot's word — the one indexed read
+        # left once the board stops being an array. `DIVI`/`NEG` are the shifts and the
+        # subtract idiom.
+        #
+        # `DSPA`/`DSPD`/`DSPS` are three opcodes where a write-only coprocessor spends
+        # one `SND`, which is what puts this program at 18 and so on a depth-5 trie.
+        # `pathfinder-unit` is that same program with the coprocessor interface, at
+        # exactly 16 — but its hardware block is UNFINISHED and the whole variant is
+        # superseded: a bespoke dataflow machine (`pathfinder_grid.py`) passes 18/18 at
+        # score 11,096,155,486, against ~1.4e11 for anything on this tier. Kept as the
+        # measured comparison, not as a candidate. See ARCH §8.3.
+        "pathfinder": {
+            "AND",
+            "DIVI",
+            "DSPA",
+            "DSPD",
+            "DSPS",
+            "LDA",
+            "MODI",
+            "NEG",
+            "OR",
+        },
+        "pathfinder-unit": {"AND", "DIVI", "LDA", "MODI", "NEG", "OR", "SND"},
         "snake": {
             "DECM",
             "DIV",
