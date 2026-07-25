@@ -174,6 +174,13 @@ def worker_round(m):
             incs.append(m.A)
             m.run(["PAINT"])
         m.BP -= 1                                          # m
+    # ── drain: the round has to leave the ring as it found it ────────────────
+    # Every lap pops all four constants and pushes all four back to stay aligned, so
+    # when BP runs out `[step, den, U, UV]` are still circulating. The next round's
+    # prologue would pop *those* instead of its own x0/y0 — so a round is only
+    # re-entrant if it consumes them first. Four rounds of the block ran perfectly in
+    # isolation and drew garbage in sequence before this went in.
+    m.run(["POP"] * 4)
     return incs
 
 
@@ -390,7 +397,7 @@ if __name__ == "__main__":
 # error rather than a grid that loads and quietly reads the wrong pipe.
 
 GLYPH = {E: ">", W: "<", N: "^", S: "v"}
-WW, WH = 40, 19                      # worker interior
+WW, WH = 40, 21                      # worker interior
 IN_COL, RET_COL = 0, 28              # north wall: input, ring-return
 FWD_COL, PNT_COL = 30, 38            # south wall: ring-forward, painter
 # binding regions that follow from those four columns: the boundary is the midpoint,
@@ -620,9 +627,21 @@ def build_worker():
     c.set(3, 18, "d")                             # BP > 0 ? north into the loop : on
     _riser(c, 3, 16, 17)
     c.set(3, 15, ">")                             # ...back to the loop head
-    Cur(c, 2, 18, W).to(0)
-    c.set(0, 18, "^")                             # BP == 0: up column 0, next round
-    _riser(c, 0, 2, 17)
+
+    # ── BP == 0: drain the ring, then round again ────────────────────────────
+    # The four constants are still circulating (see `worker_round`), and the next
+    # round's prologue would pop them instead of its own inputs. Two extra rows buy
+    # the four POPs: east to the POP region, drain, then west and up column 0.
+    c.set(2, 18, "v")
+    c.set(2, 19, ">")
+    drain = Cur(c, 3, 19, E)
+    drain.to(POP_MIN)
+    drain.seq([P("POP")] * 4)
+    drain.turn(S)
+    c.set(drain.x, 20, "<")
+    Cur(c, drain.x - 1, 20, W).to(1)
+    c.set(0, 20, "^")                             # up column 0 into the prologue
+    _riser(c, 0, 2, 19)
     return c
 
 
@@ -638,13 +657,114 @@ PROBE_WX, PROBE_WY = 1, 4                      # worker interior origin -> walls
 IN_C, RET_C, FWD_C, PNT_C = 1, 29, 31, 39     # grid columns of the four ports
 
 
+# ── the assembled box ─────────────────────────────────────────────────────────
+#
+# Four rooms and seven pipes. The room *order* is forced (see PLOTTER-BLOCK.md); what
+# took the longest was the pipes, because the worker spans nearly the full width, so
+# every pipe crossing between the halves needs a column clear of it — a *channel* —
+# and they compete for a handful. Three placements settle it:
+#
+# * **The increment descends straight down.** It may not bend before the row two
+#   below the worker's south wall, and any sideways leg there cuts a channel; going
+#   straight down leaves both sides clear and makes it a plain L round the bottom into
+#   the painter's *west* wall (its north wall is the three display sends).
+# * **The relay talks east and north.** One pipe each way means no `s`/`r` in it needs
+#   a binding argument, so either wall is free: in on the east makes ring-forward a
+#   single drop, out on the north puts the return in the open band above the painter
+#   rather than the fenced-in bottom.
+# * **The input room sits west of the worker.** The return has to cross the band over
+#   the worker's north wall to reach its port; the input has to land at the west end of
+#   the same band. From above they cross; rising from the west the input owns one row
+#   of the band and the return another.
+#
+# The paths are *declared*, not searched. A shortest-path router solves each pipe
+# locally and eats the one row a later pipe needed, so the collision only ever moves;
+# stating all seven and allocating the shared rows and columns up front is what closes
+# the box. `_PATHS` is checked against the ports as it is drawn.
+BLOCK_W, BLOCK_H = 58, 70
+_DX, _DY = 16, 1                 # display walls: cols 16..49, rows 1..26
+_WX, _WY = 16, 31                # worker walls:  cols 15..56, rows 30..52
+_PX, _PY = 16, 59                # painter walls: cols 15..31, rows 58..64
+_RX, _RY = 41, 59                # relay walls:   cols 40..44, rows 58..65
+_IX, _IY = 11, 31                # the input room, west of the worker
+
+# Shared resources, allocated before anything is drawn:
+#   band over the worker's north wall   row 27 SWAP, row 28 ring-return, row 29 input
+#   west channels (painter -> display)  col 2 ADDR, col 4 DATA, col 6 SWAP
+#   row each display pipe bends west    56 ADDR, 55 DATA, 54 SWAP
+# Channels and bend rows nest opposite ways (2<4<6 against 56>55>54), which is what
+# keeps the three display pipes from crossing; the band rows are one each.
+_PATHS = {
+    "fwd":   ([(46, 53), (46, 61), (45, 61)], "r_in"),
+    "pnt":   ([(54, 53), (54, 69), (14, 69), (14, 61)], "p_in"),
+    "r_out": ([(42, 57), (42, 53), (10, 53), (10, 28), (44, 28), (44, 29)], "ret"),
+    "i_out": ([(12, 30), (12, 29), (16, 29)], "in"),
+    "addr":  ([(17, 57), (17, 56), (2, 56), (2, 0), (17, 0)], "d_addr"),
+    "data":  ([(21, 57), (21, 55), (4, 55), (4, 3), (15, 3)], "d_data"),
+    "swap":  ([(28, 57), (28, 54), (6, 54), (6, 27), (46, 27)], "d_swap"),
+}
+
+
+def _block_ports():
+    """Each port is a wall cell plus its outward normal, which forces the two cells
+    the pipe must start (or end) with — the stub. A first cell that runs *along* the
+    wall instead leaves the analyser unable to name the source room (`src: -1`), and
+    then every `s` in it silently binds to nothing."""
+    wn, ws = _WY - 1, _WY + WH
+    pn, pw = _PY - 1, _PX - 1
+    return {
+        "in":     ((_WX + 0, wn), N),          # worker: input, ring-return
+        "ret":    ((_WX + 28, wn), N),
+        "fwd":    ((_WX + 30, ws), S),         # worker: ring-forward, increment
+        "pnt":    ((_WX + 38, ws), S),
+        "r_in":   ((_RX + RELAY_W, _RY + 2), E),
+        "r_out":  ((_RX + 1, pn), N),
+        "p_in":   ((pw, _PY + 2), W),
+        "addr":   ((_PX + S_ADDR, pn), N),     # painter: the three display sends
+        "data":   ((_PX + S_DATA, pn), N),
+        "swap":   ((_PX + S_SWAP, pn), N),
+        "d_addr": ((_DX + 1, _DY), N),         # display: top, left, bottom
+        "d_data": ((_DX, 3), W),
+        # SWAP enters the bottom wall near its *east* end, past where the ring-return
+        # turns in: nearer the west end its own stub sits across the return's row, the
+        # return detours onto row 27 to get round it, and row 27 is SWAP's only way in.
+        "d_swap": ((_DX + 30, _DY + DISPLAY_H + 1), S),
+        "i_out":  ((_IX + 1, _IY), N),
+    }
+
+
+def build_block() -> list[str]:
+    """The whole plotter block: display, worker, painter, relay and input room."""
+    g = Circuit(BLOCK_W, BLOCK_H)
+    build_display(g, _DX, _DY)
+    stamp(g, _WX, _WY, build_worker().rows())
+    walls(g, _WX, _WY, WW, WH)
+    stamp(g, _PX, _PY, painter_rows())
+    walls(g, _PX, _PY, PAINTER_W, PAINTER_H)
+    stamp(g, _RX, _RY, relay_rows())
+    walls(g, _RX, _RY, RELAY_W, RELAY_H)
+    stamp(g, _IX, _IY, ["+-+", "|I|", "+-+"])
+
+    ports, lens = _block_ports(), {}
+    for src, (cells, dst) in _PATHS.items():
+        (sp, sn), (dp, dn) = ports[src], ports[dst]
+        if cells[0] != (sp[0] + sn[0], sp[1] + sn[1]):
+            raise ValueError(f"{src}: {cells[0]} is not the stub outside {sp}")
+        if cells[-1] != (dp[0] + dn[0], dp[1] + dn[1]):
+            raise ValueError(f"{src}: {cells[-1]} is not beside {dst} at {dp}")
+        lens[src] = pipe(g, cells, into=dp)
+    if not timing_ok(lens["addr"], lens["data"], lens["swap"]):
+        raise ValueError(f"display pipes deliver out of order: {lens}")
+    return [r.rstrip() for r in g.rows()]
+
+
 def build_worker_probe():
-    g = Circuit(58, 37)
+    south, north = PROBE_WY + WH, PROBE_WY - 1
+    g = Circuit(58, south + 18)
     stamp(g, PROBE_WX, PROBE_WY, build_worker().rows())
     walls(g, PROBE_WX, PROBE_WY, WW, WH)
-    south, north = PROBE_WY + WH, PROBE_WY - 1               # 23 and 3
 
-    rx, ry = 6, 27                               # relay interior -> walls 26..33
+    rx, ry = 6, south + 4                        # relay, clear of the worker's wall
     stamp(g, rx, ry, relay_rows())
     walls(g, rx, ry, RELAY_W, RELAY_H)
 
@@ -655,12 +775,12 @@ def build_worker_probe():
     # along the wall gets `src: -1` and no `s` in the room can ever bind to it.
     n_fwd = pipe(g, [(FWD_C, south + 1), (FWD_C, ry - 2), (rx + 1, ry - 2)],
                  into=(rx + 1, ry - 1))
-    n_ret = pipe(g, [(rx, ry + RELAY_H + 1), (rx, 35), (50, 35), (50, 2),
+    n_ret = pipe(g, [(rx, ry + RELAY_H + 1), (rx, g.h - 2), (50, g.h - 2), (50, 2),
                      (RET_C, 2)], into=(RET_C, north))
 
     # the increment pipe, standing in for the painter
-    stamp(g, 43, 26, ["+-+", "|O|", "+-+"])
-    pipe(g, [(PNT_C, south + 1), (PNT_C, 27), (42, 27)], into=(43, 27))
+    stamp(g, 43, ry - 1, ["+-+", "|O|", "+-+"])
+    pipe(g, [(PNT_C, south + 1), (PNT_C, ry), (42, ry)], into=(43, ry))
     # and the input
     stamp(g, 55, 0, ["+-+", "|I|", "+-+"])
     pipe(g, [(54, 1), (IN_C, 1), (IN_C, 2)], into=(IN_C, north))

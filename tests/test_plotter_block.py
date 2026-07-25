@@ -108,13 +108,31 @@ def test_every_pixel_is_on_the_display():
             assert 0 <= a < W * H, (seg, a)
 
 
-def test_ring_returns_to_its_starting_order():
-    """The ring must end each round holding [step, den, U, UV] — the loop reads
-    four slots a lap, so a rotation left over would desynchronise every later lap."""
+def test_the_round_is_re_entrant():
+    """A round must leave the ring exactly as it found it: empty.
+
+    Each lap pops all four constants and pushes all four back to stay aligned, so
+    when BP runs out they are still circulating; the drain at the end of the round
+    consumes them. Without it every round after the first pops the *previous*
+    round's constants in place of its own x0/y0 — each segment drawn alone was
+    perfect and a sequence of them was garbage, which is what this pins down."""
     m = OpModel([0, 0, 31, 23])
     worker_round(m)
-    assert list(m.ring) == [2 * 23, 2 * 31, 1, 1 + 32]
-    assert len(m.ring) == 4
+    assert list(m.ring) == []
+
+
+def test_consecutive_rounds_are_independent():
+    """Three segments in one stream must give what each gives on its own."""
+    segs = [(0, 0, 3, 2), (5, 5, 5, 8), (31, 23, 0, 0)]
+    together = OpModel([v for s in segs for v in s])
+    for _ in segs:
+        worker_round(together)
+    apart = []
+    for s in segs:
+        one = OpModel(list(s))
+        worker_round(one)
+        apart += one.paint
+    assert together.paint == apart
 
 
 def test_ring_never_exceeds_its_capacity():
@@ -226,3 +244,40 @@ def test_the_worker_grid_matches_the_model_on_the_reference_interpreter():
             got = next(ln[len("output:"):] for ln in out.splitlines()
                        if ln.startswith("output:"))
             assert got.split() == [str(v) for v in m.paint], seg
+
+
+@pytest.mark.slow
+def test_the_assembled_block_draws_every_public_plotter_case():
+    """The whole box against the six public cases, frame for frame.
+
+    This is the end-to-end check the probes cannot be: it exercises the display, the
+    ADDR/DATA/SWAP pipe *lengths* (latency is one tick per cell, so the lengths are
+    part of the program), the painter's commit, and — because four of the six cases
+    are multi-round — that a round leaves the ring as it found it.
+    """
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from randomfun2026solvers.plotter_block import build_block
+
+    root = Path(__file__).resolve().parents[1]
+    node, tool = shutil.which("node"), root / "littleman" / "tools" / "display-frames.mjs"
+    problem = root / "tasks" / "problems" / "plotter.json"
+    if not node or not tool.exists() or not problem.exists():
+        pytest.skip("needs node, display-frames.mjs and tasks/problems/plotter.json")
+
+    want = json.loads(problem.read_text())["publicTestData"]
+    with tempfile.TemporaryDirectory() as td:
+        man = Path(td) / "block.man"
+        man.write_text("\n".join(build_block()) + "\n")
+        out = subprocess.run([node, str(tool), str(man), str(problem)],
+                             capture_output=True, text=True, check=True, timeout=600)
+        got = json.loads(out.stdout)["cases"]
+
+    assert len(got) == len(want)
+    for g, w in zip(got, want):
+        assert g["fatal"] is None, (w["name"], g["fatal"])
+        assert g["frames"] == [r["frames"][0] for r in w["rounds"]], w["name"]
