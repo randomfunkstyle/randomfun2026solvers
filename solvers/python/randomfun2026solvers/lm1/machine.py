@@ -72,9 +72,21 @@ __all__ = ["Band", "Machine", "build", "hw_micro", "MEMORY_SEMS"]
 class Band:
     """Which pipe a glyph needs. ``None`` means it does not care."""
 
-    IN = "in"  # CPU north wall: the input room
-    OUT = "out"  # CPU west wall, below the ROM pipe: the output room
+    IN = "in"  # CPU west wall, above the ROM pipe: the input room
+    OUT = "out"  # CPU south wall: the output room
     MEM = "mem"  # CPU east wall: request out to the adapter, response in from the tape
+    # LM-75 ports. Three separate bands, not one, because the side a pipe attaches
+    # to *is* its function (SPEC.md) and an `s` cannot choose a pipe at runtime.
+    DSP_SWAP = "dsp_swap"  # CPU south wall, westmost
+    DSP_DATA = "dsp_data"
+    DSP_ADDR = "dsp_addr"  # CPU south wall, eastmost
+
+
+#: The display bands, west to east across the CPU's south wall. The order is what
+#: makes the routing work: SWAP has to reach *under* the panel, DATA its left wall
+#: and ADDR its top, so laying them west-to-east in this order means their descents
+#: never cross (see :func:`_route_display`).
+DSP_BANDS = (Band.DSP_SWAP, Band.DSP_DATA, Band.DSP_ADDR)
 
 
 #: Hardware micro-programs, keyed by semantic tag — the sign-biased realisation of
@@ -129,8 +141,17 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.NEGATE: (("W", None), ("N", None), ("M", None)),
+    # The LM-75 ports. Same W/s/W sandwich as OUT, so ACC survives (§6).
+    Sem.DISPLAY_ADDR: (("W", None), ("s", Band.DSP_ADDR), ("W", None)),
+    Sem.DISPLAY_DATA: (("W", None), ("s", Band.DSP_DATA), ("W", None)),
+    Sem.DISPLAY_SWAP: (("W", None), ("s", Band.DSP_SWAP), ("W", None)),
     Sem.HALT: (("H", None),),
 }
+
+#: Bands whose glyph is pushed out to a band-specific column so it lands beside its
+#: own pipe. Without this the three display sends sit in the same column and the
+#: engine cannot tell which south-wall pipe each one meant (§7.1).
+_TARGETED_BANDS = (Band.MEM, *DSP_BANDS)
 
 #: Tags whose operand word is a STORE address, so it must be >= 1 (see the module
 #: docstring on the sign bias).
@@ -141,6 +162,7 @@ MEMORY_SEMS = frozenset(
 #: Tags realised as a structures-band slab rather than a flat lane.
 _JUMP_SEMS = frozenset({Sem.JUMP})
 _BRANCH_SEMS = frozenset({Sem.BR_ZERO, Sem.BR_NEG})
+_DISPLAY_SEMS = frozenset({Sem.DISPLAY_ADDR, Sem.DISPLAY_DATA, Sem.DISPLAY_SWAP})
 
 
 def hw_micro(sem: Sem) -> tuple[tuple[str, str | None], ...]:
@@ -274,17 +296,24 @@ def plan(program: Program) -> _Plan:
     def group(m: str) -> int:
         s = sems[m]
         if s is Sem.INPUT:
-            return 0  # top, beside the north pipe
-        if s is Sem.OUTPUT:
-            return 2  # bottom, beside the west output pipe
+            return 0  # top, beside the west input pipe
+        # Both leave by the south wall, so both want the bottom of the band. A
+        # program never has both: emitting output on a display problem is an error.
+        if s is Sem.OUTPUT or s in _DISPLAY_SEMS:
+            return 3
         return 1
 
+    # Display lanes are kept adjacent on purpose. Each one's `s` binds by being
+    # nearest its own south-wall pipe, and the comparison is Manhattan: a lane
+    # `d` rows above another needs its pipe more than `d` columns away to win. Rows
+    # 2 and 4 apart make a 6-column pitch sufficient; lanes scattered across a
+    # 31-row band would need a 30-column spread the CPU does not have.
     order = sorted(used, key=lambda m: (group(m), -width(m), m))
     slots = list(range(lanes))
     placed: dict[str, int] = {}
     for m in [n for n in order if group(n) == 0]:
         placed[m] = slots.pop(0)
-    for m in reversed([n for n in order if group(n) == 2]):
+    for m in reversed([n for n in order if group(n) == 3]):
         placed[m] = slots.pop()
     for m in [n for n in order if group(n) == 1]:
         placed[m] = slots.pop(0)
@@ -353,6 +382,9 @@ _STRUCT_X0 = 2  # slabs hug the west wall, keeping their `r` nearest the ROM pip
 _SLAB_PITCH = 13  # columns per slab: each gets its own band (see _slab)
 _JUMP_SLAB_ROWS = 5
 _BRANCH_SLAB_ROWS = 8
+#: Columns between adjacent display send glyphs. Their lanes sit 2 and 4 rows
+#: apart, and a Manhattan tie needs the column gap to exceed the row gap.
+_DSP_PITCH = 6
 
 
 @dataclass
@@ -367,25 +399,36 @@ class _Cpu:
     out_col: int  # the OUT lane's `s` column; the output pipe leaves the south wall here
     mem_out_row: int  # east wall: request out to the adapter
     mem_in_row: int  # east wall: response in from the tape
-    ports: dict[str, tuple[int, int, str]]  # band -> (x, y, direction) of the wall cell
+    dsp_cols: dict[str, int]  # display band -> the column its pipe leaves the south wall
+    wants_out: bool  # False on a display problem: emitting output is an error
     pipe_glyphs: list[tuple[int, int, str, str]]  # (x, y, glyph, band)
 
 
 def _flat_lane(
-    micro: tuple[tuple[str, str | None], ...], x0: int, mem_x: int, row: int
+    micro: tuple[tuple[str, str | None], ...],
+    x0: int,
+    targets: dict[str, int],
+    row: int,
 ) -> dict[tuple[int, int], tuple[str, str | None]]:
-    """Lay one flat lane, pushing its first MEM glyph out to ``mem_x``.
+    """Lay one flat lane, pushing each targeted band's first glyph to its column.
 
-    Everything from that glyph on follows contiguously, so the whole memory block
-    sits in the room's eastern band and binds to the east-wall pipes instead of to
-    the ROM pipe on the west (``ARCH.md`` §7.1).
+    ``targets`` maps a band to the column its glyph must land in. For MEM that puts
+    the whole memory block in the room's eastern strip, so it binds to the east-wall
+    pipes rather than the ROM pipe on the west; for the three display bands it gives
+    each ``s`` its own column above its own south-wall pipe. Both are ``ARCH.md``
+    §7.1 — place the glyph beside the wall it belongs to and let binding follow.
     """
-    first_mem = next((i for i, (_, b) in enumerate(micro) if b == Band.MEM), None)
+    firsts = {
+        band: next(i for i, (_, b) in enumerate(micro) if b == band)
+        for band in targets
+        if any(b == band for _, b in micro)
+    }
+    at_index = {i: band for band, i in firsts.items()}
     out: dict[tuple[int, int], tuple[str, str | None]] = {}
     x = x0
     for i, (glyph, band) in enumerate(micro):
-        if i == first_mem:
-            while x < mem_x:
+        if i in at_index:
+            while x < targets[at_index[i]]:
                 out[(x, row)] = (".", None)
                 x += 1
         out[(x, row)] = (glyph, band)
@@ -407,12 +450,25 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
     structured = [m for m in used if p.sem[m] in _JUMP_SEMS | _BRANCH_SEMS]
     halting = {p.row[m] for m in used if p.sem[m] is Sem.HALT}
 
-    prefixes = [
-        next((i for i, (_, b) in enumerate(mc) if b == Band.MEM), len(mc))
-        for mc in flat.values()
-        if any(b == Band.MEM for _, b in mc)
-    ]
-    mem_x = lane_x0 + (max(prefixes) if prefixes else 0) + mem_pad
+    def prefix_of(band: str) -> int:
+        """Glyphs before this band's first use, over every lane that uses it."""
+        return max(
+            (
+                next(i for i, (_, b) in enumerate(mc) if b == band)
+                for mc in flat.values()
+                if any(b == band for _, b in mc)
+            ),
+            default=0,
+        )
+
+    mem_x = lane_x0 + prefix_of(Band.MEM) + mem_pad
+    targets = {Band.MEM: mem_x}
+    # Display sends get their own columns, west to east in DSP_BANDS order, at a
+    # pitch wide enough to beat the row gaps between their (adjacent) lanes.
+    used_bands = {b for mc in flat.values() for _, b in mc}
+    dsp_used = [b for b in DSP_BANDS if b in used_bands]
+    for i, band in enumerate(dsp_used):
+        targets[band] = lane_x0 + prefix_of(band) + i * _DSP_PITCH
 
     # Each slab gets its own column band, so an exit dropping to the collector
     # never crosses a slab below it.
@@ -429,7 +485,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
         if m is None:
             lane_end[r] = lane_x0 - 1
         elif m in flat:
-            cells = _flat_lane(flat[m], lane_x0, mem_x, r)
+            cells = _flat_lane(flat[m], lane_x0, targets, r)
             lane_cells.update(cells)
             lane_end[r] = max((x for x, _ in cells), default=lane_x0 - 1)
         else:
@@ -563,14 +619,15 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
     )
     mem_out_row = mem_rows[len(mem_rows) // 2] if mem_rows else centre
     in_rows = [p.row[m] for m in used if p.sem[m] is Sem.INPUT]
-    out_cols = [lane_x0 + 1]
     return _Cpu(
         cells=g.c,
         width=width,
         height=height,
         centre=centre,
         in_row=in_rows[0] if in_rows else 1,
-        out_col=out_cols[0],
+        out_col=lane_x0 + 1,
+        dsp_cols={b: targets[b] for b in dsp_used},
+        wants_out=any(p.sem[m] is Sem.OUTPUT for m in used),
         mem_out_row=mem_out_row,
         # The response pipe attaches *above* the request pipe: it comes back over
         # the top of the adapter, so attaching below would make it cross the
@@ -584,7 +641,6 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
         # pipe. The CPU's memory `r` binds to it and reads the adapter's op words
         # instead of the tape's answers.
         mem_in_row=max(mem_out_row - 4, 1),
-        ports={},
         pipe_glyphs=pipe_glyphs,
     )
 
@@ -909,6 +965,7 @@ def build(
     tape_n: int | None = None,
     rom_rows: int | None = None,
     mem_pad: int | None = None,
+    display: tuple[int, int] = (32, 24),
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -925,7 +982,7 @@ def build(
     last: MachineError | None = None
     for pad in pads:
         try:
-            return _assemble(program, p, words, tape_n, rom_rows, pad)
+            return _assemble(program, p, words, tape_n, rom_rows, pad, display)
         except MachineError as exc:
             last = exc
     raise MachineError(f"no mem_pad makes every pipe bind; last: {last}")
@@ -938,6 +995,7 @@ def _assemble(
     tape_n: int,
     rom_rows: int | None,
     mem_pad: int,
+    display: tuple[int, int] = (32, 24),
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad)
     W, H = cpu.width, cpu.height
@@ -982,11 +1040,14 @@ def _assemble(
     g.put(4, iy, "I")
     g.draw_pipe([(6, iy), (CX - 1, iy)])
 
-    # ── CPU south wall -> O room ─────────────────────────────────────────────
+    # ── CPU south wall -> O room, unless this is a display problem ───────────
+    # SPEC.md: on a display-judged problem "emitting any program output is an
+    # error", so the room is omitted rather than left unused.
     oy = CY + H + 2
-    g.draw_pipe([(CX + cpu.out_col, oy), (CX + cpu.out_col, oy + 1)])
-    g.room(CX + cpu.out_col - 1, oy + 2, CX + cpu.out_col + 1, oy + 4)
-    g.put(CX + cpu.out_col, oy + 3, "O")
+    if cpu.wants_out:
+        g.draw_pipe([(CX + cpu.out_col, oy), (CX + cpu.out_col, oy + 1)])
+        g.room(CX + cpu.out_col - 1, oy + 2, CX + cpu.out_col + 1, oy + 4)
+        g.put(CX + cpu.out_col, oy + 3, "O")
 
     # ── adapter, east of the CPU ─────────────────────────────────────────────
     AX = CX + W + 4
@@ -1040,22 +1101,46 @@ def _assemble(
         ]
     )
 
+    # ── the LM-75, below everything so it can spread east freely ─────────────
+    dsp_touches: dict[str, tuple[int, int]] = {}
+    if cpu.dsp_cols:
+        dw, dh = display
+        # East of the DATA corridor so DATA can turn into its left wall, and low
+        # enough to clear both the CPU and the tape.
+        DX = CX + cpu.dsp_cols[Band.DSP_DATA] + 2
+        DY = max(CY + H + 4, TY + tape.height + 3)
+        g.blit(DX, DY, display_cells(dw, dh))
+        _route_display(
+            g,
+            {b: CX + c for b, c in cpu.dsp_cols.items()},
+            south=CY + H + 2,
+            dx=DX,
+            dy=DY,
+            width=dw,
+            height=dh,
+        )
+        for band in cpu.dsp_cols:
+            dsp_touches[band] = (CX + cpu.dsp_cols[band], CY + H + 2)
+
     rows = g.rows()
     touches = {
         "rom": (CX - 1, CY + cpu.centre),
         "in": (CX - 1, iy),
-        "out": (CX + cpu.out_col, CY + H + 2),
         "mem_req": (CX + W + 2, req_row),
         "mem_resp": (CX + W + 2, resp_row),
+        **dsp_touches,
     }
+    if cpu.wants_out:
+        touches["out"] = (CX + cpu.out_col, CY + H + 2)
     check_bindings(
         [(CX + x, CY + y, glyph, band) for x, y, glyph, band in cpu.pipe_glyphs], touches
     )
-    # Five pipes at the CPU plus the tape's own two ring pipes and one into it: any
-    # other count means the grid is geometrically ambiguous somewhere — usually a
-    # leg running alongside a room corner, which the engine reads as an extra pipe
-    # (see mem_in_row). Cheap to check and it localises a whole class of bug.
-    _check_pipe_count(rows, expected=8)
+    # Count the pipes the engine finds against the number drawn: any mismatch means
+    # the grid is geometrically ambiguous somewhere — usually a leg running
+    # alongside a room corner, which the engine reads as an extra pipe (see
+    # mem_in_row). Cheap, and it localises a whole class of otherwise silent bug.
+    expected = 4 + 1 + 2 + (1 if cpu.wants_out else 0) + len(cpu.dsp_cols)
+    _check_pipe_count(rows, expected=expected)
     return Machine(
         rows=rows,
         program=program,
@@ -1088,11 +1173,76 @@ def _check_pipe_count(rows: list[str], *, expected: int) -> None:
         )
 
 
+# ── the LM-75 panel ──────────────────────────────────────────────────────────
+def display_cells(width: int, height: int) -> dict[tuple[int, int], str]:
+    """A blank LM-75 of the given interior size, local ``(0,0)`` at its top-left.
+
+    ``SPEC.md``: ``+`` corners, ``:`` vertical walls, ``=`` horizontal walls, and a
+    maximum interior of 64x64. The interior is left empty — the panel is driven
+    entirely by its pipes and holds no instructions.
+    """
+    if not (1 <= width <= 64 and 1 <= height <= 64):
+        raise MachineError(f"display interior {width}x{height} exceeds the LM-75's 64x64")
+    cells: dict[tuple[int, int], str] = {}
+    for x in range(1, width + 1):
+        cells[(x, 0)] = "="
+        cells[(x, height + 1)] = "="
+    for y in range(1, height + 1):
+        cells[(0, y)] = ":"
+        cells[(width + 1, y)] = ":"
+    for corner in ((0, 0), (width + 1, 0), (0, height + 1), (width + 1, height + 1)):
+        cells[corner] = "+"
+    return cells
+
+
+def _route_display(
+    g: _Grid,
+    cols: dict[str, int],
+    *,
+    south: int,
+    dx: int,
+    dy: int,
+    width: int,
+    height: int,
+) -> None:
+    """Route the three port pipes from the CPU's south wall to the panel's sides.
+
+    The side a pipe attaches to *is* its function, so each has to reach a different
+    face: ADDR the top, DATA the left, SWAP the bottom. Two rules from ``SPEC.md``
+    shape the routing — **one pipe per side**, and **no corner attachment**, which
+    is stricter than for a plain room.
+
+    Laying the three CPU columns west-to-east as SWAP, DATA, ADDR is what keeps
+    their descents from crossing: SWAP has the longest journey (down past the panel
+    and back up into its underside), DATA stops at the panel's left edge, and ADDR
+    drops straight onto the top. Each turns east or south only after the ones west
+    of it have already left the corridor.
+    """
+    swap_x, data_x, addr_x = cols[Band.DSP_SWAP], cols[Band.DSP_DATA], cols[Band.DSP_ADDR]
+    if not (swap_x < data_x < dx - 1):
+        raise MachineError(
+            f"display at x={dx} leaves no corridor: SWAP {swap_x} and DATA {data_x} "
+            "must both be west of its left wall"
+        )
+    if not (dx + 1 <= addr_x <= dx + width):
+        raise MachineError(f"ADDR column {addr_x} is not over the panel's top wall")
+
+    # ADDR: straight down onto the top wall.
+    g.draw_pipe([(addr_x, south), (addr_x, dy - 1)])
+    # DATA: down the corridor, then east into the left wall, clear of both corners.
+    data_row = dy + height // 2
+    g.draw_pipe([(data_x, south), (data_x, data_row), (dx - 1, data_row)])
+    # SWAP: down past the panel, east under it, then north into the bottom wall.
+    under = dy + height + 3
+    swap_col = dx + width // 2
+    g.draw_pipe([(swap_x, south), (swap_x, under), (swap_col, under), (swap_col, dy + height + 2)])
+
+
 #: Tape size per problem, from the *constraints* rather than the public data:
 #: ``tcp`` allows n=48, so addresses reach BUF+47 = 51 even though no public case
 #: goes past 35. ``ARCH.md`` §4.1: footprint is 32x32 whatever N is and cost is
 #: ~105 + 8.3N ticks, so there is no trade-off — just size it to the real maximum.
-TAPE_SIZE = {"brackets": 8, "tcp": 52}
+TAPE_SIZE = {"brackets": 8, "tcp": 52, "plotter": 11}
 
 
 def build_for(slug: str) -> Machine:

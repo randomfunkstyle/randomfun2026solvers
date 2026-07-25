@@ -42,7 +42,7 @@ slow = pytest.mark.skipif(
 #: The two graded problems this generator exists for, and the tape size each needs.
 #: Sized from the *problem constraints*, not the public data: ``tcp`` allows n=48,
 #: so addresses reach BUF+47 = 51 even though no public case goes past 35.
-TARGETS = {"brackets": 8, "tcp": 52}
+TARGETS = {"brackets": 8, "tcp": 52, "plotter": 11}
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────
@@ -164,6 +164,12 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     assert m.plan.k == 4
     assert m.tape_n == tape_n
     assert "@" in "".join(m.rows)
+    # A display problem gets a panel and no `O` room: SPEC.md makes emitting any
+    # program output an error there.
+    grid = "".join(m.rows)
+    display = any(s.value.startswith("display") for s in m.plan.sem.values())
+    assert (":" in grid and "=" in grid) is display
+    assert ("O" in grid) is not display
 
 
 @node_required
