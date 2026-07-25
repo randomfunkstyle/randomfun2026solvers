@@ -506,6 +506,12 @@ def to_svg(
             f'<text class="rlab" x="{pad + x0 * cell + 3}" y="{pad + y0 * cell - 3}">'
             f"room{room.id} {escape(room.kind)}</text>"
         )
+    # IO gets a filled badge rather than a hue, on purpose: every hue in this
+    # picture already means "which arm of a fork", and a sixth and seventh hue
+    # fail CVD separation against the arm set (violet vs magenta is dE 4.1 under
+    # protanopia). Fill-plus-shape is a free channel -- round for a read, square
+    # for a write -- and each still carries its own glyph, so neither is
+    # distinguished by colour alone.
     for y in range(h):
         for x in range(w):
             glyph = rows[y][x] if x < len(rows[y]) else " "
@@ -513,8 +519,30 @@ def to_svg(
                 continue
             info = cells.get((x, y))
             k = info.kind.value if info else "void"
+            io = "read" if glyph in "rRUq" else ("write" if glyph in "sS" else "")
+            if io and info and info.room is not None:
+                stalled = f.stalls.get((x, y), 0)
+                note = (
+                    f" · blocked {stalled} tick(s) waiting" if stalled else ""
+                )
+                if io == "read":
+                    parts.append(
+                        f'<circle class="io io-read" cx="{cx(x)}" cy="{cy(y)}" '
+                        f'r="{cell * 0.40:.1f}"><title>READ ({x},{y}) '
+                        f"{escape(glyph)} — receive from the nearest incoming pipe"
+                        f"{note}</title></circle>"
+                    )
+                else:
+                    parts.append(
+                        f'<rect class="io io-write" x="{cx(x) - cell * 0.37:.1f}" '
+                        f'y="{cy(y) - cell * 0.37:.1f}" width="{cell * 0.74:.1f}" '
+                        f'height="{cell * 0.74:.1f}" rx="2.5"><title>WRITE ({x},{y}) '
+                        f"{escape(glyph)} — send to the nearest outgoing pipe"
+                        f"{note}</title></rect>"
+                    )
+            cls = f"g k-{k}" + (f" on-{io}" if io and info and info.room is not None else "")
             parts.append(
-                f'<text class="g k-{k}" x="{cx(x)}" y="{cy(y)}">{escape(glyph)}</text>'
+                f'<text class="{cls}" x="{cx(x)}" y="{cy(y)}">{escape(glyph)}</text>'
             )
 
     # dead in-room blanks: mark them, so waste is visible against the route
@@ -546,23 +574,87 @@ def to_svg(
             cy(b[1]) + py * m,
         )
 
-    # Static structure first, faint: every steer glyph forces a heading whether or
-    # not this trace happened to walk it. Without these the board looks empty in
-    # exactly the places whose direction is already decided by the grid.
-    for (x, y), info in cells.items():
+    # Static structure, faint: a steer glyph does not just nudge the man one cell,
+    # it commits him to a heading until something *changes* it. So the arrow is
+    # drawn along the WHOLE implied run -- through blanks, nops and ordinary
+    # opcodes, all of which leave a heading untouched -- and stops only where the
+    # heading can change (another steer, a conditional turn) or must (a wall).
+    # Drawing one stub per glyph was what made a `>` look like a one-cell hop.
+    def implied_run(start: Cell, d: Dir) -> Cell:
+        x, y = start
+        while True:
+            nx, ny = x + d[0], y + d[1]
+            nxt = cells.get((nx, ny))
+            if nxt is None or nxt.kind in (Kind.WALL, Kind.PIPE, Kind.VOID):
+                return (x, y)
+            if nxt.kind in (Kind.STEER, Kind.BRANCH, Kind.HALT):
+                return (nx, ny)  # include the cell that takes over
+            x, y = nx, ny
+
+    for (x, y), info in sorted(cells.items()):
         if info.kind is not Kind.STEER:
             continue
         d = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}.get(info.glyph)
         if d is None:
             continue
-        seen = "" if (x, y) in walk.first else " (never walked in this trace)"
-        x1, y1 = cx(x) - d[0] * cell * 0.34, cy(y) - d[1] * cell * 0.34
-        x2, y2 = cx(x) + d[0] * cell * 0.40, cy(y) + d[1] * cell * 0.40
-        parts.append(
-            f'<line class="s" x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'marker-end="url(#sa)"><title>({x},{y}) {escape(info.glyph)} forces '
-            f"{_ARROW[d]} — structural, always{seen}</title></line>"
+        ex, ey = implied_run((x, y), d)
+        seen = "" if (x, y) in walk.first else " · never walked in this trace"
+        x1, y1 = cx(x) - d[0] * cell * 0.30, cy(y) - d[1] * cell * 0.30
+        x2, y2 = cx(ex) + d[0] * cell * 0.34, cy(ey) + d[1] * cell * 0.34
+        mids = " ".join(
+            f"{cx(x + d[0] * i):.1f},{cy(y + d[1] * i):.1f}"
+            for i in range(1, max(abs(ex - x), abs(ey - y)) + 1)
         )
+        pts = f"{x1:.1f},{y1:.1f}" + (f" {mids}" if mids else "") + f" {x2:.1f},{y2:.1f}"
+        parts.append(
+            f'<polyline class="s" points="{pts}" marker-mid="url(#csa)" '
+            f'marker-end="url(#sa)"><title>({x},{y}) {escape(info.glyph)} commits to '
+            f"{_ARROW[d]} for {max(abs(ex - x), abs(ey - y))} cell(s), to "
+            f"({ex},{ey}){seen}</title></polyline>"
+        )
+
+    # Every arm a fork CAN take, not just the ones this run happened to take.
+    # SPEC: `X` turns on the main hand (A<0 left, A>0 right, A==0 straight) so it
+    # is three-way; `a`/`d` are two-way against the backpack; `x` picks a side on
+    # its parity. The arm set depends on the heading he arrives with, which the
+    # grid alone does not fix -- so entry headings come from the trace, and a fork
+    # never entered is ringed but left unarmed rather than guessed at.
+    _CW = {(1, 0): (0, 1), (0, 1): (-1, 0), (-1, 0): (0, -1), (0, -1): (1, 0)}
+    _CCW = {v: k for k, v in _CW.items()}
+
+    def possible_arms(glyph: str, d: Dir) -> list[Dir]:
+        if glyph == "X":  # A<0 left, A>0 right, A==0 straight
+            return [_CCW[d], d, _CW[d]]
+        if glyph == "a":  # BP>0 left else straight
+            return [_CCW[d], d]
+        if glyph == "d":  # BP>0 right else straight
+            return [d, _CW[d]]
+        if glyph == "x":  # BP even left else right
+            return [_CCW[d], _CW[d]]
+        return [d]
+
+    for x, y in sorted(f.forks):
+        info = cells.get((x, y))
+        glyph = info.glyph if info else "?"
+        taken = f.exercised((x, y))
+        arms: list[Dir] = []
+        for entry in sorted(f.in_dirs.get((x, y), set())):
+            for a in possible_arms(glyph, entry):
+                if a not in arms:
+                    arms.append(a)
+        for i, a in enumerate(arms):
+            hue = i % len(_BRANCH_HUE)
+            hot = a in taken
+            x1, y1 = cx(x), cy(y)
+            x2, y2 = cx(x) + a[0] * cell * 0.86, cy(y) + a[1] * cell * 0.86
+            parts.append(
+                f'<line class="arm b{hue}{"" if hot else " cold"}" x1="{x1:.1f}" '
+                f'y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+                f'marker-end="url(#ab{hue})">'
+                f"<title>ARM {i + 1} of fork ({x},{y}) {escape(glyph)} → {_ARROW[a]}"
+                f"{' · taken in this trace' if hot else ' · NEVER TAKEN — untested branch'}"
+                f"</title></line>"
+            )
 
     # Every arm of a fork gets its own colour, so a branch is traceable: the run
     # leaving it says *which way this one went*, which one per-runner colour
@@ -677,6 +769,10 @@ def to_svg(
             '<marker id="sa" viewBox="0 0 6 6" markerWidth="4" markerHeight="4" '
             'refX="5.2" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" '
             'fill="#cbd5e1"/></marker>'
+            '<marker id="csa" viewBox="0 0 6 6" markerWidth="3.6" '
+            'markerHeight="3.6" refX="3" refY="3" orient="auto">'
+            '<path d="M1.5,1.5 L4,3 L1.5,4.5" fill="none" stroke="#cbd5e1" '
+            'stroke-width="1.4" stroke-linecap="round"/></marker>'
         )
     )
     runner_css = "".join(f".e.b{i}{{stroke:{c}}}" for i, c in enumerate(_BRANCH_HUE))
@@ -723,7 +819,12 @@ def to_svg(
  .k-literal{{fill:#7c3aed}} .k-io,.k-spawn{{fill:#0891b2;font-weight:700}}
  .dead{{fill:#fecaca;opacity:.75}}
  .e{{opacity:.92;stroke-linecap:round;fill:none;stroke:{_ROUTE_INK}}} {runner_css}
- .s{{stroke:#cbd5e1;stroke-width:1.1;opacity:.85}}
+ .s{{stroke:#cbd5e1;stroke-width:1.1;opacity:.9;fill:none}}
+ .arm{{stroke-width:2.4;opacity:.95}}
+ .arm.cold{{stroke-dasharray:2.5 2.5;opacity:.6}}
+ .io{{opacity:.95}}
+ .io-read{{fill:#7c3aed}} .io-write{{fill:#b45309}}
+ text.on-read,text.on-write{{fill:#fff!important;font-weight:700}}
  .fork{{fill:none;stroke:#db2777;stroke-width:2.2}}
  .fork.cold{{stroke-dasharray:3 2;opacity:.8}}
  .cross{{fill:none;stroke:#0891b2;stroke-width:1.4;stroke-dasharray:2 2}}
@@ -750,7 +851,10 @@ def to_svg(
 <div class="wrap"><svg width="{W}" height="{H}" viewBox="0 0 {W} {H}">
 <defs>{markers}</defs>{"".join(parts)}</svg></div>
 <div class="legend">{legend}
- <span><i style="background:#cbd5e1"></i>structural arrow (steer glyph)</span>
+ <span><i style="background:#cbd5e1"></i>structural run (steer commits a heading)</span>
+ <span><i style="background:#7c3aed;border-radius:50%"></i>READ (r R U q)</span>
+ <span><i style="background:#b45309"></i>WRITE (s S)</span>
+ <span><i style="border:2px dashed #2563eb"></i>fork arm never taken</span>
  <span><i style="border:2px solid #db2777"></i>fork (X a d x)</span>
  <span><i style="border:2px dashed #db2777"></i>fork, &lt;2 arms taken (untested)</span>
  <span><i style="border:1.5px dashed #0891b2"></i>crossing (shared blank)</span>
