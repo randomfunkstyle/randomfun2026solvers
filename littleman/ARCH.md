@@ -347,6 +347,72 @@ need a pointer and a value live together. **`tcp` therefore needs no SPILL block
 all** — one fewer room, two fewer pipes, and every memory lane stays on the east
 bus, which is what keeps §7.1 tractable.
 
+### 2.9 Profiling: where the ticks actually go
+
+`tools/heatmap.mjs` samples every runner's cell as the engine steps, and
+`lm1/profile.py` attributes those cells to the regions `machine.py` records at
+generation time (`Machine.regions`, rendered through the memory worker's
+`man_debug` overlays). Two things had to be right before the numbers meant
+anything:
+
+- **Split by runner.** A *servant* blocked on its input — the adapter waiting for
+  a request, the tape waiting for the adapter, the relay waiting for the ring — is
+  **idle**, not a bottleneck, and pooling it with the CPU inverts the picture. The
+  first run pooled them and pointed at the adapter's `r` as 19 % of all time; it
+  is simply idle 89 % of its life. The tool now reports a stall fraction per
+  runner and treats the least-stalled man as the critical path.
+- **Name the cells.** A generated grid has ~10k cells and carries no comments, so a
+  list of hot coordinates is unreadable.
+
+`plotter`, sampled over one round (300k ticks), before any change:
+
+| bucket | share | note |
+|---|---|---|
+| lanes | 47 % | but ~80 % of each *memory* lane is its blocked `r` |
+| **return path** | **25 %** | pure walking — no work at all |
+| slabs | 7.7 % | |
+| trie | 6.1 % | |
+| fetch | 1.4 % | |
+
+**The return path was the first fix, and it was a placement mistake, not a
+necessity.** Every instruction walks from the collector row up a riser to the
+fetch row, and the collector had been placed *below* the structures band — so the
+riser was 38 cells where the lane band alone needs 16. Moving the collector
+directly under the lane band and making slab exits **rise** into it instead of
+dropping past it took the return path to 17.9 % and bought:
+
+| | before | after | |
+|---|---|---|---|
+| `brackets` | 62,930 | **55,986** | −11.0 % |
+| `plotter` | 482,933 | **421,917** | −12.6 % |
+| `tcp` | 96,923 | **92,383** | −4.7 % |
+| `gradebook` | 694,713 | **681,441** | −1.9 % |
+
+Two glyph rules fell out of it, both of which broke a program first:
+
+- **Only a turn cell may be an arrow; the body of a drop or riser must be `.`.**
+  A riser now crosses shallower slabs' westbound entry rows, and a `^` there sends
+  that man north. `.` is the only glyph two men crossing one cell in different
+  directions both survive.
+- **A branch's loop exit cannot rise at `base + 2`** — that is exactly the column
+  where each arm parks its `W`, so the returning man walked through a register
+  swap. It rises at `base + 11`, east of every arm.
+
+**Still on the table, measured.** The next two, with the numbers that justify them:
+
+1. **The CPU is 13–18 columns wider than it needs to be**, purely so a memory `r`
+   binds to the tape's response pipe (east) rather than the ROM pipe (west) — that
+   is what `mem_pad` is. The width is paid *twice per instruction* (east to the
+   drop column, west along the collector). Moving the response pipe to the **north**
+   wall, directly above the memory lanes, would let `mem_pad` be 0: it lengthens
+   one pipe (a per-*read* cost) to shorten every instruction's walk (a per-
+   *instruction* cost), and instructions outnumber reads ~2.7:1, so break-even is
+   ~70 extra pipe cells against ~26 saved per instruction.
+2. **Response-pipe latency is 5–9 %.** The pipe is 47–49 cells and a read is
+   strictly serial — `s` then `r`, one outstanding request — so the whole length is
+   paid on every read (§7.4b). It is that long only because the adapter sits
+   between the CPU and the tape, forcing a detour over the top.
+
 ## 3. Block diagram
 
 Every box is a `layout.py` `Container` with fixed ports; every arrow is a pipe

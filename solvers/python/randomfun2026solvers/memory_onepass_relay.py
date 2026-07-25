@@ -8,7 +8,7 @@ two-pair forwarding cycle.
 """
 from __future__ import annotations
 
-from randomfun2026solvers.circuit import Circuit, E, N, S, W
+from randomfun2026solvers.circuit import Circuit, E, GLYPH, N, S, W
 from randomfun2026solvers.memory_blocks import Device, PipePort
 from randomfun2026solvers.memory_tape import lit
 
@@ -61,12 +61,63 @@ def zero_fill_relay(name: str, size: int, *, note: str, color: str) -> Device:
     )
 
 
+def zero_fill_relay_rot180(name: str, size: int, *, note: str, color: str) -> Device:
+    """Return :func:`zero_fill_relay` rotated 180 degrees.
+
+    A half-turn preserves clockwise control flow, unlike a mirror.  It places
+    the forward input on the west side and the ring return on the east side,
+    which is useful when both ports face a worker's east wall.
+    """
+    original = zero_fill_relay(name, size, note=note, color=color)
+    transformed = Circuit(original.width, original.height, strict_corridors=True)
+    opposite = {E: W, W: E, N: S, S: N}
+    glyphs = {GLYPH[d]: GLYPH[opposite[d]] for d in (E, W, N, S)}
+    for (x, y), ch in original.circuit.cell.items():
+        transformed.set(original.width - 1 - x, original.height - 1 - y, glyphs.get(ch, ch))
+
+    # A man always spawns east, even when the room is rotated. Extend the room
+    # by two rows and feed a fresh east-facing spawn into the westbound startup.
+    rotated = Circuit(original.width, original.height + 2, strict_corridors=True)
+    for (x, y), ch in transformed.cell.items():
+        if y == original.height - 1:
+            continue
+        rotated.set(x, y, "<" if ch == "@" else ch)
+    for y in (original.height - 1, original.height):
+        rotated.set(0, y, "|")
+        rotated.set(original.width - 1, y, "|")
+    for x in range(original.width):
+        rotated.set(
+            x,
+            original.height + 1,
+            "+" if x in (0, original.width - 1) else "-",
+        )
+    rotated.set(1, original.height, "@")
+    rotated.set(original.width - 2, original.height, "^")
+    rotated.set(original.width - 2, original.height - 1, "^")
+    return Device(
+        name,
+        rotated,
+        {
+            "ring-return": PipePort(9, 3, E, "out", "zeros and forwarded values"),
+            "ring-forward": PipePort(-1, 1, W, "in", "values from the worker"),
+        },
+        note,
+        color,
+    )
+
+
 def _self_test() -> None:
     relay = zero_fill_relay("relay", 10, note="ring owner", color="#fb7185")
     assert relay.width == 9 and relay.height == 8
     assert relay.ports["ring-return"].role == "out"
     assert relay.ports["ring-forward"].role == "in"
     assert relay.circuit.get(1, 1) == "@"
+    rotated = zero_fill_relay_rot180("relay", 10, note="ring owner", color="#fb7185")
+    assert rotated.width == 9 and rotated.height == 10
+    assert rotated.ports["ring-return"].role == "out"
+    assert rotated.ports["ring-forward"].role == "in"
+    assert rotated.circuit.get(1, 8) == "@"
+    assert rotated.circuit.get(7, 6) == "<"
 
 
 if __name__ == "__main__":

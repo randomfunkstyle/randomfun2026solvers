@@ -54,5 +54,7 @@ drain:  LD  WANT
         LDA                 ; ACC = buffer[want]
         BRZ main            ; a gap: wait for the next packet
         OUT
-        INCM WANT           ; want += 1 in one instruction            <- ext
+        LD  WANT
+        ADDI 1
+        ST  WANT
         JMP drain

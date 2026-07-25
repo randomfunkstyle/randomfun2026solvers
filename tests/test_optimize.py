@@ -82,6 +82,7 @@ def test_optimize_refuses_broken_input() -> None:
         optimize(broken, "atoi")
 
 
+@pytest.mark.slow  # optimiser search: ~30-80s
 @node_required
 def test_optimize_atoi_improves_and_verifies() -> None:
     res = optimize(EXAMPLES / "atoi.man", "atoi", max_sweeps=1)
@@ -93,6 +94,7 @@ def test_optimize_atoi_improves_and_verifies() -> None:
     assert verify(res.render(), "atoi").passed
 
 
+@pytest.mark.slow  # optimiser search: ~30-80s
 @node_required
 def test_optimize_memory_stays_correct() -> None:
     # memory's long pipes are load-bearing buffers; every shrink breaks it, so the

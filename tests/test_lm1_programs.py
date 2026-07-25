@@ -122,10 +122,13 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # LDA/MOVA in place of LDP/STP: keeping the address in ACC means the
         # `0`/`1` request literal never has to coexist with it, so tcp needs no
         # SPILL block at all (see tcp.asm's header).
-        "tcp": {"INCM", "LDA", "MOVA"},
-        # Two arrays (ids, grades) indexed by a runtime student number. `DIVI 4`
-        # turns a grade address back into that number, which is what lets the whole
-        # program run on one cursor (see gradebook.asm).
+        #
+        # `INCM` is deliberately NOT here. It measured -0.9% on the public cases but
+        # the judge scored that build 1,927,262,669 against 1,849,876,224 for this
+        # one -- tcp is tape-bound, so removing an instruction re-times requests onto
+        # worse ring phases. Reverted; see ARCH.md §4.1 on judging rather than
+        # modelling a tape-bound program.
+        "tcp": {"LDA", "MOVA"},
         # One packed cell per student: `AND` masks a field out of it (that is what
         # deletes the ids array and TOP's tie-break), `MUL`/`DIV` scale a grade by a
         # field weight the *operation* names, and `MOVA` is how the roster fills a
@@ -141,10 +144,10 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         "plotter": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
         "triangle-closed": {"MUL", "DIVI"},
-        # 27 one-cell bitmasks instead of 243 flags: `AND` tests membership, and
-        # the set is a plain ADD because the test proved the bit clear. LDA/MOVA
-        # index the masks; DIVI builds the box number (see sudoku-validity.asm).
-        "sudoku-validity": {"AND", "DIVI", "LDA", "MOVA"},
+        # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
+        # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
+        # indexed opcodes are drawn *without* a SPILL block — see machine.py's `_HW`.
+        "sudoku-validity": {"DIVI", "MODI", "LDP", "STP"},
     }
 
 

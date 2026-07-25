@@ -13,7 +13,6 @@ Three tiers, cheapest first:
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -34,21 +33,19 @@ node_required = pytest.mark.skipif(
     shutil.which("node") is None or not LM_MJS.exists(),
     reason="node and littleman/lm.mjs required",
 )
-slow = pytest.mark.skipif(
-    os.environ.get("LM1_SLOW") != "1",
-    reason="set LM1_SLOW=1 to run the full public-case sweeps",
-)
+# One mechanism for "too slow for the default run", registered in pyproject.
+slow = pytest.mark.slow
 
-#: The non-display programs this file covers; the display ones (``plotter``,
-#: ``palette``) need a panel and a ROM fold, so they go through ``build_for`` in
-#: ``test_lm1_display.py`` instead. ``gradebook`` likewise has its own file.
+#: Every task the generator can build, with the tape size each needs — read from
+#: the generator so the two cannot drift apart. Sizes come from the *problem
+#: constraints*, not the public data: ``tcp`` allows n=48, so addresses reach
+#: BUF+47 = 51 even though no public case goes past seq 35.
 #:
-#: Tape sizes are **highest address reached + 1**, from the problem *constraints*
-#: rather than the public data — ``tcp`` allows n=48, so it reaches BUF+47 = 51
-#: even though no public case goes past seq 35. The ``+ 1`` is load-bearing: a
-#: tape of exactly 51 crashes tcp at n=48 (see
-#: :func:`test_tcp_survives_the_constraint_limit`).
-TARGETS = {"brackets": 5, "tcp": 52, "sudoku-validity": 37}
+#: The sizes are **highest address reached + 1**, and the ``+ 1`` is load-bearing:
+#: a tape of exactly 51 crashes tcp at n=48 after 32 of 48 values (see
+#: :func:`test_tcp_survives_the_constraint_limit`), and plotter hit the same wall
+#: with 11 live values against ``tape_n=11``.
+TARGETS = machine.TAPE_SIZE
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────
@@ -165,7 +162,9 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     between the ROM pipe and the tape's response pipe that stalled every jump was
     caught exactly here.
     """
-    m = machine.build(programs.load(slug), tape_n=tape_n)
+    # build_for supplies the tape size *and* the panel resolution, which a display
+    # program now requires: the panel is the problem's, not the program's.
+    m = machine.build_for(slug)
     assert m.width > 0 and m.height > 0
     assert m.plan.k == 4
     assert m.tape_n == tape_n
@@ -181,9 +180,9 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
 @node_required
 def test_checked_in_grids_match_the_generator() -> None:
     """The ``.man`` files under ``tasks/solutions`` are generated, not hand-edited."""
-    for slug, tape_n in TARGETS.items():
+    for slug in TARGETS:
         path = REPO / "tasks" / "solutions" / f"{slug}_cpu.man"
-        expected = "\n".join(machine.build(programs.load(slug), tape_n=tape_n).rows) + "\n"
+        expected = "\n".join(machine.build_for(slug).rows) + "\n"
         assert path.read_text(encoding="utf-8") == expected, (
             f"{path.name} is stale; regenerate with "
             f"`python -m randomfun2026solvers.lm1.machine {slug} --out {path}`"

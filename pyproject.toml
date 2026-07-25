@@ -14,6 +14,7 @@ randomfun2026solvers = "randomfun2026solvers.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.14.0",
 ]
 
@@ -36,3 +37,12 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The default run must stay fast enough to use as a loop (target: under ~30s).
+# Anything dominated by a search or a long wasm run is marked `slow` and excluded;
+# run it with `pytest -m slow`, or the whole suite with `pytest -m ""`.
+# `-n auto`: ~193 of these tests shell out to node/wasm, so they are dominated by
+# process startup and parallelise almost linearly (25s -> under 10s on 10 cores).
+addopts = "-m 'not slow' -n auto"
+markers = [
+  "slow: minutes, not seconds — optimiser searches and long engine runs",
+]

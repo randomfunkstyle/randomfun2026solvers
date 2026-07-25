@@ -435,6 +435,7 @@ def test_every_public_case_commits_exactly_the_expected_frames(slug: str) -> Non
             )
 
 
+@pytest.mark.slow  # drives the engine over a whole problem
 @node_required
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
 def test_the_score_is_measured_from_the_committed_frames(slug: str) -> None:
@@ -488,11 +489,11 @@ STEP_CAP = 5_000_000
 #: This used to be a 32-pixel *diagonal* at 265.5k ticks a round, which put 20 rounds
 #: 6% over the step cap; the packed single-add loop is what took it to ~97k.
 WORST_SEGMENT = (31, 1, 0, 0)
-WORST_ROUND_TICKS = 96_994
+WORST_ROUND_TICKS = 81_434
 
 #: 20 rounds of ``WORST_SEGMENT`` on the engine — the number the step cap is checked
 #: against, and the one figure that has to stay honest.
-WORST_20_ROUND_TICKS = 1_938_265
+WORST_20_ROUND_TICKS = 1_626_229
 
 
 def _judge_segments(segments: list[tuple[int, ...]]) -> object:
@@ -521,6 +522,7 @@ def _judge_segments(segments: list[tuple[int, ...]]) -> object:
     return snap
 
 
+@pytest.mark.slow  # drives the engine over a whole problem
 @node_required
 def test_only_the_public_cases_are_graded_which_is_why_plotter_is_submittable() -> None:
     """``privateTestCount`` is 0, so the *graded* worst case is a public one.
@@ -555,7 +557,7 @@ def test_the_worst_legal_20_round_load_fits_the_step_cap_on_the_engine() -> None
     magnitude. That model said 3.8M for a load the engine ran in 5.31M against a 5M
     cap, and the overrun shipped. So: engine, worst legal shape, all 20 rounds.
 
-    ~1.94M is 39% of the cap, i.e. a 2.6x margin, which is what buys safety against
+    ~1.63M is 33% of the cap, i.e. a 3.1x margin, which is what buys safety against
     private cases nobody can see (``privateTestCount`` says 0, but it said 0 for
     ``gradebook`` too and the judge served one anyway).
     """
