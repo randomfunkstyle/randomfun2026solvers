@@ -42,6 +42,13 @@ slow = pytest.mark.skipif(
 #: The two graded problems this generator exists for, and the tape size each needs.
 #: Sized from the *problem constraints*, not the public data: ``tcp`` allows n=48,
 #: so addresses reach BUF+47 = 51 even though no public case goes past 35.
+#: The non-display programs this file covers; the display ones (``plotter``,
+#: ``palette``) need a panel and a ROM fold, so they go through ``build_for`` in
+#: ``test_lm1_display.py`` instead. ``gradebook`` likewise has its own file.
+#:
+#: brackets/tcp are sized to the address each actually reaches, not to the
+#: constraint: the tape is a rotating ring, so a slot costs real ticks (~114/case
+#: on brackets, ~999 on tcp) at no footprint change.
 TARGETS = {"brackets": 5, "tcp": 51, "sudoku-validity": 37}
 
 
@@ -164,6 +171,12 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     assert m.plan.k == 4
     assert m.tape_n == tape_n
     assert "@" in "".join(m.rows)
+    # A display problem gets a panel and no `O` room: SPEC.md makes emitting any
+    # program output an error there.
+    grid = "".join(m.rows)
+    display = any(s.value.startswith("display") for s in m.plan.sem.values())
+    assert (":" in grid and "=" in grid) is display
+    assert ("O" in grid) is not display
 
 
 @node_required

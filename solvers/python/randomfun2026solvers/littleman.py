@@ -32,6 +32,7 @@ __all__ = [
     "PipeValue",
     "Room",
     "Display",
+    "FrameJudge",
     "Box",
     "PipeSeg",
     "PipeGeom",
@@ -39,6 +40,7 @@ __all__ = [
     "Entities",
     "Fatal",
     "Snapshot",
+    "DisplayRun",
     "render_ascii",
     "summarize",
     "main",
@@ -115,6 +117,14 @@ class Room(_Model):
 
 
 class Display(_Model):
+    """An LM-75 panel: both buffers, the cursor, and how many frames it committed.
+
+    ``front`` is the *current* buffer (what the judge compares), ``back`` the
+    *next* one being composed; both are ``w * h`` colour values in row-major
+    order. ``frames`` is the **commit counter**, not a list of frames — the engine
+    keeps no history (see :class:`FrameJudge` for the streaming verdict).
+    """
+
     id: int
     min_: Vec2 = Field(alias="min")
     max_: Vec2 = Field(alias="max")
@@ -123,12 +133,36 @@ class Display(_Model):
     front: list[int] = Field(default_factory=list)
     back: list[int] = Field(default_factory=list)
     cursor: int | None = None
-    frames: list[Any] | None = None
+    frames: int = 0
 
     @model_validator(mode="before")
     @classmethod
     def _null_lists(cls, data: Any) -> Any:
         return _nulls_to_lists(data, ("front", "back"))
+
+    def rows(self, *, buffer: str = "front") -> list[str]:
+        """One hex digit per pixel, one string per row — the JSON frame format."""
+        flat = self.front if buffer == "front" else self.back
+        return [
+            "".join(f"{p:x}" for p in flat[y * self.w : (y + 1) * self.w]) for y in range(self.h)
+        ]
+
+
+class FrameJudge(_Model):
+    """The engine's streaming display verdict, when ``judge`` was given frames.
+
+    ``matched`` counts committed frames that equalled the next expected one, in
+    order; the run passes when ``matched == total``. ``mismatch`` reports the
+    first offending frame (``index`` plus the ``got`` buffer).
+    """
+
+    matched: int = 0
+    total: int = 0
+    mismatch: dict[str, Any] | None = None
+
+    @property
+    def passed(self) -> bool:
+        return self.total > 0 and self.matched == self.total
 
 
 class Box(_Model):
@@ -206,6 +240,7 @@ class Snapshot(_Model):
     input_read: int | None = Field(default=None, alias="inputRead")
     output_settled: bool | None = Field(default=None, alias="outputSettled")
     frame_committed: bool | None = Field(default=None, alias="frameCommitted")
+    frame_judge: FrameJudge | None = Field(default=None, alias="frameJudge")
     fatal: Fatal | None = None
 
     @model_validator(mode="before")
@@ -219,6 +254,28 @@ class Snapshot(_Model):
     def ok(self) -> bool:
         """True when the program finished cleanly (halted, no fatal error)."""
         return self.halted and self.fatal is None
+
+
+class DisplayRun(_Model):
+    """One display-judged case replayed: the frames it committed, and at which tick.
+
+    Frames are rows of hex digits, one character per pixel — the shape the problem
+    JSONs use, so they compare verbatim against a round's ``frames``. ``ticks[i]``
+    is the tick frame ``i`` was committed, which is what a display problem is scored
+    on (``GRADING.md``: "until your final frame matches").
+
+    :class:`FrameJudge` is the other half of the same story: it is the engine's own
+    verdict on whether the frames were *right*, where this carries the frames and
+    the ticks so a caller can score them.
+    """
+
+    name: str = "?"
+    frames: list[list[str]] = Field(default_factory=list)
+    ticks: list[int] = Field(default_factory=list)
+    output: list[int] = Field(default_factory=list)
+    fatal: str | None = None
+    width: int = 0
+    height: int = 0
 
 
 def _nulls_to_lists(data: Any, keys: Sequence[str]) -> Any:
@@ -326,6 +383,12 @@ class Littleman:
         Returns the settle :class:`Snapshot` — ``step`` is the precise
         final-output tick and ``output`` the emitted values. Rounds in ``input``
         / ``expected`` are separated by ``/``.
+
+        ``frames`` is a display problem's expected frames, **nested per round**:
+        ``[[[row, ...], ...], ...]`` — exactly the shape ``rounds[i]["frames"]``
+        has in ``tasks/problems/*.json``. The engine then compares each committed
+        frame against the next expected one and reports
+        :attr:`Snapshot.frame_judge`.
         """
         extra: list[str] = []
         exp = _input_to_str(expected)
@@ -336,6 +399,52 @@ class Littleman:
         if max_ticks is not None:
             extra += ["--max-ticks", str(max_ticks)]
         return self._invoke("judge", program, input=input, extra=extra)
+
+    def display_frames(
+        self,
+        program: str | os.PathLike[str],
+        cases: Sequence[dict[str, Any]],
+        *,
+        max_ticks: int | None = None,
+    ) -> list[DisplayRun]:
+        """Replay display-judged ``cases`` and return the frames each one commits.
+
+        :meth:`judge` with ``frames`` answers *did it pass*; this answers *at which
+        tick*, which the settle loop cannot: a display problem emits no program
+        output, so there is nothing for the loop to count, and a good solver
+        typically never halts. This drives ``tools/display-frames.mjs``, which steps
+        with the wasm's ``stopOnFrame`` flag and snapshots the panel at every SWAP —
+        and hands the expected frames to ``load`` so the engine gates the rounds
+        itself, exactly as the judge does.
+
+        ``cases`` are ``publicTestData`` entries; each must carry the ``frames`` it
+        expects, since that is how many commits to wait for.
+        """
+        tool = self.script.parent / "tools" / "display-frames.mjs"
+        if not tool.exists():
+            raise LittlemanError(f"display-frames.mjs not found beside {self.script}")
+        path, cleanup = _resolve_program(program)
+        spec = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        try:
+            json.dump(list(cases), spec)
+            spec.close()
+            proc = subprocess.run(
+                [self.node, str(tool), str(path), spec.name, str(max_ticks or 5_000_000)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        finally:
+            Path(spec.name).unlink(missing_ok=True)
+            if cleanup is not None:
+                cleanup()
+        if not proc.stdout.strip():
+            raise _parse_error(proc.stderr)
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise LittlemanError(f"could not parse display-frames JSON: {exc}") from exc
+        return [DisplayRun.model_validate(c) for c in (data.get("cases") or [])]
 
     # internals ------------------------------------------------------------------
     def _invoke(

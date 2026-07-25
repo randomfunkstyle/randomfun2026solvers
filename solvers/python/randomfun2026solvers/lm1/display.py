@@ -52,13 +52,19 @@ class Display(BaseModel):
 
     def write(self, port: int, value: int) -> None:
         if port == ADDR:
+            if not 0 <= value < self.width * self.height:
+                raise ValueError(f"ADDR {value} is out of bounds for {self.width}x{self.height}")
             self.cursor = value
         elif port == DATA:
+            if not 0 <= value <= 15:
+                raise ValueError(f"DATA must be a colour 0-15; got {value}")
             row, col = divmod(self.cursor, self.width)
-            if 0 <= row < self.height and 0 <= col < self.width:
-                self.next[row][col] = value
-            self.cursor += 1
+            self.next[row][col] = value
+            # "next column, else next row, else back to the upper-left"
+            self.cursor = (self.cursor + 1) % (self.width * self.height)
         elif port == SWAP:
+            if value not in (0, 1):
+                raise ValueError(f"SWAP must be 0 or 1; got {value}")
             self.current = [row[:] for row in self.next]
             self.committed.append(["".join(f"{p:x}" for p in row) for row in self.current])
             if value == 0:
