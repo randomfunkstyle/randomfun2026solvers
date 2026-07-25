@@ -35,6 +35,8 @@ __all__ = [
     "drop_col",
     "try_drop",
     "try_squash",
+    "stretch_col",
+    "stretch_row",
     "reglyph",
     "ring_capacity",
 ]
@@ -282,6 +284,112 @@ def try_drop(
     except (MoveError, PaintError) as exc:
         return None, str(exc)
     return trial, rep
+
+
+# ── the inverse move: insert a line ──────────────────────────────────────────
+def _stretch(ast: Ast, axis: str, index: int) -> DropReport:
+    """Insert one blank grid line at `index`, repairing everything that spanned it.
+
+    The inverse of :func:`_drop`, and it exists to make the value of a cut
+    *measurable*. A squash cannot be run on a grid that has no slack, so there is
+    no before-and-after to compare — but stretching always can, and inserting a
+    blank cell into a horizontal run of ops is semantically identical (the man
+    walks a nop) while costing exactly one tick per pass. Measure what the
+    insertion costs and you have measured what the removal would save, on the real
+    grid rather than by argument.
+    """
+    ax = 0 if axis == "col" else 1
+    rep = DropReport(axis=axis, index=index, note="stretch")
+
+    for room in ast.rooms:
+        lo = room.y if ax else room.x
+        hi = lo + (room.h + 1 if ax else room.w + 1)
+        if index <= lo:
+            room.translate(0, 1) if ax else room.translate(1, 0)
+            rep.rooms_moved.append(room.id)
+            continue
+        if index > hi:
+            continue
+        if room.pinned:
+            raise MoveError(
+                f"room{room.id} is pinned but {axis} {index} would widen it: {room.note}"
+            )
+        if ax:
+            room.h += 1
+        else:
+            room.w += 1
+        rep.rooms_shrunk.append(room.id)
+        for child in room.children:
+            _grow_child(child, ax, index)
+        room.ports = [
+            (x + (1 if not ax and x >= index else 0), y + (1 if ax and y >= index else 0))
+            for x, y in room.ports
+        ]
+
+    for pipe in ast.pipes:
+        moved = [
+            (x + (1 if not ax and x >= index else 0), y + (1 if ax and y >= index else 0))
+            for x, y in pipe.path
+        ]
+        # Shifting one side opens a one-cell gap wherever the run crossed the line.
+        # Bridging it is what keeps the pipe a pipe; without this the leg silently
+        # detaches and the grid still loads.
+        bridged: list[tuple[int, int]] = [moved[0]]
+        for prev, cur in zip(moved, moved[1:], strict=False):
+            if abs(prev[0] - cur[0]) + abs(prev[1] - cur[1]) == 2:
+                bridged.append(((prev[0] + cur[0]) // 2, (prev[1] + cur[1]) // 2))
+                rep.pipes_shortened[pipe.id] = rep.pipes_shortened.get(pipe.id, 0) - 1
+            bridged.append(cur)
+        pipe.path = bridged
+        pipe.glyphs = reglyph(bridged, pipe.entry_dir, pipe.exit_dir)
+        pipe.x = min(x for x, _ in bridged)
+        pipe.y = min(y for _, y in bridged)
+
+    for stray in ast.strays:
+        if ax:
+            if stray.y >= index:
+                stray.y += 1
+        elif stray.x >= index:
+            stray.x += 1
+    return rep
+
+
+def _grow_child(child, ax: int, index: int) -> None:
+    """Slide a room child forward by one, or open a blank line inside an atom."""
+    if isinstance(child, Corridor):
+        child.dots = [
+            (x + (1 if not ax and x >= index else 0), y + (1 if ax and y >= index else 0))
+            for x, y in child.dots
+        ]
+        if child.dots:
+            child.x = min(x for x, _ in child.dots)
+            child.y = min(y for _, y in child.dots)
+        return
+    if isinstance(child, Atom):
+        if ax and child.y <= index < child.y + len(child.rows):
+            local = index - child.y
+            w = child.size[0]
+            child.rows = child.rows[:local] + [" " * w] + child.rows[local:]
+            return
+        if not ax and child.x <= index < child.x + child.size[0]:
+            local = index - child.x
+            child.rows = [r[:local] + " " + r[local:] for r in child.rows]
+            return
+    if ax:
+        if child.y >= index:
+            child.y += 1
+    elif child.x >= index:
+        child.x += 1
+
+
+def stretch_col(ast: Ast, x: int) -> DropReport:
+    """Insert a blank grid column at `x`."""
+    return _stretch(ast, "col", x)
+
+
+def stretch_row(ast: Ast, y: int) -> DropReport:
+    """Insert a blank grid row at `y`."""
+    return _stretch(ast, "row", y)
 
 
 # ── squashing one room, without cutting the grid ─────────────────────────────

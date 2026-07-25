@@ -32,6 +32,7 @@ from randomfun2026solvers.manast import (  # noqa: E402
     Refine,
     RoomNode,
     parse_ast,
+    render,
     round_trip_ok,
 )
 from randomfun2026solvers.manfree import (  # noqa: E402
@@ -42,7 +43,11 @@ from randomfun2026solvers.manfree import (  # noqa: E402
     scan,
     squash_report,
 )
-from randomfun2026solvers.manmoves import try_squash  # noqa: E402
+from randomfun2026solvers.manmoves import (  # noqa: E402
+    MoveError,
+    stretch_col,
+    try_squash,
+)
 
 E, W, N, S = (1, 0), (-1, 0), (0, -1), (0, 1)
 
@@ -314,6 +319,48 @@ def test_a_squash_is_refused_when_it_would_slide_a_pipes_attach_cell():
     assert "S wall" in str(why) and "re-route" in str(why)
 
 
+def test_stretch_is_the_inverse_of_a_drop_so_a_cut_can_be_priced():
+    """Stretching is how a squash gets a number instead of an argument.
+
+    A grid with no slack cannot be squashed, so there is no before-and-after to
+    measure — but it can always be stretched, and inserting a blank into a run of
+    ops is semantically identical while costing one tick per pass. On ``plotter``
+    this priced a column at 92.5 avgTicks where the per-lap figure said 2.
+    """
+    ast = _room(["ab", "cd"])
+    stretch_col(ast, 2)
+    assert ast.rooms[0].w == 3
+    got = render(ast)
+    assert got[1] == "|a b|", got
+    assert got[2] == "|c d|", got
+
+
+def test_stretch_bridges_a_pipe_it_pulls_apart():
+    """Shifting one side of a run opens a gap; an unbridged pipe silently detaches."""
+    pipe = PipeNode(
+        id=0,
+        x=0,
+        y=0,
+        path=[(0, 0), (1, 0), (2, 0), (3, 0)],
+        glyphs=[">", "-", "-", ">"],
+        entry_dir=E,
+        exit_dir=E,
+    )
+    ast = Ast(pipes=[pipe])
+    stretch_col(ast, 2)
+    assert pipe.path == [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]
+    assert pipe.glyphs == [">", "-", "-", "-", ">"]
+
+
+def test_stretch_refuses_to_widen_a_pinned_display():
+    """Widening a panel changes the pixel resolution, which is the problem spec."""
+    ast = _room(["   ", "   "], kind="display")
+    ast.rooms[0].pinned = True
+    ast.rooms[0].note = "resolution"
+    with pytest.raises(MoveError, match="pinned"):
+        stretch_col(ast, 2)
+
+
 def test_a_pinned_room_cannot_be_squashed_either():
     ast = _room(["   ", "   "], kind="display")
     ast.rooms[0].pinned = True
@@ -398,13 +445,22 @@ def test_a_row_feeding_a_display_wall_is_reported_forced_not_spare():
 
 @node_required
 @plotter_required
-def test_the_plotter_has_no_free_row_so_the_report_says_squashing_is_the_lever():
+def test_the_report_never_claims_squashing_shrinks_the_box():
+    """It does not. The freed column becomes blank space behind the wall.
+
+    An earlier wording said "squashing is the only lever" when no line cut paid,
+    which reads as though squashing recovers the factor. It recovers ticks. Since
+    the score is factor x avgTicks both are real, but they are different levers and
+    conflating them sends a search looking for footprint in the wrong move.
+    """
     ast = parse_ast(PLOTTER, refine=Refine.BLOCKS)
     f = scan(ast)
     assert f.removable_rows() == []
     assert f.paying_lines() == [], "a column cut cannot help a grid taller than wide"
     text = report(ast)
-    assert "Squashing is the only lever" in text
+    assert "Squashing is the only lever" not in text
+    assert "factor x avgTicks" in text
+    assert "lowers ticks, never the factor" in text
     # rows 0 and 63 carry one pipe each and nothing else
     solo = [r for r in f.pipe_only_lines() if r.axis == "row" and len(r.pipes_here) == 1]
     assert {r.index for r in solo} >= {0, 63}

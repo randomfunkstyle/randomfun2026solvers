@@ -598,14 +598,19 @@ class RoomLine:
     ok: bool
     reason: str = ""
     pipes_grown: tuple[int, ...] = ()
-    #: ticks per lap this line is costing the loops that coast over it
+    #: ticks per lap this line costs the loops that coast over it. **Per lap** —
+    #: multiply by the lap count for the score, which needs a run to know. On
+    #: ``plotter`` a 2-ticks-per-lap column measured 92.5 avgTicks (~46 laps, ~1%
+    #: of score), so quoting the per-lap figure alone understates it 46-fold.
+    #: :func:`~randomfun2026solvers.manmoves.stretch_col` prices a line exactly:
+    #: insert it and read the tick delta off the engine.
     ticks: int = 0
 
     def __str__(self) -> str:
         mark = "YES" if self.ok else "no "
         s = f"{mark} {self.axis} {self.index}"
         if self.ticks:
-            s += f"  (-{self.ticks} ticks/lap)"
+            s += f"  (-{self.ticks} ticks/lap; x laps for score — measure with stretch)"
         if self.ok and self.pipes_grown:
             s += f"  grows pipe{', pipe'.join(map(str, self.pipes_grown))} by 1"
         if not self.ok:
@@ -798,9 +803,19 @@ def report(ast: Ast, *, capacity: dict[tuple[int, ...], int] | None = None) -> s
         lines.append(f"{len(paying)} of them actually lower the factor:")
         lines += [f"  {r}" for r in paying[:12]]
     else:
+        # Do not say "squashing is the only lever" here. Squashing does not lower
+        # the factor either — the freed column becomes blank space behind the wall
+        # that came in. The score is factor x avgTicks, so the two levers are
+        # independent and have to be named as such, or a search goes looking for
+        # footprint in a move that only ever pays in ticks.
         lines.append(
             "NONE of them lowers the factor: every removable line is on the short axis, "
-            "so the box does not shrink. Squashing is the only lever."
+            "so the box does not shrink."
+        )
+        lines.append(
+            "  score is factor x avgTicks, so what is left are two independent levers: "
+            "RE-ROUTE a pipe off the binding axis (lowers the factor) and SQUASH a loop "
+            "(lowers ticks, never the factor)."
         )
     for tag, group in (("row", f.rows), ("col", f.cols)):
         empty = [r.index for r in group if r.verdict is Verdict.EMPTY]
