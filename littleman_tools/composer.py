@@ -679,26 +679,91 @@ def _lower_layout_rooms(
     connections: list[_Connection] = []
     signal_sources: dict[str, _PortRef] = {}
     signal_targets: dict[str, list[_PortRef]] = {signal: [] for signal in netlist.producers}
+    explicit_branch_sources: dict[tuple[str, ...], _PortRef] = {}
+    explicit_branch_aliases = {
+        signal
+        for fanout in netlist.fanouts
+        for branch in fanout.branches
+        for signal in branch
+    }
+    direct_frame_inputs: set[str] = set()
     fanout_orientation_counter = [0]
     gates_per_level = Counter(netlist.levels[gate.output] for gate in netlist.gates)
     gate_ordinal_by_level: Counter[int] = Counter()
 
     specs.append(_io_interface_spec("input.io", _RoomRole.INPUT_INTERFACE, 0, "I"))
-    input_adapter = _make_input_demultiplexer(len(netlist.inputs))
-    specs.append(_adapter_spec("input", _RoomRole.INPUT_DEMULTIPLEXER, 0, input_adapter))
-    connections.append(
-        _Connection(
-            signal="input:frame",
-            source=_PortRef("input.io", "frame"),
-            target=_PortRef("input", "frame"),
+    direct_full_frame_fanout = (
+        len(netlist.fanouts) == 1 and netlist.fanouts[0].source == netlist.inputs
+    )
+    scalar_input_fallback = any(
+        netlist.consumers[signal] or signal in netlist.outputs for signal in netlist.inputs
+    )
+    needs_input_demultiplexer = not direct_full_frame_fanout or scalar_input_fallback
+    if needs_input_demultiplexer:
+        input_adapter = _make_input_demultiplexer(len(netlist.inputs))
+        specs.append(_adapter_spec("input", _RoomRole.INPUT_DEMULTIPLEXER, 0, input_adapter))
+        if not direct_full_frame_fanout:
+            connections.append(
+                _Connection(
+                    signal="input:frame",
+                    source=_PortRef("input.io", "frame"),
+                    target=_PortRef("input", "frame"),
+                )
+            )
+        signal_sources.update(
+            {
+                signal: _PortRef("input", f"field[{index}]")
+                for index, signal in enumerate(netlist.inputs)
+            }
         )
-    )
-    signal_sources.update(
-        {
-            signal: _PortRef("input", f"field[{index}]")
-            for index, signal in enumerate(netlist.inputs)
-        }
-    )
+
+    for fanout_index, explicit_fanout in enumerate(netlist.fanouts):
+        fanout_name = f"fanout.frame[{fanout_index}]"
+        fanout_output_count = len(explicit_fanout.branches)
+        if direct_full_frame_fanout and scalar_input_fallback:
+            fanout_output_count += 1
+        fanout_adapter = _make_scalar_fanout(fanout_output_count)
+        specs.append(_adapter_spec(fanout_name, _RoomRole.FANOUT, 0, fanout_adapter))
+
+        if direct_full_frame_fanout:
+            direct_frame_inputs.update(explicit_fanout.source)
+            frame_source = _PortRef("input.io", "frame")
+        else:
+            packer_name = f"{fanout_name}.packer"
+            packer = (
+                _make_two_field_packer()
+                if len(explicit_fanout.source) == 2
+                else _make_output_joiner(len(explicit_fanout.source))
+            )
+            specs.append(_adapter_spec(packer_name, _RoomRole.PACKER, 0, packer))
+            for field_index, signal in enumerate(explicit_fanout.source):
+                signal_targets[signal].append(_PortRef(packer_name, f"field[{field_index}]"))
+            frame_source = _PortRef(packer_name, "frame")
+
+        connections.append(
+            _Connection(
+                signal=f"{fanout_name}:input-frame",
+                source=frame_source,
+                target=_PortRef(fanout_name, "input"),
+            )
+        )
+        if direct_full_frame_fanout and scalar_input_fallback:
+            connections.append(
+                _Connection(
+                    signal="input:scalar-frame",
+                    source=_PortRef(
+                        fanout_name,
+                        f"copy[{len(explicit_fanout.branches)}]",
+                    ),
+                    target=_PortRef("input", "frame"),
+                )
+            )
+        explicit_branch_sources.update(
+            {
+                branch: _PortRef(fanout_name, f"copy[{branch_index}]")
+                for branch_index, branch in enumerate(explicit_fanout.branches)
+            }
+        )
 
     for index, gate in enumerate(netlist.gates):
         level = netlist.levels[gate.output]
@@ -717,7 +782,16 @@ def _lower_layout_rooms(
             )
         )
 
-        if len(gate.inputs) == 1:
+        frame_source = explicit_branch_sources.get(gate.inputs)
+        if frame_source is not None:
+            connections.append(
+                _Connection(
+                    signal=f"{gate.output}:input-frame",
+                    source=frame_source,
+                    target=_PortRef(gate_name, "input"),
+                )
+            )
+        elif len(gate.inputs) == 1:
             signal_targets[gate.inputs[0]].append(_PortRef(gate_name, "input"))
         else:
             packer_name = f"{gate_name}.packer"
@@ -756,6 +830,10 @@ def _lower_layout_rooms(
         signal_targets[signal].append(_PortRef("output", f"field[{index}]"))
 
     for signal in netlist.producers:
+        if signal in explicit_branch_aliases or (
+            signal in direct_frame_inputs and not signal_targets[signal]
+        ):
+            continue
         _connect_signal_with_fanout(
             signal=signal,
             source=signal_sources[signal],

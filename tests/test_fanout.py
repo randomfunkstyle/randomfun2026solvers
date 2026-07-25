@@ -1,9 +1,18 @@
 import re
+from pathlib import Path
 from types import MappingProxyType
 
 import pytest
 
-from littleman_tools.composer import FanOut, Gate, Netlist
+from littleman_tools.composer import (
+    FanOut,
+    Gate,
+    Netlist,
+    _lower_layout_rooms,
+    _RoomRole,
+    compose,
+)
+from littleman_tools.runner import Littleman
 
 
 def _fanout_half_adder() -> Netlist:
@@ -32,6 +41,86 @@ def test_netlist_records_explicit_input_frame_fanout() -> None:
     assert isinstance(netlist.producers, MappingProxyType)
     assert isinstance(netlist.consumers, MappingProxyType)
     assert isinstance(netlist.levels, MappingProxyType)
+
+
+def test_explicit_input_frame_fanout_avoids_scalar_adapters() -> None:
+    source = compose(_fanout_half_adder())
+    analysis = Littleman().analyze(source)
+
+    assert len(analysis.rooms) == 6  # I, S, XOR, AND, joiner, O
+    assert source.count("@") == 4  # S, XOR, AND, output joiner
+
+
+def test_explicit_input_frame_fanout_lowers_to_one_fanout_without_scalar_adapters() -> None:
+    primitive_root = Path(__file__).parents[1] / "tasks" / "solutions" / "primitives"
+
+    specs, _ = _lower_layout_rooms(_fanout_half_adder(), primitive_root)
+    roles = [spec.role for spec in specs]
+
+    assert roles.count(_RoomRole.FANOUT) == 1
+    assert _RoomRole.INPUT_DEMULTIPLEXER not in roles
+    assert _RoomRole.PACKER not in roles
+
+
+def test_explicit_frame_fanout_preserves_scalar_input_fallback() -> None:
+    netlist = _fanout_half_adder()
+    netlist = Netlist(
+        inputs=netlist.inputs,
+        fanouts=netlist.fanouts,
+        gates=netlist.gates,
+        outputs=("sum", "carry", "a"),
+    )
+    primitive_root = Path(__file__).parents[1] / "tasks" / "solutions" / "primitives"
+
+    specs, connections = _lower_layout_rooms(netlist, primitive_root)
+    roles = [spec.role for spec in specs]
+
+    assert roles.count(_RoomRole.FANOUT) == 1
+    assert roles.count(_RoomRole.INPUT_DEMULTIPLEXER) == 1
+    assert _RoomRole.PACKER not in roles
+    assert any(
+        connection.target.room == "output" and connection.target.port == "field[2]"
+        for connection in connections
+    )
+
+
+def test_explicit_input_subset_uses_one_demultiplexer_and_one_frame_packer() -> None:
+    netlist = Netlist(
+        inputs=("a", "b", "passthrough"),
+        fanouts=(
+            FanOut(
+                source=("a", "b"),
+                branches=(("xor_a", "xor_b"), ("and_a", "and_b")),
+            ),
+        ),
+        gates=(
+            Gate("xor-gate.man", ("xor_a", "xor_b"), "sum"),
+            Gate("and-gate.man", ("and_a", "and_b"), "carry"),
+        ),
+        outputs=("sum", "carry", "passthrough"),
+    )
+    primitive_root = Path(__file__).parents[1] / "tasks" / "solutions" / "primitives"
+
+    specs, _ = _lower_layout_rooms(netlist, primitive_root)
+    roles = [spec.role for spec in specs]
+
+    assert roles.count(_RoomRole.INPUT_DEMULTIPLEXER) == 1
+    assert roles.count(_RoomRole.PACKER) == 1
+    assert roles.count(_RoomRole.FANOUT) == 1
+
+
+@pytest.mark.slow
+def test_explicit_fanout_half_adder_preserves_ordered_sum_and_carry() -> None:
+    snapshot = Littleman().judge(
+        compose(_fanout_half_adder()),
+        input=[0, 0, 0, 1, 1, 0, 1, 1],
+        expected=[0, 0, 1, 0, 1, 0, 0, 1],
+        max_ticks=1_000,
+    )
+
+    assert snapshot.output == [0, 0, 1, 0, 1, 0, 0, 1]
+    assert snapshot.output_settled is True
+    assert snapshot.fatal is None
 
 
 def test_fanout_and_netlist_normalize_caller_sequences_to_tuples() -> None:
