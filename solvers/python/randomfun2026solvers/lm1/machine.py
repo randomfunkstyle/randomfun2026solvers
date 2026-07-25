@@ -163,6 +163,35 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.MUL_MEM: (("s", Band.MEM), ("r", Band.MEM), ("*", None), ("M", None)),
+    # ── indexed memory: `LDP`/`STP`, and *no SPILL block* ─────────────────────
+    # ``isa.py`` gives both of these a spill slot, because in the ``0 addr`` /
+    # ``1 addr value`` wire protocol the request-opening literal clobbers A while B
+    # still holds ACC (``ARCH.md`` §6.1's "real hole in §5.1"). The sign-biased
+    # request closes that hole: the operation rides in the address word's sign, so
+    # there is no literal to clobber anything and a pointer never has to be parked.
+    #
+    # LDP: send +a, take the pointer straight back into A, send it *as* the next
+    # request — one glyph shorter than a spill round trip, and it keeps the whole
+    # lane on the east bus.
+    Sem.LOAD_IND: (
+        ("s", Band.MEM),  # +a
+        ("r", Band.MEM),  # A = ptr
+        ("s", Band.MEM),  # +ptr (A is already the request)
+        ("r", Band.MEM),  # A = store[ptr]
+        ("M", None),
+    ),
+    # STP: `N` turns the pointer into the write marker while ACC waits in B, then
+    # one `W` hands the value over — the pointer is dead by then, so the two are
+    # never live at once. ACC survives (the trailing `M` re-lands it in B).
+    Sem.STORE_IND: (
+        ("s", Band.MEM),  # +a
+        ("r", Band.MEM),  # A = ptr
+        ("N", None),  # A = -ptr: the write marker
+        ("s", Band.MEM),
+        ("W", None),  # A = ACC, the value
+        ("s", Band.MEM),
+        ("M", None),  # B = the value = ACC, unchanged
+    ),
     # ACC is the address, so `W` alone puts the request in A. Operand word unused.
     Sem.LOAD_ACC: (("W", None), ("s", Band.MEM), ("r", Band.MEM), ("M", None)),
     # Source read first (its address is an immediate), so the value only becomes
@@ -195,7 +224,16 @@ DSP_SEM_BAND: dict[Sem, str] = {
 #: Tags whose operand word is a STORE address, so it must be >= 1 (see the module
 #: docstring on the sign bias).
 MEMORY_SEMS = frozenset(
-    {Sem.LOAD, Sem.STORE, Sem.ADD_MEM, Sem.SUB_MEM, Sem.MUL_MEM, Sem.STORE_ACC_MEM}
+    {
+        Sem.LOAD,
+        Sem.STORE,
+        Sem.ADD_MEM,
+        Sem.SUB_MEM,
+        Sem.MUL_MEM,
+        Sem.STORE_ACC_MEM,
+        Sem.LOAD_IND,
+        Sem.STORE_IND,
+    }
 )
 
 #: Tags realised as a structures-band slab rather than a flat lane.
@@ -1480,6 +1518,7 @@ TAPE_SIZE = {
     "gradebook": 94,  # ids[16] + grades[16*4] + scalars
     "plotter": 11,
     "palette": 3,  # one colour counter; the pixels need no tape at all
+    "sudoku-validity": 31,  # 27 unit masks + 3 cursors, one slot of slack
 }
 
 #: ROM fold overrides, where ``rom.rows_for_budget``'s default is not the footprint
@@ -1504,6 +1543,10 @@ ROM_ROWS = {
     # footprint 23,409); 34 rows makes it no wider than the rest of the machine and
     # gives 112x103, the width-bound floor. See tests/test_lm1_gradebook.py.
     "gradebook": 34,
+    # 89x94 at 37 rows against 84x146 at the default: no display and a 30-slot tape
+    # leave the machine narrow enough that the default fold makes height binding.
+    # See tests/test_lm1_sudoku.py.
+    "sudoku-validity": 37,
 }
 
 
