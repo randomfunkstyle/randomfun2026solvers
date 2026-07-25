@@ -1,0 +1,16 @@
+# snake — submission 59642b9a-1dd5-461a-98b6-2bb8ad6c624a
+
+verdict      done: 17/17 cases, area2 10404, avgTicks 174,550, score 1,816,016,976
+submitted    2026-07-25T23:47:34+0300
+grid         102x102
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  3900c6295c248bea4ffb97177f933a7d008f343b4a2c625aa8131ad2df7158cf
+commit       6f55e64
+local        snake: all public frame cases match (emulator)
+source       littleman/examples/snake-handmade.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Hand-packed snake-ring layout; deterministic top-ROM refold from 6 to 8 rows, 121x100 to 102x102; public avgTicks 117202; ROM-only suffix-preserving compaction.
