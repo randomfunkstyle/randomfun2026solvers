@@ -91,6 +91,13 @@ traffic to delete; the cost is issue.
 | 15 | `history-lesson` | D | 0 | 97×90 = **9,409** | — | `footprint`-scored; ticks are free | — |
 | 16 | `hello-world` | D | 0 | not built | ~11×5 | trivial either way | — |
 
+The "now" column is a moving target in one direction only: a pending change that
+removes four dead columns from every generated machine is worth **−7% to −8%** on
+six of the seven CPU builds (`brackets` 98×95 → 94×76, `tcp` 112×78 → 108×78,
+`subset-sum` 112×97 → 108×99), and it invalidates every ROM fold optimum. Re-read
+the baselines after that merges. None of it moves the *ratios* above by more than a
+few percent, because a 12×–200× footprint factor does not care about four columns.
+
 Two structural facts fall out of that table and are worth stating plainly.
 
 **Unblocking is nearly exhausted.** Rows 11–13 are already ring machines
@@ -292,21 +299,73 @@ word with three `/`s (each `M`, literal, `W`, `/` — `/` leaves the remainder i
 projection is **~1.1–1.3M average ticks, worst case ~0.5× the cap**, and at a
 50×50 grid that is a score of **~2.8–3.2e9** where today there is no score at all.
 
-### 4.5 The packing that makes it fit in three registers
-A man has `A`, `B` and a write-only `BP`, so every piece of state that is not in a
-ring must be packed. Two words, both comfortably inside 64 bits:
+### 4.5 The prune is load-bearing — do not drop it to simplify ingest
+Storing `suf[j]` per cell is the expensive part of ingest, so the obvious
+simplification is to prune only on `p == n` and let `v[p] > r` do the rest.
+Measured over the public set:
 
-* **state** `= (r·L + q)·L + p` — with `r < 10^6` and `L = 21` that is `< 4.4e8`.
-  Two `/L`s recover `p`, then `q`, then `r`, each leaving the next field in `B`.
-* **cell `j`** `= ((suf[j]·10^5 + v[j])·L + link[j])·2 + mark[j]` — `suf ≤ 20 ×
-  99999 = 1,999,980` and `v ≤ 99,999`, so `< 8.4e12`. `link` and `mark` are the
-  mutable fields; `suf` and `v` are written once, during ingest.
+| variant | worst iterations | worst rotations | worst ticks @ a=40, b=3.2 | vs cap |
+|---|---|---|---|---|
+| with the `r > suf[p]` prune | 112,018 | 804,803 | 7.77M | **0.52×** |
+| without it (`p == n` only) | 189,702 | 1,022,594 | 12.07M | **0.80×** |
+
+0.80× is not a margin worth having on a problem whose model constants are
+estimates, so the prune stays.
+
+### 4.6 The packing, and how to avoid needing a third register
+A man has `A`, `B` and a **write-only** `BP` (`b` sets it, `m` decrements it,
+`d`/`a`/`x` branch on it — nothing reads it). So there are *two* readable
+registers, and that is the binding constraint on the whole design, not the tick
+budget. Every binary op takes its right operand from `B`, so computing
+`pre·10^5 + v` from `A = v, B = pre` needs a third slot and there isn't one. Three
+ways round it, and the third is why this design closes:
+
+1. **A scratch ring** (`register-cell.man`'s idiom, ~20 ticks round trip) — costs a
+   third incoming and a third outgoing pipe on the worker, and every one of those
+   makes nearest-pipe binding harder. Works; `stream.py` carries eleven pipes.
+2. **Multiplication by a small constant is repeated `+`**, because `B` survives it:
+   with `B = mask`, `A = tag`, the sequence `++++M` computes `mask·4 + tag` into `B`
+   using no third register at all. This is the trick that makes §3's `brackets`
+   stack free, and it generalises to any radix small enough to unroll.
+3. **Don't store `suf` at all — carry it in the state word and update it
+   incrementally.** `suf[p+1] = suf[p] − v[p]`, and `v[p]` is read every iteration
+   anyway, so the forward step is one `-`. The wrap is the only special case:
+   at `p = n`, `suf` must reset to `Total`. Give the sentinel cell the value field
+   **`−Total`** and the uniform rule `suf ← suf − v_j` is then correct *everywhere*,
+   because `suf[n] = 0` and `0 − (−Total) = Total`. The sentinel can never be
+   selected: `r == 0` is tested first and `r > suf[n] = 0` prunes every other case,
+   so its value field is never used as a value.
+
+With (3) the ring cell collapses to `(v_j·L + link_j)·2 + mark_j` — under 4.2e6,
+no suffix field, and **ingest becomes `n × {r, s}`, exactly `sort-numbers`' load
+loop**. The state word is `((suf·10^6 + r)·L + q)·L + p`: `suf ≤ 1,999,980`,
+`r < 10^6`, `L = 21`, so `< 8.8e11`. Two `/L`s recover `p` then `q`, a `/10^6`
+splits `suf` from `r`, and `/` leaving its remainder in `B` is what makes each
+unpack two glyphs rather than five.
+
+Backtracking updates `suf` for free: the jump from `p` to `q+1` reads every cell it
+passes, so accumulating `suf ← suf − v` in the rotate loop body is one extra glyph,
+and the pass necessarily crosses the sentinel — which is exactly where `Total` gets
+reinstated. Split the jump into `rotate (k−1) times` plus one special final step so
+that recovering `link[q]` and `v[q]` (for `r ← r + v[q]`) is straight-line code
+rather than a branch inside a counted loop.
 
 `mark` exists only so the answer can be emitted in *increasing* index order by two
 laps at the end (lap 1 counts the marks and emits `k`, lap 2 emits the marked
 values) — following the `link` chain would give them in decreasing order.
 
-### 4.6 The one thing that is *not* fixed by this
+### 4.7 What is left to do, and the one place it can still go wrong
+The design above is complete and its arithmetic is measured, but it is a
+multi-session build: INIT (read `n`, load the ring, accumulate `Total`, write the
+sentinel), the DFS loop head with three lanes, the two-part backtrack, and two
+emit laps — call it six blocks in one worker room of roughly 45×40, plus one ring
+and one relay. The risk is not the ticks and not the algorithm; it is that
+**a two-in/two-out station can bind both `r` glyphs to the same pipe with no load
+error and no stall, and simply read the wrong data** (the failure `stream.py`'s
+docstring records). So build it against `tools/route-check.mjs` from the first
+block, not at the end.
+
+### 4.8 The one thing that is *not* fixed by this
 The direct DFS is 112,018 iterations on the worst **public** case, and
 `privateTestCount: 0` means the public set *is* the graded set. But it is not
 robust: a random-search sweep of 400 inputs drawn strictly inside the constraints
