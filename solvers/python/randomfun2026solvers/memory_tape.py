@@ -491,6 +491,13 @@ def build_v2_compact_relay(n: int) -> list[str]:
     raise Collision(f"no fold gives enough tape slots: {last}")
 
 
+def build_v2_compact_relay_31(n: int) -> list[str]:
+    """Remove the compact relay build's structurally dead leading columns."""
+    rows = build_v2_compact_relay(n)
+    left = min(i for row in rows for i, ch in enumerate(row) if not ch.isspace())
+    return [row[left:].rstrip() for row in rows]
+
+
 V3_IW, V3_IH = 24, 20
 V3_IN_ROW = 2
 V3_OUT_COL = 2
@@ -1040,6 +1047,17 @@ def assemble_v2_compact_relay_debug(n: int) -> tuple[list[str], DebugMap]:
         color="#10b981",
     )
     return rows, dbg
+
+
+def assemble_v2_compact_relay_31_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the 31x31 relay variant and translate its generated sidecar."""
+    untrimmed, dbg = assemble_v2_compact_relay_debug(n)
+    left = min(
+        i for row in untrimmed for i, ch in enumerate(row) if not ch.isspace()
+    )
+    rows = [row[left:].rstrip() for row in untrimmed]
+    dbg.title = f"memory tape v2 compact relay 31x31 n={n}"
+    return rows, dbg.translated(-left, 0)
 
 
 def assemble_v2_fast_init_debug(n: int) -> tuple[list[str], DebugMap]:
