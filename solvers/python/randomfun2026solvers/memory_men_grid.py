@@ -183,7 +183,12 @@ def build_grid(cols: int, rows: int) -> Grid:
     router_y = 6
     router_h = len(ROUTER_ROWS)
     col_y = router_y + router_h + 1 + _GAP - 1  # south wall, 2 pipe cells, north wall
-    coll_y = col_y + col_h + _GAP
+    # A collector only has to reach its column's *last band row*, not the column's
+    # last row — the band below it is a tile's third row, which owns no pipe. So
+    # its room stops early and the strip comes up behind it, as far as the two
+    # cells of pipe and the neighbouring rooms' walls allow.
+    coll_room_h = init_h + BAND * (rows - 1) + 2
+    coll_y = max(col_y + coll_room_h + _GAP, col_y + col_h + 2)
     out_y = coll_y + 2 + _GAP
 
     x0 = 1
@@ -261,14 +266,14 @@ def build_grid(cols: int, rows: int) -> Grid:
         _room(grid, cx["rep"], col_y, spanned(REPEATER, _REP_W, col_h))
         _room(grid, cx["dec"], col_y, spanned(dec_body, _DEC_W, col_h))
         _room(grid, cx["cell"], col_y, spanned(cell_body, _CELL_W, col_h))
-        _room(grid, cx["coll"], col_y, spanned(COLLECTOR, _COLL_W, col_h))
+        _room(grid, cx["coll"], col_y, spanned(COLLECTOR, _COLL_W, coll_room_h))
 
         # router strip -> this column's repeater, down two cells into its north wall
         feed_x = cx["rep"] + 2
         draw_pipe(grid, [(feed_x, y) for y in range(router_y + router_h + 1, col_y)])
         # this column's collector -> the collector strip, likewise
         ans_x = cx["coll"] + 1
-        draw_pipe(grid, [(ans_x, y) for y in range(col_y + col_h + 1, coll_y)])
+        draw_pipe(grid, [(ans_x, y) for y in range(col_y + coll_room_h + 1, coll_y)])
 
         for main in mains:
             y = col_y + main
@@ -315,7 +320,7 @@ def build_grid(cols: int, rows: int) -> Grid:
         )
         dbg.lane(
             f"answer <- column {j}",
-            [(ans_x, col_y + col_h + 1), (ans_x, coll_y - 1)],
+            [(ans_x, col_y + coll_room_h + 1), (ans_x, coll_y - 1)],
             kind="pipe",
             expect="the stored value, on a selected READ",
             note="same length in every column, which is what keeps answers in order",
