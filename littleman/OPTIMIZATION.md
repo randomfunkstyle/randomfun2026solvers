@@ -198,14 +198,18 @@ uv run python -m randomfun2026solvers.manopt \
 |---:|---|---:|---:|---|
 | 1 | `gradebook` | 114×101, score 10,082,933,604 | 2 | removed row 74; 114×100, public objective 3,912,488,501.14 → 3,907,925,048.57 |
 | 2 | `snake` | 121×136, score 3,369,020,288 | 6 | removed rows 49, 68, 110, 112, and 130; 121×131, public objective 2,261,394,944 → 2,093,092,848 |
+| 3 | `sudoku-validity` | 83×80, score 3,043,333,207 | 1 | fixed point; internal cuts rebound 24 ops and the behavior-preserving bottom cut had zero objective value |
+| 4 | `tcp` | 109×74, score 1,678,313,030 | 2 | removed row 47; 109×73, public objective 1,051,587,310 → 1,050,755,640 |
 | 7 | `memory` | 31×31, score 55,105,622 | 1 | fixed point with the inferred 121-cell ring total held exactly |
 | 8 | `plotter` | 44×56, score 22,774,730 | 1 | fixed point; the feed-row cut rebound 2 ops and room moves rebound 37 |
 
 The verified candidates are
 `tasks/compacted/gradebook_submitted_ast10.man` and
-`tasks/compacted/snake_submitted_ast10.man`. Gradebook average ticks improve
-from 301,053.28571428574 to 300,702.14285714284 at the same 114² footprint
+`tasks/compacted/snake_submitted_ast10.man`, and
+`tasks/compacted/tcp_submitted_ast10.man`. Gradebook average ticks improve from
+301,053.28571428574 to 300,702.14285714284 at the same 114² footprint
 (objective −0.12%). Snake average ticks improve from 122,264 to 121,968 while
-its binding side falls by five rows (objective −7.44%). These candidates derive
-from the current best submitted solutions; they are not themselves claimed to
-be submitted.
+its binding side falls by five rows (objective −7.44%). TCP average ticks
+improve from 88,510 to 88,440 at the same 109² footprint (objective −0.079%).
+These candidates derive from the current best submitted solutions; they are not
+themselves claimed to be submitted.
