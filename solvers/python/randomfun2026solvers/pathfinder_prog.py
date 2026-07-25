@@ -40,7 +40,6 @@ from __future__ import annotations
 
 from collections import deque
 
-
 #: Words resident in the ring: [P, Q] plus four groups of [S1, NB, S2, S3].
 RING_WORDS = 18
 #: High-water marks of the two auxiliary loops (measured by the op-level model).

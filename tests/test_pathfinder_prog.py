@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from randomfun2026solvers import pathfinder_prog as pf
 
 PROBLEM = Path(__file__).resolve().parents[1] / "tasks" / "problems" / "pathfinder.json"
