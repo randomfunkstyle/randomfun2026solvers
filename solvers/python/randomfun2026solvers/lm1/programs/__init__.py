@@ -5,10 +5,15 @@ against the ISA table in :mod:`randomfun2026solvers.lm1.isa`. The slug matches a
 problem in ``tasks/problems/``, so :func:`rounds_for_problem` can feed a program
 the exact public test data the judge uses.
 
-Only problems that need no *array* live here. Everything that needs indexed
-memory is blocked on the STORE block by design (``ARCH.md`` §4.1) — except that
-``tcp`` and ``brackets``, which ``ARCH.md`` does not list as blocked, turned out
-to need indexed access too (see the step-2 report / ``isa.LM1_EXT``).
+``ARCH.md`` §4.1 blocks every problem that needs an *array* on the STORE block, but
+``machine.py`` now generates that block (the verified rotating tape), so a program
+here may index memory through the ``LDA``/``MOVA`` extensions — ``tcp``, ``brackets``
+and ``gradebook`` all do (see the step-2 report / ``isa.LM1_EXT``). What is still
+missing is a program, not hardware.
+
+The two display-judged problems (``plotter``, ``palette``) live here too: they emit
+no program output, so :func:`frames_for_problem` supplies what
+:func:`rounds_for_problem` cannot.
 """
 
 from __future__ import annotations
@@ -29,7 +34,10 @@ __all__ = [
     "problem_of",
     "problem_json",
     "rounds_for_problem",
+    "frames_for_problem",
+    "display_size",
     "history_lesson_source",
+    "palette_source",
 ]
 
 PROGRAM_DIR = Path(__file__).resolve().parent
@@ -80,6 +88,92 @@ def rounds_for_problem(slug: str) -> list[tuple[str, list[Round]]]:
         ]
         cases.append((name, rounds))
     return cases
+
+
+def frames_for_problem(slug: str) -> list[tuple[str, list[list[list[str]]]]]:
+    """``[(case_name, [round_frames])]`` — the expected panel frames per round.
+
+    The display size lives in ``io.display``; the frames themselves are rows of
+    hex digits, one per pixel, exactly as :func:`~..display.frames_from_writes`
+    returns them.
+    """
+    cases = []
+    for index, case in enumerate(problem_json(slug).get("publicTestData") or []):
+        name = case.get("name") or f"case-{index}"
+        raw_rounds = case.get("rounds") or [case]
+        cases.append((name, [[list(f) for f in (r.get("frames") or [])] for r in raw_rounds]))
+    return cases
+
+
+def display_size(slug: str) -> tuple[int, int]:
+    """The panel resolution a display-judged problem states."""
+    panel = (problem_json(slug).get("io") or {}).get("display")
+    if not panel:
+        raise KeyError(f"{slug} is not a display problem")
+    return int(panel["width"]), int(panel["height"])
+
+
+def palette_source(slug: str = "palette") -> str:
+    """Regenerate ``palette.asm`` from the problem JSON.
+
+    Sixteen frames, each the whole panel in one colour. The loop is *rolled over
+    colours* and *unrolled over pixels*, which is the cheap shape here: the DATA
+    port advances the cursor itself, so ``width * height`` bare ``DSPD``s paint a
+    frame with no counter, no test and no STORE traffic — and ``DSPD`` preserves
+    ACC (the ``W``/``s``/``W`` sandwich), so the colour is loaded once per frame.
+    Rolling the pixels instead would cost four tape accesses per pixel, i.e. ~64x
+    the ticks for ~64 fewer ROM words.
+
+    Regenerate with::
+
+        from randomfun2026solvers.lm1.programs import PROGRAM_DIR, palette_source
+        (PROGRAM_DIR / "palette.asm").write_text(palette_source())
+    """
+    width, height = display_size(slug)
+    pixels = width * height
+    lines = [
+        f"; palette — GENERATED from {slug}.json, do not hand-edit.",
+        ";",
+        "; Sixteen frames, colour 0 through 15, on the "
+        f"{width}x{height} LM-75. Uses all three port",
+        "; opcodes: DSPA parks the cursor at (0,0), DSPD paints, DSPS commits.",
+        ";",
+        "; Writing 0 to SWAP commits *and* clears `next` and resets the cursor, so the",
+        "; DSPA is strictly redundant — it is here because a display CPU that cannot",
+        "; address the panel is not one, and this is the program the hardware is",
+        f"; generated from. The {pixels} DSPD writes are unrolled: the DATA port advances the",
+        "; cursor by itself, so painting a frame needs no counter and no STORE traffic.",
+        ";",
+        "; Address 1, not 0: the generated hardware puts the operation in the *sign* of",
+        "; the address word, so slot 0 would be ambiguous.",
+        "",
+        ".equ COLOUR 1",
+        "",
+        "        LDI 0",
+        "        ST  COLOUR",
+        "",
+        "frame:  LDI 0",
+        "        DSPA                ; cursor -> (0, 0)",
+        "        LD  COLOUR",
+    ]
+    for i in range(pixels):
+        note = f"                ; pixel {i}" if i in (0, pixels - 1) else ""
+        lines.append(f"        DSPD{note}")
+    lines += [
+        "",
+        "        LDI 0",
+        "        DSPS                ; commit the frame, clear `next`, home the cursor",
+        "",
+        "        LD  COLOUR",
+        "        ADDI 1",
+        "        ST  COLOUR          ; ST preserves ACC, so the test below sees colour + 1",
+        "        SUBI 16",
+        "        BRZ done",
+        "        JMP frame",
+        "done:   HALT",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def history_lesson_source(slug: str = "history-lesson") -> str:

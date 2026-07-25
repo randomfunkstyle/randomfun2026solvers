@@ -21,9 +21,12 @@ Tick measurement uses the exact reference engine via :class:`Littleman`:
   so a binary search finds the precise tick the final value was emitted.
 
 Display problems (``plotter``/``palette``: rounds carry ``frames`` and emit no
-program output) can't be measured this way — there is no output to count and
-the CLI does not surface a committed-frame tick. For those we fall back to the
-``run`` settle/halt tick and flag it ``approx`` on the result.
+program output) can't be measured that way — there is no output to count. For
+those :meth:`Littleman.display_frames` steps to each committed frame instead and
+the score uses the *last* one, which is what the judge measures. If that is
+unavailable (no Node) the result falls back to the ``run`` settle/halt tick and is
+flagged ``approx`` — a bad proxy, since a solver that never halts settles at the
+tick cap.
 
 Footprint is read from the source grid the way ``lm.mjs`` reads it: drop a
 single trailing newline, split on ``\\n``; ``width`` = longest row length,
@@ -149,8 +152,16 @@ def _ticks_for_case(
     inp = _case_input(case)
 
     if _is_display_case(case):
-        # No program output to count, and the CLI exposes no committed-frame tick;
-        # estimate with the run settle/halt tick (may time out → cap).
+        # No program output to count, so step to the *last committed frame* instead
+        # — that is the tick a display problem is scored on. The run settle/halt tick
+        # is only a fallback: a solver that never halts (the usual shape) settles at
+        # the cap and would score as if it were 5M ticks slow.
+        try:
+            runs = lm.display_frames(path, [case], max_ticks=tick_cap)
+        except LittlemanError:
+            runs = []
+        if runs and runs[0].fatal is None and runs[0].ticks:
+            return runs[0].ticks[-1], False
         try:
             snap = lm.run(path, input=inp, max_ticks=tick_cap)
         except LittlemanError:
