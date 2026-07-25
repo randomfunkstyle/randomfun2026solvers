@@ -1396,6 +1396,60 @@ rotation* — free. And **g = 255 − p**, a 180° rotation of the board, keeps 
 non-negative, which makes the bit tests branch-free. The LM-1 version needs neither because
 it pays a tape read for everything anyway.
 
+#### Where the 15x actually comes from, measured on both grids
+
+Both machines were run through `tools/display-frames.mjs` on the same seven public cases
+and fitted the same way. The result is not what the `snake` comparison would predict:
+
+| | LM-1 | bespoke | ratio |
+|---|---|---|---|
+| footprint | 33,856 | 30,625 | **1.11x** |
+| fixed cost per case | 1,680,572 | **51,842** | **32.4x** |
+| per move | 61,159 | **4,154** | **14.7x** |
+| the 15M cap is reached at | 218 moves | **3,598 moves** | 16.5x |
+
+**Footprint is a tie.** Both grids are ~175-184 tall and the score bills only the taller
+side, so the entire 15x is ticks. That inverts §8.0's lesson (where the coprocessor got
+*bigger* and won on ticks) and §2.6's (where bespoke won on both): here bespoke wins on
+ticks *only*, and the CPU's 180 columns of ROM are free because they hide under the height
+the panel and the lane band already cost.
+
+**The fixed cost is 32x, and the reason is one register.** Both fold the 256 input cells
+with `w = 2*w + bit`. The bespoke machine keeps `w` in **B** across the input read, because
+`ri` only clobbers A — eight glyphs and ~10 ticks per cell, no memory at all. LM-1 cannot:
+its accumulator *is* B, and every instruction fetch clobbers A, so `IN` destroys any second
+live value and the recurrence must spill to the tape at ~415 ticks a read. That is §5.1's
+"three registers are not enough" showing up as a 32x constant rather than as a percentage,
+and it is inherent to having a fetch at all — no amount of ISA work removes it.
+
+**The per-move 15x is two independent savings.** About 58 % of LM-1's 61,159 is blocked tape
+latency (§8.3's profile: `LD` 24.1 %, `ADD` 6.1 %, and the hottest cell of each is the
+mem-response `r`); the rest is fetch, trie, lane walk and return path. The bespoke machine
+has none of those: a BFS level is one 18-word ring lap, and there is no fetch, no decode and
+no return.
+
+On top of that it stores strictly less. **Distance mod 3 in three label planes** works
+because the board is bipartite, so three residues are enough to say closer / here / farther,
+and *pushing the planes back into the ring in a different order is the rotation* — relabeling
+is free. `free = NB | S1 | S2 | S3` derives the wall mask instead of storing it, so there is
+no fifth plane. Against that, LM-1 keeps FREE, AVAIL, SAVE and four direction masks — 28
+slots it must also read back during the walk. **The bespoke machine stores no path at all**;
+every robot move is a local test against the three residues.
+
+Two ideas worth stealing regardless of tier:
+
+- **`g = 255 - p` as a board rotation.** Both builds needed the packing loop's first cell to
+  land in the *top* bit; LM-1 wrote it as a reversed bit index, the grid as a 180-degree
+  rotation of the board. Same map, but the rotation framing makes the consequence obvious —
+  the board is symmetric, so only the tie-break's test order flips, and nothing else moves.
+- **Put every pipe anchor on one wall and ties become arithmetically impossible.** With all
+  eight anchors on the north wall the distance from any interior cell is `|x - col| + y + 2`,
+  the `y` term is common, and nearest-pipe collapses to *nearest anchor column* — a 1-D rule
+  that holds at every row and so can be asserted on all 327 pipe ops instead of hoped for.
+  Anchors are then spaced so each adjacent pair's columns sum to an **odd** number, which
+  makes `|x-c1| == |x-c2|` unsolvable in integers: the §2.7 tie that "loses silently" cannot
+  occur by construction. LM-1 instead pads the CPU (`mem_pad`) and route-checks afterwards.
+
 The rest of this section is the LM-1 measurement, kept because it prices the tier on a
 problem where both were built — the same service §8.0 does for `snake`.
 
