@@ -156,7 +156,20 @@ The three display pipes are long in the assembled box (the painter is ~50 rows b
 the panel), which `timing_ok` constrains but does not forbid: only the *relative*
 lengths matter, and `l_swap` may be as long as convenient.
 
-### Why the box does not close with the display on top
+### The round has to be re-entrant
+
+The bug that survived every geometric argument was not geometric. Each lap of the
+pixel loop pops all four constants and pushes all four back to stay aligned, so when
+`BP` runs out they are **still circulating** — and the next round's prologue pops
+those in place of its own `x0`/`y0`. Every segment drawn on its own was perfect and
+any sequence of them was garbage. Four `POP`s on the exit path drain the ring, which
+costs the worker two rows and buys the only property that matters here: a round
+leaves the ring exactly as it found it, empty.
+
+The 589,824-segment proof never caught this because it only ever ran *one* round.
+`test_the_round_is_re_entrant` and `test_consecutive_rounds_are_independent` do.
+
+### Declaring the pipes instead of searching for them
 
 Routing the seven pipes kept moving one collision around rather than removing it, so
 the obstruction is worth stating exactly. The worker spans nearly the full width, so
@@ -178,14 +191,38 @@ it — a *channel* — and there are only a few, on either side. Four facts then
   stubs and the worker's south wall, and three separate channels — so one side needs
   five channels and at most four exist.
 
-A BFS router that tries every link order and randomised tie-breaks (`scratchpad/
-router.py`) places six of the seven pipes and never the increment, which is the
-mechanical statement of the same thing.
+A BFS router that tries every link order and randomised tie-breaks places six of the
+seven pipes and never the seventh — and that is the lesson, not a limit of the search.
+A shortest-path router solves each pipe *locally* and eats the one row a later pipe
+needed, so the collision only ever moves. What closes the box is **declaring** all
+seven paths and allocating the shared resources up front:
 
-The escape is to **put the display at the bottom and the painter directly above it**:
-the three display ports stop being channel traffic altogether, which removes three of
-the five channel users. Only the input and the ring-return then have to get past the
-worker, and those two can nest on one side.
+    band over the worker's north wall   row 27 SWAP, row 28 ring-return, row 29 input
+    west channels (painter -> display)  col 2 ADDR, col 4 DATA, col 6 SWAP
+    row each display pipe bends west    56 ADDR, 55 DATA, 54 SWAP
+
+Channels and bend rows nest opposite ways (`2<4<6` against `56>55>54`), which is what
+keeps the three display pipes from crossing. Three placements do the rest:
+
+* **The increment descends straight down.** It cannot bend before the row two below
+  the worker's south wall, and any sideways leg there cuts a channel — so it goes
+  straight down and round the bottom into the painter's *west* wall.
+* **The relay talks east and north.** One pipe each way means neither its `s` nor its
+  `r` needs a binding argument, so any wall is free: in on the east makes ring-forward
+  a single drop, out on the north puts the return in the open band above the painter
+  instead of the fenced-in bottom.
+* **The input room sits west of the worker.** From above, the input would cross the
+  ring-return in the two-row band; rising from the west each owns one row.
+
+`build_block()` draws it and checks every path against its port's stub as it goes.
+
+## Result
+
+**20/20 cases, score 66,665,235** — against 7,760,316,749 for the CPU version, a
+116x improvement. 70x70 footprint (area² 4900) and ~13,600 average ticks, so the win
+is almost entirely ticks: ~19 per pixel instead of ~19,000. The footprint is now the
+larger factor and the box is loose — it was sized for slack once the routing was
+understood, and the rooms could be packed considerably tighter.
 
 ## Verification
 
