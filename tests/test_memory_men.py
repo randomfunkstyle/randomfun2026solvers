@@ -84,14 +84,18 @@ def test_cell_tick_costs_hold():
     assert pairs - reads == CELL_WRITE_TICKS
 
 
-def test_router_lane_port_sits_under_the_peel_dive():
-    # Not cosmetic: with the port a column east the WRITE tail's `s` ties with the
-    # western neighbour's pipe and ties break by reading order, so every WRITE
-    # lands one cell too far west.
-    rows, ports = router_rows(3)
-    for x in ports:
-        assert rows[0][x - 1] == "d"
-        assert rows[0][x] == "v"
+def test_router_lane_port_is_strictly_nearest_its_own_lane():
+    # Not cosmetic: a port equidistant from two lanes' sends resolves by reading
+    # order, so every WRITE lands one cell too far west. At the minimum pitch there
+    # is no slack, so the port sits on the `d`; with a pitch of 6 there is, and it
+    # sits on the peel dive.
+    tight, tight_ports = router_rows(3, pitch=4)
+    for x in tight_ports:
+        assert tight[0][x] == "d", tight[0]
+    loose, loose_ports = router_rows(3, pitch=6)
+    for x in loose_ports:
+        assert loose[0][x - 1] == "d"
+        assert loose[0][x] == "v"
 
 
 def test_mid_router_splits_the_address_with_one_glyph():

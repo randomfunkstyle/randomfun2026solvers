@@ -441,7 +441,13 @@ def router_rows(
         # The port sits under the peel dive, not under the lane's `s`: that is what
         # keeps the WRITE tail's `s` strictly nearer its own lane's pipe than its
         # western neighbour's, which a tie would resolve the wrong way.
-        ports.append(x + 1)
+        #
+        # At the minimum pitch there is no slack for even that: the WRITE tail's `s`
+        # sits two columns west of its lane, so a port at `x + 1` is *equidistant*
+        # from this lane's pipe and the previous one's, the tie breaks by reading
+        # order, and every WRITE lands one cell too far west. Pull the port onto the
+        # `d` itself, which is strictly nearer for both sends at any pitch.
+        ports.append(x + 1 if pitch >= 6 else x)
         put(x, 0, "d")  # BP > 0 -> bypass clockwise; BP == 0 -> peel straight on
         put(x + 1, 0, "v")
         put(x + pitch - 1, 0, ">")
