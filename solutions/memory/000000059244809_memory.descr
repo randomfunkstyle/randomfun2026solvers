@@ -1,0 +1,16 @@
+# memory — submission f86431a0-33e3-4c68-9b6f-96b729da855d
+
+verdict      done: 24/24 cases, area2 961, avgTicks 61,649, score 59,244,809
+submitted    2026-07-25T12:37:28+0300
+grid         31x31
+problem id   d0b34a23-67c1-4087-b88e-90a74404d50e
+fingerprint  cb7d8b945602fbd2e39190bea767b7308e9b1d6081794c9d128fa7ae33588d58
+commit       057908b
+local        memory: 7/7 public cases, avg 14,208 ticks
+source       tasks/compacted/memory_ast.man
+
+runner output:
+Passed 24/24 test cases
+
+notes:
+AST compaction: drop_row(25) on the grid AST. 31x32 -> 31x31, factor 1024 -> 961. Relay room shifted up one; both ring pipes reglyphed one cell shorter (107 -> 105 slots against the n+1=101 minimum). Every pipe binding identical to the base; 7/7 public cases.
