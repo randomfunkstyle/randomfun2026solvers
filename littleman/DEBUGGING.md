@@ -16,7 +16,17 @@ uv run python -m randomfun2026solvers.lm1.machine plotter \
   --man  tasks/solutions/plotter_cpu.man \
   --html littleman/examples/plotter-machine.debug.html \
   --json littleman/examples/plotter-machine.debug.json
+
+uv run python -m randomfun2026solvers.memory_men --tree 4 4 \
+  --man  littleman/examples/memory-men-tree-4x4.man \
+  --html littleman/examples/memory-men-tree-4x4.html \
+  --json littleman/examples/memory-men-tree-4x4.json
 ```
+
+The man-memory overlay is the case for the convention: its grid is 16 identical
+6x6 rooms and nothing in the ASCII says which one holds address 5. The sidecar
+names every cell `cell addr N` (`N = mid lane * k2 + leaf lane`, and mid lane *j*
+feeds the block `k1-1-j` rows down), so the picture answers that in one hover.
 
 Open the `.html` in a browser: the grid with every region boxed, named and
 annotated. Keep the `.json` — the tools below read it.

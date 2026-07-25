@@ -39,18 +39,38 @@ drops into an LM-1 machine in place of ``tape_block``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from .circuit import Circuit
+from .man_debug import DebugMap
 
 __all__ = [
     "CELL",
     "CELL_READ_TICKS",
     "CELL_WRITE_TICKS",
     "Line",
+    "Tree",
     "build_line",
+    "build_tree",
     "cell_at",
+    "collector_rows",
+    "main",
+    "router_rows",
 ]
+
+# ── overlay palette: one colour per kind of room, so a screenshot reads at a
+# glance which band is routing and which is storage.
+C_IO = "#e879f9"
+C_HEAD = "#38bdf8"
+C_MID = "#a78bfa"
+C_LEAF = "#fb923c"
+C_STORE = "#22c55e"
+C_COLL = "#facc15"
+C_CMD = "#60a5fa"
+C_ANS = "#34d399"
 
 #: The storage cell's interior, verified on the engine (see module docstring).
 #:
@@ -129,6 +149,9 @@ class Line:
     rows: tuple[str, ...]
     width: int
     height: int
+    #: The sidecar the generator emits alongside the grid (see ``DEBUGGING.md``):
+    #: the grid carries no comments, so this is the only record of what a cell is.
+    debug: DebugMap | None = field(default=None, compare=False, repr=False)
 
     @property
     def footprint(self) -> int:
@@ -241,11 +264,101 @@ def build_line(n: int) -> Line:
         for i, glyph in enumerate(row):
             grid.set(rx - 6 + i, by + j, glyph)
 
+    # ── the sidecar: names for a grid that cannot carry comments ──────────────
+    dbg = DebugMap(f"man-memory line n={n}")
+    dbg.region(
+        "input",
+        rx - 6,
+        iy - 1,
+        3,
+        3,
+        note="the problem's own stream: `0 addr` (READ) / `1 addr value` (WRITE)",
+        color=C_IO,
+    )
+    dbg.region(
+        "router",
+        rx,
+        ry,
+        iw,
+        ih,
+        note=(
+            "preamble `>rMrbW`: B=op, BP=addr, A=op. Then one walk east: `d` bypasses "
+            "a lane while BP>0 (8 ticks) and peels into it at BP==0, so lane j serves "
+            "address j and one operation costs 22+14*addr ticks."
+        ),
+        color=C_MID,
+    )
+    dbg.lane(
+        "input-pipe",
+        [(rx - 3, iy), (rx - 1, iy)],
+        kind="pipe",
+        expect="op addr [value]",
+        color=C_CMD,
+    )
+    for j in range(n):
+        x = rx + PREAMBLE + PITCH * j + 1
+        dbg.region(
+            f"cell addr {j}",
+            x - 1,
+            cy - 1,
+            CELL_W,
+            CELL_H,
+            note=(
+                f"the resident man for address {j}: his B *is* the stored value (0 until "
+                f"first WRITE, so no initialisation pass). READ 12 ticks, WRITE 8."
+            ),
+            color=C_STORE,
+        )
+        dbg.lane(
+            f"cmd addr {j}",
+            [(x, ry + ih + 1), (x, cy - 1)],
+            kind="pipe",
+            expect="op [value]",
+            color=C_CMD,
+        )
+        ox = x + CELL_OUT_COL - CELL_IN_COL
+        dbg.lane(
+            f"answer addr {j}",
+            [(ox, by - 3), (ox, by - 1)],
+            kind="pipe",
+            expect="the value, on READ only",
+            color=C_ANS,
+        )
+    dbg.region(
+        "collector",
+        rx,
+        by,
+        bw,
+        2,
+        note=(
+            "`R` takes whichever answer pipe is ready, `s` forwards it. Safe because the "
+            "router issues requests >=18 ticks apart and every pipe here is 2 cells, so "
+            "no two answers are ever in flight."
+        ),
+        color=C_COLL,
+    )
+    dbg.lane(
+        "output-pipe",
+        [(rx - 2, by + 1), (rx - 4, by + 1)],
+        kind="pipe",
+        expect="one word per READ",
+        color=C_ANS,
+    )
+    dbg.region(
+        "output",
+        rx - 6,
+        by - 1,
+        3,
+        3,
+        note="one word per READ, in stream order",
+        color=C_IO,
+    )
+
     rows = [row.rstrip() for row in grid.rows()]
     while rows and not rows[-1]:
         rows.pop()
     width = max(len(row) for row in rows)
-    return Line(n=n, rows=tuple(rows), width=width, height=len(rows))
+    return Line(n=n, rows=tuple(rows), width=width, height=len(rows), debug=dbg)
 
 
 # ── the tree: one router per level, cells at the leaves ──────────────────────
@@ -260,7 +373,11 @@ LANE_PITCH = 4
 
 
 def router_rows(
-    k: int, *, block: int | None = None, pitch: int = LANE_PITCH
+    k: int,
+    *,
+    block: int | None = None,
+    pitch: int = LANE_PITCH,
+    merge_head: bool = False,
 ) -> tuple[list[str], list[int]]:
     """A lane-walking router: ``k`` children, one command pipe out per child.
 
@@ -283,16 +400,25 @@ def router_rows(
     if pitch < LANE_PITCH:
         raise ValueError(f"lane pitch must be at least {LANE_PITCH}")
     mid = block is not None
-    if mid:
+    if merge_head and mid:
+        raise ValueError("a head-merged router addresses cells, so it has no block size")
+    if merge_head:
+        # The problem's own stream is `op addr [value]`, op first, while a router
+        # deeper in a tree is fed `addr op [value]` by the head that reordered it.
+        # Merging the head in means reading both here — B parks op across the walk,
+        # `b` takes the address into BP, and `W` brings op back to A for the lane —
+        # which also deletes the lane's `r`, and with it one whole row.
+        pre = ">rMrbW"
+    elif mid:
         lit = str(block) if block < 10 else f"`{block}`"
         pre = ">rM" + lit + "W/bW"
     else:
         pre = ">rb"
     x0 = len(pre)
-    # lane rows: [s(local)] r(op) s(op) X ... return
+    # lane rows: [s(local)] [r(op)] s(op) X ... return
     r_local = 2 if mid else None
-    r_op = 3 if mid else 2
-    r_send = r_op + 1
+    r_op = None if merge_head else (3 if mid else 2)
+    r_send = 2 if merge_head else r_op + 1
     r_x = r_send + 1
     r_ret = r_x + 1
     ih = r_ret + 1
@@ -324,7 +450,8 @@ def router_rows(
         put(x + pitch - 1, 1, "^")
         if r_local is not None:
             put(x + 1, r_local, "s")  # the child's local address
-        put(x + 1, r_op, "r")  # op, off the parent pipe
+        if r_op is not None:
+            put(x + 1, r_op, "r")  # op, off the parent pipe
         put(x + 1, r_send, "s")
         put(x + 1, r_x, "X")  # 0 = READ: straight on; 1 = WRITE: clockwise, west
         put(x, r_x, "r")  # WRITE: the value, still off the parent pipe
@@ -387,6 +514,20 @@ def draw_pipe(grid: Circuit, path: list[tuple[int, int]]) -> int:
     return len(path) - 1
 
 
+def _corners(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Reduce a cell-by-cell pipe path to the vertices ``DebugMap.lane`` wants.
+
+    The overlay is derived from the *same* list the pipe was drawn from, so an
+    annotated pipe can never point somewhere the grid does not.
+    """
+    out = [path[0]]
+    for prev, cur, nxt in zip(path, path[1:], path[2:], strict=False):
+        if (cur[0] - prev[0], cur[1] - prev[1]) != (nxt[0] - cur[0], nxt[1] - cur[1]):
+            out.append(cur)
+    out.append(path[-1])
+    return out
+
+
 def _room(grid: Circuit, x: int, y: int, rows: list[str] | tuple[str, ...]) -> None:
     """Stamp a room's interior at (x,y) and draw its walls."""
     iw = max(len(r) for r in rows)
@@ -427,6 +568,8 @@ class Tree:
     rows: tuple[str, ...]
     width: int
     height: int
+    #: Named rooms, addresses and pipes for the grid below (see ``DEBUGGING.md``).
+    debug: DebugMap | None = field(default=None, compare=False, repr=False)
 
     @property
     def n(self) -> int:
@@ -475,9 +618,111 @@ def build_tree(k1: int, k2: int) -> Tree:
     _room(grid, bx, ry, mid_rows)
     _io_room(grid, bx + 15, hy + 1, "O")
 
-    draw_pipe(grid, [(bx + 1, 3), (bx + 1, 4), (bx + 1, hy - 1)])  # I -> head
-    draw_pipe(grid, [(bx + 5, hy + 4), (bx + 5, hy + 5), (bx + 5, ry - 1)])  # head -> mid
-    draw_pipe(grid, [(bx + 12, hy + 1), (bx + 13, hy + 1), (bx + 14, hy + 1)])  # head -> O
+    # ── the sidecar. Everything a reader of the bare ASCII cannot recover: which
+    # room is what, and above all which physical cell holds which address.
+    dbg = DebugMap(f"man-memory tree k1={k1} k2={k2} (n={k1 * k2})")
+    dbg.region(
+        "input",
+        bx,
+        0,
+        3,
+        3,
+        note="the problem's own stream: `0 addr` (READ) / `1 addr value` (WRITE)",
+        color=C_IO,
+    )
+    dbg.region(
+        "head",
+        bx,
+        hy,
+        max(len(r) for r in HEAD_ROWS),
+        len(HEAD_ROWS),
+        note=(
+            "the only room that talks to I/O. Swaps the stream's `op addr` into the "
+            "tree's `addr op [value]`, and on a READ waits for the answer before "
+            "starting the next operation — that serialisation is what keeps answers "
+            "ordered when latency down the tree differs per address. Ports: input and "
+            "answer arrive on the north wall (over interior cols 1 and 8), the command "
+            "leaves the south wall under col 5, the answer leaves east on row 1."
+        ),
+        color=C_HEAD,
+    )
+    dbg.region(
+        "output",
+        bx + 14,
+        hy,
+        3,
+        3,
+        note="one word per READ, in stream order",
+        color=C_IO,
+    )
+    dbg.region(
+        "mid router",
+        bx,
+        ry,
+        mid_iw,
+        len(mid_rows),
+        note=(
+            f"one `/` splits the address: quotient (the block, 0..{k1 - 1}) drives BP, "
+            f"remainder (the local address, 0..{k2 - 1}) is relayed on. Then a single "
+            f"walk east: `d` bypasses a lane while BP>0 and peels into it at BP==0, so "
+            f"lane j owns addresses j*{k2}..j*{k2}+{k2 - 1}."
+        ),
+        color=C_MID,
+    )
+    dbg.circle(
+        "`/` address split",
+        bx + mid_rows[0].index("/"),
+        ry,
+        2,
+        note=(
+            f"`>rM{k2}W/bW`: A=addr, B={k2}, then `/` leaves quotient in A and remainder "
+            f"in B in one glyph; `b` loads BP=quotient and `W` brings the remainder back "
+            f"to A for the lane's `s`. addr = block*{k2} + local."
+        ),
+        color=C_MID,
+    )
+    for j in range(k1):
+        dbg.region(
+            f"mid lane {j} -> addr {j * k2}..{j * k2 + k2 - 1}",
+            bx + mid_ports[j] - 1,
+            ry,
+            PITCH,
+            len(mid_rows),
+            note=(
+                f"BP=={j} peels here; the command pipe leaves the south wall under this "
+                f"lane's `v` and runs to the leaf router {k1 - 1 - j} blocks down "
+                f"(lane j feeds block k1-1-j, which is what keeps the fan-out planar)."
+            ),
+            color=C_MID,
+        )
+
+    in_pipe = [(bx + 1, 3), (bx + 1, 4), (bx + 1, hy - 1)]
+    root_pipe = [(bx + 5, hy + 4), (bx + 5, hy + 5), (bx + 5, ry - 1)]
+    out_pipe = [(bx + 12, hy + 1), (bx + 13, hy + 1), (bx + 14, hy + 1)]
+    draw_pipe(grid, in_pipe)  # I -> head
+    draw_pipe(grid, root_pipe)  # head -> mid
+    draw_pipe(grid, out_pipe)  # head -> O
+    dbg.lane(
+        "input-pipe",
+        _corners(in_pipe),
+        kind="pipe",
+        expect="op addr [value]",
+        color=C_CMD,
+    )
+    dbg.lane(
+        "root command",
+        _corners(root_pipe),
+        kind="pipe",
+        expect="addr op [value]",
+        color=C_CMD,
+    )
+    dbg.lane(
+        "output-pipe",
+        _corners(out_pipe),
+        kind="pipe",
+        expect="one word per READ",
+        color=C_ANS,
+    )
 
     mid_bottom = ry + len(mid_rows)
     prev_coll: tuple[int, int] | None = None
@@ -489,53 +734,134 @@ def build_tree(k1: int, k2: int) -> Tree:
         by = by0 + pitch_y * pos
         _room(grid, bx, by, leaf_rows)
         ty, cx = ty0 + lane, 1 + lane
-        draw_pipe(
-            grid,
+        cmd_path = (
             [(bx + mid_ports[lane], y) for y in range(mid_bottom + 1, ty)]
             + [(x, ty) for x in range(bx + mid_ports[lane], cx - 1, -1)]
             + [(cx, y) for y in range(ty + 1, by + 1)]
-            + [(x, by) for x in range(cx + 1, bx)],
+            + [(x, by) for x in range(cx + 1, bx)]
+        )
+        draw_pipe(grid, cmd_path)
+        dbg.region(
+            f"leaf router block {lane} (addr {lane * k2}..{lane * k2 + k2 - 1})",
+            bx,
+            by,
+            leaf_iw,
+            len(leaf_rows),
+            note=(
+                f"`>rb` loads BP = the local address, then the same walk east: lane i "
+                f"peels to the cell holding addr {lane * k2}+i. Fed by mid lane {lane}; "
+                f"every `r` in here (including the WRITE value at the far end of the "
+                f"lane) binds to that one incoming pipe, which is why the packet needs no "
+                f"dummy tokens."
+            ),
+            color=C_LEAF,
+        )
+        dbg.lane(
+            f"cmd block {lane}",
+            _corners(cmd_path),
+            kind="pipe",
+            expect="local op [value]",
+            color=C_CMD,
         )
         # leaf router -> its cells, and the cells -> this block's collector
         for i in range(k2):
             cell_x = bx + leaf_ports[i] - 1
             cell_y = by + len(leaf_rows) + 4
+            addr = lane * k2 + i
             cell_at(grid, cell_x, cell_y)
-            draw_pipe(grid, [(cell_x, cell_y - 3), (cell_x, cell_y - 2), (cell_x, cell_y - 1)])
+            cell_cmd = [(cell_x, cell_y - 3), (cell_x, cell_y - 2), (cell_x, cell_y - 1)]
+            draw_pipe(grid, cell_cmd)
             out_x = cell_x + CELL_OUT_COL - CELL_IN_COL
-            draw_pipe(grid, [(out_x, cell_y + 5), (out_x, cell_y + 6), (out_x, cell_y + 7)])
+            cell_ans = [(out_x, cell_y + 5), (out_x, cell_y + 6), (out_x, cell_y + 7)]
+            draw_pipe(grid, cell_ans)
+            dbg.region(
+                f"cell addr {addr}",
+                cell_x - 1,
+                cell_y - 1,
+                CELL_W,
+                CELL_H,
+                note=(
+                    f"address {addr} = mid lane {lane} * {k2} + leaf lane {i}. The "
+                    f"resident man's B *is* the stored value — 0 until the first WRITE, so "
+                    f"there is no initialisation pass. READ {CELL_READ_TICKS} ticks, "
+                    f"WRITE {CELL_WRITE_TICKS}."
+                ),
+                color=C_STORE,
+            )
+            dbg.lane(
+                f"cmd addr {addr}",
+                _corners(cell_cmd),
+                kind="pipe",
+                expect="op [value]",
+                color=C_CMD,
+            )
+            dbg.lane(
+                f"answer addr {addr}",
+                _corners(cell_ans),
+                kind="pipe",
+                expect="the value, on READ only",
+                color=C_ANS,
+            )
         cy = by + len(leaf_rows) + 4 + CELL_H + 2
         _room(grid, bx, cy, [r.ljust(coll_iw) for r in coll_rows])
+        dbg.region(
+            f"collector block {lane}",
+            bx,
+            cy,
+            coll_iw,
+            len(coll_rows),
+            note=(
+                f"`R` takes whichever pipe is ready — this block's {k2} cells, plus the "
+                f"chain from the block above — and `s` forwards it south. No pipe affinity "
+                f"needed, which is why the answer path is a chain beside the cells rather "
+                f"than {k1 * k2} long pipes converging on one room."
+            ),
+            color=C_COLL,
+        )
         if prev_coll is not None:
             px, py = prev_coll
             ex = east + pos - 1
-            draw_pipe(
-                grid,
+            chain = (
                 # in on interior row 0, out from row 1: a collector's own outgoing
                 # stub and its predecessor's incoming one would otherwise want the
                 # same cell east of the wall.
                 [(x, py) for x in range(px, ex + 1)]
                 + [(ex, y) for y in range(py + 1, cy)]
-                + [(x, cy) for x in range(ex, bx + coll_iw - 1, -1)],
+                + [(x, cy) for x in range(ex, bx + coll_iw - 1, -1)]
+            )
+            draw_pipe(grid, chain)
+            dbg.lane(
+                f"answer chain block {lane + 1} -> block {lane}",
+                _corners(chain),
+                kind="pipe",
+                expect="an answer from any block above",
+                color=C_ANS,
             )
         prev_coll = (bx + coll_iw + 1, cy + 1)
 
     # last collector -> the head's answer port on its north wall
     px, py = prev_coll
     ex = east + k1
-    draw_pipe(
-        grid,
+    last = (
         [(x, py) for x in range(px, ex + 1)]
         + [(ex, y) for y in range(py - 1, 3, -1)]
         + [(x, 4) for x in range(ex - 1, bx + 8 - 1, -1)]
-        + [(bx + 8, hy - 1)],
+        + [(bx + 8, hy - 1)]
+    )
+    draw_pipe(grid, last)
+    dbg.lane(
+        "answers -> head",
+        _corners(last),
+        kind="pipe",
+        expect="every READ answer, the full height of the grid",
+        color=C_ANS,
     )
 
     rows = [row.rstrip() for row in grid.rows()]
     while rows and not rows[-1]:
         rows.pop()
     width = max(len(row) for row in rows)
-    return Tree(k1=k1, k2=k2, rows=tuple(rows), width=width, height=len(rows))
+    return Tree(k1=k1, k2=k2, rows=tuple(rows), width=width, height=len(rows), debug=dbg)
 
 
 # ── measured cost model ──────────────────────────────────────────────────────
@@ -582,3 +908,47 @@ def line_ticks(addr: int) -> int:
 def tape_ticks(n: int) -> float:
     """The LM-1 STORE tape's cost per access, for comparison (``ARCH.md`` §4.1)."""
     return 105 + 8.3 * n
+
+
+# ── CLI: the grid and its sidecars, in one invocation ────────────────────────
+#
+# The house rule from ``littleman/DEBUGGING.md``: a generated `.man` carries no
+# comments, so the generator is the only thing that knows what a cell means and it
+# must emit the overlay at the same moment it emits the ASCII. Writing the three
+# files separately is how an overlay drifts from its grid.
+def main(argv: Sequence[str] | None = None) -> int:
+    """``--line N`` or ``--tree K1 K2``, written to ``--man``/``--html``/``--json``."""
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    what = ap.add_mutually_exclusive_group(required=True)
+    what.add_argument("--line", type=int, metavar="N", help="one router with N cells")
+    what.add_argument(
+        "--tree",
+        type=int,
+        nargs=2,
+        metavar=("K1", "K2"),
+        help="a mid router over K1 leaf blocks of K2 cells (n = K1*K2)",
+    )
+    ap.add_argument("--man", type=Path, help="write the grid here")
+    ap.add_argument("--html", type=Path, help="write the labelled debug overlay here")
+    ap.add_argument("--json", type=Path, help="write the debug region sidecar here")
+    args = ap.parse_args(argv)
+
+    built: Line | Tree
+    built = build_line(args.line) if args.line is not None else build_tree(*args.tree)
+    rows = list(built.rows)
+    if args.man:
+        args.man.write_text(built.source() + "\n", encoding="utf-8")
+    assert built.debug is not None  # every builder emits its own map
+    if args.html:
+        built.debug.write_html(rows, args.html)
+    if args.json:
+        built.debug.write_json(args.json)
+    if not (args.man or args.html or args.json):
+        print(built.source())
+    else:
+        print(f"{built.width} x {built.height}, footprint {built.footprint}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

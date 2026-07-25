@@ -1282,8 +1282,16 @@ def build(
     display: tuple[int, int] | None = None,
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
+    store: str = "tape",
 ) -> Machine:
     """Assemble the whole machine for ``program``.
+
+    ``store`` picks the memory tier: ``"tape"`` is the rotating ring (§4.1,
+    ``105 + 8.3n`` ticks per access at 33 columns whatever ``n`` is), ``"men"`` is
+    ``memory_men_store.men_block`` — one little man per value, a measured
+    ``22 + 14 * addr`` per access. The man-memory is faster per access at every
+    small ``n`` and *narrower in area* at ``n`` around 5, but it widens as
+    ``6n + 13``, so it is only the better choice while the tape size is small.
 
     ``tape_n`` defaults to the program's highest *static* address, which is wrong
     for any program that computes addresses at runtime (``LDA``/``MOVA``), so those
@@ -1322,7 +1330,17 @@ def build(
         for pad in pads:
             try:
                 return _assemble(
-                    program, p, words, tape_n, rom_rows, pad, display, stream, resp_pad, spad
+                    program,
+                    p,
+                    words,
+                    tape_n,
+                    rom_rows,
+                    pad,
+                    display,
+                    stream,
+                    resp_pad,
+                    spad,
+                    store,
                 )
             except MachineError as exc:
                 last = exc
@@ -1340,6 +1358,7 @@ def _assemble(
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
     stream_pad: int = 0,
+    store: str = "tape",
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad)
     W, H = cpu.width, cpu.height
@@ -1418,7 +1437,14 @@ def _assemble(
     g.draw_pipe([(CX + W + 2, req_row), (AX - 1, req_row)])
 
     # ── tape, east of the adapter ────────────────────────────────────────────
-    tape = tape_block(tape_n)
+    if store == "men":
+        from ..memory_men_store import men_block
+
+        tape = men_block(tape_n)
+    elif store == "tape":
+        tape = tape_block(tape_n)
+    else:
+        raise MachineError(f"unknown store tier {store!r}; expected 'tape' or 'men'")
     TX = AX + ADAPTER_W + 6
     TY = CY
     g.blit(TX, TY, tape.cells)
@@ -1530,7 +1556,11 @@ def _assemble(
     # already counted in ``touches`` — so ``blk.pipes - 1`` (the response pipe is
     # drawn half here, half there, and is one pipe).
     extra = (blk.pipes - 1) if blk else 0
-    _check_pipe_count(rows, expected=len(touches) + 3 + extra)
+    # The memory tier's own internal pipes: the tape's two ring legs, or the
+    # man-memory's command and answer pipe per cell. Everything the machine itself
+    # drew is already in ``touches``, plus the one response pipe drawn half here.
+    store_pipes = 2 * tape_n if store == "men" else 2
+    _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
     return Machine(
         rows=rows,
         regions=regions,

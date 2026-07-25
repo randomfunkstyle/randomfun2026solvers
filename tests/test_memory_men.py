@@ -9,6 +9,7 @@ producing a memory that loads and computes the wrong thing.
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import pytest
 from randomfun2026solvers.fast_littleman import FastLittleman
@@ -22,6 +23,9 @@ from randomfun2026solvers.memory_men import (
     line_ticks,
     router_rows,
 )
+
+EXAMPLES = Path(__file__).parents[1] / "littleman" / "examples"
+TREE_4X4 = EXAMPLES / "memory-men-tree-4x4.man"
 
 CELL_PROBE = "\n".join(
     [
@@ -111,6 +115,37 @@ def test_line_geometry(n: int) -> None:
     line = build_line(n)
     assert line.width == 6 * n + 13
     assert line.height == 21
+
+
+def test_the_checked_in_tree_matches_the_generator() -> None:
+    """``memory-men-tree-4x4.man`` is generated with its overlay, never hand-edited."""
+    tree = build_tree(4, 4)
+    assert (tree.width, tree.height) == (46, 117)
+    assert TREE_4X4.read_text(encoding="utf-8") == tree.source() + "\n", (
+        "memory-men-tree-4x4.man is stale; regenerate the grid *and* its sidecars with "
+        "`python -m randomfun2026solvers.memory_men --tree 4 4 "
+        f"--man {TREE_4X4} --html {TREE_4X4.with_suffix('.html')} "
+        f"--json {TREE_4X4.with_suffix('.json')}`"
+    )
+
+
+def test_the_overlay_labels_every_cell_with_the_address_it_holds() -> None:
+    # Verified against the engine: after writing 1000+a to each address a, the man
+    # holding that value stands inside the region named `cell addr a`.
+    tree = build_tree(4, 4)
+    assert tree.debug is not None
+    cells = {r.name: r for r in tree.debug.regions if r.name.startswith("cell addr ")}
+    assert len(cells) == 16
+    # lane j of the mid feeds the block (k1-1-j) rows down, so addresses run
+    # bottom-up: block 0 (addr 0..3) is the southmost room.
+    for addr in range(16):
+        region = cells[f"cell addr {addr}"]
+        assert (region.w, region.h) == (6, 6)
+        assert f"mid lane {addr // 4} * 4 + leaf lane {addr % 4}" in region.note
+    tops = sorted({cells[f"cell addr {a}"].y for a in range(16)})
+    for block in range(4):
+        ys = {cells[f"cell addr {block * 4 + i}"].y for i in range(4)}
+        assert ys == {tops[3 - block]}, "a block's four cells share one row band"
 
 
 def test_tree_geometry() -> None:
