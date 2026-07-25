@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
 
-from .primitive_contracts import contracts_by_artifact
+from .primitive_contracts import Side, contracts_by_artifact
 
 __all__ = ["ActiveRoom", "Gate", "Netlist", "extract_active_room"]
 
@@ -22,6 +23,206 @@ class ActiveRoom:
     width: int
     height: int
     runner: tuple[int, int]
+
+
+class _AdapterFlow(StrEnum):
+    """The direction values move through one generated adapter port."""
+
+    INCOMING = "incoming"
+    OUTGOING = "outgoing"
+
+
+@dataclass(frozen=True)
+class _AdapterPort:
+    """One local pipe attachment and every instruction cell bound to that pipe."""
+
+    name: str
+    flow: _AdapterFlow
+    side: Side
+    wall: tuple[int, int]
+    instructions: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class _GeneratedAdapter:
+    """An independently placeable generated room with explicit local ports."""
+
+    room: ActiveRoom
+    ports: tuple[_AdapterPort, ...]
+
+
+def _make_input_demultiplexer(field_count: int) -> _GeneratedAdapter:
+    """Split each ordered input frame across one scalar pipe per field."""
+
+    room, receives, sends = _make_ordered_adapter_room(field_count)
+    ports = [
+        _AdapterPort(
+            name="frame",
+            flow=_AdapterFlow.INCOMING,
+            side=Side.WEST,
+            wall=(0, 1),
+            instructions=receives,
+        )
+    ]
+    ports.extend(
+        _AdapterPort(
+            name=f"field[{index}]",
+            flow=_AdapterFlow.OUTGOING,
+            side=Side.NORTH,
+            wall=(send[0], 0),
+            instructions=(send,),
+        )
+        for index, send in enumerate(sends)
+    )
+    return _GeneratedAdapter(room=room, ports=tuple(ports))
+
+
+def _make_scalar_fanout(output_count: int) -> _GeneratedAdapter:
+    """Broadcast one scalar atomically to the requested outgoing pipe ports."""
+
+    if output_count < 2:
+        raise ValueError("Scalar fanout requires at least two outputs")
+
+    room = _room_from_grid(("+-----+", "|@>rSv|", "| ^  <|", "+-----+"))
+    attachments = (
+        (Side.EAST, (6, 1)),
+        (Side.SOUTH, (4, 3)),
+        (Side.WEST, (0, 2)),
+        (Side.SOUTH, (2, 3)),
+        (Side.NORTH, (5, 0)),
+        (Side.EAST, (6, 2)),
+        (Side.WEST, (0, 1)),
+        (Side.SOUTH, (1, 3)),
+        (Side.SOUTH, (3, 3)),
+        (Side.SOUTH, (5, 3)),
+        (Side.NORTH, (1, 0)),
+        (Side.NORTH, (2, 0)),
+        (Side.NORTH, (4, 0)),
+    )
+    if output_count > len(attachments):
+        raise ValueError(
+            f"Scalar fanout room supports at most {len(attachments)} direct outputs, "
+            f"got {output_count}"
+        )
+
+    ports = [
+        _AdapterPort(
+            name="input",
+            flow=_AdapterFlow.INCOMING,
+            side=Side.NORTH,
+            wall=(3, 0),
+            instructions=((3, 1),),
+        )
+    ]
+    ports.extend(
+        _AdapterPort(
+            name=f"copy[{index}]",
+            flow=_AdapterFlow.OUTGOING,
+            side=side,
+            wall=wall,
+            instructions=((4, 1),),
+        )
+        for index, (side, wall) in enumerate(attachments[:output_count])
+    )
+    return _GeneratedAdapter(room=room, ports=tuple(ports))
+
+
+def _make_two_field_packer() -> _GeneratedAdapter:
+    """Pack two scalar streams into one ordered serial frame."""
+
+    room = _room_from_grid(("+-----+", "|@>rsv|", "|.^sr<|", "+-----+"))
+    return _GeneratedAdapter(
+        room=room,
+        ports=(
+            _AdapterPort(
+                name="field[0]",
+                flow=_AdapterFlow.INCOMING,
+                side=Side.NORTH,
+                wall=(3, 0),
+                instructions=((3, 1),),
+            ),
+            _AdapterPort(
+                name="field[1]",
+                flow=_AdapterFlow.INCOMING,
+                side=Side.SOUTH,
+                wall=(4, 3),
+                instructions=((4, 2),),
+            ),
+            _AdapterPort(
+                name="frame",
+                flow=_AdapterFlow.OUTGOING,
+                side=Side.EAST,
+                wall=(6, 1),
+                instructions=((4, 1), (3, 2)),
+            ),
+        ),
+    )
+
+
+def _make_output_joiner(field_count: int) -> _GeneratedAdapter:
+    """Join selected scalar outputs into their declared serial field order."""
+
+    room, receives, sends = _make_ordered_adapter_room(field_count)
+    ports = [
+        _AdapterPort(
+            name=f"field[{index}]",
+            flow=_AdapterFlow.INCOMING,
+            side=Side.NORTH,
+            wall=(receive[0], 0),
+            instructions=(receive,),
+        )
+        for index, receive in enumerate(receives)
+    ]
+    ports.append(
+        _AdapterPort(
+            name="frame",
+            flow=_AdapterFlow.OUTGOING,
+            side=Side.EAST,
+            wall=(room.width - 1, 1),
+            instructions=sends,
+        )
+    )
+    return _GeneratedAdapter(room=room, ports=tuple(ports))
+
+
+def _make_ordered_adapter_room(
+    field_count: int,
+) -> tuple[ActiveRoom, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    if field_count < 1:
+        raise ValueError("Ordered adapter requires at least one field")
+
+    interior_width = 4 * field_count + 3
+    top = [" "] * interior_width
+    top[0:2] = ("@", ">")
+    receives: list[tuple[int, int]] = []
+    sends: list[tuple[int, int]] = []
+    for index in range(field_count):
+        receive_x = 3 + 4 * index
+        send_x = receive_x + 1
+        top[receive_x - 1] = "r"
+        top[send_x - 1] = "s"
+        receives.append((receive_x, 1))
+        sends.append((send_x, 1))
+    top[-1] = "v"
+
+    bottom = [" "] * interior_width
+    bottom[0:2] = (".", "^")
+    bottom[-1] = "<"
+    wall = "+" + "-" * interior_width + "+"
+    room = _room_from_grid((wall, "|" + "".join(top) + "|", "|" + "".join(bottom) + "|", wall))
+    return room, tuple(receives), tuple(sends)
+
+
+def _room_from_grid(grid: tuple[str, ...]) -> ActiveRoom:
+    return ActiveRoom(
+        text="\n".join(grid),
+        grid=grid,
+        width=len(grid[0]),
+        height=len(grid),
+        runner=next(
+            (x, y) for y, row in enumerate(grid) for x, cell in enumerate(row) if cell == "@"
+        ),
+    )
 
 
 def extract_active_room(source: str | PathLike[str]) -> ActiveRoom:
