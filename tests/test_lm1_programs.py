@@ -70,7 +70,7 @@ BLOCKED = {
 }
 
 #: Problems graded on committed frames rather than on program output.
-DISPLAY_PROBLEMS = {"plotter", "palette", "snake"}
+DISPLAY_PROBLEMS = {"plotter", "palette", "snake", "pathfinder"}
 
 #: Programs whose *emulated* tick estimate exceeds ``TICK_CAP`` on the largest
 #: public case. Empty since ``matmul`` moved onto the STREAM block: every program
@@ -100,6 +100,7 @@ def test_the_expected_programs_exist() -> None:
         "sudoku-validity",
         "matmul",
         "snake",
+        "pathfinder",
     }
 
 
@@ -192,6 +193,13 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # `IN`, because a seventeenth costs a trie level plus its lane rows (measured:
         # 158x167 against 121x136).
         "snake-ring": {"DIV", "INCM", "MODI", "SND"},
+        # pathfinder is a bitset program, so its extensions are the bitwise pair and
+        # the two things a bitset needs to be addressed by: `AND`/`OR` intersect and
+        # merge the neighbour masks, `MODI` splits a cell index into (word, bit) —
+        # `LDA` then indexes the four direction masks by the robot's word, which is the
+        # one indexed read left once the board stops being an array. `SND` is the whole
+        # display interface. Sixteen opcodes exactly, i.e. a depth-4 trie.
+        "pathfinder": {"AND", "OR", "MODI", "LDA", "SND"},
         "snake": {
             "DECM",
             "DIV",

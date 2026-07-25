@@ -1,0 +1,848 @@
+{
+  "title": "little-little-little-man \u2014 ring machine",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "panel",
+      "x": 99,
+      "y": 0,
+      "w": 21,
+      "h": 26,
+      "note": "painter + LM-75, from lllm_panel",
+      "color": "#a855f7",
+      "tags": []
+    },
+    {
+      "name": "input",
+      "x": 80,
+      "y": 22,
+      "w": 3,
+      "h": 3,
+      "note": "ASCII program, then one k a round",
+      "color": "#64748b",
+      "tags": []
+    },
+    {
+      "name": "store-relay",
+      "x": 2,
+      "y": 6,
+      "w": 6,
+      "h": 4,
+      "note": "turnaround of the 401-cell store ring",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "file-relay",
+      "x": 58,
+      "y": 24,
+      "w": 6,
+      "h": 4,
+      "note": "turnaround of the 17-cell register file",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "channels",
+      "x": 1,
+      "y": 31,
+      "w": 26,
+      "h": 190,
+      "note": "25 vertical corridors carrying every routed edge",
+      "color": "#94a3b8",
+      "tags": []
+    },
+    {
+      "name": "band:ST",
+      "x": 28,
+      "y": 31,
+      "w": 15,
+      "h": 190,
+      "note": "ST pipe ops must stand here; nearest column binds",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:FI",
+      "x": 49,
+      "y": 31,
+      "w": 25,
+      "h": 190,
+      "note": "FI pipe ops must stand here; nearest column binds",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:IO",
+      "x": 76,
+      "y": 31,
+      "w": 77,
+      "h": 190,
+      "note": "IO pipe ops must stand here; nearest column binds",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "block:INIT",
+      "x": 28,
+      "y": 31,
+      "w": 130,
+      "h": 4,
+      "note": "L0 sq sq ri M ri sq W sq M L16 - sq L1 sq rq sq rq sq rq M sq L4 W { sp rq sq rq sq rq sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:ROW",
+      "x": 28,
+      "y": 37,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:SETUP_DONE",
+      "x": 28,
+      "y": 40,
+      "w": 130,
+      "h": 1,
+      "note": "L1 N sr rq rq rq rq rq M L0 sq sq sq sq L1 sq W sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:ROUND",
+      "x": 28,
+      "y": 42,
+      "w": 130,
+      "h": 2,
+      "note": "ri M L2 * sp rq W sq rq sq rq sq rq sq rq sq rq sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:TICK",
+      "x": 28,
+      "y": 46,
+      "w": 130,
+      "h": 1,
+      "note": "rq X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:ROUND_END",
+      "x": 28,
+      "y": 49,
+      "w": 130,
+      "h": 1,
+      "note": "sq rq sq rq sq rq sq rq sq rq sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:TICK_GO",
+      "x": 28,
+      "y": 52,
+      "w": 130,
+      "h": 1,
+      "note": "M L1 W - sq rq sq X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:TICK_LIVE",
+      "x": 28,
+      "y": 55,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq sq rq sq b",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:SEEK",
+      "x": 28,
+      "y": 58,
+      "w": 130,
+      "h": 1,
+      "note": "d",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:READ",
+      "x": 28,
+      "y": 61,
+      "w": 130,
+      "h": 1,
+      "note": "rr sr M",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:REST",
+      "x": 28,
+      "y": 64,
+      "w": 130,
+      "h": 1,
+      "note": "rr X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:REST_PUSH",
+      "x": 28,
+      "y": 67,
+      "w": 130,
+      "h": 1,
+      "note": "sr",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:REST_END",
+      "x": 28,
+      "y": 69,
+      "w": 130,
+      "h": 1,
+      "note": "sr W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DISPATCH",
+      "x": 28,
+      "y": 72,
+      "w": 130,
+      "h": 1,
+      "note": "M L12 W - X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_DIGIT",
+      "x": 28,
+      "y": 75,
+      "w": 130,
+      "h": 1,
+      "note": "M rq sq rq sq rq sq rq W sq rq b sq rq M L8 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MOVE",
+      "x": 28,
+      "y": 78,
+      "w": 130,
+      "h": 1,
+      "note": "sp W sp W x",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MV_H",
+      "x": 28,
+      "y": 82,
+      "w": 130,
+      "h": 1,
+      "note": "] x",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MV_W",
+      "x": 28,
+      "y": 85,
+      "w": 130,
+      "h": 1,
+      "note": "M L1 N +",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MV_END",
+      "x": 28,
+      "y": 87,
+      "w": 130,
+      "h": 2,
+      "note": "M sp L9 sp W sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MV_E",
+      "x": 28,
+      "y": 90,
+      "w": 130,
+      "h": 1,
+      "note": "M L1 +",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MV_V",
+      "x": 28,
+      "y": 93,
+      "w": 130,
+      "h": 1,
+      "note": "] x",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MV_S",
+      "x": 28,
+      "y": 96,
+      "w": 130,
+      "h": 1,
+      "note": "M L16 +",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:MV_N",
+      "x": 28,
+      "y": 98,
+      "w": 130,
+      "h": 1,
+      "note": "M L16 N +",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:J_TREE",
+      "x": 28,
+      "y": 101,
+      "w": 130,
+      "h": 1,
+      "note": "+ M L5 W - X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_HALT",
+      "x": 28,
+      "y": 104,
+      "w": 130,
+      "h": 2,
+      "note": "rq sq rq L1 sq rq sq rq sq rq sq rq M sp L9 sp W sp W sp W sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:J_LOW",
+      "x": 28,
+      "y": 108,
+      "w": 130,
+      "h": 1,
+      "note": "+ X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_SPACE",
+      "x": 28,
+      "y": 111,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq sq rq sq rq b sq rq M L0 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:J_1234",
+      "x": 28,
+      "y": 114,
+      "w": 130,
+      "h": 1,
+      "note": "b x",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:J_13",
+      "x": 28,
+      "y": 118,
+      "w": 130,
+      "h": 1,
+      "note": "] x",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_SUB",
+      "x": 28,
+      "y": 121,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq M sq rq - sq rq b sq rq M L10 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_M",
+      "x": 28,
+      "y": 123,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq rq sq sq rq b sq rq M L12 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:J_24",
+      "x": 28,
+      "y": 126,
+      "w": 130,
+      "h": 1,
+      "note": "] x",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_ADD",
+      "x": 28,
+      "y": 129,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq M sq rq + sq rq b sq rq M L10 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_X",
+      "x": 28,
+      "y": 132,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq sq rq sq X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:LX_0",
+      "x": 28,
+      "y": 135,
+      "w": 130,
+      "h": 1,
+      "note": "rq b sq rq M L3 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:LX_P",
+      "x": 28,
+      "y": 137,
+      "w": 130,
+      "h": 1,
+      "note": "rq M L1 + M L3 W & b sq rq M L3 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:LX_N",
+      "x": 28,
+      "y": 139,
+      "w": 130,
+      "h": 1,
+      "note": "rq M L1 N + M L3 W & b sq rq M L3 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:J_HIGH",
+      "x": 28,
+      "y": 142,
+      "w": 130,
+      "h": 1,
+      "note": "M L5 W - X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:J_DIR",
+      "x": 28,
+      "y": 145,
+      "w": 130,
+      "h": 1,
+      "note": "M L4 + M",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:L_DIR",
+      "x": 28,
+      "y": 147,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq sq rq sq rq W b sq rq M L3 W",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:SEEK_STEP",
+      "x": 28,
+      "y": 149,
+      "w": 130,
+      "h": 1,
+      "note": "rr sr m",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:TICK_PAD",
+      "x": 28,
+      "y": 151,
+      "w": 130,
+      "h": 2,
+      "note": "rq sq rq sq rq sq rq M sp L9 sp W sp W sp W sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:ROW_GO",
+      "x": 28,
+      "y": 154,
+      "w": 130,
+      "h": 1,
+      "note": "M L1 W - sq rq b sq rq sq rq sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:REAL_LOOP",
+      "x": 28,
+      "y": 157,
+      "w": 130,
+      "h": 1,
+      "note": "d",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:PAD_SET",
+      "x": 28,
+      "y": 160,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq sq rq sq rq b sq rq sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:PAD_LOOP",
+      "x": 28,
+      "y": 163,
+      "w": 130,
+      "h": 1,
+      "note": "d",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:ROW_END",
+      "x": 28,
+      "y": 167,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq sq M L1 W - X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:RE_WALL",
+      "x": 28,
+      "y": 170,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq L1 sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:RE_NORM",
+      "x": 28,
+      "y": 172,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq rq sq rq L0 sq",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:PAD_CELL",
+      "x": 28,
+      "y": 174,
+      "w": 130,
+      "h": 5,
+      "note": "rq sp M L1 + sq L0 sp L0 sr rq sq rq sq rq sq rq sq rq sq m",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:CELL",
+      "x": 28,
+      "y": 180,
+      "w": 130,
+      "h": 3,
+      "note": "rq sp M L1 + sq rq sq rq sq rq sq rq sq rq sq X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:REAL_CELL",
+      "x": 28,
+      "y": 185,
+      "w": 130,
+      "h": 1,
+      "note": "ri",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DEC",
+      "x": 28,
+      "y": 188,
+      "w": 130,
+      "h": 1,
+      "note": "M L48 W - X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DEC_D0",
+      "x": 28,
+      "y": 191,
+      "w": 130,
+      "h": 1,
+      "note": "L12 sr L8 sp",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:CELL_TAIL",
+      "x": 28,
+      "y": 194,
+      "w": 130,
+      "h": 1,
+      "note": "M L9 W - X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:AT_FIX",
+      "x": 28,
+      "y": 197,
+      "w": 130,
+      "h": 1,
+      "note": "rq sq M L1 W - M rq W sq rq sq rq sq rq sq rq sq m",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:CELL_ROT",
+      "x": 28,
+      "y": 199,
+      "w": 130,
+      "h": 1,
+      "note": "m",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DEC_ASC",
+      "x": 28,
+      "y": 201,
+      "w": 130,
+      "h": 1,
+      "note": "+",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DEC_TAB",
+      "x": 28,
+      "y": 203,
+      "w": 130,
+      "h": 3,
+      "note": "M L29 * M L6 W } M L15 & M L4 * W L51674891514224901 } M L15 & sr M L4 * W L162947623267008 } M L15 & sp",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DEC_HI",
+      "x": 28,
+      "y": 208,
+      "w": 130,
+      "h": 1,
+      "note": "M L9 W - X",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DEC_DIG",
+      "x": 28,
+      "y": 211,
+      "w": 130,
+      "h": 3,
+      "note": "+ M L12 + sr L8 sp",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:DEC_ASC2",
+      "x": 28,
+      "y": 215,
+      "w": 130,
+      "h": 1,
+      "note": "+ M L48 +",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "block:WALL_CELL",
+      "x": 28,
+      "y": 217,
+      "w": 130,
+      "h": 2,
+      "note": "ri L4 sp L10 sr m",
+      "color": "#f59e0b",
+      "tags": [
+        "block"
+      ]
+    }
+  ],
+  "circles": [],
+  "scenarios": [],
+  "lanes": []
+}

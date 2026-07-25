@@ -51,7 +51,7 @@ __all__ = [
 #: emulator picks a model and the generator picks a block from this one word.
 #: ``stream`` is ``lm1/stream.py``'s three rings and a MAC (``matmul``); ``snake`` is
 #: ``lm1/snake_unit.py``'s body FIFO, which also owns the display and answers nothing.
-UNITS = frozenset({"stream", "snake"})
+UNITS = frozenset({"stream", "snake", "path"})
 
 #: ``ARCH.md`` §2.1: ring capacity must be ``P + slack``; too small deadlocks,
 #: too large starves the CPU.

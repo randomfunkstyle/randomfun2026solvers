@@ -1,0 +1,19 @@
+# pathfinder — submission c6b9837d-2a42-4e65-af41-178d1ccb8877
+
+verdict      done: 17/18 cases, no score (a full pass is required)
+submitted    2026-07-26T01:59:41+0300
+grid         180x184
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  716a7f1ac05bd977d8dc2807ec62669167b6f9c0d5fb62bf7b376e552d7e4f9c
+commit       43f993b
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_cpu.man
+
+runner output:
+Passed 17/18 test cases
+
+Passed all 7 public tests
+Failed 1 of 11 private tests (1 step-cap)
+
+notes:
+bit-parallel BFS over four 64-bit board words; CPU paints the LM-75; 180x184, avg 5.00M ticks locally

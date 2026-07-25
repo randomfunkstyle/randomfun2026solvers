@@ -231,6 +231,7 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.AND_MEM: (("s", Band.MEM), ("r", Band.MEM), ("&", None), ("M", None)),
+    Sem.OR_MEM: (("s", Band.MEM), ("r", Band.MEM), ("|", None), ("M", None)),
     # ── indexed memory: `LDP`/`STP`, and *no SPILL block* ─────────────────────
     # ``isa.py`` gives both of these a spill slot, because in the ``0 addr`` /
     # ``1 addr value`` wire protocol the request-opening literal clobbers A while B
@@ -311,6 +312,7 @@ MEMORY_SEMS = frozenset(
         Sem.MUL_MEM,
         Sem.DIV_MEM,
         Sem.AND_MEM,
+        Sem.OR_MEM,
         Sem.STORE_ACC_MEM,
         Sem.LOAD_IND,
         Sem.STORE_IND,
@@ -1095,16 +1097,23 @@ _ADAPTER = [
     ".>M0sWs....v",  # read: B=w; A=0; send 0; A=w=a; send a
     "^.........@<",  # return leg; spawn/turn moved left with the freed column
 ]
+_Y_ADAPTER = [
+    ".>Ns1srs...v",  # write: send addr, then op=1, then pass the value
+    "UX.........v",
+    ".>s0s......v",  # read: send addr, then op=0
+    "^.........@<",
+]
 ADAPTER_W = len(_ADAPTER[0])
 ADAPTER_H = len(_ADAPTER)
 ADAPTER_IN_ROW = 2  # west wall: the request pipe from the CPU
 ADAPTER_OUT_ROW = 2  # east wall: the expanded request out to the tape
 
 
-def adapter_cells() -> dict[tuple[int, int], str]:
+def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
     """The adapter's interior cells, local (1,1)-based."""
     out: dict[tuple[int, int], str] = {}
-    for y, row in enumerate(_ADAPTER, start=1):
+    rows = _Y_ADAPTER if address_first else _ADAPTER
+    for y, row in enumerate(rows, start=1):
         for x, ch in enumerate(row, start=1):
             if ch != " ":
                 out[(x, y)] = ch
@@ -1359,6 +1368,10 @@ def build(
     ``22 + 14 * addr`` per access. The man-memory is faster per access at every
     small ``n`` and *narrower in area* at ``n`` around 5, but it widens as
     ``6n + 13``, so it is only the better choice while the tape size is small.
+    ``"men-y"`` uses two equal man-cell banks behind a ``Y`` selector. Its
+    address-first adapter drives the selector directly; CPU loads already wait
+    for their response, so the standalone memory program's ordering head would
+    only add latency. This tier supports every registered STORE size.
 
     ``tape_n`` defaults to the program's highest *static* address, which is wrong
     for any program that computes addresses at runtime (``LDA``/``MOVA``), so those
@@ -1547,7 +1560,7 @@ def _assemble(
             "engine would read a second, spurious pipe into the CPU"
         )
     g.room(AX, AY, AX + ADAPTER_W + 1, AY + ADAPTER_H + 1)
-    g.blit(AX, AY, adapter_cells())
+    g.blit(AX, AY, adapter_cells(address_first=store == "men-y"))
     req_row = AY + ADAPTER_IN_ROW
     g.draw_pipe([(CX + W + 2, req_row), (AX - 1, req_row)])
 
@@ -1556,10 +1569,14 @@ def _assemble(
         from ..memory_men_store import men_block
 
         tape = men_block(tape_n)
+    elif store == "men-y":
+        from ..memory_men_y import y_men_block
+
+        tape = y_men_block(tape_n)
     elif store == "tape":
         tape = tape_block(tape_n)
     else:
-        raise MachineError(f"unknown store tier {store!r}; expected 'tape' or 'men'")
+        raise MachineError(f"unknown store tier {store!r}; expected 'tape', 'men', or 'men-y'")
     TX = AX + ADAPTER_W + 6
     TY = CY
     g.blit(TX, TY, tape.cells)
@@ -1677,7 +1694,7 @@ def _assemble(
     # The memory tier's own internal pipes: the tape's two ring legs, or the
     # man-memory's command and answer pipe per cell. Everything the machine itself
     # drew is already in ``touches``, plus the one response pipe drawn half here.
-    store_pipes = 2 * tape_n if store == "men" else 2
+    store_pipes = tape.pipes if store == "men-y" else (2 * tape_n if store == "men" else 2)
     _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -1721,6 +1738,13 @@ def _stream(
         from . import snake_unit
 
         blk = snake_unit.build_snake()
+    elif unit == "path":
+        # The PATH unit is snake's block with the ring taken out: `pathfinder` keeps
+        # its whole state (four 64-bit board words) in the CPU's tape and asks the
+        # unit only to paint, so all the unit owns is the panel and the robot's cell.
+        from . import path_unit
+
+        blk = path_unit.build_path()
     else:
         from . import stream as streammod
 
@@ -1937,6 +1961,11 @@ TAPE_SIZE = {
     # tape is eight slots and a read costs ~180 ticks instead of ~653. That is the whole
     # point of the rewrite — see snake-ring.asm's header.
     "snake-ring": 9,
+    # pathfinder's board is a bitset, not an array: 256 cells live in four 64-bit
+    # words, so the whole BFS — frontier, reached set, and the four direction masks —
+    # is 40 slots instead of 512. Every slot taxes every read by ~8 ticks (§4.1),
+    # which is also why its power-of-two masks are computed rather than tabulated.
+    "pathfinder": 52,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
@@ -1990,6 +2019,11 @@ ROM_ROWS = {
     # sweep minimum at 122x136; 5 is 144x135 and 7 is 111x137, so this is a real
     # optimum rather than a plateau.
     "snake-ring": 6,
+    # pathfinder's P is 2,484 words — the level step is unrolled over the four board
+    # words and then twice again — so the ROM dominates the box and wants folding
+    # almost square. Swept: 24/40/60/72/80/100/140 rows give footprints of 267k/98k/
+    # 45k/33.9k/36.9k/44.9k/63.5k, so 72 (180x184) is a real minimum, not a plateau.
+    "pathfinder": 72,
 }
 
 
@@ -2015,7 +2049,7 @@ def display_for(slug: str) -> tuple[int, int] | None:
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
 
-def build_for(slug: str) -> Machine:
+def build_for(slug: str, *, store: str = "tape") -> Machine:
     """Generate the machine for a checked-in task program.
 
     Everything not derivable from the ``.asm`` comes from the registry above, except
@@ -2033,6 +2067,7 @@ def build_for(slug: str) -> Machine:
         rom_rows=ROM_ROWS.get(slug),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
+        store=store,
     )
 
 

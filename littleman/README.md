@@ -8,7 +8,8 @@ editor byte-for-byte.
 
 **Docs (saved locally — no need to hit the contest site):**
 [`SPEC.md`](SPEC.md) the language · [`GRADING.md`](GRADING.md) scoring, limits
-and the submission API · [`ARCH.md`](ARCH.md#82-split-y-audit) architecture and
+and the submission API · [`OPTIMIZATION.md`](OPTIMIZATION.md) deterministic AST
+auditing and optimizer commands · [`ARCH.md`](ARCH.md#82-split-y-audit) architecture and
 the all-task split audit · [`reference/`](reference/) raw official text +
 interpreter probe · [`../tasks/problems/`](../tasks/problems/) all 20 problem
 statements with public test data.

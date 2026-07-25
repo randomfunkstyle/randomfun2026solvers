@@ -50,7 +50,7 @@ from .memory_men import (
     router_rows,
 )
 
-__all__ = ["YSelector", "y_selector_rows", "build_tree_y"]
+__all__ = ["YMenStore", "YSelector", "y_men_block", "y_selector_rows", "build_tree_y"]
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,19 @@ class YSelector:
     low_col: int
     #: interior row where the parent's pipe should arrive on the west wall
     in_row: int
+
+
+@dataclass(frozen=True)
+class YMenStore:
+    """A two-bank ``Y`` memory packaged for the LM-1 STORE seam."""
+
+    cells: dict[tuple[int, int], str]
+    width: int
+    height: int
+    in_cell: tuple[int, int]
+    out_cell: tuple[int, int]
+    pipes: int
+    capacity: int
 
 
 def y_selector_rows(bank: int) -> YSelector:
@@ -249,3 +262,100 @@ def build_tree_y(bank: int) -> tuple[tuple[str, ...], int, int]:
     while rows and not rows[-1]:
         rows.pop()
     return tuple(rows), max(len(r) for r in rows), len(rows)
+
+
+def y_men_block(n: int) -> YMenStore:
+    """Build a direct two-bank man-memory for the LM-1 STORE seam.
+
+    Odd slot counts round up to two equal banks; the last cell is unreachable.
+    The CPU adapter emits ``addr op [value]`` for this backend, so its selector
+    needs neither the standalone memory program's I/O rooms nor its ordering
+    head. Loads already block the CPU until their response arrives.
+    """
+    if n < 1:
+        raise ValueError("a Y STORE block needs at least one cell")
+    bank = (n + 1) // 2
+    sel = y_selector_rows(bank)
+    leaf_rows, leaf_ports = router_rows(bank, pitch=PITCH)
+    leaf_iw = max(len(r) for r in leaf_rows)
+    coll_rows, _ = collector_rows(1)
+    sel_iw = max(len(r) for r in sel.rows)
+
+    bx, sy = 8, 4
+    sel_h = len(sel.rows)
+    sel_x = bx + 2
+    east = bx + max(leaf_iw, sel_iw) + 3
+    response_x = east + 6
+    grid = Circuit(response_x + 4, sy + sel_h + 2 * 26 + 16)
+
+    _room(grid, sel_x, sy, list(sel.rows))
+
+    # Adapter -> selector. The exposed stub is entered heading east.
+    request_y = sy + sel.in_row
+    request = [(x, request_y) for x in range(3, sel_x - 1)]
+    draw_pipe(grid, request + [(sel_x - 1, request_y)])
+
+    prev_coll: tuple[int, int] | None = None
+    block_y = sy + sel_h + 5
+    for bank_id in (1, 0):
+        by = block_y
+        _room(grid, bx, by, leaf_rows)
+        if bank_id == 1:
+            px, start, ex = sel_x + sel.high_col, sy - 3, east + 2
+            path = (
+                [(px, start + 1), (px, start)]
+                + [(x, start) for x in range(px + 1, ex + 1)]
+                + [(ex, y) for y in range(start + 1, by + 1)]
+                + [(x, by) for x in range(ex - 1, bx + leaf_iw - 1, -1)]
+            )
+        else:
+            px, start, wx = sel_x + sel.low_col, sy + sel_h + 2, bx - 3
+            path = (
+                [(px, start - 1), (px, start)]
+                + [(x, start) for x in range(px - 1, wx - 1, -1)]
+                + [(wx, y) for y in range(start + 1, by + 1)]
+                + [(x, by) for x in range(wx + 1, bx)]
+            )
+        draw_pipe(grid, path)
+        for i in range(bank):
+            cell_x = bx + leaf_ports[i] - 1
+            cell_y = by + len(leaf_rows) + 4
+            cell_at(grid, cell_x, cell_y)
+            draw_pipe(grid, [(cell_x, cell_y - 3), (cell_x, cell_y - 2), (cell_x, cell_y - 1)])
+            out_x = cell_x + CELL_OUT_COL - CELL_IN_COL
+            draw_pipe(grid, [(out_x, cell_y + 5), (out_x, cell_y + 6), (out_x, cell_y + 7)])
+        cy = by + len(leaf_rows) + 4 + CELL_H + 2
+        _room(grid, bx, cy, [r.ljust(leaf_iw) for r in coll_rows])
+        if prev_coll is not None:
+            ppx, ppy = prev_coll
+            cex = east + 4
+            draw_pipe(
+                grid,
+                [(x, ppy) for x in range(ppx, cex + 1)]
+                + [(cex, y) for y in range(ppy + 1, cy)]
+                + [(x, cy) for x in range(cex, bx + leaf_iw - 1, -1)],
+            )
+        prev_coll = (bx + leaf_iw + 1, cy + 1)
+        block_y = cy + 6
+
+    # Last collector -> CPU response stub, around the far east of every bank.
+    ppx, ppy = prev_coll
+    draw_pipe(
+        grid,
+        [(x, ppy) for x in range(ppx, response_x + 1)]
+        + [(response_x, y) for y in range(ppy - 1, 0, -1)]
+        + [(response_x, 0)],
+    )
+
+    cells = {point: glyph for point, glyph in grid.cell.items() if glyph != " "}
+    return YMenStore(
+        cells=cells,
+        width=max(x for x, _ in cells) + 1,
+        height=max(y for _, y in cells) + 1,
+        in_cell=(request[0][0], request[0][1]),
+        out_cell=(response_x, 1),
+        # selector->banks (2), collector chain (1), plus one command and one
+        # answer pipe for every physical cell.
+        pipes=4 * bank + 3,
+        capacity=2 * bank,
+    )
