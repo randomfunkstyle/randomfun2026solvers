@@ -706,24 +706,49 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
             lane_cells[(lane_x0, r)] = (pre, None)
             lane_end[r] = lane_x0
 
-    # ── drop columns: strictly ordered bottom-to-top, floored east of the slabs
+    # ── drop columns: turn south the moment every lane below allows it ───────
+    # A drop is only ever a `v` at its head and `.` below, and a southbound man keeps
+    # his heading over a `.` — so the only hard constraint is that the column be clear
+    # of *glyphs* on every row the drop crosses. Going bottom-to-top, that is the
+    # running suffix maximum of ``lane_end``, and nothing more.
+    #
+    # It used to be floored at ``struct_east + 1`` for every lane, which is the
+    # slabs' east edge. A **structured** lane does need that: its drop continues past
+    # the collector into its own slab. A simple lane's drop *stops* at the collector,
+    # which sits above the slabs, so it never enters the band it was clearing. The
+    # floor cost every simple instruction ~22 columns east and the same ~22 back west
+    # along the collector, twice over, once per instruction, forever.
+    #
+    # Simple and structured columns must stay disjoint for a subtler reason: a
+    # structured drop needs the collector row to show `.` where it passes through, so a
+    # simple man arriving on that column would sail *past* the collector and be
+    # swallowed by the wrong slab. Keeping simple lanes west of ``struct_east`` and
+    # structured ones east of it makes that disjointness structural.
     drop_x: dict[int, int] = {}
-    cur = struct_east + 1
     assigned: set[int] = set()
+    floor = lane_x0
     for r in sorted(all_rows, reverse=True):
+        # Halting rows carry no drop but do carry glyphs, so they still raise the
+        # floor for everything above them.
+        floor = max(floor, lane_end[r] + 1)
         if r in halting:
             continue
-        c = max(cur, lane_end[r] + 1)
         m = by_row.get(r)
         if m is not None and m in slab_rows:
             # A slab's entry column must be unique in *both* directions: its `<`
             # turns an arriving man west, so any other drop sharing the column
             # would be swallowed by this slab's entry row.
+            c = max(floor, struct_east + 1)
             while c in assigned:
                 c += 1
-            cur = c + 1
         else:
-            cur = c
+            c = floor
+            if c > struct_east:
+                # A micro-program long enough to reach the slabs has to join the
+                # structured lanes' discipline rather than risk their columns.
+                c = struct_east + 1
+                while c in assigned:
+                    c += 1
         drop_x[r] = c
         assigned.add(c)
 
@@ -826,10 +851,19 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
     # east wall, since nothing down there steers him.
     g.put(2, collector, "@")
 
-    if struct_east >= min(drop_x.values(), default=struct_east + 1):
+    # A simple drop *stops* at the collector, and the collector sits above the slabs,
+    # so being west of ``struct_east`` is harmless — that used to be forbidden back
+    # when the collector was below the slab band and a drop really did cross one.
+    # What must still hold is column disjointness against the drops that pass
+    # *through* the collector on their way to a slab: those leave `.` on the collector
+    # row, so a simple man sharing the column would sail past his turn west and be
+    # swallowed by that slab.
+    through = {drop_x[p.row[m]] for m in order}
+    clash = {r: c for r, c in drop_x.items() if c in through and by_row.get(r) not in order}
+    if clash:
         raise MachineError(
-            f"slabs reach column {struct_east} but the westmost drop column is "
-            f"{min(drop_x.values())}: a simple lane's drop would cross a slab"
+            f"simple lane drop column(s) {sorted(set(clash.values()))} collide with a "
+            f"slab entry column; a simple lane would drop past the collector"
         )
 
     width = ret_x + 1
