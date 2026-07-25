@@ -19,6 +19,7 @@ if str(PKG) not in sys.path:
 
 from randomfun2026solvers.memory_ast import (  # noqa: E402
     Affinity,
+    banked_spec,
     relative_spec,
     spec_for,
 )
@@ -54,6 +55,40 @@ def test_every_ring_needs_one_spare_slot() -> None:
     """n values circulating need somewhere to move into; exactly n deadlocks."""
     assert spec_for(100).ring.minimum == 101
     assert spec_for(7).ring.minimum == 8
+
+
+def test_y_banking_maps_every_address_to_exactly_one_fifty_cell_ring() -> None:
+    split = banked_spec(100, 2)
+
+    for addr in range(100):
+        routes = split.routes(addr)
+        assert sum(route.active for route in routes) == 1
+        selected = split.selected(addr)
+        assert selected.bank == addr // 50
+        assert selected.local == addr % 50
+
+    # The proposed "magic": the high child sees the same address minus 50.
+    assert split.routes(81)[1].local == 31
+    assert split.routes(18)[1].local == -32
+
+
+def test_y_banking_halves_the_rotation_but_each_ring_needs_its_own_hole() -> None:
+    full = spec_for(100)
+    split = banked_spec(100, 2)
+
+    assert split.bank_size == 50
+    assert split.rotation_ticks() * 2 == full.rotation_ticks()
+    assert split.minimum_ring_cells == 102
+    assert split.longest_side_limit(31) == 43
+
+
+def test_y_banking_rejects_unequal_buckets_and_bad_addresses() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="divisible"):
+        banked_spec(100, 3)
+    with pytest.raises(ValueError, match="outside"):
+        banked_spec().selected(100)
 
 
 def test_pipe_affinity_partitions_the_worker_into_zones() -> None:

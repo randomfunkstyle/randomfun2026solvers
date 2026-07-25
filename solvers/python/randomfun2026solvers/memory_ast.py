@@ -39,6 +39,8 @@ from enum import Enum
 
 __all__ = [
     "Affinity",
+    "BankRoute",
+    "BankedSpec",
     "Step",
     "MEMORY_STEPS",
     "RELATIVE_STEPS",
@@ -46,6 +48,7 @@ __all__ = [
     "Spec",
     "spec_for",
     "relative_spec",
+    "banked_spec",
 ]
 
 
@@ -190,6 +193,84 @@ class Ring:
     @property
     def minimum(self) -> int:
         return self.n + 1
+
+
+@dataclass(frozen=True)
+class BankRoute:
+    """One child's interpretation of an address after a ``Y`` split."""
+
+    bank: int
+    local: int
+    active: bool
+
+
+@dataclass(frozen=True)
+class BankedSpec:
+    """A full-lap tape split into equal, concurrently rotated banks.
+
+    The operation reader receives ``op`` and ``addr`` once, then ``Y`` clones
+    those registers.  Child ``i`` computes ``addr - i*bank_size``; only the
+    child for which that value is in range performs the target side effect.
+    Every child still completes one full local revolution, so the rings return
+    to cell zero and a designated child can become the next operation reader.
+
+    A WRITE value is deliberately read *after* range selection.  Exactly one
+    child is active, so exactly one child consumes the third input token.  This
+    is the crucial reason the design needs neither an input broadcaster nor a
+    join instruction.
+    """
+
+    n: int
+    banks: int
+
+    def __post_init__(self) -> None:
+        if self.n <= 0 or self.banks <= 0:
+            raise ValueError("memory size and bank count must be positive")
+        if self.n % self.banks:
+            raise ValueError("equal banks require n to be divisible by banks")
+
+    @property
+    def bank_size(self) -> int:
+        return self.n // self.banks
+
+    @property
+    def rings(self) -> tuple[Ring, ...]:
+        return tuple(Ring(self.bank_size) for _ in range(self.banks))
+
+    @property
+    def minimum_ring_cells(self) -> int:
+        """Total pipe capacity: each independently moving ring needs one hole."""
+        return sum(r.minimum for r in self.rings)
+
+    def routes(self, addr: int) -> tuple[BankRoute, ...]:
+        if not 0 <= addr < self.n:
+            raise ValueError(f"address {addr} outside 0..{self.n - 1}")
+        size = self.bank_size
+        return tuple(
+            BankRoute(bank=i, local=addr - i * size, active=i * size <= addr < (i + 1) * size)
+            for i in range(self.banks)
+        )
+
+    def selected(self, addr: int) -> BankRoute:
+        active = [route for route in self.routes(addr) if route.active]
+        if len(active) != 1:
+            raise AssertionError(f"address {addr} selected {len(active)} banks")
+        return active[0]
+
+    def rotation_ticks(self) -> int:
+        """Critical-path rotation when all banks rotate at eight ticks/value."""
+        return 8 * self.bank_size
+
+    def longest_side_limit(self, baseline_side: int) -> int:
+        """Largest integer side that can beat an equal-overhead full-lap tape.
+
+        Score is ``side² * ticks``.  Banking by ``k`` ideally divides rotation
+        time by ``k``, so its longest side may grow by strictly less than
+        ``sqrt(k)``.  The returned integer enforces that strict inequality.
+        """
+        import math
+
+        return math.ceil(baseline_side * math.sqrt(self.banks)) - 1
 
 
 @dataclass
@@ -338,6 +419,11 @@ def relative_spec(n: int = 100) -> Spec:
     return Spec(n=n, steps=RELATIVE_STEPS(n), ring=Ring(n))
 
 
+def banked_spec(n: int = 100, banks: int = 2) -> BankedSpec:
+    """Describe the ``Y``-forked full-lap design without committing geometry."""
+    return BankedSpec(n=n, banks=banks)
+
+
 if __name__ == "__main__":
     full = spec_for(100)
     rel = relative_spec(100)
@@ -351,4 +437,12 @@ if __name__ == "__main__":
         f"rotation per op: {full.rotation_ticks()} -> {rel.rotation_ticks()} ticks "
         f"({full.rotation_ticks() / rel.rotation_ticks():.2f}x), "
         f"loops {sum(s.is_loop for s in full.steps)} -> {sum(s.is_loop for s in rel.steps)}"
+    )
+    split = banked_spec()
+    print()
+    print(
+        f"BANKED: {split.banks} x {split.bank_size}, "
+        f"{split.rotation_ticks()} rotation ticks/op, "
+        f"{split.minimum_ring_cells} total ring cells, "
+        f"must fit within {split.longest_side_limit(31)} cells to beat a 31-cell baseline"
     )

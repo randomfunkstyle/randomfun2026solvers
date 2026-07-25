@@ -6,7 +6,7 @@ solved**, every one passing all its public cases on the reference interpreter.
 | set | problem | grid | score | how |
 |---|---|---|---|---|
 | 1 | `triangle` | 8×8 | **960** | bespoke |
-| 1 | `memory` | 31×32 | 14,289,920 | bespoke (pipe tape) |
+| 1 | `memory` | 31×31 | 55,105,622 server | bespoke (pipe tape) |
 | 1 | `reverse-a-list` | 21×21 | 482,564 | bespoke (value ring) |
 | 1 | `sort-numbers` | 25×25 | 2,083,304 | bespoke (value ring) |
 | 2 | `history-lesson` | 97×90 | **9,409** | bespoke (base-128 ROM) |
@@ -535,6 +535,57 @@ Further variants, in rough order of payoff (the first two are described in
 
 `layout.py`'s `Container.variants` is the mechanism for handing the solver
 several of these and letting it pick one that routes.
+
+#### Two 50-cell banks with `Y`
+
+The concrete two-bank design no longer needs an input broadcaster or a join.
+The operation reader consumes `op, addr`, keeps `op` in B and `addr` in A/BP,
+then splits once:
+
+```
+                         Y
+                       /   \
+low child:  addr      /     \  high child: addr - 50
+            ring[0]  /       \ ring[1]
+```
+
+Both children execute the same full-lap 50-cell algorithm concurrently. The
+low child is active only when `addr - 50 < 0`; the high child is active only
+when `addr - 50 >= 0`. Exactly one active child performs the target side effect.
+For a WRITE, that child alone receives the value token *after* selection; for a
+READ, it alone sends to output. The inactive child makes a no-op revolution, so
+both rings return to cell zero. One designated child walks back to the input
+loop after a padded fixed-length path and the other halts—there is no join.
+
+This fits the three registers. Before `Y`, A/BP hold `addr` and B holds `op`.
+Each child first branches on `op`; once that branch is known, the short sequence
+`WM` `` `50` `` `W-` replaces the no-longer-needed op with the bank predicate
+without losing the address. The high worker uses the result directly; the low
+worker adds 50 back on its active path.
+
+The model and the executable selector are checked in
+`memory_ast.banked_spec`, `memory_banked.build_bucket_probe`, and
+`tests/test_memory_banked.py`. The probe runs all 100 addresses on the native
+validator and the four cut boundaries on the reference wasm. It proves actual
+`Y` birth directions and mutually exclusive output, not merely integer
+division in Python.
+
+The budget is unusually favorable:
+
+| property | one ring | two banks |
+|---|---:|---:|
+| values per critical-path revolution | 100 | 50 |
+| modeled rotation ticks | 800 | 400 |
+| minimum total pipe cells | 101 | 102 |
+| independent relay loops | 1 | 2 |
+
+Storage capacity therefore barely grows—the extra cost is duplicated relay and
+worker control, not another 100 cells. Against the current 31×31 grid, a
+rotation-only 2× speedup can tolerate a longest side of at most 43 cells
+(`31√2`, strict score inequality). This is an optimistic geometry gate, not a
+score prediction: fixed decode paths reduce the real speedup. A complete
+candidate should be abandoned as soon as it exceeds 43, and must beat the
+checked-in machine on all seven public cases before replacing it.
 
 **The two tiers are a precondition, not an optimisation.** The emulator (§9
 step 2) measured that **41–53 % of executed instructions are `LD`/`ST`**, and
@@ -1263,7 +1314,7 @@ The complete released-task audit is:
 | `triangle` | none | The closed form is already a short dependency chain. Forking multiplication/addition adds setup and a join, so the 24×3 bespoke grid wins. |
 | `reverse-a-list` | low | Input and output order are both serial and the current ring is the storage. A feeder could alternate values between workers, but merging them in reverse order needs the same count/state and adds pipes. |
 | `sort-numbers` | low | Parallel compare/search needs either duplicated arrays or a reduction. The single ring/tape remains the bottleneck; split workers cannot safely mutate it independently. |
-| `memory` | **implemented local gadget** | `memory_blocks.east_fork` uses `Y` to give a fetched read value to the output arm and tape arm without `S` accidentally broadcasting to the index device. This is exactly the independent-side-effect pattern. The gadget and validator semantics are proven, but it is not in the current 31×31 winning ring and has not shown a score win; it removes a routing ambiguity, not the 100-cell storage cost. |
+| `memory` | **high; bank selector implemented** | Split each operation across two independent 50-cell rings. The low worker uses `addr`, the high worker uses `addr - 50`, and exactly one performs the target side effect. `memory_banked.build_bucket_probe` proves the selector on real engines; the remaining work is physical placement of the two rings under the 43-cell go/no-go bound. The older `memory_blocks.east_fork` remains a smaller read-side-effect gadget. |
 | `history-lesson` | none for score | Two emitters can produce the fixed text faster, but scoring ignores ticks. They duplicate or complicate the compressed stream and cannot reduce the 144×148 footprint bound. |
 | `brackets` | low | Stack state is a prefix recurrence. Splitting chunks requires exporting each chunk's unmatched prefix/suffix and joining summaries; at length 32 that machinery is larger than the packed-stack loop. |
 | `tcp` | low | Packet arrival, reorder-buffer mutation, and earliest-possible ordered output share one moving frontier. Split lookup/output servants can overlap locally, but both still serialize on the same tape and output pipe. |
@@ -1303,6 +1354,13 @@ Concrete probes and budgets keep this audit falsifiable:
   versus roughly 12.7M for the submitted 31×31 ring at its recorded 13,248
   local ticks. The split gadget stays a routing building block; this machine is
   not a submission candidate.
+- **Banked-memory gate:** `memory_ast.banked_spec(100, 2)` proves every address
+  selects exactly one bank and that the high child's local address is
+  `addr - 50`. Two rings need 102 pipe cells in total versus 101 today, while
+  the modeled rotation path falls from 800 to 400 ticks. The executable probe
+  verifies outputs `addr % 50` for all 100 addresses. A placed solution must
+  remain at most 43 cells on its longest side to have any idealized score
+  margin over 31×31.
 - **Sudoku go/no-go budget:** the current CPU performs **17 tape transactions
   per cell**: five to materialize addresses and four for each row/column/box
   test-and-set. Three split workers with three independent 9-mask banks reduce
