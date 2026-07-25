@@ -254,13 +254,19 @@ V2_FWD_ROW = 8              # right wall
 V2_RET_COL = 12             # bottom wall
 
 
-def worker_v2(n: int, *, init_body: str | None = None) -> Circuit:
+def worker_v2(
+    n: int,
+    *,
+    init_body: str | None = None,
+    constant_input: bool = False,
+) -> Circuit:
     c = Circuit(V2_IW, V2_IH)
     L = lit(n)
     GUT = V2_IW - 1                       # right gutter: P2 exit climbs to MAIN
 
     # ── INIT (row 0) ──────────────────────────────────────────────────────
-    x, _ = c.run(1, 0, "@" + L + "b")     # A=N, BP=N
+    init_n = "r" if constant_input else L
+    x, _ = c.run(1, 0, "@" + init_n + "b")  # A=N, BP=N
     c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
     if init_body is not None:
         if n % 2:
@@ -272,15 +278,36 @@ def worker_v2(n: int, *, init_body: str | None = None) -> Circuit:
     c.route(fill_exit, E, [(GUT, 5), (GUT, 1)], (0, 1), S)
     c.turn(0, 2, E)                        # left gutter -> MAIN
 
-    # ── MAIN (row 2): r(in)->op ; X  (op==0 straight = READ, 1 = CW = WRITE)
-    c.run(1, 2, "rX")
-    rx, _ = c.run(3, 2, "rbM" + L + "-M")      # BP=addr, B=+(N-addr)
-    c.turn(2, 3, E)
-    wx, _ = c.run(3, 3, "rbM" + L + "-NM")     # BP=addr, B=-(N-addr)
+    if constant_input:
+        # Keep op in B while both input values are received near the lower port.
+        c.run(1, 2, "rM")
+        c.turn(3, 2, S)
+        c.turn(3, 3, W)
+        c.run(1, 3, "r", d=W)                  # lower input -> addr
+        c.turn(0, 3, S)
+        c.turn(0, 4, E)
+        c.run(1, 4, "bWX")                     # BP=addr; branch on saved op
+        read_setup, _ = c.run(4, 4, "r-M")
+        c.horizontal(4, read_setup - 1, 10)
+        c.turn(3, 5, E)
+        write_setup, _ = c.run(4, 5, ".r-NM")
+        c.route(
+            (write_setup, 5),
+            E,
+            [(9, 5), (9, 4)],
+            (10, 4),
+            E,
+        )
+    else:
+        # ── MAIN: op==0 goes straight to READ; op==1 turns CW to WRITE.
+        c.run(1, 2, "rX")
+        rx, _ = c.run(3, 2, "rbM" + L + "-M")
+        c.turn(2, 3, E)
+        wx, _ = c.run(3, 3, "rbM" + L + "-NM")
+        c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
+        c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
 
-    # both arms drop to row 4, run west, then enter P1 heading east
-    c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
-    c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+    # Both arms reach the shared absolute south turn into P1.
     c.turn(10, 4, S)
     c.turn(10, 5, E)
     p1, _ = c.counted_loop(11, 5, "rs")        # pass `addr` values through
@@ -293,20 +320,65 @@ def worker_v2(n: int, *, init_body: str | None = None) -> Circuit:
     # ── READ target (row 11, CW/south) ───────────────────────────────────
     c.turn(15, 11, E)
     c.run(16, 11, "bm")                        # BP = N-1-addr
-    c.run(18, 11, "rS")                        # cell[addr] -> output AND tape
+    if constant_input:
+        c.turn(18, 11, S)
+        c.turn(18, 12, W)
+        c.run(17, 12, "rS", d=W)               # target -> output AND tape
+        read_exit = (15, 12)
+    else:
+        c.run(18, 11, "rS")                    # target -> output AND tape
+        read_exit = (20, 11)
 
     # ── WRITE target (row 9, CCW/north) ──────────────────────────────────
     c.turn(15, 9, W)
     c.run(14, 9, "N", d=W)                     # A = N-addr  (col 13 stays clear:
     c.run(12, 9, "bm", d=W)                    # the P1->dispatch descent crosses it)
-    c.horizontal(9, 10, 2)
-    c.run(2, 9, "r", d=W)                      # r(in) -> value
-    c.route((1, 9), W, [(1, 12)], (10, 12), E)
-    c.run(11, 12, "sr")                        # new value in, old one out
+    if constant_input:
+        c.horizontal(9, 10, 5)
+        c.run(5, 9, "r", d=W)
+        c.route((4, 9), W, [(4, 12)], (8, 12), E)
+        c.run(9, 12, "sr")
+        write_exit = 11
+    else:
+        c.horizontal(9, 10, 2)
+        c.run(2, 9, "r", d=W)                  # r(in) -> value
+        c.route((1, 9), W, [(1, 12)], (10, 12), E)
+        c.run(11, 12, "sr")                    # new value in, old one out
+        write_exit = 13
 
     # ── both arms -> P2 entry (row 14) ───────────────────────────────────
-    c.route((20, 11), E, [(20, 13), (10, 13), (10, 14)], (11, 14), E)
-    c.route((13, 12), E, [(14, 12), (14, 13), (10, 13), (10, 14)], (11, 14), E)
+    if constant_input:
+        c.route(
+            read_exit,
+            W,
+            [(15, 13), (10, 13), (10, 14)],
+            (11, 14),
+            E,
+        )
+    else:
+        c.route(
+            read_exit,
+            E,
+            [(20, 13), (10, 13), (10, 14)],
+            (11, 14),
+            E,
+        )
+    if constant_input:
+        c.route(
+            (write_exit, 12),
+            E,
+            [(write_exit, 13), (10, 13), (10, 14)],
+            (11, 14),
+            E,
+        )
+    else:
+        c.route(
+            (write_exit, 12),
+            E,
+            [(14, 12), (14, 13), (10, 13), (10, 14)],
+            (11, 14),
+            E,
+        )
     p2, _ = c.counted_loop(11, 14, "rs")       # pass N-1-addr values through
     c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
     return c
@@ -496,6 +568,106 @@ def build_v2_compact_relay_31(n: int) -> list[str]:
     rows = build_v2_compact_relay(n)
     left = min(i for row in rows for i, ch in enumerate(row) if not ch.isspace())
     return [row[left:].rstrip() for row in rows]
+
+
+def constant_source(n: int) -> list[str]:
+    """A compact room that walks N once per lap and offers it forever."""
+    top = ">@" + lit(n) + "sv"
+    bottom = "^" + " " * (len(top) - 3) + "s<"
+    wall = "+" + "-" * len(top) + "+"
+    return [wall, "|" + top + "|", "|" + bottom + "|", wall]
+
+
+def assemble_v2_constant_register(n: int, fold: int = 0) -> list[str]:
+    """Supply N from a dedicated repeating register instead of inline literals.
+
+    The source continuously fills a short pipe into the worker's top wall. The
+    two setup arms consume one value per operation; all other receives remain
+    closer to either the input or tape-return pipe.
+    """
+    iw, ih = V2_IW, V2_IH
+    g = Circuit(400, 200)
+    wk = worker_v2(n, constant_input=True)
+    wx, wy = 7, 8
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    constant_in_row = 7
+    iy = wy + constant_in_row
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+
+    ox = wx + V2_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    source = constant_source(n)
+    source_x, source_y = wx + 5, wy - 7
+    for i, row in enumerate(source):
+        for j, ch in enumerate(row):
+            g.set(source_x + j, source_y + i, ch)
+    constant_col = wx + 6
+    g.set(constant_col, wy - 3, "v")
+    g.set(constant_col, wy - 2, "v")
+
+    bottom_y = wy + ih
+    fy = wy + V2_FWD_ROW
+    ret_col = wx + V2_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 5
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    for i, row in enumerate(COMPACT_RELAY):
+        for j, ch in enumerate(row):
+            g.set(1 + j, relay_y + i, ch)
+    adj = 1 + len(COMPACT_RELAY[0])
+
+    n_fwd = _draw_pipe(
+        g,
+        [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (adj, r_a),
+            (east - 1, r_a),
+            (east - 1, r_b),
+            (adj + fold, r_b),
+            (adj + fold, r_c),
+            (ret_col, r_c),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    rows = [row.rstrip() for row in g.rows() if row.strip()]
+    left = min(i for row in rows for i, ch in enumerate(row) if not ch.isspace())
+    return [row[left:].rstrip() for row in rows]
+
+
+def build_v2_constant_register(n: int) -> list[str]:
+    """Smallest compact-relay build with a dedicated repeating N register."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2_constant_register(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
 
 
 V3_IW, V3_IH = 24, 20
@@ -1058,6 +1230,137 @@ def assemble_v2_compact_relay_31_debug(n: int) -> tuple[list[str], DebugMap]:
     rows = [row[left:].rstrip() for row in untrimmed]
     dbg.title = f"memory tape v2 compact relay 31x31 n={n}"
     return rows, dbg.translated(-left, 0)
+
+
+def assemble_v2_constant_register_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the repeating-N experiment with its source and setup lanes marked."""
+    rows = build_v2_constant_register(n)
+    _, dbg = assemble_v2_compact_relay_31_debug(n)
+    dbg = dbg.translated(0, 1)
+    dbg.title = f"memory tape v2 dedicated constant register n={n}"
+    dbg.regions = [
+        region
+        for region in dbg.regions
+        if region.name
+        not in ("input-room", "main-dispatch", "read-target", "write-target")
+    ]
+    dbg.lanes = [
+        lane
+        for lane in dbg.lanes
+        if lane.name
+        not in (
+            "input-pipe",
+            "read-setup",
+            "write-setup",
+            "read-target-access",
+            "write-target-access",
+        )
+    ]
+    dbg.region(
+        "constant-register",
+        11,
+        0,
+        len(constant_source(n)[0]),
+        len(constant_source(n)),
+        note="walk N once per lap; initialization and every operation consume it",
+        color="#facc15",
+    )
+    dbg.region(
+        "input-room",
+        0,
+        13,
+        3,
+        3,
+        note="lowered beside command decode and the write-value receive",
+        color="#22c55e",
+    )
+    dbg.region(
+        "shared-command-setup",
+        6,
+        9,
+        12,
+        4,
+        note="receive op and addr once; BP keeps addr while op selects an arm",
+        color="#60a5fa",
+    )
+    dbg.region(
+        "folded-read-target",
+        21,
+        18,
+        4,
+        3,
+        note="b,m on the top row; tape receive and fan-out run back to the left",
+        color="#a78bfa",
+    )
+    dbg.region(
+        "write-target",
+        10,
+        16,
+        13,
+        5,
+        note="short path to lower input, then append new value and discard old",
+        color="#fb923c",
+    )
+    dbg.lane(
+        "constant-pipe",
+        [(12, 4), (12, 5)],
+        kind="pipe",
+        expect="a ready N value enters the worker above both setup receives",
+        color="#fde047",
+    )
+    dbg.lane(
+        "input-pipe",
+        [(3, 14), (5, 14)],
+        kind="pipe",
+        expect="operations enter near command decode and the write target",
+        color="#22c55e",
+    )
+    dbg.lane(
+        "shared-command-decode",
+        [(7, 9), (9, 9), (9, 10), (6, 10), (6, 11), (9, 11)],
+        kind="expected",
+        expect="retain op in B, receive addr, put addr in BP, restore op, branch",
+        color="#60a5fa",
+    )
+    dbg.lane(
+        "read-setup",
+        [(9, 11), (16, 11), (16, 12), (17, 12)],
+        kind="expected",
+        expect="op=0: fetch N, derive B=+(N-addr), enter first tape pass",
+        color="#60a5fa",
+    )
+    dbg.lane(
+        "write-setup",
+        [(9, 11), (9, 12), (15, 12), (15, 11), (16, 11)],
+        kind="expected",
+        expect="op=1: fetch N, derive B=-(N-addr), enter first tape pass",
+        color="#fb923c",
+    )
+    dbg.lane(
+        "read-target-access",
+        [
+            (21, 17),
+            (21, 18),
+            (24, 18),
+            (24, 19),
+            (21, 19),
+            (21, 20),
+            (16, 20),
+            (16, 21),
+            (17, 21),
+        ],
+        kind="expected",
+        expect="folded bm/down/left-rS reaches P2 without the old east corridor",
+        color="#a78bfa",
+    )
+    dbg.lane(
+        "write-target-access",
+        [(21, 16), (10, 16), (10, 19), (17, 19), (17, 20), (16, 20)],
+        kind="expected",
+        expect="receive new value nearby, append it, then consume old target",
+        color="#fb923c",
+    )
+    return rows, dbg
 
 
 def assemble_v2_fast_init_debug(n: int) -> tuple[list[str], DebugMap]:
