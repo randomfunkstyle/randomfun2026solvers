@@ -39,17 +39,16 @@ slow = pytest.mark.skipif(
     reason="set LM1_SLOW=1 to run the full public-case sweeps",
 )
 
-#: The two graded problems this generator exists for, and the tape size each needs.
-#: Sized from the *problem constraints*, not the public data: ``tcp`` allows n=48,
-#: so addresses reach BUF+47 = 51 even though no public case goes past 35.
 #: The non-display programs this file covers; the display ones (``plotter``,
 #: ``palette``) need a panel and a ROM fold, so they go through ``build_for`` in
 #: ``test_lm1_display.py`` instead. ``gradebook`` likewise has its own file.
 #:
-#: brackets/tcp are sized to the address each actually reaches, not to the
-#: constraint: the tape is a rotating ring, so a slot costs real ticks (~114/case
-#: on brackets, ~999 on tcp) at no footprint change.
-TARGETS = {"brackets": 5, "tcp": 51, "sudoku-validity": 37}
+#: Tape sizes are **highest address reached + 1**, from the problem *constraints*
+#: rather than the public data — ``tcp`` allows n=48, so it reaches BUF+47 = 51
+#: even though no public case goes past seq 35. The ``+ 1`` is load-bearing: a
+#: tape of exactly 51 crashes tcp at n=48 (see
+#: :func:`test_tcp_survives_the_constraint_limit`).
+TARGETS = {"brackets": 5, "tcp": 52, "sudoku-validity": 37}
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────
@@ -204,3 +203,50 @@ def test_public_cases_pass_on_the_real_interpreter(slug: str, tape_n: int) -> No
     res = optimize.verify(path, slug, tick_cap=5_000_000)
     failed = [c.name for c in res.cases if not c.passed]
     assert res.passed, f"{slug}: {failed}"
+
+
+@node_required
+def test_tcp_survives_the_constraint_limit() -> None:
+    """n=48 with the maximum legal delay — the case a tape of 51 slots crashes on.
+
+    The public cases only reach seq ~35, so nothing there exercises the top of the
+    buffer. Sized to exactly its highest address (BUF + 47 = 51) the machine dies
+    ``fatal: wall`` after 32 of the 48 values, with the first 32 correct; 52 and 53
+    both pass. That is why ``TARGETS``/``TAPE_SIZE`` use highest-address **+ 1**.
+
+    The delay pattern is reversed blocks of 16 — the most out-of-order a stream can
+    be without tripping the max-delay rule, since a packet 16 or more above the
+    wanted seq must answer -1 and stop.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    n = 48
+    order: list[int] = []
+    for base in range(0, n, 16):
+        block = list(range(base, min(base + 16, n)))
+        block.reverse()
+        order += block
+    values = {s: 1 + (s * 37) % 999 for s in range(n)}
+
+    buffered: dict[int, int] = {}
+    want = 0
+    rounds_in: list[str] = []
+    rounds_out: list[str] = []
+    for i, seq in enumerate(order):
+        rounds_in.append(f"{n} {seq} {values[seq]}" if i == 0 else f"{seq} {values[seq]}")
+        buffered[seq] = values[seq]
+        drained = []
+        while want in buffered:
+            drained.append(buffered[want])
+            want += 1
+        rounds_out.append(" ".join(str(v) for v in drained))
+
+    snap = Littleman().judge(
+        REPO / "tasks" / "solutions" / "tcp_cpu.man",
+        input=" / ".join(rounds_in),
+        expected=" / ".join(rounds_out),
+        max_ticks=5_000_000,
+    )
+    assert snap.fatal is None, f"fatal: {snap.fatal}"
+    assert list(snap.output) == [values[s] for s in range(n)]
+    assert snap.step < 5_000_000, f"{snap.step:,} ticks against the 5,000,000 step cap"

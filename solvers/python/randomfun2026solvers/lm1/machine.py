@@ -1420,7 +1420,12 @@ def _check_pipe_count(rows: list[str], *, expected: int) -> None:
 #: the tape block is 33 columns wide at every N.
 TAPE_SIZE = {
     "brackets": 5,  # reaches address 4
-    "tcp": 51,  # BUF + 47, the constraint's n=48
+    # 52, NOT 51. tcp's highest address is BUF + 47 = 51, and a tape sized to
+    # exactly that **crashes** (`fatal: wall`) at n=48 after 32 of 48 values —
+    # verified: 51 fails, 52 and 53 pass. The public cases only reach seq ~35, so
+    # nothing catches it there. The rule is `highest address + 1`, which is also
+    # what brackets follows (reaches 4, sized 5).
+    "tcp": 52,
     "sudoku-validity": 37,  # BOX + 8, the 27 bitmasks plus scalars
     "gradebook": 94,  # ids[16] + grades[16*4] + scalars
     "plotter": 11,
