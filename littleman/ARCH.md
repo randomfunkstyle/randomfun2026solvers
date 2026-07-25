@@ -12,7 +12,7 @@ solved**, every one passing all its public cases on the reference interpreter.
 | 2 | `history-lesson` | 97×90 | **9,409** | bespoke (base-128 ROM) |
 | 2 | `brackets` | 98×75 | 308,880,647 | LM-1 |
 | 2 | `tcp` | 112×77 | 1,195,367,936 | LM-1 |
-| 2 | `plotter` | 112×106 | 6,057,915,733 | LM-1 + display |
+| 2 | `plotter` | 112×116 | 2,749,462,237 | LM-1 + display |
 | 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
 | 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
 | — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
@@ -443,6 +443,16 @@ Note the ~105-tick fixed overhead per operation (read op, read addr, arithmetic,
 dispatch) — it does not amortise away, which is why even an N=4 tape costs 138
 ticks and loses to a `register-cell` by 7× for scratch. The tiers are distinct
 mechanisms, not two sizes of the same one.
+
+**In a generated machine that fixed part is ~316 ticks, not ~105, and it dwarfs the
+slope.** Solving for per-unit costs against `plotter`'s engine total (§8.1) gives
+~316 ticks per access at N=11 while rebuilding the *same* program at N=11/21/31 moves
+it by only ~1.9 ticks per access per slot. So the two figures above answer different
+questions and both are needed: `8.3·N`-style slope arguments decide **how big** to make
+a tape, and the ~316 fixed cost decides **how often to touch it**. Sizing is worth a
+few percent; access count is worth multiples. The planning rule that falls out —
+**one tape access ≈ 7 instructions ≈ 40 recirculated ROM words** — is what turned
+`plotter` from 6 % over the step cap to 61 % under it.
 
 Further variants, in rough order of payoff (the first two are described in
 `programs/README.md` and not yet built):
@@ -1052,7 +1062,7 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 2 | `history-lesson` | no input; pure ROM dump (`footprint`-only) | 0 | 1/1 · P=8431 · 273k | **✔ solved bespoke** |
 | Sem 2 | `brackets` | typed stack depth 32; needs `MODI`/`DIVI` | 6 scalars | 9/9 · P=154 · 30k | **✔ solved by the synthesiser** (98×95, 62,930 ticks, score 604M) |
 | Sem 2 | `tcp` | indexed by `seq`; needs `LDA`/`MOVA` | 51 | 6/6 · P=45 · 30k | **✔ solved by the synthesiser** (112×78, 96,923 ticks, score 1.22bn) |
-| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 10 | 6/6 · P=151 · 173k | **✔ solved by the synthesiser** (112×106, 482,933 ticks avg, score 6.06bn) |
+| Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 10 | 6/6 · P=243 · 74k | **✔ solved by the synthesiser** (112×116, 204,330 ticks avg, score 2.75bn) |
 | Sem 3 | `gradebook` | ids + N×K grades, search by id; needs `LDA`/`MOVA`/`DIVI` | 93 | 7/7 · P=460 · 318k | **✔ solved by the synthesiser** (112×103, 694,713 ticks, score 8.71bn) |
 | Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | — | **✕** |
 | Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
@@ -1069,29 +1079,70 @@ engine's own `frameJudge` verdict, and `tools/display-frames.mjs` steps with
 `stopOnFrame` and compares the snapshots in Python. Neither is the old "no fatal, no
 output" check, which proved nothing on a problem that emits no output.
 
-**`plotter`'s tick margin is negative at the constraints' limit, and that is fine
-only because of `privateTestCount`.** Three figures for it get confused with each
-other, so all three, measured on the engine:
+### 8.1 `plotter` was 6 % over the step cap, and the fix was tape accesses per pixel
 
-| Load | Ticks | vs 5M cap |
+The margin used to be **negative** at the constraints' limit: 20 rounds of the worst
+legal segment cost **5,311,321** ticks against a 5,000,000 cap, and the only reason
+that shipped is that the number nobody had measured on the engine was the one everyone
+quoted. All figures below are `lm.mjs judge --frames`, never the emulator.
+
+| Load | before | after |
 |---|---|---|
-| worst **graded** case (`octant fan`, 8 rounds) | 857k | 0.17× |
-| 20 rounds averaging less than the worst segment | 4.78M | 0.96× |
-| 20 rounds of the **worst legal** segment (`dx=31, dy=23`) | 5.31M | **1.06× — cut off** |
+| worst **graded** case (`octant fan`, 8 rounds) | 857k | **378k** |
+| 20 rounds of the worst legal segment | **5.31M — 1.06× the cap** | **1.94M — 0.39×** |
+| score (`max(w,h)² × avg ticks`) | 12,544 × 483k = 6.06bn | 13,456 × 204k = **2.75bn** |
 
-The most expensive legal segment is the one with the largest minor-axis travel, at
-~265.5k ticks a round, so **18 rounds fit and 19 do not** (5.05M). The constraints
-allow 20. What makes `plotter` submittable anyway is that **every problem here has
-`privateTestCount: 0`** — the graded set *is* `publicTestData` — so the 857k figure
-is the one that scores. `test_lm1_display.py` asserts that, rather than leaving it as
-a comment, and asserts the 19-round overrun too; if a problem JSON ever grows private
-cases the margin has to be re-argued from scratch.
+**Where the ticks were, decomposed against the engine's total** (20 rounds,
+12,560 tape accesses, 19,220 instructions, 59,600 recirculated words): solving for the
+per-unit costs gives **~316 ticks per tape access**, ~45 per instruction and the known
+8 per skipped word — so the tape was **75 %** of the bill, instructions 16 % and jumps
+9 %.
 
-The middle row is the trap: it is the load `test_lm1_programs.py` uses, its segments
-average cheaper than the worst, and reading its 0.96× as *the* margin is how a machine
-that is 1.06× over the cap gets written down as being under it. The emulator's
-estimate for that same load is 3.8M — ~20 % optimistic against the engine — so it is
-not the margin either.
+That 316 is the load-bearing number and it is *not* §4.1's `105 + 8.3N`. §4.1's slope
+is real but small: rebuilding `plotter` at N = 11/21/31 moves the total by only
+~1.9 ticks per access per slot, so almost all of the 316 is fixed cost per access —
+adapter round trip plus the tape's own dispatch — and it does **not** amortise. The
+practical rule: **an access costs ~7 instructions. Count accesses, not instructions.**
+
+Three transformations got the inner loop from ~20 accesses per pixel to 4
+(`programs/plotter.asm` documents each; all three are verified against the spec's
+pseudocode over all 589,824 endpoint pairs):
+
+- **carry `addr = 32*y + x` instead of `(x, y)`** — the map is injective on the panel,
+  so the stop test `x==x1 and y==y1` is exactly `addr == addr1`;
+- **split on the major axis**, which makes one of Bresenham's two error tests
+  identically true, leaving two arms whose entire effect is *one addition of a
+  per-round constant* to (err, addr);
+- **pack err and addr into one word** at radix 1024, so that addition is one `ADD`.
+  The surviving error test becomes `sign(q)` by folding the threshold into the packed
+  value, which works because the threshold is a whole multiple of the radix and so
+  cannot disturb the low field. `MODI 1024` recovers `addr` with no access at all.
+
+The fourth lever is **unrolling, and it is worth stating on its own** because it is
+counter-intuitive: a backward jump recirculates `P − body` words at 8 ticks each, so
+**every iteration pays for the whole program's non-loop code whether it runs or not**
+(§5.4). `P − body` is just the setup, so `u` copies of the body divide that tax by `u`
+at a cost in ROM cells only — measured 2,485,405 / 2,075,485 / 1,894,525 / 1,846,233
+ticks at u = 1/2/4/6. Four is where it flattens and where `footprint × ticks` bottoms
+out; note the *footprint* cost is real here, because `plotter` is height-bound once the
+ROM is folded to 112 columns.
+
+Two smaller findings from the same rewrite:
+
+- **An `N`-slot tape addresses 1..N−1.** Ten live values fit an N=11 tape only after
+  aliasing four pairs whose live ranges do not overlap. Overrunning by one slot is not
+  a wrong answer, it is `fatal: wall` inside the tape room — the same failure `tcp`
+  hit at 51 slots.
+- **16 opcodes is free, 17 is not.** `k = ceil(log2 |used|)`, so the sixteenth opcode
+  (`MODI`, here) costs nothing while a seventeenth adds a trie level to *every*
+  instruction plus ~32 lane rows. That ceiling is what ruled out `DIVI`/a shift opcode
+  for the branch-free `sx = 2*floor((dx−1)/32) + 1` trick, which would otherwise have
+  shortened the setup.
+
+`privateTestCount: 0` is therefore no longer what makes `plotter` submittable — it says
+0 for every problem here, and it said 0 for `gradebook` too, which the judge then
+served a private case anyway. Measure the constraint limit on the engine and assert it:
+`test_lm1_display.py::test_the_worst_legal_20_round_load_fits_the_step_cap_on_the_engine`.
 
 Three findings that change the plan:
 

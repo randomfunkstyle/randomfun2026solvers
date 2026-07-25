@@ -191,6 +191,16 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.MUL_MEM: (("s", Band.MEM), ("r", Band.MEM), ("*", None), ("M", None)),
+    # Exactly SUB_MEM's shape: `/` is native, and the `W` is there for the same
+    # reason — the divisor arrives in A from the tape and the dividend is ACC in B.
+    # `/` leaves the remainder in B; the trailing `M` overwrites it.
+    Sem.DIV_MEM: (
+        ("s", Band.MEM),
+        ("r", Band.MEM),
+        ("W", None),
+        ("/", None),
+        ("M", None),
+    ),
     Sem.AND_MEM: (("s", Band.MEM), ("r", Band.MEM), ("&", None), ("M", None)),
     # ACC is the address, so `W` alone puts the request in A. Operand word unused.
     Sem.LOAD_ACC: (("W", None), ("s", Band.MEM), ("r", Band.MEM), ("M", None)),
@@ -232,6 +242,7 @@ MEMORY_SEMS = frozenset(
         Sem.ADD_MEM,
         Sem.SUB_MEM,
         Sem.MUL_MEM,
+        Sem.DIV_MEM,
         Sem.AND_MEM,
         Sem.STORE_ACC_MEM,
     }
@@ -1427,8 +1438,8 @@ TAPE_SIZE = {
     # what brackets follows (reaches 4, sized 5).
     "tcp": 52,
     "sudoku-validity": 37,  # BOX + 8, the 27 bitmasks plus scalars
-    "gradebook": 94,  # ids[16] + grades[16*4] + scalars
-    "plotter": 11,
+    "gradebook": 32,  # one packed cell per student (16) + 15 scalars
+    "plotter": 11,  # reaches address 10 — ten names aliased onto ten slots
     "palette": 3,  # one colour counter; the pixels need no tape at all
 }
 
@@ -1447,13 +1458,20 @@ TAPE_SIZE = {
 #: Kept per-slug rather than folded into the heuristic so the checked-in
 #: ``brackets``/``tcp`` grids stay byte-identical.
 ROM_ROWS = {
-    # The panel adds ~30 rows and makes height competitive: 112x106 (12,544) against
-    # the default's 112x119 (14,161). See tests/test_lm1_display.py.
-    "plotter": 10,
-    # A 460-word ROM folded to the CPU's own ~48 columns is 83 rows tall (112x153,
-    # footprint 23,409); 34 rows makes it no wider than the rest of the machine and
-    # gives 112x103, the width-bound floor. See tests/test_lm1_gradebook.py.
-    "gradebook": 34,
+    # The panel adds ~30 rows and makes height the binding dimension, so this is the
+    # minimum over every fold: 112x116 (13,456) against the default's 112x148 (21,904).
+    # 20 rows is where the ROM stops being what sets the width (112 is the adapter plus
+    # the 32-wide tape); folding further only adds height. `plotter` is height-bound
+    # past that point, which is why unrolling its inner loop (see plotter.asm) is a real
+    # footprint trade rather than a free one — it is still a large net win on score,
+    # since it cuts ticks 24% for 7% more area. See tests/test_lm1_display.py.
+    "plotter": 20,
+    # gradebook's three per-student scans are unrolled 16 ways (see gradebook.asm on
+    # why a loop iteration costs a whole ROM lap), so its image is 836 words and the
+    # ROM, not the tape, sets the box. The minimum over every fold is 117x123
+    # (15,129); the default's 48-column fold is 279x89 (77,841). Height-bound past
+    # ~56 rows, width-bound below ~50. See tests/test_lm1_gradebook.py.
+    "gradebook": 53,
 }
 
 

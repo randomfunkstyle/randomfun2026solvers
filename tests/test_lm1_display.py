@@ -67,8 +67,8 @@ DISPLAY_TARGETS = ("palette", "plotter")
 
 #: ``max(width, height)²`` and the shape it comes from, pinned per slug so a
 #: regression in either dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = {"plotter": (112, 106), "palette": (98, 98)}
-EXPECTED_FOOTPRINT = {"plotter": 12_544, "palette": 9_604}
+EXPECTED_SHAPE = {"plotter": (112, 116), "palette": (98, 98)}
+EXPECTED_FOOTPRINT = {"plotter": 13_456, "palette": 9_604}
 
 MAX_INSTRUCTIONS = 400_000
 TICK_CAP = 3_000_000
@@ -452,11 +452,11 @@ def test_the_score_is_measured_from_the_committed_frames(slug: str) -> None:
     assert (res.width, res.height) == EXPECTED_SHAPE[slug]
     assert res.area2 == EXPECTED_FOOTPRINT[slug]
     assert res.avg_ticks is not None and res.score == pytest.approx(res.area2 * res.avg_ticks)
-    # plotter: avg ~483k, worst public case ~857k -> score ~6.06bn. palette has a
+    # plotter: avg ~204k, worst public case ~378k -> score ~2.75bn. palette has a
     # single case at ~151k -> ~1.45bn. The public plotter cases top out at 8 of the 20
     # legal rounds, so leave room for a case ~2.5x the longest.
     assert max(c.ticks for c in res.cases) < CAP / 4, [c.ticks for c in res.cases]
-    assert res.avg_ticks < (600_000 if slug == "plotter" else 200_000), res.avg_ticks
+    assert res.avg_ticks < (250_000 if slug == "plotter" else 200_000), res.avg_ticks
 
 
 @node_required
@@ -479,12 +479,20 @@ def test_every_public_case_draws_the_expected_frames_via_the_judge(slug: str) ->
 #: GRADING.md's default step cap. ``plotter.json`` sets ``tickCap: null``.
 STEP_CAP = 5_000_000
 
-#: Measured on the engine: the most expensive legal segment is the one with the largest
-#: minor-axis travel, ``dx = 31`` and ``dy = 23`` in either direction, at ~265.5k ticks
-#: a round. Every other shape is cheaper (a full-width horizontal is 228k, a
-#: full-height vertical 186k, a single pixel 12k).
-WORST_SEGMENT = (0, 0, 31, 23)
-WORST_ROUND_TICKS = 265_517
+#: Measured on the engine. Cost is now ~linear in the *pixel count*, which is
+#: ``max(dx, |dy|) + 1``, so the dearest segments are the ones spanning the full width;
+#: among those the near-horizontals edge ahead, because ``plotter.asm``'s "major axis
+#: only" arm pays a two-word jump where the diagonal arm falls through. A full-height
+#: vertical is 1.46M over 20 rounds and a single pixel 308k, both well under this.
+#:
+#: This used to be a 32-pixel *diagonal* at 265.5k ticks a round, which put 20 rounds
+#: 6% over the step cap; the packed single-add loop is what took it to ~97k.
+WORST_SEGMENT = (31, 1, 0, 0)
+WORST_ROUND_TICKS = 96_994
+
+#: 20 rounds of ``WORST_SEGMENT`` on the engine — the number the step cap is checked
+#: against, and the one figure that has to stay honest.
+WORST_20_ROUND_TICKS = 1_938_265
 
 
 def _judge_segments(segments: list[tuple[int, ...]]) -> object:
@@ -517,13 +525,12 @@ def _judge_segments(segments: list[tuple[int, ...]]) -> object:
 def test_only_the_public_cases_are_graded_which_is_why_plotter_is_submittable() -> None:
     """``privateTestCount`` is 0, so the *graded* worst case is a public one.
 
-    This is the fact the tick margin turns on, and it is worth an assertion rather
-    than a comment: ``plotter``'s public set tops out at 8 rounds / ~857k ticks, i.e.
-    ~17% of the cap, while a 19- or 20-round case of near-maximal segments would
-    overrun it (the test below). Those cases are legal by the stated constraints but
-    are never served — "Private cases are never served" (``GRADING.md``), and the
-    count is zero besides. If a future problem JSON grows private cases, this fails
-    and the margin has to be re-argued.
+    ``plotter``'s public set tops out at 8 rounds / ~378k ticks, i.e. ~8% of the cap,
+    where the constraints allow 20 rounds. That gap used to *be* the margin — the
+    machine was 1.06x over the cap at 20 rounds and only submittable because private
+    cases are never served. It no longer is (``test_the_worst_legal_20_round_load...``
+    below), so this test is now a cross-check rather than the argument. Kept because
+    ``privateTestCount`` growing is still worth a failing test.
     """
     prob = programs.problem_json("plotter")
     assert prob["privateTestCount"] == 0
@@ -538,31 +545,51 @@ def test_only_the_public_cases_are_graded_which_is_why_plotter_is_submittable() 
 
 
 @node_required
-@slow
-def test_a_worst_case_20_round_load_would_overrun_the_cap() -> None:
-    """The margin, measured — and it is *negative* at the constraints' limit.
+def test_the_worst_legal_20_round_load_fits_the_step_cap_on_the_engine() -> None:
+    """The margin, measured on the engine at the constraints' limit — 20 rounds.
 
-    A 20-round case of the most expensive legal segment costs ~5.31M ticks against the
-    5M cap (~1.06x), and 19 rounds already costs ~5.05M. Only 18 fit. The reason
-    ``plotter`` is still safe to submit is ``privateTestCount == 0`` (the test above),
-    not headroom.
+    This assertion is the whole reason ``plotter`` is submittable, and it is the one
+    that was missing: the only 20-round figure the suite used to carry came from
+    ``lm1/emulator.py`` with store accesses modelled as ``105 + 8.3N``, which
+    ``ARCH.md`` §4.1 now records as understating the real rotating tape by an order of
+    magnitude. That model said 3.8M for a load the engine ran in 5.31M against a 5M
+    cap, and the overrun shipped. So: engine, worst legal shape, all 20 rounds.
 
-    Two figures that look contradictory are both right and measure different loads, so
-    they are pinned together here: ~857k is the worst *public* case, and ~4.78M is the
-    20-round load in ``test_lm1_programs.py``, whose segments average less than the
-    worst. That one is *not* the worst legal load, and reading it as the margin is how
-    "1.05x under the cap" gets written down for a machine that is 1.06x over it.
-
-    The emulator's estimate for the same 20-round load is 3.8M — ~20% optimistic
-    against the engine's 5.31M, so it must not be used as the margin either.
+    ~1.94M is 39% of the cap, i.e. a 2.6x margin, which is what buys safety against
+    private cases nobody can see (``privateTestCount`` says 0, but it said 0 for
+    ``gradebook`` too and the judge served one anyway).
     """
     assert _judge_segments([WORST_SEGMENT]).step == pytest.approx(WORST_ROUND_TICKS, rel=0.02)
 
-    fits = _judge_segments([WORST_SEGMENT] * 18).step
-    assert fits < STEP_CAP, f"18 rounds should still fit, got {fits:,}"
-
-    over = _judge_segments([WORST_SEGMENT] * 19).step
-    assert over > STEP_CAP, (
-        f"19 worst-case rounds now cost {over:,}, under the {STEP_CAP:,} cap — the "
-        "machine got faster, so re-measure the limit and update this test"
+    ticks = _judge_segments([WORST_SEGMENT] * 20).step
+    assert ticks == pytest.approx(WORST_20_ROUND_TICKS, rel=0.02), f"{ticks:,}"
+    assert ticks < STEP_CAP // 2, (
+        f"20 worst-case rounds cost {ticks:,} of the {STEP_CAP:,} cap — the target is "
+        "half the cap, for margin against private cases we cannot see"
     )
+
+
+@node_required
+@slow
+def test_no_other_segment_shape_costs_more_than_the_worst_one_pinned_above() -> None:
+    """``WORST_SEGMENT`` is a claim about which shape is dearest; here it is checked.
+
+    Cost is dominated by the pixel count (``max(dx, |dy|) + 1``), so every full-width
+    span is within a few percent and everything shorter is well under. The one
+    non-obvious ordering is that a near-*horizontal* beats the full diagonal, because
+    the "major axis only" arm pays a jump the diagonal arm falls through — which is
+    the opposite of the pre-rewrite machine, where the diagonal was dearest.
+    """
+    shapes = [
+        (0, 0, 31, 23),  # full diagonal, the old worst case
+        (0, 23, 31, 0),
+        (0, 0, 31, 0),  # full-width horizontal
+        (0, 0, 31, 12),
+        (0, 0, 0, 23),  # full-height vertical
+        (0, 0, 16, 23),
+        (5, 5, 5, 5),  # the degenerate single pixel
+    ]
+    worst = _judge_segments([WORST_SEGMENT] * 20).step
+    for shape in shapes:
+        ticks = _judge_segments([shape] * 20).step
+        assert ticks <= worst, f"{shape} costs {ticks:,}, more than {WORST_SEGMENT} at {worst:,}"

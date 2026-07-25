@@ -429,6 +429,15 @@ def _sub_mem(em: Emulator, addr: int | None) -> None:
     em.b = em.a  # `M`
 
 
+@_handler(Sem.DIV_MEM)
+def _div_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    em.a = em._mem_read(addr)
+    em.a, em.b = em.b, em.a  # `W` — the dividend is ACC, so the operands swap
+    em.a, em.b = floor_div(em.a, em.b)  # `/`
+    em.b = em.a  # `M`
+
+
 @_handler(Sem.MUL_MEM)
 def _mul_mem(em: Emulator, addr: int | None) -> None:
     assert addr is not None

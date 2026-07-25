@@ -106,6 +106,7 @@ class Sem(StrEnum):
     MUL_IMM = "mul-imm"
     DIV_IMM = "div-imm"
     MOD_IMM = "mod-imm"
+    DIV_MEM = "div-mem"
     LOAD = "load"
     STORE = "store"
     INC_MEM = "inc-mem"
@@ -675,6 +676,31 @@ _EXT_OPS: tuple[Op, ...] = (
             Micro.SEND_MEM,
         ),
         sem=Sem.DEC_MEM,
+        ext=True,
+    ),
+    # `/` is a native glyph, so a *memory* divide is exactly `SUB`'s shape and
+    # costs exactly what `SUB` costs. It exists because a divisor computed at
+    # runtime cannot reach `DIVI`: `gradebook` divides by `N` (the roster size) and
+    # by a subject's field weight, and the immediate-only form forced a 13-way
+    # dispatch on `N` — ~40 instructions whose only job was to name a literal.
+    # One row here deletes all of them, and the ROM word count is a *first-order*
+    # tick cost (see the ``gradebook.asm`` header), not just area.
+    Op(
+        code=32,
+        mnemonic="DIV",
+        operands=1,
+        description="ACC = floor(ACC / store[addr]) — a runtime divisor cannot reach DIVI",
+        micro=(
+            Micro.LIT0,
+            Micro.SEND_MEM,
+            Micro.RING_READ,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.SWAP,
+            Micro.DIV,
+            Micro.MOV,
+        ),
+        sem=Sem.DIV_MEM,
         ext=True,
     ),
     Op(
