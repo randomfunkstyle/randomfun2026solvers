@@ -182,9 +182,10 @@ coordinate-level tweaking.
 The 2026-07-25 campaign deliberately covers only the best accepted file in each
 `solutions/` archive. Raw CPU drafts, probes, `tasks/compacted` experiments,
 historical superseded submissions, and `unscored_*.man` are outside its scope.
-Families were processed by archived score, largest first. Each run had a
-10-round budget and stopped early when the complete deterministic neighborhood
-contained no improving move.
+The accepted frontier is refreshed from `origin/main` after every improvement,
+then families are processed by archived score, largest first. Each run has a
+10-round budget and stops early when the complete deterministic neighborhood
+contains no improving move.
 
 ```sh
 uv run python -m randomfun2026solvers.manopt \
@@ -193,17 +194,15 @@ uv run python -m randomfun2026solvers.manopt \
   --out tasks/compacted/SLUG_submitted_ast10.man
 ```
 
-| Order | Submitted family | Before | Effective rounds | Result |
+| Order | Submitted family | Best submitted source | Effective rounds | Result |
 |---:|---|---:|---:|---|
-| 1 | `gradebook` | 117×118, objective 4,466,256,272.57 | 2 | removed outer row 116; 117×117, objective 4,390,877,773.29 |
-| 2 | `sudoku-validity` | 89×88 | 1 | fixed point; width moves rebound 39 ops, row cuts rebound 24 |
-| 3 | `tcp` | 110×77 | 1 | fixed point; the behavior-preserving area cut had zero objective value |
-| 4 | `brackets` | 96×74 | 1 | fixed point; the behavior-preserving area cut had zero objective value |
-| 5 | `memory` | 31×31 | 1 | fixed point with the inferred 121-cell ring total held exactly |
-| 6 | `plotter` | 44×56 | 1 | fixed point; the feed-row cut rebound 2 ops and room moves rebound 37 |
+| 1 | `gradebook` | 114×101, score 10,082,933,604 | 2 | removed row 74; 114×100, public objective 3,912,488,501.14 → 3,907,925,048.57 |
+| 7 | `memory` | 31×31, score 55,105,622 | 1 | fixed point with the inferred 121-cell ring total held exactly |
+| 8 | `plotter` | 44×56, score 22,774,730 | 1 | fixed point; the feed-row cut rebound 2 ops and room moves rebound 37 |
 
 The only new candidate is
 `tasks/compacted/gradebook_submitted_ast10.man`. Independent validation confirms
-all public cases pass, average ticks remain exactly 320,759.5714285714, and the
-measured objective improves by 1.69%. This is a candidate derived from a
-submitted solution; it is not itself claimed to be submitted.
+all public cases pass, average ticks improve from 301,053.28571428574 to
+300,702.14285714284 at the same 114² footprint, and the measured objective
+improves by 0.12%. This is a candidate derived from the current best submitted
+solution; it is not itself claimed to be submitted.
