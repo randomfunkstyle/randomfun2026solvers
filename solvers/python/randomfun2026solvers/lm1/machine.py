@@ -489,6 +489,9 @@ class _Cpu:
     has_in: bool = True  # False when no lane reads the input room
     has_out: bool = True  # False on a display problem: no `O` room at all
     dsp_cols: dict[str, int] = field(default_factory=dict)  # display band -> `s` column
+    #: Named boxes in *interior* coordinates, for profiling and overlays. The grid
+    #: cannot carry comments, so this is the only record of what a cell means.
+    regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
 
 def _flat_lane(
@@ -594,12 +597,20 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
     order = sorted(structured, key=lambda m: drop_x[p.row[m]])
     slab_at: dict[str, int] = {}
     slab_base: dict[str, int] = {}
-    y = span + 2
+    # The collector sits **immediately** below the lane band, above the slabs, and
+    # slab exits *rise* into it rather than dropping past it. That is worth real
+    # ticks: every instruction walks the riser from the collector up to the fetch
+    # row, so putting the collector below ~21 rows of slabs made the riser 38 cells
+    # instead of 16 — paid once per instruction, for the whole program. A profile
+    # (`tools/heatmap.mjs` + `lm1.profile`) put the return path at 25 % of the CPU's
+    # time before this.
+    collector = span + 1
+    y = collector + 1
     for i, m in enumerate(order):
         slab_at[m] = y
         slab_base[m] = _STRUCT_X0 + i * _SLAB_PITCH
         y += slab_rows[m]
-    collector = y
+    bottom = y
 
     g = _Grid()
     pipe_glyphs: list[tuple[int, int, str, str]] = []
@@ -648,7 +659,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
         m = by_row.get(r)
         stop = slab_at[m] if (m is not None and m in slab_at) else collector
         for yy in range(r + 1, stop):
-            g.soft(drop_x[r], yy, ".")
+            g.soft(drop_x[r], yy, ".")  # crosses the collector row for a slab lane
 
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
@@ -666,6 +677,8 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
         g.put(base, s0, "v")
 
     # ── collector -> west riser -> back into the fetch cell ──────────────────
+    # `soft` after the drops, so a slab-entry column that has to pass *through* the
+    # collector keeps its `.` and is not turned west by a `<`.
     ret_x = max([*drop_x.values(), *struct_drops])
     for x in range(3, ret_x + 1):
         g.soft(x, collector, "<")
@@ -685,7 +698,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
         )
 
     width = ret_x + 1
-    height = collector
+    height = bottom
     mem_rows = sorted(
         r
         for r in all_rows
@@ -694,6 +707,23 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
     mem_out_row = mem_rows[len(mem_rows) // 2] if mem_rows else centre
     in_rows = [p.row[m] for m in used if p.sem[m] is Sem.INPUT]
     out_cols = [lane_x0 + 1]
+
+    # ── name every region, so a profile is readable ───────────────────────────
+    regions: dict[str, tuple[int, int, int, int]] = {
+        "fetch": (1, centre, 4, 1),
+        "trie": (5, 1, k, span),
+        "return:riser": (1, centre + 1, 1, collector - centre),
+        "return:collector": (2, collector, ret_x - 1, 1),
+    }
+    for r in all_rows:
+        m = by_row.get(r)
+        if m is None:
+            continue
+        end = drop_x.get(r, lane_end[r])
+        regions[f"lane:{m}"] = (lane_x0, r, max(1, end - lane_x0 + 1), 1)
+    for m in order:
+        regions[f"slab:{m}"] = (slab_base[m], slab_at[m], _SLAB_PITCH, slab_rows[m])
+
     return _Cpu(
         cells=g.c,
         width=width,
@@ -715,6 +745,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
         # instead of the tape's answers.
         mem_in_row=max(mem_out_row - 4, 1),
         ports={},
+        regions=regions,
         pipe_glyphs=pipe_glyphs,
         has_in=bool(in_rows),
         has_out=any(p.sem[m] is Sem.OUTPUT for m in used),
@@ -752,8 +783,10 @@ def _slab(
     if sem in _JUMP_SEMS:
         _discard_loop(g, base, s0 + 2, pipe_glyphs)
         exit_col = base + 2
-        g.put(exit_col, s0 + 2, "v")
-        for y in range(s0 + 3, collector):
+        # Rise back to the collector, which is now *above* the slabs: the exit is a
+        # `^` column, and the collector's own `<` turns the arriving man west.
+        g.put(exit_col, s0 + 2, "^")
+        for y in range(collector + 1, s0 + 2):
             g.soft(exit_col, y, ".")
         return {exit_col}
 
@@ -780,11 +813,15 @@ def _slab(
             x += 1
         for c in range(x, cols[arm]):
             g.soft(c, row, ".")
-        g.put(cols[arm], row, "v")
-        end = turn_row if arm == taken else collector
-        for y in range(row + 1, end):
-            g.soft(cols[arm], y, ".")
-        if arm != taken:
+        if arm == taken:
+            g.put(cols[arm], row, "v")
+            for y in range(row + 1, turn_row):
+                g.soft(cols[arm], y, ".")
+        else:
+            # Not-taken arms rise to the collector above the slab.
+            g.put(cols[arm], row, "^")
+            for y in range(collector + 1, row):
+                g.soft(cols[arm], y, ".")
             drops.add(cols[arm])
 
     # The taken arm turns west along `turn_row` and runs back to the slab's west
@@ -799,9 +836,16 @@ def _slab(
     g.put(base, turn_row, "v")
 
     _discard_loop(g, base, loop_y, pipe_glyphs)
-    exit_col = base + 2
-    g.put(exit_col, loop_y, "v")
-    for y in range(loop_y + 1, collector):
+    # East of every arm, which is not cosmetic. The exit now *rises* to the
+    # collector, so it crosses all three arm rows on the way — and `base + 2` is
+    # exactly where each arm keeps its `W`, so a riser there walks the returning man
+    # through a register swap. `base + 11` clears `cols["neg"]` (`base + 9`) and
+    # still fits inside _SLAB_PITCH.
+    exit_col = base + 11
+    # Only the turn cell is an arrow: the body must be `.` because it also crosses
+    # shallower slabs' westbound entry rows, where a `^` would send that man north.
+    g.put(exit_col, loop_y, "^")
+    for y in range(collector + 1, loop_y):
         g.soft(exit_col, y, ".")
     drops.add(exit_col)
     return drops
@@ -1011,6 +1055,33 @@ class Machine:
     #: Where each display band's ``s`` glyph ended up, in *grid* coordinates — the
     #: cells ``lm.mjs route`` has to answer with that band's own pipe.
     dsp_glyphs: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
+    #: the only thing that knows what any cell *means* — the grid carries no
+    #: comments — so it records that here for ``man_debug`` overlays and for
+    #: ``tools/heatmap.mjs``, which is otherwise a profile of anonymous cells.
+    regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
+
+    def debug_map(self):  # -> man_debug.DebugMap
+        """A ``man_debug.DebugMap`` naming every region, for overlays and profiling."""
+        from ..man_debug import DebugMap
+
+        dbg = DebugMap(f"{self.program.name} — generated by lm1.machine")
+        palette = {
+            "rom": "#a855f7",
+            "fetch": "#ef4444",
+            "trie": "#f97316",
+            "lane": "#3b82f6",
+            "slab": "#eab308",
+            "return": "#14b8a6",
+            "adapter": "#22c55e",
+            "tape": "#0ea5e9",
+            "display": "#ec4899",
+            "io": "#94a3b8",
+        }
+        for name, (x, y, w, h) in sorted(self.regions.items()):
+            kind = name.split(":", 1)[0]
+            dbg.region(name, x, y, w, h, color=palette.get(kind, "#64748b"), tags=[kind])
+        return dbg
 
     @property
     def width(self) -> int:
@@ -1202,6 +1273,36 @@ def _assemble(
     )
 
     rows = g.rows()
+
+    # ── name every block in grid coordinates ─────────────────────────────────
+    regions: dict[str, tuple[int, int, int, int]] = {
+        f"cpu:{n}": (CX + x, CY + y, w, h) for n, (x, y, w, h) in cpu.regions.items()
+    }
+    regions["rom"] = (RX, RY, romlay.width + 1, romlay.height + 2)
+    regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
+    regions["tape"] = (TX, TY, tape.width, tape.height)
+    if cpu.has_in:
+        regions["io:I"] = (3, iy - 1, 3, 3)
+    if cpu.has_out:
+        regions["io:O"] = (CX + cpu.out_col - 1, oy + 2, 3, 3)
+    # The panel is the only thing that uses `=`/`:`, so its box can just be read
+    # back off the grid rather than threaded out of the routing helper.
+    panel = [
+        (x, y)
+        for y, row in enumerate(rows)
+        for x, ch in enumerate(row)
+        if ch in "=:"
+    ]
+    if panel:
+        px = min(x for x, _ in panel)
+        py = min(y for _, y in panel)
+        regions["display"] = (
+            px,
+            py,
+            max(x for x, _ in panel) - px + 1,
+            max(y for _, y in panel) - py + 1,
+        )
+
     touches = {
         "rom": (CX - 1, CY + cpu.centre),
         "mem_req": (CX + W + 2, req_row),
@@ -1222,6 +1323,7 @@ def _assemble(
     _check_pipe_count(rows, expected=len(touches) + 3)
     return Machine(
         rows=rows,
+        regions=regions,
         program=program,
         plan=p,
         tape_n=tape_n,

@@ -39,10 +39,11 @@ slow = pytest.mark.skipif(
     reason="set LM1_SLOW=1 to run the full public-case sweeps",
 )
 
-#: The two graded problems this generator exists for, and the tape size each needs.
-#: Sized from the *problem constraints*, not the public data: ``tcp`` allows n=48,
-#: so addresses reach BUF+47 = 51 even though no public case goes past 35.
-TARGETS = {"brackets": 8, "tcp": 52, "plotter": 11}
+#: Every task the generator can build, with the tape size each needs — read from
+#: the generator so the two cannot drift apart. Sizes come from the *problem
+#: constraints*, not the public data: ``tcp`` allows n=48, so addresses reach
+#: BUF+47 = 51 even though no public case goes past 35.
+TARGETS = machine.TAPE_SIZE
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────
@@ -159,7 +160,9 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     between the ROM pipe and the tape's response pipe that stalled every jump was
     caught exactly here.
     """
-    m = machine.build(programs.load(slug), tape_n=tape_n)
+    # build_for supplies the tape size *and* the panel resolution, which a display
+    # program now requires: the panel is the problem's, not the program's.
+    m = machine.build_for(slug)
     assert m.width > 0 and m.height > 0
     assert m.plan.k == 4
     assert m.tape_n == tape_n
@@ -175,9 +178,9 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
 @node_required
 def test_checked_in_grids_match_the_generator() -> None:
     """The ``.man`` files under ``tasks/solutions`` are generated, not hand-edited."""
-    for slug, tape_n in TARGETS.items():
+    for slug in TARGETS:
         path = REPO / "tasks" / "solutions" / f"{slug}_cpu.man"
-        expected = "\n".join(machine.build(programs.load(slug), tape_n=tape_n).rows) + "\n"
+        expected = "\n".join(machine.build_for(slug).rows) + "\n"
         assert path.read_text(encoding="utf-8") == expected, (
             f"{path.name} is stale; regenerate with "
             f"`python -m randomfun2026solvers.lm1.machine {slug} --out {path}`"
