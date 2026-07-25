@@ -203,6 +203,14 @@ class Move:
 def _try(ast: Ast, move: Move, caps: dict[tuple[int, ...], int]) -> Ast | str:
     """Apply `move` to a copy. Returns the new AST or the refusal reason."""
     trial = copy.deepcopy(ast)
+
+    def capacity_ok(candidate: Ast) -> str | None:
+        for group, need in caps.items():
+            have = ring_capacity(candidate, group)
+            if have < need:
+                return f"ring group {group} has {have} cells, needs {need}"
+        return None
+
     try:
         if move.kind == "drop-row":
             out, rep = try_drop(trial, "row", move.args[0], capacity=caps)
@@ -219,12 +227,16 @@ def _try(ast: Ast, move: Move, caps: dict[tuple[int, ...], int]) -> Ast | str:
             v = plan.move_room(*move.args)
             if not v:
                 return v.reason
+            if reason := capacity_ok(plan.ast):
+                return reason
             return plan.ast
         if move.kind == "reroute":
             plan = Plan(trial)
             v = plan.reroute(move.args[0], min_capacity=move.args[1])
             if not v:
                 return v.reason
+            if reason := capacity_ok(plan.ast):
+                return reason
             return plan.ast
         if move.kind == "squash":
             out, report = try_squash(
@@ -289,6 +301,7 @@ def search(
     move_set: str = "layout",
     problem: str | Path | dict | None = None,
     tick_cap: int = 5_000_000,
+    speed_for_space: bool = False,
     log=print,
 ) -> tuple[Ast, list[Move]]:
     """Hill-climb on geometry or the measured problem objective.
@@ -296,9 +309,12 @@ def search(
     A move that does not shrink the factor is still kept when it shrinks the
     *bounding box on one axis*, because the factor is ``max(w,h)**2``: trimming the
     short side pays nothing today and everything once the long side comes down.
-    With ``problem``, public cases and ``factor × avgTicks`` gate every move, so
-    a speed-for-space trade may grow one side only when its measured tick saving
-    more than pays for that growth.
+    With ``problem``, public cases and ``factor × avgTicks`` gate every move.
+    By default the expensive semantic validator only sees candidates that first
+    shrink the factor or bounding-box area. ``speed_for_space`` additionally
+    admits non-compacting candidates whose measured tick saving may pay for
+    their geometry; it is intentionally opt-in because that neighborhood is
+    much larger.
     """
     best = ast
     applied: list[Move] = []
@@ -335,7 +351,7 @@ def search(
                 continue  # never grow either side
             factor = got.geometry_factor
             area = gw * gh
-            semantic_candidate = problem is not None
+            semantic_candidate = problem is not None and speed_for_space
             if factor < bf or (factor == bf and area < bw * bh) or semantic_candidate:
                 scored.append((factor, area, mv, got))
         scored.sort(key=lambda t: (t[0], t[1]))
@@ -407,11 +423,29 @@ def main() -> None:
     )
     ap.add_argument("--capacity", action="append", default=[], metavar="PIPES=NEED")
     ap.add_argument("--pipe-min", action="append", default=[], metavar="ID=N")
+    ap.add_argument(
+        "--infer-capacity",
+        action="store_true",
+        help=(
+            "free undeclared pipes at the two-cell floor while conservatively "
+            "holding every inferred ring group's current total; public cases remain required"
+        ),
+    )
     ap.add_argument("--problem", help="run every public case before accepting each move")
+    ap.add_argument(
+        "--speed-for-space",
+        action="store_true",
+        help=(
+            "also validate non-compacting moves whose tick reduction might pay "
+            "for their geometry (substantially expands the search)"
+        ),
+    )
     ap.add_argument("--tick-cap", type=int, default=5_000_000)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--describe-only", action="store_true")
     args = ap.parse_args()
+    if args.infer_capacity and not args.problem:
+        ap.error("--infer-capacity requires --problem so the assumption is case-validated")
 
     caps: dict[tuple[int, ...], int] = {}
     for spec in args.capacity:
@@ -424,6 +458,13 @@ def main() -> None:
 
     prog = parse_program(args.grid, bind=False)
     ast = parse_ast(prog, refine=Refine.BLOCKS, capacity=mins)
+    if args.infer_capacity:
+        from .manfree import optimistic, ring_groups
+
+        inferred_groups = ring_groups(ast)
+        for group, need in inferred_groups.items():
+            caps.setdefault(group, need)
+        ast = optimistic(ast)
     print(describe(ast, capacity=caps))
     if args.describe_only:
         return
@@ -438,6 +479,7 @@ def main() -> None:
         move_set=args.moves,
         problem=args.problem,
         tick_cap=args.tick_cap,
+        speed_for_space=args.speed_for_space,
     )
     w, h = best.bbox
     print(

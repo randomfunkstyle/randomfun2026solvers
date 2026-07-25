@@ -51,7 +51,7 @@ AST loop-squash search:
 
 ```sh
 uv run python -m randomfun2026solvers.manopt GRID.man \
-  --moves squash --problem SLUG --rounds 100 \
+  --moves all --infer-capacity --problem SLUG --rounds 10 \
   --out tasks/compacted/SLUG_squashed.man
 ```
 
@@ -62,6 +62,12 @@ remains the original layout search.
 The optimizer refuses a move when the grid stops loading, a send/receive binds
 to another pipe, a public case fails, or the measured
 `max(width,height)² × averageTicks` objective does not improve.
+
+The default semantic shortlist contains only moves that first reduce the
+footprint factor or bounding-box area. Use `--speed-for-space` to also measure
+non-compacting moves whose tick reduction might pay for their geometry. That is
+an intentionally separate, much larger search rather than a cost silently paid
+by every compaction run.
 
 ## What previous submissions teach
 
@@ -170,3 +176,34 @@ Two initial deterministic attempts were intentionally rejected:
 Those are useful terminal results for those move families. The next work should
 come from explicit line folding or a generator-level topology rewrite, not
 coordinate-level tweaking.
+
+## Submitted-solution AST10 campaign
+
+The 2026-07-25 campaign deliberately covers only the best accepted file in each
+`solutions/` archive. Raw CPU drafts, probes, `tasks/compacted` experiments,
+historical superseded submissions, and `unscored_*.man` are outside its scope.
+Families were processed by archived score, largest first. Each run had a
+10-round budget and stopped early when the complete deterministic neighborhood
+contained no improving move.
+
+```sh
+uv run python -m randomfun2026solvers.manopt \
+  solutions/SLUG/BEST_SLUG.man \
+  --moves all --infer-capacity --problem SLUG --rounds 10 \
+  --out tasks/compacted/SLUG_submitted_ast10.man
+```
+
+| Order | Submitted family | Before | Effective rounds | Result |
+|---:|---|---:|---:|---|
+| 1 | `gradebook` | 117×118, objective 4,466,256,272.57 | 2 | removed outer row 116; 117×117, objective 4,390,877,773.29 |
+| 2 | `sudoku-validity` | 89×88 | 1 | fixed point; width moves rebound 39 ops, row cuts rebound 24 |
+| 3 | `tcp` | 110×77 | 1 | fixed point; the behavior-preserving area cut had zero objective value |
+| 4 | `brackets` | 96×74 | 1 | fixed point; the behavior-preserving area cut had zero objective value |
+| 5 | `memory` | 31×31 | 1 | fixed point with the inferred 121-cell ring total held exactly |
+| 6 | `plotter` | 44×56 | 1 | fixed point; the feed-row cut rebound 2 ops and room moves rebound 37 |
+
+The only new candidate is
+`tasks/compacted/gradebook_submitted_ast10.man`. Independent validation confirms
+all public cases pass, average ticks remain exactly 320,759.5714285714, and the
+measured objective improves by 1.69%. This is a candidate derived from a
+submitted solution; it is not itself claimed to be submitted.
