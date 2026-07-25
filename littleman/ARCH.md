@@ -756,6 +756,34 @@ the engine (4×4 and 8×8 panels, single-stepped, frames dumped at every commit)
   written on a tick *is* in the frame committed on that tick. Unequal pipe lengths
   reorder writes — plan latency, not send order. Values still in flight are processed
   after the last man halts.
+- **The write cursor is 0 at power-on**, before any `ADDR` is ever sent. Probed with a
+  grid that has *no ADDR pipe at all*: three `DATA` colours land in cells 0, 1, 2
+  row-major. `ADDR ← 0` and `SWAP ← 0` re-home the cursor; neither *initialises* it.
+  So a 256-cell board fill needs no `ADDR` word, and — with the previous point — that
+  fill can be interrupted by any number of `SWAP ← 1` commits without re-homing.
+- **The port-order constraint is on arrival ticks, not on pipe lengths.** A value sent on
+  tick `T` into an `L`-cell pipe is consumed during `T + (L-1)`, and within one tick the
+  panel processes ADDR → DATA → SWAP. So the conditions are
+  `ta + (La-1) <= td + (Ld-1)` and `ts + (Ls-1) >= td + (Ld-1)`, and **equality is safe in
+  both**. Measured: `swap == data` lands the pixel in the right frame; a SWAP pipe two
+  cells shorter but sent two ticks later is fine; an ADDR pipe eight cells shorter but sent
+  eight ticks later is fine. The failure was demonstrated too — SWAP length 2 against DATA
+  length 6 sends the commit two ticks later and it *still* arrives first, so the frame comes
+  out blank and the pixel appears one frame late. `snake_unit.py`'s `addr == data` /
+  `swap >= data` are therefore **sufficient, not minimal**; they are a safe special case of
+  the inequalities above, for arms that send on consecutive ticks.
+- **A stray `|` one cell behind a bend's arrowhead deletes the whole pipe, silently.** No
+  load error; `analyze` simply reports one pipe fewer, and the `s` that meant to use it
+  binds a *sibling* pipe, so the machine runs to completion doing the wrong thing. This is
+  the §2.7 family again ("counting the pipes the engine finds against the number drawn
+  catches the whole family in one line") and it is the reason that count belongs in every
+  block builder's assertions, not just in the machine's.
+
+  Probes: `examples/panel-cursor-poweron.man`, `panel-cursor-interleaved-commits.man`,
+  `panel-latency-swap-overtakes.man`, `panel-latency-swap-equal.man`,
+  `panel-latency-swap-shorter-but-later.man`, `panel-latency-addr-shorter-same-tick.man`,
+  with the readings in `examples/panel-probes.md`. All six verified by the engine's own
+  `frameJudge`.
 - **Range faults are fatal on the arrival tick**, each with its own reason:
   `display-value` for `DATA` outside 0–15, `display-addr` for `ADDR` outside
   `0 … w*h-1`, `display-swap` for anything but 0/1.
