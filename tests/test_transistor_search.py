@@ -10,7 +10,7 @@ from littleman_tools.transistor_search import (
 )
 
 REPO = Path(__file__).parents[1]
-NARROW = REPO / "tasks" / "solutions" / "primitives" / "transistor-compact-narrow.man"
+AND_GATE = REPO / "tasks" / "solutions" / "primitives" / "and-gate.man"
 
 
 def _result(name: str, **metrics: int) -> CandidateResult:
@@ -62,7 +62,7 @@ def test_pareto_frontier_drops_dominated_and_duplicate_measurements() -> None:
 def test_local_turn_search_keeps_only_the_seed_on_its_frontier() -> None:
     from littleman_tools.transistor_search import search_local_turns
 
-    frontier = search_local_turns(NARROW.read_text(encoding="utf-8"))
+    frontier = search_local_turns(AND_GATE.read_text(encoding="utf-8"))
 
     assert [result.name for result in frontier] == ["seed"]
-    assert frontier[0].measurement.stream_ticks == 266
+    assert frontier[0].measurement.stream_ticks == 219

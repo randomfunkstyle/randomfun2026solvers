@@ -32,10 +32,11 @@ CANDIDATES = (
     Candidate("compact", PRIMITIVES / "transistor-compact.man"),
     Candidate("compact-narrow", PRIMITIVES / "transistor-compact-narrow.man"),
 )
+AND_GATE = Candidate("and-gate", PRIMITIVES / "and-gate.man")
 
 
 def test_transistor_candidates_are_y_free_artifacts() -> None:
-    for candidate in CANDIDATES:
+    for candidate in (*CANDIDATES, AND_GATE):
         source = candidate.path.read_text(encoding="utf-8")
         assert "Y" not in source, candidate.name
 
@@ -81,7 +82,7 @@ def test_transistor_candidates_preserve_the_controlled_forwarding_contract() -> 
 
 
 @pytest.mark.slow
-def test_compact_candidates_improve_the_runner_movement_metrics() -> None:
+def test_compact_transistors_improve_the_runner_movement_metrics() -> None:
     runner = Littleman()
     baseline, compact, narrow = (_measure(candidate, runner) for candidate in CANDIDATES)
 
@@ -95,3 +96,16 @@ def test_compact_candidates_improve_the_runner_movement_metrics() -> None:
     assert narrow.walking_ticks < compact.walking_ticks
     assert compact.straight_through_arrows < baseline.straight_through_arrows
     assert narrow.straight_through_arrows < compact.straight_through_arrows
+
+
+@pytest.mark.slow
+def test_and_gate_is_a_smaller_faster_binary_forwarding_candidate() -> None:
+    runner = Littleman()
+    narrow = _measure(CANDIDATES[-1], runner)
+    and_gate = _measure(AND_GATE, runner)
+
+    assert and_gate.side < narrow.side
+    assert and_gate.first_result_tick < narrow.first_result_tick
+    assert and_gate.four_result_ticks < narrow.four_result_ticks
+    assert and_gate.walking_ticks < narrow.walking_ticks
+    assert and_gate.straight_through_arrows == 0
