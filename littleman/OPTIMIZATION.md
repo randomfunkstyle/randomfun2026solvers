@@ -243,3 +243,35 @@ factor unchanged while reducing public average ticks from 25,593 to 25,579
 one binding-side column and one execution row; the composed
 `tasks/compacted/brackets_submitted_rom_ast10.man` reaches 94×74, 25,496.78
 average ticks, and objective 225,289,528.44.
+
+## STORE backend replacement
+
+`lm1.storeopt` makes memory replacement a deterministic AST seam operation:
+
+```sh
+uv run python -m randomfun2026solvers.lm1.storeopt BEST.man \
+  --program SLUG --store men --out tasks/compacted/SLUG_men.man
+```
+
+It locates the registered memory rooms by translation-invariant room signatures,
+records the request/response boundary pipe cells, headings, and outside room
+roles, and can return an AST with the old store rooms plus all attached routes
+removed. `machine.build_for(..., store="men")` places the replacement and routes
+both seams; `storeopt` then asserts the new AST attaches to the same logical
+outside roles, validates all public cases, and writes only a strict objective
+improvement. A hand-packed source is accepted when its memory room group is a
+rigidly moved copy of the registered drop-in block.
+
+The current best-submission sweep found no man-memory winner:
+
+| CPU program | Slots | Result |
+|---|---:|---|
+| `gradebook` | 32 | line backend unavailable (declared 24-cell limit) |
+| `sudoku-validity` | 31 | line backend unavailable (declared 24-cell limit) |
+| `tcp` | 52 | line backend unavailable (declared 24-cell limit) |
+| `snake-ring` | 9 | valid; 146×136 and objective 2,819,305,318.40, worse than 1,219,369,608 |
+| `matmul` | 16 | valid; 165×90 and objective 3,623,044,660.71, worse than 972,863,228.57 |
+| `brackets` | 5 | valid; 106×69 and objective 298,042,390.67, worse than 230,976,825 |
+
+Because none improves its best submitted source, no man-memory candidate is
+retained and no follow-up AST10/ROM10 pass is warranted for this backend.

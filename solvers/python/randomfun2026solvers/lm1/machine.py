@@ -2015,7 +2015,7 @@ def display_for(slug: str) -> tuple[int, int] | None:
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
 
-def build_for(slug: str) -> Machine:
+def build_for(slug: str, *, store: str = "tape") -> Machine:
     """Generate the machine for a checked-in task program.
 
     Everything not derivable from the ``.asm`` comes from the registry above, except
@@ -2033,6 +2033,7 @@ def build_for(slug: str) -> Machine:
         rom_rows=ROM_ROWS.get(slug),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
+        store=store,
     )
 
 
