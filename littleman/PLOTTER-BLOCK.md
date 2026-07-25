@@ -78,6 +78,44 @@ Two tricks keep setup short despite the FIFO:
   scratch slot of its own. The same preamble sets `BP = M+1`, sends `n` to the
   painter and leaves `B = f`.
 
+## Laying out the worker: the send-binding detour
+
+`r` competes only with other **incoming** pipes and `s` only with other **outgoing**
+ones, which is what makes the layout tractable at all:
+
+* The worker's two incoming pipes (input, ring-return) are separated by grouping all
+  four `RIN`s in the prologue. Ring *pushes* may interleave with them freely — an `s`
+  never competes with an `r` — so the prologue costs one wall transition per round,
+  not four.
+* The two outgoing pipes (ring-forward, painter) are the hard case, because the hot
+  loop contains four pushes **and** one send to the painter, and adjacent cells are
+  ~1 apart in Manhattan distance. They cannot both bind by proximity unless the
+  painter send is physically separated from the pushes.
+
+Ring order fixes where that send falls. With `[step, den, U, U+V]` the carry lane
+sends last (clean west→east run, no detour) and the no-carry lane sends third of
+four; any other order just swaps which lane pays. There is no order that makes both
+last, because the two lanes send *different* slots, and the slot a lane doesn't send
+must still be popped and pushed to keep the ring aligned.
+
+So the no-carry lane takes a return leg: it runs east to the painter send and comes
+back west along a second row for the final push. That costs the loop band's width
+once per no-carry lap — about eight ticks, or four averaged over a line.
+
+Alternatives considered and rejected:
+
+* **Painter does two adds** (worker sends `U` then `V`-or-`0`, ring holds
+  `[step, den, U, V]`). Removes the detour and needs no `U+V` slot, but adds three
+  ticks to every painter lap — the same average cost, for a second protocol to get
+  right.
+* **`S` instead of `s`** for the painter send. `S` writes every outgoing pipe, so it
+  needs no binding at all — but it also injects the increment into the ring, and its
+  ordinal differs between the two lanes, so the relay cannot know which value to
+  drop.
+* **`f` on the ring, `B` free.** The carry lane needs `den` before it can finalise
+  `f`, while `f`'s slot must precede `den`'s; holding `step`, `den` and `f` at once
+  needs three hands.
+
 ## Verification
 
 `tests/test_plotter_block.py` re-runs the op-level simulation (`A`, `B`, `BP`, ring
