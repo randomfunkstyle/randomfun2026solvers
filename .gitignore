@@ -1,4 +1,5 @@
 .lq/
+.worktrees/
 tmp/
 .venv/
 __pycache__/
