@@ -218,33 +218,84 @@ keeps the three display pipes from crossing. Three placements do the rest:
 
 ## Result
 
-**20/20 cases, score 53,693,850** — against 7,760,316,749 for the CPU version, a
-**145x improvement**. 50x64 (area² 4096) and ~13,100 average ticks, so the win is
-almost entirely ticks: ~19 per pixel instead of ~19,000.
+**20/20 cases, score 29,147,283** — against 7,760,316,749 for the CPU version, a
+**266x improvement**. 49x59 (area² 3,481) and ~8,373 average ticks.
 
-The first box that worked was 57x70. Four compactions, none of which changed the
-design — each was space that turned out not to be doing anything:
+### The ring's length is the machine's clock rate
 
-* **Parallel pipes may touch.** The three display channels were spaced a column apart
-  out of caution; a pipe carries its own arrowheads, so neighbouring flows never
-  merge, and cols 0/1/2 work as well as 2/4/6.
-* **The relay rides a row higher than the painter**, so both south walls line up and
-  the increment's return leg comes up under them rather than clearing the lower one.
-* **`@` sits on the prologue row.** It spawns heading east — already the right way —
-  and is otherwise a nop, so the returning man walks straight over it. It had been
-  given a row of its own, on the theory that the merge needed two cells.
-* **Band C exits one row earlier.** Its merge already lands east of the lane on the
-  row below, so the man can drop one row and turn straight back west; the old code ran
-  out to the east wall and descended twice.
+The single biggest win after the design itself came from measuring rather than
+guessing. Fitting the public cases gives a cost model:
+
+| | fixed | per round | per pixel |
+|---|---|---|---|
+| ring returning over the north wall | 43 | 541 | **112** |
+| ring turning round under the worker | −14 | 288 | **78.6** |
+
+The worker's pixel-loop lap is only 74–78 cells, so 112 ticks/pixel could not be its
+code. It was the **ring**: every lap pops all four constants and pushes them back, so
+lap *n+1* cannot start until the values pushed on lap *n* have travelled the whole
+loop. The return leg was 93 cells — it entered the worker's *north* wall, so it had to
+climb the west channels and cross the band to get there — and the worker spent ~35
+ticks of every lap standing at an `r`. Lengthening only that pipe by 30 cells measured
+**+30.0 ticks/pixel, one for one**, which is the whole diagnosis in one experiment.
+
+The fix is a binding observation. `r` binds by Manhattan distance to *the cell where
+each incoming pipe meets the room*, so two incoming pipes on **opposite walls** are
+separated by the **row** term rather than by a column. The round's shape already
+matches that: every input read is in the prologue at the top of the room and every
+ring pop is below it. So the ring-return moved to the south wall beside ring-forward,
+the relay flattened to two rows and sits directly underneath, and the ring went from
+101 cells to 11. The old `RIN_MAX`/`POP_MIN` column regions are gone, replaced by a
+predicate the engine's own `route` oracle is tested against, glyph by glyph.
+
+It is not shorter still because **the ring is also its own buffer**: the prologue
+pushes six values before anything pops, the peak depth is 8, and a pipe holds one
+value per cell — under nine cells the machine deadlocks rather than running fast. The
+ring is sized by capacity and only then minimised for latency.
+
+By contrast the three display pipes are 74/71/83 cells and cost **~40 ticks per case,
+once**: they are pure pipeline fill, and `timing_ok` forces all three to be within ~13
+cells of each other anyway, so there is nothing to win there.
+
+### Height, and what each remaining row is for
+
+Once ticks were the worker's own lap again, the box came down 63 → 59 by finding rows
+that were only clearance:
+
+* **The increment enters the painter's east wall**, not its west — coming round the
+  bottom cost a row for one westward leg. The painter has a single incoming pipe, so no
+  `r` in it needs a particular side.
+* **The input enters the worker's west wall**, which empties the ring-return's old band
+  row. Two cells and not one: a one-cell pipe is *both* stubs at once, and the analyser
+  then reports `dst: -1` and every input read silently falls through to the ring.
+* **The relay's box sits inside the rows the display pipes climb and bend on** — the
+  pipes are at cols 0..21, the relay at 30..36 — and the row the ring crosses to reach
+  the relay is the same row SWAP bends west along. Five rows do three jobs.
+* **Band B starts one row higher.** A westward `X` puts its two-cell hop on the row
+  above and its solo lane below, so band B reaching up into row 2 costs nothing: that
+  row had held the base row's descent, two glyphs in thirty-nine columns.
+
+The band above the worker is still **two rows for one pipe**, and that one is not
+removable: SWAP's last cell turns north into the display's bottom wall, and the loader
+decides where a pipe *starts* from the cell behind the arrowhead — with the worker's
+north wall directly under that turn it reads the turn as a new pipe leaving the worker
+and refuses to load. The second row is clearance under an arrowhead.
+
+Two loader rules worth stating, both found by being bitten:
+
+* **A pipe may not bend away from a wall it hugs.** Any cell whose arrowhead points
+  away from an adjacent wall is read as a pipe *starting* at that room, which turns a
+  legitimate pipe into a room-to-itself loop.
+* **A one-cell pipe cannot be both stubs.** `analyze` will still name its source, but
+  the loader gives it no destination.
 
 What is left is load-bearing. Row 0 exists because a pipe entering the display's top
 wall needs a cell above it, and in LM-75 the top wall *is* the ADDR port. The
-increment's bottom leg cannot move up into the gap either: the two stub cells of each
-worker south port take the first two rows, ring-forward's descent the next six, and
-the relay's walls the rest — the barrier reappears wherever the relay is moved to.
-The remaining height is the display (26 rows) and the worker (21), so shrinking
-further means reshaping the worker itself, wider and shorter — width has 14 columns
-of headroom before it binds, so rows can be traded for columns for free.
+remaining height is the display (26 rows) and the worker (20), so the next win is
+reshaping the worker itself. Width has 10 columns of headroom before it binds, so rows
+can still be traded for columns for free — and the *ticks* now sit in the pixel loop's
+two long horizontal runs, whose length is set by how far east the increment port's
+binding boundary forces the `s@PAINT`.
 
 ## Verification
 

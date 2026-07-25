@@ -407,7 +407,7 @@ if __name__ == "__main__":
 # rather than a grid that loads and quietly reads the wrong pipe.
 
 GLYPH = {E: ">", W: "<", N: "^", S: "v"}
-WW, WH = 39, 19                      # worker interior
+WW, WH = 39, 18                      # worker interior
 IN_COL = -1                          # west wall: input (see RIN_REF)
 RET_COL, FWD_COL, PNT_COL = 18, 30, 38   # south wall: ring-return, ring-fwd, painter
 # The two send regions: the boundary is the midpoint of the two ports, and a glyph
@@ -557,11 +557,15 @@ def build_worker():
     cur.seq([P(o) for o in [("LIT", 5), "M", "POP", "SHL", "M", "POP", "ADD"]])
     cur.to(PAINT_MIN).op(*P("PAINT"))
     cur.turn(S)
-    _riser(c, cur.x, 2, 3, "v")
-    c.set(cur.x, 4, "<")                          # band B is walked WEST
+    _riser(c, cur.x, 2, 2, "v")
+    c.set(cur.x, 3, "<")                          # band B is walked WEST
 
-    # ── band B: row 5 — TWO branches share it (disjoint column ranges) ────────
-    cur = Cur(c, cur.x - 1, 4, W)
+    # ── band B: row 3 — TWO branches share it (disjoint column ranges) ────────
+    # Row 3 and not 4: a westward `X` puts its two-cell hop on the row *above* and
+    # its solo lane on the row below, so band B starting here reaches up into row 2 —
+    # which the base row's descent had all to itself, two glyphs in thirty-nine
+    # columns. Everything below moves up with it.
+    cur = Cur(c, cur.x - 1, 3, W)
     cur.seq([P(o) for o in ["POP", "M", "POP", "SUB"]])        # A = x1-x0, B = x0
     branch(c, cur, W,
            neg=["NEG", "M", "ADD", "PUSH", ("LIT", 1), "NEG", "PUSH"],
@@ -572,11 +576,11 @@ def build_worker():
                 "NEG", "PUSH"],
            pos=["M", "ADD", "PUSH", ("LIT", 5), "M", ("LIT", 1), "SHL", "PUSH"])
     cur.to(2).turn(S)                             # down column 2 into band C
-    _riser(c, 2, 5, 6, "v")
-    c.set(2, 7, ">")
+    _riser(c, 2, 4, 5, "v")
+    c.set(2, 6, ">")
 
-    # ── band C: row 7 — the major-axis compare ───────────────────────────────
-    cur = Cur(c, 3, 7, E)
+    # ── band C: row 6 — the major-axis compare ───────────────────────────────
+    cur = Cur(c, 3, 6, E)
     cur.to(BAND_X0)
     cur.seq([P(o) for o in ["POP", "M", "POP", "PUSH", "POP", "SUB"]])
     branch(c, cur, E,
@@ -588,41 +592,41 @@ def build_worker():
     # drop one row and turn straight back west — no need to run out to the east wall
     # first and descend twice, which is what this used to do.
     cur.turn(S)
-    c.set(cur.x, 9, "<")
+    c.set(cur.x, 8, "<")
 
     # ── preamble: recover M as den>>1, send n, set BP, leave B = f ────────────
-    # Row 9 is only a corridor: the block needs a POP first and a PAINT last, so it
+    # Row 8 is only a corridor: the block needs a POP first and a PAINT last, so it
     # has to run west-to-east, and band C left the man on the east side.
-    Cur(c, cur.x - 1, 9, W).to(15)
-    c.set(15, 9, "v")
-    c.set(15, 10, ">")
-    cur = Cur(c, 16, 10, E)
+    Cur(c, cur.x - 1, 8, W).to(BAND_X0)
+    c.set(BAND_X0, 8, "v")
+    c.set(BAND_X0, 9, ">")
+    cur = Cur(c, BAND_X0 + 1, 9, E)
     cur.seq([P(o) for o in ["POP", "PUSH", ("LIT", 1), "M", "POP", "PUSH", "SHR",
                             "ADD"]])
     cur.to(PAINT_MIN).op(*P("PAINT"))             # n -> painter
     cur.turn(S)                                   # the tail rides the return leg,
-    c.set(cur.x, 11, "<")                         # which keeps the room 40 wide
-    cur = Cur(c, cur.x - 1, 11, W)
+    c.set(cur.x, 10, "<")                         # which keeps the room 39 wide
+    cur = Cur(c, cur.x - 1, 10, W)
     cur.seq([P(o) for o in ["BP", "SUB", "NEG", "M"]])         # BP = n, B = f
     cur.seq([P(o) for o in ["POP", "PUSH", "POP", "PUSH"]])    # ring back in order
     cur.to(4).turn(S)                             # column 4 down into the loop
-    c.set(4, 12, "v")
-    c.set(4, 13, ">")
+    c.set(4, 11, "v")
+    c.set(4, 12, ">")
 
     # ── the pixel loop: five rows, because four paths must not cross ─────────
     #
-    #   12 |         > M r s r s ......... s@P r  v |   no-carry code (CCW exit)
-    #   13 | > ... r s + X > M r s W - M r s r s .. s@P v |   shared + carry (straight+CW)
-    #   14 |         > ^                        v      |   the CW exit's two-cell hop
-    #   15 |   ^   < < < < ...................  <      |   carry's return leg
-    #   16 | ^ d m < ................ s ......  <      |   no-carry's return leg
+    #   11 |         > M r s r s ......... s@P r  v |   no-carry code (CCW exit)
+    #   12 | > ... r s + X > M r s W - M r s r s .. s@P v |   shared + carry (straight+CW)
+    #   13 |         > ^                        v      |   the CW exit's two-cell hop
+    #   14 |   ^   < < < < ...................  <      |   carry's return leg
+    #   15 | ^ d m < ................ s ......  <      |   no-carry's return leg
     #
     # A >= 0 is the carry, so the carry lane owns *both* the straight and the CW exit
     # and the CW exit needs a two-cell hop back onto the shared row. That hop is why
-    # row 14 cannot also be a return corridor, and the two lanes cannot share one
+    # row 13 cannot also be a return corridor, and the two lanes cannot share one
     # return row either: the no-carry lane still owes a PUSH after its PAINT, and the
     # carry lane must not execute it.
-    cur = Cur(c, 5, 13, E)
+    cur = Cur(c, 5, 12, E)
     cur.to(BAND_X0)
     cur.seq([P(o) for o in ["POP", "PUSH", "ADD"]])            # A = f + step, B = f
     x, y = cur.x, cur.y
@@ -635,10 +639,10 @@ def build_worker():
                              "POP", "PUSH", "POP", "PUSH"]])   # B = f' - den; UV
     lane.to(PAINT_MIN).op(*P("PAINT"))            # the increment is U + V
     lane.turn(S)                                  # down to its return leg
-    c.set(lane.x, 14, "v")
-    c.set(lane.x, 15, "<")
-    Cur(c, lane.x - 1, 15, W).to(6)
-    c.set(5, 15, "v")                             # drop onto the shared merge row
+    c.set(lane.x, 13, "v")
+    c.set(lane.x, 14, "<")
+    Cur(c, lane.x - 1, 14, W).to(6)
+    c.set(5, 14, "v")                             # drop onto the shared merge row
 
     # ── the no-carry lane: PAINT cannot be last ──────────────────────────────
     # `A` is clobbered by every `r`, so the increment must be sent *before* UV is
@@ -649,33 +653,33 @@ def build_worker():
     nc.to(PAINT_MIN).op(*P("PAINT"))              # the increment is U
     nc.seq([P(o) for o in ["POP"]])               # UV, read here...
     nc.to(nc.x + 1).turn(S)
-    _riser(c, nc.x, 13, 15, "v")
-    c.set(nc.x, 16, "<")
-    nc = Cur(c, nc.x - 1, 16, W)
+    _riser(c, nc.x, 12, 14, "v")
+    c.set(nc.x, 15, "<")
+    nc = Cur(c, nc.x - 1, 15, W)
     nc.to(PUSH_MAX).op(*P("PUSH"))                # ...and pushed back, west of 34
     nc.to(5)
 
     # ── one `m` per lap, then the BP test ────────────────────────────────────
-    c.set(5, 16, "<")                             # carry arrives south, no-carry west
-    c.set(4, 16, "m")                             # BP -= 1
-    c.set(3, 16, "d")                             # BP > 0 ? north into the loop : on
-    _riser(c, 3, 14, 15)
-    c.set(3, 13, ">")                             # ...back to the loop head
+    c.set(5, 15, "<")                             # carry arrives south, no-carry west
+    c.set(4, 15, "m")                             # BP -= 1
+    c.set(3, 15, "d")                             # BP > 0 ? north into the loop : on
+    _riser(c, 3, 13, 14)
+    c.set(3, 12, ">")                             # ...back to the loop head
 
     # ── BP == 0: drain the ring, then round again ────────────────────────────
     # The four constants are still circulating (see `worker_round`), and the next
     # round's prologue would pop them instead of its own inputs. Two extra rows buy
     # the four POPs: east to the POP region, drain, then west and up column 0.
-    c.set(2, 16, "v")
-    c.set(2, 17, ">")
-    drain = Cur(c, 3, 17, E)
+    c.set(2, 15, "v")
+    c.set(2, 16, ">")
+    drain = Cur(c, 3, 16, E)
     drain.to(BAND_X0)
     drain.seq([P("POP")] * 4)
     drain.turn(S)
-    c.set(drain.x, 18, "<")
-    Cur(c, drain.x - 1, 18, W).to(1)
-    c.set(0, 18, "^")                             # up column 0 into the prologue
-    _riser(c, 0, 1, 17)
+    c.set(drain.x, 17, "<")
+    Cur(c, drain.x - 1, 17, W).to(1)
+    c.set(0, 17, "^")                             # up column 0 into the prologue
+    _riser(c, 0, 1, 16)
     return c
 
 
@@ -716,11 +720,11 @@ RET_C, FWD_C, PNT_C = (PROBE_WX + c for c in (RET_COL, FWD_COL, PNT_COL))
 # locally and eats the one row a later pipe needed, so the collision only ever moves;
 # stating all seven and allocating the shared rows and columns up front is what closes
 # the box. `_PATHS` is checked against the ports as it is drawn.
-BLOCK_W, BLOCK_H = 49, 61
+BLOCK_W, BLOCK_H = 49, 59
 _DX, _DY = 9, 1                  # display walls: cols 9..42, rows 1..26
-_WX, _WY = 9, 30                 # worker walls:  cols 8..48, rows 29..49
-_PX, _PY = 9, 56                 # painter walls: cols 8..24, rows 55..60
-_RX, _RY = 31, 52                # relay walls:   cols 30..36, rows 51..54
+_WX, _WY = 9, 30                 # worker walls:  cols 8..48, rows 29..48
+_PX, _PY = 9, 54                 # painter walls: cols 8..24, rows 53..58
+_RX, _RY = 31, 50                # relay walls:   cols 30..36, rows 49..52
 _IX = 3                          # the input room, west of the worker; its row is taken
                                  # from the worker's, so the two cannot drift apart
 
@@ -732,9 +736,15 @@ _IX = 3                          # the input room, west of the worker; its row i
 # the turn as a new pipe leaving the worker, and refuses to load. So the band is two
 # rows for one pipe — the second is the clearance under SWAP's arrowhead.
 #   west channels (painter -> display)  col 0 ADDR, col 1 DATA, col 2 SWAP
-#   row each display pipe bends west    53 ADDR, 52 DATA, 51 SWAP
-# Channels and bend rows nest opposite ways (0<1<2 against 53>52>51), which is what
+#   row each display pipe bends west    51 ADDR, 50 DATA, 49 SWAP
+# Channels and bend rows nest opposite ways (0<1<2 against 51>50>49), which is what
 # keeps the three display pipes from crossing; the band rows are one each.
+#
+# The five rows between the worker's south wall and the painter are shared two ways
+# over, which is why there are only five: the relay's box (four rows) sits *inside* the
+# rows the three display pipes need to climb and bend on, because the pipes are all at
+# columns 0..21 and the relay is at 30..36; and the row the ring has to cross to reach
+# the relay is the same row SWAP bends west along, for the same reason.
 #
 # The channels are *adjacent*, not spaced. Two parallel pipes may touch — a pipe is
 # followed by its own arrowheads, so neighbouring flows never merge (the painter probe
@@ -759,18 +769,18 @@ _IX = 3                          # the input room, west of the worker; its row i
 # the return came in over the north wall it had to climb the whole box — 93 cells,
 # and 84% of every pixel's cost was the worker standing at an `r` waiting for it.
 _PATHS = {
-    "fwd":   ([(39, 50), (39, 52), (37, 52)], "r_in"),
-    "r_out": ([(29, 53), (27, 53), (27, 50)], "ret"),
-    "pnt":   ([(47, 50), (47, 57), (25, 57)], "p_in"),
+    "fwd":   ([(39, 49), (39, 50), (37, 50)], "r_in"),
+    "r_out": ([(29, 51), (27, 51), (27, 49)], "ret"),
+    "pnt":   ([(47, 49), (47, 55), (25, 55)], "p_in"),
     # Two cells, straight across the gap: the input room's east wall to the worker's
     # west wall. Over the north wall it needed a stub pointing away from the room
     # before it could bend, and that bend row cost a whole row of the box. Two and not
     # one — a single-cell pipe is *both* stubs at once, and the analyser then reports
     # `dst: -1`, so every input read silently falls through to the ring instead.
     "i_out": ([(_IX + 3, _WY + IN_ROW), (_IX + 4, _WY + IN_ROW)], "in"),
-    "addr":  ([(10, 54), (10, 53), (0, 53), (0, 0), (10, 0)], "d_addr"),
-    "data":  ([(14, 54), (14, 52), (1, 52), (1, 3), (8, 3)], "d_data"),
-    "swap":  ([(21, 54), (21, 51), (2, 51), (2, 27), (39, 27)], "d_swap"),
+    "addr":  ([(10, 52), (10, 51), (0, 51), (0, 0), (10, 0)], "d_addr"),
+    "data":  ([(14, 52), (14, 50), (1, 50), (1, 3), (8, 3)], "d_data"),
+    "swap":  ([(21, 52), (21, 49), (2, 49), (2, 27), (39, 27)], "d_swap"),
 }
 
 
@@ -862,21 +872,21 @@ def block_debug():
                   "live here with only pushes between them — `r` takes the *nearest* "
                   "incoming pipe, so an input read must never sit between two ring pops.",
              color="#22c55e")
-    d.region("worker:bandB", _WX, wi + 4, WW, 2,
+    d.region("worker:bandB", _WX, wi + 2, WW, 3,
              note="the two sign branches, sharing one row on disjoint column ranges. "
                   "Each lane pushes its own sign literal: a lane's identity is the man's "
                   "position, so it cannot survive the merge.",
              color="#84cc16")
-    d.region("worker:bandC", _WX, wi + 6, WW, 3,
+    d.region("worker:bandC", _WX, wi + 5, WW, 3,
              note="the major-axis compare. Its merge lands east of the lane on the row "
                   "below, so the exit drops one row and turns straight back west.",
              color="#06b6d4")
-    d.region("worker:loop", _WX + 3, wi + 12, WW - 3, 5,
+    d.region("worker:loop", _WX + 3, wi + 11, WW - 3, 5,
              note="the pixel loop, five rows because four paths must not cross. `X` "
                   "branches on the sign of f+step; the carry lane owns the straight and "
                   "the CW exit, so its two-cell hop back cannot double as a corridor.",
              color="#f59e0b")
-    d.region("worker:drain", _WX, wi + 17, 20, 2,
+    d.region("worker:drain", _WX, wi + 16, 20, 2,
              note="four POPs. Each lap pushes all four constants back, so at BP==0 they "
                   "are still circulating and the next round would pop them instead of "
                   "its own x0/y0. Every segment alone was perfect and sequences were "
