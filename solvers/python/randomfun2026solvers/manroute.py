@@ -46,6 +46,8 @@ __all__ = [
     "shortest_path",
     "route_like",
     "pad_to",
+    "ManPath",
+    "route_man",
 ]
 
 Cell = tuple[int, int]
@@ -572,3 +574,123 @@ class Plan:
         self._relay_group(trial, pipe_ids, total_min, max_x=max_x, max_y=max_y)
         self.ast = trial
         return v
+
+
+# ── routing the MAN, which is a different problem from routing a pipe ────────
+@dataclass
+class ManPath:
+    """A walk for the little man: where he goes and what has to be drawn.
+
+    A pipe and a man need different routers, and conflating them is why every
+    hand-rewiring attempt broke cases. A pipe owns every cell it occupies. The man
+    owns only his **bends**: a straight run over blank floor is shared freely,
+    because a blank is a nop in every heading, so two lanes may cross there. What
+    he cannot share is a turn glyph — that forces a heading on everyone who enters
+    it, which silently re-steers the other lane.
+
+    So the output separates the two:
+
+    ``turns``
+        cells that must hold a specific glyph, and are therefore **exclusive**;
+    ``blanks``
+        cells he merely passes through, which must stay blank but may be crossed
+        by any number of other lanes.
+    """
+
+    cells: list[Cell] = field(default_factory=list)
+    turns: dict[Cell, str] = field(default_factory=dict)
+    blanks: set[Cell] = field(default_factory=set)
+
+    @property
+    def ticks(self) -> int:
+        """One tick per cell entered — the latency this walk costs."""
+        return len(self.cells)
+
+
+_MAN_GLYPH = {(1, 0): ">", (-1, 0): "<", (0, -1): "^", (0, 1): "v"}
+
+
+def route_man(
+    start: Cell,
+    enter: Dir,
+    end: Cell,
+    exit_: Dir,
+    *,
+    code: set[Cell],
+    blanks: set[Cell] | None = None,
+    turns: dict[Cell, str] | None = None,
+    bound_x: int = 200,
+    bound_y: int = 200,
+) -> ManPath | None:
+    """Walk the man from `start` (arriving with `enter`) to `end` (leaving with `exit_`).
+
+    `code` is every cell holding an executing glyph — absolutely off limits, since
+    crossing one would run it. `blanks` are cells already reserved as transit by
+    other lanes: **crossable**, because they are floor. `turns` are turn glyphs
+    already placed: crossable only by a man already heading the way they point.
+
+    Minimises bends first, then length: a bend costs an exclusive cell, which is
+    the scarce resource, whereas extra straight cells cost only ticks.
+    """
+    import heapq
+
+    blanks = blanks or set()
+    turns = turns or {}
+
+    def passable(c: Cell, heading: Dir) -> bool:
+        if not (0 <= c[0] <= bound_x and 0 <= c[1] <= bound_y):
+            return False
+        if c in code:
+            return False
+        if c in turns:
+            return turns[c] == _MAN_GLYPH[heading]
+        return True
+
+    def can_bend_at(c: Cell) -> bool:
+        # a bend needs the cell to itself; a shared blank would be re-steered
+        return c not in code and c not in blanks and c not in turns
+
+    start_state = (start, enter)
+    best: dict[tuple[Cell, Dir], tuple[int, int]] = {start_state: (0, 0)}
+    prev: dict[tuple[Cell, Dir], tuple[tuple[Cell, Dir], str] | None] = {start_state: None}
+    heap: list[tuple[int, int, Cell, Dir]] = [(0, 0, start, enter)]
+    goal = (end, exit_)
+    while heap:
+        bends, length, cell, heading = heapq.heappop(heap)
+        if best.get((cell, heading), (1 << 30, 0))[0] < bends:
+            continue
+        if (cell, heading) == goal:
+            path: list[Cell] = []
+            tglyphs: dict[Cell, str] = {}
+            state: tuple[Cell, Dir] | None = goal
+            while state is not None:
+                path.append(state[0])
+                step = prev[state]
+                if step is not None and step[1]:
+                    # The glyph belongs to the cell where the heading CHANGES --
+                    # the man executes the cell he is standing on and then steps --
+                    # so it goes on the SOURCE, not the destination. Placing it one
+                    # cell late turns every corner into a wall crash.
+                    tglyphs[step[0][0]] = step[1]
+                state = step[0] if step is not None else None
+            path.reverse()
+            used = set(tglyphs)
+            return ManPath(
+                cells=path,
+                turns=tglyphs,
+                blanks={c for c in path if c not in used},
+            )
+        for nd in DIRS:
+            nbends = bends + (0 if nd == heading else 1)
+            if nd != heading and not can_bend_at(cell):
+                continue
+            nxt = (cell[0] + nd[0], cell[1] + nd[1])
+            if not passable(nxt, nd):
+                continue
+            key = (nxt, nd)
+            cost = (nbends, length + 1)
+            if cost < best.get(key, (1 << 30, 1 << 30)):
+                best[key] = cost
+                prev[key] = ((cell, heading), _MAN_GLYPH[nd] if nd != heading else "")
+                heapq.heappush(heap, (cost[0], cost[1], nxt, nd))
+    return None
