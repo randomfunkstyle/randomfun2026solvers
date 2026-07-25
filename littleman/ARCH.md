@@ -35,7 +35,7 @@ and the semester matrix.
 
 Companion docs: [`SPEC.md`](SPEC.md) (the language) ·
 [`GRADING.md`](GRADING.md) (scoring) · [`../tasks/problems/`](../tasks/problems/)
-(the 16 problems).
+(the 20 problems).
 
 ## 1. Goal and the trade we are consciously making
 
