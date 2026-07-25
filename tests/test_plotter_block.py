@@ -1,0 +1,164 @@
+"""The plotter block's op sequence, checked against the problem statement.
+
+The statement's pseudocode is the oracle. The block computes the same pixels a
+completely different way (a closed form on the display address, with the carry test
+biased into a sign test), so this is the test that matters — if it passes, the only
+thing left to get wrong is the ASCII.
+
+Fast tier: every degenerate and boundary segment, plus a deterministic spread.
+Slow tier: all 589,824 legal segments.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from randomfun2026solvers.plotter_block import (
+    GAP_ADDR_DATA,
+    GAP_DATA_SWAP,
+    LAP_TICKS,
+    OpModel,
+    painter_replay,
+    timing_ok,
+    worker_round,
+)
+
+W, H = 32, 24
+
+
+def bresenham(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
+    """The problem statement's pseudocode, verbatim, in its symmetric error form."""
+    dx, sx = abs(x1 - x0), (1 if x0 < x1 else -1)
+    dy, sy = -abs(y1 - y0), (1 if y0 < y1 else -1)
+    err = dx + dy
+    out = []
+    while True:
+        out.append((x0, y0))
+        if x0 == x1 and y0 == y1:
+            return out
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
+
+
+def addresses(x0: int, y0: int, x1: int, y1: int) -> list[int]:
+    """What the block's two men actually put on the ADDR port, in order."""
+    m = OpModel([x0, y0, x1, y1])
+    incs = worker_round(m)
+    base, n = m.paint[0], m.paint[1]
+    assert n == len(incs), "the worker must send exactly one increment per pixel"
+    return painter_replay(base, n, incs)
+
+
+def check(x0: int, y0: int, x1: int, y1: int) -> None:
+    want = [y * W + x for x, y in bresenham(x0, y0, x1, y1)]
+    assert addresses(x0, y0, x1, y1) == want, f"segment {(x0, y0, x1, y1)}"
+
+
+# ── the cases that break a line drawer ────────────────────────────────────────
+DEGENERATE = [
+    (0, 0, 0, 0), (31, 23, 31, 23), (5, 7, 5, 7),        # single point: M = 0
+    (0, 0, 0, 23), (31, 23, 31, 0),                       # vertical: m = 0
+    (0, 0, 31, 0), (31, 23, 0, 23),                       # horizontal: m = 0
+    (0, 0, 23, 23), (23, 23, 0, 0), (0, 23, 23, 0),        # exact diagonal: m = M
+    (0, 0, 2, 1), (2, 1, 0, 0), (0, 0, 1, 2), (1, 2, 0, 0),  # the exact-half tie
+]
+CORNERS = [
+    (a, b, c, d)
+    for a, b in ((0, 0), (31, 0), (0, 23), (31, 23))
+    for c, d in ((0, 0), (31, 0), (0, 23), (31, 23))
+]
+
+
+@pytest.mark.parametrize("seg", DEGENERATE + CORNERS)
+def test_degenerate_and_corner_segments(seg):
+    check(*seg)
+
+
+def test_direction_sensitivity():
+    """A->B may pick different pixels than B->A; the block must not symmetrise."""
+    differ = 0
+    # These four really do pick different pixel sets in the two directions.
+    for x0, y0, x1, y1 in [(0, 0, 1, 2), (0, 0, 1, 4), (0, 0, 2, 1), (2, 3, 9, 20)]:
+        fwd, rev = addresses(x0, y0, x1, y1), addresses(x1, y1, x0, y0)
+        assert fwd == [y * W + x for x, y in bresenham(x0, y0, x1, y1)]
+        assert rev == [y * W + x for x, y in bresenham(x1, y1, x0, y0)]
+        if fwd != list(reversed(rev)):
+            differ += 1
+    assert differ, "picked no asymmetric segment — the test proves nothing"
+
+
+def test_spread():
+    """A deterministic spread over every octant and both major axes."""
+    for x0 in range(0, W, 7):
+        for y0 in range(0, H, 5):
+            for x1 in range(0, W, 5):
+                for y1 in range(0, H, 7):
+                    check(x0, y0, x1, y1)
+
+
+def test_every_pixel_is_on_the_display():
+    """No ADDR may leave the panel: out of range is a fatal error, not a no-op."""
+    for seg in DEGENERATE + CORNERS:
+        for a in addresses(*seg):
+            assert 0 <= a < W * H, (seg, a)
+
+
+def test_ring_returns_to_its_starting_order():
+    """The ring must end each round holding [step, den, U, UV] — the loop reads
+    four slots a lap, so a rotation left over would desynchronise every later lap."""
+    m = OpModel([0, 0, 31, 23])
+    worker_round(m)
+    assert list(m.ring) == [2 * 23, 2 * 31, 1, 1 + 32]
+    assert len(m.ring) == 4
+
+
+def test_ring_never_exceeds_its_capacity():
+    """Peak ring depth sizes the forward/return pipes; a full ring blocks a PUSH."""
+    peak = 0
+
+    class Watched(OpModel):
+        __slots__ = ()
+
+        def do(self, op, arg=None):
+            nonlocal peak
+            out = super().do(op, arg)
+            peak = max(peak, len(self.ring))
+            return out
+
+    for seg in DEGENERATE + CORNERS:
+        worker_round(Watched(list(seg)))
+    assert peak <= 8, f"ring peaks at {peak} values"
+
+
+def test_timing_window_rejects_the_bugs_it_was_written_for():
+    # a SWAP that overtakes the DATA still in flight (the real first failure)
+    assert not timing_ok(50, 48, 5)
+    # ADDR arriving after its own DATA
+    assert not timing_ok(78, 36, 40)
+    # the matched triple that actually drew a correct frame
+    assert timing_ok(50, 48, 48)
+    # boundaries
+    assert timing_ok(50, 50 - GAP_ADDR_DATA, 99)
+    assert not timing_ok(50, 50 + LAP_TICKS - GAP_ADDR_DATA, 99)
+    assert not timing_ok(50, 48, 48 - GAP_DATA_SWAP)
+
+
+@pytest.mark.slow
+def test_all_legal_segments():
+    """All 589,824 of them, against the statement's pseudocode."""
+    bad = []
+    for x0 in range(W):
+        for y0 in range(H):
+            for x1 in range(W):
+                for y1 in range(H):
+                    want = [y * W + x for x, y in bresenham(x0, y0, x1, y1)]
+                    if addresses(x0, y0, x1, y1) != want:
+                        bad.append((x0, y0, x1, y1))
+                        if len(bad) > 5:
+                            pytest.fail(f"mismatches: {bad}")
+    assert not bad
