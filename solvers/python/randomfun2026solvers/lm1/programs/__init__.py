@@ -44,7 +44,11 @@ PROGRAM_DIR = Path(__file__).resolve().parent
 PROBLEM_DIR = Path(__file__).resolve().parents[5] / "tasks" / "problems"
 
 #: Programs whose file name is not the problem slug (alternative solutions).
-PROBLEM_OF: dict[str, str] = {"triangle-closed": "triangle", "snake-ring": "snake"}
+PROBLEM_OF: dict[str, str] = {
+    "triangle-closed": "triangle",
+    "snake-ring": "snake",
+    "pathfinder-unit": "pathfinder",
+}
 
 
 def problem_of(stem: str) -> str:
