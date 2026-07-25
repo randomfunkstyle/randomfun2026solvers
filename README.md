@@ -105,6 +105,45 @@ decodes `action_b64`/`answer_b64` as opaque bytes and interprets nothing — dec
 and interpret them in the solver per `task.contest_key`. Full contract:
 `randomfun2026claude/contracts.md §3.2`.
 
+## Submitting to the contest
+
+You need **one thing**: the team API key, in either
+`ICFP_TOKEN` or an untracked `.icfp-token` at the repo root (already gitignored —
+never commit it).
+
+```sh
+export ICFP_TOKEN=icfp_...                       # or: echo 'icfp_...' > .icfp-token
+
+uv run python -m randomfun2026solvers.submit send brackets --note "what this is"
+uv run python -m randomfun2026solvers.submit send brackets --dry-run   # check only
+uv run python -m randomfun2026solvers.submit list                      # what is archived
+uv run python -m randomfun2026solvers.submit get <submission-id>       # re-read a verdict
+```
+
+`send` runs the public cases locally first and **refuses to submit a failing grid**
+(`--force` overrides): only 5 submissions may be pending at once, so a broken one
+wastes a slot. It defaults to `tasks/solutions/<slug>_cpu.man`; use `--file` for
+anything else.
+
+Every graded submission is archived so nothing is ever lost:
+
+```
+solutions/<slug>/<server-verified-score>_<slug>.man
+solutions/<slug>/<server-verified-score>_<slug>.descr   # free-form note + provenance
+```
+
+The score is in the filename and zero-padded, so a listing sorts best-first and a
+worse run can never overwrite a better one. A submission that does not pass every
+case gets no score and is archived as `unscored_<slug>`.
+
+Two gotchas worth knowing:
+
+- **Cloudflare 403 `error code: 1010` is not an auth failure.** It is a
+  browser-signature ban on the default `Python-urllib` User-Agent; any ordinary UA
+  gets through, which is why the `curl` examples work.
+- **Local scores understate.** The server runs private cases too — `brackets` is
+  9 public but 26 graded, and its server `avgTicks` came out ~2x the local figure.
+
 ## Solver Layout
 
 The root `./solve` script dispatches by solver name to language-specific
