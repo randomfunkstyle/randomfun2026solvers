@@ -39,7 +39,14 @@ from dataclasses import dataclass, field
 from .manast import Ast, PipeNode, RoomNode, render
 from .manmoves import MoveError, reglyph
 
-__all__ = ["Verdict", "Occupancy", "Plan", "shortest_path", "pad_to"]
+__all__ = [
+    "Verdict",
+    "Occupancy",
+    "Plan",
+    "shortest_path",
+    "route_like",
+    "pad_to",
+]
 
 Cell = tuple[int, int]
 Dir = tuple[int, int]
@@ -128,6 +135,55 @@ def shortest_path(
     return None
 
 
+def route_like(
+    start: Cell,
+    end: Cell,
+    occ: Occupancy,
+    prefer: set[Cell],
+    *,
+    bound: int = 400,
+) -> list[Cell] | None:
+    """A route that deviates from `prefer` as little as possible.
+
+    The shortest path is usually the *wrong* path here. A pipe's cells decide which
+    ops bind to it — ``s``/``r`` take the nearest pipe — so a re-route that is
+    geometrically shorter but lands somewhere else re-binds ops in other rooms and
+    silently changes what the program computes. Every shortest-path reroute of the
+    memory ring re-bound six ops for exactly this reason.
+
+    So the cost minimised is *deviation*: staying on a cell the pipe already
+    occupied is free, leaving it costs one. Length breaks ties. The result is the
+    smallest edit that clears the obstacle, which is the one most likely to keep
+    every binding.
+    """
+    import heapq
+
+    if not occ.free(start) or not occ.free(end):
+        return None
+    best: dict[Cell, tuple[int, int]] = {start: (0, 1)}
+    prev: dict[Cell, Cell | None] = {start: None}
+    heap = [(0, 1, start)]
+    while heap:
+        dev, length, cur = heapq.heappop(heap)
+        if best.get(cur, (1 << 30, 0))[0] < dev:
+            continue
+        if cur == end:
+            path = [cur]
+            while (pv := prev[path[-1]]) is not None:
+                path.append(pv)
+            return path[::-1]
+        for d in DIRS:
+            nxt = (cur[0] + d[0], cur[1] + d[1])
+            if not occ.free(nxt) or nxt[0] > bound or nxt[1] > bound:
+                continue
+            cost = (dev + (0 if nxt in prefer else 1), length + 1)
+            if cost < best.get(nxt, (1 << 30, 1 << 30)):
+                best[nxt] = cost
+                prev[nxt] = cur
+                heapq.heappush(heap, (cost[0], cost[1], nxt))
+    return None
+
+
 def pad_to(path: list[Cell], target: int, occ: Occupancy) -> list[Cell] | None:
     """Lengthen `path` to exactly `target` cells by detouring into free space.
 
@@ -175,8 +231,29 @@ class Plan:
     tree byte-identical.
     """
 
-    def __init__(self, ast: Ast) -> None:
+    def __init__(self, ast: Ast, caps: dict[tuple[int, ...], int] | None = None) -> None:
         self.ast = ast
+        #: Group minima, e.g. ``{(2, 3): 101}``. A ring's capacity belongs to the
+        #: RING, so honouring only each pipe's own minimum is not enough: rerouting
+        #: a leg to its shortest path collapsed a 105-cell tape to 57 while every
+        #: individual minimum of 1 was still satisfied. That grid keeps all its
+        #: bindings and deadlocks.
+        self.caps = caps or {}
+
+    def _group_of(self, pipe_id: int) -> tuple[tuple[int, ...], int] | None:
+        for g, need in self.caps.items():
+            if pipe_id in g:
+                return g, need
+        return None
+
+    def _check_groups(self, ast: Ast) -> None:
+        for g, need in self.caps.items():
+            have = sum(p.capacity for p in ast.pipes if p.id in g)
+            if have < need:
+                raise MoveError(
+                    f"pipe group {list(g)} would hold {have} cells against a "
+                    f"declared need of {need}"
+                )
 
     # -- helpers -------------------------------------------------------------
     def _rooms_by_id(self) -> dict[int, RoomNode]:
@@ -302,7 +379,13 @@ class Plan:
                     f"pipe{pipe.id} has no free route between {first} and {last} "
                     "after the move"
                 )
-            want = max(pipe.min_capacity, len(base))
+            # keep this leg at least as long as it was when it belongs to a group:
+            # the group's total is the invariant, so a leg may not silently shrink
+            grp = self._group_of(pipe.id)
+            floor = pipe.min_capacity
+            if grp is not None:
+                floor = max(floor, pipe.capacity)
+            want = max(floor, len(base))
             if (want - len(base)) % 2:
                 want += 1
             path = base if want == len(base) else pad_to(base, want, occ)
@@ -314,6 +397,7 @@ class Plan:
             pipe.glyphs = reglyph(path, pipe.entry_dir, pipe.exit_dir)
             pipe.x = min(x for x, _ in path)
             pipe.y = min(y for _, y in path)
+        self._check_groups(ast)
 
     def move_room(self, room_id: int, dx: int, dy: int) -> Verdict:
         """Slide a room and re-route its pipes, or change nothing at all."""
@@ -346,6 +430,10 @@ class Plan:
         pipe.glyphs = reglyph(path, pipe.entry_dir, pipe.exit_dir)
         pipe.x = min(x for x, _ in path)
         pipe.y = min(y for _, y in path)
+        try:
+            self._check_groups(trial)
+        except MoveError as exc:
+            return Verdict(False, str(exc))
         before = self.factor()
         self.ast = trial
         return Verdict(
@@ -354,3 +442,133 @@ class Plan:
             factor_before=before,
             factor_after=self.factor(),
         )
+
+    # -- joint reroute -------------------------------------------------------
+    def can_reroute_group(
+        self,
+        pipe_ids: list[int],
+        total_min: int,
+        *,
+        max_x: int | None = None,
+        max_y: int | None = None,
+    ) -> Verdict:
+        """Re-lay several pipes *together*, keeping their **combined** capacity.
+
+        One pipe at a time is not enough when two legs of the same ring are in each
+        other's way: freeing the column pipe A occupies needs pipe B, which is
+        sitting in the only alternative, to move in the same breath. So all of them
+        are ripped up at once and re-laid against an occupancy grid that contains
+        none of them.
+
+        `max_x` / `max_y` cap the box, which is how a caller asks the real question
+        — "can this ring fit without column 30?" — rather than merely "can it fit".
+        Capacity is checked on the **total**, because that is what a ring holds.
+        """
+        trial = copy.deepcopy(self.ast)
+        try:
+            self._relay_group(trial, pipe_ids, total_min, max_x=max_x, max_y=max_y)
+        except MoveError as exc:
+            return Verdict(False, str(exc))
+        try:
+            render(trial)
+        except Exception as exc:  # noqa: BLE001
+            return Verdict(False, f"cannot be painted: {exc}")
+        return Verdict(
+            True,
+            f"pipes {pipe_ids} re-laid, total "
+            f"{sum(p.capacity for p in trial.pipes if p.id in pipe_ids)} cells",
+            factor_before=self.factor(),
+            factor_after=self.factor(trial),
+        )
+
+    def _relay_group(
+        self,
+        ast: Ast,
+        pipe_ids: list[int],
+        total_min: int,
+        *,
+        max_x: int | None = None,
+        max_y: int | None = None,
+    ) -> None:
+        plan = Plan(ast)
+        pipes = [p for p in ast.pipes if p.id in pipe_ids]
+        if len(pipes) != len(pipe_ids):
+            raise MoveError(f"unknown pipe in {pipe_ids}")
+        ends = {p.id: plan._attach(p) for p in pipes}
+        laid: dict[int, list[Cell]] = {}
+        # longest first: the leg with the most cells to place is the one most
+        # likely to be boxed out once the others are down
+        order = sorted(pipes, key=lambda p: -p.capacity)
+        for pipe in order:
+            occ = Occupancy.of(ast, ignore=frozenset(pipe_ids))
+            for other, path in laid.items():
+                for c in path:
+                    occ.owner[c] = f"pipe{other}"
+            src, dst = ends[pipe.id]
+            first = (src[0] + pipe.entry_dir[0], src[1] + pipe.entry_dir[1])
+            last = (dst[0] - pipe.exit_dir[0], dst[1] - pipe.exit_dir[1])
+            if max_x is not None:
+                occ = Occupancy(
+                    owner={**occ.owner, **{(max_x + 1, y): "box" for y in range(0, 400)}}
+                )
+            if max_y is not None:
+                occ = Occupancy(
+                    owner={**occ.owner, **{(x, max_y + 1): "box" for x in range(0, 400)}}
+                )
+            keep = {c for pp in pipes for c in pp.path}
+            path = route_like(first, last, occ, keep)
+            if path is None:
+                raise MoveError(
+                    f"pipe{pipe.id}: no route from {first} to {last} inside the box"
+                )
+            laid[pipe.id] = path
+        have = sum(len(p) for p in laid.values())
+        if have < total_min:
+            # spend the shortfall on whichever leg has room, in pairs (parity)
+            need = total_min - have
+            if need % 2:
+                need += 1
+            for pid in sorted(laid, key=lambda i: -len(laid[i])):
+                occ = Occupancy.of(ast, ignore=frozenset(pipe_ids))
+                for other, path in laid.items():
+                    if other == pid:
+                        continue
+                    for c in path:
+                        occ.owner[c] = f"pipe{other}"
+                if max_x is not None:
+                    occ.owner.update({(max_x + 1, y): "box" for y in range(0, 400)})
+                if max_y is not None:
+                    occ.owner.update({(x, max_y + 1): "box" for x in range(0, 400)})
+                grown = pad_to(laid[pid], len(laid[pid]) + need, occ)
+                if grown is not None:
+                    laid[pid] = grown
+                    need = 0
+                    break
+            if need:
+                raise MoveError(
+                    f"pipes {pipe_ids} reach only {have} cells inside the box, "
+                    f"{total_min} needed and nowhere left to pad"
+                )
+        for pipe in pipes:
+            path = laid[pipe.id]
+            pipe.path = path
+            pipe.glyphs = reglyph(path, pipe.entry_dir, pipe.exit_dir)
+            pipe.x = min(x for x, _ in path)
+            pipe.y = min(y for _, y in path)
+
+    def reroute_group(
+        self,
+        pipe_ids: list[int],
+        total_min: int,
+        *,
+        max_x: int | None = None,
+        max_y: int | None = None,
+    ) -> Verdict:
+        """Commit a joint reroute, or change nothing."""
+        v = self.can_reroute_group(pipe_ids, total_min, max_x=max_x, max_y=max_y)
+        if not v:
+            return v
+        trial = copy.deepcopy(self.ast)
+        self._relay_group(trial, pipe_ids, total_min, max_x=max_x, max_y=max_y)
+        self.ast = trial
+        return v
