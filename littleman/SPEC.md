@@ -6,7 +6,7 @@ glyph-by-glyph against the bundled reference interpreter** (`littleman.wasm` via
 `lm.mjs`). Where the two disagree, the interpreter wins and it is called out below.
 
 Companion docs: [`GRADING.md`](GRADING.md) (scoring, rounds, limits, submission
-API) · [`../tasks/problems/`](../tasks/problems/) (all 16 problem specs + public
+API) · [`../tasks/problems/`](../tasks/problems/) (all 20 problem specs + public
 tests) · [`reference/`](reference/) (raw official text).
 
 ## The machine
