@@ -136,17 +136,26 @@ _ARROW = {(1, 0): "→", (-1, 0): "←", (0, -1): "↑", (0, 1): "↓"}
 class Flow:
     """The traced route as a graph, which is what makes the movement legible.
 
-    A shaded cell says "visited"; an **edge** says *which way he went*, and that
-    is the thing you actually need to read a board. Two derived sets carry the
-    control flow:
+    A shaded cell says "visited"; an **edge** says *which way he went*.
 
-    ``splits``
-        cells left in more than one direction. A conditional turn (``X`` on the
-        main hand, ``a``/``d``/``x`` on the backpack) is exactly this, so the
-        forks in the program show up without parsing anything.
+    The important distinction, and one that observation alone gets wrong both
+    ways, is **fork vs crossing**:
+
+    ``forks``
+        a genuine branch in control flow, and that is a property of the *glyph*,
+        not of the trace: ``X`` turns on the main hand, ``a``/``d``/``x`` on the
+        backpack. An ``X`` is a three-way fork even in a trace where it happened
+        to go straight every time — so forks are read from the grid and a trace
+        can only say which of its arms were *exercised*.
+    ``crossings``
+        any other cell left in more than one direction. This is not a branch: it
+        is two independent lanes passing through the same blank, which is only
+        possible because a blank is a nop in every heading. Calling one a fork
+        was the false positive; missing an unexercised ``X`` was the false
+        negative.
     ``joins``
-        cells entered from more than one direction — where separate paths merge
-        back, which is where a corridor is shared and therefore load bearing.
+        cells entered from more than one heading — where paths merge, so the
+        corridor is shared and therefore load bearing.
 
     ``stalls`` counts ticks a runner stood still: an ``r`` on an empty pipe or an
     ``s`` on a full one. High stall counts are *waiting*, not work, and reading
@@ -158,19 +167,38 @@ class Flow:
     in_dirs: dict[Cell, set[Dir]] = field(default_factory=dict)
     stalls: Counter = field(default_factory=Counter)  # cell -> ticks stood still
     runners: set[int] = field(default_factory=set)
+    #: conditional-turn cells read from the grid, independent of any trace
+    forks: set[Cell] = field(default_factory=set)
 
     @property
-    def splits(self) -> set[Cell]:
-        return {c for c, d in self.out_dirs.items() if len(d) > 1}
+    def crossings(self) -> set[Cell]:
+        """Multi-exit cells that are *not* branches: shared corridors."""
+        return {c for c, d in self.out_dirs.items() if len(d) > 1} - self.forks
 
     @property
     def joins(self) -> set[Cell]:
         return {c for c, d in self.in_dirs.items() if len(d) > 1}
 
+    def exercised(self, cell: Cell) -> set[Dir]:
+        """Which arms of a fork this trace actually took (possibly none)."""
+        return self.out_dirs.get(cell, set())
 
-def flow_of(walk: Walk) -> Flow:
-    """Turn per-tick positions into a directed route graph."""
+    @property
+    def cold_forks(self) -> set[Cell]:
+        """Forks with fewer than two arms taken — untested branches."""
+        return {c for c in self.forks if len(self.exercised(c)) < 2}
+
+
+def flow_of(walk: Walk, cells: dict[Cell, object] | None = None) -> Flow:
+    """Turn per-tick positions into a directed route graph.
+
+    `cells` is the classified lattice from :mod:`manstruct`. Pass it so forks can
+    be read from the grid rather than inferred from coverage — without it a
+    conditional turn the trace never branched at is invisible.
+    """
     f = Flow()
+    if cells:
+        f.forks = {c for c, i in cells.items() if getattr(i, "kind", None) is Kind.BRANCH}
     by_runner: dict[int, list[Step]] = {}
     for s in walk.steps:
         by_runner.setdefault(s.runner, []).append(s)
@@ -274,6 +302,15 @@ def to_text(prog, cells, walk: Walk) -> str:
 
 
 _RUNNER_HUE = ["#2563eb", "#c026d3", "#0d9488", "#ea580c"]
+
+#: Branch hues for the flow view. Validated with the dataviz palette checker in
+#: both light and dark (lightness band, chroma floor, CVD separation -- worst
+#: adjacent pair deutan dE 12.8 -- and contrast). Colour means *branch* and only
+#: branch there; the runner is carried by the dash pattern instead, so the two
+#: never compete for the same channel and neither is encoded by colour alone.
+_BRANCH_HUE = ["#2563eb", "#ea580c", "#0d9488", "#c026d3"]
+_RUNNER_DASH = ["none", "5 2.5", "1.5 2", "7 2 1.5 2"]
+_ROUTE_INK = "#334155"
 
 
 def to_html(prog, cells, walk: Walk, *, title: str, input: str | None) -> str:
@@ -449,7 +486,7 @@ def to_svg(
     program *go*", which is the question you ask when a board looks sparse: the
     empty space is mostly corridor, and an arrow through it says so.
     """
-    f = flow_of(walk)
+    f = flow_of(walk, cells)
     rows = prog.to_grid()
     w = max((len(r) for r in rows), default=0)
     h = len(rows)
@@ -469,6 +506,12 @@ def to_svg(
             f'<text class="rlab" x="{pad + x0 * cell + 3}" y="{pad + y0 * cell - 3}">'
             f"room{room.id} {escape(room.kind)}</text>"
         )
+    # IO gets a filled badge rather than a hue, on purpose: every hue in this
+    # picture already means "which arm of a fork", and a sixth and seventh hue
+    # fail CVD separation against the arm set (violet vs magenta is dE 4.1 under
+    # protanopia). Fill-plus-shape is a free channel -- round for a read, square
+    # for a write -- and each still carries its own glyph, so neither is
+    # distinguished by colour alone.
     for y in range(h):
         for x in range(w):
             glyph = rows[y][x] if x < len(rows[y]) else " "
@@ -476,8 +519,30 @@ def to_svg(
                 continue
             info = cells.get((x, y))
             k = info.kind.value if info else "void"
+            io = "read" if glyph in "rRUq" else ("write" if glyph in "sS" else "")
+            if io and info and info.room is not None:
+                stalled = f.stalls.get((x, y), 0)
+                note = (
+                    f" · blocked {stalled} tick(s) waiting" if stalled else ""
+                )
+                if io == "read":
+                    parts.append(
+                        f'<circle class="io io-read" cx="{cx(x)}" cy="{cy(y)}" '
+                        f'r="{cell * 0.40:.1f}"><title>READ ({x},{y}) '
+                        f"{escape(glyph)} — receive from the nearest incoming pipe"
+                        f"{note}</title></circle>"
+                    )
+                else:
+                    parts.append(
+                        f'<rect class="io io-write" x="{cx(x) - cell * 0.37:.1f}" '
+                        f'y="{cy(y) - cell * 0.37:.1f}" width="{cell * 0.74:.1f}" '
+                        f'height="{cell * 0.74:.1f}" rx="2.5"><title>WRITE ({x},{y}) '
+                        f"{escape(glyph)} — send to the nearest outgoing pipe"
+                        f"{note}</title></rect>"
+                    )
+            cls = f"g k-{k}" + (f" on-{io}" if io and info and info.room is not None else "")
             parts.append(
-                f'<text class="g k-{k}" x="{cx(x)}" y="{cy(y)}">{escape(glyph)}</text>'
+                f'<text class="{cls}" x="{cx(x)}" y="{cy(y)}">{escape(glyph)}</text>'
             )
 
     # dead in-room blanks: mark them, so waste is visible against the route
@@ -492,30 +557,187 @@ def to_svg(
                 f'width="{cell - 6}" height="{cell - 6}"/>'
             )
 
-    # the route. Anti-parallel edges are nudged apart so a there-and-back
-    # corridor reads as two lanes instead of one overdrawn line.
-    busiest = max(f.edges.values(), default=1)
-    for (a, b, runner), n in sorted(f.edges.items(), key=lambda kv: kv[1]):
+    # Lane separation. Every arrow is pushed off the cell centre along the
+    # perpendicular of its own heading, so the four headings land in four
+    # different lanes and a there-and-back corridor reads as two, not one
+    # overdrawn line. A further step per runner keeps two men walking the *same*
+    # direction over the same cells from being drawn exactly on top of each other,
+    # which is the case a heading-only offset silently hides.
+    def lane(a: Cell, b: Cell, runner: int) -> tuple[float, float, float, float]:
         dx, dy = b[0] - a[0], b[1] - a[1]
-        off = 2.2
-        ox, oy = (-dy * off, dx * off)
-        x1, y1 = cx(a[0]) + ox, cy(a[1]) + oy
-        x2, y2 = cx(b[0]) + ox, cy(b[1]) + oy
-        width = 1.0 + 2.2 * (n / busiest) ** 0.5
-        parts.append(
-            f'<line class="e r{runner % len(_RUNNER_HUE)}" x1="{x1:.1f}" y1="{y1:.1f}" '
-            f'x2="{x2:.1f}" y2="{y2:.1f}" stroke-width="{width:.2f}" '
-            f'marker-end="url(#a{runner % len(_RUNNER_HUE)})">'
-            f"<title>({a[0]},{a[1]}) {_ARROW[(dx, dy)]} ({b[0]},{b[1]}) "
-            f"· {n} traversal(s) · runner {runner}</title></line>"
+        px, py = -dy, dx  # perpendicular to travel; flips with the heading
+        m = cell * 0.11 + cell * 0.075 * runner
+        return (
+            cx(a[0]) + px * m,
+            cy(a[1]) + py * m,
+            cx(b[0]) + px * m,
+            cy(b[1]) + py * m,
         )
 
-    for x, y in sorted(f.splits):
-        glyph = rows[y][x] if x < len(rows[y]) else " "
-        dirs = "".join(_ARROW[d] for d in sorted(f.out_dirs[(x, y)]))
+    # Static structure, faint: a steer glyph does not just nudge the man one cell,
+    # it commits him to a heading until something *changes* it. So the arrow is
+    # drawn along the WHOLE implied run -- through blanks, nops and ordinary
+    # opcodes, all of which leave a heading untouched -- and stops only where the
+    # heading can change (another steer, a conditional turn) or must (a wall).
+    # Drawing one stub per glyph was what made a `>` look like a one-cell hop.
+    def implied_run(start: Cell, d: Dir) -> Cell:
+        x, y = start
+        while True:
+            nx, ny = x + d[0], y + d[1]
+            nxt = cells.get((nx, ny))
+            if nxt is None or nxt.kind in (Kind.WALL, Kind.PIPE, Kind.VOID):
+                return (x, y)
+            if nxt.kind in (Kind.STEER, Kind.BRANCH, Kind.HALT):
+                return (nx, ny)  # include the cell that takes over
+            x, y = nx, ny
+
+    for (x, y), info in sorted(cells.items()):
+        if info.kind is not Kind.STEER:
+            continue
+        d = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}.get(info.glyph)
+        if d is None:
+            continue
+        ex, ey = implied_run((x, y), d)
+        seen = "" if (x, y) in walk.first else " · never walked in this trace"
+        x1, y1 = cx(x) - d[0] * cell * 0.30, cy(y) - d[1] * cell * 0.30
+        x2, y2 = cx(ex) + d[0] * cell * 0.34, cy(ey) + d[1] * cell * 0.34
+        mids = " ".join(
+            f"{cx(x + d[0] * i):.1f},{cy(y + d[1] * i):.1f}"
+            for i in range(1, max(abs(ex - x), abs(ey - y)) + 1)
+        )
+        pts = f"{x1:.1f},{y1:.1f}" + (f" {mids}" if mids else "") + f" {x2:.1f},{y2:.1f}"
         parts.append(
-            f'<circle class="split" cx="{cx(x)}" cy="{cy(y)}" r="{cell * 0.44:.1f}">'
-            f"<title>SPLIT ({x},{y}) {escape(glyph)} → leaves {dirs}</title></circle>"
+            f'<polyline class="s" points="{pts}" marker-mid="url(#csa)" '
+            f'marker-end="url(#sa)"><title>({x},{y}) {escape(info.glyph)} commits to '
+            f"{_ARROW[d]} for {max(abs(ex - x), abs(ey - y))} cell(s), to "
+            f"({ex},{ey}){seen}</title></polyline>"
+        )
+
+    # Every arm a fork CAN take, not just the ones this run happened to take.
+    # SPEC: `X` turns on the main hand (A<0 left, A>0 right, A==0 straight) so it
+    # is three-way; `a`/`d` are two-way against the backpack; `x` picks a side on
+    # its parity. The arm set depends on the heading he arrives with, which the
+    # grid alone does not fix -- so entry headings come from the trace, and a fork
+    # never entered is ringed but left unarmed rather than guessed at.
+    _CW = {(1, 0): (0, 1), (0, 1): (-1, 0), (-1, 0): (0, -1), (0, -1): (1, 0)}
+    _CCW = {v: k for k, v in _CW.items()}
+
+    def possible_arms(glyph: str, d: Dir) -> list[Dir]:
+        if glyph == "X":  # A<0 left, A>0 right, A==0 straight
+            return [_CCW[d], d, _CW[d]]
+        if glyph == "a":  # BP>0 left else straight
+            return [_CCW[d], d]
+        if glyph == "d":  # BP>0 right else straight
+            return [d, _CW[d]]
+        if glyph == "x":  # BP even left else right
+            return [_CCW[d], _CW[d]]
+        return [d]
+
+    for x, y in sorted(f.forks):
+        info = cells.get((x, y))
+        glyph = info.glyph if info else "?"
+        taken = f.exercised((x, y))
+        arms: list[Dir] = []
+        for entry in sorted(f.in_dirs.get((x, y), set())):
+            for a in possible_arms(glyph, entry):
+                if a not in arms:
+                    arms.append(a)
+        for i, a in enumerate(arms):
+            hue = i % len(_BRANCH_HUE)
+            hot = a in taken
+            x1, y1 = cx(x), cy(y)
+            x2, y2 = cx(x) + a[0] * cell * 0.86, cy(y) + a[1] * cell * 0.86
+            parts.append(
+                f'<line class="arm b{hue}{"" if hot else " cold"}" x1="{x1:.1f}" '
+                f'y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+                f'marker-end="url(#ab{hue})">'
+                f"<title>ARM {i + 1} of fork ({x},{y}) {escape(glyph)} → {_ARROW[a]}"
+                f"{' · taken in this trace' if hot else ' · NEVER TAKEN — untested branch'}"
+                f"</title></line>"
+            )
+
+    # Every arm of a fork gets its own colour, so a branch is traceable: the run
+    # leaving it says *which way this one went*, which one per-runner colour
+    # cannot. Arm index is by sorted heading, so the same colour means the same
+    # relative arm at every fork in the picture.
+    branch: dict[tuple[Cell, Dir], int] = {}
+    for c in f.forks:
+        for i, d in enumerate(sorted(f.exercised(c))):
+            branch[(c, d)] = i % len(_BRANCH_HUE)
+
+    # Chain consecutive same-heading moves into ONE polyline. A straight run
+    # shares a heading and therefore a lane, so the line is unbroken and carries a
+    # chevron at every cell it passes -- that is what makes it read as "and it
+    # keeps going this way" instead of a row of separate dashes.
+    busiest = max(f.edges.values(), default=1)
+    nxt: dict[tuple[int, Dir], dict[Cell, tuple[Cell, int]]] = {}
+    for (a, b, runner), n in f.edges.items():
+        d = (b[0] - a[0], b[1] - a[1])
+        nxt.setdefault((runner, d), {})[a] = (b, n)
+
+    for (runner, d), moves in sorted(nxt.items()):
+        dash = _RUNNER_DASH[runner % len(_RUNNER_DASH)]
+        starts = [a for a in moves if (a[0] - d[0], a[1] - d[1]) not in moves]
+        for start in sorted(starts):
+            chain, traffic, cur = [start], [], start
+            while cur in moves:
+                b, n = moves[cur]
+                traffic.append(n)
+                chain.append(b)
+                cur = b
+            pts = []
+            for i, c in enumerate(chain):
+                # the lane offset is constant along a straight run, so the
+                # polyline is continuous; the head overshoots the final centre so
+                # it points INTO the next cell rather than stopping dead on it
+                x1, y1, _, _ = lane(c, (c[0] + d[0], c[1] + d[1]), runner)
+                if i == len(chain) - 1:
+                    x1 += d[0] * cell * 0.24
+                    y1 += d[1] * cell * 0.24
+                pts.append(f"{x1:.1f},{y1:.1f}")
+            peak = max(traffic)
+            width = 1.0 + 2.4 * (peak / busiest) ** 0.5
+            bi = branch.get((start, d))
+            if bi is None:
+                cls, mk, extra = "e", "ink", ""
+            else:
+                cls, mk = f"e b{bi}", f"b{bi}"
+                extra = f" \u00b7 arm {bi + 1} of {len(f.exercised(start))} leaving a fork"
+            parts.append(
+                f'<polyline class="{cls}" points="{" ".join(pts)}" '
+                f'stroke-width="{width:.2f}" stroke-dasharray="{dash}" '
+                f'marker-mid="url(#c{mk})" marker-end="url(#a{mk})">'
+                f"<title>({chain[0][0]},{chain[0][1]}) {_ARROW[d]} "
+                f"({chain[-1][0]},{chain[-1][1]}) \u00b7 {len(chain) - 1} cell(s) "
+                f"\u00b7 up to {peak} traversal(s) \u00b7 runner {runner}{extra}"
+                f"</title></polyline>"
+            )
+
+    # Forks come from the GRID, so an `X` is ringed even where this trace only
+    # ever took one arm -- and those matter most, because an untaken arm is an
+    # untested branch.
+    for x, y in sorted(f.forks):
+        glyph = rows[y][x] if x < len(rows[y]) else " "
+        taken = f.exercised((x, y))
+        arms = "".join(_ARROW[dd] for dd in sorted(taken)) or "none"
+        cold = len(taken) < 2
+        parts.append(
+            f'<circle class="fork{" cold" if cold else ""}" cx="{cx(x)}" '
+            f'cy="{cy(y)}" r="{cell * 0.44:.1f}">'
+            f"<title>FORK ({x},{y}) {escape(glyph)} \u2014 conditional turn. "
+            f"Arms taken in this trace: {arms}"
+            f"{' \u00b7 UNTESTED: fewer than two arms exercised' if cold else ''}"
+            f"</title></circle>"
+        )
+    for x, y in sorted(f.crossings):
+        parts.append(
+            f'<rect class="cross" x="{cx(x) - cell * 0.4:.1f}" '
+            f'y="{cy(y) - cell * 0.4:.1f}" width="{cell * 0.8:.1f}" '
+            f'height="{cell * 0.8:.1f}">'
+            f"<title>CROSSING ({x},{y}) \u2014 two lanes share this blank "
+            f"({''.join(_ARROW[dd] for dd in sorted(f.out_dirs[(x, y)]))}). "
+            f"Not a branch: a nop passes every heading through unchanged, so the "
+            f"cell is load bearing for both.</title></rect>"
         )
     for (x, y), n in f.stalls.items():
         if n < max(4, walk.ticks // 200):
@@ -527,19 +749,41 @@ def to_svg(
             f"</title></rect>"
         )
 
-    markers = "".join(
-        f'<marker id="a{i}" viewBox="0 0 6 6" markerWidth="5" markerHeight="5" '
-        f'refX="5.2" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="{c}"/>'
-        f"</marker>"
-        for i, c in enumerate(_RUNNER_HUE)
+    def _marks(name: str, colour: str) -> str:
+        return (
+            f'<marker id="a{name}" viewBox="0 0 6 6" markerWidth="5" '
+            f'markerHeight="5" refX="5.2" refY="3" orient="auto">'
+            f'<path d="M0,0 L0,6 L6,3 z" fill="{colour}"/></marker>'
+            # chevron for marker-mid: an open V, so a long run shows direction
+            # at every cell without the line looking like a chain of blobs
+            f'<marker id="c{name}" viewBox="0 0 6 6" markerWidth="4.5" '
+            f'markerHeight="4.5" refX="3" refY="3" orient="auto">'
+            f'<path d="M1,1 L4,3 L1,5" fill="none" stroke="{colour}" '
+            f'stroke-width="1.6" stroke-linecap="round"/></marker>'
+        )
+
+    markers = (
+        "".join(_marks(f"b{i}", c) for i, c in enumerate(_BRANCH_HUE))
+        + _marks("ink", _ROUTE_INK)
+        + (
+            '<marker id="sa" viewBox="0 0 6 6" markerWidth="4" markerHeight="4" '
+            'refX="5.2" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" '
+            'fill="#cbd5e1"/></marker>'
+            '<marker id="csa" viewBox="0 0 6 6" markerWidth="3.6" '
+            'markerHeight="3.6" refX="3" refY="3" orient="auto">'
+            '<path d="M1.5,1.5 L4,3 L1.5,4.5" fill="none" stroke="#cbd5e1" '
+            'stroke-width="1.4" stroke-linecap="round"/></marker>'
+        )
     )
-    runner_css = "".join(f".e.r{i}{{stroke:{c}}}" for i, c in enumerate(_RUNNER_HUE))
+    runner_css = "".join(f".e.b{i}{{stroke:{c}}}" for i, c in enumerate(_BRANCH_HUE))
     split_rows = "".join(
         f"<tr><td>({x},{y})</td><td><code>"
         f"{escape(rows[y][x] if x < len(rows[y]) else ' ')}</code></td>"
-        f"<td>{''.join(_ARROW[d] for d in sorted(f.out_dirs[(x, y)]))}</td>"
-        f"<td>{walk.count.get((x, y), 0)}</td></tr>"
-        for x, y in sorted(f.splits, key=lambda c: (c[1], c[0]))
+        f"<td>{''.join(_ARROW[d] for d in sorted(f.exercised((x, y)))) or '—'}</td>"
+        f"<td>{len(f.exercised((x, y)))}</td>"
+        f"<td>{walk.count.get((x, y), 0)}</td>"
+        f"<td>{'UNTESTED' if len(f.exercised((x, y))) < 2 else 'ok'}</td></tr>"
+        for x, y in sorted(f.forks, key=lambda c: (c[1], c[0]))
     )
     stall_rows = "".join(
         f"<tr><td>({x},{y})</td><td><code>"
@@ -548,9 +792,15 @@ def to_svg(
         for (x, y), n in f.stalls.most_common(10)
     )
     legend = "".join(
-        f'<span><i style="background:{c}"></i>runner {i} route</span>'
-        for i, c in enumerate(_RUNNER_HUE[: max(walk.runners, 1)])
+        f'<span><i style="background:{c}"></i>branch {i + 1} out of a split</span>'
+        for i, c in enumerate(_BRANCH_HUE)
+    ) + "".join(
+        f'<span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" '
+        f'stroke="{_ROUTE_INK}" stroke-width="2" stroke-dasharray="'
+        f'{_RUNNER_DASH[i % len(_RUNNER_DASH)]}"/></svg>runner {i}</span>'
+        for i in range(max(walk.runners, 1))
     )
+    n_steer = sum(1 for i in cells.values() if i.kind is Kind.STEER)
     return f"""<!doctype html>
 <meta charset="utf-8"><title>{escape(title)} flow</title>
 <style>
@@ -568,8 +818,16 @@ def to_svg(
  .k-steer{{fill:#ea580c}} .k-branch{{fill:#db2777;font-weight:700}}
  .k-literal{{fill:#7c3aed}} .k-io,.k-spawn{{fill:#0891b2;font-weight:700}}
  .dead{{fill:#fecaca;opacity:.75}}
- .e{{opacity:.85;stroke-linecap:round}} {runner_css}
- .split{{fill:none;stroke:#db2777;stroke-width:2;stroke-dasharray:3 2}}
+ .e{{opacity:.92;stroke-linecap:round;fill:none;stroke:{_ROUTE_INK}}} {runner_css}
+ .s{{stroke:#cbd5e1;stroke-width:1.1;opacity:.9;fill:none}}
+ .arm{{stroke-width:2.4;opacity:.95}}
+ .arm.cold{{stroke-dasharray:2.5 2.5;opacity:.6}}
+ .io{{opacity:.95}}
+ .io-read{{fill:#7c3aed}} .io-write{{fill:#b45309}}
+ text.on-read,text.on-write{{fill:#fff!important;font-weight:700}}
+ .fork{{fill:none;stroke:#db2777;stroke-width:2.2}}
+ .fork.cold{{stroke-dasharray:3 2;opacity:.8}}
+ .cross{{fill:none;stroke:#0891b2;stroke-width:1.4;stroke-dasharray:2 2}}
  .stall{{fill:none;stroke:#f59e0b;stroke-width:2}}
  .legend{{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0;color:#475569;font-size:12px}}
  .legend span{{display:flex;align-items:center;gap:5px}}
@@ -583,20 +841,29 @@ def to_svg(
   .dead{{fill:#7f1d1d}} th{{color:#94a3b8}} td{{border-color:#1e293b}}
   code{{background:#1e293b}} .sub,.legend{{color:#94a3b8}} svg{{background:#0b1120}}}}
 </style>
-<h1>{escape(title)} — flow: arrows and splits</h1>
+<h1>{escape(title)} — flow: arrows, forks and crossings</h1>
 <p class="sub">{walk.ticks:,} ticks · {len(f.edges):,} distinct moves ·
- <b>{len(f.splits)}</b> splits · <b>{len(f.joins)}</b> joins ·
+ <b>{len(f.forks)}</b> forks (<b>{len(f.cold_forks)}</b> untested) ·
+ <b>{len(f.crossings)}</b> crossings · <b>{len(f.joins)}</b> joins ·
+ {n_steer} structural ·
  input <code>{escape(input or "(none)")}</code>.
  Arrow thickness is traffic; hover anything for detail.</p>
 <div class="wrap"><svg width="{W}" height="{H}" viewBox="0 0 {W} {H}">
 <defs>{markers}</defs>{"".join(parts)}</svg></div>
 <div class="legend">{legend}
- <span><i style="border:2px dashed #db2777"></i>split (conditional turn)</span>
+ <span><i style="background:#cbd5e1"></i>structural run (steer commits a heading)</span>
+ <span><i style="background:#7c3aed;border-radius:50%"></i>READ (r R U q)</span>
+ <span><i style="background:#b45309"></i>WRITE (s S)</span>
+ <span><i style="border:2px dashed #2563eb"></i>fork arm never taken</span>
+ <span><i style="border:2px solid #db2777"></i>fork (X a d x)</span>
+ <span><i style="border:2px dashed #db2777"></i>fork, &lt;2 arms taken (untested)</span>
+ <span><i style="border:1.5px dashed #0891b2"></i>crossing (shared blank)</span>
  <span><i style="border:2px solid #f59e0b"></i>stalled on a pipe</span>
  <span><i style="background:#fecaca"></i>never entered</span></div>
-<h2>Splits — where control forks</h2>
-<table><tr><th>cell</th><th>glyph</th><th>leaves</th><th>visits</th></tr>
-{split_rows or '<tr><td colspan="4">none in this trace</td></tr>'}</table>
+<h2>Forks — where control branches (read from the grid, not the trace)</h2>
+<table><tr><th>cell</th><th>glyph</th><th>arms taken</th><th>n arms</th>
+<th>visits</th><th>coverage</th></tr>
+{split_rows or '<tr><td colspan="6">no conditional turns in this grid</td></tr>'}</table>
 <h2>Stalls — ticks spent blocked, not working</h2>
 <table><tr><th>cell</th><th>glyph</th><th>ticks</th><th>of trace</th></tr>
 {stall_rows or '<tr><td colspan="4">none</td></tr>'}</table>
@@ -621,9 +888,10 @@ def main() -> None:
         args.grid, input=args.input, ticks=args.ticks, workers=args.workers, lm=lm
     )
     print(to_text(prog, cells, walk))
-    f = flow_of(walk)
+    f = flow_of(walk, cells)
     print(
-        f"\nFLOW  {len(f.edges):,} distinct moves, {len(f.splits)} splits, "
+        f"\nFLOW  {len(f.edges):,} distinct moves, {len(f.forks)} forks "
+        f"({len(f.cold_forks)} with <2 arms taken), {len(f.crossings)} crossings, "
         f"{len(f.joins)} joins, {sum(f.stalls.values()):,} stalled ticks"
     )
     for c, n in f.stalls.most_common(4):
