@@ -4,6 +4,10 @@
 It loads `littleman.wasm` through `wasm_exec.js`; keep these three files
 together.
 
+Runtime provenance: `littleman.wasm` was fetched from the official editor at
+`https://icfpcontest2026.com/littleman.wasm` on 2026-07-25. Its SHA-256 is
+`613b6cf515f657a9e2dff921b96a28850b7fdd3e62764a946c4d24df1b929730`.
+
 ```sh
 node littleman/lm.mjs run   <file.man> [--input "1 2 3"] [--json] [--max-ticks N]
 node littleman/lm.mjs tick  <file.man> [N] [--input "1 2 3"] [--json]
