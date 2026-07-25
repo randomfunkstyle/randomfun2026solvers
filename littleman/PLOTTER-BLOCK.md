@@ -156,6 +156,37 @@ The three display pipes are long in the assembled box (the painter is ~50 rows b
 the panel), which `timing_ok` constrains but does not forbid: only the *relative*
 lengths matter, and `l_swap` may be as long as convenient.
 
+### Why the box does not close with the display on top
+
+Routing the seven pipes kept moving one collision around rather than removing it, so
+the obstruction is worth stating exactly. The worker spans nearly the full width, so
+every pipe that must get from the bottom half to the top half needs a column clear of
+it — a *channel* — and there are only a few, on either side. Four facts then fight:
+
+* **The worker's two south ports may only bend on the row two below its wall**, and
+  ring-forward's port is west of the increment's, so the only non-crossing pair is
+  ring-forward west, increment east. Whichever way the increment then travels, its
+  descent is a wall across every row between the worker and the painter.
+* **That descent separates the relay from the east channels.** Put the relay west of
+  it and the ring's return can never reach the east side; put it east and
+  *ring-forward* cannot reach the relay, since it may not cross the increment's port
+  column either.
+* **The input and the ring-return both end in the two-row band above the worker's
+  north wall**, at its west end and its middle. From opposite sides they must cross;
+  from the same side they nest, but then that side needs two channels.
+* **The display's three ports need three separate bend rows** between the painter's
+  stubs and the worker's south wall, and three separate channels — so one side needs
+  five channels and at most four exist.
+
+A BFS router that tries every link order and randomised tie-breaks (`scratchpad/
+router.py`) places six of the seven pipes and never the increment, which is the
+mechanical statement of the same thing.
+
+The escape is to **put the display at the bottom and the painter directly above it**:
+the three display ports stop being channel traffic altogether, which removes three of
+the five channel users. Only the input and the ring-return then have to get past the
+worker, and those two can nest on one side.
+
 ## Verification
 
 `tests/test_plotter_block.py` re-runs the op-level simulation (`A`, `B`, `BP`, ring
