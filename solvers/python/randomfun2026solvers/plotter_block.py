@@ -407,7 +407,7 @@ if __name__ == "__main__":
 # rather than a grid that loads and quietly reads the wrong pipe.
 
 GLYPH = {E: ">", W: "<", N: "^", S: "v"}
-WW, WH = 35, 17                      # worker interior
+WW, WH = 34, 17                      # worker interior
 IN_COL = -1                          # west wall: input (see RIN_REF)
 RET_COL, FWD_COL, PNT_COL = 15, 28, 32   # south wall: ring-return, ring-fwd, painter
 # The two send regions: the boundary is the midpoint of the two ports, and a glyph
@@ -553,6 +553,13 @@ def build_worker():
     # at (0,0). `@` sits on the prologue row itself rather than costing a row of its
     # own: it spawns heading east — already the right way — and is *otherwise a nop*,
     # so the returning man simply walks over it.
+    #
+    # It could live off the code rows entirely — on the drain's empty return leg, where
+    # the `<` at the far end turns the spawned man round and walks him back into the
+    # riser; that was built and drew all six cases correctly. It is not worth it. The
+    # column it occupies here is free anyway (the room's width is set by the pixel
+    # loop's descent, four columns further east), and starting sixteen rows lower costs
+    # a measured 30 ticks in every case while saving nothing.
     c.set(0, 0, ">")
     c.set(1, 0, "@")
 
@@ -662,11 +669,15 @@ def build_worker():
     nc.seq([P(o) for o in ["M", "POP", "PUSH", "POP", "PUSH"]])
     nc.to(PAINT_MIN).op(*P("PAINT"))              # the increment is U
     nc.seq([P(o) for o in ["POP"]])               # UV, read here...
-    nc.to(nc.x + 1).turn(S)
+    # Straight down off the pop, with no blank column first: this lane's descent runs
+    # alongside the carry lane's, one column east of it, and parallel descents in
+    # adjacent columns are fine. The blank that used to sit here made this lane's
+    # round trip two ticks longer than it needed to be, and it set the room's width.
+    nc.turn(S)
     _riser(c, nc.x, 11, 13, "v")
     c.set(nc.x, 14, "<")
     nc = Cur(c, nc.x - 1, 14, W)
-    nc.to(PUSH_MAX).op(*P("PUSH"))                # ...and pushed back, west of 34
+    nc.to(PUSH_MAX).op(*P("PUSH"))                # ...and pushed back, west of the split
     nc.to(5)
 
     # ── one `m` per lap, then the BP test ────────────────────────────────────
@@ -738,9 +749,9 @@ RET_C, FWD_C, PNT_C = (PROBE_WX + c for c in (RET_COL, FWD_COL, PNT_COL))
 # locally and eats the one row a later pipe needed, so the collision only ever moves;
 # stating all seven and allocating the shared rows and columns up front is what closes
 # the box. `_PATHS` is checked against the ports as it is drawn.
-BLOCK_W, BLOCK_H = 45, 56
+BLOCK_W, BLOCK_H = 44, 56
 _DX, _DY = 5, 1                  # display walls: cols 5..38, rows 1..26
-_WX, _WY = 9, 28                 # worker walls:  cols 8..44, rows 27..45
+_WX, _WY = 9, 28                 # worker walls:  cols 8..43, rows 27..45
 _PX, _PY = 9, 51                 # painter walls: cols 8..24, rows 50..55
 _RX, _RY = 31, 47                # relay walls:   cols 30..36, rows 46..49
 _IX = 3                          # the input room, west of the worker; its row is taken
