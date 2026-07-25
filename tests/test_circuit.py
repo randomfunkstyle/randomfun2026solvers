@@ -20,3 +20,14 @@ def test_strict_corridor_rejects_conflicting_turn() -> None:
 
     with pytest.raises(Collision, match="reserved as a corridor"):
         circuit.turn(2, 1, (0, 1))
+
+
+def test_counted_ring_grows_symmetrically_for_spaced_body() -> None:
+    circuit = Circuit(4, 8)
+
+    exits = circuit.counted_ring(1, 1, "0.s")
+
+    assert exits == [(3, 1), (0, 6)]
+    assert circuit.get(2, 2) == "0"
+    assert circuit.get(2, 4) == "s"
+    assert circuit.get(1, 3) == "s"
