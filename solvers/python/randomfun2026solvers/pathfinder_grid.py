@@ -528,10 +528,11 @@ def worker() -> tuple[Circuit, list[_Block], DebugMap]:
         p.start(row)
         for tok in toks:
             p.token(tok)
-        # A branch's north lane leaves through ``(c_b, r1-1)``, so that row has
-        # to be a plain code row: on the entry row the channel is full of the
-        # predecessors' eastbound merges.  Hence three rows for a branch.
-        r1 = p.exit_west(3 if isinstance(succ[name], dict) else 2, row)
+        # A block always enters eastbound and always leaves westbound, so it
+        # occupies an *even* number of rows.  The jog blocks need their north
+        # lane to turn west on a row whose channel is empty, which the entry row
+        # never is, so those two get four.
+        r1 = p.exit_west(3 if name in JOG_POS else 2, row)
         blocks.append(_Block(name, row, r1, succ[name]))
         # A ``neg`` lane that halts needs an ``H`` one row below the branch, and
         # that row has to belong to *this* block: on the next block's entry row

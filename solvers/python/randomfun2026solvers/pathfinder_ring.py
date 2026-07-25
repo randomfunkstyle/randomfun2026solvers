@@ -133,13 +133,42 @@ program until it wedges):
 **Not measured, because there is no grid:** ``w x h``, ``area2``,
 ``avg_ticks``, ``score``.  The placer wedges partway through -- it is greedy
 with no backtracking, and every configuration eventually reaches a state where
-the man's next legal cell is inside a pocket the earlier corridors sealed, or a
-loop's entry bus has no free neighbour left to merge onto.  The guards that
-prevent the first failure (an escape-region size test on every glyph, a merge
-bus instead of a reserved dock, immediate depth-first descent into every branch
-lane) each pushed the wedge later without removing it.  The next thing to try
-is backtracking over the choice of goal cell, or abandoning free-form walking
-for a discipline that cannot self-block.
+the man's next legal cell is inside a pocket its own earlier corridors sealed,
+or a loop's entry bus has no free neighbour left to merge onto.  Three guards
+each pushed the wedge later without removing it: a flood-fill escape test on
+every glyph (the man must leave himself somewhere to step), a merge *bus* --
+several direction glyphs in a row -- instead of a single reserved dock cell,
+and depth-first descent into every branch lane the moment the branch is placed
+rather than queueing lanes.  The furthest run placed 744 of ~1600 cells.
+
+## What to build instead
+
+Free-form walking is the wrong shape for this.  The next attempt should use a
+discipline whose free space cannot be disconnected by anything already placed.
+The cheapest such discipline that still admits the cross-band binding:
+
+* **A fixed boustrophedon spine, four columns wide.**  Put all eight anchors on
+  the north wall at four *consecutive* interior columns -- scheme (a), whose
+  weakness was only that a man cannot walk backwards along a row.  With one
+  column per band that weakness costs one *row* per direction reversal, and the
+  reversals are countable: greedy simulation over the real token stream, with
+  the optimal assignment ``sR/rR, sG/rG, sF/rF, sP/rI`` at columns 0..3, needs
+  **111 spine rows** for the whole program including one row per block.
+* **A free channel row between every pair of spine rows.**  The spine is then a
+  monotone path that can never seal a pocket, and every branch lane (clockwise
+  and counter-clockwise off a horizontal heading) lands in a free channel.
+* **A free highway either side of the field.**  Each spine row's entry cell is
+  its turn glyph at the field edge, which is adjacent to a highway *and* to two
+  channels -- three ways to merge onto it, so joins and back edges route
+  through a plain grid graph with no reservations.
+* **Multi-digit literals in their own five-column window**, walked eastward off
+  a channel row and back.  They cannot live in a four-column field (```256```
+  needs five cells), and a west-heading row would read them backwards.
+
+That lands at roughly ``2 * 111`` rows and ``highway + 6 + highway + 5``
+columns before padding -- tall and thin, so it is the same trade the banked
+``pathfinder_grid`` build made.  It is worth doing only if the row count can be
+brought down; the cross-band analysis above says where the slack is.
 """
 from __future__ import annotations
 
