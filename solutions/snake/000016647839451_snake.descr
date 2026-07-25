@@ -1,0 +1,16 @@
+# snake — submission 3d98d982-99e7-4815-9d55-739a99bf68e8
+
+verdict      done: 17/17 cases, area2 16641, avgTicks 1,000,411, score 16,647,839,451
+submitted    2026-07-25T20:57:00+0300
+grid         123x129
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  0ffc281a590aad94c9c41def329e0efd95c129f7bb13f4544cc503700d3e1700
+commit       c524aad
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_cpu.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+LM-1 CPU + LM-75, incremental framebuffer: SWAP 1 keeps `next`, so a tick paints two pixels (erase tail, draw head) instead of 256. Body is a 64-slot FIFO ring in the tape; collision is a scan after the tail pops. 123x129 = 16641, 9 ROM rows.

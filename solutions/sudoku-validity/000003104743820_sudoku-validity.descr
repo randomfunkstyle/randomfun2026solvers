@@ -1,0 +1,16 @@
+# sudoku-validity — submission f5820e32-f32e-4d93-98cc-a244e5bb35f3
+
+verdict      done: 20/20 cases, area2 6889, avgTicks 450,681, score 3,104,743,820
+submitted    2026-07-25T17:37:22+0300
+grid         83x80
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  881f9121e9c2eb2a4f6b36bf73e04ac708bfcce8fd1264b72ee48d95db779c02
+commit       2318f09
+local        sudoku-validity: 6/6 public cases, avg 442,979 ticks
+source       tasks/solutions/sudoku-validity_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+packed ROM: variable-width tokens, parity-safe placement

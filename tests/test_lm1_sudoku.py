@@ -347,8 +347,8 @@ def test_the_machine_generates_and_every_pipe_binds() -> None:
     m = machine.build_for(SLUG)
     assert m.tape_n == TAPE_N
     assert m.plan.k == 4
-    assert (m.width, m.height) == (89, 94)
-    assert m.footprint == 8836
+    assert (m.width, m.height) == (83, 80)
+    assert m.footprint == 6889
     assert "@" in "".join(m.rows)
 
 

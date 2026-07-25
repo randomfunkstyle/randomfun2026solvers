@@ -354,11 +354,12 @@ def test_the_program_stays_on_the_depth_four_trie() -> None:
 def test_checked_in_grid_matches_the_generator() -> None:
     """``build_for`` runs the engine's structural analysis: every pipe must bind."""
     m = machine.build_for(SLUG)
-    assert (m.width, m.height) == (117, 123)
-    # Height-bound now: the unrolled scans make the ROM image 836 words, and 53 rows
-    # is the minimum over every fold (see ROM_ROWS). Trading 20% more area for 5x
-    # fewer ticks is a 1.7x better score, and it is what fits the step cap at all.
-    assert m.footprint == 123**2
+    assert (m.width, m.height) == (114, 101)
+    # Width-bound: the unrolled scans make the ROM image 836 words, but packed tokens
+    # halve its cells, so 31 rows is the first fold that gets it under the machine's
+    # own 113 columns (see ROM_ROWS) and every fold below that is flat. Trading 20%
+    # more area for 5x fewer ticks is what fits the step cap at all.
+    assert m.footprint == 114**2
     assert m.rom_rows == machine.ROM_ROWS[SLUG]
     assert m.tape_n == TAPE_N
     expected = "\n".join(m.rows) + "\n"

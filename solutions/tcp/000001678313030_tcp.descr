@@ -1,0 +1,16 @@
+# tcp — submission a1699e03-593e-4035-8e1e-1ff67d7c34e7
+
+verdict      done: 20/20 cases, area2 11881, avgTicks 141,260, score 1,678,313,030
+submitted    2026-07-25T17:53:34+0300
+grid         109x74
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  074941ab0e3e9736016516473bb4e446b95c1158392487bc6fb5335d17adc055
+commit       66ee97d
+local        tcp: 6/6 public cases, avg 88,510 ticks
+source       tasks/solutions/tcp_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+short return path: simple lanes drop at their own micro-program's end

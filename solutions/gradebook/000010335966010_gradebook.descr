@@ -1,0 +1,16 @@
+# gradebook — submission 055e574a-8237-4e06-992b-8611809a4c1f
+
+verdict      done: 20/20 cases, area2 12769, avgTicks 809,458, score 10,335,966,010
+submitted    2026-07-25T17:36:04+0300
+grid         113x101
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  4b30935a3699e87f745252e897b9b2df9de32c48c4202c0ac949ff38f606575d
+commit       2318f09
+local        gradebook: 7/7 public cases, avg 314,385 ticks
+source       tasks/solutions/gradebook_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+packed ROM: variable-width tokens, parity-safe placement
