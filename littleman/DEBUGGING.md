@@ -115,3 +115,19 @@ and nothing says which `Y` on the spawner corridor gave birth to which resident.
 The overlay names both, and the cell-to-address labels are checked against the
 engine (write `1000+a` to every address, snapshot the runners, assert each holder
 stands inside the region named `cell addr a`) rather than asserted from the layout.
+
+### The broadcast-addressed field
+
+```sh
+uv run python -m randomfun2026solvers.memory_men_bcast --cells 16 \
+  --man littleman/examples/memory-men-bcast-16.man \
+  --html littleman/examples/memory-men-bcast-16.html \
+  --json littleman/examples/memory-men-bcast-16.json
+```
+
+Sixteen cells in one room again, but here the bands differ only in the *length of a
+`]` chain*, and nothing in the ASCII says why — or which band answers address 5. The
+overlay names each band's address and its shift count, circles the `{` that is the
+entire address decoder, circles all sixteen `Y` births, and marks the empty lower
+half of the router as load-bearing (a shorter router leaves the lower bands' pipes
+with no source room). Cell-to-address labels are engine-checked, not asserted.

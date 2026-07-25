@@ -33,10 +33,25 @@ the pace — order ``n`` ticks per access, against a walk's ``10 * addr``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from .circuit import Circuit
-from .memory_men import _io_room, _room, collector_rows, draw_pipe
+from .man_debug import DebugMap
+from .memory_men import (
+    C_ANS,
+    C_CMD,
+    C_COLL,
+    C_IO,
+    C_MID,
+    C_STORE,
+    _io_room,
+    _room,
+    collector_rows,
+    draw_pipe,
+)
 
 __all__ = ["TILE_ROWS", "BAND", "tile_cols", "field_rows", "ROUTER_ROWS"]
 
@@ -168,6 +183,8 @@ class Bcast:
     rows: tuple[str, ...]
     width: int
     height: int
+    #: names for a grid that cannot carry comments, built from the same coordinates
+    debug: DebugMap | None = field(default=None, compare=False, repr=False)
 
     @property
     def footprint(self) -> int:
@@ -233,7 +250,173 @@ def build_bcast(n: int) -> Bcast:
     draw_pipe(grid, [(ex + 1, fy + 1), (ex + 2, fy + 1), (ex + 3, fy + 1)])
     _io_room(grid, ex + 4, fy + 1, "O")
 
+    # ── the sidecar ───────────────────────────────────────────────────────────
+    # Nothing in the ASCII says which band holds address 5, and nothing says why one
+    # band's `]` chain is longer than its neighbour's. Both are the whole design.
+    dbg = DebugMap(f"broadcast man-memory n={n}: S out, one-hot decode, R back")
+    dbg.region(
+        "input",
+        rox - 6,
+        roy + ROUTER_IN_ROW - 1,
+        3,
+        3,
+        note="the problem's own stream: `0 addr` (READ) / `1 addr value` (WRITE)",
+        color=C_IO,
+    )
+    dbg.region(
+        "router / broadcaster",
+        rox,
+        roy,
+        router_iw,
+        len(ROUTER_ROWS),
+        note=(
+            "`r` the op and branch on it. Each lane then reads the address and builds "
+            "`1 << addr` with `M 1 {`, and `S` writes that into EVERY outgoing pipe at "
+            "once. A READ then broadcasts 0; a WRITE broadcasts 1 and the value. This "
+            "room owns no other outgoing pipe on purpose — `S` would broadcast into it "
+            "too, which is why answers go through the collector instead."
+        ),
+        color=C_MID,
+    )
+    dbg.circle(
+        "one-hot in one glyph",
+        rox + 6,
+        roy,
+        1,
+        note="A=1, B=addr, so `{` (A << B) is the whole address decoder",
+        color=C_MID,
+    )
+    dbg.region(
+        "router spans the field",
+        rox,
+        roy + len(ROUTER_ROWS),
+        router_iw,
+        field_ih - len(ROUTER_ROWS),
+        note=(
+            "empty, and load-bearing: a pipe's first cell must sit against its source "
+            "room's wall. With a four-row router the lower bands' pipes parsed with no "
+            "source at all and those cells bound a neighbour's pipe instead."
+        ),
+        color=C_MID,
+    )
+    dbg.region(
+        "cell field (ONE room)",
+        fx,
+        fy,
+        field_iw,
+        field_ih,
+        note=(
+            f"all {n} cells share this room. Five rows each: return corridor, main "
+            "line, READ tail, WRITE lane, WRITE store. Columns 0-1 are the spawner's."
+        ),
+        color=C_STORE,
+    )
+    for j, main in enumerate(main_rows):
+        c = tile_cols(j)
+        dbg.circle(
+            f"split -> cell {j}",
+            fx + 1,
+            fy + main,
+            1,
+            note=(
+                f"entered heading south, so one copy lands east on cell {j}'s `>` and "
+                "the other drops into column 0 to seed the next band"
+            ),
+            color=C_MID,
+        )
+        dbg.region(
+            f"cell addr {j}",
+            fx + c["x0"],
+            fy + main - 1,
+            c["width"] - c["x0"],
+            TILE_ROWS,
+            note=(
+                f"holds address {j} in its man's B. `b` moves the broadcast word to BP, "
+                f"then {j} x `]` shifts bit {j} down to bit 0 and `x` turns on it — all "
+                "BP-only, so B is never touched. READ: `W M s`. WRITE: `r` then `M`."
+            ),
+            color=C_STORE,
+        )
+        dbg.lane(
+            f"broadcast -> cell {j}",
+            [(rox + router_iw + 1, fy + main), (fx - 1, fy + main)],
+            kind="pipe",
+            expect="one-hot, op, [value]",
+            note="one of the n pipes `S` writes at once; every cell consumes every word",
+            color=C_CMD,
+        )
+        dbg.lane(
+            f"answer addr {j}",
+            [(fx + field_iw + 1, fy + main + 1), (cox - 1, fy + main + 1)],
+            kind="pipe",
+            expect="the stored value, on a selected READ only",
+            note=f"leaves level with cell {j}'s own `s`, which is what binds it here",
+            color=C_ANS,
+        )
+    dbg.region(
+        "collector",
+        cox,
+        fy,
+        coll_iw,
+        field_ih,
+        note=(
+            "`R` reads from ANY incoming pipe, so the answer needs no addressing at "
+            "all — the many-to-one teleport. Spanning the field's rows is what makes "
+            "every answer pipe a two-cell stub instead of a fan-out corridor."
+        ),
+        color=C_COLL,
+    )
+    dbg.region("output", ex + 3, fy, 3, 3, note="one word per READ", color=C_IO)
+    dbg.lane(
+        "input-pipe",
+        [(rox - 3, roy + ROUTER_IN_ROW), (rox - 1, roy)],
+        kind="pipe",
+        expect="op addr [value]",
+        color=C_CMD,
+    )
+    dbg.lane(
+        "output-pipe",
+        [(ex + 1, fy + 1), (ex + 3, fy + 1)],
+        kind="pipe",
+        expect="one word per READ",
+        color=C_ANS,
+    )
+
     out = [row.rstrip() for row in grid.rows()]
     while out and not out[-1]:
         out.pop()
-    return Bcast(n=n, rows=tuple(out), width=max(len(r) for r in out), height=len(out))
+    return Bcast(
+        n=n,
+        rows=tuple(out),
+        width=max(len(r) for r in out),
+        height=len(out),
+        debug=dbg,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``--cells N``, written to ``--man`` / ``--html`` / ``--json`` in one go."""
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    ap.add_argument("--cells", type=int, default=16, metavar="N", help="how many cells")
+    ap.add_argument("--man", type=Path, help="write the grid here")
+    ap.add_argument("--html", type=Path, help="write the labelled debug overlay here")
+    ap.add_argument("--json", type=Path, help="write the debug region sidecar here")
+    args = ap.parse_args(argv)
+
+    built = build_bcast(args.cells)
+    assert built.debug is not None  # the builder always emits its own map
+    if args.man:
+        args.man.write_text(built.source() + "\n", encoding="utf-8")
+    if args.html:
+        built.debug.write_html(list(built.rows), args.html)
+    if args.json:
+        built.debug.write_json(args.json)
+    if not (args.man or args.html or args.json):
+        print(built.source())
+    else:
+        print(f"{built.width} x {built.height}, footprint {built.footprint}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -129,3 +129,35 @@ def test_access_cost_does_not_depend_on_the_address():
     flat = [per_op(a) for a in (0, 1, 8)]
     assert flat == [42.0, 42.0, 42.0], flat
     assert per_op(15) == 52.0
+
+
+def test_the_checked_in_broadcast_grid_matches_the_generator():
+    from pathlib import Path
+
+    path = Path("littleman/examples/memory-men-bcast-16.man")
+    if not path.is_file():  # pragma: no cover - only when run from another cwd
+        pytest.skip(f"{path} not reachable from this working directory")
+    assert path.read_text(encoding="utf-8").rstrip("\n") == build_bcast(16).source(), (
+        "regenerate with: uv run python -m randomfun2026solvers.memory_men_bcast "
+        "--cells 16 --man littleman/examples/memory-men-bcast-16.man "
+        "--html littleman/examples/memory-men-bcast-16.html "
+        "--json littleman/examples/memory-men-bcast-16.json"
+    )
+
+
+def test_the_overlay_names_the_decoder_and_every_address():
+    built = build_bcast(16)
+    assert built.debug is not None
+    side = built.debug.to_dict()
+    names = {r["name"] for r in side["regions"]}
+    assert {f"cell addr {j}" for j in range(16)} <= names
+    rows = list(built.rows)
+    # the circle that explains the decoder must sit on the `{` that builds it
+    onehot = [c for c in side["circles"] if "one-hot" in c["name"]]
+    assert len(onehot) == 1
+    assert rows[onehot[0]["cy"]][onehot[0]["cx"]] == "{"
+    # ...and every split circle on a `Y`
+    splits = [c for c in side["circles"] if c["name"].startswith("split")]
+    assert len(splits) == 16
+    for circle in splits:
+        assert rows[circle["cy"]][circle["cx"]] == "Y", circle["name"]
