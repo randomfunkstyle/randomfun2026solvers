@@ -57,29 +57,29 @@ def test_activity_profile_separates_useful_work_from_walking() -> None:
         expected=EXPECTED,
         max_ticks=100,
     )
+    ten_tick_gate = runner.activity_profile(
+        PRIMITIVES / "and-gate-ten-tick.man", input=INPUT, expected=EXPECTED, max_ticks=100
+    )
     and_gate = runner.activity_profile(
         PRIMITIVES / "and-gate.man", input=INPUT, expected=EXPECTED, max_ticks=100
-    )
-    u_gate = runner.activity_profile(
-        PRIMITIVES / "and-gate-u.man", input=INPUT, expected=EXPECTED, max_ticks=100
     )
 
     assert baseline.total_ticks == 76
     assert compact.total_ticks == 66
     assert narrow.total_ticks == 62
-    assert and_gate.total_ticks == 40
-    assert and_gate.walking_ticks == 6
+    assert ten_tick_gate.total_ticks == 40
+    assert ten_tick_gate.walking_ticks == 6
+    assert ten_tick_gate.stall_ticks == 0
+    assert and_gate.total_ticks == 33
+    assert and_gate.walking_ticks == 2
     assert and_gate.stall_ticks == 0
-    assert u_gate.total_ticks == 33
-    assert u_gate.walking_ticks == 2
-    assert u_gate.stall_ticks == 0
     assert compact.walking_ticks < baseline.walking_ticks
     assert narrow.walking_ticks < compact.walking_ticks
-    assert and_gate.walking_ticks < narrow.walking_ticks
-    assert u_gate.walking_ticks < and_gate.walking_ticks
+    assert ten_tick_gate.walking_ticks < narrow.walking_ticks
+    assert and_gate.walking_ticks < ten_tick_gate.walking_ticks
     assert narrow.straight_through_arrows == 0
-    assert and_gate.straight_through_arrows == 1
-    for profile in (baseline, compact, narrow, and_gate, u_gate):
+    assert ten_tick_gate.straight_through_arrows == 1
+    for profile in (baseline, compact, narrow, ten_tick_gate, and_gate):
         classified_ticks = (
             profile.compute_ticks
             + profile.control_ticks

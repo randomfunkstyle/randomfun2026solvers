@@ -33,11 +33,11 @@ CANDIDATES = (
     Candidate("compact-narrow", PRIMITIVES / "transistor-compact-narrow.man"),
 )
 AND_GATE = Candidate("and-gate", PRIMITIVES / "and-gate.man")
-U_GATE = Candidate("and-gate-u", PRIMITIVES / "and-gate-u.man")
+TEN_TICK_GATE = Candidate("and-gate-ten-tick", PRIMITIVES / "and-gate-ten-tick.man")
 
 
 def test_transistor_candidates_are_y_free_artifacts() -> None:
-    for candidate in (*CANDIDATES, AND_GATE, U_GATE):
+    for candidate in (*CANDIDATES, AND_GATE, TEN_TICK_GATE):
         source = candidate.path.read_text(encoding="utf-8")
         assert "Y" not in source, candidate.name
 
@@ -100,13 +100,14 @@ def test_compact_transistors_improve_the_runner_movement_metrics() -> None:
 
 
 @pytest.mark.slow
-def test_and_gate_is_a_smaller_faster_binary_forwarding_candidate() -> None:
+def test_and_gate_is_the_promoted_faster_binary_forwarding_candidate() -> None:
     runner = Littleman()
     narrow = _measure(CANDIDATES[-1], runner)
     and_gate = _measure(AND_GATE, runner)
 
     assert and_gate.side == 8
-    assert and_gate.first_result_tick == 10
+    assert and_gate.first_result_tick == 9
+    assert and_gate.four_result_ticks == 33
     assert and_gate.four_result_ticks < narrow.four_result_ticks
     assert and_gate.walking_ticks < narrow.walking_ticks
     assert and_gate.straight_through_arrows == 1
@@ -115,16 +116,16 @@ def test_and_gate_is_a_smaller_faster_binary_forwarding_candidate() -> None:
 @pytest.mark.slow
 def test_terminal_bend_pipe_is_valid_and_u_gate_beats_ten_ticks_per_pair() -> None:
     runner = Littleman()
-    u_gate = _measure(U_GATE, runner)
+    and_gate = _measure(AND_GATE, runner)
 
-    analysis = runner.analyze(U_GATE.path)
+    analysis = runner.analyze(AND_GATE.path)
     incoming_pipe = analysis.pipes[1]
     assert [segment.pos.as_tuple() for segment in incoming_pipe.path] == [(3, 3), (2, 3)]
     assert [segment.dir.as_tuple() for segment in incoming_pipe.path] == [(-1, 0), (0, 1)]
-    assert [cell.as_tuple() for cell in runner.route(U_GATE.path, 5, 5)] == [(3, 3), (2, 3)]
+    assert [cell.as_tuple() for cell in runner.route(AND_GATE.path, 5, 5)] == [(3, 3), (2, 3)]
 
     snapshot = runner.judge(
-        U_GATE.path,
+        AND_GATE.path,
         input=TRUTH_TABLE_INPUT,
         expected=TRUTH_TABLE_OUTPUT,
         max_ticks=100,
@@ -132,6 +133,15 @@ def test_terminal_bend_pipe_is_valid_and_u_gate_beats_ten_ticks_per_pair() -> No
 
     assert snapshot.output == TRUTH_TABLE_OUTPUT
     assert snapshot.output_settled is True
-    assert u_gate.side == 8
-    assert u_gate.first_result_tick == 9
-    assert u_gate.four_result_ticks == 33
+    assert and_gate.side == 8
+    assert and_gate.first_result_tick == 9
+    assert and_gate.four_result_ticks == 33
+
+
+@pytest.mark.slow
+def test_ten_tick_gate_remains_as_a_baseline_candidate() -> None:
+    ten_tick_gate = _measure(TEN_TICK_GATE, Littleman())
+
+    assert ten_tick_gate.side == 8
+    assert ten_tick_gate.first_result_tick == 10
+    assert ten_tick_gate.four_result_ticks == 40
