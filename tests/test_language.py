@@ -56,6 +56,16 @@ def test_parse_program_reports_source_locations(source: str, message: str) -> No
         parse_program(source)
 
 
+def test_parse_program_rejects_more_than_thirteen_fanout_branches_at_fanout_statement() -> None:
+    branches = ", ".join(f"(left_{index},)" for index in range(14))
+
+    with pytest.raises(
+        LanguageError,
+        match=re.escape("line 2, column 1: FanOut supports at most 13 branches"),
+    ):
+        parse_program(f"inputs a\n{branches} = fanout(a)\noutputs a\n")
+
+
 @pytest.mark.parametrize(
     ("source", "message"),
     [

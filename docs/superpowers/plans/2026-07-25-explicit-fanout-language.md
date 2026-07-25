@@ -12,6 +12,7 @@
 
 - Keep every checked-in primitive .man artifact and primitive contract unchanged.
 - V1 accepts at most one explicit FanOut, whose source must exactly equal the complete ordered Netlist.inputs tuple; proper subsets and intermediate gate-result fanout are out of scope.
+- A V1 FanOut has at most 13 direct branches, matching one `S` room's outgoing attachment ports; larger fanout requires a future cascading lowering.
 - Inputs participating in explicit fanout cannot also be consumed directly by a gate or selected directly as outputs; scalar fallback is out of scope.
 - Each V1 branch is consumed exactly once as one later gate complete ordered input tuple. Reject partial branch use and direct output selection.
 - Existing scalar-only Netlist(inputs, gates, outputs) behavior remains unchanged.

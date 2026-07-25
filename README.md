@@ -52,8 +52,9 @@ outputs sum, carry
 littleman-compile half_adder.lmc -o half_adder.man
 ```
 
-`fanout` copies the complete ordered input frame through `S`. The compiler CLI
-writes only the path explicitly requested with `-o`.
+`fanout` copies the complete ordered input frame through `S`. V1 supports at
+most 13 direct branches; larger fanout needs a future cascading lowering. The
+compiler CLI writes only the path explicitly requested with `-o`.
 
 ## Score a solution
 

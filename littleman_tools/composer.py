@@ -21,6 +21,8 @@ from .primitive_contracts import (
 
 __all__ = ["ActiveRoom", "FanOut", "Gate", "Netlist", "compose", "extract_active_room", "write"]
 
+_MAX_DIRECT_FANOUT_BRANCHES = 13
+
 
 @dataclass(frozen=True)
 class ActiveRoom:
@@ -397,6 +399,11 @@ class Netlist:
                 )
             if len(fanout.branches) < 2:
                 raise ValueError("FanOut requires at least two branches")
+            if len(fanout.branches) > _MAX_DIRECT_FANOUT_BRANCHES:
+                raise ValueError(
+                    "FanOut supports at most "
+                    f"{_MAX_DIRECT_FANOUT_BRANCHES} branches, got {len(fanout.branches)}"
+                )
             for branch_index, branch in enumerate(fanout.branches):
                 if len(branch) != len(fanout.source):
                     raise ValueError(

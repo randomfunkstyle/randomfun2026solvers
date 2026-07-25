@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .composer import FanOut, Gate, Netlist
+from .composer import _MAX_DIRECT_FANOUT_BRANCHES, FanOut, Gate, Netlist
 from .primitive_contracts import contract_for
 
 __all__ = ["LanguageError", "parse_file", "parse_program"]
@@ -193,6 +193,13 @@ def parse_program(source: str) -> Netlist:
                     statement.column,
                 )
             branches = _parse_branches(left, statement)
+            if len(branches) > _MAX_DIRECT_FANOUT_BRANCHES:
+                raise LanguageError(
+                    "FanOut supports at most "
+                    f"{_MAX_DIRECT_FANOUT_BRANCHES} branches, got {len(branches)}",
+                    statement.line,
+                    statement.column,
+                )
             fanout_source = _parse_names(
                 fanout_call.group(1), statement, description="fanout source"
             )

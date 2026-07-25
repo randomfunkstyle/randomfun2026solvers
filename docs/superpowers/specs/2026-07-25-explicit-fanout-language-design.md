@@ -29,6 +29,9 @@ behavior.
 Validation rules:
 
 - V1 accepts at most one explicit `FanOut`;
+- it supports at most 13 direct branches, matching the available outgoing
+  attachment ports on one `S` room; larger fanout requires a future cascading
+  lowering;
 - its source exactly equals the complete declared `Netlist.inputs` tuple, in
   the same order; proper input subsets are rejected;
 - every branch has exactly the source width and preserves source position;

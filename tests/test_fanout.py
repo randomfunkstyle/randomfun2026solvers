@@ -182,6 +182,21 @@ def test_thirteen_explicit_branches_fit_one_direct_fanout_room() -> None:
     )
 
 
+def test_netlist_rejects_more_than_thirteen_direct_fanout_branches() -> None:
+    branches = tuple((f"branch_{index}",) for index in range(14))
+
+    with pytest.raises(ValueError, match="at most 13 branches"):
+        Netlist(
+            inputs=("a",),
+            fanouts=(FanOut(source=("a",), branches=branches),),
+            gates=tuple(
+                Gate("not-gate.man", branch, f"result_{index}")
+                for index, branch in enumerate(branches)
+            ),
+            outputs=tuple(f"result_{index}" for index in range(14)),
+        )
+
+
 @pytest.mark.slow
 def test_explicit_fanout_half_adder_preserves_ordered_sum_and_carry() -> None:
     snapshot = Littleman().judge(
