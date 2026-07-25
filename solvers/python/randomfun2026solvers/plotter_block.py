@@ -30,7 +30,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from randomfun2026solvers.circuit import Circuit
+from randomfun2026solvers.circuit import Circuit, E, N, S, W
 from randomfun2026solvers.value_ring import stamp, walls
 
 __all__ = [
@@ -74,7 +74,8 @@ class OpModel:
         elif op == "SUB":   self.A = self.A - self.B
         elif op == "MUL":   self.A = self.A * self.B
         elif op == "NEG":   self.A = -self.A
-        elif op == "SHR":   self.A = self.A >> self.B
+        elif op == "SHR":   self.A = self.A >> self.B      # `}`
+        elif op == "SHL":   self.A = self.A << self.B      # `{`
         elif op == "BP":    self.BP = self.A
         elif op == "PUSH":  self.ring.append(self.A)
         elif op == "POP":   self.A = self.ring.popleft()
@@ -121,7 +122,10 @@ def worker_round(m):
     m.run(["RIN", "M", "RIN", "PUSH", "W", "PUSH", "PUSH",
            "RIN", "PUSH", "W", "PUSH", "RIN", "PUSH"])
     # ring: [y0, x0, x0, x1, y0, y1]
-    m.run([("LIT", 32), "M", "POP", "MUL", "M", "POP", "ADD", "PAINT"])   # base
+    # No backtick literals anywhere in the worker: they pair *vertically* across the
+    # whole grid, so a multi-digit literal would make every column a bookkeeping
+    # problem. y0*32 is y0<<5 (one digit), and 32 itself is 1<<5.
+    m.run([("LIT", 5), "M", "POP", "SHL", "M", "POP", "ADD", "PAINT"])    # base
     # Each lane pushes its **own** sign literal. Pushing them after the merge would
     # mean the merged code had to remember which lane ran, and a lane's identity
     # lives only in the man's position — so it cannot survive a merge.
@@ -132,9 +136,11 @@ def worker_round(m):
         m.run(["M", "ADD", "PUSH", ("LIT", 1), "PUSH"])                 # 2D, sx=+1
     m.run(["POP", "M", "POP", "SUB"])                       # A = y1 - y0
     if m.A < 0:                                             # X
-        m.run(["NEG", "M", "ADD", "PUSH", ("LIT", 32), "NEG", "PUSH"])  # 2Dy, -32
+        m.run(["NEG", "M", "ADD", "PUSH", ("LIT", 5), "M", ("LIT", 1),
+               "SHL", "NEG", "PUSH"])                    # 2Dy, psy = -32
     else:
-        m.run(["M", "ADD", "PUSH", ("LIT", 32), "PUSH"])                # 2Dy, +32
+        m.run(["M", "ADD", "PUSH", ("LIT", 5), "M", ("LIT", 1),
+               "SHL", "PUSH"])                           # 2Dy, psy = +32
     # ring: [2D, sx, 2Dy, psy]. Rotate sx to the tail so 2D and 2Dy can meet in
     # the two hands — the compare then only swaps them.
     m.run(["POP", "M", "POP", "PUSH", "POP", "SUB"])        # A = 2Dy - 2D, B = 2D
@@ -368,3 +374,117 @@ if __name__ == "__main__":
         dbg.write_json(args.json)
     if not (args.man or args.html or args.json):
         print("\n".join(rows))
+
+
+# ── laying the worker out: the four binding regions, enforced while drawing ───
+#
+# Two pipes on the *same wall* a few columns apart give a boundary that depends
+# only on x, because the row term is identical in both Manhattan distances. That
+# is what makes the worker layable at all, and it turns four global rules into
+# four column ranges:
+#
+#     input  @ N col 0   ring-return @ N col 24  ->  RIN: x <= 11   POP: x >= 13
+#     ring-fwd @ S col 28  painter   @ S col 38  ->  PUSH: x <= 32  PAINT: x >= 34
+#
+# `Cur` checks each one as the glyph is placed, so a mis-bound send is a build
+# error rather than a grid that loads and quietly reads the wrong pipe.
+
+GLYPH = {E: ">", W: "<", N: "^", S: "v"}
+WW, WH = 40, 18                      # worker interior
+IN_COL, RET_COL = 0, 24              # north wall: input, ring-return
+FWD_COL, PNT_COL = 28, 38            # south wall: ring-forward, painter
+# binding regions that follow from those four columns
+RIN_MAX, POP_MIN, PUSH_MAX, PAINT_MIN = 11, 13, 32, 34
+
+
+class Cur:
+    """A cursor that lays glyphs along its heading and checks the pipe regions."""
+
+    def __init__(self, c, x, y, d):
+        self.c, self.x, self.y, self.d = c, x, y, d
+
+    def op(self, g, kind=None):
+        if kind == "RIN" and self.x > RIN_MAX:
+            raise ValueError(f"RIN at x={self.x} binds to the ring, not the input")
+        if kind == "POP" and self.x < POP_MIN:
+            raise ValueError(f"POP at x={self.x} binds to the input, not the ring")
+        if kind == "PUSH" and self.x > PUSH_MAX:
+            raise ValueError(f"PUSH at x={self.x} binds to the painter, not the ring")
+        if kind == "PAINT" and self.x < PAINT_MIN:
+            raise ValueError(f"PAINT at x={self.x} binds to the ring, not the painter")
+        self.c.set(self.x, self.y, g)
+        self.step()
+        return self
+
+    def step(self):
+        self.x += self.d[0]
+        self.y += self.d[1]
+
+    def seq(self, items):
+        for g, kind in items:
+            self.op(g, kind)
+        return self
+
+    def to(self, col):
+        while self.x != col:
+            self.c.set(self.x, self.y, " ")
+            self.step()
+        return self
+
+    def turn(self, d):
+        self.c.set(self.x, self.y, GLYPH[d])
+        self.d = d
+        self.step()
+        return self
+
+
+# op -> (glyph, binding kind)
+def P(o):
+    return {
+        "RIN": ("r", "RIN"), "POP": ("r", "POP"), "PUSH": ("s", "PUSH"),
+        "PAINT": ("s", "PAINT"), "M": ("M", None), "W": ("W", None),
+        "ADD": ("+", None), "SUB": ("-", None), "NEG": ("N", None),
+        "SHL": ("{", None), "SHR": ("}", None), "BP": ("b", None),
+    }[o] if isinstance(o, str) else (str(o[1]), None)
+
+
+CWD = {E: S, S: W, W: N, N: E}
+CCWD = {v: k for k, v in CWD.items()}
+
+
+def branch(c, cur, d, neg, pos, neg_is_le=False):
+    """`X` at the cursor. A<0 takes the CCW exit, A>0 the CW exit, A==0 straight.
+
+    Two of the three exits always share code, so the straight row carries it and the
+    turning lane is routed onto that row *before* the first op — arriving on a code
+    glyph would leave the man's heading unchanged and walk him off the lane.
+
+    `neg_is_le` flips which pair shares: the compare needs A<=0 (x-major) together.
+    """
+    x, y = cur.x, cur.y
+    c.set(x, y, "X")
+    cw, ccw = CWD[d], CCWD[d]
+    shared, single = (neg, pos) if neg_is_le else (pos, neg)
+    join, solo = (ccw, cw) if neg_is_le else (cw, ccw)
+
+    back = (-join[0], -join[1])
+    c.set(x + join[0], y + join[1], GLYPH[d])              # step out, head along d
+    c.set(x + join[0] + d[0], y + join[1] + d[1], GLYPH[back])   # and back onto the row
+    c.set(x + d[0], y + d[1], GLYPH[d])                    # the merge cell itself
+    sc = Cur(c, x + 2 * d[0], y + 2 * d[1], d)
+    sc.seq([P(o) for o in shared])
+
+    c.set(x + solo[0], y + solo[1], GLYPH[d])
+    so = Cur(c, x + solo[0] + d[0], y + solo[1] + d[1], d)
+    so.seq([P(o) for o in single])
+
+    far = max(sc.x, so.x) if d == E else min(sc.x, so.x)
+    sc.to(far)
+    so.to(far)
+    c.set(so.x, so.y, GLYPH[(-solo[0], -solo[1])])         # solo turns back
+    c.set(sc.x, sc.y, GLYPH[d])                            # shared passes through
+    cur.x, cur.y, cur.d = sc.x + d[0], sc.y + d[1], d
+    return cur
+
+
+
