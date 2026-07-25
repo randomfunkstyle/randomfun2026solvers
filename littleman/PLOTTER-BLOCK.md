@@ -116,6 +116,30 @@ Alternatives considered and rejected:
   `f`, while `f`'s slot must precede `den`'s; holding `step`, `den` and `f` at once
   needs three hands.
 
+## Assembling the box
+
+Four rooms and seven pipes. The port columns are fixed by the binding regions, so the
+arrangement is mostly forced:
+
+* **display** 34x26 at the top, **worker** 42x21 below it, **painter** 17x7 and
+  **relay** 5x8 at the bottom (side by side — together 22 wide, so they cost one band
+  of height, not two).
+* Both pipes leaving the worker's south wall have a *forced* first cell pointing
+  south, so they can only diverge on the row below: ring-forward runs west to the
+  relay, the increment pipe east and then around. That is the whole reason the relay
+  sits west of the painter's feed.
+* The ring's return goes down and around the east side, because the input pipe needs
+  the row directly above the worker's north wall and the two cannot share it.
+
+A pipe's first cell must point **away** from the wall it leaves — the analyser reads
+the source room off the cell behind the flow, so a first leg that runs *along* the
+wall gets `src: -1` and no `s` in that room can bind to it. The failure is silent:
+the sends go nowhere and the program simply produces no output.
+
+The three display pipes are long in the assembled box (the painter is ~50 rows below
+the panel), which `timing_ok` constrains but does not forbid: only the *relative*
+lengths matter, and `l_swap` may be as long as convenient.
+
 ## Verification
 
 `tests/test_plotter_block.py` re-runs the op-level simulation (`A`, `B`, `BP`, ring
