@@ -122,21 +122,34 @@ def worker_round(m):
            "RIN", "PUSH", "W", "PUSH", "RIN", "PUSH"])
     # ring: [y0, x0, x0, x1, y0, y1]
     m.run([("LIT", 32), "M", "POP", "MUL", "M", "POP", "ADD", "PAINT"])   # base
-    m.run(["POP", "M", "POP", "SUB"])                       # A = x1 - x0
-    sx = -1 if m.A < 0 else 1                               # X
-    m.run(["NEG", "M"] if sx == -1 else ["M"])
-    m.run(["ADD", "PUSH"])                                  # ring: ... 2D
+    # Each lane pushes its **own** sign literal. Pushing them after the merge would
+    # mean the merged code had to remember which lane ran, and a lane's identity
+    # lives only in the man's position — so it cannot survive a merge.
+    m.run(["POP", "M", "POP", "SUB"])                       # A = x1 - x0, B = x0
+    if m.A < 0:                                             # X
+        m.run(["NEG", "M", "ADD", "PUSH", ("LIT", 1), "NEG", "PUSH"])   # 2D, sx=-1
+    else:
+        m.run(["M", "ADD", "PUSH", ("LIT", 1), "PUSH"])                 # 2D, sx=+1
     m.run(["POP", "M", "POP", "SUB"])                       # A = y1 - y0
-    psy = -32 if m.A < 0 else 32                            # X
-    m.run(["NEG", "M"] if psy == -32 else ["M"])
-    m.run(["ADD", "PUSH"])                                  # ring: 2D 2Dy
-    m.run([("LIT", 1), "PUSH"] if sx == 1 else [("LIT", 1), "NEG", "PUSH"])
-    m.run([("LIT", 32), "PUSH"] if psy == 32 else [("LIT", 32), "NEG", "PUSH"])
-    m.run(["POP", "M", "POP"])                              # A = 2Dy, B = 2D
-    xmajor = m.B >= m.A                                     # X on 2Dy - 2D
-    m.run(["PUSH", "W", "PUSH"] if xmajor else ["W", "PUSH", "W", "PUSH"])
-    m.run(["POP", "M", "POP"])                              # A = psy, B = sx
-    m.run(["W", "PUSH", "W", "ADD", "PUSH"] if xmajor else ["PUSH", "ADD", "PUSH"])
+    if m.A < 0:                                             # X
+        m.run(["NEG", "M", "ADD", "PUSH", ("LIT", 32), "NEG", "PUSH"])  # 2Dy, -32
+    else:
+        m.run(["M", "ADD", "PUSH", ("LIT", 32), "PUSH"])                # 2Dy, +32
+    # ring: [2D, sx, 2Dy, psy]. Rotate sx to the tail so 2D and 2Dy can meet in
+    # the two hands — the compare then only swaps them.
+    m.run(["POP", "M", "POP", "PUSH", "POP", "SUB"])        # A = 2Dy - 2D, B = 2D
+    # `SUB` is the compare, and it consumes 2Dy -- but each lane can recover it as
+    # diff + 2D, so no copy has to be parked anywhere.
+    # U and V depend on the major axis as well, so the whole of it lives inside the
+    # lanes: a lane's identity is the man's position and cannot survive the merge.
+    if m.A <= 0:                                            # X: x-major
+        m.run(["ADD", "PUSH", "W", "PUSH"])                 # step = 2Dy, den = 2D
+        m.run(["POP", "M", "POP"])                           # A = sx, B = psy
+        m.run(["PUSH", "ADD", "PUSH"])                       # U = sx, UV = sx + psy
+    else:                                                   # y-major
+        m.run(["W", "PUSH", "ADD", "PUSH"])                 # step = 2D,  den = 2Dy
+        m.run(["POP", "M", "POP"])                           # A = sx, B = psy
+        m.run(["W", "PUSH", "ADD", "PUSH"])                  # U = psy, UV = psy + sx
     # ring: [step, den, U, UV]
     m.run(["POP", "PUSH", ("LIT", 1), "M", "POP", "PUSH", "SHR"])     # A = M
     m.run(["ADD", "PAINT", "BP", "SUB", "NEG", "M"])        # n -> painter, BP, B = f
