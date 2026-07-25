@@ -1,17 +1,8 @@
-# Contest problems (ICFP 2026, littleman)
+# Contest problems (ICFP 2026, Little Man)
 
-Every released problem, fetched from the public API and saved so we never need
-the site again:
-
-```sh
-curl https://icfpcontest2026.com/api/v1/public/problems              # -> _index.json
-curl https://icfpcontest2026.com/api/v1/public/problems/<slug>       # -> <slug>.json
-```
-
-Each `<slug>.json` carries `description`, `io` (grammar + constraints),
-`scoring`, `tickCap`, `privateTestCount`, and `publicTestData` — the same public
-cases the editor runs. Private cases are never served. `_index.json` is the
-listing, and holds the `problemId` needed for submissions (`id`).
+Each `<slug>.json` contains the task description, `io` grammar and constraints,
+scoring mode, tick cap, and `publicTestData` I/O examples. `_index.json` is the
+problem catalogue. Private test data is not included.
 
 Rules and scoring: [`../../littleman/GRADING.md`](../../littleman/GRADING.md).
 Language: [`../../littleman/SPEC.md`](../../littleman/SPEC.md).
@@ -36,4 +27,4 @@ Language: [`../../littleman/SPEC.md`](../../littleman/SPEC.md).
 | Practice Problems (Ungraded) | `palette` | Palette | footprint-tick | 1 | 0 | 8x8 | Show all sixteen palette colors on the display. |
 
 All problems currently have `tickCap: null`, i.e. the default 5,000,000-step cap.
-`status: practice` problems are ungraded and reject submissions.
+`status: practice` problems are ungraded.

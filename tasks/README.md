@@ -1,8 +1,12 @@
-# Solver Tasks
+# Tasks and solutions
 
-Real contest task datasets, downloaded samples, and local solver fixtures belong
-in this solver repository.
+`problems/` contains the local task catalogue. Each JSON file is the source of
+truth for a task description, its I/O grammar, constraints, public I/O examples,
+and scoring metadata.
 
-The `demo_sudoku` and `demo_probe` fixtures currently remain in the
-`randomfun2026claude` infrastructure repo because the fake contest server still
-uses them to serve tasks and score submissions.
+`solutions/` contains checked-in Little Man `.man` artifacts only. This redesign
+baseline intentionally retains one solution:
+
+```text
+solutions/triangle.man
+```
