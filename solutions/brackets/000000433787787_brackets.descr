@@ -1,0 +1,16 @@
+# brackets — submission 58d7c8a5-3c3d-4daf-8892-8de50d2bd4ca
+
+verdict      done: 26/26 cases, area2 8836, avgTicks 49,093, score 433,787,787
+submitted    2026-07-26T00:53:39+0300
+grid         94x74
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  faf151097a5211aa593d0fce28e7ab6d17ef05b8b02c55719d3a8f1d38343a14
+commit       5f5e372
+local        brackets: 9/9 public cases, avg 25,497 ticks
+source       tasks/compacted/brackets_submitted_rom_ast10.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+ROM10 7-to-13 fold plus AST10 column 40 and row 56 compaction

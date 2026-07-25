@@ -10,9 +10,11 @@ from __future__ import annotations
 import random
 
 import pytest
+from randomfun2026solvers import optimize
 from randomfun2026solvers.fast_littleman import FastLittleman
+from randomfun2026solvers.lm1 import machine
 from randomfun2026solvers.memory_men_store import MAX_LINE_N, men_block, men_ticks
-from randomfun2026solvers.memory_men_y import build_tree_y, y_selector_rows
+from randomfun2026solvers.memory_men_y import build_tree_y, y_men_block, y_selector_rows
 
 
 def _stream(n: int, ops: int, seed: int) -> tuple[list[int], list[int]]:
@@ -69,6 +71,22 @@ def test_store_block_refuses_a_size_it_would_lose_at():
 def test_men_ticks_is_the_measured_line_cost():
     assert men_ticks(0) == 22
     assert men_ticks(4) == 78
+
+
+def test_y_store_block_rounds_odd_capacity_and_matches_the_seam() -> None:
+    blk = y_men_block(5)
+    assert blk.capacity == 6
+    assert blk.pipes == 15
+    assert blk.cells[blk.in_cell] == ">"
+    assert blk.cells[blk.out_cell] == "^"
+
+
+@pytest.mark.slow
+def test_y_store_backend_passes_brackets_public_cases() -> None:
+    candidate = machine.build_for("brackets", store="men-y")
+    result = optimize.verify(candidate.rows, "brackets")
+    assert result.passed
+    assert result.avg_ticks == pytest.approx(30_922.444444444445)
 
 
 @pytest.mark.slow
