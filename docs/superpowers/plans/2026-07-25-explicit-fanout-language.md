@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Keep every checked-in primitive .man artifact and primitive contract unchanged.
-- V1 fanout sources must be declared Netlist inputs; intermediate gate-result fanout is out of scope.
+- V1 accepts at most one explicit FanOut, whose source must exactly equal the complete ordered Netlist.inputs tuple; proper subsets and intermediate gate-result fanout are out of scope.
+- Inputs participating in explicit fanout cannot also be consumed directly by a gate or selected directly as outputs; scalar fallback is out of scope.
 - Each V1 branch is consumed exactly once as one later gate complete ordered input tuple. Reject partial branch use and direct output selection.
 - Existing scalar-only Netlist(inputs, gates, outputs) behavior remains unchanged.
 - A complete branch lowers through one existing S fanout room, with no scalar fanout or per-gate packer room for that branch.
@@ -113,7 +114,7 @@ branch_owner = {
 }
 ~~~
 
-Require a non-empty source tuple of declared inputs, at least two branches, matching branch width, and globally unique branch names. Add branch aliases as FanOut producers at level zero. If a gate references any alias, require gate.inputs == branch, record the one consumer, and reject unconsumed branches after gate validation. Export FanOut from composer and package init.
+Require at most one FanOut, a non-empty source tuple exactly equal to Netlist.inputs in order, at least two branches, matching branch width, and globally unique branch names. Add branch aliases as FanOut producers at level zero. If a gate references any alias, require gate.inputs == branch, record the one consumer, and reject unconsumed branches after gate validation. Reject any direct gate consumer or selected output of an original input when explicit fanout is present. Export FanOut from composer and package init.
 
 - [ ] **Step 4: Verify GREEN and compatibility**
 
@@ -168,7 +169,7 @@ At _lower_layout_rooms start, add:
 explicit_branch_sources: dict[tuple[str, ...], _PortRef] = {}
 ~~~
 
-When fanout.source equals netlist.inputs, connect input.io.frame directly to _make_scalar_fanout(len(fanout.branches)).input and omit input demultiplexer. When source is a proper input subset, retain one input demultiplexer, create exactly one packer for fanout.source, then connect it to S. Register each branch tuple to the corresponding copy[index] port.
+Connect input.io.frame directly to _make_scalar_fanout(len(fanout.branches)).input, omit the input demultiplexer, and register each branch tuple to the corresponding copy[index] port. Validation rejects proper input subsets and scalar fallback, so lowering has no demultiplexer/repacker fallback path for explicit fanout.
 
 - [ ] **Step 4: Bypass scalar packing for registered branches**
 
@@ -189,6 +190,8 @@ else:
 ~~~
 
 Do not pass registered branch aliases into _connect_signal_with_fanout. Preserve original scalar lowering when fanouts is empty.
+
+Add fast validation regressions proving that a proper-subset source and a direct scalar consumer/output of an explicitly fanned-out input are rejected before placement.
 
 - [ ] **Step 5: Add the slow runtime regression**
 

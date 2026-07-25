@@ -28,26 +28,32 @@ behavior.
 
 Validation rules:
 
-- every source signal is a declared netlist input;
+- V1 accepts at most one explicit `FanOut`;
+- its source exactly equals the complete declared `Netlist.inputs` tuple, in
+  the same order; proper input subsets are rejected;
 - every branch has exactly the source width and preserves source position;
 - every branch signal is a unique new producer name;
 - no branch name collides with an input, gate output, or another branch name;
 - every branch is consumed by exactly one gate as that gate's complete ordered
   input tuple; partial branch use and direct output selection are rejected.
+- declared inputs copied by explicit fanout cannot also be consumed directly
+  by a gate or selected directly as an output.
 
 ## Frame-aware lowering
 
 Lowering keeps a registry from a complete ordered branch tuple to its frame
-port. A `FanOut` starts from its declared-input source frame, emits one `S`
-room with one outgoing branch per declared branch, and registers each branch
-frame. V1 intentionally limits explicit fanout to input frames; fanout of
-intermediate gate results needs a future ordered-operation IR.
+port. A `FanOut` starts directly from the complete runtime input frame, emits
+one `S` room with one outgoing branch per declared branch, and registers each
+branch frame. It never demultiplexes or repacks an explicit fanout source.
+V1 intentionally limits explicit fanout to the complete declared input frame;
+proper subsets, scalar fallback consumers, and fanout of intermediate gate
+results need a future ordered-operation IR.
 
 When a gate's complete ordered input tuple matches a registered branch frame,
 the composer connects that frame directly to the primitive input pipe. It does
 not create a two-field packer and does not create scalar fanout rooms for the
-signals in that complete branch. Other uses retain the existing lowering,
-which keeps backward compatibility and handles arbitrary mixed consumers.
+signals in that complete branch. Netlists without explicit fanout retain the
+existing scalar lowering unchanged.
 
 This changes no checked-in primitive artifact or primitive semantic contract.
 Placement, stubs, routing, cropping, and write behavior remain unchanged.
@@ -98,8 +104,9 @@ solver dispatch, optimisation service, submission client, or network behavior.
 
 ## Tests
 
-Fast tests cover IR validation, frame-aware room reduction, parser success and
-source locations for errors, CLI argument validation, and deterministic output.
-Slow tests run the generated explicit-fanout half-adder through the reference
-runtime and assert its ordered `sum, carry` frame. Existing scalar-netlist
-regressions remain unchanged.
+Fast tests cover IR validation—including rejection of proper-subset sources
+and scalar fallback consumers—frame-aware room reduction, parser success and
+source locations for errors, CLI argument validation, and deterministic
+output. Slow tests run the generated explicit-fanout half-adder through the
+reference runtime and assert its ordered `sum, carry` frame. Existing
+scalar-netlist regressions remain unchanged.
