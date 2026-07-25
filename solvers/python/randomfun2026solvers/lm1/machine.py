@@ -231,6 +231,7 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.AND_MEM: (("s", Band.MEM), ("r", Band.MEM), ("&", None), ("M", None)),
+    Sem.OR_MEM: (("s", Band.MEM), ("r", Band.MEM), ("|", None), ("M", None)),
     # ── indexed memory: `LDP`/`STP`, and *no SPILL block* ─────────────────────
     # ``isa.py`` gives both of these a spill slot, because in the ``0 addr`` /
     # ``1 addr value`` wire protocol the request-opening literal clobbers A while B
@@ -311,6 +312,7 @@ MEMORY_SEMS = frozenset(
         Sem.MUL_MEM,
         Sem.DIV_MEM,
         Sem.AND_MEM,
+        Sem.OR_MEM,
         Sem.STORE_ACC_MEM,
         Sem.LOAD_IND,
         Sem.STORE_IND,
@@ -1736,6 +1738,13 @@ def _stream(
         from . import snake_unit
 
         blk = snake_unit.build_snake()
+    elif unit == "path":
+        # The PATH unit is snake's block with the ring taken out: `pathfinder` keeps
+        # its whole state (four 64-bit board words) in the CPU's tape and asks the
+        # unit only to paint, so all the unit owns is the panel and the robot's cell.
+        from . import path_unit
+
+        blk = path_unit.build_path()
     else:
         from . import stream as streammod
 
@@ -1952,6 +1961,16 @@ TAPE_SIZE = {
     # tape is eight slots and a read costs ~180 ticks instead of ~653. That is the whole
     # point of the rewrite — see snake-ring.asm's header.
     "snake-ring": 9,
+    # pathfinder's board is a bitset, not an array: 256 cells live in four 64-bit
+    # words, so the whole BFS — frontier, reached set, and the four direction masks —
+    # is 40 slots instead of 512. Every slot taxes every read by ~8 ticks (§4.1),
+    # which is also why its power-of-two masks are computed rather than tabulated.
+    "pathfinder": 52,
+    # pathfinder-unit keeps the identical tape: moving the *painting* into a
+    # coprocessor changes the opcode count and the trie's depth, not the data. The
+    # board still lives in the CPU's four bitset words, unlike snake-ring, where the
+    # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
+    "pathfinder-unit": 52,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
@@ -2005,6 +2024,14 @@ ROM_ROWS = {
     # sweep minimum at 122x136; 5 is 144x135 and 7 is 111x137, so this is a real
     # optimum rather than a plateau.
     "snake-ring": 6,
+    # pathfinder's P is 2,484 words — the level step is unrolled over the four board
+    # words and then twice again — so the ROM dominates the box and wants folding
+    # almost square. Swept: 24/40/60/72/80/100/140 rows give footprints of 267k/98k/
+    # 45k/33.9k/36.9k/44.9k/63.5k, so 72 (180x184) is a real minimum, not a plateau.
+    "pathfinder": 72,
+    # pathfinder-unit: P is 2,416 and the CPU is smaller (depth-4 trie, three fewer
+    # lanes), so the fold optimum moves; swept once the block exists.
+    "pathfinder-unit": 72,
 }
 
 

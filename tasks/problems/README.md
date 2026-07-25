@@ -49,7 +49,8 @@ Semester 4 also added an `uberStrict` field to the per-problem response
 four Semester 4 files carry it; the sixteen older files predate it and do not.
 
 **`privateTestCount: 0` is not a promise.** `snake` reports 0 and the judge graded
-**17** cases against its 5 public ones, and the hidden ones are dearer than the public
+**17** cases against its 5 public ones, `pathfinder` reports 0 and was graded on **18**
+against its 7, and the hidden ones are dearer than the public
 set (avgTicks 1,000,411 against the 640,777 the same grid measures locally, i.e. 1.6x).
 Size hardware to the *constraint box*, never to the public data — the same lesson
 `gradebook` taught, now with a number attached.
@@ -63,7 +64,7 @@ still has. Lower is better; `max(w,h)² × avg ticks`.
 | Slug | Best rival scores | Implied footprint (score ÷ tick cap) | Our best |
 |---|---|---|---|
 | `snake` | 200,000,000 · 2,500,000,000 | ≥ 13² at 15M ticks | **3,369,020,288** (17/17) |
-| `pathfinder` | 50,000,000,000 · 300,000,000,000 | ≥ 58² at 15M ticks | — |
+| `pathfinder` | 50,000,000,000 · 300,000,000,000 | ≥ 58² at 15M ticks | **17/18, unscored** (180×184, avg 5.00M) |
 | `little-little-little-man` | 1,300,000,000,000 | ≥ 295² at 15M ticks | — |
 | `little-little-man` | not seen yet | — | — |
 | `subset-sum` | 448,000,000 | ≥ 10² at 5M ticks | — (blocked) |
@@ -78,3 +79,23 @@ by far the simplest of the four. That is the largest open gap in the contest.
 a bigger one that is much faster; ours is 121x136 = 18,496 at 182k ticks, so the gap is
 footprint, not speed. A bespoke machine — no ISA, no ROM, a few men around the panel —
 is the only thing that closes it (§1's trade, and `plotter_block` is the precedent).
+
+## `pathfinder`: 17/18, and the case it misses is the tick cap
+
+The first submission passes **17 of the 18** cases the judge runs, which scores nothing — a
+full pass is required — but it pins the remaining work exactly. Measured on the engine over
+the seven public cases, cost is linear in the number of moves:
+
+```
+ticks = 1,680,572 + 61,159 x (total moves in the case)      max residual 248k
+```
+
+so the 15,000,000 cap is reached at **~218 total moves**. The public cases run 22-89 moves
+(worst 7.15M ticks, a 2.1x margin), and the spec bounds each path at 64 moves but places
+**no bound on the number of rounds** — so a case of ~10 long rounds exceeds the cap, and
+that is almost certainly the 18th. This is a *ticks* failure, not a correctness one: all
+seven public cases match frame for frame on the reference engine.
+
+Two things worth keeping. The per-move figure is the whole target — it needs to come down
+~2x for headroom, not a few percent. And `privateTestCount: 0` has now lied on three
+problems (`gradebook`, `snake`, `pathfinder`); here it cost a score rather than a scare.

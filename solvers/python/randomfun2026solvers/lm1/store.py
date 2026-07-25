@@ -23,7 +23,15 @@ from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Callable
 
-__all__ = ["Store", "StoreError", "DictStore", "SpillRing", "StreamUnit", "SnakeUnit"]
+__all__ = [
+    "Store",
+    "StoreError",
+    "DictStore",
+    "SpillRing",
+    "StreamUnit",
+    "SnakeUnit",
+    "PathUnit",
+]
 
 READ = 0
 WRITE = 1
@@ -376,3 +384,101 @@ class SnakeUnit:
         # 1, never 0: the panel is a persistent framebuffer, so `next` and the cursor
         # survive a commit and only the pixels that changed are ever written.
         self._write(self.SWAP, 1)
+
+
+class PathUnit:
+    """A model of ``path_unit.py``'s board coprocessor — one remembered cell and a panel.
+
+    The same ``8 * arg + code`` wire format as :class:`StreamUnit` and :class:`SnakeUnit`,
+    because that is what the real unit's decode trie reads, and the same two structural
+    rules ``ARCH.md`` §8.0 draws out of ``snake``:
+
+    * **It answers nothing.** §7.1 makes an incoming pipe a rival for every ``r`` in the
+      CPU, the jump slab's ROM read included, so a *replying* unit cannot be placed on a
+      machine that has jumps — and this program is nothing but jumps. So ``recv`` raises,
+      and every command is given enough authority to finish its own drawing.
+    * **It owns the display.** The three LM-75 ports hang off this block, so the CPU has
+      no display lanes at all — the difference between ``pathfinder.asm``'s 18 opcodes
+      (a depth-5 trie) and ``pathfinder-unit.asm``'s 16 (depth 4).
+
+    The unit's whole state is *the robot's cell*, which is what makes ``MOVE`` one command:
+    the CPU sends only where the robot is going, and the unit blacks out where it was. The
+    CPU therefore never has to remember the previous cell across a round, and no command
+    ever carries two cell indices.
+
+    ``CELL`` is cheaper still — it carries no address at all. The panel's cursor advances
+    itself on every DATA write, so the setup round's 256 cells are 256 bare colour writes
+    in row-major order, and the 256th wraps the cursor back to the upper-left for free.
+    """
+
+    #: arm -> command code. The real unit *reads* these off its decode trie's geometry, so
+    #: they are not free to choose; ``tests/test_path_unit_model.py`` pins them against the
+    #: ``.equ C_*`` lines in ``pathfinder-unit.asm`` so the two tables cannot drift.
+    CODES = {"CELL": 0, "ROBOT": 1, "FLAG": 2, "MOVE": 3}
+
+    #: ``display.py``'s port numbers, repeated rather than imported to keep this
+    #: module free of the display model.
+    ADDR, DATA, SWAP = 0, 1, 2
+
+    #: the problem's four colours (``pathfinder_sim`` names the same numbers).
+    PATH, WALL, FLAG, ROBOT = 0, 7, 9, 10
+
+    def __init__(self, write_display: Callable[[int, int], None]) -> None:
+        self._write = write_display
+        self.robot: int | None = None  # the unit's only state
+        self.words = 0  # command words across the CPU's pipe (the tick model bills these)
+        self.cells = 0  # board cells painted at the panel's own cursor
+        self.frames = 0  # commits, i.e. SWAP writes
+
+    # ── wire protocol ────────────────────────────────────────────────────────
+    def send(self, word: int) -> None:
+        """One command word: ``8 * arg + code``."""
+        self.words += 1
+        code, arg = word & 7, word >> 3
+        if code == self.CODES["CELL"]:
+            self._cell(arg)
+        elif code == self.CODES["ROBOT"]:
+            self._robot(arg)
+        elif code == self.CODES["FLAG"]:
+            self._paint(arg, self.FLAG)  # no commit: the flag is not a frame of its own
+        elif code == self.CODES["MOVE"]:
+            self._move(arg)
+        else:
+            raise StoreError(f"PATH: no arm for command code {code}")
+
+    def recv(self) -> int:
+        raise StoreError("PATH: the unit answers nothing; a program with RCV cannot bind")
+
+    # ── arms ─────────────────────────────────────────────────────────────────
+    def _cell(self, value: int) -> None:
+        """One board cell, at wherever the panel's cursor already is."""
+        if value not in (0, 1):
+            raise StoreError(f"PATH: CELL takes 0 (path) or 1 (wall), got {value}")
+        self._write(self.DATA, self.WALL if value else self.PATH)
+        self.cells += 1
+
+    def _robot(self, cell: int) -> None:
+        """The setup round's one frame: the robot lands, and the board is complete."""
+        self._paint(cell, self.ROBOT)
+        self.robot = cell
+        self._commit()
+
+    def _move(self, cell: int) -> None:
+        """One step of the walk: erase, redraw, commit — one frame per move."""
+        if self.robot is None:
+            raise StoreError("PATH: MOVE before any ROBOT; the unit has no robot to move")
+        self._paint(self.robot, self.PATH)
+        self._paint(cell, self.ROBOT)
+        self.robot = cell
+        self._commit()
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _paint(self, cell: int, colour: int) -> None:
+        self._write(self.ADDR, cell)
+        self._write(self.DATA, colour)
+
+    def _commit(self) -> None:
+        # 1, never 0: the panel is a persistent framebuffer, which is why a frame is only
+        # two pixel writes and why the flag survives until the robot steps onto it (§4.4).
+        self._write(self.SWAP, 1)
+        self.frames += 1
