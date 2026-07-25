@@ -136,6 +136,22 @@ the source room off the cell behind the flow, so a first leg that runs *along* t
 wall gets `src: -1` and no `s` in that room can bind to it. The failure is silent:
 the sends go nowhere and the program simply produces no output.
 
+Three geometric constraints fell out of the first assembly attempt, all cheap to
+satisfy once known and all silent-failure modes if not:
+
+* **The worker's south-wall pipes and the painter's north-wall pipes cannot share a
+  band.** Each has a *forced* first cell pointing away from its wall, so the worker's
+  two pipes necessarily occupy the row two below its south wall and the painter's
+  three occupy the row two above its north wall. Leave a spare row between the rooms
+  and each band gets its own row.
+* **The display's top wall needs a row above it**, because a pipe entering a wall
+  needs a cell on the far side — so the panel cannot sit at `dy = 0`. The same
+  applies to any wall a port uses.
+* **The relay cannot sit between the painter and the worker's feed.** Its own walls
+  block the increment pipe's westward leg, and its return pipe's forced first cell
+  takes the row below it. Putting the relay under the painter, with the ring running
+  down one side and the return around the other, keeps every leg on its own row.
+
 The three display pipes are long in the assembled box (the painter is ~50 rows below
 the panel), which `timing_ok` constrains but does not forbid: only the *relative*
 lengths matter, and `l_swap` may be as long as convenient.
