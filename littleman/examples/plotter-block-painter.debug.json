@@ -1,0 +1,92 @@
+{
+  "title": "plotter block \u2014 painter probe (ADDR 50 / DATA 48 / SWAP 48 cells)",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "display",
+      "x": 2,
+      "y": 1,
+      "w": 34,
+      "h": 26,
+      "note": "LM-75 32x24. Top wall = ADDR, left = DATA, bottom = SWAP.",
+      "color": "#334155",
+      "tags": []
+    },
+    {
+      "name": "painter",
+      "x": 13,
+      "y": 32,
+      "w": 17,
+      "h": 7,
+      "note": "owns addr in B; one lap per pixel",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "painter:lap",
+      "x": 14,
+      "y": 34,
+      "w": 7,
+      "h": 2,
+      "note": "14 cells = 14 ticks/pixel: d s `15` v / < s r + M m ^. `+` then `M` leave A=B=addr', so the lap re-enters s@ADDR loaded.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "painter:commit",
+      "x": 14,
+      "y": 37,
+      "w": 15,
+      "h": 1,
+      "note": "BP hits 0 -> the long way round to `0 s@SWAP`, then r M reads the next base. The detour exists so s@SWAP lands far from the ADDR and DATA pipe columns \u2014 all three leave the north wall and s binds by distance.",
+      "color": "#f59e0b",
+      "tags": []
+    },
+    {
+      "name": "painter:spawn",
+      "x": 24,
+      "y": 36,
+      "w": 2,
+      "h": 1,
+      "note": "@ then v, merging into the preamble *after* s@SWAP \u2014 spawning before it would commit a black frame and fail the streaming compare.",
+      "color": "#a855f7",
+      "tags": []
+    },
+    {
+      "name": "pipe:ADDR",
+      "x": 0,
+      "y": 0,
+      "w": 2,
+      "h": 31,
+      "note": "50 cells, up the west side and over the top. Length is part of the program: ADDR must not arrive after its own DATA.",
+      "color": "#ef4444",
+      "tags": []
+    },
+    {
+      "name": "pipe:SWAP",
+      "x": 35,
+      "y": 27,
+      "w": 2,
+      "h": 2,
+      "note": "48 cells, deliberately long. A short SWAP overtakes the DATA writes still in flight and commits with the last pixels missing.",
+      "color": "#ec4899",
+      "tags": []
+    },
+    {
+      "name": "input",
+      "x": 33,
+      "y": 33,
+      "w": 3,
+      "h": 3,
+      "note": "stands in for the worker: base, n, inc x n",
+      "color": "#64748b",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [],
+  "lanes": []
+}

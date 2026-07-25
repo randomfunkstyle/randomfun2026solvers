@@ -253,8 +253,105 @@ def build_display(g: Circuit, dx: int, dy: int) -> None:
         g.set(dx + w - 1, y, ":")
 
 
+# ── the relay: the ring's turnaround ──────────────────────────────────────────
+#
+# Interior 3x6. One circuit of 14 cells carrying **four** values — column 2 walked
+# south and column 0 walked north, each holding two (r,s) pairs — so 3.5
+# ticks/value, which keeps up with the worker's ~19-tick lap. A single-pair relay
+# would forward one value per circuit and throttle the whole machine.
+#
+# `>` at (0,0) rather than the spawn: the returning man arrives heading north and
+# needs turning east, and `@` is only a nop, so it cannot do that. The spawn sits
+# at (1,0) instead, where heading east is already correct.
+#
+# One incoming pipe and one outgoing, so no `s`/`r` here needs a binding argument.
+RELAY = [">@v", "s.r", "r.s", "s.r", "r.s", "^.<"]
+RELAY_W, RELAY_H = 3, 6
+
+
+def relay_rows() -> list[str]:
+    return [row.replace(".", " ") for row in RELAY]
+
+
+# ── the painter probe: everything verified so far, as a runnable grid ─────────
+def build_probe() -> tuple[list[str], object]:
+    """Display + painter + the three port pipes, driven straight from the input room.
+
+    The input pipe stands in for the worker, so the probe speaks the worker's exact
+    protocol — `base, n, inc...` — and a correct frame here means the painter, all
+    three LM-75 ports and the pipe-length timing are right. This is the artifact
+    that drew a matching main diagonal on the reference interpreter.
+    """
+    from randomfun2026solvers.man_debug import DebugMap
+
+    w, h = 37, 40
+    dx, dy = 2, 1                       # display walls: cols 2..35, rows 1..26
+    px, py = 14, 33                     # painter interior origin
+    data_row, addr_col, swap_col = 2, 3, 3
+
+    g = Circuit(w, h)
+    build_display(g, dx, dy)
+    stamp(g, px, py, painter_rows())
+    walls(g, px, py, PAINTER_W, PAINTER_H)
+
+    l_addr = pipe(g, [(px + S_ADDR, 31), (px + S_ADDR, 30), (0, 30), (0, 0),
+                      (addr_col, 0)], into=(addr_col, dy))
+    l_data = pipe(g, [(px + S_DATA, 31), (px + S_DATA, 29), (1, 29), (1, data_row)],
+                  into=(dx, data_row))
+    l_swap = pipe(g, [(px + S_SWAP, 31), (px + S_SWAP, 28), (w - 1, 28), (w - 1, 27),
+                      (swap_col, 27)], into=(swap_col, dy + DISPLAY_H + 1))
+    if not timing_ok(l_addr, l_data, l_swap):
+        raise ValueError(f"pipe lengths deliver out of order: ADDR {l_addr}, "
+                         f"DATA {l_data}, SWAP {l_swap}")
+    stamp(g, 33, 33, ["+-+", "|I|", "+-+"])
+    pipe(g, [(32, 34), (30, 34)], into=(29, 34))
+
+    d = DebugMap(f"plotter block — painter probe (ADDR {l_addr} / DATA {l_data} / "
+                 f"SWAP {l_swap} cells)")
+    d.region("display", dx, dy, DISPLAY_W + 2, DISPLAY_H + 2,
+             note="LM-75 32x24. Top wall = ADDR, left = DATA, bottom = SWAP.",
+             color="#334155")
+    d.region("painter", px - 1, py - 1, PAINTER_W + 2, PAINTER_H + 2,
+             note="owns addr in B; one lap per pixel", color="#0ea5e9")
+    d.region("painter:lap", px, py + 1, 7, 2,
+             note="14 cells = 14 ticks/pixel: d s `15` v / < s r + M m ^. "
+                  "`+` then `M` leave A=B=addr', so the lap re-enters s@ADDR loaded.",
+             color="#22c55e")
+    d.region("painter:commit", px, py + 4, PAINTER_W, 1,
+             note="BP hits 0 -> the long way round to `0 s@SWAP`, then r M reads the "
+                  "next base. The detour exists so s@SWAP lands far from the ADDR and "
+                  "DATA pipe columns — all three leave the north wall and s binds by "
+                  "distance.",
+             color="#f59e0b")
+    d.region("painter:spawn", px + 10, py + 3, 2, 1,
+             note="@ then v, merging into the preamble *after* s@SWAP — spawning "
+                  "before it would commit a black frame and fail the streaming compare.",
+             color="#a855f7")
+    d.region("pipe:ADDR", 0, 0, 2, 31,
+             note=f"{l_addr} cells, up the west side and over the top. Length is part "
+                  "of the program: ADDR must not arrive after its own DATA.",
+             color="#ef4444")
+    d.region("pipe:SWAP", w - 2, 27, 2, 2,
+             note=f"{l_swap} cells, deliberately long. A short SWAP overtakes the DATA "
+                  "writes still in flight and commits with the last pixels missing.",
+             color="#ec4899")
+    d.region("input", 33, 33, 3, 3,
+             note="stands in for the worker: base, n, inc x n", color="#64748b")
+    return [r.rstrip() for r in g.rows()], d
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--man", "--out", dest="man", type=Path, help="write the grid here")
+    ap.add_argument("--html", type=Path, help="write a labelled debug overlay here")
+    ap.add_argument("--json", type=Path, help="write the debug region sidecar here")
     args = ap.parse_args()
-    raise SystemExit("worker layout not wired up yet — see PLOTTER-BLOCK.md")
+    rows, dbg = build_probe()
+    if args.man:
+        args.man.write_text("\n".join(rows) + "\n")
+    if args.html:
+        dbg.write_html(rows, args.html)
+    if args.json:
+        dbg.write_json(args.json)
+    if not (args.man or args.html or args.json):
+        print("\n".join(rows))
