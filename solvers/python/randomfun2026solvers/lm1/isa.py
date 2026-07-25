@@ -61,6 +61,7 @@ class Micro(StrEnum):
     SWAP = "W"  # A <-> B
     ADD = "+"
     SUB = "-"
+    BITAND = "&"
     MUL = "*"
     DIV = "/"
     MOD = "%"
@@ -108,6 +109,7 @@ class Sem(StrEnum):
     LOAD = "load"
     STORE = "store"
     ADD_MEM = "add-mem"
+    AND_MEM = "and-mem"
     SUB_MEM = "sub-mem"
     MUL_MEM = "mul-mem"
     LOAD_IND = "load-ind"
@@ -584,6 +586,28 @@ _EXT_OPS: tuple[Op, ...] = (
         description="ACC = -ACC — the ROM can only hold non-negative literals",
         micro=(Micro.SWAP, Micro.NEG, Micro.MOV),
         sem=Sem.NEGATE,
+        ext=True,
+    ),
+    Op(
+        # `&` is a native single glyph, so this costs exactly what ADD costs, and
+        # the decode trie is sized per program (ceil(log2(ops used))) -- so for any
+        # program with a spare lane it is free. It turns a set-membership array of
+        # `n * bits` cells into `n` bitmask cells, which is what lets
+        # sudoku-validity fit the 84-slot tape (243 flags -> 27 masks).
+        code=29,
+        mnemonic="AND",
+        operands=1,
+        description="ACC &= store[addr] — bitmask set-membership without an array",
+        micro=(
+            Micro.LIT0,
+            Micro.SEND_MEM,
+            Micro.RING_READ,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.BITAND,
+            Micro.MOV,
+        ),
+        sem=Sem.AND_MEM,
         ext=True,
     ),
     Op(

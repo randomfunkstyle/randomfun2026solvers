@@ -114,6 +114,7 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.MUL_MEM: (("s", Band.MEM), ("r", Band.MEM), ("*", None), ("M", None)),
+    Sem.AND_MEM: (("s", Band.MEM), ("r", Band.MEM), ("&", None), ("M", None)),
     # ACC is the address, so `W` alone puts the request in A. Operand word unused.
     Sem.LOAD_ACC: (("W", None), ("s", Band.MEM), ("r", Band.MEM), ("M", None)),
     # Source read first (its address is an immediate), so the value only becomes
@@ -135,7 +136,15 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
 #: Tags whose operand word is a STORE address, so it must be >= 1 (see the module
 #: docstring on the sign bias).
 MEMORY_SEMS = frozenset(
-    {Sem.LOAD, Sem.STORE, Sem.ADD_MEM, Sem.SUB_MEM, Sem.MUL_MEM, Sem.STORE_ACC_MEM}
+    {
+        Sem.LOAD,
+        Sem.STORE,
+        Sem.ADD_MEM,
+        Sem.SUB_MEM,
+        Sem.MUL_MEM,
+        Sem.AND_MEM,
+        Sem.STORE_ACC_MEM,
+    }
 )
 
 #: Tags realised as a structures-band slab rather than a flat lane.

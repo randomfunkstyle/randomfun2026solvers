@@ -392,6 +392,14 @@ def _add_mem(em: Emulator, addr: int | None) -> None:
     em.b = em.a  # `M`
 
 
+@_handler(Sem.AND_MEM)
+def _and_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    em.a = em._mem_read(addr)
+    em.a = wrap(em.a & em.b)  # `&` — commutative, so no `W` needed
+    em.b = em.a  # `M`
+
+
 @_handler(Sem.SUB_MEM)
 def _sub_mem(em: Emulator, addr: int | None) -> None:
     assert addr is not None
