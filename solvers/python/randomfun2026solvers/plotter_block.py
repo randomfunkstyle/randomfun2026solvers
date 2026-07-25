@@ -275,9 +275,14 @@ def timing_ok(l_addr: int, l_data: int, l_swap: int) -> bool:
             and l_swap > l_data - GAP_DATA_SWAP)
 
 
-def build_display(g: Circuit, dx: int, dy: int) -> None:
-    """Stamp the LM-75: '+' corners, '=' horizontal walls, ':' vertical walls."""
-    w, h = DISPLAY_W + 2, DISPLAY_H + 2
+def build_display(
+    g: Circuit, dx: int, dy: int, *, panel_w: int = DISPLAY_W, panel_h: int = DISPLAY_H
+) -> None:
+    """Stamp the LM-75: '+' corners, '=' horizontal walls, ':' vertical walls.
+
+    Defaults to `plotter`'s own 32x24 panel; the 16x16 problems pass 16x16.
+    """
+    w, h = panel_w + 2, panel_h + 2
     for x in range(dx, dx + w):
         for y in (dy, dy + h - 1):
             g.set(x, y, "+" if x in (dx, dx + w - 1) else "=")
