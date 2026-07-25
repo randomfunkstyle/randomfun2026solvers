@@ -44,7 +44,7 @@ from .littleman import Littleman
 from .manparse import parse_program
 from .manstruct import Kind, _build_cells
 
-__all__ = ["Step", "Walk", "trace", "to_html", "to_text"]
+__all__ = ["Step", "Walk", "Flow", "flow_of", "trace", "to_html", "to_svg", "to_text"]
 
 
 @dataclass(frozen=True)
@@ -124,6 +124,70 @@ def trace(
     walk.runners = len({s.runner for s in walk.steps})
     walk.complete = bool(frames) and all(s.halted for s in frames[-1])
     return walk
+
+
+# ── flow: the route as directed edges, forks, joins and stalls ───────────────
+Cell = tuple[int, int]
+Dir = tuple[int, int]
+_ARROW = {(1, 0): "→", (-1, 0): "←", (0, -1): "↑", (0, 1): "↓"}
+
+
+@dataclass
+class Flow:
+    """The traced route as a graph, which is what makes the movement legible.
+
+    A shaded cell says "visited"; an **edge** says *which way he went*, and that
+    is the thing you actually need to read a board. Two derived sets carry the
+    control flow:
+
+    ``splits``
+        cells left in more than one direction. A conditional turn (``X`` on the
+        main hand, ``a``/``d``/``x`` on the backpack) is exactly this, so the
+        forks in the program show up without parsing anything.
+    ``joins``
+        cells entered from more than one direction — where separate paths merge
+        back, which is where a corridor is shared and therefore load bearing.
+
+    ``stalls`` counts ticks a runner stood still: an ``r`` on an empty pipe or an
+    ``s`` on a full one. High stall counts are *waiting*, not work, and reading
+    them as hot code is a mistake the plain visit-count view invites.
+    """
+
+    edges: Counter = field(default_factory=Counter)  # (from, to, runner) -> ticks
+    out_dirs: dict[Cell, set[Dir]] = field(default_factory=dict)
+    in_dirs: dict[Cell, set[Dir]] = field(default_factory=dict)
+    stalls: Counter = field(default_factory=Counter)  # cell -> ticks stood still
+    runners: set[int] = field(default_factory=set)
+
+    @property
+    def splits(self) -> set[Cell]:
+        return {c for c, d in self.out_dirs.items() if len(d) > 1}
+
+    @property
+    def joins(self) -> set[Cell]:
+        return {c for c, d in self.in_dirs.items() if len(d) > 1}
+
+
+def flow_of(walk: Walk) -> Flow:
+    """Turn per-tick positions into a directed route graph."""
+    f = Flow()
+    by_runner: dict[int, list[Step]] = {}
+    for s in walk.steps:
+        by_runner.setdefault(s.runner, []).append(s)
+    for runner, steps in by_runner.items():
+        f.runners.add(runner)
+        steps.sort(key=lambda s: s.tick)
+        for a, b in zip(steps, steps[1:], strict=False):
+            if a.pos == b.pos:
+                f.stalls[a.pos] += 1  # blocked: same cell two ticks running
+                continue
+            d = (b.pos[0] - a.pos[0], b.pos[1] - a.pos[1])
+            if d not in _ARROW:
+                continue  # a teleport cannot happen; guard anyway
+            f.edges[(a.pos, b.pos, runner)] += 1
+            f.out_dirs.setdefault(a.pos, set()).add(d)
+            f.in_dirs.setdefault(b.pos, set()).add(d)
+    return f
 
 
 # ── reporting ────────────────────────────────────────────────────────────────
@@ -376,13 +440,178 @@ show(0);
 """
 
 
+def to_svg(
+    prog, cells, walk: Walk, *, title: str, input: str | None, cell: int = 20
+) -> str:
+    """Ink the route: one arrow per traversed edge, badges on forks and stalls.
+
+    The heat view answers "was this cell used". This answers "which way does the
+    program *go*", which is the question you ask when a board looks sparse: the
+    empty space is mostly corridor, and an arrow through it says so.
+    """
+    f = flow_of(walk)
+    rows = prog.to_grid()
+    w = max((len(r) for r in rows), default=0)
+    h = len(rows)
+    pad = 26
+    W, H = pad * 2 + w * cell, pad * 2 + h * cell
+    cx = lambda x: pad + x * cell + cell / 2  # noqa: E731
+    cy = lambda y: pad + y * cell + cell / 2  # noqa: E731
+
+    # backdrop: rooms, then glyphs
+    parts: list[str] = []
+    for room in prog.rooms:
+        x0, y0 = room.min_
+        x1, y1 = room.max_
+        parts.append(
+            f'<rect class="room" x="{pad + x0 * cell}" y="{pad + y0 * cell}" '
+            f'width="{(x1 - x0 + 1) * cell}" height="{(y1 - y0 + 1) * cell}"/>'
+            f'<text class="rlab" x="{pad + x0 * cell + 3}" y="{pad + y0 * cell - 3}">'
+            f"room{room.id} {escape(room.kind)}</text>"
+        )
+    for y in range(h):
+        for x in range(w):
+            glyph = rows[y][x] if x < len(rows[y]) else " "
+            if glyph == " ":
+                continue
+            info = cells.get((x, y))
+            k = info.kind.value if info else "void"
+            parts.append(
+                f'<text class="g k-{k}" x="{cx(x)}" y="{cy(y)}">{escape(glyph)}</text>'
+            )
+
+    # dead in-room blanks: mark them, so waste is visible against the route
+    for (x, y), info in cells.items():
+        if (
+            info.room is not None
+            and info.kind in (Kind.FLOOR, Kind.NOP)
+            and (x, y) not in walk.first
+        ):
+            parts.append(
+                f'<rect class="dead" x="{pad + x * cell + 3}" y="{pad + y * cell + 3}" '
+                f'width="{cell - 6}" height="{cell - 6}"/>'
+            )
+
+    # the route. Anti-parallel edges are nudged apart so a there-and-back
+    # corridor reads as two lanes instead of one overdrawn line.
+    busiest = max(f.edges.values(), default=1)
+    for (a, b, runner), n in sorted(f.edges.items(), key=lambda kv: kv[1]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        off = 2.2
+        ox, oy = (-dy * off, dx * off)
+        x1, y1 = cx(a[0]) + ox, cy(a[1]) + oy
+        x2, y2 = cx(b[0]) + ox, cy(b[1]) + oy
+        width = 1.0 + 2.2 * (n / busiest) ** 0.5
+        parts.append(
+            f'<line class="e r{runner % len(_RUNNER_HUE)}" x1="{x1:.1f}" y1="{y1:.1f}" '
+            f'x2="{x2:.1f}" y2="{y2:.1f}" stroke-width="{width:.2f}" '
+            f'marker-end="url(#a{runner % len(_RUNNER_HUE)})">'
+            f"<title>({a[0]},{a[1]}) {_ARROW[(dx, dy)]} ({b[0]},{b[1]}) "
+            f"· {n} traversal(s) · runner {runner}</title></line>"
+        )
+
+    for x, y in sorted(f.splits):
+        glyph = rows[y][x] if x < len(rows[y]) else " "
+        dirs = "".join(_ARROW[d] for d in sorted(f.out_dirs[(x, y)]))
+        parts.append(
+            f'<circle class="split" cx="{cx(x)}" cy="{cy(y)}" r="{cell * 0.44:.1f}">'
+            f"<title>SPLIT ({x},{y}) {escape(glyph)} → leaves {dirs}</title></circle>"
+        )
+    for (x, y), n in f.stalls.items():
+        if n < max(4, walk.ticks // 200):
+            continue
+        parts.append(
+            f'<rect class="stall" x="{pad + x * cell + 1}" y="{pad + y * cell + 1}" '
+            f'width="{cell - 2}" height="{cell - 2}" rx="3">'
+            f"<title>STALLED ({x},{y}) {n} ticks — blocked on a pipe, not working"
+            f"</title></rect>"
+        )
+
+    markers = "".join(
+        f'<marker id="a{i}" viewBox="0 0 6 6" markerWidth="5" markerHeight="5" '
+        f'refX="5.2" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="{c}"/>'
+        f"</marker>"
+        for i, c in enumerate(_RUNNER_HUE)
+    )
+    runner_css = "".join(f".e.r{i}{{stroke:{c}}}" for i, c in enumerate(_RUNNER_HUE))
+    split_rows = "".join(
+        f"<tr><td>({x},{y})</td><td><code>"
+        f"{escape(rows[y][x] if x < len(rows[y]) else ' ')}</code></td>"
+        f"<td>{''.join(_ARROW[d] for d in sorted(f.out_dirs[(x, y)]))}</td>"
+        f"<td>{walk.count.get((x, y), 0)}</td></tr>"
+        for x, y in sorted(f.splits, key=lambda c: (c[1], c[0]))
+    )
+    stall_rows = "".join(
+        f"<tr><td>({x},{y})</td><td><code>"
+        f"{escape(rows[y][x] if x < len(rows[y]) else ' ')}</code></td><td>{n}</td>"
+        f"<td>{100 * n / max(walk.ticks, 1):.1f}%</td></tr>"
+        for (x, y), n in f.stalls.most_common(10)
+    )
+    legend = "".join(
+        f'<span><i style="background:{c}"></i>runner {i} route</span>'
+        for i, c in enumerate(_RUNNER_HUE[: max(walk.runners, 1)])
+    )
+    return f"""<!doctype html>
+<meta charset="utf-8"><title>{escape(title)} flow</title>
+<style>
+ body{{font:14px/1.5 ui-sans-serif,system-ui,sans-serif;margin:0;padding:24px;
+  background:#fff;color:#0f172a}}
+ h1{{font-size:19px;margin:0 0 4px}} h2{{font-size:15px;margin:26px 0 8px}}
+ .sub{{color:#64748b;margin:0 0 14px}}
+ .wrap{{overflow:auto;border:1px solid #cbd5e1;border-radius:8px;background:#fff}}
+ svg{{display:block}}
+ .room{{fill:#f8fafc;stroke:#94a3b8;stroke-width:1}}
+ .rlab{{font:10px ui-monospace,monospace;fill:#94a3b8}}
+ .g{{font:12px ui-monospace,Menlo,monospace;text-anchor:middle;dominant-baseline:central;
+  fill:#0f172a}}
+ .k-wall{{fill:#94a3b8}} .k-pipe{{fill:#059669}} .k-nop{{fill:#cbd5e1}}
+ .k-steer{{fill:#ea580c}} .k-branch{{fill:#db2777;font-weight:700}}
+ .k-literal{{fill:#7c3aed}} .k-io,.k-spawn{{fill:#0891b2;font-weight:700}}
+ .dead{{fill:#fecaca;opacity:.75}}
+ .e{{opacity:.85;stroke-linecap:round}} {runner_css}
+ .split{{fill:none;stroke:#db2777;stroke-width:2;stroke-dasharray:3 2}}
+ .stall{{fill:none;stroke:#f59e0b;stroke-width:2}}
+ .legend{{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0;color:#475569;font-size:12px}}
+ .legend span{{display:flex;align-items:center;gap:5px}}
+ .legend i{{width:12px;height:12px;border-radius:3px;display:inline-block}}
+ table{{border-collapse:collapse;font-size:12px}}
+ th,td{{text-align:left;padding:4px 10px;border-bottom:1px solid #e2e8f0}}
+ th{{color:#64748b}} code{{background:#f1f5f9;padding:1px 4px;border-radius:3px}}
+ @media(prefers-color-scheme:dark){{
+  body{{background:#0b1120;color:#e2e8f0}} .wrap{{border-color:#334155}}
+  .room{{fill:#0f172a;stroke:#334155}} .g{{fill:#e2e8f0}} .k-wall{{fill:#475569}}
+  .dead{{fill:#7f1d1d}} th{{color:#94a3b8}} td{{border-color:#1e293b}}
+  code{{background:#1e293b}} .sub,.legend{{color:#94a3b8}} svg{{background:#0b1120}}}}
+</style>
+<h1>{escape(title)} — flow: arrows and splits</h1>
+<p class="sub">{walk.ticks:,} ticks · {len(f.edges):,} distinct moves ·
+ <b>{len(f.splits)}</b> splits · <b>{len(f.joins)}</b> joins ·
+ input <code>{escape(input or "(none)")}</code>.
+ Arrow thickness is traffic; hover anything for detail.</p>
+<div class="wrap"><svg width="{W}" height="{H}" viewBox="0 0 {W} {H}">
+<defs>{markers}</defs>{"".join(parts)}</svg></div>
+<div class="legend">{legend}
+ <span><i style="border:2px dashed #db2777"></i>split (conditional turn)</span>
+ <span><i style="border:2px solid #f59e0b"></i>stalled on a pipe</span>
+ <span><i style="background:#fecaca"></i>never entered</span></div>
+<h2>Splits — where control forks</h2>
+<table><tr><th>cell</th><th>glyph</th><th>leaves</th><th>visits</th></tr>
+{split_rows or '<tr><td colspan="4">none in this trace</td></tr>'}</table>
+<h2>Stalls — ticks spent blocked, not working</h2>
+<table><tr><th>cell</th><th>glyph</th><th>ticks</th><th>of trace</th></tr>
+{stall_rows or '<tr><td colspan="4">none</td></tr>'}</table>
+"""
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("grid", type=Path)
     ap.add_argument("--input", default=None)
     ap.add_argument("--ticks", type=int, default=600)
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--html", type=Path)
+    ap.add_argument("--html", type=Path, help="heat view: first-visit order + scrubber")
+    ap.add_argument("--svg", type=Path, help="flow view: arrows, splits, stalls")
+    ap.add_argument("--cell", type=int, default=20, help="flow view cell size in px")
     args = ap.parse_args()
 
     lm = Littleman()
@@ -392,6 +621,21 @@ def main() -> None:
         args.grid, input=args.input, ticks=args.ticks, workers=args.workers, lm=lm
     )
     print(to_text(prog, cells, walk))
+    f = flow_of(walk)
+    print(
+        f"\nFLOW  {len(f.edges):,} distinct moves, {len(f.splits)} splits, "
+        f"{len(f.joins)} joins, {sum(f.stalls.values()):,} stalled ticks"
+    )
+    for c, n in f.stalls.most_common(4):
+        print(f"  stalled at {c} for {n:,} ticks ({100 * n / max(walk.ticks, 1):.0f}%)")
+    if args.svg:
+        args.svg.write_text(
+            to_svg(
+                prog, cells, walk, title=args.grid.name, input=args.input, cell=args.cell
+            ),
+            encoding="utf-8",
+        )
+        print(f"wrote {args.svg}")
     if args.html:
         args.html.write_text(
             to_html(prog, cells, walk, title=args.grid.name, input=args.input),
