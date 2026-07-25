@@ -528,9 +528,15 @@ def worker() -> tuple[Circuit, list[_Block], DebugMap]:
         p.start(row)
         for tok in toks:
             p.token(tok)
-        r1 = p.exit_west(3 if name in JOG_POS else 2, row)
+        # A branch's north lane leaves through ``(c_b, r1-1)``, so that row has
+        # to be a plain code row: on the entry row the channel is full of the
+        # predecessors' eastbound merges.  Hence three rows for a branch.
+        r1 = p.exit_west(3 if isinstance(succ[name], dict) else 2, row)
         blocks.append(_Block(name, row, r1, succ[name]))
-        row = r1 + 1
+        # A ``neg`` lane that halts needs an ``H`` one row below the branch, and
+        # that row has to belong to *this* block: on the next block's entry row
+        # it would sit squarely across the eastbound merge that reaches it.
+        row = r1 + 1 + (isinstance(succ[name], dict) and "HALT" in succ[name].values())
     height = row
 
     # the spawn: the man appears facing east and walks into INIT's entry `>`
@@ -571,9 +577,22 @@ def _route_branch(c: Circuit, b: _Block, entry: dict[str, int], tok: str) -> Non
             # the man walks the channel from the code area to the branch: those
             # cells are transit, so nothing may later be placed on them
             for x in range(cb + 1, ENTRY_COL + 1):
+                if c.get(x, b.r1) != " ":
+                    raise Collision(f"{b.name}: {c.get(x, b.r1)!r} on the walk to the branch")
                 c.set(x, b.r1, " ")
                 c.reserved.add((x, b.r1))
-            for lane, d in dirs.items():
+            # Two lanes of one branch can share a successor, and then the second
+            # wire has to merge into the first one's ``>`` while heading east —
+            # which only works if the *easternmost* turn column is claimed
+            # first.  N and S own ``c_b``; the jog and the straight lane are
+            # always west of it, so that is the order.
+            def _rank(item: tuple[str, tuple[int, int]]) -> int:
+                d = item[1]
+                if d is N:
+                    return 2 if b.name in JOG_POS else 0
+                return 1 if d is S else 3
+
+            for lane, d in sorted(dirs.items(), key=_rank):
                 target = b.succ[lane]
                 if target == "HALT":
                     if d is not S:
