@@ -23,7 +23,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Callable
 
-__all__ = ["Store", "StoreError", "DictStore", "SpillRing", "StreamUnit"]
+__all__ = ["Store", "StoreError", "DictStore", "SpillRing", "StreamUnit", "SnakeUnit"]
 
 READ = 0
 WRITE = 1
@@ -263,3 +263,114 @@ class StreamUnit:
         if not ring:
             raise StoreError(f"STREAM: {what} is empty; the real unit would block forever")
         return ring.popleft()
+
+
+class SnakeUnit:
+    """A model of ``snake_unit.py``'s body-ring coprocessor — a FIFO and a panel.
+
+    The same ``8 * arg + code`` wire format as :class:`StreamUnit`, and the same
+    reason for it: that is literally what the real unit's decode trie reads.
+
+    Two things make this unit unlike the STREAM block, and both are forced rather
+    than chosen:
+
+    * **It answers nothing.** ``ARCH.md`` §7.1 makes an incoming pipe a rival for
+      every ``r`` in the CPU, so a response pipe on the south wall competes with the
+      jump slab's ROM read — measured, in all 4,800 placements of a snake program
+      that had an ``RCV``. So the unit cannot report a collision; it has to *act* on
+      one, which is why ``STEP`` either moves the snake or ends the game.
+    * **It owns the display.** The three LM-75 ports hang off this block rather than
+      off the CPU, so the CPU has no display lanes at all. Writes go through the
+      emulator's own ``display_writes`` hook, which is what lets
+      ``display.frames_from_writes`` grade a machine whose CPU never draws.
+
+    The body is a ``deque`` because a rotate-only FIFO is nothing more than one. What
+    the model lacks is the hardware's finite ring capacity, so it records a high-water
+    mark for the generator to size the real pipes against (the snake cannot exceed 50
+    cells: a growth needs a spawn round *and* a tick round).
+    """
+
+    #: arm -> command code. The real unit derives these from its trie's geometry, and
+    #: the tests assert the two tables agree — move a leaf and this has to move too.
+    CODES = {"GROW": 0, "STEP": 1, "FRUIT": 2, "RED": 3}
+
+    #: ``display.py``'s port numbers, repeated rather than imported to keep this
+    #: module free of the display model.
+    ADDR, DATA, SWAP = 0, 1, 2
+
+    GREEN, RED_, BLACK = 10, 9, 0
+
+    def __init__(self, write_display: Callable[[int, int], None]) -> None:
+        self._write = write_display
+        self.body: deque[int] = deque()
+        self.words = 0  # command words across the CPU's pipe (the tick model bills these)
+        self.rotations = 0  # ring rotations, i.e. cells compared or painted
+        self.high_water = 0
+        self.stopped = False
+
+    # ── wire protocol ────────────────────────────────────────────────────────
+    def send(self, word: int) -> None:
+        """One command word: ``8 * arg + code``."""
+        if self.stopped:
+            # The man halted on the losing frame. The real cmd pipe simply fills up;
+            # nothing is meant to follow, since the test case has ended.
+            return
+        self.words += 1
+        code, arg = word & 7, word >> 3
+        if code == self.CODES["GROW"]:
+            self._append(arg)
+            self._commit()
+        elif code == self.CODES["STEP"]:
+            self._step(arg // 256, arg % 256)
+        elif code == self.CODES["FRUIT"]:
+            self._paint(arg, self.RED_)
+            self._commit()
+        elif code == self.CODES["RED"]:
+            if arg != len(self.body):
+                raise StoreError(f"SNAKE: RED {arg} against a body of {len(self.body)}")
+            self.rotations += arg
+            self._die()
+        else:
+            raise StoreError(f"SNAKE: no arm for command code {code}")
+
+    def recv(self) -> int:
+        raise StoreError("SNAKE: the unit answers nothing; a program with RCV cannot bind")
+
+    # ── arms ─────────────────────────────────────────────────────────────────
+    def _step(self, n: int, cell: int) -> None:
+        """One ordinary tick: scan, then move or lose.
+
+        The scan skips the **first** value, which is the tail. That is the rule "the
+        tail moves before the head" expressed as geometry rather than as a special
+        case: the cell it is vacating cannot be a collision.
+        """
+        if n != len(self.body):
+            raise StoreError(f"SNAKE: STEP {n} against a body of {len(self.body)}")
+        self.rotations += n
+        if cell in list(self.body)[1:]:
+            self._die()  # the body does not move: it is drawn where it was
+            return
+        self._paint(self.body.popleft(), self.BLACK)
+        self._append(cell)
+        self._commit()
+
+    def _die(self) -> None:
+        for cell in self.body:
+            self._paint(cell, self.RED_)
+        self._commit()
+        self.stopped = True
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _append(self, cell: int) -> None:
+        self.body.append(cell)
+        self.high_water = max(self.high_water, len(self.body))
+        self._paint(cell, self.GREEN)
+
+    def _paint(self, cell: int, colour: int) -> None:
+        self._write(self.ADDR, cell)
+        self._write(self.DATA, colour)
+
+    def _commit(self) -> None:
+        # 1, never 0: the panel is a persistent framebuffer, so `next` and the cursor
+        # survive a commit and only the pixels that changed are ever written.
+        self._write(self.SWAP, 1)
