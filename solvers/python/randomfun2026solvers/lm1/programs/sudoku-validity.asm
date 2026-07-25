@@ -6,8 +6,9 @@
 ;
 ; The natural encoding is a set-membership array — seen[r][v], seen[c][v],
 ; seen[box][v], 3 x 9 x 9 = 243 cells. **That does not fit.** `memory_tape`'s
-; verified tape is geometrically capped at 84 slots in its 32x32 box, and a bigger
-; tape costs footprint on a problem that is otherwise tiny.
+; verified tape is geometrically capped at 103 slots in its 32x32 box (build_v2
+; tries folds in order and fold 0 gives the most; N=103 builds, N=104 does not),
+; so 243 is out of reach by a factor of two.
 ;
 ; So each of the 27 sets is a **bitmask in one cell**: bit v-1 of ROW+r is set iff
 ; digit v already appears in row r. 27 cells instead of 243, and a membership test
@@ -22,7 +23,7 @@
 ;
 ; Addresses start at 1: the generated hardware encodes the operation in the *sign*
 ; of the address word (+a = read, -a = write), so slot 0 is ambiguous and unused.
-; Highest address used is BOX+8 = 36, well inside the tape's 84 slots.
+; Highest address used is BOX+8 = 36, comfortably inside the tape's 103 slots.
 
 .equ R    1                 ; this cell's row
 .equ C    2                 ; this cell's column

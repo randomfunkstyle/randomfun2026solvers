@@ -35,7 +35,7 @@ MAX_INSTRUCTIONS = 3_000_000
 #: problems. No program here should claim to solve one of these.
 #:
 #: ``sudoku-validity`` came off this list: it looked blocked because its natural
-#: encoding is 3 x 9 x 9 = 243 set-membership flags and the tape caps at 84 slots,
+#: encoding is 3 x 9 x 9 = 243 set-membership flags and the tape caps at 103 slots,
 #: but as 27 one-cell bitmasks it needs only 36 addresses. What unblocked it was an
 #: encoding change plus one opcode (`AND`), not a bigger STORE block.
 BLOCKED = {
