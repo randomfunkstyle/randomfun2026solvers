@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .asm import Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
-from .store import DictStore, SnakeUnit, SpillRing, Store, StreamUnit
+from .store import DictStore, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
 
 __all__ = [
     "Round",
@@ -152,7 +152,7 @@ class Emulator:
         self.words = list(program.words)
         self.store: Store = store if store is not None else DictStore()
         self.spill = spill if spill is not None else SpillRing()
-        self._stream: StreamUnit | SnakeUnit | None = None
+        self._stream: StreamUnit | SnakeUnit | PathUnit | None = None
         self.tick_model = ticks
 
         self.a = 0
@@ -292,19 +292,23 @@ class Emulator:
 
     # ── STREAM: created on first use, since it owns the I and O rooms ────────
     @property
-    def stream(self) -> StreamUnit | SnakeUnit:
+    def stream(self) -> StreamUnit | SnakeUnit | PathUnit:
         """The coprocessor the program named with ``.unit``, wired to this run.
 
         Lazily built because a unit *is* part of the machine's I/O on a program that
         has one: the STREAM block's ``RDIN`` arm hands input words to the CPU and its
-        ``EMIT`` arm writes the output room, and the snake unit owns the LM-75 — so in
-        both cases the hooks have to be this emulator's own. Recording the snake
-        unit's port writes in ``display_writes`` is what lets
+        ``EMIT`` arm writes the output room, and the snake and path units own the
+        LM-75 — so in every case the hooks have to be this emulator's own. Recording a
+        display-owning unit's port writes in ``display_writes`` is what lets
         ``display.frames_from_writes`` grade a machine whose CPU never draws.
         """
         if self._stream is None:
             if self.program.unit == "snake":
                 self._stream = SnakeUnit(
+                    lambda port, value: self.display_writes.append((port, value))
+                )
+            elif self.program.unit == "path":
+                self._stream = PathUnit(
                     lambda port, value: self.display_writes.append((port, value))
                 )
             else:

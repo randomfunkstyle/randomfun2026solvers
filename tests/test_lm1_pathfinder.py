@@ -119,3 +119,19 @@ def test_the_tape_is_sized_to_the_program_not_the_board() -> None:
     text = ASM.read_text()
     assert f"TAPE_SIZE['pathfinder'] = {TAPE_SIZE['pathfinder']}" in text
     assert TAPE_SIZE["pathfinder"] < 64
+
+
+def test_the_model_agrees_with_the_contests_own_expected_frames() -> None:
+    """The strongest check available, and it validates the *oracle* rather than the
+    program: `pathfinder.json` ships the expected frames per round, so this compares
+    our BFS and its tie-break against the contest's ground truth instead of against
+    another thing we wrote. In particular it is what settles the reading of "prefer
+    moving up, then right, then down, then left" as a per-step greedy rule among
+    neighbours that stay on a shortest path.
+    """
+    for case in _cases():
+        official = [f for r in case["rounds"] for f in (r.get("frames") or [])]
+        assert official, f"{case['name']!r}: the problem JSON ships no frames"
+        board, rx, ry, flags = parse_case_rounds(_rounds(case))
+        mine = [frame_rows(f) for f in solve_case(board, rx, ry, flags)]
+        assert mine == official, f"{case['name']!r}: model disagrees with the contest"
