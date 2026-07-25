@@ -31,6 +31,7 @@ from __future__ import annotations
 import sys
 
 from randomfun2026solvers.circuit import GLYPH, Circuit, Collision, E, W, N, S
+from randomfun2026solvers.man_debug import DebugMap
 
 # ── rows (worker interior) ────────────────────────────────────────────────────
 R_INIT, R_TRANSIT1 = 0, 4
@@ -215,7 +216,9 @@ def tape_slots_of(n: int) -> tuple[int, int]:
     return sum(r.count("-") + r.count("|") for r in rows), n + 1
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and not any(
+    arg == "--v2" or arg.startswith("--debug-") for arg in sys.argv[1:]
+):
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     if "--worker" in sys.argv[2:]:
         print(worker(n).ruler())
@@ -369,3 +372,96 @@ def build_v2(n: int) -> list[str]:
             if "slots" not in str(exc):
                 raise
     raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def assemble_v2_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the compact tape machine plus named regions, pipes, and routes.
+
+    The .man grid has no comment syntax.  This sidecar deliberately keeps the
+    geometry in one place, including the fold picked for the requested capacity.
+    """
+    last: Collision | None = None
+    fold = 0
+    rows: list[str] | None = None
+    for candidate in (0, 2, 4, 6, 8, 10):
+        try:
+            rows = assemble_v2(n, candidate)
+            fold = candidate
+            break
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    if rows is None:
+        raise Collision(f"no fold gives enough tape slots: {last}")
+
+    wx, wy = 7, 7
+    iw, ih = V2_IW, V2_IH
+    dbg = DebugMap(f"memory tape v2 n={n}, fold={fold}")
+    dbg.region("worker", wx, wy, iw, ih, note="operation decode, two tape passes, and target access", color="#38bdf8")
+    dbg.region("init", wx, wy, 20, 6, note="fill the tape with n zero values", color="#64748b")
+    dbg.region("main-dispatch", wx, wy + 2, 15, 3, note="opcode 0 enters read setup; opcode 1 enters write setup", color="#60a5fa")
+    dbg.region("first-pass", wx + 10, wy + 4, 4, 7, note="rotate addr values from tape head to target", color="#22c55e")
+    dbg.region("target-dispatch", wx + 13, wy + 8, 4, 4, note="sign of B selects read or write target", color="#f59e0b")
+    dbg.region("read-target", wx + 15, wy + 10, 7, 3, note="read target; S emits it and returns it to tape", color="#a78bfa")
+    dbg.region("write-target", wx + 1, wy + 8, 14, 6, note="receive new input, append it, consume old target", color="#fb923c")
+    dbg.region("second-pass", wx + 10, wy + 13, 4, 5, note="return remaining n-1-addr values to their original alignment", color="#14b8a6")
+
+    iy = wy + V2_IN_ROW
+    ox = wx + V2_OUT_COL
+    dbg.region("input-room", wx - 6, iy - 1, 3, 3, note="operation stream", color="#22c55e")
+    dbg.region("output-room", ox - 1, wy - 6, 3, 3, note="read results", color="#a78bfa")
+
+    bottom_y = wy + ih
+    fy = wy + V2_FWD_ROW
+    ret_col = wx + V2_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 6
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    adj = len(RELAY[0]) + 1
+    fwd = [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)]
+    ret = [
+        (adj, r_a), (east - 1, r_a), (east - 1, r_b), (adj + fold, r_b),
+        (adj + fold, r_c), (ret_col, r_c), (ret_col, bottom_y + 1),
+    ]
+    dbg.region("relay", 1, relay_y, len(RELAY[0]), len(RELAY), note="turnaround room for the value ring", color="#fb7185")
+    dbg.lane("tape-forward-pipe", fwd, kind="pipe", expect="worker sends values toward relay", color="#34d399")
+    dbg.lane("tape-return-pipe", ret, kind="pipe", expect="relay returns values into worker bottom wall", color="#10b981")
+    dbg.lane("input-pipe", [(wx - 3, iy), (wx - 1, iy)], kind="pipe", expect="operations enter worker", color="#22c55e")
+    dbg.lane("output-pipe", [(ox, wy - 2), (ox, wy - 5)], kind="pipe", expect="read values leave worker", color="#a78bfa")
+
+    # These are semantic lanes, not additional tracks: they state the intended
+    # runner route used by the focused tracer.
+    dbg.lane("read-setup", [(wx + 3, wy + 2), (wx + 15, wy + 2), (wx + 15, wy + 4), (wx + 10, wy + 4)], kind="expected", expect="op=0: addr -> B=+(n-addr), BP=addr", color="#60a5fa")
+    dbg.lane("write-setup", [(wx + 3, wy + 3), (wx + 15, wy + 3), (wx + 15, wy + 4), (wx + 10, wy + 4)], kind="expected", expect="op=1: addr -> B=-(n-addr), BP=addr", color="#fb923c")
+    dbg.lane("first-tape-pass", [(wx + 11, wy + 5), (wx + 12, wy + 5), (wx + 12, wy + 8), (wx + 11, wy + 8), (wx + 11, wy + 5)], kind="expected", expect="pass exactly addr values through the ring", color="#22c55e")
+    dbg.lane("read-target-access", [(wx + 15, wy + 10), (wx + 15, wy + 11), (wx + 20, wy + 11)], kind="expected", expect="target read is sent to output and tape", color="#a78bfa")
+    dbg.lane("write-target-access", [(wx + 15, wy + 9), (wx + 2, wy + 9), (wx + 2, wy + 12), (wx + 12, wy + 12)], kind="expected", expect="new value enters before old target is discarded", color="#fb923c")
+    dbg.lane("second-tape-pass", [(wx + 11, wy + 14), (wx + 12, wy + 14), (wx + 12, wy + 17), (wx + 11, wy + 17), (wx + 11, wy + 14)], kind="expected", expect="pass n-1-addr remaining values; alignment is restored", color="#14b8a6")
+    dbg.scenario(
+        "write-read-7",
+        "1 7 42 0 7",
+        700,
+        2100,
+        watch=["write-setup", "first-tape-pass", "write-target-access", "second-tape-pass", "tape-forward-pipe", "tape-return-pipe"],
+        note="write 42 at address 7, then read address 7",
+    )
+
+    # assemble_v2 removes leading all-blank rows, so translate the sidecar too.
+    first_row = wy - 6
+    return rows, dbg.translated(0, -first_row)
+
+
+if __name__ == "__main__" and any(
+    arg == "--v2" or arg.startswith("--debug-") for arg in sys.argv[1:]
+):
+    numeric_args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    n = int(numeric_args[0]) if numeric_args else 100
+    rows, debug = assemble_v2_debug(n)
+    for arg in sys.argv[1:]:
+        if arg.startswith("--debug-json="):
+            debug.write_json(arg.split("=", 1)[1])
+        elif arg.startswith("--debug-html="):
+            debug.write_html(rows, arg.split("=", 1)[1])
+    print("\n".join(rows))
