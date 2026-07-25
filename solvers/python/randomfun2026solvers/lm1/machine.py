@@ -1282,6 +1282,7 @@ def build(
     display: tuple[int, int] | None = None,
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
+    packed_rom: bool = True,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -1298,6 +1299,11 @@ def build(
     own ring and the machine stalls, emitting nothing — so the off-by-one is checked
     here instead. Only *static* addresses can be checked; a program computing them at
     run time has to size its own tape and is trusted to.
+
+    ``packed_rom`` lays the ROM with :func:`rom.build_packed_rom` — variable-width
+    tokens instead of one padded fixed width, which roughly halves it. Pass ``False``
+    for the original fixed-width fold; the word stream is identical either way, so it
+    is purely a size/speed choice.
     """
     p = plan(program)
     words = rom_words(program, p)
@@ -1322,11 +1328,31 @@ def build(
         for pad in pads:
             try:
                 return _assemble(
-                    program, p, words, tape_n, rom_rows, pad, display, stream, resp_pad, spad
+                    program, p, words, tape_n, rom_rows, pad, display, stream, resp_pad,
+                    spad, packed_rom,
                 )
             except MachineError as exc:
                 last = exc
     raise MachineError(f"no pad pair makes every pipe bind; last: {last}")
+
+
+def _packed_fold(words: list[int], budget: int) -> int:
+    """Fewest rows that keep a packed ROM within ``budget`` columns.
+
+    The packed builder is driven by row count and derives the narrowest width that
+    fits, so this inverts it: width falls monotonically as rows rise, which makes
+    the search a bisection. Same intent as :func:`rom.rows_for_budget` — trade width
+    into height only until the ROM stops being the widest thing in the machine.
+    """
+    room = budget - 5  # two turn columns, the riser, and two walls
+    lo, hi = 1, max(1, len(words))
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if rommod.width_for_rows(words, mid) <= room:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
 
 
 def _assemble(
@@ -1340,18 +1366,26 @@ def _assemble(
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
     stream_pad: int = 0,
+    packed_rom: bool = True,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad)
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
     # from the other (footprint is max(w, h)^2, ARCH.md §7.4).
-    nrows = (
-        rom_rows
-        if rom_rows is not None
-        else rommod.rows_for_budget(len(words), rommod.digit_width(words), max(40, W))
-    )
-    romlay = rommod.build_rom(words, rows=nrows)
+    if packed_rom:
+        # Packed tokens are ~half the cells, so the same column budget swallows
+        # roughly twice as many words per row and the default fold is that much
+        # shallower (rom.build_packed_rom).
+        nrows = rom_rows if rom_rows is not None else _packed_fold(words, max(40, W))
+        romlay = rommod.build_packed_rom(words, rows=nrows)
+    else:
+        nrows = (
+            rom_rows
+            if rom_rows is not None
+            else rommod.rows_for_budget(len(words), rommod.digit_width(words), max(40, W))
+        )
+        romlay = rommod.build_rom(words, rows=nrows)
 
     g = _Grid()
 
@@ -1762,44 +1796,45 @@ TAPE_SIZE = {
 #: because a ring is briefly holding one more than it stores.
 STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 
-#: ROM fold overrides, where ``rom.rows_for_budget``'s default is not the footprint
-#: optimum. The default folds the ROM toward the *CPU's own* width, which is right
-#: only while the CPU and the tape are the sole things setting the bounding box.
-#: ``brackets`` and ``tcp`` come out width-bound, so their height is free and the
-#: default costs nothing; the two below are height-bound and had to be folded flatter
-#: and wider. Every machine here is ~112 columns (adapter + the 32-wide tape), so the
-#: rule of thumb is: fold until the ROM is no wider than that, and no further.
+#: ROM fold overrides, where the default heuristic is not the footprint optimum.
+#: The default folds the ROM toward the *CPU's own* width, which is right only while
+#: the CPU and the tape are the sole things setting the bounding box.
 #:
-#: Both numbers are the minimum over every fold, and both are checked against the
-#: default in the tests, so a regression in the heuristic is a failure rather than a
-#: quietly worse score.
+#: Every number here is the minimum over a full fold sweep, and every one is checked
+#: against the default in the tests, so a regression in the heuristic is a failure
+#: rather than a quietly worse score.
 #:
-#: Kept per-slug rather than folded into the heuristic so the checked-in
-#: ``brackets``/``tcp`` grids stay byte-identical.
+#: All of them were re-swept for the **packed** ROM (``rom.build_packed_rom``), which
+#: is the default. Packed tokens are roughly half the cells, so the same word count
+#: wants about half as many rows and every entry moved: a fold tuned for the padded
+#: fixed-width ROM now overshoots and makes height binding again. ``brackets`` and
+#: ``tcp`` still need no entry — they are width-bound by the machine, not the ROM, so
+#: their height is free and the default costs nothing.
 ROM_ROWS = {
-    # The panel adds ~30 rows and makes height the binding dimension, so this is the
-    # minimum over every fold: 112x116 (13,456) against the default's 112x148 (21,904).
-    # 20 rows is where the ROM stops being what sets the width (112 is the adapter plus
-    # the 32-wide tape); folding further only adds height. `plotter` is height-bound
-    # past that point, which is why unrolling its inner loop (see plotter.asm) is a real
-    # footprint trade rather than a free one — it is still a large net win on score,
-    # since it cuts ticks 24% for 7% more area. See tests/test_lm1_display.py.
-    "plotter": 20,
+    # The panel adds ~30 rows and makes height binding, so the ROM has to stop being
+    # what sets the width and then stop: 111x104 (12,321) at 8 rows, against the
+    # default's 111x123 (15,129). `plotter` is height-bound past that point, which is
+    # why unrolling its inner loop (see plotter.asm) is a real footprint trade rather
+    # than a free one. See tests/test_lm1_display.py.
+    "plotter": 8,
     # gradebook's three per-student scans are unrolled 16 ways (see gradebook.asm on
     # why a loop iteration costs a whole ROM lap), so its image is 836 words and the
-    # ROM, not the tape, sets the box. The minimum over every fold is 117x123
-    # (15,129); the default's 48-column fold is 279x89 (77,841). Height-bound past
-    # ~56 rows, width-bound below ~50. See tests/test_lm1_gradebook.py.
-    "gradebook": 53,
-    # 89x94 at 37 rows against 84x146 at the default: no display and a 30-slot tape
-    # leave the machine narrow enough that the default fold makes height binding.
-    # See tests/test_lm1_sudoku.py.
-    "sudoku-validity": 37,
-    # matmul is the one machine that comes out *square* (96x96): the STREAM block's
-    # ring band is as wide as the tape row above it, and its height is what the ROM
-    # trades against. 11 rows is the sweep minimum, and the sweep is not flat here —
-    # 10 rows costs 15 % and 18 rows (the old, tape-only build's fold) costs 15 %.
-    "matmul": 11,
+    # ROM, not the tape, sets the box. 31 rows is the first fold that gets the ROM
+    # under the machine's own 113 columns; wider costs width, narrower only costs
+    # height. 113x101 (12,769). See tests/test_lm1_gradebook.py.
+    "gradebook": 31,
+    # No display and a 30-slot tape leave the machine 83 columns wide, so the same
+    # rule applies one size down: 23 rows is where the ROM stops setting the width.
+    # 83x80 (6,889). See tests/test_lm1_sudoku.py.
+    "sudoku-validity": 23,
+    # matmul is the one machine that came out *square* on the padded ROM (96x96). The
+    # STREAM block's ring band is as wide as the tape row above it, and its height is
+    # what the ROM trades against; packed, the trade lands at 88x90 (8,100) on 5 rows.
+    "matmul": 5,
+    # palette needed no entry while its ROM was padded — the default fold happened to
+    # be right. Packed, the default over-folds into 97x99 and 6 rows recovers 97x78
+    # (9,409); the width is the machine's, so the ROM only ever costs height here.
+    "palette": 6,
 }
 
 
