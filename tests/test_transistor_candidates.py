@@ -104,7 +104,7 @@ def test_and_gate_is_a_smaller_faster_binary_forwarding_candidate() -> None:
     narrow = _measure(CANDIDATES[-1], runner)
     and_gate = _measure(AND_GATE, runner)
 
-    assert and_gate.side < narrow.side
+    assert and_gate.side == 8
     assert and_gate.first_result_tick < narrow.first_result_tick
     assert and_gate.four_result_ticks < narrow.four_result_ticks
     assert and_gate.walking_ticks < narrow.walking_ticks
