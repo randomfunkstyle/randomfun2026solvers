@@ -1,0 +1,16 @@
+# brackets — submission c213ec57-85c1-4fd6-b5ef-e218d5390f1a
+
+verdict      done: 26/26 cases, area2 9216, avgTicks 54,502, score 502,289,014
+submitted    2026-07-25T16:29:37+0300
+grid         96x74
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  61545e8827f3dab123386d41a13dfcd2ce5104bb0a4a42e2b3fb168e640be4b3
+commit       b8998ca
+local        brackets: 9/9 public cases, avg 28,293 ticks
+source       tasks/compacted/brackets_96x74.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+sweep: cut col 42 + row 56, capacities declared per pipe role. 97x75 -> 96x74.

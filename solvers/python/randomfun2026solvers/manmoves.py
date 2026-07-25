@@ -37,6 +37,8 @@ __all__ = [
     "try_squash",
     "stretch_col",
     "stretch_row",
+    "try_shift_content",
+    "hug_violations",
     "reglyph",
     "ring_capacity",
 ]
@@ -606,6 +608,71 @@ def _squash(ast: Ast, room_id: int, axis: str, index: int,
         if have < need:
             raise MoveError(f"pipe group {group} fell to {have} cells against a need of {need}")
     return rep
+
+
+def _shift_content(ast: Ast, room_id: int, dx: int, dy: int) -> DropReport:
+    """Slide a room's **contents** inside its walls, leaving the box where it is.
+
+    The move that shortens a hot loop without removing anything. A room's ports sit
+    on its walls at fixed columns, and ``s``/``r`` bind to the nearest pipe — so the
+    boundary between two same-wall pipes falls at their midpoint, and any op that
+    must bind to the far one has to sit beyond it. The lap then walks out to that
+    column and back **every time round**, which makes the distance between the code
+    and the boundary a per-lap cost rather than a one-off.
+
+    Sliding the whole band one or two columns moves its pushes without changing
+    their order, which is exactly how ``plotter`` took its two south send ports from
+    30/38 to 30/34 and its pixel loop from 78.6 to 74.7 ticks. Nothing is added or
+    deleted; only the distance to the boundary changes.
+
+    Bindings are the thing this move puts at risk — it changes what is nearest to
+    what, by design — so the caller must re-parse and diff. Geometry alone cannot
+    tell you whether it worked.
+    """
+    room = next((r for r in ast.rooms if r.id == room_id), None)
+    if room is None:
+        raise MoveError(f"no room{room_id}")
+    inner = {
+        (x, y)
+        for x in range(room.x + 1, room.x + room.w + 1)
+        for y in range(room.y + 1, room.y + room.h + 1)
+    }
+    moved: set[tuple[int, int]] = set()
+    for child in room.children:
+        for cx, cy in child.paint():
+            moved.add((cx + dx, cy + dy))
+    outside = sorted(moved - inner)
+    if outside:
+        raise MoveError(
+            f"shifting room{room_id} by ({dx},{dy}) puts {len(outside)} glyph(s) into or "
+            f"through its wall, first at {outside[0]}"
+        )
+    for child in room.children:
+        child.translate(dx, dy) if isinstance(child, Corridor) else _move_child(child, dx, dy)
+    return DropReport(
+        axis="content", index=0, rooms_shrunk=[room_id],
+        note=f"shift room{room_id} contents by ({dx},{dy})",
+    )
+
+
+def _move_child(child, dx: int, dy: int) -> None:
+    child.x += dx
+    child.y += dy
+
+
+def try_shift_content(
+    ast: Ast, room_id: int, dx: int, dy: int
+) -> tuple[Ast | None, DropReport | str]:
+    """Attempt a content shift on a *copy*; return it, or why it was refused."""
+    import copy
+
+    trial = copy.deepcopy(ast)
+    try:
+        rep = _shift_content(trial, room_id, dx, dy)
+        render(trial)
+    except (MoveError, PaintError) as exc:
+        return None, str(exc)
+    return trial, rep
 
 
 def try_squash(

@@ -1,0 +1,16 @@
+# gradebook — submission 812e4aaa-371a-44cc-8377-6764d5a233f8
+
+verdict      done: 20/20 cases, area2 13924, avgTicks 820,103, score 11,419,119,045
+submitted    2026-07-25T17:04:16+0300
+grid         117x118
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  1ec60c62222b8d8bf95aeed178a1f1e6dcc6d99eb9d7bf8a44343401becaeb04
+commit       b8998ca
+local        gradebook: 7/7 public cases, avg 320,760 ticks
+source       tasks/compacted/gradebook_117x118.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+output room moved off the bottom onto room2's east wall: the 3x3 box and its 2-cell stub were the only things below row 117. 117x123 -> 117x118, factor 15129 -> 13924, ticks unchanged.

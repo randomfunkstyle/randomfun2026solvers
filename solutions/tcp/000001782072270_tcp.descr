@@ -1,0 +1,16 @@
+# tcp — submission 286a2a62-fa39-4d4d-b66b-c1e6bb4f0fdc
+
+verdict      done: 20/20 cases, area2 12100, avgTicks 147,279, score 1,782,072,270
+submitted    2026-07-25T16:30:04+0300
+grid         110x77
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  9f795be17576b7d0fc41ab1f426d0eb1078b22e869d56bf907bcd24bbcc6ffb9
+commit       b8998ca
+local        tcp: 6/6 public cases, avg 92,262 ticks
+source       tasks/compacted/tcp_110x77.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+sweep: cut col 56 + row 51, capacities declared per pipe role. 111x78 -> 110x77.

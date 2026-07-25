@@ -1,0 +1,16 @@
+# sudoku-validity — submission 2a2a387f-bed3-4ad6-8f9e-fa6f4421ed79
+
+verdict      done: 20/20 cases, area2 7921, avgTicks 460,467, score 3,647,361,483
+submitted    2026-07-25T17:08:59+0300
+grid         89x88
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  c759d8af2c70cb524a98628d404a481bca39f4e5ff22fbb29dcfdeba8e25a1f8
+commit       b8998ca
+local        sudoku-validity: 6/6 public cases, avg 452,654 ticks
+source       tasks/compacted/sudoku_right.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+output room moved off the bottom onto room2's east wall (same move as gradebook). 89x93 -> 89x88, factor 8649 -> 7921, ticks unchanged.

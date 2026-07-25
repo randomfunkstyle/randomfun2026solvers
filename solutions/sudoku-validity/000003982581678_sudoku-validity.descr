@@ -1,0 +1,16 @@
+# sudoku-validity — submission fb051734-3515-45cc-bd59-9129cdb407f7
+
+verdict      done: 20/20 cases, area2 8649, avgTicks 460,467, score 3,982,581,678
+submitted    2026-07-25T16:43:58+0300
+grid         89x93
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  b6e6a93d14ceb589777f5de9bdc62c08f79dbaab933e62655a70f6e8b8ddcd77
+commit       b8998ca
+local        sudoku-validity: 6/6 public cases, avg 452,654 ticks
+source       tasks/compacted/sudoku_89x93.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+sweep: cut row 87, capacities declared per pipe role. 89x94 -> 89x93.
