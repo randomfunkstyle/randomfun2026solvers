@@ -124,7 +124,7 @@ non-blocked man steps one cell along his heading). Snapshot subtlety: at tick
 | Control | `.`/space nop; `H` halt this man |
 | Backpack | `b` BP=A · `m` BP-=1 · `d`/`a` turn cw/ccw if BP>0 (counted loop) · `q` BP=count in nearest incoming pipe · `]` BP>>=1 · `x` turn by BP low bit (binary decomp) |
 | Pipes | `s` send nearest-out · `S` send all-out · `r` recv nearest-in · `R` recv any-in · `U` like R + turn away · (all block; `no-pipe` fatal if no pipe on the needed side) |
-| Split | `Y` man turns cw, a copy (same A/B/BP) exits one cell ccw — **only way to get >1 man in a room** |
+| Split | `Y` replaces the man with right/left children (same A/B/BP), born one cell CW/CCW; they execute next tick — **only way to get >1 man in a room** |
 
 **Pipes** carry values one-way between two rooms, FIFO, capacity = length,
 min length 2; body `-`/`|`, arrowheads `> < ^ v` point with the flow.
@@ -313,8 +313,11 @@ problemSetVisible, orderInSet, status}` — the `id` is the `problemId` for subm
 
 - **Snapshot is pre-execution**: the glyph under a man at tick *t* fires at *t+1*.
 - **`/` is floored division, remainder → B** — not a fork. The split op is **`Y`**.
-- **`Y` split** is undocumented on the site but valid; it's the only way to run
-  more than one man in a single room (footprint-friendly parallelism).
+- **`Y` split** is documented on the supplemental
+  [`/split`](https://icfpcontest2026.com/split) page. Children execute their
+  birth cells next tick; right retains order, left acts last. Birth/movement
+  collisions kill men without a fatal error, while a wall birth is fatal.
+- **`C` is not split.** The published glyph is `Y`.
 - **Pipe "nearest" can block** behind a busy pipe even if another is idle — use
   `R`/`U` (any-ready) or lay pipes carefully.
 - **ASCII problems** are still plain decimal ints on the wire (`"hi"` = `104 105`).

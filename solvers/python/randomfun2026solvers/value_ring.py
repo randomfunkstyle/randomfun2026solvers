@@ -47,13 +47,20 @@ from randomfun2026solvers.circuit import Circuit, Collision, E, N, S, W
 
 __all__ = ["build_reverse", "build_sort", "reverse_worker", "sort_worker"]
 
-# ── relay: the ring's turnaround room (6 ticks/word, same as the worker) ──────
-RELAY = [
-    "+----+",
-    "|@ >v|",
-    "|  sr|",
-    "|  ^<|",
-    "+----+",
+# ── relay: U reverses at the incoming pipe (6 ticks/word) ────────────────────
+RELAY_NORTH = [
+    "+---+",
+    "| U<|",
+    "| s^|",
+    "|@>^|",
+    "+---+",
+]
+RELAY_SOUTH = [
+    "+---+",
+    "|@>v|",
+    "| sv|",
+    "| U<|",
+    "+---+",
 ]
 
 
@@ -192,11 +199,11 @@ def build_reverse() -> list[str]:
     # the ring, coiled in the east strip: out at the worker's top-right corner,
     # down through the relay, back in at its bottom-right.
     east = wx + REV_IW + 1  # first free column east of the wall
-    stamp(g, east + 1, 10, RELAY)
-    n_fwd = draw_pipe(g, [(east, wy + REV_FWD_ROW), (east + 5, wy + REV_FWD_ROW), (east + 5, 9)])
+    stamp(g, east + 2, 10, RELAY_NORTH)
+    n_fwd = draw_pipe(g, [(east, wy + REV_FWD_ROW), (east + 4, wy + REV_FWD_ROW), (east + 4, 9)])
     n_ret = draw_pipe(
         g,
-        [(east + 3, 15), (east + 3, 16), (east + 6, 16), (east + 6, 19), (east, wy + REV_RET_ROW)],
+        [(east + 4, 15), (east + 4, 16), (east + 6, 16), (east + 6, 19), (east, wy + REV_RET_ROW)],
     )
     if n_fwd + n_ret + 2 < 16 + 2:
         raise Collision(f"ring holds {n_fwd + n_ret + 2} values, need >= 18")
@@ -331,7 +338,7 @@ def build_sort() -> list[str]:
     # wall, because only columns east of the worker's north-east corner have a
     # free cell under the band -- which is what fixes the relay's position.
     east = wx + SORT_IW + 1
-    stamp(g, east - 2, 0, RELAY)
+    stamp(g, east - 1, 0, RELAY_SOUTH)
     n_fwd = draw_pipe(g, [(east, wy + SORT_FWD_ROW), (east + 2, wy + SORT_FWD_ROW), (east + 2, 5)])
     n_ret = draw_pipe(g, [(east + 1, 5), (east + 1, wy + SORT_RET_ROW), (east, wy + SORT_RET_ROW)])
     if n_fwd + n_ret + 2 < 17 + 2:

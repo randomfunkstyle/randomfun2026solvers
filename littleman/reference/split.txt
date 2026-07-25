@@ -1,0 +1,22 @@
+Split
+=====
+
+Source: https://icfpcontest2026.com/split
+Retrieved: 2026-07-25
+
+The official instruction glyph is Y.
+
+- Y replaces the entering little man with two copies. They are born on the
+  cells to his left and right, relative to his incoming heading, and each faces
+  away from Y.
+- Both copies retain A, B, and BP.
+- The copies execute their birth cells and move on the tick after their birth.
+- The right copy takes the parent's creation-order position. The left copy is
+  newest and acts after every previously existing little man.
+- Splitting is unconditional. A birth into a wall is fatal.
+- A birth onto another little man kills both without a fatal error.
+- Same-cell movement collisions and head-on swaps kill both without a fatal
+  error. Two copies spawned onto the same cell also die.
+- At most 65,536 little men may be live.
+
+This file is a concise local transcription. The linked page is authoritative.

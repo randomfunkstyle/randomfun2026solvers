@@ -960,19 +960,20 @@ def _discard_loop(g: _Grid, x: int, y: int, pipe_glyphs: list[tuple[int, int, st
 #: passed straight through. Two pipes only — one in from the CPU, one out to the
 #: tape — so every ``r``/``s`` in here binds unambiguously whatever the geometry.
 #:
-#: ``r`` then ``X``: a positive word turns him clockwise (south, the read arm), a
-#: negative one counter-clockwise (north, the write arm). Zero cannot occur, which
-#: is precisely why hardware addresses start at 1.
+#: ``U`` then ``X``: the adapter has exactly one incoming pipe, on its west wall,
+#: so receiving turns the northbound return east directly into the branch. A
+#: positive word then turns clockwise (south, the read arm), a negative one
+#: counter-clockwise (north, the write arm). Zero cannot occur, which is precisely
+#: why hardware addresses start at 1.
 #:
-#: The ``>`` in front of MAIN's ``r`` is load-bearing, not decoration: the return
-#: leg arrives up column 1 heading *north*, and a man who executes ``r`` while
-#: heading north steps north again — out through the roof. A port is (cell,
-#: heading), never just a cell (``ARCH.md`` §7.2).
+#: Compared with ``>rX``, ``UX`` moves the receive one cell left and fuses its
+#: steering with the pipe operation. Both arms and the spawn/return corner can
+#: therefore move left too, freeing the old rightmost column.
 _ADAPTER = [
-    "..>M1sWNsrs.v",  # write: B=w; A=1; send 1; A=w; A=-w=a; send a; pass the value
-    ">rX.........v",  # main: turn east, read one request word, branch on its sign
-    "..>M0sWs....v",  # read: B=w; A=0; send 0; A=w=a; send a
-    "^..........@<",  # return leg; the spawn joins it just before MAIN
+    ".>M1sWNsrs.v",  # write: B=w; A=1; send 1; A=w; A=-w=a; send a; pass the value
+    "UX.........v",  # receive request, point away from west pipe, branch on sign
+    ".>M0sWs....v",  # read: B=w; A=0; send 0; A=w=a; send a
+    "^.........@<",  # return leg; spawn/turn moved left with the freed column
 ]
 ADAPTER_W = len(_ADAPTER[0])
 ADAPTER_H = len(_ADAPTER)

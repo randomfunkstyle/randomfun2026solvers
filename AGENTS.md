@@ -38,6 +38,36 @@ passing on the reference interpreter — keep it, mark it slow, and make sure th
 fast tier still fails if the *generator* changes shape (e.g. assert the checked-in
 grid still matches what the generator emits).
 
+## Little Man validation backends
+
+`optimize.verify` uses the independent in-memory `FastLittleman` validator by
+default. It parses a grid once and runs a native C++ tick loop loaded into the
+Python process, so repeated cases do not start Node or boot the Go/WASM engine.
+The native library is compiled once with the system C++ compiler and cached in
+the temporary directory by source hash.
+
+```sh
+uv run littleman-validate tasks/solutions/triangle_cpu.man triangle
+LM_VALIDATOR=fast uv run pytest -m ""
+LM_VALIDATOR=reference uv run pytest -m ""  # force the Node/WASM oracle
+```
+
+Pass an explicit `Littleman` instance to `optimize.verify` when a test needs a
+fake backend or specifically needs the reference implementation. Keep
+`littleman.py` and `lm.mjs` as the semantic oracle for differential tests,
+debug snapshots, stepping, analysis, and routing; `FastLittleman` is the
+validation-focused backend and does not replace those debugging APIs.
+
+Current parity/performance evidence (2026-07-25):
+
+- all public cases for all 12 checked-in solution families matched Node/WASM
+  verdicts and exact tick counts, including `palette` and `plotter` frames;
+- median validation speedup was 5.79x on `sudoku-validity` and 239x on the short
+  `triangle` workload (warm native cache);
+- the complete suite passed identically with both backends: 605 passed,
+  13 skipped; whole-suite wall time was 86.05s fast versus 90.85s reference
+  (only 1.06x overall because most tests do not go through `optimize.verify`).
+
 ## Never touch production from a test
 
 Submitting is a real, rate-limited, outward-facing action. `tests/test_submit.py`

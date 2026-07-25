@@ -128,19 +128,28 @@ pipe on the side it needs ends the whole program (`no-pipe`).
 | `R` | Receive into A from **any** incoming pipe with a value ready. Blocks if nothing ready. |
 | `U` | Like `R`, but on success the man **turns away from the side of the room he read from**. |
 
-### `Y` — split (undocumented)
+### `Y` — split
 
-`Y` is a valid instruction (it is in the interpreter's `validOps`) but is
-**absent from the official language reference**. Verified behaviour:
+The contest's supplemental [Split reference](https://icfpcontest2026.com/split)
+publishes the precise semantics. The glyph is **`Y`**; `C` is not an instruction.
 
-> The little man turns **clockwise**, and a copy of him — same A, B, and BP —
-> emerges one cell to the **counter-clockwise** side, heading that way. The
-> incoming heading is lost.
+- The parent disappears. Two children with identical A, B, and BP are born one
+  cell to its right and left, relative to its entry heading, facing away from
+  `Y`.
+- The children are present immediately after the split tick, but execute their
+  birth cells and move starting on the following tick.
+- The right child keeps the parent's creation-order slot. The left child is the
+  newest runner and acts after all previously existing runners.
+- Splitting is unconditional. A wall birth is a fatal `wall` error.
+- A child born on another live man kills both without a fatal error. Ordinary
+  same-cell arrivals, head-on swaps, and two children born on the same cell also
+  kill the participants without a fatal error.
+- At most 65,536 little men may be live.
 
-Entering `Y` heading east yields one man heading south and a copy one cell north
-heading north (runner count 1 → 2, confirmed in interpreter snapshots). This is
-the only way to get more than one man inside a single room, which matters
-because footprint scoring punishes extra rooms.
+Entering `Y` heading east therefore yields the order-preserving child one cell
+south heading south, and the newest child one cell north heading north. `Y` is
+the only way to put more than one active man in one room, which can share room
+walls and duplicate register state without extra pipes.
 
 ## Pipes
 

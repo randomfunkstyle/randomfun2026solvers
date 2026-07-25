@@ -1,0 +1,16 @@
+# gradebook — submission e115e357-54d2-44d1-8fd0-4d55f893040b
+
+verdict      done: 20/20 cases, area2 15129, avgTicks 820,103, score 12,407,343,582
+submitted    2026-07-25T15:47:05+0300
+grid         117x123
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  ba2946ed241b78a59ec4997e325d2b9f9527d7303be453e25e85f67789e2e757
+commit       e8dd233
+local        gradebook: 7/7 public cases, avg 320,760 ticks
+source       tasks/solutions/gradebook_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+compact 12-column U adapter: receive and steer fused; lower ticks

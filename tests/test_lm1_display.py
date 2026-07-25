@@ -67,7 +67,7 @@ DISPLAY_TARGETS = ("palette", "plotter")
 
 #: ``max(width, height)²`` and the shape it comes from, pinned per slug so a
 #: regression in either dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = {"plotter": (112, 116), "palette": (98, 98)}
+EXPECTED_SHAPE = {"plotter": (111, 116), "palette": (97, 98)}
 EXPECTED_FOOTPRINT = {"plotter": 13_456, "palette": 9_604}
 
 MAX_INSTRUCTIONS = 400_000

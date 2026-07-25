@@ -1,0 +1,16 @@
+# brackets — submission 365825dd-b882-488b-af6e-40b9ac0e7b99
+
+verdict      done: 26/26 cases, area2 9409, avgTicks 54,656, score 514,257,580
+submitted    2026-07-25T15:46:28+0300
+grid         97x75
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  672129c5c17eaaeced6c222bbb308b922cf8ddcf1ad229b02330ec773e039d67
+commit       e8dd233
+local        brackets: 9/9 public cases, avg 28,375 ticks
+source       tasks/solutions/brackets_cpu.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+compact 12-column U adapter: receive and steer fused; adapter moved left one column

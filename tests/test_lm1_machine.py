@@ -48,6 +48,14 @@ slow = pytest.mark.slow
 TARGETS = machine.TAPE_SIZE
 
 
+def test_adapter_uses_u_to_free_its_old_rightmost_column() -> None:
+    """Its sole west-side input lets receive and east steering share one cell."""
+    assert machine.ADAPTER_W == 12
+    assert {len(row) for row in machine._ADAPTER} == {machine.ADAPTER_W}
+    assert machine._ADAPTER[1].startswith("UX")
+    assert machine._ADAPTER[3].endswith("@<")
+
+
 # ── ROM encoding ─────────────────────────────────────────────────────────────
 def test_group_is_palindromic_in_its_backtick_offsets() -> None:
     """Reversal must map a group's backtick columns onto themselves.
