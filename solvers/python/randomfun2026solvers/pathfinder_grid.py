@@ -183,7 +183,7 @@ SCRATCH_CELLS = prog.SCRATCH_WORDS + 1
 #: Placement of the room inside the grid.  ``WY`` is the depth of the north
 #: band, and it is set by the ring: ten pipe rows either side of its relay is
 #: what buys the 20 cells the 18-word ring needs to not deadlock.
-WX, WY = 1, 16
+WX, WY = 1, 10
 
 # ── which pipe does a column bind to? ─────────────────────────────────────────
 
@@ -677,13 +677,14 @@ def _check_order(succ: dict[str, object]) -> None:
 
 
 # ── the north band and the whole grid ─────────────────────────────────────────
-#: Relay interiors.  The ring's is wider because it turns 18 words a lap.
-RING_RELAY_W, AUX_RELAY_W = 10, 6
-#: Rows the relay rooms occupy (top wall .. bottom wall).  The ring's sits at
-#: the top of the band so its two straight pipes are ten cells each; ``F``/``G``
-#: sit just above the worker, where four cells each is already enough.
-RING_RELAY_ROWS = (1, 4)
-AUX_RELAY_ROWS = (WY - 9, WY - 6)
+#: Relay interiors.  The ring's is wider because it turns 18 words a lap: 14
+#: gives 11 ``r``/``s`` pairs per 28-cell walking cycle, 2.55 ticks a word.
+RING_RELAY_W, AUX_RELAY_W = 14, 6
+#: Rows the relay rooms occupy (top wall .. bottom wall).  All three sit flush
+#: at the top of the band, which is only eight rows deep in total: the band is
+#: pure overhead on a dimension that gets squared, so the ring buys its 20 cells
+#: of capacity from two horizontal jogs instead of from ten rows of descent.
+RELAY_ROWS = (0, 3)
 
 
 def build() -> tuple[list[str], DebugMap]:
@@ -702,20 +703,32 @@ def build() -> tuple[list[str], DebugMap]:
     a = {k: WX + v for k, v in SEND_ANCHOR.items()}
     r = {k: WX + v for k, v in RECV_ANCHOR.items()}
 
-    # ring: relay high in the band, both pipes straight down its own anchor
-    ring_x = a["R"] - 3
-    stamp(g, ring_x, RING_RELAY_ROWS[0], flat_relay(RING_RELAY_W))
-    n_fwd = draw_pipe(g, [(a["R"], wall_row), (a["R"], RING_RELAY_ROWS[1] + 1)])
-    n_ret = draw_pipe(g, [(r["R"], RING_RELAY_ROWS[1] + 1), (r["R"], wall_row)])
+    below = RELAY_ROWS[1] + 1  # the row a relay's pipes attach from
+    # ring: 20 cells of capacity out of an eight-row band.  The forward pipe
+    # steps two rows up and runs west under the relay; the return drops from the
+    # relay's far end, runs east one row above the wall and turns down into its
+    # own anchor.  The two share no row, and the return has to arrive at the
+    # wall from the *north* — a terminal arrowhead's forward cell must be a room
+    # border, and the forward pipe is sitting one column west of it.
+    ring_x = a["R"] - 8
+    stamp(g, ring_x, RELAY_ROWS[0], flat_relay(RING_RELAY_W))
+    n_fwd = draw_pipe(g, [
+        (a["R"], wall_row), (a["R"], wall_row - 2),
+        (a["R"] - 5, wall_row - 2), (a["R"] - 5, below),
+    ])
+    n_ret = draw_pipe(g, [
+        (ring_x + RING_RELAY_W - 1, below), (ring_x + RING_RELAY_W - 1, wall_row - 1),
+        (r["R"], wall_row - 1), (r["R"], wall_row),
+    ])
     if n_fwd + n_ret < RING_CELLS:
         raise Collision(f"ring holds {n_fwd + n_ret} cells, need >= {RING_CELLS}")
 
     aux = []
     for band, need in (("G", SCRATCH_CELLS), ("F", FIFO_CELLS)):
         rx = min(a[band], r[band]) - 2
-        stamp(g, rx, AUX_RELAY_ROWS[0], flat_relay(AUX_RELAY_W))
-        f = draw_pipe(g, [(a[band], wall_row), (a[band], AUX_RELAY_ROWS[1] + 1)])
-        t = draw_pipe(g, [(r[band], AUX_RELAY_ROWS[1] + 1), (r[band], wall_row)])
+        stamp(g, rx, RELAY_ROWS[0], flat_relay(AUX_RELAY_W))
+        f = draw_pipe(g, [(a[band], wall_row), (a[band], below)])
+        t = draw_pipe(g, [(r[band], below), (r[band], wall_row)])
         if f + t < need:
             raise Collision(f"{band} loop holds {f + t} cells, need >= {need}")
         aux.append((band, rx, f + t))
@@ -735,12 +748,11 @@ def build() -> tuple[list[str], DebugMap]:
     dbg.region("worker", WX - 1, WY - 1, IW + 2, ih + 2,
                note=f"{IW}x{ih} interior; west channel {NCHW} cols, code {CODEW}",
                color="#334155")
-    dbg.region("ring relay", ring_x, RING_RELAY_ROWS[0],
-               RING_RELAY_W + 2, RING_RELAY_ROWS[1] - RING_RELAY_ROWS[0] + 1,
+    depth = RELAY_ROWS[1] - RELAY_ROWS[0] + 1
+    dbg.region("ring relay", ring_x, RELAY_ROWS[0], RING_RELAY_W + 2, depth,
                note=f"{n_fwd + n_ret} ring cells (need {RING_CELLS})", color="#0ea5e9")
     for band, rx, cells in aux:
-        dbg.region(f"{band} relay", rx, AUX_RELAY_ROWS[0],
-                   AUX_RELAY_W + 2, AUX_RELAY_ROWS[1] - AUX_RELAY_ROWS[0] + 1,
+        dbg.region(f"{band} relay", rx, RELAY_ROWS[0], AUX_RELAY_W + 2, depth,
                    note=f"{cells} cells", color="#22c55e")
     dbg.region("input", in_x - 1, wall_row - 5, 3, 3, note="program input", color="#64748b")
     dbg.region("panel block", panel_x, 0, BLOCK_W, BLOCK_H,
