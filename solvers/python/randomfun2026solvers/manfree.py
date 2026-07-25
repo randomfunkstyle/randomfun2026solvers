@@ -66,6 +66,10 @@ __all__ = [
     "circuits",
     "BlockSquash",
     "squash_report",
+    "PipeRole",
+    "pipe_roles",
+    "ring_groups",
+    "optimistic",
     "report",
 ]
 
@@ -321,28 +325,109 @@ def line_report(
 PIPE_FLOOR = 2
 
 
+class PipeRole(StrEnum):
+    """What a pipe's *length* means — which decides whether it may be shortened.
+
+    The distinction is not cosmetic. Treating every pipe alike is wrong in both
+    directions: it forbids trimming a conduit that would have been fine, and it
+    permits trimming a ring into a deadlock.
+    """
+
+    #: On a directed cycle between rooms. Its length **is capacity** — the values
+    #: in flight go round and must all fit. Individual legs may trade length; the
+    #: group total may not fall.
+    RING = "ring"
+    #: Acyclic room-to-room. Length is latency plus whatever is in flight before
+    #: the receiver pops, so it is usually trimmable and always worth asking about.
+    CONDUIT = "conduit"
+    #: Ends off-grid, at a display port or an output. Length is latency, but the
+    #: terminal cell decides *which port* receives — so the route carries meaning
+    #: that a shortening can destroy without changing any glyph in a room.
+    FEED = "feed"
+
+
+def pipe_roles(ast: Ast) -> dict[int, PipeRole]:
+    """Classify every pipe by what its length means.
+
+    A ring is found rather than declared: pipes whose two rooms sit in the same
+    strongly connected component of the room graph are carrying values round a
+    cycle. On ``plotter`` that is exactly ``pipe1`` and ``pipe3`` — the
+    worker/painter circuit — and nothing else, which matches what shortening each
+    pipe actually did: ``pipe2`` (conduit) lost a cell with 20/20 cases still
+    passing, while ``pipe6`` (feed) lost 38 and every case failed.
+    """
+    nodes = sorted({p.src for p in ast.pipes} | {p.dst for p in ast.pipes})
+    out_edges: dict[int, list[int]] = defaultdict(list)
+    for p in ast.pipes:
+        if p.src >= 0 and p.dst >= 0:
+            out_edges[p.src].append(p.dst)
+    cyclic: set[int] = set()
+    for comp in _sccs(nodes, lambda n: out_edges.get(n, [])):
+        if len(comp) > 1 or comp[0] in out_edges.get(comp[0], []):
+            cyclic |= set(comp)
+    roles: dict[int, PipeRole] = {}
+    for p in ast.pipes:
+        if p.dst < 0 or p.src < 0:
+            roles[p.id] = PipeRole.FEED
+        elif p.src in cyclic and p.dst in cyclic:
+            roles[p.id] = PipeRole.RING
+        else:
+            roles[p.id] = PipeRole.CONDUIT
+    return roles
+
+
+def ring_groups(ast: Ast) -> dict[tuple[int, ...], int]:
+    """Ring pipe-id groups mapped to the capacity they currently have.
+
+    The constraint belongs to the **group**, never to a leg: a ring of 9 + 94 cells
+    holds 103 values wherever the boundary between the two legs falls, so a move
+    that shortens one leg and lengthens the other is free. Charging each leg its
+    own minimum forbids exactly the re-routes that are safe.
+
+    Pinning the total at what it is today is the conservative reading, and the
+    right one absent a declared need: the program is known to work at this
+    capacity and not known to work at any less.
+    """
+    roles = pipe_roles(ast)
+    ids = tuple(sorted(p.id for p in ast.pipes if roles[p.id] is PipeRole.RING))
+    if not ids:
+        return {}
+    return {ids: sum(p.capacity for p in ast.pipes if p.id in ids)}
+
+
 def optimistic(ast: Ast, *, floor: int = PIPE_FLOOR) -> Ast:
-    """The same AST with every undeclared pipe given a nominal minimum.
+    """The same AST with undeclared pipes unpinned **according to their role**.
 
-    An undeclared capacity pins a pipe, which is the right *default* — silence
-    must never shorten a ring. But it is only a default, and reporting it as the
-    answer hides real cuts behind a missing annotation. On ``plotter`` every pipe
-    was undeclared, so the scan called the grid immovable; declaring a nominal
-    floor exposed column 46, which then came out with bindings intact, 20/20 cases
-    and 92 ticks saved.
+    An undeclared capacity pins a pipe, which is the right *default* — silence must
+    never shorten a ring. But it is only a default, and reporting it as the answer
+    hides real cuts behind a missing annotation. On ``plotter`` all seven pipes were
+    undeclared, so the scan called a 28%-occupied grid immovable; unpinning exposed
+    column 46, which came out with bindings intact, 20/20 cases and 92 ticks saved.
 
-    So: ask whether the route still works instead of assuming it does not. What
-    this returns is a *question*, not a verdict — any cut found on it has assumed
-    the pipes have slack, and only running the cases can settle that.
+    A ring pipe is unpinned too, but only so its legs can trade length — pair this
+    with :func:`ring_groups` and the group total is held. Give a ring leg a floor of
+    2 on its own and a cut will happily collapse a 103-cell circuit into a deadlock
+    that no glyph check and no binding diff can see.
+
+    What this returns is a *question*, not a verdict. Any cut found on it has
+    assumed slack; only running the cases can settle that.
     """
     import copy
 
+    roles = pipe_roles(ast)
     trial = copy.deepcopy(ast)
     for pipe in trial.pipes:
-        if pipe.min_capacity is None:
+        if pipe.min_capacity is not None:
+            continue
+        role = roles[pipe.id]
+        if role is PipeRole.RING:
+            # No individual floor worth stating: the group carries the constraint.
             pipe.min_capacity = min(floor, pipe.capacity)
-            pipe.pinned = False
-            pipe.note = f"assumed minimum {pipe.min_capacity}: verify by running the cases"
+            pipe.note = f"{role.value}: length is CAPACITY — hold the group total"
+        else:
+            pipe.min_capacity = min(floor, pipe.capacity)
+            pipe.note = f"{role.value}: assumed minimum, verify by running the cases"
+        pipe.pinned = False
     return trial
 
 
@@ -856,15 +941,29 @@ def report(ast: Ast, *, capacity: dict[tuple[int, ...], int] | None = None) -> s
     # on plotter, so it is reported by default rather than left behind a flag.
     undeclared = [p.id for p in ast.pipes if p.min_capacity is None]
     if undeclared:
-        opt = scan(optimistic(ast), capacity=capacity)
+        roles = pipe_roles(ast)
+        by_role: dict[str, list[int]] = defaultdict(list)
+        for pid, role in sorted(roles.items()):
+            by_role[role.value].append(pid)
+        # The ring's total is held while its legs are freed, so the scan can offer
+        # a re-route that re-balances the circuit but never one that drains it.
+        groups = dict(capacity or {})
+        groups.update(ring_groups(ast))
+        opt = scan(optimistic(ast), capacity=groups)
         extra = [
             r for r in opt.paying_lines()
             if not any(q.axis == r.axis and q.index == r.index for q in paying)
         ]
-        lines += [
-            "",
-            f"── hidden by undeclared capacity (pipe{', pipe'.join(map(str, undeclared))}) ──",
-        ]
+        lines += ["", "── hidden by undeclared capacity ──"]
+        for role, pids in sorted(by_role.items()):
+            meaning = {
+                "ring": "length IS capacity — legs may trade, the total may not fall",
+                "conduit": "length is latency — trimmable, ask the cases",
+                "feed": "ends at a display/output port — the terminal cell picks the port",
+            }[role]
+            lines.append(f"  {role:8s} pipe{', pipe'.join(map(str, pids)):22s} {meaning}")
+        for ids, need in ring_groups(ast).items():
+            lines.append(f"  ring group {ids} held at {need} cells")
         if extra:
             lines.append(
                 f"{len(extra)} further line(s) come out once the pipes are assumed to have "

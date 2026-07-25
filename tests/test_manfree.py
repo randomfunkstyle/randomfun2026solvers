@@ -46,6 +46,7 @@ from randomfun2026solvers.manfree import (  # noqa: E402
 from randomfun2026solvers.manmoves import (  # noqa: E402
     MoveError,
     stretch_col,
+    try_drop,
     try_squash,
 )
 
@@ -456,6 +457,65 @@ def test_a_row_feeding_a_display_wall_is_reported_forced_not_spare():
     assert "display" in row0
     # so the honest headline is one row, not two
     assert "64 -> 63" in body
+
+
+def _two_room_ring() -> Ast:
+    """Two rooms wired both ways: pipe0 out, pipe1 back. A ring, by topology."""
+    left = RoomNode(id=0, x=0, y=0, kind="compute", w=1, h=1,
+                    children=[Atom(id=0, x=1, y=1, rows=["s"])])
+    right = RoomNode(id=1, x=8, y=0, kind="compute", w=1, h=1,
+                     children=[Atom(id=0, x=9, y=1, rows=["r"])])
+    out = PipeNode(id=0, x=3, y=1, path=[(3, 1), (4, 1), (5, 1), (6, 1), (7, 1)],
+                   glyphs=[">", "-", "-", "-", ">"], src=0, dst=1,
+                   entry_dir=E, exit_dir=E)
+    back = PipeNode(id=1, x=3, y=4, path=[(7, 4), (6, 4), (5, 4), (4, 4), (3, 4)],
+                    glyphs=["<", "-", "-", "-", "<"], src=1, dst=0,
+                    entry_dir=W, exit_dir=W)
+    ast = Ast(rooms=[left, right], pipes=[out, back])
+    ast.source = [""]
+    return ast
+
+
+def test_a_pipe_on_a_cycle_is_a_ring_and_the_rest_are_not():
+    """Found from the topology, not declared — a ring is what a cycle makes."""
+    from randomfun2026solvers.manfree import PipeRole, pipe_roles
+
+    roles = pipe_roles(_two_room_ring())
+    assert roles == {0: PipeRole.RING, 1: PipeRole.RING}
+
+    ast = _two_room_ring()
+    ast.pipes[1].src, ast.pipes[1].dst = 1, -1  # break the cycle: now a feed
+    roles = pipe_roles(ast)
+    assert roles[0] is PipeRole.CONDUIT, "with no way back it is a conduit, not a ring"
+    assert roles[1] is PipeRole.FEED
+
+
+def test_the_ring_constraint_is_on_the_group_not_the_leg():
+    """A ring of 5 + 5 holds ten values wherever the split falls."""
+    from randomfun2026solvers.manfree import ring_groups
+
+    assert ring_groups(_two_room_ring()) == {(0, 1): 10}
+
+
+def test_a_cut_that_would_drain_a_ring_is_refused_even_though_no_glyph_objects():
+    """The failure a glyph check and a binding diff both miss.
+
+    Shortening a ring below the values in flight deadlocks, and nothing in the
+    ASCII says so. This is why a ring leg must not be handed a floor of 2 on its
+    own the way a conduit can be.
+    """
+    from randomfun2026solvers.manfree import optimistic, ring_groups
+
+    ast = _two_room_ring()
+    groups = ring_groups(ast)
+    opt = optimistic(ast)
+    # col 5 runs down the middle of both legs, so cutting it takes one cell off each
+    loose, rep = try_drop(opt, "col", 5)
+    assert loose is not None, rep
+    assert sum(p.capacity for p in loose.pipes) == 8, "unguarded, the ring loses two cells"
+    held, why = try_drop(optimistic(ast), "col", 5, capacity=groups)
+    assert held is None, "the group constraint must refuse it"
+    assert "fell to 8" in str(why) and "need of 10" in str(why)
 
 
 def test_optimistic_unpins_undeclared_pipes_without_touching_declared_ones():
