@@ -641,8 +641,20 @@ def _flat_lane(
     return out
 
 
-def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int = 0) -> _Cpu:
-    """Lay the CPU: fetch, decode trie, lanes, structures band, return path."""
+def build_cpu(
+    program: Program,
+    p: _Plan,
+    *,
+    mem_pad: int = 0,
+    stream_pad: int = 0,
+    short_return: bool = True,
+) -> _Cpu:
+    """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
+
+    ``short_return`` lets a simple lane drop at the end of its own micro-program
+    rather than east of the slab band; see the drop-column comment. It narrows the
+    CPU, which ``matmul``'s STREAM wiring does not currently survive.
+    """
     k, lanes = p.k, p.lanes
     centre = 1 << k
     span = 2 * lanes - 1
@@ -726,31 +738,50 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int =
     # structured ones east of it makes that disjointness structural.
     drop_x: dict[int, int] = {}
     assigned: set[int] = set()
-    floor = lane_x0
-    for r in sorted(all_rows, reverse=True):
-        # Halting rows carry no drop but do carry glyphs, so they still raise the
-        # floor for everything above them.
-        floor = max(floor, lane_end[r] + 1)
-        if r in halting:
-            continue
-        m = by_row.get(r)
-        if m is not None and m in slab_rows:
-            # A slab's entry column must be unique in *both* directions: its `<`
-            # turns an arriving man west, so any other drop sharing the column
-            # would be swallowed by this slab's entry row.
-            c = max(floor, struct_east + 1)
-            while c in assigned:
-                c += 1
-        else:
-            c = floor
-            if c > struct_east:
-                # A micro-program long enough to reach the slabs has to join the
-                # structured lanes' discipline rather than risk their columns.
-                c = struct_east + 1
+    if short_return:
+        floor = lane_x0
+        for r in sorted(all_rows, reverse=True):
+            # Halting rows carry no drop but do carry glyphs, so they still raise the
+            # floor for everything above them.
+            floor = max(floor, lane_end[r] + 1)
+            if r in halting:
+                continue
+            m = by_row.get(r)
+            if m is not None and m in slab_rows:
+                # A slab's entry column must be unique in *both* directions: its `<`
+                # turns an arriving man west, so any other drop sharing the column
+                # would be swallowed by this slab's entry row.
+                c = max(floor, struct_east + 1)
                 while c in assigned:
                     c += 1
-        drop_x[r] = c
-        assigned.add(c)
+            else:
+                c = floor
+                if c > struct_east:
+                    # A micro-program long enough to reach the slabs has to join the
+                    # structured lanes' discipline rather than risk their columns.
+                    c = struct_east + 1
+                    while c in assigned:
+                        c += 1
+            drop_x[r] = c
+            assigned.add(c)
+    else:
+        # The original rule, kept verbatim so a slug on the long path regenerates
+        # byte-for-byte: every column floored east of the slabs, strictly ordered
+        # bottom-to-top, and a structured lane pushing everything above it one further.
+        cur = struct_east + 1
+        for r in sorted(all_rows, reverse=True):
+            if r in halting:
+                continue
+            c = max(cur, lane_end[r] + 1)
+            m = by_row.get(r)
+            if m is not None and m in slab_rows:
+                while c in assigned:
+                    c += 1
+                cur = c + 1
+            else:
+                cur = c
+            drop_x[r] = c
+            assigned.add(c)
 
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
@@ -1317,6 +1348,7 @@ def build(
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
     packed_rom: bool = True,
+    short_return: bool | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -1339,6 +1371,8 @@ def build(
     for the original fixed-width fold; the word stream is identical either way, so it
     is purely a size/speed choice.
     """
+    if short_return is None:
+        short_return = program.name not in _LONG_RETURN
     p = plan(program)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
@@ -1358,16 +1392,27 @@ def build(
     pads = [mem_pad] if mem_pad is not None else range(0, 40)
     spads = range(0, 40, 2) if stream else [0]
     last: MachineError | None = None
+    best: Machine | None = None
     for spad in spads:
         for pad in pads:
             try:
-                return _assemble(
+                m = _assemble(
                     program, p, words, tape_n, rom_rows, pad, display, stream, resp_pad,
-                    spad, packed_rom,
+                    spad, packed_rom, short_return,
                 )
             except MachineError as exc:
                 last = exc
-    raise MachineError(f"no pad pair makes every pipe bind; last: {last}")
+                continue
+            # Every feasible pad is *correct*, so take the smallest rather than the
+            # first. They differ by more than a column: the pad shifts the memory
+            # block east, which moves every pipe that binds to it, so which pad binds
+            # is not monotone and the first feasible one is an arbitrary pick. Ties
+            # break on height, which is free on a width-bound machine but never hurts.
+            if best is None or (m.footprint, m.height) < (best.footprint, best.height):
+                best = m
+    if best is None:
+        raise MachineError(f"no pad pair makes every pipe bind; last: {last}")
+    return best
 
 
 def _packed_fold(words: list[int], budget: int) -> int:
@@ -1401,8 +1446,11 @@ def _assemble(
     resp_pad: int = 0,
     stream_pad: int = 0,
     packed_rom: bool = True,
+    short_return: bool = True,
 ) -> Machine:
-    cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad)
+    cpu = build_cpu(
+        program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return
+    )
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
@@ -1866,6 +1914,15 @@ ROM_ROWS = {
     # what the ROM trades against; packed, the trade lands at 88x90 (8,100) on 5 rows.
     "matmul": 5,
 }
+
+
+#: Slugs that must keep the old, long return path. Letting a simple lane drop early
+#: narrows the CPU, and ``matmul``'s STREAM wiring does not survive that: every one of
+#: 3,600 (fold, mem_pad, stream_pad) combinations fails to place its pipes, all of them
+#: a `v` landing on an occupied cell near the top of the grid. The short path is worth
+#: a few percent of ticks here, so this is a deferred fix rather than a dead end --
+#: matmul keeps the grid that scored 1,464,201,360.
+_LONG_RETURN = {"matmul"}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:

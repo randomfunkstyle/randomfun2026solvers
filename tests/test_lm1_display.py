@@ -67,8 +67,8 @@ DISPLAY_TARGETS = ("palette", "plotter")
 
 #: ``max(width, height)²`` and the shape it comes from, pinned per slug so a
 #: regression in either dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = {"plotter": (111, 104), "palette": (97, 89)}
-EXPECTED_FOOTPRINT = {"plotter": 12_321, "palette": 9_409}
+EXPECTED_SHAPE = {"plotter": (109, 104), "palette": (95, 89)}
+EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 9_025}
 
 MAX_INSTRUCTIONS = 400_000
 TICK_CAP = 3_000_000
@@ -358,7 +358,11 @@ def test_folding_the_rom_is_what_buys_plotters_footprint(slug: str) -> None:
     if slug in machine.ROM_ROWS:
         assert tuned.rom_rows == machine.ROM_ROWS[slug]
         assert tuned.footprint < default.footprint
-        assert tuned.width == default.width  # width is the tape's; only height moved
+        # The tuned fold used to only trade height, the width being the tape's. It can
+        # now also come out *narrower*: the fold changes the ROM's height, the CPU sits
+        # below it, and which memory pad binds depends on those rows — so a different,
+        # tighter pad becomes available.
+        assert tuned.width <= default.width
     else:
         assert tuned.rows == default.rows
 
@@ -489,11 +493,11 @@ STEP_CAP = 5_000_000
 #: This used to be a 32-pixel *diagonal* at 265.5k ticks a round, which put 20 rounds
 #: 6% over the step cap; the packed single-add loop is what took it to ~97k.
 WORST_SEGMENT = (31, 1, 0, 0)
-WORST_ROUND_TICKS = 81_434
+WORST_ROUND_TICKS = 68_122
 
 #: 20 rounds of ``WORST_SEGMENT`` on the engine — the number the step cap is checked
 #: against, and the one figure that has to stay honest.
-WORST_20_ROUND_TICKS = 1_626_229
+WORST_20_ROUND_TICKS = 1_359_533
 
 
 def _judge_segments(segments: list[tuple[int, ...]]) -> object:
@@ -557,7 +561,7 @@ def test_the_worst_legal_20_round_load_fits_the_step_cap_on_the_engine() -> None
     magnitude. That model said 3.8M for a load the engine ran in 5.31M against a 5M
     cap, and the overrun shipped. So: engine, worst legal shape, all 20 rounds.
 
-    ~1.63M is 33% of the cap, i.e. a 3.1x margin, which is what buys safety against
+    ~1.36M is 27% of the cap, i.e. a 3.7x margin, which is what buys safety against
     private cases nobody can see (``privateTestCount`` says 0, but it said 0 for
     ``gradebook`` too and the judge served one anyway).
     """
