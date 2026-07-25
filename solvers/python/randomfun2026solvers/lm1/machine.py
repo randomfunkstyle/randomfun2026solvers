@@ -114,6 +114,35 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.MUL_MEM: (("s", Band.MEM), ("r", Band.MEM), ("*", None), ("M", None)),
+    # ── indexed memory: `LDP`/`STP`, and *no SPILL block* ─────────────────────
+    # ``isa.py`` gives both of these a spill slot, because in the ``0 addr`` /
+    # ``1 addr value`` wire protocol the request-opening literal clobbers A while B
+    # still holds ACC (``ARCH.md`` §6.1's "real hole in §5.1"). The sign-biased
+    # request closes that hole: the operation rides in the address word's sign, so
+    # there is no literal to clobber anything and a pointer never has to be parked.
+    #
+    # LDP: send +a, take the pointer straight back into A, send it *as* the next
+    # request — one glyph shorter than a spill round trip, and it keeps the whole
+    # lane on the east bus.
+    Sem.LOAD_IND: (
+        ("s", Band.MEM),  # +a
+        ("r", Band.MEM),  # A = ptr
+        ("s", Band.MEM),  # +ptr (A is already the request)
+        ("r", Band.MEM),  # A = store[ptr]
+        ("M", None),
+    ),
+    # STP: `N` turns the pointer into the write marker while ACC waits in B, then
+    # one `W` hands the value over — the pointer is dead by then, so the two are
+    # never live at once. ACC survives (the trailing `M` re-lands it in B).
+    Sem.STORE_IND: (
+        ("s", Band.MEM),  # +a
+        ("r", Band.MEM),  # A = ptr
+        ("N", None),  # A = -ptr: the write marker
+        ("s", Band.MEM),
+        ("W", None),  # A = ACC, the value
+        ("s", Band.MEM),
+        ("M", None),  # B = the value = ACC, unchanged
+    ),
     # ACC is the address, so `W` alone puts the request in A. Operand word unused.
     Sem.LOAD_ACC: (("W", None), ("s", Band.MEM), ("r", Band.MEM), ("M", None)),
     # Source read first (its address is an immediate), so the value only becomes
@@ -135,7 +164,16 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
 #: Tags whose operand word is a STORE address, so it must be >= 1 (see the module
 #: docstring on the sign bias).
 MEMORY_SEMS = frozenset(
-    {Sem.LOAD, Sem.STORE, Sem.ADD_MEM, Sem.SUB_MEM, Sem.MUL_MEM, Sem.STORE_ACC_MEM}
+    {
+        Sem.LOAD,
+        Sem.STORE,
+        Sem.ADD_MEM,
+        Sem.SUB_MEM,
+        Sem.MUL_MEM,
+        Sem.STORE_ACC_MEM,
+        Sem.LOAD_IND,
+        Sem.STORE_IND,
+    }
 )
 
 #: Tags realised as a structures-band slab rather than a flat lane.
@@ -1092,7 +1130,16 @@ def _check_pipe_count(rows: list[str], *, expected: int) -> None:
 #: ``tcp`` allows n=48, so addresses reach BUF+47 = 51 even though no public case
 #: goes past 35. ``ARCH.md`` §4.1: footprint is 32x32 whatever N is and cost is
 #: ~105 + 8.3N ticks, so there is no trade-off — just size it to the real maximum.
-TAPE_SIZE = {"brackets": 8, "tcp": 52}
+TAPE_SIZE = {"brackets": 8, "tcp": 52, "sudoku-validity": 31}
+
+#: ROM fold per problem, where the default is wrong. ``rows_for_budget`` aims the
+#: ROM at ``max(40, CPU width)``, which is the right target only while the CPU is
+#: the widest thing in the machine. Once the adapter and the tape have already
+#: taken the machine past 80 columns, folding the ROM to the CPU's own ~45 makes it
+#: needlessly tall and *height* becomes binding instead — ``sudoku-validity`` is
+#: 89x94 at 37 rows and 84x146 at the default. These values are swept over every
+#: fold and are the footprint minimum; leaving a slug out keeps the default.
+ROM_ROWS = {"sudoku-validity": 37}
 
 
 def build_for(slug: str) -> Machine:
@@ -1101,7 +1148,7 @@ def build_for(slug: str) -> Machine:
 
     if slug not in TAPE_SIZE:
         raise MachineError(f"no tape size recorded for {slug!r}; have {sorted(TAPE_SIZE)}")
-    return build(programs.load(slug), tape_n=TAPE_SIZE[slug])
+    return build(programs.load(slug), tape_n=TAPE_SIZE[slug], rom_rows=ROM_ROWS.get(slug))
 
 
 def main(argv: list[str] | None = None) -> int:

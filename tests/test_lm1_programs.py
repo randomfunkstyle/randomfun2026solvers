@@ -37,7 +37,6 @@ BLOCKED = {
     "memory",
     "reverse-a-list",
     "sort-numbers",
-    "sudoku-validity",
     "subset-sum",
     "gradebook",
     "matmul",
@@ -62,6 +61,7 @@ def test_the_expected_programs_exist() -> None:
         "tcp",
         "history-lesson",
         "plotter",
+        "sudoku-validity",
     }
 
 
@@ -111,6 +111,10 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # express; one opcode per LM-75 port gives each its own lane (see plotter.asm).
         "plotter": {"DSPA", "DSPD", "DSPS", "NEG"},
         "triangle-closed": {"MUL", "DIVI"},
+        # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
+        # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
+        # indexed opcodes are drawn *without* a SPILL block — see machine.py's `_HW`.
+        "sudoku-validity": {"DIVI", "MODI", "LDP", "STP"},
     }
 
 
