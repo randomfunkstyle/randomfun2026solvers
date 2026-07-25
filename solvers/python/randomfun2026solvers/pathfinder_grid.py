@@ -139,21 +139,37 @@ CW0, CW1 = NCHW, IW - 1
 ENTRY_COL = NCHW - 1
 
 _T = (BAND_W - 1) // 2
-#: Send anchors (interior columns), band order R G F P.
-SEND_ANCHOR = {
-    "R": CW0 + _T,
-    "G": CW0 + 2 * BAND_W - 1 - _T,
-    "F": CW0 + 2 * BAND_W + _T,
-    "P": CW0 + 4 * BAND_W - 1 - _T,
-}
-#: Receive anchors, band order R G F I.  Offset by one from the sends so no two
-#: pipes share a column on the wall, and still summing odd pairwise.
-RECV_ANCHOR = {
-    "R": SEND_ANCHOR["R"] + 1,
-    "G": SEND_ANCHOR["G"] - 1,
-    "F": SEND_ANCHOR["F"] + 1,
-    "I": SEND_ANCHOR["P"] - 1,
-}
+#: Left-to-right order of the four pipe loops.  Measured over all 24
+#: permutations: the ones that shave a row or two off the height (the
+#: serpentine spends a row on every *reversal* of the band sequence) all pay
+#: for it several times over in travel, because this order is the one that
+#: minimises band-steps — ``G-R`` 29, ``F-R`` 17, ``F-G`` 16, ``F-P`` 15,
+#: ``F-I`` 6, ``G-P`` 4, 87 transitions for 108 steps.  ``R P F G`` is 177 rows
+#: and 369k ticks against this one's 181 and 276k.
+LOOP_ORDER = ("R", "G", "F", "P")
+#: The receive side of the same loop; the painter's band hosts program input.
+RECV_OF = {"R": "R", "G": "G", "F": "F", "P": "I"}
+
+
+def _anchors() -> tuple[dict[str, int], dict[str, int]]:
+    """Anchor columns, placed so every band boundary is a half-integer.
+
+    Neighbouring anchors sum to an odd number in both partitions, so
+    ``|x-c1| == |x-c2|`` has no integer solution: there is no tie to fall back
+    on reading order, and no one-cell edit can silently rebind a pipe op.
+    """
+    send: dict[str, int] = {}
+    recv: dict[str, int] = {}
+    for i, band in enumerate(LOOP_ORDER):
+        # mirrored inside alternate bands, which is what makes every adjacent
+        # pair sum odd whatever the band width is
+        col = CW0 + i * BAND_W + (_T if i % 2 == 0 else BAND_W - 1 - _T)
+        send[band] = col
+        recv[RECV_OF[band]] = col + (1 if i % 2 == 0 else -1)
+    return send, recv
+
+
+SEND_ANCHOR, RECV_ANCHOR = _anchors()
 
 SEND_TOK = {"sr": "R", "sg": "G", "sf": "F", "sp": "P"}
 RECV_TOK = {"rr": "R", "rg": "G", "rf": "F", "ri": "I"}
