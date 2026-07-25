@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
 
-from .primitive_contracts import Side, contracts_by_artifact
+from .primitive_contracts import (
+    PortContract,
+    PrimitiveContract,
+    Side,
+    contract_for,
+    contracts_by_artifact,
+)
 
 __all__ = ["ActiveRoom", "Gate", "Netlist", "extract_active_room"]
 
@@ -372,3 +378,510 @@ class Netlist:
             MappingProxyType({signal: tuple(gates) for signal, gates in consumers.items()}),
         )
         object.__setattr__(self, "levels", MappingProxyType(levels))
+
+
+class _RoomRole(StrEnum):
+    """Why a room exists in the lowered netlist layout."""
+
+    INPUT_DEMULTIPLEXER = "input_demultiplexer"
+    FANOUT = "fanout"
+    PACKER = "packer"
+    PRIMITIVE = "primitive"
+    OUTPUT_JOINER = "output_joiner"
+
+
+@dataclass(frozen=True)
+class _Rect:
+    """An inclusive integer-grid rectangle."""
+
+    left: int
+    top: int
+    width: int
+    height: int
+
+    @property
+    def right(self) -> int:
+        return self.left + self.width - 1
+
+    @property
+    def bottom(self) -> int:
+        return self.top + self.height - 1
+
+    @property
+    def cells(self) -> frozenset[tuple[int, int]]:
+        return frozenset(
+            (x, y)
+            for y in range(self.top, self.bottom + 1)
+            for x in range(self.left, self.right + 1)
+        )
+
+
+@dataclass(frozen=True)
+class _PortAnchor:
+    """A placed port with its stub and reserved route-exit corridor."""
+
+    name: str
+    flow: _AdapterFlow
+    side: Side
+    wall: tuple[int, int]
+    stub: tuple[tuple[int, int], tuple[int, int]]
+    anchor: tuple[int, int]
+    direction: tuple[int, int]
+    escape: tuple[tuple[int, int], tuple[int, int]]
+    instructions: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class _RoomPlacement:
+    """One active room inside a padded, non-overlapping reservation."""
+
+    name: str
+    role: _RoomRole
+    level: int
+    room: ActiveRoom
+    origin: tuple[int, int]
+    bounds: _Rect
+    footprint: _Rect
+    ports: tuple[_PortAnchor, ...]
+    keepout: frozenset[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class _PortRef:
+    """A stable reference to one named port before routing."""
+
+    room: str
+    port: str
+
+
+@dataclass(frozen=True)
+class _Connection:
+    """An unrouted scalar connection between two exterior anchors."""
+
+    signal: str
+    source: _PortRef
+    target: _PortRef
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """Immutable placement output consumed by the later routing task."""
+
+    placements: tuple[_RoomPlacement, ...]
+    connections: tuple[_Connection, ...]
+    routing_aisles: tuple[_Rect, ...]
+    keepout: frozenset[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class _RoomSpec:
+    name: str
+    role: _RoomRole
+    level: int
+    room: ActiveRoom
+    ports: tuple[_AdapterPort, ...]
+
+
+_STUB_LENGTH = 2
+_DEFAULT_CLEARANCE = 2
+_ROOM_AISLE = 6
+_LEVEL_AISLE = 6
+_SIDE_DIRECTIONS: Mapping[Side, tuple[int, int]] = MappingProxyType(
+    {
+        Side.NORTH: (0, -1),
+        Side.EAST: (1, 0),
+        Side.SOUTH: (0, 1),
+        Side.WEST: (-1, 0),
+    }
+)
+_SIDE_ORDER = (Side.NORTH, Side.EAST, Side.SOUTH, Side.WEST)
+_ROLE_ORDER: Mapping[_RoomRole, int] = MappingProxyType(
+    {
+        _RoomRole.INPUT_DEMULTIPLEXER: 0,
+        _RoomRole.FANOUT: 1,
+        _RoomRole.PACKER: 2,
+        _RoomRole.PRIMITIVE: 3,
+        _RoomRole.OUTPUT_JOINER: 4,
+    }
+)
+
+
+def _plan_layout(
+    netlist: Netlist,
+    primitive_directory: str | PathLike[str] | None = None,
+) -> _Layout:
+    """Lower and deterministically place a validated scalar netlist.
+
+    This reserves room geometry and two-cell port stubs only.  Connections
+    deliberately contain endpoint references rather than searched routes.
+    """
+
+    if not netlist.inputs:
+        raise ValueError("Layout requires at least one declared input signal")
+    if not netlist.outputs:
+        raise ValueError("Layout requires at least one selected output signal")
+
+    primitive_root = (
+        Path(primitive_directory)
+        if primitive_directory is not None
+        else Path(__file__).parents[1] / "tasks" / "solutions" / "primitives"
+    )
+    specs, connections = _lower_layout_rooms(netlist, primitive_root)
+    placements, aisles = _place_room_specs(specs)
+    keepout = frozenset().union(*(placement.keepout for placement in placements))
+    return _Layout(
+        placements=placements,
+        connections=connections,
+        routing_aisles=aisles,
+        keepout=keepout,
+    )
+
+
+def _lower_layout_rooms(
+    netlist: Netlist,
+    primitive_root: Path,
+) -> tuple[tuple[_RoomSpec, ...], tuple[_Connection, ...]]:
+    specs: list[_RoomSpec] = []
+    connections: list[_Connection] = []
+    signal_sources: dict[str, _PortRef] = {}
+    signal_targets: dict[str, list[_PortRef]] = {signal: [] for signal in netlist.producers}
+
+    input_adapter = _make_input_demultiplexer(len(netlist.inputs))
+    specs.append(_adapter_spec("input", _RoomRole.INPUT_DEMULTIPLEXER, 0, input_adapter))
+    signal_sources.update(
+        {
+            signal: _PortRef("input", f"field[{index}]")
+            for index, signal in enumerate(netlist.inputs)
+        }
+    )
+
+    for index, gate in enumerate(netlist.gates):
+        level = netlist.levels[gate.output]
+        gate_name = f"gate[{index}]"
+        room = extract_active_room(primitive_root / gate.kind)
+        primitive_ports = _select_primitive_ports(room, contract_for(gate.kind))
+        specs.append(
+            _RoomSpec(
+                name=gate_name,
+                role=_RoomRole.PRIMITIVE,
+                level=level,
+                room=room,
+                ports=primitive_ports,
+            )
+        )
+
+        if len(gate.inputs) == 1:
+            signal_targets[gate.inputs[0]].append(_PortRef(gate_name, "input"))
+        else:
+            packer_name = f"{gate_name}.packer"
+            packer = (
+                _make_two_field_packer()
+                if len(gate.inputs) == 2
+                else _make_output_joiner(len(gate.inputs))
+            )
+            specs.append(_adapter_spec(packer_name, _RoomRole.PACKER, level, packer))
+            for field_index, signal in enumerate(gate.inputs):
+                signal_targets[signal].append(_PortRef(packer_name, f"field[{field_index}]"))
+            connections.append(
+                _Connection(
+                    signal=f"{gate.output}:input-frame",
+                    source=_PortRef(packer_name, "frame"),
+                    target=_PortRef(gate_name, "input"),
+                )
+            )
+
+        signal_sources[gate.output] = _PortRef(gate_name, "output")
+
+    output_level = max(netlist.levels[signal] for signal in netlist.outputs) + 1
+    output_adapter = _make_output_joiner(len(netlist.outputs))
+    specs.append(_adapter_spec("output", _RoomRole.OUTPUT_JOINER, output_level, output_adapter))
+    for index, signal in enumerate(netlist.outputs):
+        signal_targets[signal].append(_PortRef("output", f"field[{index}]"))
+
+    for signal in netlist.producers:
+        _connect_signal_with_fanout(
+            signal=signal,
+            source=signal_sources[signal],
+            targets=signal_targets[signal],
+            level=netlist.levels[signal],
+            specs=specs,
+            connections=connections,
+            counter=[0],
+        )
+
+    return tuple(specs), tuple(connections)
+
+
+def _adapter_spec(
+    name: str,
+    role: _RoomRole,
+    level: int,
+    adapter: _GeneratedAdapter,
+) -> _RoomSpec:
+    _validate_adapter_ports(name, adapter)
+    return _RoomSpec(name=name, role=role, level=level, room=adapter.room, ports=adapter.ports)
+
+
+def _connect_signal_with_fanout(
+    *,
+    signal: str,
+    source: _PortRef,
+    targets: Sequence[_PortRef],
+    level: int,
+    specs: list[_RoomSpec],
+    connections: list[_Connection],
+    counter: list[int],
+) -> None:
+    if not targets:
+        raise ValueError(f"Signal {signal!r} has no consumer or selected output")
+    if len(targets) == 1:
+        connections.append(_Connection(signal, source, targets[0]))
+        return
+
+    branch_count = min(13, len(targets))
+    fanout_name = f"fanout[{signal}][{counter[0]}]"
+    counter[0] += 1
+    fanout = _make_scalar_fanout(branch_count)
+    specs.append(_adapter_spec(fanout_name, _RoomRole.FANOUT, level, fanout))
+    connections.append(_Connection(signal, source, _PortRef(fanout_name, "input")))
+
+    groups = _balanced_groups(tuple(targets), branch_count)
+    for index, group in enumerate(groups):
+        _connect_signal_with_fanout(
+            signal=signal,
+            source=_PortRef(fanout_name, f"copy[{index}]"),
+            targets=group,
+            level=level,
+            specs=specs,
+            connections=connections,
+            counter=counter,
+        )
+
+
+def _balanced_groups(
+    values: tuple[_PortRef, ...],
+    group_count: int,
+) -> tuple[tuple[_PortRef, ...], ...]:
+    short_size, longer_groups = divmod(len(values), group_count)
+    groups: list[tuple[_PortRef, ...]] = []
+    start = 0
+    for index in range(group_count):
+        size = short_size + (1 if index < longer_groups else 0)
+        groups.append(values[start : start + size])
+        start += size
+    return tuple(groups)
+
+
+def _select_primitive_ports(
+    room: ActiveRoom,
+    contract: PrimitiveContract,
+) -> tuple[_AdapterPort, _AdapterPort]:
+    incoming = _instruction_cells(room, frozenset("rRUq"))
+    outgoing = _instruction_cells(room, frozenset("sS"))
+    if not incoming:
+        raise ValueError(f"Primitive {contract.artifact!r} active room has no receive instruction")
+    if not outgoing:
+        raise ValueError(f"Primitive {contract.artifact!r} active room has no send instruction")
+
+    input_candidates = _ranked_wall_candidates(room, contract.input_port, incoming)
+    output_candidates = _ranked_wall_candidates(room, contract.output_port, outgoing)
+    for input_side, input_wall in input_candidates:
+        input_stub = frozenset(_local_stub(input_side, input_wall))
+        for output_side, output_wall in output_candidates:
+            if input_wall == output_wall:
+                continue
+            if not input_stub.isdisjoint(_local_stub(output_side, output_wall)):
+                continue
+            return (
+                _AdapterPort(
+                    name="input",
+                    flow=_AdapterFlow.INCOMING,
+                    side=input_side,
+                    wall=input_wall,
+                    instructions=incoming,
+                ),
+                _AdapterPort(
+                    name="output",
+                    flow=_AdapterFlow.OUTGOING,
+                    side=output_side,
+                    wall=output_wall,
+                    instructions=outgoing,
+                ),
+            )
+
+    raise ValueError(
+        f"Primitive {contract.artifact!r} cannot place distinct non-corner input/output stubs"
+    )
+
+
+def _instruction_cells(
+    room: ActiveRoom,
+    glyphs: frozenset[str],
+) -> tuple[tuple[int, int], ...]:
+    return tuple(
+        (x, y) for y, row in enumerate(room.grid) for x, cell in enumerate(row) if cell in glyphs
+    )
+
+
+def _ranked_wall_candidates(
+    room: ActiveRoom,
+    port: PortContract,
+    instructions: tuple[tuple[int, int], ...],
+) -> tuple[tuple[Side, tuple[int, int]], ...]:
+    candidates: list[tuple[tuple[int, int, int, int, int], Side, tuple[int, int]]] = []
+    for side_index, side in enumerate(_SIDE_ORDER):
+        if side not in port.allowed_sides:
+            continue
+        for wall in _side_wall_cells(room, side):
+            distances = [
+                abs(wall[0] - instruction[0]) + abs(wall[1] - instruction[1])
+                for instruction in instructions
+            ]
+            candidates.append(
+                (
+                    (max(distances), sum(distances), side_index, wall[1], wall[0]),
+                    side,
+                    wall,
+                )
+            )
+    if not candidates:
+        raise ValueError("Port contract has no legal non-corner wall attachment")
+    candidates.sort()
+    return tuple((side, wall) for _, side, wall in candidates)
+
+
+def _side_wall_cells(room: ActiveRoom, side: Side) -> tuple[tuple[int, int], ...]:
+    if side is Side.NORTH:
+        return tuple((x, 0) for x in range(1, room.width - 1))
+    if side is Side.EAST:
+        return tuple((room.width - 1, y) for y in range(1, room.height - 1))
+    if side is Side.SOUTH:
+        return tuple((x, room.height - 1) for x in range(1, room.width - 1))
+    return tuple((0, y) for y in range(1, room.height - 1))
+
+
+def _local_stub(
+    side: Side,
+    wall: tuple[int, int],
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    dx, dy = _SIDE_DIRECTIONS[side]
+    return (
+        (wall[0] + dx, wall[1] + dy),
+        (wall[0] + 2 * dx, wall[1] + 2 * dy),
+    )
+
+
+def _validate_adapter_ports(name: str, adapter: _GeneratedAdapter) -> None:
+    for port in adapter.ports:
+        if port.wall not in _side_wall_cells(adapter.room, port.side):
+            raise ValueError(
+                f"Adapter {name!r} port {port.name!r} is not on a non-corner "
+                f"{port.side.value} wall cell"
+            )
+        if not port.instructions:
+            raise ValueError(f"Adapter {name!r} port {port.name!r} has no instructions")
+
+
+def _place_room_specs(
+    specs: tuple[_RoomSpec, ...],
+) -> tuple[tuple[_RoomPlacement, ...], tuple[_Rect, ...]]:
+    indexed_specs = tuple(enumerate(specs))
+    levels = sorted({spec.level for spec in specs})
+    placements: list[_RoomPlacement] = []
+    band_ranges: list[tuple[int, int]] = []
+    band_top = 0
+
+    for level in levels:
+        level_specs = sorted(
+            ((index, spec) for index, spec in indexed_specs if spec.level == level),
+            key=lambda item: (_ROLE_ORDER[item[1].role], item[0]),
+        )
+        band_height = max(
+            spec.room.height + 2 * (_STUB_LENGTH + _DEFAULT_CLEARANCE) for _, spec in level_specs
+        )
+        left = 0
+        for _, spec in level_specs:
+            placement = _place_room_spec(spec, left, band_top)
+            placements.append(placement)
+            left = placement.footprint.right + 1 + _ROOM_AISLE
+        band_ranges.append((band_top, band_top + band_height - 1))
+        band_top += band_height + _LEVEL_AISLE
+
+    max_right = max(placement.footprint.right for placement in placements)
+    aisles = tuple(
+        _Rect(
+            left=0,
+            top=upper_bottom + 1,
+            width=max_right + 1,
+            height=lower_top - upper_bottom - 1,
+        )
+        for (_, upper_bottom), (lower_top, _) in zip(band_ranges, band_ranges[1:], strict=False)
+    )
+    return tuple(placements), aisles
+
+
+def _place_room_spec(spec: _RoomSpec, left: int, top: int) -> _RoomPlacement:
+    margin = _STUB_LENGTH + _DEFAULT_CLEARANCE
+    footprint = _Rect(
+        left=left,
+        top=top,
+        width=spec.room.width + 2 * margin,
+        height=spec.room.height + 2 * margin,
+    )
+    origin = (left + margin, top + margin)
+    bounds = _Rect(origin[0], origin[1], spec.room.width, spec.room.height)
+    ports = tuple(_place_port(port, origin) for port in spec.ports)
+    occupied = bounds.cells | frozenset(cell for port in ports for cell in port.stub)
+    keepout = _expand_cells(occupied, _DEFAULT_CLEARANCE)
+    if not keepout <= footprint.cells:
+        raise ValueError(f"Room {spec.name!r} keepout exceeds its padded footprint")
+    return _RoomPlacement(
+        name=spec.name,
+        role=spec.role,
+        level=spec.level,
+        room=spec.room,
+        origin=origin,
+        bounds=bounds,
+        footprint=footprint,
+        ports=ports,
+        keepout=keepout,
+    )
+
+
+def _place_port(
+    port: _AdapterPort,
+    origin: tuple[int, int],
+) -> _PortAnchor:
+    wall = (origin[0] + port.wall[0], origin[1] + port.wall[1])
+    direction = _SIDE_DIRECTIONS[port.side]
+    stub = (
+        (wall[0] + direction[0], wall[1] + direction[1]),
+        (wall[0] + 2 * direction[0], wall[1] + 2 * direction[1]),
+    )
+    escape = (
+        (wall[0] + 3 * direction[0], wall[1] + 3 * direction[1]),
+        (wall[0] + 4 * direction[0], wall[1] + 4 * direction[1]),
+    )
+    return _PortAnchor(
+        name=port.name,
+        flow=port.flow,
+        side=port.side,
+        wall=wall,
+        stub=stub,
+        anchor=stub[-1],
+        direction=direction,
+        escape=escape,
+        instructions=tuple((origin[0] + x, origin[1] + y) for x, y in port.instructions),
+    )
+
+
+def _expand_cells(
+    cells: frozenset[tuple[int, int]],
+    clearance: int,
+) -> frozenset[tuple[int, int]]:
+    return frozenset(
+        (x + dx, y + dy)
+        for x, y in cells
+        for dy in range(-clearance, clearance + 1)
+        for dx in range(-clearance, clearance + 1)
+    )
