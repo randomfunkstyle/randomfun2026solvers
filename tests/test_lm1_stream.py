@@ -115,6 +115,42 @@ def test_the_fused_mac_is_four_glyphs() -> None:
     assert body.replace(" ", "") == "rs*s"
 
 
+def test_y_seeds_two_persistent_relays_in_one_room() -> None:
+    """The combined A/B relay scaffold needs one starter and two disjoint loops."""
+    cells = stream.dual_relay_cells()
+    assert stream.DUAL_RELAY_IW == 3
+    assert stream.DUAL_RELAY_IH == 9
+    assert list(cells.values()).count("@") == 1
+    assert list(cells.values()).count("Y") == 1
+    assert list(cells.values()).count("r") == 2
+    assert list(cells.values()).count("s") == 2
+
+    rows = [
+        "".join(cells.get((x, y), " ") for x in range(1, stream.DUAL_RELAY_IW + 1))
+        for y in range(1, stream.DUAL_RELAY_IH + 1)
+    ]
+    source = "\n".join(
+        [
+            "+" + "-" * stream.DUAL_RELAY_IW + "+",
+            *["|" + row + "|" for row in rows],
+            "+" + "-" * stream.DUAL_RELAY_IW + "+",
+        ]
+    )
+
+    # At tick 5 both children are alive and following separate corridors. The
+    # next operation on either loop is its blocking receive; no collision or
+    # wall error is needed to retire a setup child.
+    from randomfun2026solvers.littleman import Littleman
+
+    snapshot = Littleman().tick(source, 5)
+    assert snapshot.fatal is None
+    assert len(snapshot.entities.runners) == 2
+    assert {runner.pos.as_tuple() for runner in snapshot.entities.runners} == {
+        (1, 2),
+        (3, 8),
+    }
+
+
 # ── the placed block ─────────────────────────────────────────────────────────
 def test_the_rings_are_long_enough_for_the_worst_legal_shape() -> None:
     """Capacity is length: 257 values need 257 cells, and the search must find them."""

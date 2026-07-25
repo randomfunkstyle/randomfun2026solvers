@@ -24,11 +24,10 @@ an `O` room for the display problems. `lm1/cpugen.py` remains the earlier
 hand-rolled 7-opcode instance (`triangle`, §2.6); `lm1/synth.py` is the
 straight-line-only generator it grew into. `machine.py` supersedes both.
 
-The five bespoke grids beat their LM-1 equivalents by orders of magnitude —
+The bespoke grids beat their LM-1 equivalents by orders of magnitude —
 `triangle` is 960 by hand against 471,744 generated — so LM-1 remains the safety
-net rather than the plan of record (§1). Still open: **`matmul`** (needs ~512
-cells against a 103-slot tape, so it is blocked on the store, not the ISA) and
-**`subset-sum`**.
+net rather than the plan of record (§1). `matmul` is now solved by adding the
+rotate-only STREAM tier (§8 and `lm1/stream.py`); **`subset-sum`** remains open.
 
 Visual walkthrough: [`arch.html`](arch.html) — the verified units, an animated
 run of the whole machine driven by real interpreter snapshots, the tick budget
@@ -529,7 +528,8 @@ Further variants, in rough order of payoff (the first two are described in
   6×6 hollow square amortises the fixed corner/test/decrement cost over 7 values
   in flight, reaching ~2.9: another ~2.2×.
 - **Banking** — k rings, address = (bank, offset), ~N/k per access at k× the
-  pipe area. The only route to `matmul`'s 768 slots, and still a stretch.
+  pipe area. Superseded for `matmul` by its sequential-access STREAM block, but
+  still relevant to random-access workloads.
 - **`register-cell` arrays** — for a handful of named scalars, k cells beat any
   tape outright.
 
@@ -1130,7 +1130,7 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 2 | `tcp` | indexed by `seq`; needs `LDA`/`MOVA` | 51 | 6/6 · P=45 · 30k | **✔ solved by the synthesiser** (112×78, 96,923 ticks, score 1.22bn) |
 | Sem 2 | `plotter` | display ADDR/DATA/SWAP + line arithmetic | 10 | 6/6 · P=243 · 74k | **✔ solved by the synthesiser** (112×116, 204,330 ticks avg, score 2.75bn) |
 | Sem 3 | `gradebook` | ids + N×K grades, search by id; needs `LDA`/`MOVA`/`DIVI` | 93 | 7/7 · P=460 · 318k | **✔ solved by the synthesiser** (112×103, 694,713 ticks, score 8.71bn) |
-| Sem 3 | `matmul` | three matrices, ~8450 accesses | 768 | — | **✕** |
+| Sem 3 | `matmul` | rotate-only A/B/C streams; fused hardware MAC | 14 scalars + STREAM | 7/7 · P=126 · 120k | **✔ solved by STREAM** (96×96, score 1.11bn) |
 | Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
 | Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | — | C |
 | Practice | `hello-world` · `max-element` · `atoi` | 0–1 slots | ≤1 | 1/1 · 10/10 · 2/2 | A |
@@ -1221,10 +1221,12 @@ Three findings that change the plan:
   scalars, so an N=8 tape serves it. `tcp`'s 48-slot reorder buffer does need
   indexing, but through `LDA`/`MOVA` rather than `LDP`/`STP`, so it needs no SPILL
   block either.
-- **`matmul` looks infeasible.** ~8,450 accesses × ~750 ticks ≈ **6.3M against a
-  5M cap** — and that is with the *constant-cost* tape, so the earlier delay-line
-  estimate was pessimistic about the mechanism but right about the verdict. It
-  needs banked memory or a bespoke solution.
+- **The ordinary tape makes `matmul` infeasible, but STREAM solves it.** The
+  ~8,450-access estimate correctly rejects random-access STORE. The final loop
+  order only rotates A, B, and the current C row, so `lm1/stream.py` replaces
+  those accesses with three FIFO rings and performs 4,096 worst-case MACs in a
+  local counted loop. The generated 96×96 grid passes 7/7 at 120,460 average
+  ticks and 550,774 worst-case ticks.
 
 `history-lesson` proved the point about scoring rather than capability: LM-1 can
 emit it (P=8431, ~40k ROM cells), but on a `footprint`-only problem that is
@@ -1267,7 +1269,7 @@ The complete released-task audit is:
 | `tcp` | low | Packet arrival, reorder-buffer mutation, and earliest-possible ordered output share one moving frontier. Split lookup/output servants can overlap locally, but both still serialize on the same tape and output pipe. |
 | `plotter` | low | The four unrolled pixel bodies look identical but each consumes the previous pixel's packed `(err,addr)`. Separate rounds are withheld until the frame commits, and display writes/commit are side effects on one device. |
 | `gradebook` | medium in a banked rewrite | Student scans and per-subject aggregates are independent and can be split by roster half. The current build has one tape adapter, so two CPU runners merely queue the same expensive accesses; a win requires two memory banks plus a small min/max/sum join. GET/SET remain serial operations. |
-| `matmul` | **high** | Output cells and dot-product partials are independent. A split tree can create row/cell workers with copied dimensions, while banked A/B stores feed them. Ordered output needs a collector, but the work per result is large enough to amortise it. This is the best large-room target and the likely route under the tick cap; adding `Y` only to the current one-tape CPU is not enough. |
+| `matmul` | low for the solved critical path | Main now uses three rotate-only rings and a four-glyph hardware MAC, not one tape. Splitting the MAC's B-return and product sends does not shorten its three-tick critical path and needs termination corridors. A better `Y` use is structural: seed the two persistent A/B relay loops in one shared room; `stream.dual_relay_cells` is the validated placement scaffold. |
 | `subset-sum` | **conditional** | Include/exclude search maps directly to `Y`, copied registers give both branches the same prefix state, and BP can hold the 20-bit choice mask. But the values are dynamic input: every live branch still needs the next value, and neither a tape read nor an input receive broadcasts inside a room. A full depth-20 tree also exceeds the 65,536-live-runner cap. Split is useful only after solving value distribution (staged broadcast or replicated banks), and lexicographic output still needs an ordered winner protocol. |
 | `sudoku-validity` | **high local shape** | Row, column, and box are three identical test-and-set operations. Two splits can make three workers and combine failure as a side effect (any duplicate writes a sticky invalid flag). The current single tape serializes all three, so the practical rewrite needs three independent 9-word banks or three bitset servants. This is the clearest small-room prototype. |
 | `hello-world` | none | Independent constant emitters immediately serialize on the one output pipe; deterministic creation order is possible but the fork corridors cost more cells than the tiny literal stream. |
@@ -1280,9 +1282,9 @@ This yields three implementation rules:
 - **Small rooms:** use `Y` as a one-cell register fan-out when each child can
   terminate in a different side effect. The memory read-target fork is the
   reference gadget; Sudoku's row/column/box update is the next candidate.
-- **Large rooms:** do not split the CPU while leaving one tape. Split the data
-  plane too—banked stores and one collector for `matmul`, a bounded search tree
-  and winner collector for `subset-sum`.
+- **Large rooms:** do not split the CPU while leaving one tape. Split or
+  specialize the data plane too—STREAM for `matmul`, and a bounded search tree
+  plus winner collector for `subset-sum`.
 - **Identical subfunctions are not sufficient.** They must have independent
   inputs/state or commute through a side effect. Plotter's repeated bodies and
   gradebook's scans are syntactically alike, but their current data paths remain
@@ -1311,12 +1313,10 @@ Concrete probes and budgets keep this audit falsifiable:
   current 89×94 grid only if the tiled three-bank machine stays below about
   `sqrt(2.54)×94 ≈ 150` cells on its longest side. That is a useful geometry
   acceptance test before implementing the full generator.
-- **Matmul architecture:** keep 16 row workers. While A arrives, route each
-  16-value row into its worker's local ring. Then broadcast each B row to all
-  workers; worker `i` combines it with its resident `A[i,t]` and maintains 16
-  local accumulators. This parallelises the 16 output rows, makes the dynamic
-  value distribution explicit, and lets a collector drain completed rows in
-  row-major order. A generic CPU plus one tape cannot express this win.
+- **Matmul result:** main's single STREAM worker is already better than the
+  proposed 16-worker bank: it needs three rings, 14 scalar tape slots, and 0.59
+  CPU instructions per MAC. The first `Y` prototype therefore targets relay
+  room consolidation, not more MAC workers.
 - **Subset-sum stop condition:** do not draw the exponential fork tree until a
   value-distribution probe can deliver one dynamic `v_i` to every live branch
   cheaper than those branches can read it serially from the tape. At depth 16
@@ -1350,8 +1350,8 @@ Concrete probes and budgets keep this audit falsifiable:
 8. **Reuse the machinery for the remaining array problems** — `sort-numbers`,
    `reverse-a-list`, `subset-sum`, `sudoku-validity`. Each is now an `.asm` file plus
    a tape size (and a `ROM_ROWS` fold if the default is not the footprint optimum),
-   as `gradebook` (7/7, 112×103, score 8.71bn) has just demonstrated; `matmul` is
-   still out of reach on ticks (§8).
+   as `gradebook` demonstrated. `matmul` now uses the separate STREAM tier
+   because its access order is FIFO rather than random (§8).
    `gradebook` also measured where the ticks of an array problem *go*, which the
    scalar programs could not: with 93 tape slots an access is ~885 ticks and every
    variable is a slot, so **memory traffic is ~68% of the bill**, the ROM lap a
@@ -1373,10 +1373,9 @@ command), `tools/run-cases.mjs` scores a grid against a case file, and
 - **ROM serpentine density** — reversed literals on alternating rows halve the
   ROM's height but add a whole class of load errors (§4.2). Ship the safe
   version first.
-- **`Y` (split) beyond the proven memory fork.** Prototype Sudoku's three
-  independent bitset servants first. For the two unsolved problems, design
-  `matmul` around banked stores and `subset-sum` around a bounded split tree;
-  merely adding a second runner to LM-1 leaves its single tape and ring
-  serialized (§8.2).
+- **`Y` (split) beyond the proven memory fork.** Place and benchmark the tested
+  dual-relay scaffold in STREAM, then prototype Sudoku's three independent
+  bitset servants. For `subset-sum`, solve dynamic value distribution before
+  drawing a bounded split tree (§8.2).
 - **Second "loop ring"** for hot bodies, if §5.4's jump cost dominates real
   programs.

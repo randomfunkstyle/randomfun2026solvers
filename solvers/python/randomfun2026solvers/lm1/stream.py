@@ -88,10 +88,13 @@ from ..circuit import Circuit
 
 __all__ = [
     "ARMS",
+    "DUAL_RELAY_IH",
+    "DUAL_RELAY_IW",
     "StreamBlock",
     "UNIT_IH",
     "UNIT_IW",
     "arm_codes",
+    "dual_relay_cells",
     "unit_interior",
 ]
 
@@ -362,6 +365,54 @@ def relay_cells() -> dict[tuple[int, int], str]:
             if ch != " ":
                 out[(x, y)] = ch
     return out
+
+
+# ── two relays, one room, one starter ────────────────────────────────────────
+# The STREAM block needs two identical persistent relay men, one for ring A and
+# one for ring B. They currently live in separate 3x3 rooms. This layout is the
+# first production-oriented use of Y: a single starter splits north/south, then
+# each child enters one unchanged `r`/`s` relay loop. It is deliberately exposed
+# before placement so geometry and runtime semantics can be pinned independently.
+#
+# Coordinates are interior, 1-based like ``relay_cells``:
+#
+#     >>v       upper child joins at the extra `>` on the west
+#     ^sr
+#     ^<<
+#     ^<
+#     @Y
+#      v
+#      >v       lower child is born directly above its loop
+#      sr
+#      ^<
+#
+# The upper route is longer, but startup latency is irrelevant: both men reach
+# blocking `r` before the CPU can finish filling its command/tape state.
+DUAL_RELAY_IW = 3
+DUAL_RELAY_IH = 9
+
+
+def dual_relay_cells() -> dict[tuple[int, int], str]:
+    """Two disjoint relay loops seeded by one ``Y`` in one compute room."""
+    rows = (
+        ">>v",
+        "^sr",
+        "^<<",
+        "^< ",
+        "@Y ",
+        " v ",
+        " >v",
+        " sr",
+        " ^<",
+    )
+    if {len(row) for row in rows} != {DUAL_RELAY_IW}:
+        raise StreamError("dual relay rows are not fixed-width")
+    return {
+        (x, y): ch
+        for y, row in enumerate(rows, start=1)
+        for x, ch in enumerate(row, start=1)
+        if ch != " "
+    }
 
 
 @dataclass
