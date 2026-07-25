@@ -209,9 +209,9 @@ def worker_snake(size: int = 10) -> Circuit:
         E,
     )
     c.run(43, 11, "rs")
-    c.route((45, 11), E, [(45, 27)], (22, 27), W)
-    c.run(21, 27, "s", d=W)
-    c.route((20, 27), W, [(20, 30), (0, 30)], (0, 15), E)
+    c.route((45, 11), E, [(45, 27)], (7, 27), W)
+    c.run(6, 27, "s", d=W)
+    c.route((5, 27), W, [(4, 27), (4, 30), (0, 30)], (0, 15), E)
 
     # WRITE target, deferred input fetch, replacement, then main.
     c.route((write_exit, write_y + 1), E, [(44, write_y + 1), (44, 18)], (43, 18), W)
@@ -351,7 +351,7 @@ def build_tight(size: int = 10) -> tuple[list[str], DebugMap]:
 def build_snake(size: int = 10) -> tuple[list[str], DebugMap]:
     """Assemble the folded worker with adjacent, spacer-free pipe folds."""
     c = worker_snake(size)
-    grid = Circuit(56, 60)
+    grid = Circuit(56, 53)
     wx, wy = 6, 10
     _stamp(grid, c, (wx, wy))
     _walls(grid, (wx, wy), c.w, c.h)
@@ -367,10 +367,10 @@ def build_snake(size: int = 10) -> tuple[list[str], DebugMap]:
     debug.region("input", 0, wy + 14, 3, 3, note="operation stream", color="#22c55e")
     debug.lane("input-pipe", input_pipe, kind="pipe", expect="op, address, deferred write value", color="#22c55e")
 
-    _room(grid, 4, wy + c.h + 3, "O")
-    output_pipe = [(5, wy + c.h + 1), (5, wy + c.h + 2)]
+    _room(grid, 0, wy + 26, "O")
+    output_pipe = [(4, wy + 27), (3, wy + 27)]
     _draw_pipe(grid, output_pipe)
-    debug.region("output", 4, wy + c.h + 3, 3, 3, note="read results", color="#a78bfa")
+    debug.region("output", 0, wy + 26, 3, 3, note="read results", color="#a78bfa")
     debug.lane("output-pipe", output_pipe, kind="pipe", expect="read value only", color="#a78bfa")
 
     index = register_cell("current", note="logical ring head", color="#facc15")
@@ -385,12 +385,12 @@ def build_snake(size: int = 10) -> tuple[list[str], DebugMap]:
     debug.lane("index-response", response, kind="pipe", expect="current response", color="#fde68a")
 
     relay = zero_fill_relay("relay", size, note="zero fill and ring turnaround", color="#fb7185")
-    rx, ry = 2, 50
+    rx, ry = 2, 43
     _stamp(grid, relay.circuit, (rx, ry))
-    forward = [(wx + c.w + 1, wy + 16), (54, wy + 16), (54, 48), (12, 48), (12, ry + 6), (11, ry + 6)]
+    forward = [(wx + c.w + 1, wy + 16), (54, wy + 16), (54, 46), (12, 46), (12, ry + 6), (11, ry + 6)]
     returned = [
-        (rx - 1, ry + 4), (0, ry + 4), (0, 58),
-        (55, 58), (55, wy + 14), (wx + c.w + 1, wy + 14),
+        (rx - 1, ry + 4), (0, ry + 4), (0, 51),
+        (55, 51), (55, wy + 14), (wx + c.w + 1, wy + 14),
     ]
     forward_slots = _draw_pipe(grid, forward)
     return_slots = _draw_pipe(grid, returned)
