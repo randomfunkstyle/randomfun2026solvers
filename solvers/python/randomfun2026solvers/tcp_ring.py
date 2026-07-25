@@ -57,7 +57,7 @@ a one-dimensional rule that holds at every row, instead of the 2-D case where a
 block that moves down a row can silently rebind.  With input/output at columns
 3/7 and ring-forward/return at 18/22, both midpoints land on 12.5, so
 
-    columns 0..12 -> input / output        columns 13..39 -> the ring
+    columns 0..12 -> input / output        columns 13..36 -> the ring
 
 and :func:`_io` / :func:`_ring` refuse to place a pipe op on the wrong side of
 that line.  ``route-check.mjs`` and :meth:`Littleman.route` verify the result
@@ -82,7 +82,7 @@ __all__ = ["IH", "IW", "RING_WORDS", "build", "worker"]
 
 # ── worker geometry ───────────────────────────────────────────────────────────
 #: Interior of the one worker room.
-IW, IH = 40, 32
+IW, IH = 37, 32
 
 #: North-wall anchor columns.  Both midpoints are 12.5, so the binding rule is
 #: "columns <= 12 are I/O, columns >= 13 are the ring" at *every* row.
@@ -271,7 +271,7 @@ def build() -> list[str]:
     """The whole machine: worker + I/O rooms + relay + the ring's two pipes."""
     w = worker()
     g = Circuit(IW + 12, IH + 10)
-    wx, wy = 1, 8
+    wx, wy = 1, 6
     stamp(g, wx, wy, w.rows())
     walls(g, wx, wy, IW, IH)
 

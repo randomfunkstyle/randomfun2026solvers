@@ -34,19 +34,21 @@ ROOT = Path(__file__).resolve().parents[1]
 SOLUTION = ROOT / "tasks" / "solutions" / "tcp_ring.man"
 PROBLEM = ROOT / "tasks" / "problems" / "tcp.json"
 
-#: Committed geometry.  Width binds the score, so both are pinned exactly.
-GRID_W, GRID_H, AREA2 = 42, 41, 1764
+#: Committed geometry.  A square: ``mancompact`` cut the grid's dead columns down
+#: to the point where width and height bind equally, so neither can be traded for
+#: the other without a re-layout.  Both pinned exactly.
+GRID_W, GRID_H, AREA2 = 39, 39, 1521
 
 #: Engine-measured tick of the final expected output, per public case.  Pinned
 #: exactly rather than as a bound: ticks here are deterministic, and an
 #: inequality would hide an improvement as readily as a regression.
 CASE_TICKS = {
-    "in-order stream": 1770,
-    "single max-displacement swap": 5142,
-    "drain burst": 5042,
-    "loss case": 4322,
-    "shortest stream": 240,
-    "block-reversed n=32": 10168,
+    "in-order stream": 1767,
+    "single max-displacement swap": 5139,
+    "drain burst": 5039,
+    "loss case": 4319,
+    "shortest stream": 237,
+    "block-reversed n=32": 10165,
 }
 
 
@@ -123,8 +125,8 @@ def test_every_pipe_op_binds_to_the_pipe_it_was_written_for() -> None:
     lm = Littleman()
     rows = SOLUTION.read_text().rstrip("\n").split("\n")
     pipes = {tuple(s.pos.as_tuple() for s in p.path): p for p in lm.analyze(SOLUTION).pipes}
-    io_pipes = {cells for cells, p in pipes.items() if len(cells) == 4}
-    assert len(io_pipes) == 2, "input and output are the two 4-cell pipes"
+    io_pipes = {tuple(s.pos.as_tuple() for s in p.path) for p in _io_pipes(lm)}
+    assert len(io_pipes) == 2, "one pipe from the I room, one into the O room"
 
     census = {"io": 0, "ring": 0}
     for y, row in enumerate(rows):
@@ -145,18 +147,42 @@ def test_every_pipe_op_binds_to_the_pipe_it_was_written_for() -> None:
 def test_the_ring_holds_its_resident_words() -> None:
     """Under capacity a pipe ring deadlocks with no error, so assert the slack."""
     lm = Littleman()
-    ring = [p for p in lm.analyze(SOLUTION).pipes if len(p.path) != 4]
+    ring = _ring_pipes(lm)
     assert len(ring) == 2
     assert sum(len(p.path) for p in ring) >= tcp_ring.RING_WORDS + 1
 
 
-def _inside_worker(lm: Littleman, x: int, y: int) -> bool:
-    """True for cells in the worker room -- the relay's own ``r``/``s`` are not ours."""
+def _rooms(lm: Littleman) -> tuple[object, object]:
+    """``(worker, relay)`` -- the two rooms that are not the 3x3 I/O rooms.
+
+    Identified by size rather than by index, so the band can be re-laid out
+    without silently turning these invariants into tautologies.
+    """
     def area(r: object) -> int:
         lo, hi = r.min_, r.max_  # type: ignore[attr-defined]
         return (hi.x - lo.x) * (hi.y - lo.y)
 
-    room = max(lm.analyze(SOLUTION).rooms, key=area)
+    big = sorted(lm.analyze(SOLUTION).rooms, key=area)[-2:]
+    return big[-1], big[0]
+
+
+def _ring_pipes(lm: Littleman) -> list[object]:
+    """The two pipes between the worker and the relay -- i.e. the ring itself."""
+    worker, relay = _rooms(lm)
+    ends = {tuple(r.min_.as_tuple()) for r in (worker, relay)}  # type: ignore[attr-defined]
+    rooms = lm.analyze(SOLUTION).rooms
+    ids = {i for i, r in enumerate(rooms) if tuple(r.min_.as_tuple()) in ends}
+    return [p for p in lm.analyze(SOLUTION).pipes if {p.src, p.dst} <= ids]
+
+
+def _io_pipes(lm: Littleman) -> list[object]:
+    ring = _ring_pipes(lm)
+    return [p for p in lm.analyze(SOLUTION).pipes if p not in ring]
+
+
+def _inside_worker(lm: Littleman, x: int, y: int) -> bool:
+    """True for cells in the worker room -- the relay's own ``r``/``s`` are not ours."""
+    room = _rooms(lm)[0]
     return room.min_.x < x < room.max_.x and room.min_.y < y < room.max_.y
 
 
@@ -222,3 +248,24 @@ def test_an_emit_costs_one_rotation_plus_its_station() -> None:
         spans[k] = _tick_of_nth_output(lm, src, inp, k + 1) - _tick_of_nth_output(lm, src, inp, 1)
     slopes = {(spans[b] - spans[a]) / (b - a) for a, b in ((2, 4), (4, 6), (6, 8), (8, 10))}
     assert slopes == {TICKS_PER_EMIT}
+
+
+def test_the_grid_has_no_dead_line_left_to_cut() -> None:
+    """``mancompact`` is the arbiter of "as small as this layout goes".
+
+    A dead line is a whole row or column of blanks, walls parallel to the cut and
+    pipe bodies parallel to the cut -- geometrically free to delete, but *not*
+    semantically free, because pulling a wall in can hand an ``s``/``r`` to a
+    different pipe with no other symptom.  Running it here means the committed
+    footprint is a measured floor for this block arrangement rather than whatever
+    the generator's constants happened to be, and it re-checks the two pipes'
+    declared slack while it is at it.
+    """
+    from randomfun2026solvers.mancompact import compact
+    from randomfun2026solvers.manstruct import CapacityHint
+
+    lm = Littleman()
+    ids = [i for i, p in enumerate(lm.analyze(SOLUTION).pipes) if p in _ring_pipes(lm)]
+    res = compact(SOLUTION, capacity=[CapacityHint(tuple(ids), tcp_ring.RING_WORDS + 1)])
+    assert res.cuts == [], f"still cuttable: {res.cuts}"
+    assert res.after == (GRID_W, GRID_H)
