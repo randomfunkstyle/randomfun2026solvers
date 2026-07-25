@@ -252,16 +252,17 @@ def build() -> dict:
         "rg", "M",                           # B = incoming carry
         "rg", "|", "M", "rg", "|", "M", "rg", "|", "M", "rg", "|",
         "M", "rf", "|",                      # c = self | fwd | bcq
-        "sg",
-        "rr", "sg", "sg",                    # NB, twice
-        "rg", "sg", "rg", "sg",              # rotate the carry and f
-        "rg", "M",                           # B = c
-        "rg", "&",                           # A = new = NB & c
-        "sg", "sg",
-        "rr", "M",                           # B = S2
-        "rg", "sg", "rg", "sg", "rg", "sg",  # rotate NB, carry, f
-        "rg", "|", "sr",                     # S1' = S2 | new
-        "rg", "M", "rg", "~", "sr",          # NB' = NB ^ new
+        # c stays in B and `new` replaces it there, so the finalise only ever
+        # parks ONE value (NB, for the XOR) instead of shuttling four through
+        # the scratch FIFO: 36 tokens -> 21 in the block that is a third of the
+        # whole program's op count.
+        "M",                                 # B = c
+        "rr", "sg",                          # A = NB, parked for the XOR
+        "&",                                 # A = new = NB & c
+        "M",                                 # B = new
+        "rr", "|", "sr",                     # S1' = S2 | new
+        "rg", "sg", "rg", "sg", "rg",        # A = NB again
+        "~", "sr",                           # NB' = NB ^ new
         "rr", "sr",                          # S3 becomes S2'
         "rg", "sg", "rg", "sr",              # f becomes S3'
     ])

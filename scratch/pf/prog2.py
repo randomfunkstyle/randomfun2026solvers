@@ -40,7 +40,6 @@ from __future__ import annotations
 
 from collections import deque
 
-
 #: Words resident in the ring: [P, Q] plus four groups of [S1, NB, S2, S3].
 RING_WORDS = 18
 #: High-water marks of the two auxiliary loops (measured by the op-level model).
@@ -140,25 +139,31 @@ def build() -> dict:
     # -- and that IS the tie-break order.  Per group kw = 47 - p + 64*pos, and
     # (S1 >> kw) | (S1 << -kw) is a genuine 128-bit window shift: at most one
     # term is non-zero, and where both are they agree.
+    # F cycles [kw, acc, Q, p] -- kw first.  ``M`` puts kw in B, and B survives
+    # every pipe op, so popping kw *before* the ring read lets the whole G run
+    # sit between one F run and the next: the body's pipe-zone string collapses
+    # from F F F F R R G G F F G G G G F F R*6 (6 transitions) to
+    # F F R R G*6 F*6 R*6 (4), and this body runs 420 times a case.
     P["ITERPRE"] = ([
-        "rr", "sr",                    # P straight back
-        "rr", "sr", "sf",              # Q back;  F = [p, Q]
-        "rf", "sf",                    # A = p;   F = [Q, p]
-        "M", L(47), "-", "sf",         # F = [Q, p, kw]
-        L(0), "sf", L(4), "b",         # F = [Q, p, kw, acc]
+        "rr", "sr",                    # P straight back (A = P, which is p)
+        "M", L(47), "-", "sf",         # F = [p, kw]
+        L(0), "sf",                    # F = [p, kw, acc]
+        "rr", "sr", "sf",              # Q back;  F = [p, kw, acc, Q]
+        "rf", "sf",                    # rotate p -> F = [kw, acc, Q, p]
+        L(4), "b",
     ], "ITERT")
     lap(P, "ITER", "ITEREND", [
-        "rf", "sf", "rf", "sf",        # rotate Q, p
-        "rr", "sr", "sg", "sg",        # S1 back on the ring, two copies in G
         "rf", "M", L(64), "+", "sf",   # pop kw (B = kw), push kw + 64
+        "rr", "sr", "sg", "sg",        # S1 back on the ring, two copies in G
         "rg", "}", "sg",               # t1 = S1 >> kw
         "W", "N", "M",                 # B = -kw
         "rg", "{", "M",                # t2 = S1 << -kw
         "rg", "|", "M",                # t = t1 | t2
         "rf", "|", "sf",               # acc |= t
+        "rf", "sf", "rf", "sf",        # rotate Q, p
         "rr", "sr", "rr", "sr", "rr", "sr",
     ])
-    P["ITEREND"] = (["rf", "sf", "rf", "sf", "rf", "rf", "sg"], "TU")
+    P["ITEREND"] = (["rf", "rf", "sg"], "TU")
 
     for name, bit, hit, miss in (("TU", 32, "MVUP", "TR"),
                                  ("TR", 15, "MVRIGHT", "TD"),
@@ -247,16 +252,13 @@ def build() -> dict:
         "rg", "M",                           # B = incoming carry
         "rg", "|", "M", "rg", "|", "M", "rg", "|", "M", "rg", "|",
         "M", "rf", "|",                      # c = self | fwd | bcq
-        "sg",
-        "rr", "sg", "sg",                    # NB, twice
-        "rg", "sg", "rg", "sg",              # rotate the carry and f
-        "rg", "M",                           # B = c
-        "rg", "&",                           # A = new = NB & c
-        "sg", "sg",
-        "rr", "M",                           # B = S2
-        "rg", "sg", "rg", "sg", "rg", "sg",  # rotate NB, carry, f
-        "rg", "|", "sr",                     # S1' = S2 | new
-        "rg", "M", "rg", "~", "sr",          # NB' = NB ^ new
+        "M",                                 # B = c
+        "rr", "sg",                          # A = NB, parked for the XOR
+        "&",                                 # A = new = NB & c
+        "M",                                 # B = new
+        "rr", "|", "sr",                     # S1' = S2 | new
+        "rg", "sg", "rg", "sg", "rg",        # A = NB again
+        "~", "sr",                           # NB' = NB ^ new
         "rr", "sr",                          # S3 becomes S2'
         "rg", "sg", "rg", "sr",              # f becomes S3'
     ])
