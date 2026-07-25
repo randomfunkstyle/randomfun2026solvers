@@ -3,6 +3,7 @@
 __all__ = [
     "Littleman",
     "LittlemanError",
+    "FanOut",
     "ProgramScore",
     "ScoringError",
     "Snapshot",
@@ -20,4 +21,8 @@ def __getattr__(name: str) -> object:
         from . import scoring
 
         return getattr(scoring, name)
+    if name == "FanOut":
+        from . import composer
+
+        return composer.FanOut
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -19,7 +19,7 @@ from .primitive_contracts import (
     contracts_by_artifact,
 )
 
-__all__ = ["ActiveRoom", "Gate", "Netlist", "compose", "extract_active_room", "write"]
+__all__ = ["ActiveRoom", "FanOut", "Gate", "Netlist", "compose", "extract_active_room", "write"]
 
 
 @dataclass(frozen=True)
@@ -338,13 +338,26 @@ class Gate:
 
 
 @dataclass(frozen=True)
+class FanOut:
+    """Copies one ordered input frame into named ordered branch frames."""
+
+    source: tuple[str, ...]
+    branches: tuple[tuple[str, ...], ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", tuple(self.source))
+        object.__setattr__(self, "branches", tuple(tuple(branch) for branch in self.branches))
+
+
+@dataclass(frozen=True)
 class Netlist:
-    """An ordered scalar DAG with immutable derived signal indexes."""
+    """An ordered scalar DAG with optional explicit input-frame fanout."""
 
     inputs: tuple[str, ...]
     gates: tuple[Gate, ...]
     outputs: tuple[str, ...]
-    producers: Mapping[str, Gate | None] = field(init=False, repr=False)
+    fanouts: tuple[FanOut, ...] = ()
+    producers: Mapping[str, Gate | FanOut | None] = field(init=False, repr=False)
     consumers: Mapping[str, tuple[Gate, ...]] = field(init=False, repr=False)
     levels: Mapping[str, int] = field(init=False, repr=False)
 
@@ -352,8 +365,9 @@ class Netlist:
         object.__setattr__(self, "inputs", tuple(self.inputs))
         object.__setattr__(self, "gates", tuple(self.gates))
         object.__setattr__(self, "outputs", tuple(self.outputs))
+        object.__setattr__(self, "fanouts", tuple(self.fanouts))
 
-        producers: dict[str, Gate | None] = {}
+        producers: dict[str, Gate | FanOut | None] = {}
         consumers: dict[str, list[Gate]] = {}
         levels: dict[str, int] = {}
 
@@ -364,8 +378,48 @@ class Netlist:
             consumers[signal] = []
             levels[signal] = 0
 
+        branch_owner: dict[str, tuple[FanOut, tuple[str, ...]]] = {}
+        for fanout in self.fanouts:
+            if not fanout.source:
+                raise ValueError("FanOut source must not be empty")
+            if len(set(fanout.source)) != len(fanout.source):
+                raise ValueError("FanOut source contains duplicate signals")
+            for signal in fanout.source:
+                if signal not in producers:
+                    raise ValueError(f"FanOut source signal {signal!r} is not a declared input")
+            if len(fanout.branches) < 2:
+                raise ValueError("FanOut requires at least two branches")
+            for branch_index, branch in enumerate(fanout.branches):
+                if len(branch) != len(fanout.source):
+                    raise ValueError(
+                        f"FanOut branch {branch_index} has width {len(branch)}, "
+                        f"expected {len(fanout.source)}"
+                    )
+                for signal in branch:
+                    if signal in branch_owner:
+                        raise ValueError(f"Duplicate FanOut branch signal {signal!r}")
+                    if signal in producers:
+                        raise ValueError(
+                            f"FanOut branch signal {signal!r} conflicts with a declared input"
+                        )
+                    branch_owner[signal] = (fanout, branch)
+                    producers[signal] = fanout
+                    consumers[signal] = []
+                    levels[signal] = 0
+
+        branch_consumers: dict[tuple[str, ...], Gate] = {}
         contracts = contracts_by_artifact()
         for index, gate in enumerate(self.gates):
+            referenced_branches = {
+                branch_owner[signal][1] for signal in gate.inputs if signal in branch_owner
+            }
+            if referenced_branches:
+                branch = next(iter(referenced_branches))
+                if len(referenced_branches) != 1 or gate.inputs != branch:
+                    raise ValueError(f"Gate {index} must consume complete FanOut branch {branch!r}")
+                if branch in branch_consumers:
+                    raise ValueError(f"FanOut branch {branch!r} is consumed more than once")
+
             try:
                 contract = contracts[gate.kind]
             except KeyError as error:
@@ -382,6 +436,10 @@ class Netlist:
                     raise ValueError(
                         f"Produced signal {gate.output!r} conflicts with a declared input"
                     )
+                if isinstance(producers[gate.output], FanOut):
+                    raise ValueError(
+                        f"Produced signal {gate.output!r} conflicts with a FanOut branch"
+                    )
                 raise ValueError(f"Duplicate produced signal {gate.output!r}")
 
             input_levels: list[int] = []
@@ -394,11 +452,20 @@ class Netlist:
                 consumers[signal].append(gate)
                 input_levels.append(levels[signal])
 
+            if referenced_branches:
+                branch_consumers[branch] = gate
             producers[gate.output] = gate
             consumers[gate.output] = []
             levels[gate.output] = max(input_levels, default=0) + 1
 
+        for fanout in self.fanouts:
+            for branch in fanout.branches:
+                if branch not in branch_consumers:
+                    raise ValueError(f"FanOut branch {branch!r} is not consumed by a gate")
+
         for signal in self.outputs:
+            if signal in branch_owner:
+                raise ValueError(f"Selected output {signal!r} is a FanOut branch signal")
             if signal not in producers:
                 raise ValueError(f"Selected output {signal!r} is not defined")
 
