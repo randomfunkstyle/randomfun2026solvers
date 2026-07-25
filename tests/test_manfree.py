@@ -291,13 +291,8 @@ def test_a_squash_grows_the_pipe_on_the_wall_that_moved():
     assert grown.glyphs[-1] == "<", "the terminal still hands the value west, into the wall"
 
 
-def test_a_squash_is_refused_when_it_would_slide_a_pipes_attach_cell():
-    """Moving where a pipe lands is a re-route, and it is refused by name.
-
-    This is the case that keeps ``plotter``'s worker from giving up column 46: a
-    pipe attaches to its south wall east of that column, so narrowing the room
-    moves the cell that pipe is aiming at.
-    """
+def _room_with_south_pipe() -> Ast:
+    """A room whose south wall a pipe lands on, east of the column to be cut."""
     ast = _room(["a  ", "b  "])  # box 5x4, south wall row 3
     ast.pipes.append(
         PipeNode(
@@ -314,9 +309,29 @@ def test_a_squash_is_refused_when_it_would_slide_a_pipes_attach_cell():
             pinned=False,
         )
     )
-    trial, why = try_squash(ast, 0, "col", 2)
+    return ast
+
+
+def test_a_squash_that_slides_an_attach_cell_asks_the_router_first():
+    """Refusing outright was wrong: the route is usually still there, one over.
+
+    This is the case that looked like it kept ``plotter``'s worker from giving up
+    column 46. It did not — the route was still available, and the cut went through
+    with every binding intact and 92 ticks saved. A cut "deletes" a route far less
+    often than the geometry suggests, so the question goes to the router.
+    """
+    trial, rep = try_squash(_room_with_south_pipe(), 0, "col", 2)
+    assert trial is not None, rep
+    assert rep.pipes_rerouted, "the pipe that had to move should be reported as re-routed"
+    # it still lands on the wall, which has come in by one
+    assert trial.pipes[0].path[-1] == (2, 4)
+
+
+def test_the_strict_reading_is_still_available_and_names_the_wall():
+    """When routing is load-bearing, being told beats having it quietly redrawn."""
+    trial, why = try_squash(_room_with_south_pipe(), 0, "col", 2, reroute=False)
     assert trial is None
-    assert "S wall" in str(why) and "re-route" in str(why)
+    assert "S wall" in str(why) and "reroute disabled" in str(why)
 
 
 def test_stretch_is_the_inverse_of_a_drop_so_a_cut_can_be_priced():
@@ -441,6 +456,60 @@ def test_a_row_feeding_a_display_wall_is_reported_forced_not_spare():
     assert "display" in row0
     # so the honest headline is one row, not two
     assert "64 -> 63" in body
+
+
+def test_optimistic_unpins_undeclared_pipes_without_touching_declared_ones():
+    """An undeclared capacity is a *default*, not a finding.
+
+    Reporting the pin as the answer hid the only real cut ``plotter`` had. So the
+    question gets asked both ways: the honest scan says immovable, the optimistic
+    one says "column 46, if the pipes have slack" — and the cases settle it. They
+    did: bindings intact, 20/20, 92 ticks saved.
+    """
+    from randomfun2026solvers.manfree import PIPE_FLOOR, optimistic
+
+    a = PipeNode(id=0, x=0, y=0, path=[(x, 0) for x in range(6)],
+                 glyphs=[">", "-", "-", "-", "-", ">"], pinned=True)
+    b = PipeNode(id=1, x=0, y=2, path=[(x, 2) for x in range(6)],
+                 glyphs=[">", "-", "-", "-", "-", ">"], min_capacity=5, pinned=False)
+    ast = Ast(pipes=[a, b])
+    opt = optimistic(ast)
+    assert opt.pipes[0].min_capacity == PIPE_FLOOR
+    assert not opt.pipes[0].pinned
+    assert "verify by running the cases" in opt.pipes[0].note
+    assert opt.pipes[1].min_capacity == 5, "a declared minimum is never overwritten"
+    assert ast.pipes[0].min_capacity is None, "the original must not be mutated"
+
+
+def test_optimism_never_shortens_a_pipe_below_what_it_already_is():
+    """A two-cell pipe is already at SPEC's floor; the nominal must not exceed it."""
+    from randomfun2026solvers.manfree import optimistic
+
+    tiny = PipeNode(id=0, x=0, y=0, path=[(0, 0)], glyphs=[">"], pinned=True)
+    opt = optimistic(Ast(pipes=[tiny]))
+    assert opt.pipes[0].min_capacity == 1
+
+
+@node_required
+@plotter_required
+def test_the_optimistic_scan_proposes_but_does_not_decide():
+    """It surfaces plotter's row 27, which then fails the cases. Both are correct.
+
+    Row 27 is geometrically removable and leaves every binding intact, so nothing
+    short of running the program can reject it — it shortens pipe6 by 38 cells and
+    destroys the route. This is exactly why the optimistic view is labelled an
+    assumption rather than a result.
+    """
+    from randomfun2026solvers.manfree import optimistic
+
+    ast = parse_ast(PLOTTER, refine=Refine.BLOCKS)
+    assert scan(ast).paying_lines() == []
+    found = scan(optimistic(ast)).paying_lines()
+    assert found, "the pin was hiding at least one factor-lowering line"
+    assert any(r.axis == "row" and r.index == 27 for r in found)
+    text = report(ast)
+    assert "hidden by undeclared capacity" in text
+    assert "ASSUMPTION, so run the cases" in text
 
 
 @node_required

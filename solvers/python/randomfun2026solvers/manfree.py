@@ -316,6 +316,36 @@ def line_report(
     return rep
 
 
+#: SPEC's floor: a pipe of one cell reports ``dst=-1``, so two is the shortest
+#: thing that is still a pipe.
+PIPE_FLOOR = 2
+
+
+def optimistic(ast: Ast, *, floor: int = PIPE_FLOOR) -> Ast:
+    """The same AST with every undeclared pipe given a nominal minimum.
+
+    An undeclared capacity pins a pipe, which is the right *default* — silence
+    must never shorten a ring. But it is only a default, and reporting it as the
+    answer hides real cuts behind a missing annotation. On ``plotter`` every pipe
+    was undeclared, so the scan called the grid immovable; declaring a nominal
+    floor exposed column 46, which then came out with bindings intact, 20/20 cases
+    and 92 ticks saved.
+
+    So: ask whether the route still works instead of assuming it does not. What
+    this returns is a *question*, not a verdict — any cut found on it has assumed
+    the pipes have slack, and only running the cases can settle that.
+    """
+    import copy
+
+    trial = copy.deepcopy(ast)
+    for pipe in trial.pipes:
+        if pipe.min_capacity is None:
+            pipe.min_capacity = min(floor, pipe.capacity)
+            pipe.pinned = False
+            pipe.note = f"assumed minimum {pipe.min_capacity}: verify by running the cases"
+    return trial
+
+
 def scan(ast: Ast, *, capacity: dict[tuple[int, ...], int] | None = None) -> Freedom:
     """Every row and column of the grid, each with its own verdict."""
     w, h = ast.bbox
@@ -821,6 +851,40 @@ def report(ast: Ast, *, capacity: dict[tuple[int, ...], int] | None = None) -> s
         empty = [r.index for r in group if r.verdict is Verdict.EMPTY]
         free = [r.index for r in group if r.verdict is Verdict.FREE]
         lines.append(f"{tag}s: empty {empty or '-'}  free-but-occupied {free or '-'}")
+
+    # Anything an undeclared capacity was hiding. This is where the real cuts were
+    # on plotter, so it is reported by default rather than left behind a flag.
+    undeclared = [p.id for p in ast.pipes if p.min_capacity is None]
+    if undeclared:
+        opt = scan(optimistic(ast), capacity=capacity)
+        extra = [
+            r for r in opt.paying_lines()
+            if not any(q.axis == r.axis and q.index == r.index for q in paying)
+        ]
+        lines += [
+            "",
+            f"── hidden by undeclared capacity (pipe{', pipe'.join(map(str, undeclared))}) ──",
+        ]
+        if extra:
+            lines.append(
+                f"{len(extra)} further line(s) come out once the pipes are assumed to have "
+                f"slack — ASSUMPTION, so run the cases:"
+            )
+            lines += [f"  {r}" for r in extra[:12]]
+        else:
+            opt_free = [
+                r for r in [*opt.rows, *opt.cols]
+                if r.removable and not any(
+                    q.axis == r.axis and q.index == r.index
+                    for q in [*f.removable_rows(), *f.removable_cols()]
+                )
+            ]
+            lines.append(
+                f"{len(opt_free)} further line(s) become removable, none of which lowers the "
+                f"factor: {[(r.axis, r.index) for r in opt_free[:10]]}"
+                if opt_free
+                else "nothing further: the pin was not what was blocking anything"
+            )
 
     axis = "row" if h >= w else "col"
     pipe_only = [r for r in f.pipe_only_lines() if r.axis == axis]

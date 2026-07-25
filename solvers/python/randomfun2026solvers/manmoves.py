@@ -55,6 +55,8 @@ class DropReport:
     rooms_shrunk: list[int] = field(default_factory=list)
     rooms_moved: list[int] = field(default_factory=list)
     pipes_shortened: dict[int, int] = field(default_factory=dict)  # id -> cells lost
+    #: id -> change in cell count from a re-route (negative means it got shorter)
+    pipes_rerouted: dict[int, int] = field(default_factory=dict)
     note: str = ""
 
 
@@ -433,7 +435,7 @@ def _attachments(ast: Ast, pipe: PipeNode, room: RoomNode) -> list[tuple[str, tu
 
 
 def _squash(ast: Ast, room_id: int, axis: str, index: int,
-            capacity: dict[tuple[int, ...], int]) -> DropReport:
+            capacity: dict[tuple[int, ...], int], reroute: bool = True) -> DropReport:
     """Remove one interior line of ONE room, leaving the rest of the grid alone.
 
     This is the move that matters once a room spans the full width of the grid: no
@@ -482,16 +484,23 @@ def _squash(ast: Ast, room_id: int, axis: str, index: int,
     far = "S" if ax else "E"
     perpendicular = ("W", "E") if ax else ("N", "S")
     grow: list[tuple[PipeNode, str]] = []
+    move: list[tuple[PipeNode, str, str]] = []
     for pipe in ast.pipes:
         for end, wall in _attachments(ast, pipe, room):
             side = _side(room, wall)
             if side == far:
                 grow.append((pipe, end))
             elif side in perpendicular and wall[ax] > index:
-                raise MoveError(
-                    f"pipe{pipe.id} attaches to room{room_id}'s {side} wall at {wall}, which "
-                    f"slides when {axis} {index} goes — that is a re-route, not a squash"
-                )
+                # The attach cell slides, so the pipe has to land one cell over.
+                # Refusing here was the wrong answer: the route is usually still
+                # there, just one column across. Ask the router instead of
+                # assuming — a cut "deletes" a route far less often than it looks.
+                if not reroute:
+                    raise MoveError(
+                        f"pipe{pipe.id} attaches to room{room_id}'s {side} wall at {wall}, "
+                        f"which slides when {axis} {index} goes (reroute disabled)"
+                    )
+                move.append((pipe, end, side))
 
     if ax:
         room.h -= 1
@@ -520,6 +529,36 @@ def _squash(ast: Ast, room_id: int, axis: str, index: int,
         pipe.y = min(y for _, y in pipe.path)
         rep.pipes_shortened[pipe.id] = -1  # grew by one, charged as negative shrink
 
+    # Re-route the pipes whose landing cell moved. Deferred to here so the router
+    # sees the room at its NEW size: routed against the old walls, every path would
+    # be one cell short of the surface it is meant to touch.
+    # Imported here, not at module scope: manroute depends on this module for
+    # reglyph, so a top-level import is a cycle.
+    from .manroute import Occupancy, route_like
+
+    for pipe, end, side in move:
+        step = -1
+        old = list(pipe.path)
+        term = old[0] if end == "src" else old[-1]
+        want = (term[0] + step, term[1]) if not ax else (term[0], term[1] + step)
+        occ = Occupancy.of(ast, ignore=frozenset({pipe.id}))
+        fixed = old[-1] if end == "src" else old[0]
+        # Minimal *deviation*, not minimal length: `s`/`r` bind to the nearest
+        # pipe, so the shortest path is usually the wrong one — it lands somewhere
+        # else and silently re-binds ops in rooms this move never touched.
+        found = route_like(fixed, want, occ, prefer=set(old))
+        if found is None:
+            raise MoveError(
+                f"pipe{pipe.id} must land on room{room_id}'s {side} wall at {want} after "
+                f"{axis} {index} goes, and no route reaches it — this cut really does "
+                f"delete that route"
+            )
+        pipe.path = found[::-1] if end == "src" else found
+        pipe.glyphs = reglyph(pipe.path, pipe.entry_dir, pipe.exit_dir)
+        pipe.x = min(x for x, _ in pipe.path)
+        pipe.y = min(y for _, y in pipe.path)
+        rep.pipes_rerouted[pipe.id] = len(pipe.path) - len(old)
+
     for group, need in capacity.items():
         have = ring_capacity(ast, group)
         if have < need:
@@ -534,13 +573,20 @@ def try_squash(
     index: int,
     *,
     capacity: dict[tuple[int, ...], int] | None = None,
+    reroute: bool = True,
 ) -> tuple[Ast | None, DropReport | str]:
-    """Attempt a room-local squash on a *copy*; return it, or why it was refused."""
+    """Attempt a room-local squash on a *copy*; return it, or why it was refused.
+
+    `reroute` lets the router move a pipe whose landing cell the squash slides.
+    Pass ``False`` for the strict reading — only squashes that disturb no pipe at
+    all — which is the right setting when the routing is load-bearing and you
+    would rather be told than have it quietly redrawn.
+    """
     import copy
 
     trial = copy.deepcopy(ast)
     try:
-        rep = _squash(trial, room_id, axis, index, capacity or {})
+        rep = _squash(trial, room_id, axis, index, capacity or {}, reroute)
         render(trial)
     except (MoveError, PaintError) as exc:
         return None, str(exc)
