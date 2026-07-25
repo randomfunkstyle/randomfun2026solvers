@@ -22,6 +22,7 @@ its resident words (an under-capacity ring deadlocks with no error at all).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -157,3 +158,67 @@ def _inside_worker(lm: Littleman, x: int, y: int) -> bool:
 
     room = max(lm.analyze(SOLUTION).rooms, key=area)
     return room.min_.x < x < room.max_.x and room.min_.y < y < room.max_.y
+
+
+slow = pytest.mark.skipif(
+    os.environ.get("LM1_SLOW") != "1",
+    reason="set LM1_SLOW=1 to run the per-packet cost regressions",
+)
+
+
+def _tick_of_nth_output(lm: Littleman, src: str, inp: str, n: int, cap: int = 400_000) -> int:
+    """Smallest tick with at least ``n`` output values (output length is monotonic)."""
+    hi = 64
+    while len(lm.tick(src, hi, input=inp).output) < n:
+        hi = min(hi * 2, cap)
+        assert hi < cap, f"only {n - 1} values within {cap} ticks"
+    lo = 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if len(lm.tick(src, mid, input=inp).output) >= n:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def _k_stores_then_unlock(k: int) -> str:
+    """``k`` packets at offsets ``k..1``, then packet 0, which drains all ``k+1``."""
+    rounds = [f"{i} {100 + i}" for i in range(k, 0, -1)] + ["0 100"]
+    return f"20 {rounds[0]} / " + " / ".join(rounds[1:])
+
+
+#: Engine-measured per-packet costs.  Both slopes are exact -- every point lies on
+#: the line with zero residual -- which is the evidence that the machine's cost is
+#: structural rather than data-dependent.
+TICKS_PER_INSERT = 278.0
+TICKS_PER_EMIT = 44.0
+
+
+@slow
+def test_an_insert_costs_the_same_at_every_offset() -> None:
+    """The lap is 16 slots wide whatever ``d`` is, so insert cost must be flat.
+
+    ``STORE`` rotates ``d`` then ``15 - d``, which is the whole reason the header
+    comes back aligned -- and it means the *offset* a packet lands at cannot show
+    up in the tick count.  A slope that varied with ``k`` here (each packet in the
+    sweep arrives at a different offset) would mean the phase was drifting.
+    """
+    lm, src = Littleman(), SOLUTION.read_text()
+    first = {k: _tick_of_nth_output(lm, src, _k_stores_then_unlock(k), 1) for k in (2, 4, 6, 8, 10)}
+    slopes = {
+        (a, b): (first[b] - first[a]) / (b - a) for a, b in ((2, 4), (4, 6), (6, 8), (8, 10))
+    }
+    assert set(slopes.values()) == {TICKS_PER_INSERT}
+
+
+@slow
+def test_an_emit_costs_one_rotation_plus_its_station() -> None:
+    """Draining is one ring rotation and ~12 glyphs per value, measured flat."""
+    lm, src = Littleman(), SOLUTION.read_text()
+    spans = {}
+    for k in (2, 4, 6, 8, 10):
+        inp = _k_stores_then_unlock(k)
+        spans[k] = _tick_of_nth_output(lm, src, inp, k + 1) - _tick_of_nth_output(lm, src, inp, 1)
+    slopes = {(spans[b] - spans[a]) / (b - a) for a, b in ((2, 4), (4, 6), (6, 8), (8, 10))}
+    assert slopes == {TICKS_PER_EMIT}
