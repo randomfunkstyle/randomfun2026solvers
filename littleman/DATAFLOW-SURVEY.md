@@ -25,7 +25,7 @@ The short version, and it is not the answer the question implies:
 | mechanism | ticks | ratio |
 |---|---|---|
 | one glyph the man walks over (bespoke grid) | **1** | 1× |
-| one rotation of a pipe ring (`r`+`s` in a counted loop) | **~3.2** | 3× |
+| one rotation of a pipe ring (`r`+`s` in a counted loop) | **6.0 as built; 3.2 achievable** — see §1.1 | 6× / 3× |
 | one relay lap (`memory.man`'s 4×3 room, 6-cell cycle) | **~6** | 6× |
 | one issued LM-1 instruction (fetch + trie + execute + return) | **46** | 46× |
 | one tape access at N=97 | **~780** (`67 + 7.35·N`) | 780× |
@@ -35,6 +35,53 @@ the engine by +0.5%..+6.4%, against +4.9%..+10.9% for `62 + 8.0·N`. (The additi
 form is physically wrong — a read unblocks the CPU when the answer is *sent*, not
 when the tape finishes its lap, so the truth is a `max(…)` — but it is the best
 *calibrated* predictor we have, so use it and do not believe the mechanism.)
+
+### 1.1 The rotation cost was inherited, not measured — and it was wrong twice over
+
+The `3.2` above was carried over from STREAM's ring and never checked. Measured on
+the engine (`tests/test_dataflow_relay.py`, a worker that loads a ring, rotates `N`
+times and emits one value; the slope of first-output tick vs `N` is exact, with
+zero residual):
+
+| worker loop | relay | measured ticks/rotation |
+|---|---|---|
+| `counted_loop("rs")`, 8 cells/value | `value_ring.RELAY` | **8.0** |
+| `counted_ring("rs")`, 5 cells/value | `value_ring.RELAY` | **6.0** |
+| `counted_ring("rsrs")`, 3.5 cells/value | `value_ring.RELAY` | **6.0** |
+| `counted_ring("rsrsrs")`, 3.0 cells/value | `value_ring.RELAY` | **6.0** |
+
+The worker got more than twice as fast and **throughput did not move**. The binding
+constraint is the *turnaround room*: `RELAY` is a 6-cell walking cycle carrying one
+word per lap, so it caps any ring at 6 ticks/rotation however the worker is tuned.
+Nothing on the worker's side reveals this, and every projection in this document
+that multiplies a rotation count by 3.2 was therefore **1.9× optimistic**.
+
+It is fixable geometrically, and cheaply — a turnaround room with a longer
+perimeter carries more words per lap
+(`randomfun2026solvers.dataflow_relay.relay(w, h)`), and one man alternating
+`r`/`s` around it stays a FIFO. Binding is unambiguous however many pipe glyphs it
+holds, because a turnaround room has exactly one incoming and one outgoing pipe.
+Measured, both bounds hold to the tick:
+
+    ticks per rotation = max(2 + 3/m, (2(w+h) - 4) / relay_words(w, h))
+
+| worker `m` | relay | words/lap | measured | binding |
+|---|---|---|---|---|
+| 1 | 4×3 | 2 | 5.00 | worker |
+| 2 | 4×3 | 2 | 5.00 | relay |
+| 2 | 6×4 | 5 | 3.50 | worker |
+| 3 | 6×4 | 5 | **3.20** | relay |
+| 3 | 8×6 | 9 | **3.00** | worker |
+
+So `b = 3.2` is real, but only with a relay this repo did not have; `2.67` is
+available at 8×6. Two consequences for anything costed here:
+
+* **Size the ring so the cheaper term binds.** A fat relay behind a narrow worker
+  loop, or the reverse, buys nothing — the sweep above has two rows of each.
+* **`counted_ring` tests `BP` every `m` values**, so an *arbitrary* rotation count
+  needs a coarse loop plus a unit-stride remainder. §4.4's jump length
+  `(q+1−p) mod L` is arbitrary, so budget `3.2·(k − k mod m) + 5·(k mod m)`, not
+  `3.2·k`.
 
 **Where each shipped machine's ticks actually go.** This is the table that decides
 which rewrite is worth doing, because a ring deletes the *tape* column and a
@@ -299,6 +346,37 @@ word with three `/`s (each `M`, literal, `W`, `/` — `/` leaves the remainder i
 projection is **~1.1–1.3M average ticks, worst case ~0.5× the cap**, and at a
 50×50 grid that is a score of **~2.8–3.2e9** where today there is no score at all.
 
+**Corrected for §1.1, and for what `a` has to include.** Two errors compound in
+the table above.
+
+*The ring term.* At the measured `b = 6.0` of the relay this repo ships, the worst
+case is `a·112,018 + 6.0·1,028,839 = a·112,018 + 6.17M`, so the design survives
+only while `a ≤ 79`. With `dataflow_relay.relay(6, 4)` behind an `m = 3` worker
+loop the measured `b` really is 3.2, the ring term falls to 3.29M, and the ceiling
+rises to `a ≤ 104`. **The fat relay is therefore not an optimisation here, it is
+most of the margin** — the difference between 1.3× and 1.9× headroom.
+
+*The `a` term.* §4.6 treats register pressure as a footprint problem, but a man has
+**one** register that survives a receive — `r` overwrites `A`, so only `B` carries
+across a pipe op — and the state is three live scalars (`r`, `suf`, `𝔻`) plus the
+cell word. Every value parked to get round that costs a **ring op, ~3.2 ticks, not
+one tick**, and a plausible station parks 6–8 times per iteration. So `a` is
+~20–26 ticks of parking *before* any arithmetic, and `a = 60`–`80` is the honest
+expectation, not 40–50.
+
+Putting both together, and keeping §4.4's rotation counts:
+
+| relay | b | a = 60 | a = 80 | ceiling on a |
+|---|---|---|---|---|
+| `value_ring.RELAY` | 6.0 | 12.9M (0.86×) | 15.1M (**over**) | 79 |
+| `dataflow_relay.relay(6, 4)` | 3.2 | 10.0M (0.67×) | 12.3M (0.82×) | 104 |
+
+So the design still closes, but on the fat relay and with **~1.2–1.5× margin on the
+worst public case, not the 2× §4.8 claims**. Anyone building it should treat the
+station's parking count as the thing to minimise — packing all three scalars into
+one word carried in `B` and unpacking with `/` costs glyphs at 1 tick where parking
+costs 3.2, so arithmetic beats spilling by better than 3:1.
+
 ### 4.5 The prune is load-bearing — do not drop it to simplify ingest
 Storing `suf[j]` per cell is the expensive part of ingest, so the obvious
 simplification is to prune only on `p == n` and let `v[p] > r` do the rest.
@@ -373,7 +451,8 @@ robust: a random-search sweep of 400 inputs drawn strictly inside the constraint
 **714,549** iterations for the direct DFS and **537,471** for the greedy+oracle —
 6.4× and 12.9× their worst public cases. At `a = 50, b = 3.2` that is ~40M, well
 over the cap. So the honest claim is: **this design passes the graded set with a
-2× margin and is not a general subset-sum solver.** If private cases ever appear
+~1.2–1.5× margin (§4.4 as corrected, not the 2× first written here) and is not a
+general subset-sum solver.** If private cases ever appear
 on this problem, the fallback is the greedy+oracle walk in the same hardware
 (41,516 iterations worst public, and its extra machinery — insertion sort,
 candidate deletion, suffix rebuild — is all `n`-scale cold code, so it costs
