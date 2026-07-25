@@ -53,7 +53,22 @@ from randomfun2026solvers.dataflow_relay import (  # noqa: E402
     relay_words,
     ticks_per_rotation,
 )
-from randomfun2026solvers.value_ring import RELAY, draw_pipe, stamp, walls  # noqa: E402
+from randomfun2026solvers.value_ring import draw_pipe, stamp, walls  # noqa: E402
+
+#: The repo's original minimal turnaround room, inlined here because
+#: :mod:`randomfun2026solvers.value_ring` has since specialised it into
+#: ``RELAY_NORTH``/``RELAY_SOUTH`` (which differ in *pipe attachment side*, not in
+#: throughput).  This is the 6-cell walking cycle whose one-word-per-lap cap is
+#: the subject of :func:`test_the_minimal_relay_caps_every_ring_at_six_ticks`, so
+#: it has to stay byte-identical to what was measured even as ``value_ring``
+#: moves on.
+MINIMAL_RELAY = [
+    "+----+",
+    "|@ >v|",
+    "|  sr|",
+    "|  ^<|",
+    "+----+",
+]
 
 LM_MJS = REPO / "littleman" / "lm.mjs"
 
@@ -231,4 +246,5 @@ def test_the_minimal_relay_caps_every_ring_at_six_ticks(tmp_path: Path, m: int) 
     every width.  This is the assertion that makes the fat relay load-bearing
     rather than a micro-optimisation.
     """
-    assert measure_ticks_per_rotation(tmp_path, m, RELAY, 3) == pytest.approx(6.0, abs=1e-9)
+    measured = measure_ticks_per_rotation(tmp_path, m, MINIMAL_RELAY, 3)
+    assert measured == pytest.approx(6.0, abs=1e-9)
