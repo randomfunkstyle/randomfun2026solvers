@@ -1,0 +1,16 @@
+# plotter — submission a41583d8-918c-4eff-ab0d-e4117d5d5cfb
+
+verdict      done: 20/20 cases, area2 4096, avgTicks 13,109, score 53,693,850
+submitted    2026-07-25T14:25:08+0300
+grid         50x64
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  4392d6b3dcb439dd656030ca6594a4d748aea169de69459ee1c5f11d96df5069
+commit       b1b6337
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+worker 21->19 rows: @ on the prologue row, band C exits one row earlier

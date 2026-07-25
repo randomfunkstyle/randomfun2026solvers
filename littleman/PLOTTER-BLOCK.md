@@ -218,25 +218,33 @@ keeps the three display pipes from crossing. Three placements do the rest:
 
 ## Result
 
-**20/20 cases, score 58,124,068** — against 7,760,316,749 for the CPU version, a
-**134x improvement**. 50x66 (area² 4356) and ~13,300 average ticks, so the win is
+**20/20 cases, score 53,693,850** — against 7,760,316,749 for the CPU version, a
+**145x improvement**. 50x64 (area² 4096) and ~13,100 average ticks, so the win is
 almost entirely ticks: ~19 per pixel instead of ~19,000.
 
-The first box that worked was 57x70. Two things compacted it:
+The first box that worked was 57x70. Four compactions, none of which changed the
+design — each was space that turned out not to be doing anything:
 
-* **Parallel pipes may touch.** The three display channels were spaced a column
-  apart out of caution; a pipe carries its own arrowheads, so neighbouring flows
-  never merge, and cols 0/1/2 work as well as 2/4/6.
+* **Parallel pipes may touch.** The three display channels were spaced a column apart
+  out of caution; a pipe carries its own arrowheads, so neighbouring flows never
+  merge, and cols 0/1/2 work as well as 2/4/6.
 * **The relay rides a row higher than the painter**, so both south walls line up and
   the increment's return leg comes up under them rather than clearing the lower one.
+* **`@` sits on the prologue row.** It spawns heading east — already the right way —
+  and is otherwise a nop, so the returning man walks straight over it. It had been
+  given a row of its own, on the theory that the merge needed two cells.
+* **Band C exits one row earlier.** Its merge already lands east of the lane on the
+  row below, so the man can drop one row and turn straight back west; the old code ran
+  out to the east wall and descended twice.
 
 What is left is load-bearing. Row 0 exists because a pipe entering the display's top
 wall needs a cell above it, and in LM-75 the top wall *is* the ADDR port. The
-increment's bottom leg cannot move up into the gap either: rows 53-54 are the two
-stub cells of each worker south port, rows 55-60 are ring-forward's descent, and rows
-61-64 are the relay's walls — the barrier reappears wherever the relay is moved to.
-The remaining height is the display (26 rows) and the worker (23), so shrinking
-further means reshaping the worker itself, wider and shorter.
+increment's bottom leg cannot move up into the gap either: the two stub cells of each
+worker south port take the first two rows, ring-forward's descent the next six, and
+the relay's walls the rest — the barrier reappears wherever the relay is moved to.
+The remaining height is the display (26 rows) and the worker (21), so shrinking
+further means reshaping the worker itself, wider and shorter — width has 14 columns
+of headroom before it binds, so rows can be traded for columns for free.
 
 ## Verification
 
