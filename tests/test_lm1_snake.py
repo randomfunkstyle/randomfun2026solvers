@@ -130,10 +130,13 @@ def test_the_body_ring_holds_every_snake_the_constraints_allow() -> None:
     The tape is sized from that bound rather than from the public cases, whose longest
     snake is 6 cells: ``TAPE_SIZE`` is the only place the ring's extent is stated,
     because every address in the program is computed at run time.
+
+    Exactly 50, not a round 64: the ring's size is a first-order tick cost. One tape
+    read costs ~105 + 8.3N ticks, so every unneeded slot taxes all ~2,100 reads a case.
     """
     prog = programs.load("snake")
     body = prog.equs["BODY"]
-    assert machine.TAPE_SIZE["snake"] == body + 64
+    assert machine.TAPE_SIZE["snake"] == body + 50
     assert (
         "At most 100 rounds per test case (including the starting round)."
         in (programs.problem_json("snake")["io"]["constraints"])
@@ -248,8 +251,8 @@ def test_the_score_is_measured_from_the_committed_frames() -> None:
     assert (res.width, res.height) == EXPECTED_SHAPE
     assert res.area2 == EXPECTED_FOOTPRINT
     assert res.avg_ticks is not None and res.score == pytest.approx(res.area2 * res.avg_ticks)
-    # Submitted at 10,663,170,057: 16,641 x ~640.8k average ticks.
-    assert res.avg_ticks < 700_000, res.avg_ticks
+    # 16,641 x ~611k average ticks locally; the judge's 17 cases average ~955k.
+    assert res.avg_ticks < 650_000, res.avg_ticks
     # The dearest public case is ~2.3M of the 15M cap. Private cases are never served
     # for this problem, but ``gradebook`` reported 0 and served one anyway, so keep the
     # margin: the constraint box allows only ~8 rounds more than the longest case uses.

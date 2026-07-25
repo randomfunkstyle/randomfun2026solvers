@@ -1870,12 +1870,16 @@ TAPE_SIZE = {
     # That is the whole point of the new tier: at n=16 an access is ~185 ticks rather
     # than the ~830 a 104-slot tape costs, and *none* of them is in the inner loop.
     "matmul": 16,
-    # snake keeps ten scalars plus a 64-slot body ring (BODY+63 = 79, so 80). The ring
-    # is sized to the *constraint*, not the public cases: 100 rounds allow at most 49
-    # growths, so the snake cannot exceed 50 cells, and 64 is the power of two whose
-    # `MODI` wrap costs nothing. The addresses are computed at run time, so this line
-    # is the only place the tape's real extent is stated.
-    "snake": 80,
+    # snake keeps eleven scalars plus a 50-slot body ring (BODY+49 = 65, so 66). The
+    # ring is sized to the *constraint*, not the public cases: 100 rounds allow at most
+    # 49 growths, so the snake cannot exceed 50 cells, and `MODI 50` wraps a ring of any
+    # size just as cheaply as a power of two. The addresses are computed at run time, so
+    # this line is the only place the tape's real extent is stated.
+    #
+    # It is worth ~4% on its own: measured on the engine, the same program at N=66/90
+    # runs the longest public case in 2,169,980 / 2,617,836 ticks — 18.7k ticks per slot
+    # per case, i.e. ~8.3 ticks per slot on every one of its ~2,250 accesses (§4.1).
+    "snake": 66,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the

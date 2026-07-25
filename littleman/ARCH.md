@@ -511,6 +511,46 @@ dispatch) — it does not amortise away, which is why even an N=4 tape costs 138
 ticks and loses to a `register-cell` by 7× for scratch. The tiers are distinct
 mechanisms, not two sizes of the same one.
 
+#### A read costs 523 ticks and a write costs 19 — the asymmetry is the whole game
+
+Measured per *cell* on `snake` (`tools/heatmap.mjs` + `lm1/profile.py`, gated so the
+run ends at the scored tick), and it re-prices every program on this page:
+
+| unit | cost | how it was measured |
+|---|---|---|
+| one tape **read** | **523 ticks** (512–637 across five cases) | 100.0% of the tape's marginal cost lands on one cell — the mem-response `r` in the CPU's memory lanes. Rebuilding at N+16 moved *only* that cell. |
+| one tape **write** | **~19 ticks** | the whole `ST` lane is 5,375 ticks for 276 writes: a write is fire-and-forget, the CPU never waits for it |
+| one **instruction** | **162 ticks** | fetch + trie + lane walk + return, summed over the CPU's own regions |
+| one **taken branch** | **155 + 5.88 per discarded word** | solved from the JMPF and BRZ slabs (253 jumps/45,325 words and 161/8,672) |
+| one tape **slot** | **8.06 ticks per read** | N=66 → 90 on a fixed program: 2,169,980 → 2,617,836 ticks |
+
+Four consequences, all of them design rules rather than trivia:
+
+- **Spend writes freely and hunt reads.** `ST` is nearly free, so parking a value in a
+  scratch slot costs nothing and re-reading it costs 523. Prefer any encoding that
+  reads once and writes twice over one that reads twice.
+- **A read-modify-write opcode is cheap and a re-read is not** — which is what makes
+  the `INCM`/`DECM` family (§6.1) worth its lanes: `DECM n` is one read where
+  `LD n; SUBI 1; ST n` is two.
+- **Each word of `P` costs ~2,433 ticks per case** on a program taking ~414 branches,
+  so ROM size is a tick cost and not only an area cost. And the skip is `P − L`
+  wherever the loop sits — the ring is circular, so "put the hot loop last" is really
+  "make the loop body long and `P` short".
+- **Sizing the tape is worth multiples, not percent, once a structure is in it.** A
+  50-cell array taxes every unrelated scalar read by 8.06 × 50 = 403 ticks. That is the
+  argument for the STREAM tier below, and for `snake` it is the difference between a
+  523-tick read and a ~196-tick one.
+
+Two traps in the profiler itself, both hit on `snake`:
+
+- `profile.py`'s `critical_runner()` takes the **least-stalled** runner, and on a
+  machine whose tape ring never stops walking that is the *tape's* man — reported as
+  `tape 100%` with an all-zero rollup. Pin the CPU's runner by hand.
+- `heatmap.mjs` passes no expected frames, so **input is never gated** and the CPU
+  parks on the `IN` lane's `r` forever once the input runs out. At `--cap 3000000` that
+  fabricated 720,069 ticks — 24% of the profile — as a lane that does no work in the
+  scored run. Gate the run, or cap it at the final commit's tick.
+
 **In a generated machine that fixed part is ~316 ticks, not ~105, and it dwarfs the
 slope.** Solving for per-unit costs against `plotter`'s engine total (§8.1) gives
 ~316 ticks per access at N=11 while rebuilding the *same* program at N=11/21/31 moves

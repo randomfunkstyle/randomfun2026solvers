@@ -407,7 +407,7 @@
       "y": 0,
       "w": 123,
       "h": 13,
-      "note": "looping ROM: 249 words, 9 rows, re-emitted forever",
+      "note": "looping ROM: 253 words, 9 rows, re-emitted forever",
       "color": "#a855f7",
       "tags": [
         "rom"
@@ -419,7 +419,7 @@
       "y": 18,
       "w": 33,
       "h": 34,
-      "note": "rotating pipe tape, N=80 (~105+8.3N ticks/access)",
+      "note": "rotating pipe tape, N=66 (~105+8.3N ticks/access)",
       "color": "#0ea5e9",
       "tags": [
         "tape"
