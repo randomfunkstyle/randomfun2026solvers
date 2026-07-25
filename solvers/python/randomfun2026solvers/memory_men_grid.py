@@ -72,7 +72,7 @@ from .memory_men_addr import (
     tile_x0,
 )
 
-__all__ = ["REPEATER", "Grid", "build_grid", "shapes_for"]
+__all__ = ["REPEATER", "COLLECTOR", "Grid", "build_grid", "shapes_for"]
 
 #: The head of a column: take one word, shout it at the whole column, three times.
 #:
@@ -90,11 +90,25 @@ REPEATER: tuple[str, ...] = (
     "@^",
 )
 
+#: A column's collector, narrowed the same way as the repeater.
+#:
+#: `R` takes from any of the column's ``N`` answer pipes and `s` puts it down the
+#: one pipe to the collector strip, so the whole program is two glyphs and the
+#: room is only as wide as a loop containing them: a 2x3 ring, entered from the
+#: ``@`` below it. Six ticks a lap, exactly as when it was 4x2 — two columns off
+#: every column of memory.
+COLLECTOR: tuple[str, ...] = (
+    "v<",
+    "sR",
+    ">^",
+    "@^",
+)
+
 #: Interior width of each room in a column, in order.
 _REP_W = max(len(r) for r in REPEATER)
 _DEC_W = tile_x0(True) + max(len(r) for r in DECODER_TILE)
 _CELL_W = tile_x0(False) + max(len(r) for r in CELL_TILE)
-_COLL_W = 4
+_COLL_W = max(len(r) for r in COLLECTOR)
 
 #: Interior columns between two rooms: wall, two cells of pipe, wall.
 _GAP = 4
@@ -247,7 +261,7 @@ def build_grid(cols: int, rows: int) -> Grid:
         _room(grid, cx["rep"], col_y, spanned(REPEATER, _REP_W, col_h))
         _room(grid, cx["dec"], col_y, spanned(dec_body, _DEC_W, col_h))
         _room(grid, cx["cell"], col_y, spanned(cell_body, _CELL_W, col_h))
-        _room(grid, cx["coll"], col_y, spanned(collector_rows(1)[0], _COLL_W, col_h))
+        _room(grid, cx["coll"], col_y, spanned(COLLECTOR, _COLL_W, col_h))
 
         # router strip -> this column's repeater, down two cells into its north wall
         feed_x = cx["rep"] + 2

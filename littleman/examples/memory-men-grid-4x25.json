@@ -9,7 +9,7 @@
       "name": "router / broadcaster",
       "x": 1,
       "y": 6,
-      "w": 138,
+      "w": 130,
       "h": 8,
       "note": "one op in, three words out to every column at once. The strip spans the whole width so each column's pipe is a two-cell stub off its south wall, and it owns no other outgoing pipe \u2014 `S` would broadcast into that too.",
       "color": "#a78bfa",
@@ -19,7 +19,7 @@
       "name": "collector strip",
       "x": 1,
       "y": 99,
-      "w": 138,
+      "w": 130,
       "h": 2,
       "note": "`R` takes from any incoming pipe, so answers need no addressing. It is on the *bottom* on purpose: answer pipes never cross broadcast pipes, and every column's answer travels the same distance, so a later op's answer cannot overtake an earlier one.",
       "color": "#facc15",
@@ -49,7 +49,7 @@
       "name": "column 0: addr 0-24",
       "x": 1,
       "y": 18,
-      "w": 33,
+      "w": 31,
       "h": 77,
       "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 0 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
       "color": "#a78bfa",
@@ -67,9 +67,9 @@
     },
     {
       "name": "column 1: addr 25-49",
-      "x": 36,
+      "x": 34,
       "y": 18,
-      "w": 33,
+      "w": 31,
       "h": 77,
       "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 25 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
       "color": "#22c55e",
@@ -77,7 +77,7 @@
     },
     {
       "name": "repeater 1",
-      "x": 36,
+      "x": 34,
       "y": 18,
       "w": 2,
       "h": 6,
@@ -87,9 +87,9 @@
     },
     {
       "name": "column 2: addr 50-74",
-      "x": 71,
+      "x": 67,
       "y": 18,
-      "w": 33,
+      "w": 31,
       "h": 77,
       "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 50 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
       "color": "#a78bfa",
@@ -97,7 +97,7 @@
     },
     {
       "name": "repeater 2",
-      "x": 71,
+      "x": 67,
       "y": 18,
       "w": 2,
       "h": 6,
@@ -107,9 +107,9 @@
     },
     {
       "name": "column 3: addr 75-99",
-      "x": 106,
+      "x": 100,
       "y": 18,
-      "w": 33,
+      "w": 31,
       "h": 77,
       "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 75 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
       "color": "#22c55e",
@@ -117,7 +117,7 @@
     },
     {
       "name": "repeater 3",
-      "x": 106,
+      "x": 100,
       "y": 18,
       "w": 2,
       "h": 6,
@@ -138,7 +138,7 @@
     },
     {
       "name": "base 25",
-      "cx": 43,
+      "cx": 41,
       "cy": 21,
       "r": 1,
       "note": "read walking south, `M` into B, then `+1` a band: 25..49",
@@ -147,7 +147,7 @@
     },
     {
       "name": "base 50",
-      "cx": 78,
+      "cx": 74,
       "cy": 21,
       "r": 1,
       "note": "read walking south, `M` into B, then `+1` a band: 50..74",
@@ -156,7 +156,7 @@
     },
     {
       "name": "base 75",
-      "cx": 113,
+      "cx": 107,
       "cy": 21,
       "r": 1,
       "note": "read walking south, `M` into B, then `+1` a band: 75..99",
@@ -234,11 +234,11 @@
       "name": "broadcast -> column 1",
       "points": [
         [
-          38,
+          36,
           15
         ],
         [
-          38,
+          36,
           17
         ]
       ],
@@ -249,15 +249,15 @@
       "tags": [],
       "cells": [
         [
-          38,
+          36,
           15
         ],
         [
-          38,
+          36,
           16
         ],
         [
-          38,
+          36,
           17
         ]
       ]
@@ -266,11 +266,11 @@
       "name": "answer <- column 1",
       "points": [
         [
-          66,
+          64,
           96
         ],
         [
-          66,
+          64,
           98
         ]
       ],
@@ -281,15 +281,15 @@
       "tags": [],
       "cells": [
         [
-          66,
+          64,
           96
         ],
         [
-          66,
+          64,
           97
         ],
         [
-          66,
+          64,
           98
         ]
       ]
@@ -298,11 +298,11 @@
       "name": "broadcast -> column 2",
       "points": [
         [
-          73,
+          69,
           15
         ],
         [
-          73,
+          69,
           17
         ]
       ],
@@ -313,15 +313,15 @@
       "tags": [],
       "cells": [
         [
-          73,
+          69,
           15
         ],
         [
-          73,
+          69,
           16
         ],
         [
-          73,
+          69,
           17
         ]
       ]
@@ -330,11 +330,11 @@
       "name": "answer <- column 2",
       "points": [
         [
-          101,
+          97,
           96
         ],
         [
-          101,
+          97,
           98
         ]
       ],
@@ -345,15 +345,15 @@
       "tags": [],
       "cells": [
         [
-          101,
+          97,
           96
         ],
         [
-          101,
+          97,
           97
         ],
         [
-          101,
+          97,
           98
         ]
       ]
@@ -362,11 +362,11 @@
       "name": "broadcast -> column 3",
       "points": [
         [
-          108,
+          102,
           15
         ],
         [
-          108,
+          102,
           17
         ]
       ],
@@ -377,15 +377,15 @@
       "tags": [],
       "cells": [
         [
-          108,
+          102,
           15
         ],
         [
-          108,
+          102,
           16
         ],
         [
-          108,
+          102,
           17
         ]
       ]
@@ -394,11 +394,11 @@
       "name": "answer <- column 3",
       "points": [
         [
-          136,
+          130,
           96
         ],
         [
-          136,
+          130,
           98
         ]
       ],
@@ -409,15 +409,15 @@
       "tags": [],
       "cells": [
         [
-          136,
+          130,
           96
         ],
         [
-          136,
+          130,
           97
         ],
         [
-          136,
+          130,
           98
         ]
       ]
