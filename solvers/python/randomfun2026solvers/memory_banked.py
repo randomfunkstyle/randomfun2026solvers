@@ -19,9 +19,13 @@ WRITE child will consume the value token after the split.
 
 from __future__ import annotations
 
-from randomfun2026solvers.circuit import Circuit, E
+import argparse
+from pathlib import Path
 
-__all__ = ["build_bucket_probe"]
+from randomfun2026solvers.circuit import Circuit, E
+from randomfun2026solvers.man_debug import DebugMap
+
+__all__ = ["build_bucket_probe", "build_bucket_probe_debug"]
 
 
 def _walls(grid: Circuit, ox: int, oy: int, iw: int, ih: int) -> None:
@@ -89,3 +93,90 @@ def build_bucket_probe() -> list[str]:
 
     return [row.rstrip() for row in grid.rows() if row.strip()]
 
+
+def build_bucket_probe_debug() -> tuple[list[str], DebugMap]:
+    """Build the selector together with its non-drifting visual explanation."""
+    rows = build_bucket_probe()
+    debug = DebugMap("Y-banked memory selector — low addr / high addr−50")
+    debug.region(
+        "input-and-split",
+        6,
+        4,
+        5,
+        3,
+        note="The parent reads addr, copies it with M, then Y births one worker on each side.",
+        color="#a855f7",
+    )
+    debug.region(
+        "high-bank-selector",
+        10,
+        2,
+        12,
+        4,
+        note="Compute addr−50. Negative halts; zero/positive merge and emit local address.",
+        color="#3b82f6",
+    )
+    debug.region(
+        "low-bank-selector",
+        10,
+        5,
+        11,
+        4,
+        note="Compute addr−50. Negative adds 50 back and emits; zero/positive halt.",
+        color="#22c55e",
+    )
+    debug.lane(
+        "parent",
+        [(7, 5), (10, 5)],
+        kind="control",
+        expect="rM leaves A=B=addr; Y duplicates both registers",
+        color="#a855f7",
+    )
+    debug.lane(
+        "high-child",
+        [(10, 4), (17, 4), (17, 5), (19, 5), (19, 4), (21, 4)],
+        kind="control",
+        expect="active exactly for addr ≥ 50; output addr−50",
+        color="#3b82f6",
+    )
+    debug.lane(
+        "low-child",
+        [(10, 6), (10, 7), (17, 7), (17, 6), (20, 6)],
+        kind="control",
+        expect="active exactly for addr < 50; output original addr",
+        color="#22c55e",
+    )
+    debug.scenario(
+        "low bucket",
+        "18",
+        0,
+        30,
+        watch=["parent", "low-child"],
+        note="The low child emits 18; the high child sees −32 and halts.",
+    )
+    debug.scenario(
+        "high bucket",
+        "81",
+        0,
+        30,
+        watch=["parent", "high-child"],
+        note="The high child emits 31; the low child rejects address 81.",
+    )
+    return rows, debug
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--man", type=Path, required=True)
+    parser.add_argument("--html", type=Path, required=True)
+    parser.add_argument("--json", type=Path, required=True)
+    args = parser.parse_args()
+
+    rows, debug = build_bucket_probe_debug()
+    args.man.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    debug.write_html(rows, args.html)
+    debug.write_json(args.json)
+
+
+if __name__ == "__main__":
+    main()

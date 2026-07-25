@@ -10,7 +10,7 @@ editor byte-for-byte.
 [`SPEC.md`](SPEC.md) the language · [`GRADING.md`](GRADING.md) scoring, limits
 and the submission API · [`ARCH.md`](ARCH.md#82-split-y-audit) architecture and
 the all-task split audit · [`reference/`](reference/) raw official text +
-interpreter probe · [`../tasks/problems/`](../tasks/problems/) all 16 problem
+interpreter probe · [`../tasks/problems/`](../tasks/problems/) all 20 problem
 statements with public test data.
 
 See [`DEBUGGING.md`](DEBUGGING.md) for the overlay, trace and profiling workflow.
