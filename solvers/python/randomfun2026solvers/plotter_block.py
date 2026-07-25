@@ -720,24 +720,28 @@ RET_C, FWD_C, PNT_C = (PROBE_WX + c for c in (RET_COL, FWD_COL, PNT_COL))
 # locally and eats the one row a later pipe needed, so the collision only ever moves;
 # stating all seven and allocating the shared rows and columns up front is what closes
 # the box. `_PATHS` is checked against the ports as it is drawn.
-BLOCK_W, BLOCK_H = 49, 59
-_DX, _DY = 9, 1                  # display walls: cols 9..42, rows 1..26
-_WX, _WY = 9, 30                 # worker walls:  cols 8..48, rows 29..48
-_PX, _PY = 9, 54                 # painter walls: cols 8..24, rows 53..58
-_RX, _RY = 31, 50                # relay walls:   cols 30..36, rows 49..52
+BLOCK_W, BLOCK_H = 49, 58
+_DX, _DY = 5, 1                  # display walls: cols 5..38, rows 1..26
+_WX, _WY = 9, 29                 # worker walls:  cols 8..48, rows 28..47
+_PX, _PY = 9, 53                 # painter walls: cols 8..24, rows 52..57
+_RX, _RY = 31, 49                # relay walls:   cols 30..36, rows 48..51
 _IX = 3                          # the input room, west of the worker; its row is taken
                                  # from the worker's, so the two cannot drift apart
 
 # Shared resources, allocated before anything is drawn:
-#   band over the worker's north wall   row 27 SWAP, row 28 clear
-# Row 28 carries nothing and still cannot go. SWAP's last cell turns north into the
+#   band over the worker's north wall   row 27 SWAP, and nothing else
+# The band is one row, and getting it there is why the **display sits four columns west
+# of the worker** rather than flush with it. SWAP's last cell turns north into the
 # display's bottom wall, and the loader decides where a pipe *starts* from the cell
-# behind the arrowhead: with the worker's north wall directly under that turn it reads
-# the turn as a new pipe leaving the worker, and refuses to load. So the band is two
-# rows for one pipe — the second is the clearance under SWAP's arrowhead.
+# behind the arrowhead — so with the worker's north wall directly under that turn it
+# reads the turn as a new pipe leaving the worker and refuses to load. The band needed a
+# second row purely as clearance under one arrowhead. Overhanging the display past the
+# worker's west wall puts free cells under bottom-wall columns 6 and 7 instead, and
+# SWAP enters at column 6. Width is unchanged: the box is 49 wide because of the
+# worker either way.
 #   west channels (painter -> display)  col 0 ADDR, col 1 DATA, col 2 SWAP
-#   row each display pipe bends west    51 ADDR, 50 DATA, 49 SWAP
-# Channels and bend rows nest opposite ways (0<1<2 against 51>50>49), which is what
+#   row each display pipe bends west    50 ADDR, 49 DATA, 48 SWAP
+# Channels and bend rows nest opposite ways (0<1<2 against 50>49>48), which is what
 # keeps the three display pipes from crossing; the band rows are one each.
 #
 # The five rows between the worker's south wall and the painter are shared two ways
@@ -769,18 +773,18 @@ _IX = 3                          # the input room, west of the worker; its row i
 # the return came in over the north wall it had to climb the whole box — 93 cells,
 # and 84% of every pixel's cost was the worker standing at an `r` waiting for it.
 _PATHS = {
-    "fwd":   ([(39, 49), (39, 50), (37, 50)], "r_in"),
-    "r_out": ([(29, 51), (27, 51), (27, 49)], "ret"),
-    "pnt":   ([(47, 49), (47, 55), (25, 55)], "p_in"),
+    "fwd":   ([(39, 48), (39, 49), (37, 49)], "r_in"),
+    "r_out": ([(29, 50), (27, 50), (27, 48)], "ret"),
+    "pnt":   ([(47, 48), (47, 54), (25, 54)], "p_in"),
     # Two cells, straight across the gap: the input room's east wall to the worker's
     # west wall. Over the north wall it needed a stub pointing away from the room
     # before it could bend, and that bend row cost a whole row of the box. Two and not
     # one — a single-cell pipe is *both* stubs at once, and the analyser then reports
     # `dst: -1`, so every input read silently falls through to the ring instead.
     "i_out": ([(_IX + 3, _WY + IN_ROW), (_IX + 4, _WY + IN_ROW)], "in"),
-    "addr":  ([(10, 52), (10, 51), (0, 51), (0, 0), (10, 0)], "d_addr"),
-    "data":  ([(14, 52), (14, 50), (1, 50), (1, 3), (8, 3)], "d_data"),
-    "swap":  ([(21, 52), (21, 49), (2, 49), (2, 27), (39, 27)], "d_swap"),
+    "addr":  ([(10, 51), (10, 50), (0, 50), (0, 0), (6, 0)], "d_addr"),
+    "data":  ([(14, 51), (14, 49), (1, 49), (1, 3), (4, 3)], "d_data"),
+    "swap":  ([(21, 51), (21, 48), (2, 48), (2, 27), (6, 27)], "d_swap"),
 }
 
 
@@ -812,10 +816,10 @@ def _block_ports():
         "swap":   ((_PX + S_SWAP, pn), N),
         "d_addr": ((_DX + 1, _DY), N),         # display: top, left, bottom
         "d_data": ((_DX, 3), W),
-        # SWAP enters the bottom wall near its *east* end, past where the ring-return
-        # turns in: nearer the west end its own stub sits across the return's row, the
-        # return detours onto row 27 to get round it, and row 27 is SWAP's only way in.
-        "d_swap": ((_DX + 30, _DY + DISPLAY_H + 1), S),
+        # SWAP enters the bottom wall at its *west* end — the one place where the cell
+        # under its arrowhead is not the worker's north wall, which is what lets the band
+        # above the worker be a single row. Column _DX, the corner, is not a port.
+        "d_swap": ((_DX + 1, _DY + DISPLAY_H + 1), S),
         "i_out":  ((_IX + 2, _WY + IN_ROW), E),
     }
 

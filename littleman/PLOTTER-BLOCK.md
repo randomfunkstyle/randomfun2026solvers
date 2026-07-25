@@ -218,8 +218,8 @@ keeps the three display pipes from crossing. Three placements do the rest:
 
 ## Result
 
-**20/20 cases, score 29,147,283** — against 7,760,316,749 for the CPU version, a
-**266x improvement**. 49x59 (area² 3,481) and ~8,373 average ticks.
+**20/20 cases, score 27,561,420** — against 7,760,316,749 for the CPU version, a
+**282x improvement**. 49x58 (area² 3,364) and ~8,193 average ticks.
 
 ### The ring's length is the machine's clock rate
 
@@ -275,11 +275,15 @@ that were only clearance:
   above and its solo lane below, so band B reaching up into row 2 costs nothing: that
   row had held the base row's descent, two glyphs in thirty-nine columns.
 
-The band above the worker is still **two rows for one pipe**, and that one is not
-removable: SWAP's last cell turns north into the display's bottom wall, and the loader
-decides where a pipe *starts* from the cell behind the arrowhead — with the worker's
-north wall directly under that turn it reads the turn as a new pipe leaving the worker
-and refuses to load. The second row is clearance under an arrowhead.
+* **The display sits four columns west of the worker**, which is what makes the band
+  above the worker a single row. SWAP's last cell turns north into the display's bottom
+  wall, and the loader decides where a pipe *starts* from the cell behind the arrowhead —
+  so with the worker's north wall directly under that turn it read the turn as a new pipe
+  leaving the worker and refused to load, and the band needed a second row purely as
+  clearance under one arrowhead. Overhanging the display past the worker's west wall puts
+  free cells under bottom-wall columns 6 and 7, and SWAP enters at column 6. It costs
+  nothing: the box is 49 wide because of the worker either way, and SWAP gets 35 cells
+  shorter into the bargain.
 
 Two loader rules worth stating, both found by being bitten:
 
