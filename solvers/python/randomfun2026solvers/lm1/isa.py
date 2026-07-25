@@ -108,6 +108,8 @@ class Sem(StrEnum):
     MOD_IMM = "mod-imm"
     LOAD = "load"
     STORE = "store"
+    INC_MEM = "inc-mem"
+    DEC_MEM = "dec-mem"
     ADD_MEM = "add-mem"
     AND_MEM = "and-mem"
     SUB_MEM = "sub-mem"
@@ -608,6 +610,71 @@ _EXT_OPS: tuple[Op, ...] = (
             Micro.MOV,
         ),
         sem=Sem.AND_MEM,
+        ext=True,
+    ),
+    # ── store-side read-modify-write ────────────────────────────────────────
+    # The *only* RMW family a two-register machine can build, and the reason is
+    # worth writing down. A lane that wants `store[a] = f(store[a])` has three
+    # things to keep alive — the address (needed twice: once for the read request,
+    # once for the write marker), the value, and the new value — and only A and B
+    # to keep them in. `LDP`/`STP` solve that by parking a word in the SPILL pipe;
+    # `LDA`/`MOVA` solve it by never having two live at once. Neither works here.
+    #
+    # What does work: the address dies the moment the write marker has been sent,
+    # so the *second* operand can be a bare digit glyph loaded after that point.
+    #
+    #   M              B = addr          (ACC is spent; both handlers say so)
+    #   s→mem  r→mem   A = store[addr],  B = addr
+    #   W  N   s→mem   send -addr: the write marker. The address is now dead.
+    #   1              A = 1             — free, a digit glyph *is* a load (SPEC §3.1)
+    #   +      s→mem   send store[addr] + 1
+    #
+    # B still holds the *old* value, so `INCM n; BRZ done` tests the pre-increment
+    # word for free — which is what lets brackets' loop counter be one instruction.
+    # An `ADDM addr` (`store[addr] += ACC`) is NOT constructible: its second operand
+    # is a register, not a glyph, so it would have to survive `r→mem`, and nothing
+    # can. That asymmetry is the whole design rule for this family.
+    Op(
+        code=30,
+        mnemonic="INCM",
+        operands=1,
+        description="store[addr] += 1; ACC = the *old* value (see the family note)",
+        micro=(
+            Micro.RING_READ,
+            Micro.MOV,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.SWAP,
+            Micro.NEG,
+            Micro.SEND_MEM,
+            Micro.LIT1,
+            Micro.ADD,
+            Micro.SEND_MEM,
+        ),
+        sem=Sem.INC_MEM,
+        ext=True,
+    ),
+    Op(
+        code=31,
+        mnemonic="DECM",
+        operands=1,
+        description="store[addr] -= 1; ACC = the *old* value (see the family note)",
+        # `1 - v` then `N` rather than a `-1` literal: the ROM holds no negatives
+        # and `N` is one glyph, the same trick SUBI uses to avoid needing one.
+        micro=(
+            Micro.RING_READ,
+            Micro.MOV,
+            Micro.SEND_MEM,
+            Micro.READ_MEM,
+            Micro.SWAP,
+            Micro.NEG,
+            Micro.SEND_MEM,
+            Micro.LIT1,
+            Micro.SUB,
+            Micro.NEG,
+            Micro.SEND_MEM,
+        ),
+        sem=Sem.DEC_MEM,
         ext=True,
     ),
     Op(

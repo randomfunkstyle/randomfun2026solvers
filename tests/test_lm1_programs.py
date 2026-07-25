@@ -107,11 +107,13 @@ def test_programs_without_extensions_also_run_on_arch_v1(stem: str) -> None:
 def test_extension_users_are_exactly_the_ones_we_expect() -> None:
     ext = {stem: set(load(stem).ext_ops) for stem in PROGRAMS}
     assert {k: v for k, v in ext.items() if v} == {
-        "brackets": {"DIVI", "MODI"},
+        # `DECM n` fuses `LD n; SUBI 1; ST n` at the loop head *and* leaves ACC at
+        # the pre-decrement value, so the end-of-string test comes free with it.
+        "brackets": {"DECM", "DIVI", "MODI"},
         # LDA/MOVA in place of LDP/STP: keeping the address in ACC means the
         # `0`/`1` request literal never has to coexist with it, so tcp needs no
         # SPILL block at all (see tcp.asm's header).
-        "tcp": {"LDA", "MOVA"},
+        "tcp": {"INCM", "LDA", "MOVA"},
         # `DSP p` picks a pipe from its operand, which nearest-pipe binding cannot
         # express; one opcode per LM-75 port gives each its own lane (see plotter.asm).
         "plotter": {"DSPA", "DSPD", "DSPS", "NEG"},

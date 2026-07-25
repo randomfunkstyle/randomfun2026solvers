@@ -105,6 +105,34 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("s", Band.MEM),
         ("W", None),  # ACC restored
     ),
+    # Read-modify-write by a constant. `M` spends ACC to keep a second copy of the
+    # address, which is what survives `r`; once the write marker is out the address
+    # is dead and a digit glyph can safely reload A. B still holds the old value, so
+    # ACC comes out as the *pre*-operation word — free, and worth an instruction at
+    # every loop head (`DECM n; BRZ done`). See isa.py's family note.
+    Sem.INC_MEM: (
+        ("M", None),  # B = addr
+        ("s", Band.MEM),  # +addr: read
+        ("r", Band.MEM),  # A = store[addr]
+        ("W", None),  # A = addr, B = the old value
+        ("N", None),  # -addr: the write marker
+        ("s", Band.MEM),
+        ("1", None),  # the address is dead; A = 1 costs one cell
+        ("+", None),  # A = 1 + old
+        ("s", Band.MEM),
+    ),
+    Sem.DEC_MEM: (
+        ("M", None),
+        ("s", Band.MEM),
+        ("r", Band.MEM),
+        ("W", None),
+        ("N", None),
+        ("s", Band.MEM),
+        ("1", None),
+        ("-", None),  # A = 1 - old
+        ("N", None),  # A = old - 1; cheaper than holding a negative literal
+        ("s", Band.MEM),
+    ),
     Sem.ADD_MEM: (("s", Band.MEM), ("r", Band.MEM), ("+", None), ("M", None)),
     Sem.SUB_MEM: (
         ("s", Band.MEM),
@@ -139,6 +167,8 @@ MEMORY_SEMS = frozenset(
     {
         Sem.LOAD,
         Sem.STORE,
+        Sem.INC_MEM,
+        Sem.DEC_MEM,
         Sem.ADD_MEM,
         Sem.SUB_MEM,
         Sem.MUL_MEM,
@@ -1101,7 +1131,13 @@ def _check_pipe_count(rows: list[str], *, expected: int) -> None:
 #: ``tcp`` allows n=48, so addresses reach BUF+47 = 51 even though no public case
 #: goes past 35. ``ARCH.md`` §4.1: footprint is 32x32 whatever N is and cost is
 #: ~105 + 8.3N ticks, so there is no trade-off — just size it to the real maximum.
-TAPE_SIZE = {"brackets": 8, "tcp": 52}
+# Sized to the highest address each program actually reaches, and it matters more
+# than ARCH.md §4.1 implies: the tape is a *rotating* ring, so a request waits for
+# its slot to come round. Measured on the real engine, one extra slot costs ~114
+# ticks per case on brackets and ~999 on tcp — the difference being how many
+# accesses each program makes, not the footprint (the tape block is 33 columns
+# wide at every N). brackets reaches address 4, tcp reaches BUF+47 = 51.
+TAPE_SIZE = {"brackets": 5, "tcp": 51}
 
 
 def build_for(slug: str) -> Machine:

@@ -384,6 +384,26 @@ def _store(em: Emulator, addr: int | None) -> None:
     em.a = wrap(addr)  # the `W` … `W` sandwich leaves A = addr, ACC intact
 
 
+@_handler(Sem.INC_MEM)
+def _inc_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    old = em._mem_read(addr)
+    em._mem_write(addr, wrap(old + 1))
+    # `M` spent the incoming ACC on the address, and B has held the *old* value
+    # since the `W` before the write marker. A is what the last `s→mem` sent.
+    em.a = wrap(old + 1)
+    em.b = old
+
+
+@_handler(Sem.DEC_MEM)
+def _dec_mem(em: Emulator, addr: int | None) -> None:
+    assert addr is not None
+    old = em._mem_read(addr)
+    em._mem_write(addr, wrap(old - 1))
+    em.a = wrap(old - 1)
+    em.b = old
+
+
 @_handler(Sem.ADD_MEM)
 def _add_mem(em: Emulator, addr: int | None) -> None:
     assert addr is not None

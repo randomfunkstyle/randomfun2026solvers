@@ -42,7 +42,7 @@ slow = pytest.mark.skipif(
 #: The two graded problems this generator exists for, and the tape size each needs.
 #: Sized from the *problem constraints*, not the public data: ``tcp`` allows n=48,
 #: so addresses reach BUF+47 = 51 even though no public case goes past 35.
-TARGETS = {"brackets": 8, "tcp": 52, "sudoku-validity": 37}
+TARGETS = {"brackets": 5, "tcp": 51, "sudoku-validity": 37}
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────
