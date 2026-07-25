@@ -57,7 +57,7 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-    assert result.step == 117_956
+    assert result.step == 117_950
     assert result.output == []
 
 

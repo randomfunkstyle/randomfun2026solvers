@@ -1831,10 +1831,6 @@ ROM_ROWS = {
     # STREAM block's ring band is as wide as the tape row above it, and its height is
     # what the ROM trades against; packed, the trade lands at 88x90 (8,100) on 5 rows.
     "matmul": 5,
-    # palette needed no entry while its ROM was padded — the default fold happened to
-    # be right. Packed, the default over-folds into 97x99 and 6 rows recovers 97x78
-    # (9,409); the width is the machine's, so the ROM only ever costs height here.
-    "palette": 6,
 }
 
 

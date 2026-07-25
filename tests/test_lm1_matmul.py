@@ -76,12 +76,12 @@ slow = pytest.mark.skipif(
 #: assertion below, to allow an improvement without a test edit).
 REAL_TICKS = {
     "2x2 warm up": 14_126,
-    "non-square 2x3x2": 18_404,
-    "identity": 39_454,
-    "negative heavy": 69_220,
+    "non-square 2x3x2": 18_386,
+    "identity": 39_382,
+    "negative heavy": 69_040,
     "skinny 16x2x16": 71_638,
-    "max magnitude 7x5x9": 79_605,
-    "16x16x16 full size": 550_774,
+    "max magnitude 7x5x9": 79_416,
+    "16x16x16 full size": 548_758,
 }
 
 #: ``(instructions, multiply-accumulates)`` per case, from the emulator. The ratio
@@ -309,11 +309,11 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
 @node_required
 def test_the_generated_machine_is_the_recorded_size() -> None:
     m = machine.build_for(SLUG)
-    assert (m.width, m.height) == (96, 96)
-    assert m.footprint == 9216
+    assert (m.width, m.height) == (88, 90)
+    assert m.footprint == 8100
     assert m.plan.k == 3
     assert m.tape_n == 16
-    assert m.rom_rows == 11
+    assert m.rom_rows == 5
     assert m.stream is not None
 
 
@@ -322,13 +322,13 @@ def test_the_generated_machine_is_the_recorded_size() -> None:
 def test_the_recorded_rom_fold_is_the_sweep_minimum() -> None:
     """``ROM_ROWS['matmul']`` beats every other fold on footprint, and not by little.
 
-    This machine comes out *square*, so both dimensions are billed and the sweep is
-    genuinely peaked: one row flatter is 15 % worse (the ROM overruns the width),
-    one row taller is 2 % worse. Sweeping is the only way to find that.
+    This machine comes out nearly *square*, so both dimensions are billed and the
+    sweep is genuinely peaked rather than flat-bottomed: the fold either overruns the
+    width or piles on height. Sweeping is the only way to find the turn.
     """
     prog = programs.load(SLUG)
     sizes = {}
-    for rows in range(6, 24):
+    for rows in range(2, 24):
         sizes[rows] = machine.build(
             prog,
             tape_n=machine.TAPE_SIZE[SLUG],
