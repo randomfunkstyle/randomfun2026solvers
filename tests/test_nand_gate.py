@@ -6,6 +6,7 @@ from littleman_tools.runner import Littleman
 
 REPO = Path(__file__).parents[1]
 NAND_GATE = REPO / "tasks" / "solutions" / "primitives" / "nand-gate.man"
+NARROW_NAND_GATE = REPO / "tasks" / "solutions" / "primitives" / "nand-gate-narrow.man"
 
 
 @pytest.mark.slow
@@ -39,3 +40,20 @@ def test_nand_gate_complements_the_binary_product_stream() -> None:
     assert profile.walking_ticks == 2
     assert profile.stall_ticks == 0
     assert profile.straight_through_arrows == 1
+
+
+@pytest.mark.slow
+def test_narrow_nand_gate_keeps_the_baseline_behavior_in_eight_columns() -> None:
+    runner = Littleman()
+    snapshot = runner.judge(
+        NARROW_NAND_GATE,
+        input=[0, 0, 0, 1, 1, 0, 1, 1],
+        expected=[1, 1, 1, 0],
+        max_ticks=100,
+    )
+    source = NARROW_NAND_GATE.read_text(encoding="utf-8").splitlines()
+
+    assert snapshot.output == [1, 1, 1, 0]
+    assert snapshot.output_settled is True
+    assert max(len(source), *(len(row) for row in source)) == 9
+    assert max(map(len, source)) == 8
