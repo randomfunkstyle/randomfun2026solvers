@@ -1,0 +1,16 @@
+# plotter — submission d77aa92c-9844-4547-940d-ab4e99b7d2d8
+
+verdict      done: 20/20 cases, area2 3136, avgTicks 7,401, score 23,210,634
+submitted    2026-07-25T16:09:48+0300
+grid         45x56
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  1e46be78012a02166bbec9898c98c78b0cdf8f1845caf4b43d82c524961fbaa4
+commit       60b2d7a
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+ring port dragged west so the bands can shift west: send gap 30/34 -> 28/32; drain pops at the west end where the south-wall ring is the near pipe

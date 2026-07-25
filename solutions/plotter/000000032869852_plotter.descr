@@ -1,0 +1,16 @@
+# plotter — submission 296b145d-8313-4fd8-a1f3-41b1536a9957
+
+verdict      done: 20/20 cases, area2 3844, avgTicks 8,551, score 32,869,852
+submitted    2026-07-25T15:16:06+0300
+grid         49x62
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  6982f226536873502b86ad2652cb326648bc92b3abc4b0661e7781675166b831
+commit       9940caf
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+ring turns round under the worker: 93-cell return -> 11-cell ring, 112 -> 78.6 ticks/pixel, 63 -> 62 rows

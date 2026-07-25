@@ -1,0 +1,16 @@
+# plotter — submission 5b35f116-0869-4d2f-b798-f795bc35a033
+
+verdict      done: 20/20 cases, area2 3364, avgTicks 8,193, score 27,561,420
+submitted    2026-07-25T15:47:02+0300
+grid         49x58
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  df107f05438df67ea816d186fe0cdbcf8c9a484166c28d6f803c9c61cc3cb9a4
+commit       c17550f
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+display overhangs the worker's west wall so SWAP's arrowhead has a free cell under it: band 2 rows -> 1, 59 -> 58

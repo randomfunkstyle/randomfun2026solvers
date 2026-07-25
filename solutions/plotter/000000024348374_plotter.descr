@@ -1,0 +1,16 @@
+# plotter — submission e59f454e-b429-46fd-9007-94e032c05cfa
+
+verdict      done: 20/20 cases, area2 3136, avgTicks 7,764, score 24,348,374
+submitted    2026-07-25T15:59:59+0300
+grid         47x56
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  c6e843521d5af8c7a7e6ba22799c892e88859070ade41d561c9ef8cbae82cbbf
+commit       581482d
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+prologue+base share a row; south send ports closed from 30/38 to 30/34 so the pixel loop's round trip is 4 cells shorter

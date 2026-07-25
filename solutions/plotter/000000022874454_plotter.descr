@@ -1,0 +1,16 @@
+# plotter — submission 2b1e0c18-e227-497c-8109-f68e5ce8fac2
+
+verdict      done: 20/20 cases, area2 3136, avgTicks 7,294, score 22,874,454
+submitted    2026-07-25T16:37:53+0300
+grid         44x56
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  a049524931a22a2929dfcfca756532cb4d17c891c837d47352f8b167ff63c2a7
+commit       32cc8dd
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+no-carry lane descends straight off its pop, no blank column: 70.7 -> 68.4 ticks/pixel

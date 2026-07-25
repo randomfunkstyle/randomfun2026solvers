@@ -205,8 +205,15 @@ class Program(_Model):
 
 
 # ── parsing ─────────────────────────────────────────────────────────────────
-def _read_rows(program: str | os.PathLike[str]) -> list[str]:
-    """Grid rows from a path or inline source (drop one trailing newline)."""
+def read_rows(program: str | os.PathLike[str]) -> list[str]:
+    """Grid rows from a path or inline source (drop one trailing newline).
+
+    Public because a round-trip gate needs the *original* bytes to compare
+    against, and :meth:`Program.to_grid` is not that: it re-renders from the
+    rooms and pipes the analyser reported, so anything the analyser passes
+    through as raw geometry — a display panel — is absent from both sides of
+    the comparison and the gate silently passes.
+    """
     if isinstance(program, os.PathLike):
         text = Path(os.fspath(program)).read_text(encoding="utf-8")
     elif "\n" not in program and Path(program).is_file():
@@ -252,7 +259,7 @@ def parse_program(
     with bindings once to verify the result preserved them.
     """
     lm = lm or Littleman()
-    rows = _read_rows(program)
+    rows = read_rows(program)
     # analyze/route need a concrete file; pass the rendered source as inline text
     # only once (Littleman writes a temp file per call), so hand it a Path when we
     # already have one.

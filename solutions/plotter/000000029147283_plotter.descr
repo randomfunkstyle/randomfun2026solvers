@@ -1,0 +1,16 @@
+# plotter — submission be754ffe-f151-4dbe-8117-985dfbc48d8a
+
+verdict      done: 20/20 cases, area2 3481, avgTicks 8,373, score 29,147,283
+submitted    2026-07-25T15:33:02+0300
+grid         49x59
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  71d6fffe5e017440ceb06c2579a093719bcc58f1b0d05ed65bbab08d096aaae9
+commit       f52a07c
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+relay box shares the display pipes' bend rows; band B moved up onto the base row's descent row: 61 -> 59

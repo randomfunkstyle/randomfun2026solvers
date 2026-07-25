@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 
-from .manparse import Program, parse_program
+from .manparse import Program, parse_program, read_rows
 from .manstruct import Kind, _build_cells, _components, _live_in_room
 
 __all__ = [
@@ -262,6 +262,12 @@ class RoomNode(Node):
     kind: str = "compute"
     w: int = 0  # interior width
     h: int = 0  # interior height
+    #: The interior dimensions are part of the problem, so they may not change —
+    #: but the room may still MOVE. Keeping this apart from `pinned` is the whole
+    #: point of having two flags: a display's 32x24 is the pixel resolution, while
+    #: its address is free, and overhanging one four columns west of a worker is
+    #: worth a row. Pinning it outright forbids that move for no reason.
+    rigid_size: bool = False
     children: list[Node] = field(default_factory=list)
     #: wall cells a pipe attaches to, absolute. Moving the room moves these.
     ports: list[tuple[int, int]] = field(default_factory=list)
@@ -471,7 +477,12 @@ def parse_ast(
         # refused. A display is different -- its interior size *is* the pixel
         # resolution and its interior is legitimately blank, so nothing else would
         # stop a cut shrinking it. That one stays pinned.
-        pinned = room.kind == "display"
+        # A display's SIZE is the pixel resolution; its ADDRESS is free. Pinning it
+        # outright conflated the two and forbade a move worth a whole row on
+        # `plotter`: overhanging the panel four columns west of the worker put free
+        # cells under its bottom wall, which is what let the band above the worker
+        # collapse from two rows to one.
+        rigid = room.kind == "display"
         rooms.append(
             RoomNode(
                 id=room.id,
@@ -482,12 +493,33 @@ def parse_ast(
                 h=room.height - 2,
                 children=_room_children(prog, room, refine),
                 ports=attach[room.id],
-                pinned=pinned,
+                rigid_size=rigid,
                 note=(
-                    "display room: interior size is the pixel resolution"
-                    if pinned
+                    "display room: interior size is the pixel resolution, position is free"
+                    if rigid
                     else ""
                 ),
+            )
+        )
+
+    # A display the analyser reports as bare geometry rather than as a room. It
+    # must still become a node: the panel on `plotter` is 34x26 of mostly blank
+    # interior, so a freedom scan that cannot see it reads two dozen rows as
+    # empty and removable when they are in fact the pixel resolution.
+    for i, disp in enumerate(prog.displays):
+        (dx0, dy0), (dx1, dy1) = tuple(disp["min"]), tuple(disp["max"])
+        rooms.append(
+            RoomNode(
+                id=len(prog.rooms) + i,
+                x=dx0,
+                y=dy0,
+                kind="display",
+                w=dx1 - dx0 - 1,
+                h=dy1 - dy0 - 1,
+                children=[],
+                ports=[],
+                rigid_size=True,
+                note="display panel: size is the pixel resolution, position is free",
             )
         )
 
@@ -512,7 +544,11 @@ def parse_ast(
     ]
 
     # Anything the engine claimed for neither a room nor a pipe, kept verbatim.
-    src_rows = prog.to_grid()
+    # Compare against the ORIGINAL bytes, not `to_grid()`: that re-renders from
+    # the same rooms and pipes this AST is built from, so a cell the analyser
+    # never attributed is missing from both sides and `round_trip_ok` passes on a
+    # grid it has thrown a display panel away from.
+    src_rows = prog.to_grid() if isinstance(program, Program) else read_rows(program)
     claimed: set[tuple[int, int]] = set()
     for n in [*rooms, *pipes]:
         claimed |= n.cells

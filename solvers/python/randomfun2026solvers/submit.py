@@ -440,7 +440,10 @@ def main(argv: list[str] | None = None) -> int:
         program,
         verdict,
         note=args.note,
-        extra={"commit": commit, "local": detail, "source": str(path.resolve().relative_to(REPO))},
+        # `path` may be relative, or outside REPO entirely when run from a worktree —
+        # neither is a reason to lose the archive *after* a submission has landed.
+        extra={"commit": commit, "local": detail,
+               "source": os.path.relpath(path.resolve(), REPO)},
     )
     print(f"archived {man.relative_to(REPO)}")
     return 0 if verdict.accepted else 2

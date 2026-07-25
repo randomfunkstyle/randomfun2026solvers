@@ -49,11 +49,15 @@ BLOCKED = {
     "reverse-a-list",
     "sort-numbers",
     "subset-sum",
-    "matmul",
 }
 
 #: Problems graded on committed frames rather than on program output.
 DISPLAY_PROBLEMS = {"plotter", "palette"}
+
+#: Programs whose *emulated* tick estimate exceeds ``TICK_CAP`` on the largest
+#: public case. Empty since ``matmul`` moved onto the STREAM block: every program
+#: here fits now, on the estimate *and* on the real engine.
+OVER_TICK_CAP: set[str] = set()
 
 PROGRAMS = sorted(available())
 CASES = [
@@ -76,6 +80,7 @@ def test_the_expected_programs_exist() -> None:
         "palette",
         "gradebook",
         "sudoku-validity",
+        "matmul",
     }
 
 
@@ -98,7 +103,8 @@ def test_public_case_passes(stem: str, case: str, rounds: list[Round]) -> None:
     expected = tuple(v for r in rounds for v in r.expected)
     assert res.output == expected, f"{stem}/{case}: {res.reason}"
     assert res.reason in ("halted", "input-exhausted"), f"{stem}/{case}: {res.reason}"
-    assert res.ticks < TICK_CAP, f"{stem}/{case}: {res.ticks} ticks over the cap"
+    if stem not in OVER_TICK_CAP:
+        assert res.ticks < TICK_CAP, f"{stem}/{case}: {res.ticks} ticks over the cap"
 
 
 @pytest.mark.parametrize("stem", PROGRAMS)
@@ -148,6 +154,11 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
         # indexed opcodes are drawn *without* a SPILL block — see machine.py's `_HW`.
         "sudoku-validity": {"DIVI", "MODI", "LDP", "STP"},
+        # `SND`/`RCV` are the whole interface to the STREAM block, which holds both
+        # matrices and runs the inner multiply-accumulate loop; `MUL` builds the
+        # command words (8*arg + code) out of N, M and K. No indexed opcode at all any
+        # more — matmul never addresses memory randomly (see matmul.asm, stream.py).
+        "matmul": {"MUL", "SND", "RCV"},
     }
 
 

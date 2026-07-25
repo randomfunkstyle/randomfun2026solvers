@@ -1,0 +1,16 @@
+# plotter — submission 66687fe1-b7ff-4caa-8373-51f35340105d
+
+verdict      done: 20/20 cases, area2 3249, avgTicks 8,188, score 26,602,000
+submitted    2026-07-25T15:51:42+0300
+grid         49x57
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  82d864cbb88dbccb9dccb7ce3afaf8f9111d101cb931786587f89fb4a72b5920
+commit       581482d
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+worker's north wall shares row 27 with the SWAP leg: 58 -> 57

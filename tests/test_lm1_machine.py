@@ -138,6 +138,26 @@ def test_store_address_zero_is_rejected() -> None:
         machine.rom_words(prog, p)
 
 
+def test_a_tape_one_slot_too_small_is_rejected() -> None:
+    """``tape_n`` is a slot *count*, so slot ``tape_n`` does not exist.
+
+    Addressing it does not fault: the tape's worker walks past the end of its own
+    ring and the machine stalls with no output at all, which looks exactly like a
+    logic bug in the program. Cheap to catch here, and every recorded ``TAPE_SIZE``
+    is checked against its program below.
+    """
+    prog = assemble("LDI 1\nST 4\nHALT\n")
+    with pytest.raises(machine.MachineError, match="only reaches"):
+        machine.build(prog, tape_n=4)
+    machine.build(prog, tape_n=5)  # one more slot and it is legal
+
+
+def test_every_recorded_tape_size_clears_its_programs_top_address() -> None:
+    for slug, tape_n in machine.TAPE_SIZE.items():
+        top = machine._highest_address(programs.load(slug))
+        assert top < tape_n, f"{slug}: top slot {top} against a {tape_n}-slot tape"
+
+
 def test_opcode_numbers_come_from_the_lane_rows() -> None:
     """The trie sorts leaves bit-reversed, so choosing a row chooses the number."""
     prog = programs.load("brackets")
@@ -174,11 +194,17 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     # program now requires: the panel is the problem's, not the program's.
     m = machine.build_for(slug)
     assert m.width > 0 and m.height > 0
-    assert m.plan.k == 4
+    # The trie's depth is ceil(log2 |opcodes used|) — derived, not fixed at 4. It is
+    # 3 for `matmul`, whose eight opcodes are what let the STREAM block replace the
+    # inner loop; asserting a constant here would forbid ever getting smaller.
+    used = len(m.plan.number)
+    assert m.plan.k == max(1, (used - 1).bit_length())
+    assert m.plan.lanes == 1 << m.plan.k >= used
     assert m.tape_n == tape_n
     assert "@" in "".join(m.rows)
     # A display problem gets a panel and no `O` room: SPEC.md makes emitting any
-    # program output an error there.
+    # program output an error there. A STREAM problem has an `O` room too, but the
+    # block owns it rather than the CPU (see stream.py).
     grid = "".join(m.rows)
     display = any(s.value.startswith("display") for s in m.plan.sem.values())
     assert (":" in grid and "=" in grid) is display

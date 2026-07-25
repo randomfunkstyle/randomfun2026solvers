@@ -356,7 +356,11 @@ async function main() {
     process.stderr.write(`error: ${e.message}${e.pos ? ` (pos ${JSON.stringify(e.pos)})` : ""}\n`);
     process.exitCode = 1;
   }
-  // Go's runtime keeps timers alive (select{} + scheduled events); force exit.
+  // Go's runtime keeps timers alive (select{} + scheduled events); force exit —
+  // but not before stdout has actually drained. `analyze` on a large grid writes
+  // well past a pipe's 64 KB buffer, and exiting mid-write truncates the JSON
+  // (the write is async; the callback below fires once it has reached the OS).
+  await new Promise((resolve) => process.stdout.write("", resolve));
   process.exit(process.exitCode ?? 0);
 }
 

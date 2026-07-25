@@ -50,9 +50,11 @@ class Micro(StrEnum):
     RING_READ = "r↺"  # read the next ring word into A *and* send it back
     RING_SEND = "s→ring"  # bare recirculation (skip cycle emits these)
     READ_IN = "r→in"
+    READ_STREAM = "r→stream"  # one word back from the STREAM unit
     READ_MEM = "r→mem"
     READ_SPILL = "r→spill"
     SEND_OUT = "s→out"
+    SEND_STREAM = "s→stream"  # one command word to the STREAM unit
     SEND_MEM = "s→mem"
     SEND_SPILL = "s→spill"
     SEND_DSP = "s→addr/data/swap"
@@ -101,6 +103,8 @@ class Sem(StrEnum):
     SET_IMM = "set-imm"
     INPUT = "input"
     OUTPUT = "output"
+    STREAM_SEND = "stream-send"
+    STREAM_RECV = "stream-recv"
     ADD_IMM = "add-imm"
     SUB_IMM = "sub-imm"
     MUL_IMM = "mul-imm"
@@ -580,6 +584,29 @@ _EXT_OPS: tuple[Op, ...] = (
         description="send ACC to the display's SWAP port (bottom): 0 commits and clears",
         micro=(Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
         sem=Sem.DISPLAY_SWAP,
+        ext=True,
+    ),
+    # ── the STREAM block (stream.py): rings, and a fused multiply-accumulate ──
+    # One command word per `SND`, encoded ``8 * arg + code``: the unit's own decode
+    # trie reads the low three bits and `/ 8` recovers the argument (floored, so a
+    # negative argument survives). Two opcodes and the whole block is reachable —
+    # which is the point of putting the loop in the unit rather than in the ROM.
+    Op(
+        code=33,
+        mnemonic="SND",
+        operands=0,
+        description="send ACC to the STREAM unit as a command word (ACC preserved)",
+        micro=(Micro.SWAP, Micro.SEND_STREAM, Micro.SWAP),
+        sem=Sem.STREAM_SEND,
+        ext=True,
+    ),
+    Op(
+        code=34,
+        mnemonic="RCV",
+        operands=0,
+        description="ACC = the STREAM unit's next response word",
+        micro=(Micro.READ_STREAM, Micro.MOV),
+        sem=Sem.STREAM_RECV,
         ext=True,
     ),
     Op(

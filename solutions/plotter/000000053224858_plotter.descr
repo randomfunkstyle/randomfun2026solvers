@@ -1,0 +1,16 @@
+# plotter — submission 7fc43aad-3788-4a43-a20a-864708403f78
+
+verdict      done: 20/20 cases, area2 4096, avgTicks 12,994, score 53,224,858
+submitted    2026-07-25T15:46:45+0300
+grid         48x64
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  af50e5763091115eb27945c44879d7f0bcacbedfde96fc595535fd99f542ba71
+commit       131eab1
+local        plotter: all public frame cases match (emulator)
+source       tasks/compacted/plotter_48x64.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+manfree: cut cols 46 and 48 (reroute-aware; capacities declared). 50x64 -> 48x64, ticks 9007.67 -> 8915.17, no instruction changed.

@@ -26,8 +26,9 @@ Machine shape
     |       structures band    |<-- east ----------------------'
     +--------------------------+
        |  |  |
-       v  v  v south      O, or the LM-75's DATA / ADDR / SWAP — never both,
-                          since a display problem may emit no program output
+       v  v  v south      O, or the LM-75's DATA / ADDR / SWAP, or the STREAM
+                          block's command/response pair — never two of the three,
+                          since each of them owns the corridor below the CPU
 
 The ``I`` and ``O`` rooms are drawn only when a lane actually uses them: an unused
 pipe is not merely dead weight, it still competes for every ``r``/``s`` in the room
@@ -63,6 +64,18 @@ Equal values are fine — the columns merge, and both men are going to the same
 place. A floor keeps them east of the structures band so a simple lane's drop can
 pass straight through it.
 
+**Some problems need a third memory tier, and it is not addressed at all.** The
+tape is random-access and costs a revolution per word; ``matmul`` wants 512 slots
+and touches them in nothing but stream order. :mod:`~.stream` is that tier — three
+rotate-only FIFO rings, an adding relay, and a fused multiply-accumulate arm — and
+it plugs in through exactly two opcodes (``SND``/``RCV``, one command word each).
+The block owns the ``I`` and ``O`` rooms when it is present, which is what lets a
+256-value fill be *one instruction* instead of a 256-iteration ROM loop; the CPU
+then has no I/O rooms of its own and reads input by asking for it. Its two pipes
+leave the south wall on their own lane columns, exactly as the display's do, and
+``stream_pad`` walks the pair east until the jump slab's ``r`` is still nearer the
+ROM pipe than either of them (§7.1).
+
 **A display port is a place, not a number.** Which port a write hits is decided by
 the *side* of the panel its pipe attaches to, and which pipe an ``s`` uses is decided
 by where the glyph sits (``ARCH.md`` §7.1) — so ``DSP p``, taking the port from a
@@ -93,6 +106,8 @@ __all__ = [
     "DSP_SEM_BAND",
     "MEMORY_SEMS",
     "ROM_ROWS",
+    "STREAM_SEM_BAND",
+    "STREAM_SIZE",
     "TAPE_SIZE",
 ]
 
@@ -111,6 +126,12 @@ class Band:
     DSP_ADDR = "dsp_addr"  # display top wall
     DSP_DATA = "dsp_data"  # display left wall
     DSP_SWAP = "dsp_swap"  # display bottom wall
+    # CPU south wall: the STREAM block's command and response pipes (stream.py).
+    # South rather than east because the memory lanes own the east wall, and a
+    # southern pipe is ~15 rows below the lane band — far enough that a memory `r`
+    # a few columns away still wins on Manhattan distance (§7.1).
+    STREAM_CMD = "stream_cmd"
+    STREAM_RESP = "stream_resp"
 
 
 #: The display bands, west to east in the CPU's lane band — which is also the order
@@ -124,6 +145,14 @@ DSP_BANDS: tuple[str, ...] = (Band.DSP_DATA, Band.DSP_ADDR, Band.DSP_SWAP)
 #: every display pipe attaches to the south wall directly below its own ``s``, so
 #: the Manhattan tie-break is ``column separation`` vs ``row separation`` (§7.1).
 _DSP_PITCH = 6
+
+#: The STREAM bands, west to east in the lane band — which is also the order their
+#: pipes leave the south wall. The order is load-bearing for *planarity* rather
+#: than for binding: the response pipe climbs the block's east side and runs west
+#: to its lane, so it must arrive east of the command pipe's descent or the two
+#: cross (see :func:`_stream`).
+STREAM_BANDS: tuple[str, ...] = (Band.STREAM_CMD, Band.STREAM_RESP)
+_STREAM_PITCH = 6
 
 
 #: Hardware micro-programs, keyed by semantic tag — the sign-biased realisation of
@@ -247,6 +276,9 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
     ),
     Sem.NEGATE: (("W", None), ("N", None), ("M", None)),
     # ── LM-75 ports: the `W`/`s`/`W` sandwich, so ACC survives (as with OUT) ───
+    # ── STREAM: one command word out, one response word in ────────────────────
+    Sem.STREAM_SEND: (("W", None), ("s", Band.STREAM_CMD), ("W", None)),
+    Sem.STREAM_RECV: (("r", Band.STREAM_RESP), ("M", None)),
     Sem.DISPLAY_ADDR: (("W", None), ("s", Band.DSP_ADDR), ("W", None)),
     Sem.DISPLAY_DATA: (("W", None), ("s", Band.DSP_DATA), ("W", None)),
     Sem.DISPLAY_SWAP: (("W", None), ("s", Band.DSP_SWAP), ("W", None)),
@@ -258,6 +290,12 @@ DSP_SEM_BAND: dict[Sem, str] = {
     Sem.DISPLAY_ADDR: Band.DSP_ADDR,
     Sem.DISPLAY_DATA: Band.DSP_DATA,
     Sem.DISPLAY_SWAP: Band.DSP_SWAP,
+}
+
+#: Tags that talk to the STREAM block, keyed to the pipe each needs.
+STREAM_SEM_BAND: dict[Sem, str] = {
+    Sem.STREAM_SEND: Band.STREAM_CMD,
+    Sem.STREAM_RECV: Band.STREAM_RESP,
 }
 
 #: Tags whose operand word is a STORE address, so it must be >= 1 (see the module
@@ -428,8 +466,8 @@ def plan(program: Program) -> _Plan:
             return 0  # top, beside the north pipe
         if s is Sem.OUTPUT:
             return 3  # bottom, beside the south output pipe
-        if s in DSP_SEM_BAND:
-            return 2  # just above it, beside the south wall the LM-75 pipes leave
+        if s in DSP_SEM_BAND or s in STREAM_SEM_BAND:
+            return 2  # just above it, beside the south wall those pipes leave
         return 1
 
     def rank(m: str) -> tuple[int, int, str]:
@@ -438,6 +476,8 @@ def plan(program: Program) -> _Plan:
             # Not by width (all three are `W s W`): by band, so the westmost pipe
             # belongs to the lane placed furthest from the wall. See DSP_BANDS.
             return (2, DSP_BANDS.index(DSP_SEM_BAND[s]), m)
+        if s in STREAM_SEM_BAND:
+            return (2, STREAM_BANDS.index(STREAM_SEM_BAND[s]), m)
         return (group(m), -width(m), m)
 
     order = sorted(used, key=rank)
@@ -570,6 +610,7 @@ class _Cpu:
     has_in: bool = True  # False when no lane reads the input room
     has_out: bool = True  # False on a display problem: no `O` room at all
     dsp_cols: dict[str, int] = field(default_factory=dict)  # display band -> `s` column
+    stream_cols: dict[str, int] = field(default_factory=dict)  # STREAM band -> glyph column
     #: Named boxes in *interior* coordinates, for profiling and overlays. The grid
     #: cannot carry comments, so this is the only record of what a cell means.
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
@@ -600,7 +641,7 @@ def _flat_lane(
     return out
 
 
-def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
+def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0, stream_pad: int = 0) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path."""
     k, lanes = p.k, p.lanes
     centre = 1 << k
@@ -627,6 +668,19 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
     dsp_used = [b for b in DSP_BANDS if any(b == bb for mc in flat.values() for _, bb in mc)]
     dsp_cols = {b: lane_x0 + 1 + i * _DSP_PITCH for i, b in enumerate(dsp_used)}
     band_x.update(dsp_cols)
+
+    # STREAM lanes: same idea, one column per pipe. The pitch only has to exceed
+    # the 2-row lane gap for binding, but the *response* column additionally has to
+    # be east of the command column, which :func:`_stream` relies on for planarity.
+    # ``stream_pad`` walks the pair east, exactly as ``mem_pad`` walks the memory
+    # block: the constraint that binds is not the stream lanes themselves but the
+    # *jump slab's* `r`, which must stay nearer the ROM pipe on the west wall than
+    # either of these on the south (§7.1 is nearest, not nearest-useful).
+    stream_used = [b for b in STREAM_BANDS if any(b == bb for mc in flat.values() for _, bb in mc)]
+    stream_cols = {
+        b: lane_x0 + 1 + stream_pad + i * _STREAM_PITCH for i, b in enumerate(stream_used)
+    }
+    band_x.update(stream_cols)
 
     # Each slab gets its own column band, so an exit dropping to the collector
     # never crosses a slab below it.
@@ -831,6 +885,7 @@ def build_cpu(program: Program, p: _Plan, *, mem_pad: int = 0) -> _Cpu:
         has_in=bool(in_rows),
         has_out=any(p.sem[m] is Sem.OUTPUT for m in used),
         dsp_cols=dsp_cols,
+        stream_cols=stream_cols,
     )
 
 
@@ -1101,7 +1156,7 @@ def check_bindings(
     reads the wrong pipe, so it is checked here and again with
     ``tools/route-check.mjs`` on the real grid.
     """
-    incoming = {"rom", "in", "mem_resp"}
+    incoming = {"rom", "in", "mem_resp", Band.STREAM_RESP}
     for x, y, glyph, band in glyphs:
         if band == Band.MEM:
             want = "mem_req" if glyph == "s" else "mem_resp"
@@ -1133,10 +1188,13 @@ class Machine:
     tape_n: int
     rom_rows: int
     mem_pad: int
+    stream_pad: int = 0
     display: tuple[int, int] | None = None
     #: Where each display band's ``s`` glyph ended up, in *grid* coordinates — the
     #: cells ``lm.mjs route`` has to answer with that band's own pipe.
     dsp_glyphs: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: The placed STREAM block, when the program uses one (see ``stream.py``).
+    stream: object | None = None
     #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
     #: the only thing that knows what any cell *means* — the grid carries no
     #: comments — so it records that here for ``man_debug`` overlays and for
@@ -1161,11 +1219,13 @@ class Machine:
             "tape": "#0ea5e9",
             "display": "#ec4899",
             "io": "#94a3b8",
+            "stream": "#f59e0b",
         }
         notes = {
             "rom": f"looping ROM: {self.program.P} words, {self.rom_rows} rows, re-emitted forever",
             "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
             "tape": f"rotating pipe tape, N={self.tape_n} (~105+8.3N ticks/access)",
+            "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
             "display": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
             "cpu:fetch": ">rbr — opcode into BP, then the operand into A (fixed-width 2 words)",
             "cpu:trie": f"depth-{self.plan.k} backpack trie; leaves are bit-reversed",
@@ -1197,11 +1257,12 @@ class Machine:
 
     def report(self) -> str:
         panel = f", LM-75 {self.display[0]}x{self.display[1]}" if self.display else ""
+        stream = f", stream_pad={self.stream_pad}" if self.stream else ""
         return (
             f"{self.program.name}: {self.width}x{self.height} "
             f"footprint {self.footprint}, {len(self.plan.number)} opcodes "
             f"(depth {self.plan.k}), P={self.program.P} words on {self.rom_rows} ROM rows, "
-            f"tape N={self.tape_n}, mem_pad={self.mem_pad}{panel}"
+            f"tape N={self.tape_n}, mem_pad={self.mem_pad}{stream}{panel}"
         )
 
 
@@ -1219,6 +1280,8 @@ def build(
     rom_rows: int | None = None,
     mem_pad: int | None = None,
     display: tuple[int, int] | None = None,
+    stream: tuple[int, int, int] | None = None,
+    resp_pad: int = 0,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -1228,10 +1291,24 @@ def build(
     east until every pipe glyph binds where it should (§7.1). ``display`` is the
     LM-75's interior ``(width, height)`` and is required by any program using a
     ``DSP*`` opcode — the panel resolution is the problem's, not the program's.
+
+    ``tape_n`` is a **slot count**, so the usable addresses are ``1 .. tape_n - 1``:
+    slot 0 is sign-ambiguous (see the module docstring) and slot ``tape_n`` does not
+    exist. Addressing it does not fault — the tape's worker walks past the end of its
+    own ring and the machine stalls, emitting nothing — so the off-by-one is checked
+    here instead. Only *static* addresses can be checked; a program computing them at
+    run time has to size its own tape and is trusted to.
     """
     p = plan(program)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
+    top = _highest_address(program)
+    if top >= tape_n:
+        raise MachineError(
+            f"{program.name} addresses STORE slot {top} but a {tape_n}-slot tape only "
+            f"reaches {tape_n - 1}; a read past the end stalls the machine silently, "
+            "so raise TAPE_SIZE to at least the top address plus one"
+        )
     if display is None and any(s in DSP_SEM_BAND for s in p.sem.values()):
         raise MachineError(
             "the program drives the LM-75 but no display resolution was given; "
@@ -1239,13 +1316,17 @@ def build(
         )
 
     pads = [mem_pad] if mem_pad is not None else range(0, 40)
+    spads = range(0, 40, 2) if stream else [0]
     last: MachineError | None = None
-    for pad in pads:
-        try:
-            return _assemble(program, p, words, tape_n, rom_rows, pad, display)
-        except MachineError as exc:
-            last = exc
-    raise MachineError(f"no mem_pad makes every pipe bind; last: {last}")
+    for spad in spads:
+        for pad in pads:
+            try:
+                return _assemble(
+                    program, p, words, tape_n, rom_rows, pad, display, stream, resp_pad, spad
+                )
+            except MachineError as exc:
+                last = exc
+    raise MachineError(f"no pad pair makes every pipe bind; last: {last}")
 
 
 def _assemble(
@@ -1256,8 +1337,11 @@ def _assemble(
     rom_rows: int | None,
     mem_pad: int,
     display: tuple[int, int] | None = None,
+    stream: tuple[int, int, int] | None = None,
+    resp_pad: int = 0,
+    stream_pad: int = 0,
 ) -> Machine:
-    cpu = build_cpu(program, p, mem_pad=mem_pad)
+    cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad)
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
@@ -1357,11 +1441,20 @@ def _assemble(
     tout_x, tout_y = TX + tape.out_cell[0], TY + tape.out_cell[1]
     resp_row = CY + cpu.mem_in_row
     top = min(AY, CY) - 3
+    # ``resp_pad`` inserts a there-and-back jog in the corridor above the machine,
+    # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
+    # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
+    # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
+    jog = (
+        [(tout_x, top), (tout_x + resp_pad, top), (tout_x + resp_pad, top - 1)]
+        if resp_pad
+        else [(tout_x, top)]
+    )
     g.draw_pipe(
         [
             (tout_x, tout_y - 1),
-            (tout_x, top),
-            (CX + W + 3, top),
+            *jog,
+            (CX + W + 3, top - (1 if resp_pad else 0)),
             (CX + W + 3, resp_row),
             (CX + W + 2, resp_row),
         ]
@@ -1371,6 +1464,17 @@ def _assemble(
     dsp_touches = (
         _display(g, cpu, CX, CY + H + 1, AX, display) if (display and cpu.dsp_cols) else {}
     )
+
+    # ── the STREAM block, below the CPU ──────────────────────────────────────
+    stream_touches: dict[str, tuple[int, int]] = {}
+    blk = None
+    if cpu.stream_cols:
+        if stream is None:
+            raise MachineError(
+                "the program drives the STREAM block but no ring sizes were given; "
+                "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
+            )
+        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream)
 
     rows = g.rows()
 
@@ -1385,6 +1489,11 @@ def _assemble(
         regions["io:I"] = (3, iy - 1, 3, 3)
     if cpu.has_out:
         regions["io:O"] = (CX + cpu.out_col - 1, oy + 2, 3, 3)
+    if blk is not None:
+        # One box per sub-block, so a heat map of a STREAM machine says *which* ring
+        # the ticks went into rather than colouring 989 anonymous pipe cells.
+        for name, (bx, by, bw, bh) in blk.regions.items():
+            regions[f"stream:{name}"] = (SX + bx, SY + by, bw, bh)
     # The panel is the only thing that uses `=`/`:`, so its box can just be read
     # back off the grid rather than threaded out of the routing helper.
     panel = [(x, y) for y, row in enumerate(rows) for x, ch in enumerate(row) if ch in "=:"]
@@ -1403,6 +1512,7 @@ def _assemble(
         "mem_req": (CX + W + 2, req_row),
         "mem_resp": (CX + W + 2, resp_row),
         **dsp_touches,
+        **stream_touches,
     }
     if cpu.has_in:
         touches["in"] = (CX - 1, iy)
@@ -1415,7 +1525,12 @@ def _assemble(
     # other count means the grid is geometrically ambiguous somewhere — usually a
     # leg running alongside a room corner, which the engine reads as an extra pipe
     # (see mem_in_row). Cheap to check and it localises a whole class of bug.
-    _check_pipe_count(rows, expected=len(touches) + 3)
+    #
+    # The STREAM block adds its own pipes, all of them internal except the two
+    # already counted in ``touches`` — so ``blk.pipes - 1`` (the response pipe is
+    # drawn half here, half there, and is one pipe).
+    extra = (blk.pipes - 1) if blk else 0
+    _check_pipe_count(rows, expected=len(touches) + 3 + extra)
     return Machine(
         rows=rows,
         regions=regions,
@@ -1424,10 +1539,54 @@ def _assemble(
         tape_n=tape_n,
         rom_rows=romlay.rows_used,
         mem_pad=mem_pad,
+        stream_pad=stream_pad,
         display=display if dsp_touches else None,
         dsp_glyphs={
             band: (CX + x, CY + y) for x, y, _glyph, band in cpu.pipe_glyphs if band in DSP_BANDS
         },
+        stream=blk,
+    )
+
+
+def _stream(
+    g: _Grid, cpu: _Cpu, cx: int, wall_y: int, sizes: tuple[int, int, int]
+) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
+    """Place the STREAM block below the CPU and wire its two pipes. Returns touches.
+
+    The command pipe drops straight out of the CPU's south wall into the block's
+    north wall; the response pipe climbs the block's *east* side, runs west above
+    it and turns north into its own lane's column. That is why ``STREAM_BANDS`` puts
+    the response lane east of the command lane: the westward leg then stops east of
+    the command pipe's descent instead of crossing it.
+    """
+    from . import stream as streammod
+
+    a_slots, b_slots, c_slots = sizes
+    blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
+    bx, by = 1, wall_y + 5
+    g.blit(bx, by, blk.cells)
+
+    cmd_col = cx + cpu.stream_cols[Band.STREAM_CMD]
+    resp_col = cx + cpu.stream_cols[Band.STREAM_RESP]
+    cmd_x, cmd_y = bx + blk.cmd_cell[0], by + blk.cmd_cell[1]
+    resp_x, resp_y = bx + blk.resp_cell[0], by + blk.resp_cell[1]
+    if resp_col <= cmd_x:
+        raise MachineError(
+            f"the response lane's column {resp_col} is not east of the command pipe's "
+            f"descent at {cmd_x}: the two pipes would cross"
+        )
+    lane = by - 2  # the corridor the response pipe runs west along
+
+    route = [(cmd_col, wall_y + 1), (cmd_col, lane - 1), (cmd_x, lane - 1), (cmd_x, cmd_y)]
+    g.draw_pipe([p for i, p in enumerate(route) if i == 0 or p != route[i - 1]])
+    g.draw_pipe([(resp_x, resp_y), (resp_x, lane), (resp_col, lane), (resp_col, wall_y + 1)])
+    return (
+        blk,
+        {
+            Band.STREAM_CMD: (cmd_col, wall_y + 1),
+            Band.STREAM_RESP: (resp_col, wall_y + 1),
+        },
+        (bx, by),
     )
 
 
@@ -1574,6 +1733,10 @@ def _check_pipe_count(rows: list[str], *, expected: int) -> None:
 #: costs ~114 ticks per case on ``brackets`` and ~999 on ``tcp`` — the difference
 #: being how many accesses each program makes. It is not a footprint trade at all:
 #: the tape block is 33 columns wide at every N.
+#:
+#: The rule is enforced in :func:`build`, not just documented: a tape sized to
+#: *exactly* its top address does not fault, it stalls, which is the hardest kind of
+#: bug to see. See ``tests/test_lm1_machine.py``.
 TAPE_SIZE = {
     "brackets": 5,  # reaches address 4
     # 52, NOT 51. tcp's highest address is BUF + 47 = 51, and a tape sized to
@@ -1586,7 +1749,18 @@ TAPE_SIZE = {
     "plotter": 11,  # reaches address 10 — ten names aliased onto ten slots
     "palette": 3,  # one colour counter; the pixels need no tape at all
     "sudoku-validity": 31,  # 27 unit masks + 3 cursors, one slot of slack
+    # matmul keeps both matrices in the STREAM block's rings, so its tape holds only
+    # the fourteen scalars the loops need (top address 14, plus a slot of slack).
+    # That is the whole point of the new tier: at n=16 an access is ~185 ticks rather
+    # than the ~830 a 104-slot tape costs, and *none* of them is in the inner loop.
+    "matmul": 16,
 }
+
+#: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
+#: constraint box rather than the public cases. ``matmul`` allows N, M, K <= 16, so
+#: A and B hold 256 entries each and a row of C holds 16; one spare value each,
+#: because a ring is briefly holding one more than it stores.
+STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 
 #: ROM fold overrides, where ``rom.rows_for_budget``'s default is not the footprint
 #: optimum. The default folds the ROM toward the *CPU's own* width, which is right
@@ -1621,6 +1795,11 @@ ROM_ROWS = {
     # leave the machine narrow enough that the default fold makes height binding.
     # See tests/test_lm1_sudoku.py.
     "sudoku-validity": 37,
+    # matmul is the one machine that comes out *square* (96x96): the STREAM block's
+    # ring band is as wide as the tape row above it, and its height is what the ROM
+    # trades against. 11 rows is the sweep minimum, and the sweep is not flat here —
+    # 10 rows costs 15 % and 18 rows (the old, tape-only build's fold) costs 15 %.
+    "matmul": 11,
 }
 
 
@@ -1654,6 +1833,7 @@ def build_for(slug: str) -> Machine:
         tape_n=TAPE_SIZE[slug],
         rom_rows=ROM_ROWS.get(slug),
         display=display_for(slug),
+        stream=STREAM_SIZE.get(slug),
     )
 
 
