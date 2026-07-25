@@ -226,7 +226,7 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     "REST_END": (["sr", "W"], "DISPATCH"),
 
     # ══ dispatch ══════════════════════════════════════════════════════════════
-    "DISPATCH": ([f"M", f"L{DIGIT_BIAS}", "W", "-", "X"],
+    "DISPATCH": (["M", f"L{DIGIT_BIAS}", "W", "-", "X"],
                  {"neg": "J_TREE", "zero": "L_DIGIT", "pos": "L_DIGIT"}),
     # non-digit: A = j - 12, B = 12  ->  j
     "J_TREE": (["+", "M", "L5", "W", "-", "X"],
