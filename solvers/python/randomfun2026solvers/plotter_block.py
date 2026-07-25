@@ -624,3 +624,45 @@ def build_worker():
     c.set(0, 18, "^")                             # BP == 0: up column 0, next round
     _riser(c, 0, 2, 17)
     return c
+
+
+# ── the worker probe: the worker alone, its increment pipe pointed at an O room ─
+#
+# Program output is then exactly the `base, n, inc...` stream that `worker_round` is
+# proved to produce over all 589,824 segments, so one string compare on the
+# reference interpreter checks the whole grid — every branch, the ring's FIFO order,
+# the four pipe bindings and the BP-counted loop — without the painter or display in
+# the way. Verified on (0,0,31,23), its reverse, (0,23,31,0), (5,5,5,20), (3,7,29,7)
+# and the single point (0,0,0,0).
+PROBE_WX, PROBE_WY = 1, 4                      # worker interior origin -> walls rows 3..23
+IN_C, RET_C, FWD_C, PNT_C = 1, 29, 31, 39     # grid columns of the four ports
+
+
+def build_worker_probe():
+    g = Circuit(58, 37)
+    stamp(g, PROBE_WX, PROBE_WY, build_worker().rows())
+    walls(g, PROBE_WX, PROBE_WY, WW, WH)
+    south, north = PROBE_WY + WH, PROBE_WY - 1               # 23 and 3
+
+    rx, ry = 6, 27                               # relay interior -> walls 26..33
+    stamp(g, rx, ry, relay_rows())
+    walls(g, rx, ry, RELAY_W, RELAY_H)
+
+    # ring: worker south -> relay north, relay south -> the long way round -> worker
+    #
+    # A pipe's first cell must point *away* from the wall it leaves: the analyser
+    # derives the source room from the cell behind the flow, so a first leg that runs
+    # along the wall gets `src: -1` and no `s` in the room can ever bind to it.
+    n_fwd = pipe(g, [(FWD_C, south + 1), (FWD_C, ry - 2), (rx + 1, ry - 2)],
+                 into=(rx + 1, ry - 1))
+    n_ret = pipe(g, [(rx, ry + RELAY_H + 1), (rx, 35), (50, 35), (50, 2),
+                     (RET_C, 2)], into=(RET_C, north))
+
+    # the increment pipe, standing in for the painter
+    stamp(g, 43, 26, ["+-+", "|O|", "+-+"])
+    pipe(g, [(PNT_C, south + 1), (PNT_C, 27), (42, 27)], into=(43, 27))
+    # and the input
+    stamp(g, 55, 0, ["+-+", "|I|", "+-+"])
+    pipe(g, [(54, 1), (IN_C, 1), (IN_C, 2)], into=(IN_C, north))
+
+    return [r.rstrip() for r in g.rows()]

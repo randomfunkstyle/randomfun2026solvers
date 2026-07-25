@@ -187,3 +187,42 @@ def test_every_worker_send_and_receive_binds_to_the_pipe_it_means():
             lo, hi = (RIN_MAX, POP_MIN) if ch == "r" else (PUSH_MAX, PAINT_MIN)
             assert x <= lo or x >= hi, f"{ch!r} at {(x, y)} is a reading-order tie"
     assert seen["r"] and seen["s"], "found no pipe glyphs at all — wrong grid?"
+
+
+@pytest.mark.slow
+def test_the_worker_grid_matches_the_model_on_the_reference_interpreter():
+    """The op-level model is the spec; this checks the ASCII actually implements it.
+
+    The worker probe points the increment pipe at an output room, so program output
+    *is* the `base, n, inc...` stream — one string compare covers every branch, the
+    ring's FIFO order, all four pipe bindings and the BP-counted loop.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from randomfun2026solvers.plotter_block import build_worker_probe
+
+    node = shutil.which("node")
+    lm = Path(__file__).resolve().parents[1] / "littleman" / "lm.mjs"
+    if not node or not lm.exists():
+        pytest.skip("needs node and littleman/lm.mjs")
+
+    with tempfile.TemporaryDirectory() as td:
+        man = Path(td) / "worker.man"
+        man.write_text("\n".join(build_worker_probe()) + "\n")
+        for seg in [(0, 0, 31, 23), (31, 23, 0, 0), (0, 23, 31, 0),
+                    (5, 5, 5, 20), (3, 7, 29, 7), (0, 0, 0, 0)]:
+            m = OpModel(list(seg))
+            worker_round(m)
+            # The worker never halts — it loops waiting for the next segment — so
+            # tick a bound instead of running to completion.
+            out = subprocess.run(
+                [node, str(lm), "tick", str(man), "12000",
+                 "--input", " ".join(map(str, seg))],
+                capture_output=True, text=True, check=True, timeout=120,
+            ).stdout
+            got = next(ln[len("output:"):] for ln in out.splitlines()
+                       if ln.startswith("output:"))
+            assert got.split() == [str(v) for v in m.paint], seg
