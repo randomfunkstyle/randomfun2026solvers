@@ -1644,8 +1644,9 @@ def _assemble(
     #
     # The STREAM block adds its own pipes, all of them internal except the two
     # already counted in ``touches`` — so ``blk.pipes - 1`` (the response pipe is
-    # drawn half here, half there, and is one pipe).
-    extra = (blk.pipes - 1) if blk else 0
+    # drawn half here, half there, and is one pipe). A unit that answers nothing has
+    # no response pipe to double-count, so nothing is subtracted for it.
+    extra = (blk.pipes - (1 if Band.STREAM_RESP in stream_touches else 0)) if blk else 0
     _check_pipe_count(rows, expected=len(touches) + 3 + extra)
     return Machine(
         rows=rows,
@@ -1683,27 +1684,32 @@ def _stream(
     g.blit(bx, by, blk.cells)
 
     cmd_col = cx + cpu.stream_cols[Band.STREAM_CMD]
-    resp_col = cx + cpu.stream_cols[Band.STREAM_RESP]
     cmd_x, cmd_y = bx + blk.cmd_cell[0], by + blk.cmd_cell[1]
-    resp_x, resp_y = bx + blk.resp_cell[0], by + blk.resp_cell[1]
-    if resp_col <= cmd_x:
-        raise MachineError(
-            f"the response lane's column {resp_col} is not east of the command pipe's "
-            f"descent at {cmd_x}: the two pipes would cross"
-        )
     lane = by - 2  # the corridor the response pipe runs west along
+
+    # A unit that answers nothing has no response pipe, and that is a *binding*
+    # property rather than a saving: §7.1 makes an incoming pipe a rival for every
+    # `r` in the CPU, so a response landing on the south wall competes with the jump
+    # slab's ROM read. `matmul` gets away with it only by having no `JMPF` at all;
+    # measured on `snake`, all 4,800 (fold, mem_pad, stream_pad) combinations fail on
+    # exactly that binding. An outgoing command pipe has no such competition.
+    talks_back = Band.STREAM_RESP in cpu.stream_cols
+    touches = {Band.STREAM_CMD: (cmd_col, wall_y + 1)}
+    if talks_back:
+        resp_col = cx + cpu.stream_cols[Band.STREAM_RESP]
+        resp_x, resp_y = bx + blk.resp_cell[0], by + blk.resp_cell[1]
+        if resp_col <= cmd_x:
+            raise MachineError(
+                f"the response lane's column {resp_col} is not east of the command pipe's "
+                f"descent at {cmd_x}: the two pipes would cross"
+            )
+        touches[Band.STREAM_RESP] = (resp_col, wall_y + 1)
 
     route = [(cmd_col, wall_y + 1), (cmd_col, lane - 1), (cmd_x, lane - 1), (cmd_x, cmd_y)]
     g.draw_pipe([p for i, p in enumerate(route) if i == 0 or p != route[i - 1]])
-    g.draw_pipe([(resp_x, resp_y), (resp_x, lane), (resp_col, lane), (resp_col, wall_y + 1)])
-    return (
-        blk,
-        {
-            Band.STREAM_CMD: (cmd_col, wall_y + 1),
-            Band.STREAM_RESP: (resp_col, wall_y + 1),
-        },
-        (bx, by),
-    )
+    if talks_back:
+        g.draw_pipe([(resp_x, resp_y), (resp_x, lane), (resp_col, lane), (resp_col, wall_y + 1)])
+    return blk, touches, (bx, by)
 
 
 def _display(

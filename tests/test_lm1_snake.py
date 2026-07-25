@@ -257,3 +257,70 @@ def test_the_score_is_measured_from_the_committed_frames() -> None:
     # for this problem, but ``gradebook`` reported 0 and served one anyway, so keep the
     # margin: the constraint box allows only ~8 rounds more than the longest case uses.
     assert max(c.ticks for c in res.cases) < STEP_CAP // 4, [c.ticks for c in res.cases]
+
+
+# ── the coprocessor interface (see solvers/.../lm1/snake_unit.py) ─────────────
+def _stub_unit(**_sizes: int) -> object:
+    """A block whose only external connection is the incoming command pipe.
+
+    Stands in for the real body-ring unit so the *machine's* geometry can be tested
+    without its internals: one room, one ``r``, one ``H``.
+    """
+    from randomfun2026solvers.lm1.stream import StreamBlock
+
+    w, h = 6, 3
+    cells: dict[tuple[int, int], str] = {}
+    for x in range(w + 1):
+        cells[(x, 0)] = cells[(x, h)] = "-"
+    for y in range(1, h):
+        cells[(0, y)] = cells[(w, y)] = "|"
+    for corner in ((0, 0), (w, 0), (0, h), (w, h)):
+        cells[corner] = "+"
+    cells[(1, 1)], cells[(2, 1)], cells[(3, 1)] = "@", "r", "H"
+    return StreamBlock(
+        cells=cells,
+        width=w + 1,
+        height=h + 1,
+        cmd_cell=(2, -1),  # one cell above the north wall, in the `r`'s own column
+        resp_cell=(0, 0),
+        ring_a=0,
+        ring_b=0,
+        ring_c=0,
+        rows_a=0,
+        rows_b=0,
+        pipes=0,
+        glyphs=[(2, 1, "r", "cmd")],
+        codes={},
+        regions={"stub": (0, 0, w + 1, h + 1)},
+    )
+
+
+@node_required
+def test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reason ``snake``'s coprocessor is write-only, measured rather than argued.
+
+    ``ARCH.md`` §7.1: an ``r`` competes only with *incoming* pipes. A response pipe
+    into the CPU is therefore a rival for every ``r`` in it — including the jump slab's
+    ROM read, which sits at the bottom of the CPU exactly where a south-wall port
+    lands. Sweeping 4,800 (fold, mem_pad, stream_pad) combinations for a snake program
+    with an ``RCV`` failed *every* one on that binding; ``matmul``, the only other
+    machine with a unit, escapes it only by containing no ``JMPF`` at all.
+
+    So the same program with the reply dropped has to place, and the two book-keeping
+    spots that assumed a response pipe (the pipe count and the resp routing) have to
+    cope with its absence. Both are checked here rather than in the snake grid, so a
+    regression names the cause.
+    """
+    from randomfun2026solvers.lm1 import stream as streammod
+    from randomfun2026solvers.lm1.asm import assemble
+
+    monkeypatch.setattr(streammod, "build_stream", _stub_unit)
+    talks = assemble("loop:   IN\n        MULI 8\n        SND\n        RCV\n        JMP loop\n")
+    quiet = assemble("loop:   IN\n        MULI 8\n        SND\n        JMP loop\n")
+
+    with pytest.raises(machine.MachineError):
+        machine.build(talks, tape_n=2, stream=(0, 0, 0))
+    m = machine.build(quiet, tape_n=2, stream=(0, 0, 0))
+    assert m.width > 0 and m.height > 0
