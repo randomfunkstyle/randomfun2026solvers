@@ -1,7 +1,9 @@
 # `little-little-little-man` — machine design
 
-**Status: no grid yet.** Three of the four pieces are done and measured; the
-fourth, laying the worker's control-flow graph out as a room, is not started.
+**Status: shipped and passing.** `tasks/solutions/little-little-little-man_ring.man`
+
+    w x h = 159 x 222     area2 = 49,284     avg_ticks = 1,460,882.10
+    score = 7.20e10       10 / 10 public cases, both validators, identical ticks
 
 | piece | where | state |
 |---|---|---|
@@ -9,7 +11,7 @@ fourth, laying the worker's control-flow graph out as a room, is not started.
 | painter + LM-75 panel | `lllm_panel.py`, `tests/test_lllm_panel.py` | 22x26, area2 676; all 10 cases' frames replayed byte-identically on **both** validators |
 | decode tables | `lllm_tables.py` | perfect hash + two 64-bit nibble magics, verified |
 | the machine's program | `lllm_ring.py` (`WORKER`, `simulate_worker`) | 63 blocks, 614 glyph cells; reproduces every frame of all 10 public cases at token level |
-| **the worker's room layout** | — | **not built** — see "What is left" |
+| the worker's room layout | `lllm_layout.py` | one block to a row band, 25 routing channels; emits `--man/--html/--json` |
 
 ## What has to happen
 
@@ -144,10 +146,11 @@ hash of the byte and the colour table by the *class offset the first lookup
 produced*, because `&` wants `B = 15` and destroys the shift amount. Chained,
 not parallel.
 
-## What is left, and the two things that will shape it
+## The layout, and what it actually cost
 
-The worker is 63 blocks / 614 glyph cells of straight runs plus 87 routed edges.
-Two constraints measured on this CFG:
+The worker is 63 blocks / 614 glyph cells of straight runs plus 87 routed edges,
+laid out by `lllm_layout.py` into a 157x190 room. Two constraints, both measured
+before the compiler was written, and both held up:
 
 1. **Pipe binding is a column discipline, and it is nearly free here.** Six pipes
    (input, painter, store fwd/ret, file fwd/ret) all attach to one wall, so
@@ -156,14 +159,26 @@ Two constraints measured on this CFG:
    store**, and there are only **22 intra-block zone switches**. So the bulk of
    the code sits in one column band and only 22 places need a walk. This was the
    risk I expected to dominate and it does not.
-2. **Rows are what will cost.** A naive band layout — one block to a band of four
-   rows (north lane, glyphs, south lane, fall-through lane) with a channel bank
-   for the 87 edges — is ~245 rows by ~60 columns, `area2` ~60,000. At the
-   ~40,000 avg ticks the token program implies that is ~2.4e9: 540x better than
-   the leaderboard's 1.3e12, but 40x worse than the 22x26 panel floor deserves.
-   Getting to a ~120-row build (two stacks, or lanes shared between adjacent
-   bands) is worth roughly 4x, and real 2-D packing of 614 glyphs into a
-   ~45x45 room would be worth ~30x.
+2. **Rows are what cost.** The built room is 190 rows: a block gets one row per
+   glyph run (a second when a pipe band lies behind the pen and it has to wrap),
+   plus a straight-lane row, plus two more if it branches. 159x222 overall, and
+   `area2 = 49,284`.
+
+Three things that were *not* anticipated and are worth writing down:
+
+- **A token is not a glyph.** `rq`/`sq`/`rr`/`sr`/`ri`/`sp` name a *pipe*, which
+  is a column discipline; they all compile to a bare `r` or `s`. Writing the
+  token into the cell shifted every row that contained one and showed up only as
+  "numeric literal contains a non-digit" from the loader, four blocks away.
+- **A pipe's first cell must point away from its room**, so a return pipe that
+  wants to leave a relay and immediately head east has to go north for one cell
+  first. Both return pipes silently failed to parse without it — the grid still
+  loaded, with two pipes missing.
+- The tick bill is dominated by the store ring: 16H+1 words turned once per
+  interpreted tick, each word costing a whole block entry and its routed edge.
+  That is where the 1.46M average lives, and it is the first thing to attack if
+  the score ever matters: packing eight classes to a word (see above) would cut
+  the lap eightfold.
 
 Bytes accumulate `word = word*256 + class` in raster order in the packed variant,
 so cell `i` of a word sits at bits `8*(7-i)`; a short final word is left-shifted
