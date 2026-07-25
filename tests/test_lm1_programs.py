@@ -50,9 +50,9 @@ BLOCKED = {
 DISPLAY_PROBLEMS = {"plotter", "palette"}
 
 #: Programs whose *emulated* tick estimate exceeds ``TICK_CAP`` on the largest
-#: public case. ``tests/test_lm1_matmul.py`` measures matmul's wall in detail, so
-#: the generic assertion below is relaxed for it and pinned precisely over there.
-OVER_TICK_CAP: set[str] = {"matmul"}
+#: public case. Empty since ``matmul`` moved onto the STREAM block: every program
+#: here fits now, on the estimate *and* on the real engine.
+OVER_TICK_CAP: set[str] = set()
 
 PROGRAMS = sorted(available())
 CASES = [
@@ -135,10 +135,11 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
         # indexed opcodes are drawn *without* a SPILL block — see machine.py's `_HW`.
         "sudoku-validity": {"DIVI", "MODI", "LDP", "STP"},
-        # Every matmul address is computed from N/M/K at run time, so the
-        # immediate-only `LD`/`ST` cannot reach the matrices at all; `MUL` then
-        # multiplies the accumulator by a slot with no spill (see matmul.asm).
-        "matmul": {"MUL", "LDA", "MOVA"},
+        # `SND`/`RCV` are the whole interface to the STREAM block, which holds both
+        # matrices and runs the inner multiply-accumulate loop; `MUL` builds the
+        # command words (8*arg + code) out of N, M and K. No indexed opcode at all any
+        # more — matmul never addresses memory randomly (see matmul.asm, stream.py).
+        "matmul": {"MUL", "SND", "RCV"},
     }
 
 

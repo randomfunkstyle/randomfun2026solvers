@@ -1,183 +1,155 @@
 ; matmul — C = A·B, with A being N×M and B being M×K, all row-major.
 ;
-; NOT ISA v1: needs `LDA` (load through ACC), `MOVA` (store at ACC) and `MUL`
-; (multiply by a STORE slot). Every address here is computed at run time from
-; N/M/K, so ARCH.md's immediate-only `LD`/`ST` cannot reach the matrices at all.
+; NOT ISA v1: needs `MUL` (multiply by a STORE slot) and the two STREAM opcodes
+; `SND`/`RCV` (see `stream.py`). Eight opcodes in total, which keeps the decode
+; trie at depth **3** — half the lanes and half the decode walk of the 13-opcode
+; version this replaces.
 ;
-; 13 opcodes, so the decode trie stays at depth 4 (16 lanes):
-;   IN ST LDI LD ADD SUB ADDI MUL LDA MOVA OUT BRN HALT
-; There is deliberately no `JMPF` and no `BRZ`: every loop counts *up* and tests
-; `cursor - end < 0` with `BRN`, which is one instruction shorter than the
-; count-down/`BRZ`/`JMP` idiom *and* removes two structures-band slabs from the
-; generated CPU (a `BRZ` slab is 8 rows, a `JMPF` slab 5) — pure footprint win.
+; ── why the program looks like this ─────────────────────────────────────────
+; The obvious accumulator-machine matmul — three nested loops with a running sum
+; in a tape slot — is *correct* and cannot be made to fit: it costs ~13 STORE
+; accesses per multiply-accumulate, and 4096 MACs times ~800 ticks an access is
+; 40M against a 5M cap. No amount of program cleverness recovers that, because
+; the cost is memory traffic and the tape is the only memory.
 ;
-; Addresses start at 1: the generated hardware encodes the operation in the
-; *sign* of the address word (+a = read, -a = write), so slot 0 is ambiguous.
+; So the loop order is chosen for *streaming* instead, and the innermost loop is
+; not in this file at all — it is a command to the STREAM block:
 ;
-; ── layout ──────────────────────────────────────────────────────────────────
-; A goes in row-major at ABASE..ABASE+N*M-1.
-; B goes in **transposed** at BT..BT+M*K-1, i.e. B^T[j][t] = B[t][j] lives at
-; BT + j*M + t. Transposing costs nothing at load time (the write address is
-; computed either way) and it is what makes the inner product walk *both*
-; operands with stride 1: A[i][t] at PA and B[t][j] at PA + DELTA, where
-; DELTA = (BT + j*M) - (ABASE + i*M) is constant for the whole t loop. One
-; cursor, one `ADD DELTA`, and the cursor's own bump doubles as the loop test —
-; 12 STORE accesses per multiply-accumulate instead of the 16 a two-cursor
-; row-major version needs. STORE traffic is ~70 % of the tick count, so that is
-; the only optimisation in here that matters.
+;     load A into ring A, row-major        (one command)
+;     load B into ring B, row-major        (one command)
+;     for i in 0..N-1:
+;         zero the accumulator row         (one command)
+;         for t in 0..M-1:
+;             MAC K                        (one command: pops A[i][t], K MACs)
+;             FWD K                        (one command: one lap of ring C)
+;         EMIT K                           (one command: K values to the output)
+;     drain ring B                         (one command)
 ;
-; ── the tick/tape wall (measured, see tests/test_lm1_matmul.py) ─────────────
-; This program is *correct* for every legal N,M,K, but the generated machine
-; cannot run the big cases:
-;   * `machine.tape_block` tops out at **108 slots** (fold=0; every larger fold
-;     makes the return pipe shorter, not longer), and 16×16×16 needs 512 slots
-;     for A and B alone. The tape simply cannot hold it.
-;   * At the maximum tape, a STORE access costs 105 + 8.3·107 ≈ 993 ticks
-;     (ARCH.md §4.1), so the 5 M tick cap buys ~5 000 accesses — about 420
-;     multiply-accumulates. 16×16×16 needs 4 096.
-; Packing several entries per slot fixes the first wall and makes the second one
-; worse: with one accumulator every unpack temporary is itself a STORE slot.
-; matmul needs the banked/FIFO STORE that ARCH.md §4.1 lists as future work.
+; Two facts make it work. **B is not transposed**: the inner loop runs over j
+; with t fixed, so B is walked row-major, exactly as it arrives, and `MAC K`
+; rotating ring B by K advances it precisely one row of B — after M*K rotations
+; it is back where it started, ready for the next row of A. **C is never stored**:
+; a row of it circulates through the ADDER room, one partial sum per product.
+;
+; This file therefore executes ~9 instructions and 4 tape accesses per (i, t)
+; pair — 256 of those at the largest shape — instead of ~13 tape accesses per
+; multiply-accumulate. Everything below is loop scaffolding; the arithmetic is in
+; the hardware.
+;
+; ── the command word ───────────────────────────────────────────────────────
+; One word per command: `8 * arg + code`. The unit's decode trie reads the low
+; three bits and recovers `arg` with a floored `/ 8`. Codes come from the trie's
+; geometry (`stream.arm_codes`), not from a choice made here:
+;   EMIT 0 · FILLB 1 · ZEROC 2 · FILLA 3 · FWD 4 · DRAINB 5 · MAC 6 · RDIN 7
+; The four commands the inner loops use are pre-multiplied once per round, so the
+; hot path is `LD`+`SND` and nothing else.
+;
+; ── no HALT, and no LDI ────────────────────────────────────────────────────
+; The ROM is a *ring* (ARCH.md §5.3): after the last word it wraps to word 0, so
+; the round loop needs no jump — falling off the end *is* the jump, which is the
+; cheapest possible backward branch and removes the `JMPF` slab from the CPU.
+; `LDI` is gone for the same reason `JMPF` is: a zeroed tape slot plus `ADDI`
+; builds any constant, and every opcode dropped is a shorter decode walk.
 
-.equ NN     1                ; N
-.equ MM     2                ; M
-.equ KK     3                ; K
-.equ MKS    4                ; M*K
-.equ ATOP   5                ; ABASE + N*M — one past A, and B^T's base
-.equ BTOP   6                ; ATOP + M*K — one past B^T
-.equ PA     7                ; A cursor, and the inner loop's only cursor
-.equ PB     8                ; B^T write cursor (load phase)
-.equ PBROW  9                ; B^T write cursor's row start (load phase)
-.equ PBEND  10               ; where the current B row's writes stop
-.equ SUM    11               ; the dot product being accumulated
-.equ TMPA   12               ; A[i][t], staged so `MUL` can name it
-.equ AEND   13               ; one past row i of A
-.equ AROW   14               ; base of row i of A
-.equ DELTA  15               ; PB - PA for the current (i, j)
-.equ BTCOL  16               ; base of column j of B^T
-.equ CNT    17               ; generic count-up loop counter
-.equ IN1    18               ; input word staged for MOVA
-.equ ABASE  19               ; A starts here — every slot below is named above
+.equ ZERO   1                ; never written: an unwritten tape cell reads as 0
+.equ NN     2                ; N
+.equ MM     3                ; M
+.equ KK     4                ; K
+.equ CI     5                ; row counter i
+.equ CT     6                ; term counter t
+.equ CMAC   7                ; the MAC command word,  8*K + 6
+.equ CFWD   8                ; the FWD command word,  8*K + 4
+.equ CZERO  9                ; the ZEROC command word, 8*K + 2
+.equ CEMIT  10               ; the EMIT command word,  8*K + 0
+.equ CFILLA 11               ; the FILLA command word, 8*N*M + 3
+.equ CFILLB 12               ; the FILLB command word, 8*M*K + 1
+.equ CDRAIN 13               ; the DRAINB command word, 8*M*K + 5
+.equ EIGHT  14               ; the constant 8, so `MUL` can name it
 
-        IN
+; ── the only literal the round needs: 8, the command word's radix ───────────
+round:  LD  ZERO
+        ADDI 8
+        ST  EIGHT
+
+; ── read N, M, K through the unit (it owns the I room) ──────────────────────
+        LD  ZERO
+        ADDI 7                  ; RDIN
+        SND
+        RCV
         ST  NN
-        IN
+        LD  ZERO
+        ADDI 7
+        SND
+        RCV
         ST  MM
-        IN
+        LD  ZERO
+        ADDI 7
+        SND
+        RCV
         ST  KK
 
-; ── MKS = M*K, by K additions (no MULI, no multiply lane needed here) ───────
-        LDI 0
-        ST  MKS
-        LDI 0
-        ST  CNT
-mkloop: LD  MKS
-        ADD MM
-        ST  MKS
-        LD  CNT
-        ADDI 1
-        ST  CNT
-        SUB KK
-        BRN mkloop
+; ── the six command words for this round ───────────────────────────────────
+        LD  KK
+        MUL EIGHT              ; 8*K
+        ST  CEMIT               ; EMIT  = 8*K + 0
+        ADDI 2
+        ST  CZERO               ; ZEROC = 8*K + 2
+        ADDI 2
+        ST  CFWD                ; FWD   = 8*K + 4
+        ADDI 2
+        ST  CMAC                ; MAC   = 8*K + 6
 
-; ── ATOP = ABASE + N*M, by N additions ─────────────────────────────────────
-        LDI ABASE
-        ST  ATOP
-        LDI 0
-        ST  CNT
-nmloop: LD  ATOP
-        ADD MM
-        ST  ATOP
-        LD  CNT
-        ADDI 1
-        ST  CNT
-        SUB NN
-        BRN nmloop
+        LD  NN
+        MUL MM
+        MUL EIGHT              ; 8*N*M
+        ADDI 3
+        ST  CFILLA              ; FILLA = 8*N*M + 3
 
-        LD  ATOP
-        ADD MKS
-        ST  BTOP
-
-; ── load A row-major into ABASE..ATOP-1 ────────────────────────────────────
-        LDI ABASE
-        ST  PA
-loadA:  IN
-        ST  IN1
-        LD  PA
-        MOVA IN1                ; A[..] = the word just read
-        LD  PA
+        LD  MM
+        MUL KK
+        MUL EIGHT              ; 8*M*K
         ADDI 1
-        ST  PA
-        SUB ATOP
-        BRN loadA
+        ST  CFILLB              ; FILLB = 8*M*K + 1
+        ADDI 4
+        ST  CDRAIN              ; DRAINB = 8*M*K + 5
 
-; ── load B transposed: row t of B scatters down column t of B^T ────────────
-; B arrives row-major, so for each t the K writes land at BT+t, +M, +2M, …
-        LD  ATOP
-        ST  PBROW
-btrow:  LD  PBROW
-        ST  PB
-        ADD MKS
-        ST  PBEND
-btcol:  IN
-        ST  IN1
-        LD  PB
-        MOVA IN1
-        LD  PB
-        ADD MM
-        ST  PB
-        SUB PBEND
-        BRN btcol
-        LD  PBROW
+; ── load both matrices: two commands, 512 input words, no loop here ────────
+        LD  CFILLA
+        SND
+        LD  CFILLB
+        SND
+
+; ── one row of C per lap ───────────────────────────────────────────────────
+        LD  ZERO
+        ST  CI
+irow:   LD  CZERO
+        SND                     ; K zeros into the accumulator ring
+
+        LD  CMAC
+        SND                     ; t = 0: pops A[i][0], K multiply-accumulates
+        LD  ZERO
         ADDI 1
-        ST  PBROW
-        SUB ATOP
+        ST  CT
+tloop:  LD  CFWD
+        SND                     ; one lap: partial sums back to the ADDER's input
+        LD  CMAC
+        SND                     ; t: pops A[i][t], K more multiply-accumulates
+        LD  CT
+        ADDI 1
+        ST  CT
         SUB MM
-        BRN btrow
-
-; ── C[i][j] = sum_t A[i][t] * B^T[j][t], emitted as it is finished ──────────
-        LDI ABASE
-        ST  AROW
-irow:   LD  AROW
-        ADD MM
-        ST  AEND
-        LD  ATOP
-        ST  BTCOL
-
-jcol:   LDI 0
-        ST  SUM
-        LD  AROW
-        ST  PA
-        LD  BTCOL
-        SUB AROW
-        ST  DELTA
-
-tloop:  LD  PA
-        LDA                     ; A[i][t]
-        ST  TMPA
-        LD  PA
-        ADD DELTA
-        LDA                     ; B^T[j][t] == B[t][j]
-        MUL TMPA
-        ADD SUM
-        ST  SUM
-        LD  PA
-        ADDI 1
-        ST  PA
-        SUB AEND                ; the bump doubles as the loop test
         BRN tloop
 
-        LD  SUM
-        OUT
+        LD  CEMIT
+        SND                     ; K finished values straight to the output room
 
-        LD  BTCOL
-        ADD MM
-        ST  BTCOL
-        SUB BTOP
-        BRN jcol
-
-        LD  AEND                ; PA already walked to AEND
-        ST  AROW
-        SUB ATOP
+        LD  CI
+        ADDI 1
+        ST  CI
+        SUB NN
         BRN irow
-        HALT
+
+; ── ring B still holds this round's M*K values; the next round refills it ──
+        LD  CDRAIN
+        SND
+                                ; the ROM ring wraps here, back to `round`

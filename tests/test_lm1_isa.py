@@ -70,6 +70,8 @@ def test_v1_has_no_ext_rows_and_ext_extends_it() -> None:
         "STP",
         "LDA",
         "MOVA",
+        "SND",
+        "RCV",
         "DSPA",
         "DSPD",
         "DSPS",
