@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from heapq import heappop, heappush
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
@@ -473,6 +475,37 @@ class _Layout:
     keepout: frozenset[tuple[int, int]]
 
 
+class _UnroutableError(ValueError):
+    """A layout cannot be embedded by the planar no-crossover backend."""
+
+
+@dataclass(frozen=True)
+class _RoutedConnection:
+    """One logical connection and its source-to-target pipe cells."""
+
+    connection: _Connection
+    path: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class _RoutedLayout:
+    """Immutable routing output consumed by the final rendering task."""
+
+    layout: _Layout
+    routes: tuple[_RoutedConnection, ...]
+
+
+@dataclass(frozen=True)
+class _RawGrid:
+    """Internal unfinalized source plus its global-to-grid translation."""
+
+    source: str
+    origin: tuple[int, int]
+
+    def to_grid(self, cell: tuple[int, int]) -> tuple[int, int]:
+        return (cell[0] - self.origin[0], cell[1] - self.origin[1])
+
+
 @dataclass(frozen=True)
 class _RoomSpec:
     name: str
@@ -486,6 +519,7 @@ _STUB_LENGTH = 2
 _DEFAULT_CLEARANCE = 2
 _ROOM_AISLE = 6
 _LEVEL_AISLE = 6
+_ROUTING_RETRIES = 96
 _SIDE_DIRECTIONS: Mapping[Side, tuple[int, int]] = MappingProxyType(
     {
         Side.NORTH: (0, -1),
@@ -885,3 +919,238 @@ def _expand_cells(
         for dy in range(-clearance, clearance + 1)
         for dx in range(-clearance, clearance + 1)
     )
+
+
+def _route_layout(layout: _Layout) -> _RoutedLayout:
+    """Route every placed connection with deterministic negotiated congestion."""
+
+    if not layout.connections:
+        return _RoutedLayout(layout=layout, routes=())
+
+    ports = _ports_by_reference(layout)
+    bounds = _routing_search_bounds(layout)
+    uncongested: dict[int, tuple[tuple[int, int], ...]] = {}
+    for index, connection in enumerate(layout.connections):
+        source, target = _connection_ports(connection, ports)
+        path = _search_connection_path(
+            layout,
+            source,
+            target,
+            bounds,
+            occupancy=Counter(),
+            history=Counter(),
+            present_penalty=0,
+        )
+        if path is None:
+            raise _UnroutableError(
+                "Unroutable scalar layout for no-crossover backend: "
+                f"connection {connection.signal!r} cannot leave its reserved endpoints"
+            )
+        uncongested[index] = path
+
+    order = tuple(
+        sorted(
+            range(len(layout.connections)),
+            key=lambda index: (-len(uncongested[index]), index),
+        )
+    )
+    routes: dict[int, tuple[tuple[int, int], ...]] = {}
+    history: Counter[tuple[int, int]] = Counter()
+
+    for retry in range(_ROUTING_RETRIES):
+        occupancy = Counter(cell for path in routes.values() for cell in path)
+        for index in order:
+            previous = routes.get(index, ())
+            occupancy.subtract(previous)
+            path = _search_connection_path(
+                layout,
+                *_connection_ports(layout.connections[index], ports),
+                bounds,
+                occupancy=occupancy,
+                history=history,
+                present_penalty=100 * (retry + 1),
+            )
+            if path is None:
+                raise _UnroutableError(
+                    "Unroutable scalar layout for no-crossover backend: "
+                    f"connection {layout.connections[index].signal!r} has no path"
+                )
+            routes[index] = path
+            occupancy.update(path)
+
+        conflicts = tuple(cell for cell, count in occupancy.items() if count > 1)
+        if not conflicts:
+            return _RoutedLayout(
+                layout=layout,
+                routes=tuple(
+                    _RoutedConnection(connection, routes[index])
+                    for index, connection in enumerate(layout.connections)
+                ),
+            )
+        for cell in conflicts:
+            history[cell] += occupancy[cell] - 1
+
+    raise _UnroutableError(
+        "Unroutable scalar layout for no-crossover backend after "
+        f"{_ROUTING_RETRIES} deterministic conflict retries"
+    )
+
+
+def _ports_by_reference(
+    layout: _Layout,
+) -> Mapping[tuple[str, str], _PortAnchor]:
+    ports: dict[tuple[str, str], _PortAnchor] = {}
+    for placement in layout.placements:
+        for port in placement.ports:
+            reference = (placement.name, port.name)
+            if reference in ports:
+                raise ValueError(f"Duplicate placed port reference {reference!r}")
+            ports[reference] = port
+    return MappingProxyType(ports)
+
+
+def _connection_ports(
+    connection: _Connection,
+    ports: Mapping[tuple[str, str], _PortAnchor],
+) -> tuple[_PortAnchor, _PortAnchor]:
+    try:
+        source = ports[(connection.source.room, connection.source.port)]
+        target = ports[(connection.target.room, connection.target.port)]
+    except KeyError as error:
+        raise ValueError(f"Connection {connection.signal!r} references an unknown port") from error
+    if source.flow is not _AdapterFlow.OUTGOING:
+        raise ValueError(f"Connection {connection.signal!r} source is not an outgoing port")
+    if target.flow is not _AdapterFlow.INCOMING:
+        raise ValueError(f"Connection {connection.signal!r} target is not an incoming port")
+    return source, target
+
+
+def _routing_search_bounds(layout: _Layout) -> _Rect:
+    margin = max(12, 2 * len(layout.connections) + 4)
+    left = min(placement.footprint.left for placement in layout.placements) - margin
+    top = min(placement.footprint.top for placement in layout.placements) - margin
+    right = max(placement.footprint.right for placement in layout.placements) + margin
+    bottom = max(placement.footprint.bottom for placement in layout.placements) + margin
+    return _Rect(left, top, right - left + 1, bottom - top + 1)
+
+
+def _search_connection_path(
+    layout: _Layout,
+    source: _PortAnchor,
+    target: _PortAnchor,
+    bounds: _Rect,
+    *,
+    occupancy: Counter[tuple[int, int]],
+    history: Counter[tuple[int, int]],
+    present_penalty: int,
+) -> tuple[tuple[int, int], ...] | None:
+    start = source.escape[-1]
+    goal = target.escape[-1]
+    blocked = set(layout.keepout)
+    blocked.difference_update((start, goal))
+    blocked.update((source.escape[0], target.escape[0]))
+    blocked.difference_update((start, goal))
+
+    distance: dict[tuple[int, int], int] = {start: 0}
+    previous: dict[tuple[int, int], tuple[int, int]] = {}
+    frontier: list[tuple[int, int, int, int]] = [
+        (_manhattan(start, goal) * 10, 0, start[1], start[0])
+    ]
+    directions = ((0, -1), (-1, 0), (1, 0), (0, 1))
+
+    while frontier:
+        _, cost, y, x = heappop(frontier)
+        cell = (x, y)
+        if cost != distance.get(cell):
+            continue
+        if cell == goal:
+            break
+        for dx, dy in directions:
+            neighbor = (x + dx, y + dy)
+            if (
+                neighbor[0] < bounds.left
+                or neighbor[0] > bounds.right
+                or neighbor[1] < bounds.top
+                or neighbor[1] > bounds.bottom
+                or neighbor in blocked
+            ):
+                continue
+            next_cost = cost + 10 + 100 * history[neighbor] + present_penalty * occupancy[neighbor]
+            if next_cost >= distance.get(neighbor, 2**63 - 1):
+                continue
+            distance[neighbor] = next_cost
+            previous[neighbor] = cell
+            estimate = next_cost + 10 * _manhattan(neighbor, goal)
+            heappush(frontier, (estimate, next_cost, neighbor[1], neighbor[0]))
+
+    if goal not in distance:
+        return None
+
+    middle = [goal]
+    while middle[-1] != start:
+        middle.append(previous[middle[-1]])
+    middle.reverse()
+    return (
+        source.stub
+        + source.escape
+        + tuple(middle[1:-1])
+        + tuple(reversed(target.escape))
+        + tuple(reversed(target.stub))
+    )
+
+
+def _manhattan(first: tuple[int, int], second: tuple[int, int]) -> int:
+    return abs(first[0] - second[0]) + abs(first[1] - second[1])
+
+
+def _render_raw_grid(routed: _RoutedLayout) -> _RawGrid:
+    """Assemble an internal rectangular route-oracle fixture without final cropping."""
+
+    canvas: dict[tuple[int, int], str] = {}
+    for placement in routed.layout.placements:
+        for local_y, row in enumerate(placement.room.grid):
+            for local_x, glyph in enumerate(row):
+                canvas[(placement.origin[0] + local_x, placement.origin[1] + local_y)] = glyph
+
+    for route in routed.routes:
+        for index, cell in enumerate(route.path):
+            glyph = _route_glyph(route.path, index)
+            existing = canvas.get(cell, " ")
+            if existing != " ":
+                raise ValueError(f"Routed pipe overlaps occupied grid cell {cell}")
+            canvas[cell] = glyph
+
+    if not canvas:
+        return _RawGrid(source="", origin=(0, 0))
+
+    min_x = min(x for x, _ in canvas) - 1
+    max_x = max(x for x, _ in canvas) + 1
+    min_y = min(y for _, y in canvas) - 1
+    max_y = max(y for _, y in canvas) + 1
+    source = "\n".join(
+        "".join(canvas.get((x, y), " ") for x in range(min_x, max_x + 1))
+        for y in range(min_y, max_y + 1)
+    )
+    return _RawGrid(source=source, origin=(min_x, min_y))
+
+
+def _route_glyph(
+    path: tuple[tuple[int, int], ...],
+    index: int,
+) -> str:
+    if len(path) < 2:
+        raise ValueError("Little Man pipes require at least two cells")
+    if index < len(path) - 1:
+        first, second = path[index], path[index + 1]
+    else:
+        first, second = path[index - 1], path[index]
+    direction = (second[0] - first[0], second[1] - first[1])
+    try:
+        return {
+            (0, -1): "^",
+            (1, 0): ">",
+            (0, 1): "v",
+            (-1, 0): "<",
+        }[direction]
+    except KeyError as error:
+        raise ValueError(f"Route contains non-adjacent cells {first} and {second}") from error
