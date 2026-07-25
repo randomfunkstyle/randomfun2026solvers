@@ -6,7 +6,7 @@ Given a program and a problem (its JSON, or a slug that resolves to
 * ``footprint-tick`` → ``max(width, height)² × avg ticks over all test cases``
 * ``footprint``      → ``max(width, height)²`` (speed irrelevant)
 
-See ``littleman/GRADING.md`` / ``littleman/DETAILS.md`` §5 for the rules.
+See ``littleman/GRADING.md`` for the rules.
 
 Per the caller's contract we **assume every test case passes** — we do not
 compare emitted output against the expected values. We only measure, for each
@@ -30,8 +30,7 @@ tick cap.
 
 Footprint is read from the source grid the way ``lm.mjs`` reads it: drop a
 single trailing newline, split on ``\\n``; ``width`` = longest row length,
-``height`` = row count. (DETAILS §9: exact judge measurement is unconfirmed —
-validate a local ``area2`` against a real submission before trusting it.)
+``height`` = row count.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .littleman import Littleman, LittlemanError
+from .runner import Littleman, LittlemanError
 
 __all__ = [
     "ScoringError",
@@ -57,9 +56,8 @@ __all__ = [
 # The grading step cap (``tickCap: null`` on every current problem → default).
 DEFAULT_TICK_CAP = 5_000_000
 
-# Where slugs resolve: scoring.py -> randomfun2026solvers -> python -> solvers
-#   -> <repo root> / tasks / problems / <slug>.json
-_PROBLEMS_DIR = Path(__file__).resolve().parents[3] / "tasks" / "problems"
+# Where slugs resolve: <repo root> / tasks / problems / <slug>.json
+_PROBLEMS_DIR = Path(__file__).resolve().parents[1] / "tasks" / "problems"
 
 
 class ScoringError(RuntimeError):
@@ -309,7 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="randomfun2026solvers.scoring",
+        prog="littleman_tools.scoring",
         description="Score a .man program against a littleman problem (assumes all cases pass).",
     )
     parser.add_argument("program", help="path to a .man file (or inline source)")

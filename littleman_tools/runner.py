@@ -3,7 +3,7 @@
 The CLI drives the reference wasm interpreter (``littleman.wasm``) for the ICFP
 2026 "littleman" language. This module shells out to it with ``--json`` and
 parses the snapshot into pydantic models, giving a typed Python API plus a
-mirrored ``python -m randomfun2026solvers.littleman run/tick ...`` CLI.
+mirrored ``python -m littleman_tools.runner run/tick ...`` CLI.
 
 The wrapper does no interpretation itself — it is a thin, typed front-end over
 the exact same engine and the exact same ``run`` / ``tick`` semantics as the CLI.
@@ -46,9 +46,8 @@ __all__ = [
     "main",
 ]
 
-# Default location of the Node CLI, relative to this file:
-#   littleman.py -> randomfun2026solvers -> python -> solvers -> <repo root> / littleman / lm.mjs
-_DEFAULT_SCRIPT = Path(__file__).resolve().parents[3] / "littleman" / "lm.mjs"
+# Default location of the Node CLI, relative to this file.
+_DEFAULT_SCRIPT = Path(__file__).resolve().parents[1] / "littleman" / "lm.mjs"
 
 
 # ── models ──────────────────────────────────────────────────────────────────
@@ -570,7 +569,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="randomfun2026solvers.littleman",
+        prog="littleman_tools.runner",
         description="Run littleman .man programs via the Node/wasm engine.",
     )
     parser.add_argument("--node", help="node executable (default: $LM_NODE or 'node')")
