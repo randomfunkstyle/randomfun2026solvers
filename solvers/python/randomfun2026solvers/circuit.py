@@ -24,8 +24,9 @@ class Collision(RuntimeError):
 class Circuit:
     """A grid of cells; every write is checked against what is already there."""
 
-    def __init__(self, width: int, height: int) -> None:
+    def __init__(self, width: int, height: int, *, strict_corridors: bool = False) -> None:
         self.w, self.h = width, height
+        self.strict_corridors = strict_corridors
         self.cell: dict[tuple[int, int], str] = {}
         # Cells a corridor walks straight through. Code may not later land on
         # one: the man would execute it mid-transit. Tracked separately because a
@@ -37,12 +38,12 @@ class Circuit:
         if not (0 <= x < self.w and 0 <= y < self.h):
             raise Collision(f"({x},{y}) outside the {self.w}x{self.h} interior")
         old = self.cell.get((x, y))
+        if self.strict_corridors and ch != " " and (x, y) in self.reserved:
+            raise Collision(
+                f"({x},{y}) is reserved as a corridor; placing {ch!r} there "
+                "would run mid-transit"
+            )
         if old is None or old == ch:
-            if old is None and ch != " " and (x, y) in self.reserved:
-                raise Collision(
-                    f"({x},{y}) is reserved as a corridor; placing {ch!r} there "
-                    "would run mid-transit"
-                )
             self.cell[(x, y)] = ch
             return
         # A blank is compatible with anything: a man just walks over it.
@@ -101,7 +102,10 @@ class Circuit:
                         f"while heading {GLYPH[d]}"
                     )
                 self.set(x, y, cur if cur != " " else " ")
-                self.reserved.add((x, y))
+                # Endpoints are named handoffs: a following code block may own
+                # either one. Only a corridor's interior is permanently transit.
+                if i not in (0, len(cells) - 1):
+                    self.reserved.add((x, y))
 
     def vertical(self, x: int, y0: int, y1: int) -> None:
         """Reserve a straight vertical run of blanks (exclusive of endpoints)."""
