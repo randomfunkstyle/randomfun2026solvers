@@ -52,8 +52,11 @@ def test_adapter_uses_u_to_free_its_old_rightmost_column() -> None:
     """Its sole west-side input lets receive and east steering share one cell."""
     assert machine.ADAPTER_W == 12
     assert {len(row) for row in machine._ADAPTER} == {machine.ADAPTER_W}
+    assert {len(row) for row in machine._Y_ADAPTER} == {machine.ADAPTER_W}
     assert machine._ADAPTER[1].startswith("UX")
     assert machine._ADAPTER[3].endswith("@<")
+    assert "Ns1srs" in machine._Y_ADAPTER[0]
+    assert "s0s" in machine._Y_ADAPTER[2]
 
 
 # ── ROM encoding ─────────────────────────────────────────────────────────────

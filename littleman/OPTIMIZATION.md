@@ -197,11 +197,11 @@ uv run python -m randomfun2026solvers.manopt \
 | Order | Submitted family | Best submitted source | Effective rounds | Result |
 |---:|---|---:|---:|---|
 | 1 | `gradebook` | 114×101, score 10,082,933,604 | 2 | removed row 74; 114×100, public objective 3,912,488,501.14 → 3,907,925,048.57 |
-| 2 | `snake` | 121×136, score 3,369,020,288 | 6 | removed rows 49, 68, 110, 112, and 130; 121×131, public objective 2,261,394,944 → 2,093,092,848 |
+| 2 | `snake` | 102×102, score 1,816,016,976 | AST2 + ROM2 | removed row 46, then ROM 8→9 rows; 102×102, public objective 1,219,369,608 → 1,196,917,776 |
 | 3 | `sudoku-validity` | 83×80, score 3,043,333,207 | 1 | fixed point; internal cuts rebound 24 ops and the behavior-preserving bottom cut had zero objective value |
 | 4 | `tcp` | 109×74, score 1,678,313,030 | 2 | removed row 47; 109×73, public objective 1,051,587,310 → 1,050,755,640 |
 | 5 | `matmul` | 88×90, score 1,464,201,360 | 1 | fixed point; the only compacting row cuts rebound 48 ops |
-| 6 | `brackets` | 95×69, score 444,583,302 | 3 | removed column 40 and row 50; 94×68, public objective 230,976,825 → 225,413,232.44 |
+| 6 | `brackets` | 95×69, score 444,583,302 | ROM7 + AST3 | ROM 7→13 rows, then removed column 40 and row 56; 94×74, public objective 230,976,825 → 225,289,528.44 |
 | 7 | `memory` | 31×31, score 55,105,622 | 1 | fixed point with the inferred 121-cell ring total held exactly |
 | 8 | `plotter` | 44×56, score 22,774,730 | 1 | fixed point; the feed-row cut rebound 2 ops and room moves rebound 37 |
 
@@ -211,10 +211,76 @@ The verified candidates are
 `tasks/compacted/tcp_submitted_ast10.man`, and
 `tasks/compacted/brackets_submitted_ast10.man`. Gradebook average ticks improve
 from 301,053.28571428574 to 300,702.14285714284 at the same 114² footprint
-(objective −0.12%). Snake average ticks improve from 122,264 to 121,968 while
-its binding side falls by five rows (objective −7.44%). TCP average ticks
-improve from 88,510 to 88,440 at the same 109² footprint (objective −0.079%).
-Brackets shrinks its binding side and lowers average ticks from 25,593 to
-25,510.777777777777 (objective −2.41%). These candidates derive from the
-current best submitted solutions; they are not themselves claimed to be
-submitted.
+(objective −0.12%). Composing AST and ROM passes on the current snake submission
+improves from 117,202 to 115,044 average ticks at the same 102² footprint
+(objective −1.84%); see `tasks/compacted/snake_submitted_ast_rom10.man`. TCP
+average ticks improve from 88,510 to 88,440 at the same 109² footprint
+(objective −0.079%). Brackets shrinks its binding side and lowers average ticks
+from 25,593 to 25,510.777777777777 (objective −2.41%). These candidates derive
+from the current best submitted solutions; they are not themselves claimed to
+be submitted.
+
+## ROM-shape optimization
+
+More ROM rows make a CPU ROM narrower and taller; fewer make it wider and
+shorter. `lm1.romopt` deterministically tries both neighboring folds in
+binding-axis order, validates every public case, and repeats for up to 10
+rounds. `--handmade-top-rom` replaces only a generator-identical top ROM room
+and shifts the unchanged hand-made suffix.
+
+For `littleman/examples/snake-handmade.man`, 8 ROM rows are the local optimum:
+121×100 becomes 102×102 and the measured public objective falls from
+1,738,577,755.20 to 1,219,369,608.00. The lower 90-line hand-made suffix is
+otherwise byte-identical.
+
+ROM10 was also run against every current best submitted generator-backed CPU
+solution. Gradebook (31 rows), sudoku-validity (23), snake (8), and matmul (5)
+are strict neighboring-fold optima. TCP has a neutral 3–5-row plateau. Brackets
+can spend otherwise free height: 7→13 ROM rows keeps the grid width and 95²
+factor unchanged while reducing public average ticks from 25,593 to 25,579
+(objective 230,976,825 → 230,850,475). The verified standalone result is
+`tasks/compacted/brackets_submitted_rom10.man`. Applying AST10 afterward removes
+one binding-side column and one execution row; the composed
+`tasks/compacted/brackets_submitted_rom_ast10.man` reaches 94×74, 25,496.78
+average ticks, and objective 225,289,528.44.
+
+## STORE backend replacement
+
+`lm1.storeopt` makes memory replacement a deterministic AST seam operation:
+
+```sh
+uv run python -m randomfun2026solvers.lm1.storeopt BEST.man \
+  --program SLUG --store men-y --out tasks/compacted/SLUG_men_y.man
+```
+
+It locates the registered memory rooms by translation-invariant room signatures,
+records the request/response boundary pipe cells, headings, and outside room
+roles, and can return an AST with the old store rooms plus all attached routes
+removed. `machine.build_for(..., store="men" | "men-y")` places the replacement
+and routes both seams; `storeopt` then asserts the new AST retains one incoming
+and one outgoing compute-room attachment, validates all public cases, and writes
+only a strict objective improvement. Exact CPU room dimensions are deliberately
+not seam identity: legal `mem_pad` placement can widen that room. A hand-packed
+source is accepted when its memory room group is a rigidly moved copy of the
+registered drop-in block.
+
+`men` is the one-line backend. `men-y` rounds the slot count up to two equal
+banks, uses a `Y` selector, and changes the adapter to emit
+`addr op [value]`; this lets it omit the standalone memory program's serialized
+head because a CPU load already blocks waiting for its response. The current
+best-submission sweep found no man-memory winner:
+
+| CPU program | Slots | Line backend | `Y` backend: shape; average ticks; objective change |
+|---|---:|---|---|
+| `brackets` | 5 | valid, objective +29.0% | 101×81; 30,922.44 (+20.82% ticks); **+36.57%** |
+| `snake-ring` | 9 | valid, objective +131.2% | 129×136; 147,743 (+26.06% ticks); **+124.10%** |
+| `matmul` | 16 | valid, objective +272.4% | 130×90; 150,473.86 (+25.28% ticks); **+161.39%** |
+| `sudoku-validity` | 31 | unavailable above 24 cells | 167×97; 463,293 (+6.68% ticks); **+331.90%** |
+| `gradebook` | 32 | unavailable above 24 cells | 198×105; 351,246.71 (+16.67% ticks); **+251.96%** |
+| `tcp` | 52 | unavailable above 24 cells | 253×78; 81,920.50 (**−7.44% ticks**); **+398.64%** |
+
+All six `Y` grids pass every public case, including their writes and later reads.
+TCP proves the parallel banks can win on CPU time, but its 253-column leaf-bank
+layout overwhelms that gain under squared-footprint scoring. Because no backend
+improves its best submitted source, no man-memory candidate is retained and no
+follow-up AST10/ROM10 pass is warranted.

@@ -1,0 +1,16 @@
+# gradebook — submission a57c654c-5ec0-4d36-835d-06fa7b6ac6a1
+
+verdict      done: 20/20 cases, area2 12996, avgTicks 774,822, score 10,069,589,311
+submitted    2026-07-26T00:48:39+0300
+grid         114x100
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  1727dc66a7fe27c11dbbfada4da6d621e4a6f142acacaf1d0ad76b26d2db5a3e
+commit       ed29867
+local        gradebook: 7/7 public cases, avg 300,702 ticks
+source       tasks/compacted/gradebook_submitted_ast10.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+deterministic AST10: remove row 74 from best submitted CPU
