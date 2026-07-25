@@ -52,7 +52,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .manast import Ast, Corridor, Refine, parse_ast, render
-from .manmoves import try_drop
+from .manmoves import try_drop, try_squash
 from .manstruct import DIRS, Kind, _classify_glyph
 
 __all__ = [
@@ -582,14 +582,46 @@ def circuits(ast: Ast, *, limit: int = 64) -> list[Circuit]:
 
 
 
+@dataclass(frozen=True)
+class RoomLine:
+    """One interior line of one room, with a **tried** verdict.
+
+    "This column looks empty" and "this column can be removed" are different
+    claims, and only the second is worth acting on. So each candidate is actually
+    squashed on a copy: the room narrows, its children slide, the pipes on the wall
+    that moved are grown to still reach it, and the result is re-painted. A refusal
+    carries the reason, which is usually a pipe landing on a wall that slid.
+    """
+
+    axis: str
+    index: int
+    ok: bool
+    reason: str = ""
+    pipes_grown: tuple[int, ...] = ()
+    #: ticks per lap this line is costing the loops that coast over it
+    ticks: int = 0
+
+    def __str__(self) -> str:
+        mark = "YES" if self.ok else "no "
+        s = f"{mark} {self.axis} {self.index}"
+        if self.ticks:
+            s += f"  (-{self.ticks} ticks/lap)"
+        if self.ok and self.pipes_grown:
+            s += f"  grows pipe{', pipe'.join(map(str, self.pipes_grown))} by 1"
+        if not self.ok:
+            s += f"  — {self.reason}"
+        return s
+
+
 @dataclass
 class BlockSquash:
     """Can this block be pulled in, and what would have to be repaired?
 
-    Reported as a *candidate with a repair list* rather than as a safe move,
-    because narrowing a room moves the wall its pipes attach to: the shrink is
-    real, and so is the re-route it obliges. Pretending otherwise is how a
-    compactor produces a grid that loads and computes nothing.
+    The shrink does **not** move the bounding box: the freed column becomes blank
+    space behind the wall that came in. It pays in *ticks*, by shortening every
+    loop that was coasting across it, and in free space a router can spend later.
+    That is the whole reason to ask the question of a room whose grid lines are all
+    blocked — which is the normal case for a worker spanning the full width.
     """
 
     node: str
@@ -601,6 +633,8 @@ class BlockSquash:
     attached_pipes: list[int] = field(default_factory=list)
     pinned: bool = False
     note: str = ""
+    #: every candidate interior line, each with a tried verdict
+    lines: list[RoomLine] = field(default_factory=list)
 
     @property
     def occupancy(self) -> float:
@@ -608,8 +642,21 @@ class BlockSquash:
         return self.live_cells / (w * h) if w and h else 0.0
 
     @property
+    def removable(self) -> list[RoomLine]:
+        return [ln for ln in self.lines if ln.ok]
+
+    @property
     def shrink(self) -> tuple[int, int]:
-        return (len(self.free_cols), len(self.free_rows))
+        """What can *actually* come out, counted from the tried verdicts."""
+        ok = self.removable
+        return (
+            sum(1 for ln in ok if ln.axis == "col"),
+            sum(1 for ln in ok if ln.axis == "row"),
+        )
+
+    @property
+    def ticks_saved(self) -> int:
+        return sum(ln.ticks for ln in self.removable)
 
     def __str__(self) -> str:
         w, h = self.interior
@@ -618,24 +665,38 @@ class BlockSquash:
             return f"{self.node:10s} {self.kind:8s} {w}x{h}  PINNED — {self.note}"
         s = (
             f"{self.node:10s} {self.kind:8s} interior {w}x{h}, {self.live_cells} live "
-            f"({self.occupancy:.0%})  squash {dw} col(s) / {dh} row(s) -> {w - dw}x{h - dh}"
+            f"({self.occupancy:.0%})  removable: {dw} col(s) / {dh} row(s) -> "
+            f"{w - dw}x{h - dh}"
         )
-        if dw or dh:
-            s += f"\n    free cols {self.free_cols}\n    free rows {self.free_rows}"
-            if self.attached_pipes:
-                s += f"\n    re-route needed: pipe{', pipe'.join(map(str, self.attached_pipes))}"
+        if self.ticks_saved:
+            s += f", -{self.ticks_saved} ticks/lap"
+        for ln in self.lines:
+            s += f"\n    {ln}"
+        if not self.lines:
+            s += "\n    no empty interior line: the room is already tight"
         return s
 
 
-def squash_report(ast: Ast) -> list[BlockSquash]:
-    """Per-block: how much slack its interior holds, and what pays for taking it.
+def squash_report(ast: Ast, *, verify: bool = True) -> list[BlockSquash]:
+    """Per-room: **can a column or row be removed from it**, and what that costs.
 
-    This is the question worth asking when no *grid* line is free — the usual case
-    for a room that spans the full width. A room can be narrower even when the
-    column it would give up is occupied elsewhere on the grid; the cut just stops
-    being free.
+    Asked of every room, because a grid whose every line is blocked can still have
+    a room with slack in it — and that slack is where the ticks are. Each candidate
+    interior line is squashed on a copy and re-painted, so a `YES` has been tried
+    rather than eyeballed; pass ``verify=False`` for the cheap occupancy-only view.
     """
     cells = _cell_map(ast)
+    # A latent line of a loop is a line the man coasts over, so removing it takes
+    # ticks off every lap that crossed it. Attribute those ticks to the line, which
+    # is what turns "this column is empty" into "this column costs 4 ticks a lap".
+    ticks_for: dict[tuple[str, int], int] = defaultdict(int)
+    if verify:
+        for circ in circuits(ast):
+            for i in circ.latent_cols:
+                ticks_for[("col", i)] += sum(1 for (x, _y) in circ.cells if x == i)
+            for i in circ.latent_rows:
+                ticks_for[("row", i)] += sum(1 for (_x, y) in circ.cells if y == i)
+
     out: list[BlockSquash] = []
     for room in ast.rooms:
         live = {
@@ -661,6 +722,20 @@ def squash_report(ast: Ast) -> list[BlockSquash]:
         ] if room.ports else [
             p.id for p in ast.pipes if p.src == room.id or p.dst == room.id
         ]
+        lines: list[RoomLine] = []
+        if verify and not room.pinned:
+            for axis, idxs in (("col", free_cols), ("row", free_rows)):
+                for i in idxs:
+                    trial, outcome = try_squash(ast, room.id, axis, i)
+                    lines.append(RoomLine(
+                        axis=axis,
+                        index=i,
+                        ok=trial is not None,
+                        reason="" if trial is not None else str(outcome),
+                        pipes_grown=tuple(sorted(outcome.pipes_shortened))
+                        if trial is not None else (),
+                        ticks=ticks_for.get((axis, i), 0),
+                    ))
         out.append(BlockSquash(
             node=f"room{room.id}",
             kind=room.kind,
@@ -671,6 +746,7 @@ def squash_report(ast: Ast) -> list[BlockSquash]:
             attached_pipes=sorted(attached),
             pinned=room.pinned,
             note=room.note,
+            lines=lines,
         ))
     return out
 

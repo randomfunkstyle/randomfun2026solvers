@@ -1,12 +1,12 @@
 {
   "": {
-    "swift-dependencies": "/Users/oleg/projects/randomfun2026solvers/.claude/worktrees/agent-a5d95576e2257d07b/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/primary.swiftdeps"
+    "swift-dependencies": "/Users/ptaykalo/Projects/icfpc-2026/randomfun2026solvers/.claude/worktrees/compactor/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/primary.swiftdeps"
   },
-  "/Users/oleg/projects/randomfun2026solvers/.claude/worktrees/agent-a5d95576e2257d07b/solvers/swift/Sources/SwiftSolver/main.swift": {
-    "dependencies": "/Users/oleg/projects/randomfun2026solvers/.claude/worktrees/agent-a5d95576e2257d07b/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.d",
-    "object": "/Users/oleg/projects/randomfun2026solvers/.claude/worktrees/agent-a5d95576e2257d07b/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.swift.o",
-    "swiftmodule": "/Users/oleg/projects/randomfun2026solvers/.claude/worktrees/agent-a5d95576e2257d07b/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main~partial.swiftmodule",
-    "swift-dependencies": "/Users/oleg/projects/randomfun2026solvers/.claude/worktrees/agent-a5d95576e2257d07b/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.swiftdeps",
-    "diagnostics": "/Users/oleg/projects/randomfun2026solvers/.claude/worktrees/agent-a5d95576e2257d07b/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.dia"
+  "/Users/ptaykalo/Projects/icfpc-2026/randomfun2026solvers/.claude/worktrees/compactor/solvers/swift/Sources/SwiftSolver/main.swift": {
+    "dependencies": "/Users/ptaykalo/Projects/icfpc-2026/randomfun2026solvers/.claude/worktrees/compactor/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.d",
+    "object": "/Users/ptaykalo/Projects/icfpc-2026/randomfun2026solvers/.claude/worktrees/compactor/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.swift.o",
+    "swiftmodule": "/Users/ptaykalo/Projects/icfpc-2026/randomfun2026solvers/.claude/worktrees/compactor/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/ptaykalo/Projects/icfpc-2026/randomfun2026solvers/.claude/worktrees/compactor/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.swiftdeps",
+    "diagnostics": "/Users/ptaykalo/Projects/icfpc-2026/randomfun2026solvers/.claude/worktrees/compactor/solvers/swift/.build/arm64-apple-macosx/debug/SwiftSolver.build/main.dia"
   }
 }

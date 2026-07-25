@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .manast import Ast, Atom, Corridor, PaintError, render
+from .manast import Ast, Atom, Corridor, PaintError, PipeNode, RoomNode, render
 
 __all__ = [
     "MoveError",
@@ -34,6 +34,7 @@ __all__ = [
     "drop_row",
     "drop_col",
     "try_drop",
+    "try_squash",
     "reglyph",
     "ring_capacity",
 ]
@@ -278,6 +279,161 @@ def try_drop(
     try:
         rep = _drop(trial, axis, index, capacity or {})
         render(trial)  # a move that cannot be painted is not a move
+    except (MoveError, PaintError) as exc:
+        return None, str(exc)
+    return trial, rep
+
+
+# ── squashing one room, without cutting the grid ─────────────────────────────
+def _side(room: RoomNode, cell: tuple[int, int]) -> str:
+    """Which wall of `room` a cell sits on: N, S, W, E — or "" if none."""
+    x, y = cell
+    if y == room.y:
+        return "N"
+    if y == room.y + room.h + 1:
+        return "S"
+    if x == room.x:
+        return "W"
+    if x == room.x + room.w + 1:
+        return "E"
+    return ""
+
+
+def _attachments(ast: Ast, pipe: PipeNode, room: RoomNode) -> list[tuple[str, tuple[int, int]]]:
+    """``(end, wall_cell)`` for each way this pipe touches this room.
+
+    Read off the geometry rather than trusted from ``room.ports``: a squash moves
+    walls, and a stale port list is exactly how a pipe ends up attached to where a
+    wall used to be — which still parses, and computes nothing.
+    """
+    out = []
+    wall = {
+        (room.x + dx, room.y + dy)
+        for dx in range(room.w + 2)
+        for dy in range(room.h + 2)
+        if dx in (0, room.w + 1) or dy in (0, room.h + 1)
+    }
+    for end, term in (("src", pipe.path[0]), ("dst", pipe.path[-1])):
+        if (end == "src" and pipe.src != room.id) or (end == "dst" and pipe.dst != room.id):
+            continue
+        for n in ((term[0] + 1, term[1]), (term[0] - 1, term[1]),
+                  (term[0], term[1] + 1), (term[0], term[1] - 1)):
+            if n in wall:
+                out.append((end, n))
+                break
+    return out
+
+
+def _squash(ast: Ast, room_id: int, axis: str, index: int,
+            capacity: dict[tuple[int, ...], int]) -> DropReport:
+    """Remove one interior line of ONE room, leaving the rest of the grid alone.
+
+    This is the move that matters once a room spans the full width of the grid: no
+    global cut exists, but the room can still be pulled in. It does **not** shrink
+    the bounding box — the freed column becomes blank space east of the new wall —
+    so it pays in *ticks*, by shortening every loop that was coasting across that
+    column, and in free space a router can then use.
+
+    The far wall moves inward (east for a column, south for a row) so the room's
+    origin stays put and its west/north attachments are untouched. Two consequences
+    have to be repaired rather than ignored:
+
+    * a pipe on the wall that moved must grow one cell to still reach it;
+    * a pipe attached to a *perpendicular* wall beyond the cut has its attach cell
+      slide, and moving where a pipe lands is a re-route, not a squash. That case
+      is refused by name instead of being silently mis-wired.
+    """
+    ax = 0 if axis == "col" else 1
+    room = next((r for r in ast.rooms if r.id == room_id), None)
+    if room is None:
+        raise MoveError(f"no room{room_id}")
+    if room.pinned:
+        raise MoveError(f"room{room_id} is pinned: {room.note}")
+    lo = room.y if ax else room.x
+    hi = lo + (room.h + 1 if ax else room.w + 1)
+    if not lo < index < hi:
+        raise MoveError(f"{axis} {index} is not interior to room{room_id} ({lo}..{hi})")
+
+    rep = DropReport(axis=axis, index=index, note=f"squash room{room_id}")
+    occupied = [
+        c for child in room.children if not isinstance(child, Corridor)
+        for c in child.paint() if c[ax] == index
+    ]
+    if occupied:
+        raise MoveError(f"{axis} {index} holds {len(occupied)} live glyph(s) in room{room_id}")
+    crossing = [
+        (p.id, c) for p in ast.pipes for c in p.path
+        if c[ax] == index and room.x < c[0] < room.x + room.w + 1
+        and room.y < c[1] < room.y + room.h + 1
+    ]
+    if crossing:
+        raise MoveError(
+            f"{axis} {index} carries pipe{crossing[0][0]} through room{room_id}'s interior"
+        )
+
+    far = "S" if ax else "E"
+    perpendicular = ("W", "E") if ax else ("N", "S")
+    grow: list[tuple[PipeNode, str]] = []
+    for pipe in ast.pipes:
+        for end, wall in _attachments(ast, pipe, room):
+            side = _side(room, wall)
+            if side == far:
+                grow.append((pipe, end))
+            elif side in perpendicular and wall[ax] > index:
+                raise MoveError(
+                    f"pipe{pipe.id} attaches to room{room_id}'s {side} wall at {wall}, which "
+                    f"slides when {axis} {index} goes — that is a re-route, not a squash"
+                )
+
+    if ax:
+        room.h -= 1
+    else:
+        room.w -= 1
+    rep.rooms_shrunk.append(room_id)
+    for child in room.children:
+        _shift_child(child, ax, index)
+    room.ports = [
+        (x - (1 if not ax and x > index else 0), y - (1 if ax and y > index else 0))
+        for x, y in room.ports
+    ]
+
+    # The wall these land on has moved one cell inward, so each pipe needs one more
+    # cell to touch it. The cell it grows into is the one the old wall just left.
+    for pipe, end in grow:
+        term = pipe.path[0] if end == "src" else pipe.path[-1]
+        step = -1 if ax else -1  # inward is north for a row, west for a column
+        add = (term[0], term[1] + step) if ax else (term[0] + step, term[1])
+        if end == "src":
+            pipe.path = [add, *pipe.path]
+        else:
+            pipe.path = [*pipe.path, add]
+        pipe.glyphs = reglyph(pipe.path, pipe.entry_dir, pipe.exit_dir)
+        pipe.x = min(x for x, _ in pipe.path)
+        pipe.y = min(y for _, y in pipe.path)
+        rep.pipes_shortened[pipe.id] = -1  # grew by one, charged as negative shrink
+
+    for group, need in capacity.items():
+        have = ring_capacity(ast, group)
+        if have < need:
+            raise MoveError(f"pipe group {group} fell to {have} cells against a need of {need}")
+    return rep
+
+
+def try_squash(
+    ast: Ast,
+    room_id: int,
+    axis: str,
+    index: int,
+    *,
+    capacity: dict[tuple[int, ...], int] | None = None,
+) -> tuple[Ast | None, DropReport | str]:
+    """Attempt a room-local squash on a *copy*; return it, or why it was refused."""
+    import copy
+
+    trial = copy.deepcopy(ast)
+    try:
+        rep = _squash(trial, room_id, axis, index, capacity or {})
+        render(trial)
     except (MoveError, PaintError) as exc:
         return None, str(exc)
     return trial, rep

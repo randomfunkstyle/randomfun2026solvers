@@ -42,6 +42,7 @@ from randomfun2026solvers.manfree import (  # noqa: E402
     scan,
     squash_report,
 )
+from randomfun2026solvers.manmoves import try_squash  # noqa: E402
 
 E, W, N, S = (1, 0), (-1, 0), (0, -1), (0, 1)
 
@@ -239,6 +240,94 @@ def test_squash_report_finds_a_rooms_free_interior_lines():
     assert block.free_cols == [3]  # absolute grid column of the blank interior col
     assert block.free_rows == [2]
     assert block.shrink == (1, 1)
+
+
+def test_every_room_line_carries_a_verdict_that_was_actually_tried():
+    """The point of the exercise: *can* it be removed, not *does it look empty*."""
+    ast = _room(["ab ", "   ", "cd "])
+    (block,) = squash_report(ast)
+    assert {(ln.axis, ln.index) for ln in block.lines} == {("col", 3), ("row", 2)}
+    assert all(ln.ok for ln in block.lines)
+
+
+def test_squashing_a_room_narrows_it_without_moving_the_grid():
+    ast = _room(["ab ", "cd "])
+    before = ast.bbox
+    trial, rep = try_squash(ast, 0, "col", 3)
+    assert trial is not None, rep
+    room = trial.rooms[0]
+    assert (room.w, room.h) == (2, 2)
+    # the box does not shrink: the freed column is blank space behind the new wall
+    assert trial.bbox[1] == before[1]
+
+
+def test_a_squash_grows_the_pipe_on_the_wall_that_moved():
+    """The wall came in by one, so the pipe needs one more cell to still touch it."""
+    ast = _room(["ab "])  # box 5x3, east wall at x=4
+    pipe = PipeNode(
+        id=0,
+        x=5,
+        y=1,
+        path=[(7, 1), (6, 1), (5, 1)],
+        glyphs=["<", "-", "<"],
+        src=-1,
+        dst=0,
+        entry_dir=W,
+        exit_dir=W,
+        min_capacity=2,
+        pinned=False,
+    )
+    ast.pipes.append(pipe)
+    trial, rep = try_squash(ast, 0, "col", 3)
+    assert trial is not None, rep
+    grown = trial.pipes[0]
+    assert len(grown.path) == 4, "the pipe must reach the wall's new position"
+    assert grown.path[-1] == (4, 1)
+    assert grown.glyphs[-1] == "<", "the terminal still hands the value west, into the wall"
+
+
+def test_a_squash_is_refused_when_it_would_slide_a_pipes_attach_cell():
+    """Moving where a pipe lands is a re-route, and it is refused by name.
+
+    This is the case that keeps ``plotter``'s worker from giving up column 46: a
+    pipe attaches to its south wall east of that column, so narrowing the room
+    moves the cell that pipe is aiming at.
+    """
+    ast = _room(["a  ", "b  "])  # box 5x4, south wall row 3
+    ast.pipes.append(
+        PipeNode(
+            id=0,
+            x=3,
+            y=4,
+            path=[(3, 6), (3, 5), (3, 4)],
+            glyphs=["^", "|", "^"],
+            src=-1,
+            dst=0,
+            entry_dir=N,
+            exit_dir=N,
+            min_capacity=2,
+            pinned=False,
+        )
+    )
+    trial, why = try_squash(ast, 0, "col", 2)
+    assert trial is None
+    assert "S wall" in str(why) and "re-route" in str(why)
+
+
+def test_a_pinned_room_cannot_be_squashed_either():
+    ast = _room(["   ", "   "], kind="display")
+    ast.rooms[0].pinned = True
+    ast.rooms[0].note = "resolution"
+    trial, why = try_squash(ast, 0, "col", 2)
+    assert trial is None
+    assert "pinned" in str(why)
+
+
+def test_a_squash_refuses_a_line_that_is_not_interior():
+    ast = _room(["ab"])
+    trial, why = try_squash(ast, 0, "col", 0)  # the west wall
+    assert trial is None
+    assert "not interior" in str(why)
 
 
 def test_squash_report_refuses_to_shrink_a_pinned_display():
