@@ -20,7 +20,7 @@ from 15.9bn to **3.37bn**.
 | 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
 | 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
 | 4 | `snake` | 121×136 | **3,369,020,288** | LM-1 + body-ring coprocessor (17/17, judged) |
-| 4 | `pathfinder` | 180×184 | — (17/18, unscored) | LM-1 + display, bit-parallel BFS (§8.3) |
+| 4 | `pathfinder` | 84×175 | **11,096,155,486** | bespoke dataflow, bit-parallel BFS (18/18, judged) |
 | — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
 
 `lm1/machine.py` takes an assembled program and emits the whole machine — looping
@@ -1368,7 +1368,36 @@ Two rules the build produced, both of which generalise beyond `snake`:
   `data`, or a commit overtakes the pixels it commits), and the drawing fuses into the
   ring commands — `GROW` appends *and* paints *and* commits.
 
-### 8.3 `pathfinder`: bitwise ops change the algorithm, and the profile says what is left
+### 8.3 `pathfinder`: bitwise ops change the algorithm, and the CPU still loses by 13x
+
+**Solved bespoke, not by LM-1** — `tasks/solutions/pathfinder_grid.man`, a dedicated
+dataflow machine, passes **18/18** at 84×175 and avg 362,323 ticks for a score of
+**11,096,155,486**. The LM-1 build below passes **17/18** and so scores nothing; had it
+passed it would have scored ~1.7e11. That is §1's trade again, and the widest margin yet
+recorded on one problem: **13x on score, and the CPU version does not even finish.**
+
+Both arrived at the same core idea independently, which is the useful part — the algorithm
+is forced by the hardware, not by the tier:
+
+| | LM-1 (`pathfinder.asm`) | bespoke (`pathfinder_grid.py`) |
+|---|---|---|
+| board | four 64-bit words in the tape | the same four words, in a ring |
+| BFS | from the flag, level per round | from the flag, distance **mod 3** in three label planes |
+| distance storage | four direction masks, 16 slots | none — roles rotate as planes re-enter the ring |
+| tie-break | order the directions consume `avail` | falls out of neighbour order |
+| grid | 180×184 = 33,856 | **84×175 = 30,625** |
+| avg ticks (judge) | — (17/18) | **362,323** |
+| score | — | **11,096,155,486** |
+
+Two ideas the bespoke machine has that the CPU version does not, and both are the kind that
+only a dataflow grid can spend: **distance mod 3** works because the grid is bipartite, so
+three planes suffice and *pushing them back into the ring in a different order is the
+rotation* — free. And **g = 255 − p**, a 180° rotation of the board, keeps every plane word
+non-negative, which makes the bit tests branch-free. The LM-1 version needs neither because
+it pays a tape read for everything anyway.
+
+The rest of this section is the LM-1 measurement, kept because it prices the tier on a
+problem where both were built — the same service §8.0 does for `snake`.
 
 The language has `&`, `|`, `~`, `{`, `}` (`SPEC.md`), which none of the earlier problems
 needed. That turns a 16x16 board from a 256-cell array into **four 64-bit words**, so one
@@ -1420,11 +1449,13 @@ Three things that follow, and the third is the one that matters:
   (2,4) to (4,8) to (8,16) copies moves that from ~1,174 to ~807 to ~638 words, i.e.
   ~5 % of the per-move cost for a P that nearly triples. The 23.5 % slab share is mostly
   the *setup* loop, which is fixed cost and does not touch the slope.
-- **Sixteen opcodes is still free money, but it is not the cap.** The three display
-  opcodes are what force depth 5; a write-only coprocessor spends one `SND` instead
-  (`lm1/path_unit.py`, `pathfinder-unit.asm`). That attacks the trie's 8.8 % and part of
-  the return path's 13.6 %, and `snake`'s identical 17->16 step measured -19 % ticks and
-  -41 % footprint. Worth taking; ~-19 % where the cap needs ~-55 %.
+- **Sixteen opcodes was the obvious next move, and it was abandoned as pointless.** The
+  three display opcodes force depth 5; a write-only coprocessor spends one `SND` instead,
+  and `pathfinder-unit.asm` is that program at exactly 16, verified in the emulator against
+  the model on all seven cases (`PathUnit`, `tests/test_path_unit_model.py`). Its *hardware
+  block is unfinished* and will stay that way: `snake`'s identical 17->16 step measured
+  -19 % ticks and -41 % footprint, which here would give ~1.4e11 against the bespoke
+  machine's 1.1e10. The variant is kept as the measured comparison, not as a candidate.
 - **The slope is tape reads and nothing else.** ~89 reads a move at ~415 ticks is ~58 % of
   the 61,159. Shrinking the tape helps at ~1.9 ticks per slot per access (§8.1), i.e. a few
   percent. Halving the *count* needs the level step itself in hardware — `snake` measured

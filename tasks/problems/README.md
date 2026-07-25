@@ -64,7 +64,7 @@ still has. Lower is better; `max(w,h)² × avg ticks`.
 | Slug | Best rival scores | Implied footprint (score ÷ tick cap) | Our best |
 |---|---|---|---|
 | `snake` | 200,000,000 · 2,500,000,000 | ≥ 13² at 15M ticks | **3,369,020,288** (17/17) |
-| `pathfinder` | 50,000,000,000 · 300,000,000,000 | ≥ 58² at 15M ticks | **17/18, unscored** (180×184, avg 5.00M) |
+| `pathfinder` | 50,000,000,000 · 300,000,000,000 | ≥ 58² at 15M ticks | **11,096,155,486** (18/18, bespoke 84×175) |
 | `little-little-little-man` | 1,300,000,000,000 | ≥ 295² at 15M ticks | — |
 | `little-little-man` | not seen yet | — | — |
 | `subset-sum` | 448,000,000 | ≥ 10² at 5M ticks | — (blocked) |
@@ -80,7 +80,12 @@ a bigger one that is much faster; ours is 121x136 = 18,496 at 182k ticks, so the
 footprint, not speed. A bespoke machine — no ISA, no ROM, a few men around the panel —
 is the only thing that closes it (§1's trade, and `plotter_block` is the precedent).
 
-## `pathfinder`: 17/18, and the case it misses is the tick cap
+## `pathfinder`: solved bespoke at 11.1bn; the LM-1 build stalls at 17/18
+
+The problem is **solved** — `tasks/solutions/pathfinder_grid.man`, a dedicated dataflow
+machine, passes 18/18 at 84×175 for a score of **11,096,155,486**, which beats the best
+rival score seen (50bn) by 4.5x. What follows is about the *LM-1* build, kept because it
+prices the tier: it passes 17 of 18 and therefore scores nothing.
 
 The first submission passes **17 of the 18** cases the judge runs, which scores nothing — a
 full pass is required — but it pins the remaining work exactly. Measured on the engine over
