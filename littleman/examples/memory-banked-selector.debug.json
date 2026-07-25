@@ -1,0 +1,278 @@
+{
+  "title": "Y-banked memory selector \u2014 low addr / high addr\u221250",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "input-and-split",
+      "x": 6,
+      "y": 4,
+      "w": 5,
+      "h": 3,
+      "note": "The parent reads addr, copies it with M, then Y births one worker on each side.",
+      "color": "#a855f7",
+      "tags": []
+    },
+    {
+      "name": "high-bank-selector",
+      "x": 10,
+      "y": 2,
+      "w": 12,
+      "h": 4,
+      "note": "Compute addr\u221250. Negative halts; zero/positive merge and emit local address.",
+      "color": "#3b82f6",
+      "tags": []
+    },
+    {
+      "name": "low-bank-selector",
+      "x": 10,
+      "y": 5,
+      "w": 11,
+      "h": 4,
+      "note": "Compute addr\u221250. Negative adds 50 back and emits; zero/positive halt.",
+      "color": "#22c55e",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "low bucket",
+      "input": "18",
+      "from_tick": 0,
+      "to_tick": 30,
+      "watch": [
+        "parent",
+        "low-child"
+      ],
+      "note": "The low child emits 18; the high child sees \u221232 and halts."
+    },
+    {
+      "name": "high bucket",
+      "input": "81",
+      "from_tick": 0,
+      "to_tick": 30,
+      "watch": [
+        "parent",
+        "high-child"
+      ],
+      "note": "The high child emits 31; the low child rejects address 81."
+    }
+  ],
+  "lanes": [
+    {
+      "name": "parent",
+      "points": [
+        [
+          7,
+          5
+        ],
+        [
+          10,
+          5
+        ]
+      ],
+      "note": "",
+      "color": "#a855f7",
+      "kind": "control",
+      "expect": "rM leaves A=B=addr; Y duplicates both registers",
+      "tags": [],
+      "cells": [
+        [
+          7,
+          5
+        ],
+        [
+          8,
+          5
+        ],
+        [
+          9,
+          5
+        ],
+        [
+          10,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "high-child",
+      "points": [
+        [
+          10,
+          4
+        ],
+        [
+          17,
+          4
+        ],
+        [
+          17,
+          5
+        ],
+        [
+          19,
+          5
+        ],
+        [
+          19,
+          4
+        ],
+        [
+          21,
+          4
+        ]
+      ],
+      "note": "",
+      "color": "#3b82f6",
+      "kind": "control",
+      "expect": "active exactly for addr \u2265 50; output addr\u221250",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          4
+        ],
+        [
+          11,
+          4
+        ],
+        [
+          12,
+          4
+        ],
+        [
+          13,
+          4
+        ],
+        [
+          14,
+          4
+        ],
+        [
+          15,
+          4
+        ],
+        [
+          16,
+          4
+        ],
+        [
+          17,
+          4
+        ],
+        [
+          17,
+          5
+        ],
+        [
+          18,
+          5
+        ],
+        [
+          19,
+          5
+        ],
+        [
+          19,
+          4
+        ],
+        [
+          20,
+          4
+        ],
+        [
+          21,
+          4
+        ]
+      ]
+    },
+    {
+      "name": "low-child",
+      "points": [
+        [
+          10,
+          6
+        ],
+        [
+          10,
+          7
+        ],
+        [
+          17,
+          7
+        ],
+        [
+          17,
+          6
+        ],
+        [
+          20,
+          6
+        ]
+      ],
+      "note": "",
+      "color": "#22c55e",
+      "kind": "control",
+      "expect": "active exactly for addr < 50; output original addr",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          6
+        ],
+        [
+          10,
+          7
+        ],
+        [
+          11,
+          7
+        ],
+        [
+          12,
+          7
+        ],
+        [
+          13,
+          7
+        ],
+        [
+          14,
+          7
+        ],
+        [
+          15,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          17,
+          7
+        ],
+        [
+          17,
+          6
+        ],
+        [
+          18,
+          6
+        ],
+        [
+          19,
+          6
+        ],
+        [
+          20,
+          6
+        ]
+      ]
+    }
+  ]
+}

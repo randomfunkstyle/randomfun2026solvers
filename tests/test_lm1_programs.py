@@ -33,8 +33,26 @@ from randomfun2026solvers.lm1.programs import (  # noqa: E402
 
 MAX_INSTRUCTIONS = 3_000_000
 
-#: Problems ARCH.md §4.1 leaves blocked on the STORE block. No program here should
-#: claim to solve one of these.
+#: Problems with **no LM-1 assembly program**. Read the name carefully: this set
+#: says nothing about whether the problem is *solved*, only that `lm1/machine.py`
+#: does not solve it, and it is wired to `test_the_expected_programs_exist` — which
+#: asserts an `.asm` exists for every slug *not* listed here. Do not remove a slug
+#: from it without adding the `.asm`.
+#:
+#: Three of its four members are in fact solved, by dataflow grids rather than by
+#: programs, and beating every machine in this file by two to four orders of
+#: magnitude (`littleman/DATAFLOW-SURVEY.md`; pinned in `tests/test_dataflow_grids.py`):
+#: `memory` 32x32 / 19.7M (`memory_tape.build_v2(100)`, which emits
+#: `littleman/programs/memory.man` byte for byte), `reverse-a-list` 21x21 / 483k and
+#: `sort-numbers` 25x25 / 2.08M (both `value_ring.py`, pinned in
+#: `tests/test_value_ring.py`). `subset-sum` is the only genuinely unsolved problem
+#: in the set — a CPU build answers 6 of 7 public cases and is ~34x over the cap on
+#: the seventh, because its wall is instruction issue rather than the STORE block.
+#:
+#: Historical note, since the original wording claimed otherwise: ARCH.md §4.1's
+#: "blocked on the STORE block" was true when written and is now true of none of
+#: them. The tape exists; what these four need is either an `.asm` (none has one) or,
+#: for `subset-sum`, an issue path cheaper than fetch + decode + return.
 #:
 #: ``gradebook`` is *not* here any more: the STORE block exists (``machine.py``'s
 #: tape), so a problem that needs indexed memory is only blocked on having a program

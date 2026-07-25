@@ -1,0 +1,1466 @@
+{
+  "title": "man-memory field line n=16: 16 cells in one room, born by Y",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "input",
+      "x": 2,
+      "y": 3,
+      "w": 3,
+      "h": 3,
+      "note": "the problem's own stream: `0 addr` (READ) / `1 addr value` (WRITE)",
+      "color": "#e879f9",
+      "tags": []
+    },
+    {
+      "name": "router",
+      "x": 8,
+      "y": 4,
+      "w": 70,
+      "h": 5,
+      "note": "preamble `>rMrbW`: B=op, BP=addr, A=op. Then one walk east \u2014 `d` bypasses a lane while BP>0 and peels into it at BP==0. At pitch 4 a lane costs 10 ticks, so one operation is 22+10*addr.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell field (ONE room)",
+      "x": 12,
+      "y": 13,
+      "w": 66,
+      "h": 7,
+      "note": "all 16 cells share this room \u2014 no walls per value. Interior row 0 is the return lane, row 1 the spawner corridor, row 2 the south copy's birth row, rows 3-6 the tiles.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "spawner corridor",
+      "x": 12,
+      "y": 14,
+      "w": 66,
+      "h": 1,
+      "note": "`@` starts west of site 0 and walks east. Each `Y` replaces him with two copies born north and south of his heading: the south copy falls through the blank below onto its tile's `>` and is that cell forever, the north copy runs the return lane and drops back here to fire the next `Y`. Residents are therefore born in address order, one per split, and the last copy reaches `H`. Copies retain A/B/BP and nothing is ever loaded, so every cell starts at 0 \u2014 no initialisation pass.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "cell addr 0",
+      "x": 13,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 0 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 1",
+      "x": 17,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 1 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 2",
+      "x": 21,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 2 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 3",
+      "x": 25,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 3 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 4",
+      "x": 29,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 4 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 5",
+      "x": 33,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 5 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 6",
+      "x": 37,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 6 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 7",
+      "x": 41,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 7 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 8",
+      "x": 45,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 8 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 9",
+      "x": 49,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 9 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 10",
+      "x": 53,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 10 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 11",
+      "x": 57,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 11 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 12",
+      "x": 61,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 12 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 13",
+      "x": 65,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 13 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 14",
+      "x": 69,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 14 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 15",
+      "x": 73,
+      "y": 16,
+      "w": 4,
+      "h": 4,
+      "note": "holds address 15 in its man's B. `r` the command word, `X` on it: 0 walks READ (`W s M`, the `M` restoring B), 1 walks WRITE (`r W`). Identical to the walled cell \u2014 only the man arrives by birth.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "collector",
+      "x": 12,
+      "y": 24,
+      "w": 66,
+      "h": 2,
+      "note": "`R` takes whichever answer is ready and `s` forwards it to the output, so it needs no pipe affinity at all. Order is safe because the router serves one operation at a time.",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "output",
+      "x": 6,
+      "y": 24,
+      "w": 3,
+      "h": 3,
+      "note": "one word per READ",
+      "color": "#e879f9",
+      "tags": []
+    }
+  ],
+  "circles": [
+    {
+      "name": "split -> cell 0",
+      "cx": 13,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (13,13) north and (13,15) south; the south copy becomes the man holding address 0",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 1",
+      "cx": 17,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (17,13) north and (17,15) south; the south copy becomes the man holding address 1",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 2",
+      "cx": 21,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (21,13) north and (21,15) south; the south copy becomes the man holding address 2",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 3",
+      "cx": 25,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (25,13) north and (25,15) south; the south copy becomes the man holding address 3",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 4",
+      "cx": 29,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (29,13) north and (29,15) south; the south copy becomes the man holding address 4",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 5",
+      "cx": 33,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (33,13) north and (33,15) south; the south copy becomes the man holding address 5",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 6",
+      "cx": 37,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (37,13) north and (37,15) south; the south copy becomes the man holding address 6",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 7",
+      "cx": 41,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (41,13) north and (41,15) south; the south copy becomes the man holding address 7",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 8",
+      "cx": 45,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (45,13) north and (45,15) south; the south copy becomes the man holding address 8",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 9",
+      "cx": 49,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (49,13) north and (49,15) south; the south copy becomes the man holding address 9",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 10",
+      "cx": 53,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (53,13) north and (53,15) south; the south copy becomes the man holding address 10",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 11",
+      "cx": 57,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (57,13) north and (57,15) south; the south copy becomes the man holding address 11",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 12",
+      "cx": 61,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (61,13) north and (61,15) south; the south copy becomes the man holding address 12",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 13",
+      "cx": 65,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (65,13) north and (65,15) south; the south copy becomes the man holding address 13",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 14",
+      "cx": 69,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (69,13) north and (69,15) south; the south copy becomes the man holding address 14",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "split -> cell 15",
+      "cx": 73,
+      "cy": 14,
+      "r": 1,
+      "note": "birth cells (73,13) north and (73,15) south; the south copy becomes the man holding address 15",
+      "color": "#a78bfa",
+      "tags": []
+    }
+  ],
+  "scenarios": [],
+  "lanes": [
+    {
+      "name": "cmd addr 0",
+      "points": [
+        [
+          14,
+          10
+        ],
+        [
+          14,
+          12
+        ]
+      ],
+      "note": "router lane 0 -> cell 0; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          14,
+          10
+        ],
+        [
+          14,
+          11
+        ],
+        [
+          14,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 0",
+      "points": [
+        [
+          16,
+          21
+        ],
+        [
+          16,
+          23
+        ]
+      ],
+      "note": "cell 0's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          21
+        ],
+        [
+          16,
+          22
+        ],
+        [
+          16,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 1",
+      "points": [
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          12
+        ]
+      ],
+      "note": "router lane 1 -> cell 1; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          11
+        ],
+        [
+          18,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 1",
+      "points": [
+        [
+          20,
+          21
+        ],
+        [
+          20,
+          23
+        ]
+      ],
+      "note": "cell 1's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          20,
+          21
+        ],
+        [
+          20,
+          22
+        ],
+        [
+          20,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 2",
+      "points": [
+        [
+          22,
+          10
+        ],
+        [
+          22,
+          12
+        ]
+      ],
+      "note": "router lane 2 -> cell 2; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          22,
+          10
+        ],
+        [
+          22,
+          11
+        ],
+        [
+          22,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 2",
+      "points": [
+        [
+          24,
+          21
+        ],
+        [
+          24,
+          23
+        ]
+      ],
+      "note": "cell 2's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          24,
+          21
+        ],
+        [
+          24,
+          22
+        ],
+        [
+          24,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 3",
+      "points": [
+        [
+          26,
+          10
+        ],
+        [
+          26,
+          12
+        ]
+      ],
+      "note": "router lane 3 -> cell 3; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          26,
+          10
+        ],
+        [
+          26,
+          11
+        ],
+        [
+          26,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 3",
+      "points": [
+        [
+          28,
+          21
+        ],
+        [
+          28,
+          23
+        ]
+      ],
+      "note": "cell 3's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          21
+        ],
+        [
+          28,
+          22
+        ],
+        [
+          28,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 4",
+      "points": [
+        [
+          30,
+          10
+        ],
+        [
+          30,
+          12
+        ]
+      ],
+      "note": "router lane 4 -> cell 4; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          30,
+          10
+        ],
+        [
+          30,
+          11
+        ],
+        [
+          30,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 4",
+      "points": [
+        [
+          32,
+          21
+        ],
+        [
+          32,
+          23
+        ]
+      ],
+      "note": "cell 4's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          32,
+          21
+        ],
+        [
+          32,
+          22
+        ],
+        [
+          32,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 5",
+      "points": [
+        [
+          34,
+          10
+        ],
+        [
+          34,
+          12
+        ]
+      ],
+      "note": "router lane 5 -> cell 5; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          34,
+          10
+        ],
+        [
+          34,
+          11
+        ],
+        [
+          34,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 5",
+      "points": [
+        [
+          36,
+          21
+        ],
+        [
+          36,
+          23
+        ]
+      ],
+      "note": "cell 5's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          36,
+          21
+        ],
+        [
+          36,
+          22
+        ],
+        [
+          36,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 6",
+      "points": [
+        [
+          38,
+          10
+        ],
+        [
+          38,
+          12
+        ]
+      ],
+      "note": "router lane 6 -> cell 6; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          38,
+          10
+        ],
+        [
+          38,
+          11
+        ],
+        [
+          38,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 6",
+      "points": [
+        [
+          40,
+          21
+        ],
+        [
+          40,
+          23
+        ]
+      ],
+      "note": "cell 6's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          40,
+          21
+        ],
+        [
+          40,
+          22
+        ],
+        [
+          40,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 7",
+      "points": [
+        [
+          42,
+          10
+        ],
+        [
+          42,
+          12
+        ]
+      ],
+      "note": "router lane 7 -> cell 7; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          42,
+          10
+        ],
+        [
+          42,
+          11
+        ],
+        [
+          42,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 7",
+      "points": [
+        [
+          44,
+          21
+        ],
+        [
+          44,
+          23
+        ]
+      ],
+      "note": "cell 7's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          44,
+          21
+        ],
+        [
+          44,
+          22
+        ],
+        [
+          44,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 8",
+      "points": [
+        [
+          46,
+          10
+        ],
+        [
+          46,
+          12
+        ]
+      ],
+      "note": "router lane 8 -> cell 8; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          46,
+          10
+        ],
+        [
+          46,
+          11
+        ],
+        [
+          46,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 8",
+      "points": [
+        [
+          48,
+          21
+        ],
+        [
+          48,
+          23
+        ]
+      ],
+      "note": "cell 8's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          48,
+          21
+        ],
+        [
+          48,
+          22
+        ],
+        [
+          48,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 9",
+      "points": [
+        [
+          50,
+          10
+        ],
+        [
+          50,
+          12
+        ]
+      ],
+      "note": "router lane 9 -> cell 9; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          50,
+          10
+        ],
+        [
+          50,
+          11
+        ],
+        [
+          50,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 9",
+      "points": [
+        [
+          52,
+          21
+        ],
+        [
+          52,
+          23
+        ]
+      ],
+      "note": "cell 9's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          52,
+          21
+        ],
+        [
+          52,
+          22
+        ],
+        [
+          52,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 10",
+      "points": [
+        [
+          54,
+          10
+        ],
+        [
+          54,
+          12
+        ]
+      ],
+      "note": "router lane 10 -> cell 10; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          54,
+          10
+        ],
+        [
+          54,
+          11
+        ],
+        [
+          54,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 10",
+      "points": [
+        [
+          56,
+          21
+        ],
+        [
+          56,
+          23
+        ]
+      ],
+      "note": "cell 10's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          56,
+          21
+        ],
+        [
+          56,
+          22
+        ],
+        [
+          56,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 11",
+      "points": [
+        [
+          58,
+          10
+        ],
+        [
+          58,
+          12
+        ]
+      ],
+      "note": "router lane 11 -> cell 11; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          58,
+          10
+        ],
+        [
+          58,
+          11
+        ],
+        [
+          58,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 11",
+      "points": [
+        [
+          60,
+          21
+        ],
+        [
+          60,
+          23
+        ]
+      ],
+      "note": "cell 11's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          60,
+          21
+        ],
+        [
+          60,
+          22
+        ],
+        [
+          60,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 12",
+      "points": [
+        [
+          62,
+          10
+        ],
+        [
+          62,
+          12
+        ]
+      ],
+      "note": "router lane 12 -> cell 12; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          62,
+          10
+        ],
+        [
+          62,
+          11
+        ],
+        [
+          62,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 12",
+      "points": [
+        [
+          64,
+          21
+        ],
+        [
+          64,
+          23
+        ]
+      ],
+      "note": "cell 12's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          64,
+          21
+        ],
+        [
+          64,
+          22
+        ],
+        [
+          64,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 13",
+      "points": [
+        [
+          66,
+          10
+        ],
+        [
+          66,
+          12
+        ]
+      ],
+      "note": "router lane 13 -> cell 13; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          66,
+          10
+        ],
+        [
+          66,
+          11
+        ],
+        [
+          66,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 13",
+      "points": [
+        [
+          68,
+          21
+        ],
+        [
+          68,
+          23
+        ]
+      ],
+      "note": "cell 13's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          68,
+          21
+        ],
+        [
+          68,
+          22
+        ],
+        [
+          68,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 14",
+      "points": [
+        [
+          70,
+          10
+        ],
+        [
+          70,
+          12
+        ]
+      ],
+      "note": "router lane 14 -> cell 14; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          70,
+          10
+        ],
+        [
+          70,
+          11
+        ],
+        [
+          70,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 14",
+      "points": [
+        [
+          72,
+          21
+        ],
+        [
+          72,
+          23
+        ]
+      ],
+      "note": "cell 14's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          72,
+          21
+        ],
+        [
+          72,
+          22
+        ],
+        [
+          72,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 15",
+      "points": [
+        [
+          74,
+          10
+        ],
+        [
+          74,
+          12
+        ]
+      ],
+      "note": "router lane 15 -> cell 15; lands nearest this cell's two `r`s",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          74,
+          10
+        ],
+        [
+          74,
+          11
+        ],
+        [
+          74,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 15",
+      "points": [
+        [
+          76,
+          21
+        ],
+        [
+          76,
+          23
+        ]
+      ],
+      "note": "cell 15's `s` -> collector; it leaves under the `s`, so it binds here",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a READ only",
+      "tags": [],
+      "cells": [
+        [
+          76,
+          21
+        ],
+        [
+          76,
+          22
+        ],
+        [
+          76,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "input-pipe",
+      "points": [
+        [
+          5,
+          4
+        ],
+        [
+          7,
+          4
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op addr [value]",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          4
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          7,
+          4
+        ]
+      ]
+    },
+    {
+      "name": "output-pipe",
+      "points": [
+        [
+          10,
+          25
+        ],
+        [
+          8,
+          25
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "one word per READ",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          25
+        ],
+        [
+          9,
+          25
+        ],
+        [
+          8,
+          25
+        ]
+      ]
+    }
+  ]
+}

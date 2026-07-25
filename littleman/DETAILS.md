@@ -24,7 +24,7 @@ so the game is writing tight, looping grids, not clever one-liners.
 
 We have the **exact reference interpreter** locally (`littleman.wasm`, the same
 engine the online editor runs) wrapped in a Node CLI and a Python front-end, plus
-all 16 released problems fetched from the API. Everything needed to develop and
+all 20 released problems fetched from the API. Everything needed to develop and
 score offline is in this repo; the live site is only needed to submit.
 
 ## 2. Repo layout
@@ -39,7 +39,7 @@ score offline is in this repo; the live site is only needed to submit.
 | `littleman/details.md` | This file. |
 | `littleman/examples/*.man` | Tiny worked programs: `walk`, `io`, `echo`, `atoi`. |
 | `littleman/reference/*.txt` | Verbatim site extracts (fallback when docs disagree). |
-| `tasks/problems/_index.json` | Listing of all 16 problems (carries `id` for submission). |
+| `tasks/problems/_index.json` | Listing of all 20 problems (carries `id` for submission). |
 | `tasks/problems/<slug>.json` | Full problem: description, `io`, `scoring`, `publicTestData`, … |
 | `tasks/problems/README.md` | Problem table (set / scoring / case counts / summaries). |
 | `solvers/python/randomfun2026solvers/littleman.py` | Typed Python wrapper over `lm.mjs` (pydantic models). |
@@ -155,7 +155,7 @@ Full detail in [`GRADING.md`](GRADING.md). **Lower score is always better.**
 
 | Mode | Formula |
 |---|---|
-| `footprint-tick` (15 of 16 problems) | **max(width, height)² × avg ticks across all test cases** |
+| `footprint-tick` (19 of 20 problems) | **max(width, height)² × avg ticks across all test cases** |
 | `footprint` (`history-lesson` only) | **max(width, height)²** — speed irrelevant |
 
 - **width / height** = the bounding box of the **entire** program — all rooms,
@@ -180,9 +180,11 @@ against a **single program run, no reset**. Round N+1's input is **withheld unti
 all of round N's output is received** (a no-output round unlocks immediately).
 Editor input uses `/` to separate rounds.
 
-**Limits**: source ≤ **10 MB**; step cap usually **5,000,000 ticks**
-(`tickCap: null` on every current problem → the default). Hitting the cap ends
-the run immediately.
+**Limits**: source ≤ **10 MB**; step cap **5,000,000 ticks** by default
+(`tickCap: null`), which is what every problem up to Semester 3 uses. Semester 4
+sets it explicitly: 50,000,000 for `little-little-man`, 15,000,000 for
+`little-little-little-man`, `pathfinder` and `snake`. Hitting the cap ends the
+run immediately.
 
 **Submission API** (base `https://icfpcontest2026.com/api/v1`, team bearer token
 for submit): `GET /public/problems`, `GET /public/problems/<slug>`,
@@ -270,10 +272,12 @@ The wasm exposes more than `lm.mjs` surfaces. Useful when building tooling:
 - Python is the wrapper layer (`littleman.py`); the wasm is never reimplemented —
   it is the source of truth, so probe it rather than guessing semantics.
 
-## 7. Problem set (16 problems)
+## 7. Problem set (20 problems)
 
 Condensed from [`../tasks/problems/README.md`](../tasks/problems/README.md). All
-currently have `privateTestCount: 0` and `tickCap: null` (default 5M cap).
+have `privateTestCount: 0`. Semesters 1–3 and the practice problems have
+`tickCap: null` (default 5M cap); Semester 4 raises it (50M for `little-little-man`,
+15M for the other three).
 
 | Set | Slug | Name | Scoring | Public | Display | Summary |
 |---|---|---|---|---|---|---|
@@ -289,6 +293,10 @@ currently have `privateTestCount: 0` and `tickCap: null` (default 5M cap).
 | Sem 3 | `matmul` | Matrix Multiply | footprint-tick | 7 | | C = A·B, row-major, up to 16×16×16. |
 | Sem 3 | `sudoku-validity` | Sudoku Auditor | footprint-tick | 6 | | Stream cells `r c v`; emit valid-so-far 1/0. |
 | Sem 3 | `subset-sum` | Subset Sum | footprint-tick | 7 | | Find a subset summing to a target. |
+| Sem 4 | `snake` | Snake | footprint-tick | 5 | 16×16 | Simulate Snake (fruit / turn / tick rounds) and draw it. |
+| Sem 4 | `pathfinder` | Pathfinder | footprint-tick | 7 | 16×16 | BFS shortest path on a 16×16 maze; one frame per move. |
+| Sem 4 | `little-little-little-man` | LLLM | footprint-tick | 10 | 16×16 | Interpret a one-room littleman subset and draw its state. |
+| Sem 4 | `little-little-man` | LLM | footprint-tick | 14 | 16×16 | Interpret a multi-room + pipes littleman subset and draw its state. |
 | Practice | `atoi` | atoi | footprint-tick | 2 | | Parse ASCII-digit string → integer. |
 | Practice | `hello-world` | Hello World | footprint-tick | 1 | | Output 11 ASCII codes of "hello world". |
 | Practice | `max-element` | Max Element | footprint-tick | 10 | | Largest number in a list. |
@@ -299,12 +307,14 @@ currently have `privateTestCount: 0` and `tickCap: null` (default 5M cap).
 recursive grammar DSL: `int`/`ascii`, `{seq:[…]}`, `{repeat:X}`,
 `{lengthPrefixed:…}`, `lengthPrefixedAscii`, `{count:{"*":[…]}, of:X}`),
 `problemSetName`, `publicTestData`, `status` (`graded`/`practice`), `scoring`,
-`tickCap`, `privateTestCount`, and optional `display:{width,height}`.
+`tickCap`, `privateTestCount`, and optional `display:{width,height}`. Semester 4
+responses add `uberStrict` (a boolean, `false` everywhere so far, undocumented in
+the API reference); the sixteen files fetched before it existed do not carry it.
 
 **`publicTestData` shapes** — each case is `{name, …}`:
 - **Round-based** (most): `rounds:[{in:[…], out:[…]}]`, tokens as strings.
 - **Flat** (`memory`): top-level `in`/`out`, no rounds.
-- **Frame-based** (`plotter`, `palette`): `rounds:[{in, out:[], frames:[…]}]` — `out` empty, expected result is the display; each frame is an array of row strings, one hex digit (colour 0–15) per pixel.
+- **Frame-based** (`plotter`, `palette`, and all four Semester 4 problems): `rounds:[{in, out:[], frames:[…]}]` — `out` empty, expected result is the display; each frame is an array of row strings, one hex digit (colour 0–15) per pixel.
 
 `_index.json` is a flat array of `{id, slug, name, problemSetName,
 problemSetVisible, orderInSet, status}` — the `id` is the `problemId` for submission.

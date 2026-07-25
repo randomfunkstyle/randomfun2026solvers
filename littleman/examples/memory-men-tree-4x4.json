@@ -1,0 +1,3855 @@
+{
+  "title": "man-memory tree k1=4 k2=4 (n=16)",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "input",
+      "x": 7,
+      "y": 0,
+      "w": 3,
+      "h": 3,
+      "note": "the problem's own stream: `0 addr` (READ) / `1 addr value` (WRITE)",
+      "color": "#e879f9",
+      "tags": []
+    },
+    {
+      "name": "head",
+      "x": 7,
+      "y": 6,
+      "w": 11,
+      "h": 3,
+      "note": "the only room that talks to I/O. Swaps the stream's `op addr` into the tree's `addr op [value]`, and on a READ waits for the answer before starting the next operation \u2014 that serialisation is what keeps answers ordered when latency down the tree differs per address. Ports: input and answer arrive on the north wall (over interior cols 1 and 8), the command leaves the south wall under col 5, the answer leaves east on row 1.",
+      "color": "#38bdf8",
+      "tags": []
+    },
+    {
+      "name": "output",
+      "x": 21,
+      "y": 6,
+      "w": 3,
+      "h": 3,
+      "note": "one word per READ, in stream order",
+      "color": "#e879f9",
+      "tags": []
+    },
+    {
+      "name": "mid router",
+      "x": 7,
+      "y": 13,
+      "w": 32,
+      "h": 7,
+      "note": "one `/` splits the address: quotient (the block, 0..3) drives BP, remainder (the local address, 0..3) is relayed on. Then a single walk east: `d` bypasses a lane while BP>0 and peels into it at BP==0, so lane j owns addresses j*4..j*4+3.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "mid lane 0 -> addr 0..3",
+      "x": 15,
+      "y": 13,
+      "w": 6,
+      "h": 7,
+      "note": "BP==0 peels here; the command pipe leaves the south wall under this lane's `v` and runs to the leaf router 3 blocks down (lane j feeds block k1-1-j, which is what keeps the fan-out planar).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "mid lane 1 -> addr 4..7",
+      "x": 21,
+      "y": 13,
+      "w": 6,
+      "h": 7,
+      "note": "BP==1 peels here; the command pipe leaves the south wall under this lane's `v` and runs to the leaf router 2 blocks down (lane j feeds block k1-1-j, which is what keeps the fan-out planar).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "mid lane 2 -> addr 8..11",
+      "x": 27,
+      "y": 13,
+      "w": 6,
+      "h": 7,
+      "note": "BP==2 peels here; the command pipe leaves the south wall under this lane's `v` and runs to the leaf router 1 blocks down (lane j feeds block k1-1-j, which is what keeps the fan-out planar).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "mid lane 3 -> addr 12..15",
+      "x": 33,
+      "y": 13,
+      "w": 6,
+      "h": 7,
+      "note": "BP==3 peels here; the command pipe leaves the south wall under this lane's `v` and runs to the leaf router 0 blocks down (lane j feeds block k1-1-j, which is what keeps the fan-out planar).",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "leaf router block 3 (addr 12..15)",
+      "x": 7,
+      "y": 27,
+      "w": 27,
+      "h": 6,
+      "note": "`>rb` loads BP = the local address, then the same walk east: lane i peels to the cell holding addr 12+i. Fed by mid lane 3; every `r` in here (including the WRITE value at the far end of the lane) binds to that one incoming pipe, which is why the packet needs no dummy tokens.",
+      "color": "#fb923c",
+      "tags": []
+    },
+    {
+      "name": "cell addr 12",
+      "x": 9,
+      "y": 36,
+      "w": 6,
+      "h": 6,
+      "note": "address 12 = mid lane 3 * 4 + leaf lane 0. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 13",
+      "x": 15,
+      "y": 36,
+      "w": 6,
+      "h": 6,
+      "note": "address 13 = mid lane 3 * 4 + leaf lane 1. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 14",
+      "x": 21,
+      "y": 36,
+      "w": 6,
+      "h": 6,
+      "note": "address 14 = mid lane 3 * 4 + leaf lane 2. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 15",
+      "x": 27,
+      "y": 36,
+      "w": 6,
+      "h": 6,
+      "note": "address 15 = mid lane 3 * 4 + leaf lane 3. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "collector block 3",
+      "x": 7,
+      "y": 45,
+      "w": 27,
+      "h": 2,
+      "note": "`R` takes whichever pipe is ready \u2014 this block's 4 cells, plus the chain from the block above \u2014 and `s` forwards it south. No pipe affinity needed, which is why the answer path is a chain beside the cells rather than 16 long pipes converging on one room.",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "leaf router block 2 (addr 8..11)",
+      "x": 7,
+      "y": 50,
+      "w": 27,
+      "h": 6,
+      "note": "`>rb` loads BP = the local address, then the same walk east: lane i peels to the cell holding addr 8+i. Fed by mid lane 2; every `r` in here (including the WRITE value at the far end of the lane) binds to that one incoming pipe, which is why the packet needs no dummy tokens.",
+      "color": "#fb923c",
+      "tags": []
+    },
+    {
+      "name": "cell addr 8",
+      "x": 9,
+      "y": 59,
+      "w": 6,
+      "h": 6,
+      "note": "address 8 = mid lane 2 * 4 + leaf lane 0. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 9",
+      "x": 15,
+      "y": 59,
+      "w": 6,
+      "h": 6,
+      "note": "address 9 = mid lane 2 * 4 + leaf lane 1. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 10",
+      "x": 21,
+      "y": 59,
+      "w": 6,
+      "h": 6,
+      "note": "address 10 = mid lane 2 * 4 + leaf lane 2. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 11",
+      "x": 27,
+      "y": 59,
+      "w": 6,
+      "h": 6,
+      "note": "address 11 = mid lane 2 * 4 + leaf lane 3. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "collector block 2",
+      "x": 7,
+      "y": 68,
+      "w": 27,
+      "h": 2,
+      "note": "`R` takes whichever pipe is ready \u2014 this block's 4 cells, plus the chain from the block above \u2014 and `s` forwards it south. No pipe affinity needed, which is why the answer path is a chain beside the cells rather than 16 long pipes converging on one room.",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "leaf router block 1 (addr 4..7)",
+      "x": 7,
+      "y": 73,
+      "w": 27,
+      "h": 6,
+      "note": "`>rb` loads BP = the local address, then the same walk east: lane i peels to the cell holding addr 4+i. Fed by mid lane 1; every `r` in here (including the WRITE value at the far end of the lane) binds to that one incoming pipe, which is why the packet needs no dummy tokens.",
+      "color": "#fb923c",
+      "tags": []
+    },
+    {
+      "name": "cell addr 4",
+      "x": 9,
+      "y": 82,
+      "w": 6,
+      "h": 6,
+      "note": "address 4 = mid lane 1 * 4 + leaf lane 0. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 5",
+      "x": 15,
+      "y": 82,
+      "w": 6,
+      "h": 6,
+      "note": "address 5 = mid lane 1 * 4 + leaf lane 1. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 6",
+      "x": 21,
+      "y": 82,
+      "w": 6,
+      "h": 6,
+      "note": "address 6 = mid lane 1 * 4 + leaf lane 2. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 7",
+      "x": 27,
+      "y": 82,
+      "w": 6,
+      "h": 6,
+      "note": "address 7 = mid lane 1 * 4 + leaf lane 3. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "collector block 1",
+      "x": 7,
+      "y": 91,
+      "w": 27,
+      "h": 2,
+      "note": "`R` takes whichever pipe is ready \u2014 this block's 4 cells, plus the chain from the block above \u2014 and `s` forwards it south. No pipe affinity needed, which is why the answer path is a chain beside the cells rather than 16 long pipes converging on one room.",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "leaf router block 0 (addr 0..3)",
+      "x": 7,
+      "y": 96,
+      "w": 27,
+      "h": 6,
+      "note": "`>rb` loads BP = the local address, then the same walk east: lane i peels to the cell holding addr 0+i. Fed by mid lane 0; every `r` in here (including the WRITE value at the far end of the lane) binds to that one incoming pipe, which is why the packet needs no dummy tokens.",
+      "color": "#fb923c",
+      "tags": []
+    },
+    {
+      "name": "cell addr 0",
+      "x": 9,
+      "y": 105,
+      "w": 6,
+      "h": 6,
+      "note": "address 0 = mid lane 0 * 4 + leaf lane 0. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 1",
+      "x": 15,
+      "y": 105,
+      "w": 6,
+      "h": 6,
+      "note": "address 1 = mid lane 0 * 4 + leaf lane 1. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 2",
+      "x": 21,
+      "y": 105,
+      "w": 6,
+      "h": 6,
+      "note": "address 2 = mid lane 0 * 4 + leaf lane 2. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "cell addr 3",
+      "x": 27,
+      "y": 105,
+      "w": 6,
+      "h": 6,
+      "note": "address 3 = mid lane 0 * 4 + leaf lane 3. The resident man's B *is* the stored value \u2014 0 until the first WRITE, so there is no initialisation pass. READ 12 ticks, WRITE 8.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "collector block 0",
+      "x": 7,
+      "y": 114,
+      "w": 27,
+      "h": 2,
+      "note": "`R` takes whichever pipe is ready \u2014 this block's 4 cells, plus the chain from the block above \u2014 and `s` forwards it south. No pipe affinity needed, which is why the answer path is a chain beside the cells rather than 16 long pipes converging on one room.",
+      "color": "#facc15",
+      "tags": []
+    }
+  ],
+  "circles": [
+    {
+      "name": "`/` address split",
+      "cx": 12,
+      "cy": 13,
+      "r": 2,
+      "note": "`>rM4W/bW`: A=addr, B=4, then `/` leaves quotient in A and remainder in B in one glyph; `b` loads BP=quotient and `W` brings the remainder back to A for the lane's `s`. addr = block*4 + local.",
+      "color": "#a78bfa",
+      "tags": []
+    }
+  ],
+  "scenarios": [],
+  "lanes": [
+    {
+      "name": "input-pipe",
+      "points": [
+        [
+          8,
+          3
+        ],
+        [
+          8,
+          5
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op addr [value]",
+      "tags": [],
+      "cells": [
+        [
+          8,
+          3
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "root command",
+      "points": [
+        [
+          12,
+          10
+        ],
+        [
+          12,
+          12
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr op [value]",
+      "tags": [],
+      "cells": [
+        [
+          12,
+          10
+        ],
+        [
+          12,
+          11
+        ],
+        [
+          12,
+          12
+        ]
+      ]
+    },
+    {
+      "name": "output-pipe",
+      "points": [
+        [
+          19,
+          7
+        ],
+        [
+          21,
+          7
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "one word per READ",
+      "tags": [],
+      "cells": [
+        [
+          19,
+          7
+        ],
+        [
+          20,
+          7
+        ],
+        [
+          21,
+          7
+        ]
+      ]
+    },
+    {
+      "name": "cmd block 3",
+      "points": [
+        [
+          34,
+          21
+        ],
+        [
+          34,
+          25
+        ],
+        [
+          4,
+          25
+        ],
+        [
+          4,
+          27
+        ],
+        [
+          6,
+          27
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "local op [value]",
+      "tags": [],
+      "cells": [
+        [
+          34,
+          21
+        ],
+        [
+          34,
+          22
+        ],
+        [
+          34,
+          23
+        ],
+        [
+          34,
+          24
+        ],
+        [
+          34,
+          25
+        ],
+        [
+          33,
+          25
+        ],
+        [
+          32,
+          25
+        ],
+        [
+          31,
+          25
+        ],
+        [
+          30,
+          25
+        ],
+        [
+          29,
+          25
+        ],
+        [
+          28,
+          25
+        ],
+        [
+          27,
+          25
+        ],
+        [
+          26,
+          25
+        ],
+        [
+          25,
+          25
+        ],
+        [
+          24,
+          25
+        ],
+        [
+          23,
+          25
+        ],
+        [
+          22,
+          25
+        ],
+        [
+          21,
+          25
+        ],
+        [
+          20,
+          25
+        ],
+        [
+          19,
+          25
+        ],
+        [
+          18,
+          25
+        ],
+        [
+          17,
+          25
+        ],
+        [
+          16,
+          25
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          14,
+          25
+        ],
+        [
+          13,
+          25
+        ],
+        [
+          12,
+          25
+        ],
+        [
+          11,
+          25
+        ],
+        [
+          10,
+          25
+        ],
+        [
+          9,
+          25
+        ],
+        [
+          8,
+          25
+        ],
+        [
+          7,
+          25
+        ],
+        [
+          6,
+          25
+        ],
+        [
+          5,
+          25
+        ],
+        [
+          4,
+          25
+        ],
+        [
+          4,
+          26
+        ],
+        [
+          4,
+          27
+        ],
+        [
+          5,
+          27
+        ],
+        [
+          6,
+          27
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 12",
+      "points": [
+        [
+          10,
+          34
+        ],
+        [
+          10,
+          36
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          34
+        ],
+        [
+          10,
+          35
+        ],
+        [
+          10,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 12",
+      "points": [
+        [
+          13,
+          42
+        ],
+        [
+          13,
+          44
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          13,
+          42
+        ],
+        [
+          13,
+          43
+        ],
+        [
+          13,
+          44
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 13",
+      "points": [
+        [
+          16,
+          34
+        ],
+        [
+          16,
+          36
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          34
+        ],
+        [
+          16,
+          35
+        ],
+        [
+          16,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 13",
+      "points": [
+        [
+          19,
+          42
+        ],
+        [
+          19,
+          44
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          19,
+          42
+        ],
+        [
+          19,
+          43
+        ],
+        [
+          19,
+          44
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 14",
+      "points": [
+        [
+          22,
+          34
+        ],
+        [
+          22,
+          36
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          22,
+          34
+        ],
+        [
+          22,
+          35
+        ],
+        [
+          22,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 14",
+      "points": [
+        [
+          25,
+          42
+        ],
+        [
+          25,
+          44
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          25,
+          42
+        ],
+        [
+          25,
+          43
+        ],
+        [
+          25,
+          44
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 15",
+      "points": [
+        [
+          28,
+          34
+        ],
+        [
+          28,
+          36
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          34
+        ],
+        [
+          28,
+          35
+        ],
+        [
+          28,
+          36
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 15",
+      "points": [
+        [
+          31,
+          42
+        ],
+        [
+          31,
+          44
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          31,
+          42
+        ],
+        [
+          31,
+          43
+        ],
+        [
+          31,
+          44
+        ]
+      ]
+    },
+    {
+      "name": "cmd block 2",
+      "points": [
+        [
+          28,
+          21
+        ],
+        [
+          28,
+          24
+        ],
+        [
+          3,
+          24
+        ],
+        [
+          3,
+          50
+        ],
+        [
+          6,
+          50
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "local op [value]",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          21
+        ],
+        [
+          28,
+          22
+        ],
+        [
+          28,
+          23
+        ],
+        [
+          28,
+          24
+        ],
+        [
+          27,
+          24
+        ],
+        [
+          26,
+          24
+        ],
+        [
+          25,
+          24
+        ],
+        [
+          24,
+          24
+        ],
+        [
+          23,
+          24
+        ],
+        [
+          22,
+          24
+        ],
+        [
+          21,
+          24
+        ],
+        [
+          20,
+          24
+        ],
+        [
+          19,
+          24
+        ],
+        [
+          18,
+          24
+        ],
+        [
+          17,
+          24
+        ],
+        [
+          16,
+          24
+        ],
+        [
+          15,
+          24
+        ],
+        [
+          14,
+          24
+        ],
+        [
+          13,
+          24
+        ],
+        [
+          12,
+          24
+        ],
+        [
+          11,
+          24
+        ],
+        [
+          10,
+          24
+        ],
+        [
+          9,
+          24
+        ],
+        [
+          8,
+          24
+        ],
+        [
+          7,
+          24
+        ],
+        [
+          6,
+          24
+        ],
+        [
+          5,
+          24
+        ],
+        [
+          4,
+          24
+        ],
+        [
+          3,
+          24
+        ],
+        [
+          3,
+          25
+        ],
+        [
+          3,
+          26
+        ],
+        [
+          3,
+          27
+        ],
+        [
+          3,
+          28
+        ],
+        [
+          3,
+          29
+        ],
+        [
+          3,
+          30
+        ],
+        [
+          3,
+          31
+        ],
+        [
+          3,
+          32
+        ],
+        [
+          3,
+          33
+        ],
+        [
+          3,
+          34
+        ],
+        [
+          3,
+          35
+        ],
+        [
+          3,
+          36
+        ],
+        [
+          3,
+          37
+        ],
+        [
+          3,
+          38
+        ],
+        [
+          3,
+          39
+        ],
+        [
+          3,
+          40
+        ],
+        [
+          3,
+          41
+        ],
+        [
+          3,
+          42
+        ],
+        [
+          3,
+          43
+        ],
+        [
+          3,
+          44
+        ],
+        [
+          3,
+          45
+        ],
+        [
+          3,
+          46
+        ],
+        [
+          3,
+          47
+        ],
+        [
+          3,
+          48
+        ],
+        [
+          3,
+          49
+        ],
+        [
+          3,
+          50
+        ],
+        [
+          4,
+          50
+        ],
+        [
+          5,
+          50
+        ],
+        [
+          6,
+          50
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 8",
+      "points": [
+        [
+          10,
+          57
+        ],
+        [
+          10,
+          59
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          57
+        ],
+        [
+          10,
+          58
+        ],
+        [
+          10,
+          59
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 8",
+      "points": [
+        [
+          13,
+          65
+        ],
+        [
+          13,
+          67
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          13,
+          65
+        ],
+        [
+          13,
+          66
+        ],
+        [
+          13,
+          67
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 9",
+      "points": [
+        [
+          16,
+          57
+        ],
+        [
+          16,
+          59
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          57
+        ],
+        [
+          16,
+          58
+        ],
+        [
+          16,
+          59
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 9",
+      "points": [
+        [
+          19,
+          65
+        ],
+        [
+          19,
+          67
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          19,
+          65
+        ],
+        [
+          19,
+          66
+        ],
+        [
+          19,
+          67
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 10",
+      "points": [
+        [
+          22,
+          57
+        ],
+        [
+          22,
+          59
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          22,
+          57
+        ],
+        [
+          22,
+          58
+        ],
+        [
+          22,
+          59
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 10",
+      "points": [
+        [
+          25,
+          65
+        ],
+        [
+          25,
+          67
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          25,
+          65
+        ],
+        [
+          25,
+          66
+        ],
+        [
+          25,
+          67
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 11",
+      "points": [
+        [
+          28,
+          57
+        ],
+        [
+          28,
+          59
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          57
+        ],
+        [
+          28,
+          58
+        ],
+        [
+          28,
+          59
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 11",
+      "points": [
+        [
+          31,
+          65
+        ],
+        [
+          31,
+          67
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          31,
+          65
+        ],
+        [
+          31,
+          66
+        ],
+        [
+          31,
+          67
+        ]
+      ]
+    },
+    {
+      "name": "answer chain block 3 -> block 2",
+      "points": [
+        [
+          35,
+          46
+        ],
+        [
+          41,
+          46
+        ],
+        [
+          41,
+          68
+        ],
+        [
+          34,
+          68
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "an answer from any block above",
+      "tags": [],
+      "cells": [
+        [
+          35,
+          46
+        ],
+        [
+          36,
+          46
+        ],
+        [
+          37,
+          46
+        ],
+        [
+          38,
+          46
+        ],
+        [
+          39,
+          46
+        ],
+        [
+          40,
+          46
+        ],
+        [
+          41,
+          46
+        ],
+        [
+          41,
+          47
+        ],
+        [
+          41,
+          48
+        ],
+        [
+          41,
+          49
+        ],
+        [
+          41,
+          50
+        ],
+        [
+          41,
+          51
+        ],
+        [
+          41,
+          52
+        ],
+        [
+          41,
+          53
+        ],
+        [
+          41,
+          54
+        ],
+        [
+          41,
+          55
+        ],
+        [
+          41,
+          56
+        ],
+        [
+          41,
+          57
+        ],
+        [
+          41,
+          58
+        ],
+        [
+          41,
+          59
+        ],
+        [
+          41,
+          60
+        ],
+        [
+          41,
+          61
+        ],
+        [
+          41,
+          62
+        ],
+        [
+          41,
+          63
+        ],
+        [
+          41,
+          64
+        ],
+        [
+          41,
+          65
+        ],
+        [
+          41,
+          66
+        ],
+        [
+          41,
+          67
+        ],
+        [
+          41,
+          68
+        ],
+        [
+          40,
+          68
+        ],
+        [
+          39,
+          68
+        ],
+        [
+          38,
+          68
+        ],
+        [
+          37,
+          68
+        ],
+        [
+          36,
+          68
+        ],
+        [
+          35,
+          68
+        ],
+        [
+          34,
+          68
+        ]
+      ]
+    },
+    {
+      "name": "cmd block 1",
+      "points": [
+        [
+          22,
+          21
+        ],
+        [
+          22,
+          23
+        ],
+        [
+          2,
+          23
+        ],
+        [
+          2,
+          73
+        ],
+        [
+          6,
+          73
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "local op [value]",
+      "tags": [],
+      "cells": [
+        [
+          22,
+          21
+        ],
+        [
+          22,
+          22
+        ],
+        [
+          22,
+          23
+        ],
+        [
+          21,
+          23
+        ],
+        [
+          20,
+          23
+        ],
+        [
+          19,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          17,
+          23
+        ],
+        [
+          16,
+          23
+        ],
+        [
+          15,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          13,
+          23
+        ],
+        [
+          12,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          10,
+          23
+        ],
+        [
+          9,
+          23
+        ],
+        [
+          8,
+          23
+        ],
+        [
+          7,
+          23
+        ],
+        [
+          6,
+          23
+        ],
+        [
+          5,
+          23
+        ],
+        [
+          4,
+          23
+        ],
+        [
+          3,
+          23
+        ],
+        [
+          2,
+          23
+        ],
+        [
+          2,
+          24
+        ],
+        [
+          2,
+          25
+        ],
+        [
+          2,
+          26
+        ],
+        [
+          2,
+          27
+        ],
+        [
+          2,
+          28
+        ],
+        [
+          2,
+          29
+        ],
+        [
+          2,
+          30
+        ],
+        [
+          2,
+          31
+        ],
+        [
+          2,
+          32
+        ],
+        [
+          2,
+          33
+        ],
+        [
+          2,
+          34
+        ],
+        [
+          2,
+          35
+        ],
+        [
+          2,
+          36
+        ],
+        [
+          2,
+          37
+        ],
+        [
+          2,
+          38
+        ],
+        [
+          2,
+          39
+        ],
+        [
+          2,
+          40
+        ],
+        [
+          2,
+          41
+        ],
+        [
+          2,
+          42
+        ],
+        [
+          2,
+          43
+        ],
+        [
+          2,
+          44
+        ],
+        [
+          2,
+          45
+        ],
+        [
+          2,
+          46
+        ],
+        [
+          2,
+          47
+        ],
+        [
+          2,
+          48
+        ],
+        [
+          2,
+          49
+        ],
+        [
+          2,
+          50
+        ],
+        [
+          2,
+          51
+        ],
+        [
+          2,
+          52
+        ],
+        [
+          2,
+          53
+        ],
+        [
+          2,
+          54
+        ],
+        [
+          2,
+          55
+        ],
+        [
+          2,
+          56
+        ],
+        [
+          2,
+          57
+        ],
+        [
+          2,
+          58
+        ],
+        [
+          2,
+          59
+        ],
+        [
+          2,
+          60
+        ],
+        [
+          2,
+          61
+        ],
+        [
+          2,
+          62
+        ],
+        [
+          2,
+          63
+        ],
+        [
+          2,
+          64
+        ],
+        [
+          2,
+          65
+        ],
+        [
+          2,
+          66
+        ],
+        [
+          2,
+          67
+        ],
+        [
+          2,
+          68
+        ],
+        [
+          2,
+          69
+        ],
+        [
+          2,
+          70
+        ],
+        [
+          2,
+          71
+        ],
+        [
+          2,
+          72
+        ],
+        [
+          2,
+          73
+        ],
+        [
+          3,
+          73
+        ],
+        [
+          4,
+          73
+        ],
+        [
+          5,
+          73
+        ],
+        [
+          6,
+          73
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 4",
+      "points": [
+        [
+          10,
+          80
+        ],
+        [
+          10,
+          82
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          80
+        ],
+        [
+          10,
+          81
+        ],
+        [
+          10,
+          82
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 4",
+      "points": [
+        [
+          13,
+          88
+        ],
+        [
+          13,
+          90
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          13,
+          88
+        ],
+        [
+          13,
+          89
+        ],
+        [
+          13,
+          90
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 5",
+      "points": [
+        [
+          16,
+          80
+        ],
+        [
+          16,
+          82
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          80
+        ],
+        [
+          16,
+          81
+        ],
+        [
+          16,
+          82
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 5",
+      "points": [
+        [
+          19,
+          88
+        ],
+        [
+          19,
+          90
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          19,
+          88
+        ],
+        [
+          19,
+          89
+        ],
+        [
+          19,
+          90
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 6",
+      "points": [
+        [
+          22,
+          80
+        ],
+        [
+          22,
+          82
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          22,
+          80
+        ],
+        [
+          22,
+          81
+        ],
+        [
+          22,
+          82
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 6",
+      "points": [
+        [
+          25,
+          88
+        ],
+        [
+          25,
+          90
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          25,
+          88
+        ],
+        [
+          25,
+          89
+        ],
+        [
+          25,
+          90
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 7",
+      "points": [
+        [
+          28,
+          80
+        ],
+        [
+          28,
+          82
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          80
+        ],
+        [
+          28,
+          81
+        ],
+        [
+          28,
+          82
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 7",
+      "points": [
+        [
+          31,
+          88
+        ],
+        [
+          31,
+          90
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          31,
+          88
+        ],
+        [
+          31,
+          89
+        ],
+        [
+          31,
+          90
+        ]
+      ]
+    },
+    {
+      "name": "answer chain block 2 -> block 1",
+      "points": [
+        [
+          35,
+          69
+        ],
+        [
+          42,
+          69
+        ],
+        [
+          42,
+          91
+        ],
+        [
+          34,
+          91
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "an answer from any block above",
+      "tags": [],
+      "cells": [
+        [
+          35,
+          69
+        ],
+        [
+          36,
+          69
+        ],
+        [
+          37,
+          69
+        ],
+        [
+          38,
+          69
+        ],
+        [
+          39,
+          69
+        ],
+        [
+          40,
+          69
+        ],
+        [
+          41,
+          69
+        ],
+        [
+          42,
+          69
+        ],
+        [
+          42,
+          70
+        ],
+        [
+          42,
+          71
+        ],
+        [
+          42,
+          72
+        ],
+        [
+          42,
+          73
+        ],
+        [
+          42,
+          74
+        ],
+        [
+          42,
+          75
+        ],
+        [
+          42,
+          76
+        ],
+        [
+          42,
+          77
+        ],
+        [
+          42,
+          78
+        ],
+        [
+          42,
+          79
+        ],
+        [
+          42,
+          80
+        ],
+        [
+          42,
+          81
+        ],
+        [
+          42,
+          82
+        ],
+        [
+          42,
+          83
+        ],
+        [
+          42,
+          84
+        ],
+        [
+          42,
+          85
+        ],
+        [
+          42,
+          86
+        ],
+        [
+          42,
+          87
+        ],
+        [
+          42,
+          88
+        ],
+        [
+          42,
+          89
+        ],
+        [
+          42,
+          90
+        ],
+        [
+          42,
+          91
+        ],
+        [
+          41,
+          91
+        ],
+        [
+          40,
+          91
+        ],
+        [
+          39,
+          91
+        ],
+        [
+          38,
+          91
+        ],
+        [
+          37,
+          91
+        ],
+        [
+          36,
+          91
+        ],
+        [
+          35,
+          91
+        ],
+        [
+          34,
+          91
+        ]
+      ]
+    },
+    {
+      "name": "cmd block 0",
+      "points": [
+        [
+          16,
+          21
+        ],
+        [
+          16,
+          22
+        ],
+        [
+          1,
+          22
+        ],
+        [
+          1,
+          96
+        ],
+        [
+          6,
+          96
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "local op [value]",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          21
+        ],
+        [
+          16,
+          22
+        ],
+        [
+          15,
+          22
+        ],
+        [
+          14,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          11,
+          22
+        ],
+        [
+          10,
+          22
+        ],
+        [
+          9,
+          22
+        ],
+        [
+          8,
+          22
+        ],
+        [
+          7,
+          22
+        ],
+        [
+          6,
+          22
+        ],
+        [
+          5,
+          22
+        ],
+        [
+          4,
+          22
+        ],
+        [
+          3,
+          22
+        ],
+        [
+          2,
+          22
+        ],
+        [
+          1,
+          22
+        ],
+        [
+          1,
+          23
+        ],
+        [
+          1,
+          24
+        ],
+        [
+          1,
+          25
+        ],
+        [
+          1,
+          26
+        ],
+        [
+          1,
+          27
+        ],
+        [
+          1,
+          28
+        ],
+        [
+          1,
+          29
+        ],
+        [
+          1,
+          30
+        ],
+        [
+          1,
+          31
+        ],
+        [
+          1,
+          32
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          34
+        ],
+        [
+          1,
+          35
+        ],
+        [
+          1,
+          36
+        ],
+        [
+          1,
+          37
+        ],
+        [
+          1,
+          38
+        ],
+        [
+          1,
+          39
+        ],
+        [
+          1,
+          40
+        ],
+        [
+          1,
+          41
+        ],
+        [
+          1,
+          42
+        ],
+        [
+          1,
+          43
+        ],
+        [
+          1,
+          44
+        ],
+        [
+          1,
+          45
+        ],
+        [
+          1,
+          46
+        ],
+        [
+          1,
+          47
+        ],
+        [
+          1,
+          48
+        ],
+        [
+          1,
+          49
+        ],
+        [
+          1,
+          50
+        ],
+        [
+          1,
+          51
+        ],
+        [
+          1,
+          52
+        ],
+        [
+          1,
+          53
+        ],
+        [
+          1,
+          54
+        ],
+        [
+          1,
+          55
+        ],
+        [
+          1,
+          56
+        ],
+        [
+          1,
+          57
+        ],
+        [
+          1,
+          58
+        ],
+        [
+          1,
+          59
+        ],
+        [
+          1,
+          60
+        ],
+        [
+          1,
+          61
+        ],
+        [
+          1,
+          62
+        ],
+        [
+          1,
+          63
+        ],
+        [
+          1,
+          64
+        ],
+        [
+          1,
+          65
+        ],
+        [
+          1,
+          66
+        ],
+        [
+          1,
+          67
+        ],
+        [
+          1,
+          68
+        ],
+        [
+          1,
+          69
+        ],
+        [
+          1,
+          70
+        ],
+        [
+          1,
+          71
+        ],
+        [
+          1,
+          72
+        ],
+        [
+          1,
+          73
+        ],
+        [
+          1,
+          74
+        ],
+        [
+          1,
+          75
+        ],
+        [
+          1,
+          76
+        ],
+        [
+          1,
+          77
+        ],
+        [
+          1,
+          78
+        ],
+        [
+          1,
+          79
+        ],
+        [
+          1,
+          80
+        ],
+        [
+          1,
+          81
+        ],
+        [
+          1,
+          82
+        ],
+        [
+          1,
+          83
+        ],
+        [
+          1,
+          84
+        ],
+        [
+          1,
+          85
+        ],
+        [
+          1,
+          86
+        ],
+        [
+          1,
+          87
+        ],
+        [
+          1,
+          88
+        ],
+        [
+          1,
+          89
+        ],
+        [
+          1,
+          90
+        ],
+        [
+          1,
+          91
+        ],
+        [
+          1,
+          92
+        ],
+        [
+          1,
+          93
+        ],
+        [
+          1,
+          94
+        ],
+        [
+          1,
+          95
+        ],
+        [
+          1,
+          96
+        ],
+        [
+          2,
+          96
+        ],
+        [
+          3,
+          96
+        ],
+        [
+          4,
+          96
+        ],
+        [
+          5,
+          96
+        ],
+        [
+          6,
+          96
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 0",
+      "points": [
+        [
+          10,
+          103
+        ],
+        [
+          10,
+          105
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          103
+        ],
+        [
+          10,
+          104
+        ],
+        [
+          10,
+          105
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 0",
+      "points": [
+        [
+          13,
+          111
+        ],
+        [
+          13,
+          113
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          13,
+          111
+        ],
+        [
+          13,
+          112
+        ],
+        [
+          13,
+          113
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 1",
+      "points": [
+        [
+          16,
+          103
+        ],
+        [
+          16,
+          105
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          103
+        ],
+        [
+          16,
+          104
+        ],
+        [
+          16,
+          105
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 1",
+      "points": [
+        [
+          19,
+          111
+        ],
+        [
+          19,
+          113
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          19,
+          111
+        ],
+        [
+          19,
+          112
+        ],
+        [
+          19,
+          113
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 2",
+      "points": [
+        [
+          22,
+          103
+        ],
+        [
+          22,
+          105
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          22,
+          103
+        ],
+        [
+          22,
+          104
+        ],
+        [
+          22,
+          105
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 2",
+      "points": [
+        [
+          25,
+          111
+        ],
+        [
+          25,
+          113
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          25,
+          111
+        ],
+        [
+          25,
+          112
+        ],
+        [
+          25,
+          113
+        ]
+      ]
+    },
+    {
+      "name": "cmd addr 3",
+      "points": [
+        [
+          28,
+          103
+        ],
+        [
+          28,
+          105
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "op [value]",
+      "tags": [],
+      "cells": [
+        [
+          28,
+          103
+        ],
+        [
+          28,
+          104
+        ],
+        [
+          28,
+          105
+        ]
+      ]
+    },
+    {
+      "name": "answer addr 3",
+      "points": [
+        [
+          31,
+          111
+        ],
+        [
+          31,
+          113
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the value, on READ only",
+      "tags": [],
+      "cells": [
+        [
+          31,
+          111
+        ],
+        [
+          31,
+          112
+        ],
+        [
+          31,
+          113
+        ]
+      ]
+    },
+    {
+      "name": "answer chain block 1 -> block 0",
+      "points": [
+        [
+          35,
+          92
+        ],
+        [
+          43,
+          92
+        ],
+        [
+          43,
+          114
+        ],
+        [
+          34,
+          114
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "an answer from any block above",
+      "tags": [],
+      "cells": [
+        [
+          35,
+          92
+        ],
+        [
+          36,
+          92
+        ],
+        [
+          37,
+          92
+        ],
+        [
+          38,
+          92
+        ],
+        [
+          39,
+          92
+        ],
+        [
+          40,
+          92
+        ],
+        [
+          41,
+          92
+        ],
+        [
+          42,
+          92
+        ],
+        [
+          43,
+          92
+        ],
+        [
+          43,
+          93
+        ],
+        [
+          43,
+          94
+        ],
+        [
+          43,
+          95
+        ],
+        [
+          43,
+          96
+        ],
+        [
+          43,
+          97
+        ],
+        [
+          43,
+          98
+        ],
+        [
+          43,
+          99
+        ],
+        [
+          43,
+          100
+        ],
+        [
+          43,
+          101
+        ],
+        [
+          43,
+          102
+        ],
+        [
+          43,
+          103
+        ],
+        [
+          43,
+          104
+        ],
+        [
+          43,
+          105
+        ],
+        [
+          43,
+          106
+        ],
+        [
+          43,
+          107
+        ],
+        [
+          43,
+          108
+        ],
+        [
+          43,
+          109
+        ],
+        [
+          43,
+          110
+        ],
+        [
+          43,
+          111
+        ],
+        [
+          43,
+          112
+        ],
+        [
+          43,
+          113
+        ],
+        [
+          43,
+          114
+        ],
+        [
+          42,
+          114
+        ],
+        [
+          41,
+          114
+        ],
+        [
+          40,
+          114
+        ],
+        [
+          39,
+          114
+        ],
+        [
+          38,
+          114
+        ],
+        [
+          37,
+          114
+        ],
+        [
+          36,
+          114
+        ],
+        [
+          35,
+          114
+        ],
+        [
+          34,
+          114
+        ]
+      ]
+    },
+    {
+      "name": "answers -> head",
+      "points": [
+        [
+          35,
+          115
+        ],
+        [
+          45,
+          115
+        ],
+        [
+          45,
+          4
+        ],
+        [
+          15,
+          4
+        ],
+        [
+          15,
+          5
+        ]
+      ],
+      "note": "",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "every READ answer, the full height of the grid",
+      "tags": [],
+      "cells": [
+        [
+          35,
+          115
+        ],
+        [
+          36,
+          115
+        ],
+        [
+          37,
+          115
+        ],
+        [
+          38,
+          115
+        ],
+        [
+          39,
+          115
+        ],
+        [
+          40,
+          115
+        ],
+        [
+          41,
+          115
+        ],
+        [
+          42,
+          115
+        ],
+        [
+          43,
+          115
+        ],
+        [
+          44,
+          115
+        ],
+        [
+          45,
+          115
+        ],
+        [
+          45,
+          114
+        ],
+        [
+          45,
+          113
+        ],
+        [
+          45,
+          112
+        ],
+        [
+          45,
+          111
+        ],
+        [
+          45,
+          110
+        ],
+        [
+          45,
+          109
+        ],
+        [
+          45,
+          108
+        ],
+        [
+          45,
+          107
+        ],
+        [
+          45,
+          106
+        ],
+        [
+          45,
+          105
+        ],
+        [
+          45,
+          104
+        ],
+        [
+          45,
+          103
+        ],
+        [
+          45,
+          102
+        ],
+        [
+          45,
+          101
+        ],
+        [
+          45,
+          100
+        ],
+        [
+          45,
+          99
+        ],
+        [
+          45,
+          98
+        ],
+        [
+          45,
+          97
+        ],
+        [
+          45,
+          96
+        ],
+        [
+          45,
+          95
+        ],
+        [
+          45,
+          94
+        ],
+        [
+          45,
+          93
+        ],
+        [
+          45,
+          92
+        ],
+        [
+          45,
+          91
+        ],
+        [
+          45,
+          90
+        ],
+        [
+          45,
+          89
+        ],
+        [
+          45,
+          88
+        ],
+        [
+          45,
+          87
+        ],
+        [
+          45,
+          86
+        ],
+        [
+          45,
+          85
+        ],
+        [
+          45,
+          84
+        ],
+        [
+          45,
+          83
+        ],
+        [
+          45,
+          82
+        ],
+        [
+          45,
+          81
+        ],
+        [
+          45,
+          80
+        ],
+        [
+          45,
+          79
+        ],
+        [
+          45,
+          78
+        ],
+        [
+          45,
+          77
+        ],
+        [
+          45,
+          76
+        ],
+        [
+          45,
+          75
+        ],
+        [
+          45,
+          74
+        ],
+        [
+          45,
+          73
+        ],
+        [
+          45,
+          72
+        ],
+        [
+          45,
+          71
+        ],
+        [
+          45,
+          70
+        ],
+        [
+          45,
+          69
+        ],
+        [
+          45,
+          68
+        ],
+        [
+          45,
+          67
+        ],
+        [
+          45,
+          66
+        ],
+        [
+          45,
+          65
+        ],
+        [
+          45,
+          64
+        ],
+        [
+          45,
+          63
+        ],
+        [
+          45,
+          62
+        ],
+        [
+          45,
+          61
+        ],
+        [
+          45,
+          60
+        ],
+        [
+          45,
+          59
+        ],
+        [
+          45,
+          58
+        ],
+        [
+          45,
+          57
+        ],
+        [
+          45,
+          56
+        ],
+        [
+          45,
+          55
+        ],
+        [
+          45,
+          54
+        ],
+        [
+          45,
+          53
+        ],
+        [
+          45,
+          52
+        ],
+        [
+          45,
+          51
+        ],
+        [
+          45,
+          50
+        ],
+        [
+          45,
+          49
+        ],
+        [
+          45,
+          48
+        ],
+        [
+          45,
+          47
+        ],
+        [
+          45,
+          46
+        ],
+        [
+          45,
+          45
+        ],
+        [
+          45,
+          44
+        ],
+        [
+          45,
+          43
+        ],
+        [
+          45,
+          42
+        ],
+        [
+          45,
+          41
+        ],
+        [
+          45,
+          40
+        ],
+        [
+          45,
+          39
+        ],
+        [
+          45,
+          38
+        ],
+        [
+          45,
+          37
+        ],
+        [
+          45,
+          36
+        ],
+        [
+          45,
+          35
+        ],
+        [
+          45,
+          34
+        ],
+        [
+          45,
+          33
+        ],
+        [
+          45,
+          32
+        ],
+        [
+          45,
+          31
+        ],
+        [
+          45,
+          30
+        ],
+        [
+          45,
+          29
+        ],
+        [
+          45,
+          28
+        ],
+        [
+          45,
+          27
+        ],
+        [
+          45,
+          26
+        ],
+        [
+          45,
+          25
+        ],
+        [
+          45,
+          24
+        ],
+        [
+          45,
+          23
+        ],
+        [
+          45,
+          22
+        ],
+        [
+          45,
+          21
+        ],
+        [
+          45,
+          20
+        ],
+        [
+          45,
+          19
+        ],
+        [
+          45,
+          18
+        ],
+        [
+          45,
+          17
+        ],
+        [
+          45,
+          16
+        ],
+        [
+          45,
+          15
+        ],
+        [
+          45,
+          14
+        ],
+        [
+          45,
+          13
+        ],
+        [
+          45,
+          12
+        ],
+        [
+          45,
+          11
+        ],
+        [
+          45,
+          10
+        ],
+        [
+          45,
+          9
+        ],
+        [
+          45,
+          8
+        ],
+        [
+          45,
+          7
+        ],
+        [
+          45,
+          6
+        ],
+        [
+          45,
+          5
+        ],
+        [
+          45,
+          4
+        ],
+        [
+          44,
+          4
+        ],
+        [
+          43,
+          4
+        ],
+        [
+          42,
+          4
+        ],
+        [
+          41,
+          4
+        ],
+        [
+          40,
+          4
+        ],
+        [
+          39,
+          4
+        ],
+        [
+          38,
+          4
+        ],
+        [
+          37,
+          4
+        ],
+        [
+          36,
+          4
+        ],
+        [
+          35,
+          4
+        ],
+        [
+          34,
+          4
+        ],
+        [
+          33,
+          4
+        ],
+        [
+          32,
+          4
+        ],
+        [
+          31,
+          4
+        ],
+        [
+          30,
+          4
+        ],
+        [
+          29,
+          4
+        ],
+        [
+          28,
+          4
+        ],
+        [
+          27,
+          4
+        ],
+        [
+          26,
+          4
+        ],
+        [
+          25,
+          4
+        ],
+        [
+          24,
+          4
+        ],
+        [
+          23,
+          4
+        ],
+        [
+          22,
+          4
+        ],
+        [
+          21,
+          4
+        ],
+        [
+          20,
+          4
+        ],
+        [
+          19,
+          4
+        ],
+        [
+          18,
+          4
+        ],
+        [
+          17,
+          4
+        ],
+        [
+          16,
+          4
+        ],
+        [
+          15,
+          4
+        ],
+        [
+          15,
+          5
+        ]
+      ]
+    }
+  ]
+}
