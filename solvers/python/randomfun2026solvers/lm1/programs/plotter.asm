@@ -16,6 +16,22 @@
 ;
 ; Addresses start at 1: the generated hardware encodes the operation in the *sign*
 ; of the address word, so slot 0 would be ambiguous and is left unused.
+;
+; The machine that runs this is generated, not drawn — 112x106, footprint 12,544,
+; ~483k ticks averaged over the six public cases:
+;
+;   python -m randomfun2026solvers.lm1.machine plotter --out tasks/solutions/plotter_cpu.man
+;   node littleman/tools/display-frames.mjs tasks/solutions/plotter_cpu.man \
+;        tasks/problems/plotter.json
+;
+; It never halts: after the last round `IN` simply blocks, which is a legal end
+; state (GRADING.md — you do not have to halt).
+;
+; Cost per round is ~265k ticks at the worst legal segment (dx=31, dy=23), so only
+; 18 of the 20 rounds the constraints allow would fit inside the 5M cap. What makes
+; that moot is `privateTestCount: 0` — the graded set is the public one, whose worst
+; case is 8 rounds / 857k ticks. See ARCH.md §8 and tests/test_lm1_display.py; do
+; not add work to the inner loop without re-measuring both.
 
 .equ X0  1
 .equ Y0  2
@@ -58,7 +74,7 @@ sxpos:  LDI 1
         ST  SX
 
         ; dy = -abs(y1 - y0): if y1 - y0 is already negative it *is* -abs
-        dyset:  LD  Y1
+dyset:  LD  Y1
         SUB Y0
         BRN dykeep
         NEG
