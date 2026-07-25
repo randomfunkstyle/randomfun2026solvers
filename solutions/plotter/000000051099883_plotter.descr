@@ -1,0 +1,16 @@
+# plotter — submission 28a95c38-73a8-406f-8e1a-eef830c81e07
+
+verdict      done: 20/20 cases, area2 3969, avgTicks 12,875, score 51,099,883
+submitted    2026-07-25T14:39:59+0300
+grid         49x63
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  e2acd5a92b1413d260feea73d7ce358ad829471ebfe23ef1b7deb55849c1c30f
+commit       cbe9362
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+painter 5->4 rows (@ on the lap row), worker one col narrower: 49x63

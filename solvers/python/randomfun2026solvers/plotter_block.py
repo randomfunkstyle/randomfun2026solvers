@@ -41,7 +41,7 @@ __all__ = [
 DISPLAY_W, DISPLAY_H = 32, 24
 LAP_TICKS = 14          # painter cells per pixel
 GAP_ADDR_DATA = 5       # ticks from s@ADDR to s@DATA inside one lap
-GAP_DATA_SWAP = 26      # ticks from the last s@DATA to s@SWAP
+GAP_DATA_SWAP = 25      # ticks from the last s@DATA to s@SWAP
 
 
 class OpModel:
@@ -234,11 +234,10 @@ def pipe(g: Circuit, cells, into) -> int:
 PAINTER = [
     ">.............v",
     "ds`15`v........",
-    "^mM+rs<........",
-    "..........@v...",
+    "^mM+rs<...@v...",
     "^....MWbrMr<s0<",
 ]
-PAINTER_W, PAINTER_H = 15, 5
+PAINTER_W, PAINTER_H = 15, 4
 S_ADDR, S_DATA, S_SWAP = 1, 5, 12       # interior columns of the three sends
 
 
@@ -682,11 +681,11 @@ IN_C, RET_C, FWD_C, PNT_C = 1, 29, 31, 39     # grid columns of the four ports
 # locally and eats the one row a later pipe needed, so the collision only ever moves;
 # stating all seven and allocating the shared rows and columns up front is what closes
 # the box. `_PATHS` is checked against the ports as it is drawn.
-BLOCK_W, BLOCK_H = 49, 64
+BLOCK_W, BLOCK_H = 49, 63
 _DX, _DY = 9, 1                  # display walls: cols 9..42, rows 1..26
 _WX, _WY = 9, 31                 # worker walls:  cols 8..49, rows 30..50
-_PX, _PY = 9, 57                 # painter walls: cols 8..24, rows 56..62
-_RX, _RY = 34, 56                # relay walls:   cols 33..37, rows 55..62
+_PX, _PY = 9, 57                 # painter walls: cols 8..24, rows 56..61
+_RX, _RY = 34, 55                # relay walls:   cols 33..37, rows 54..61
 _IX, _IY = 4, 31                 # the input room, west of the worker
 
 # Shared resources, allocated before anything is drawn:
@@ -702,9 +701,9 @@ _IX, _IY = 4, 31                 # the input room, west of the worker
 # and bringing the increment's return leg up under the relay instead of three rows
 # below it, took the box from 57x70 to 50x67.
 _PATHS = {
-    "fwd":   ([(39, 51), (39, 58), (38, 58)], "r_in"),
-    "pnt":   ([(47, 51), (47, 63), (7, 63), (7, 59)], "p_in"),
-    "r_out": ([(35, 54), (35, 51), (3, 51), (3, 28), (37, 28), (37, 29)], "ret"),
+    "fwd":   ([(39, 51), (39, 57), (38, 57)], "r_in"),
+    "pnt":   ([(47, 51), (47, 62), (7, 62), (7, 59)], "p_in"),
+    "r_out": ([(35, 53), (35, 51), (3, 51), (3, 28), (37, 28), (37, 29)], "ret"),
     "i_out": ([(5, 30), (5, 29), (9, 29)], "in"),
     "addr":  ([(10, 55), (10, 54), (0, 54), (0, 0), (10, 0)], "d_addr"),
     "data":  ([(14, 55), (14, 53), (1, 53), (1, 3), (8, 3)], "d_data"),
