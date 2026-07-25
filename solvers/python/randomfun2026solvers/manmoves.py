@@ -103,6 +103,46 @@ def reglyph(
     return out
 
 
+def hug_violations(ast: Ast) -> list[str]:
+    """Cells where a pipe bends **away** from a wall it is hugging.
+
+    A loader rule, and one that costs a whole afternoon to find by symptom: the
+    engine decides where a pipe *starts* from the cell behind its arrowhead, so a
+    cell whose arrowhead points away from an adjacent wall is read as a **new pipe
+    leaving that room**. The grid then either refuses to load or turns a legitimate
+    pipe into a room-to-itself loop.
+
+    It matters here because nothing else catches it. Re-routing with
+    :func:`~randomfun2026solvers.manroute.route_like` optimises for deviation and
+    length; it has no idea that a bend one cell from a wall is illegal, and the
+    result still renders, still analyses as a pipe, and computes the wrong thing.
+    So every generated route is checked against this before it is believed.
+    """
+    walls: dict[tuple[int, int], int] = {}
+    for room in ast.rooms:
+        bw, bh = room.size
+        for dx in range(bw):
+            for dy in range(bh):
+                if dx in (0, bw - 1) or dy in (0, bh - 1):
+                    walls[(room.x + dx, room.y + dy)] = room.id
+    out: list[str] = []
+    for pipe in ast.pipes:
+        for i, (cell, glyph) in enumerate(zip(pipe.path, pipe.glyphs, strict=False)):
+            d = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}.get(glyph)
+            if d is None:
+                continue  # `-`/`|` carry no heading of their own
+            behind = (cell[0] - d[0], cell[1] - d[1])
+            if behind in walls and i != 0:
+                # An arrowhead whose *predecessor* is a wall is exactly the shape
+                # the loader reads as "a pipe starts here".
+                out.append(
+                    f"pipe{pipe.id} cell {i} at {cell} shows {glyph!r} with room"
+                    f"{walls[behind]}'s wall at {behind} behind it: the loader will read "
+                    f"this as a new pipe leaving that room"
+                )
+    return out
+
+
 def _contiguous(path: list[tuple[int, int]]) -> bool:
     return all(
         abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1 for a, b in zip(path, path[1:], strict=False)
@@ -144,9 +184,9 @@ def _drop(ast: Ast, axis: str, index: int, capacity: dict[tuple[int, ...], int])
         # cut straight through a pinned one shrank it instead. That is the single
         # case the flag exists for: a display's interior is legitimately blank, its
         # size IS the pixel resolution, and no glyph check will ever refuse the cut.
-        if room.pinned:
+        if room.rigid_size:
             raise MoveError(
-                f"room{room.id} is pinned but {axis} {index} would shrink it: {room.note}"
+                f"room{room.id}'s size is fixed but {axis} {index} would shrink it: {room.note}"
             )
         # A Corridor holds `.` cells, which SPEC calls a nop -- the same as a
         # blank. They are erasable, so they must not count as content here;
@@ -312,9 +352,9 @@ def _stretch(ast: Ast, axis: str, index: int) -> DropReport:
             continue
         if index > hi:
             continue
-        if room.pinned:
+        if room.rigid_size:
             raise MoveError(
-                f"room{room.id} is pinned but {axis} {index} would widen it: {room.note}"
+                f"room{room.id}'s size is fixed but {axis} {index} would widen it: {room.note}"
             )
         if ax:
             room.h += 1
@@ -457,6 +497,8 @@ def _squash(ast: Ast, room_id: int, axis: str, index: int,
     room = next((r for r in ast.rooms if r.id == room_id), None)
     if room is None:
         raise MoveError(f"no room{room_id}")
+    if room.rigid_size:
+        raise MoveError(f"room{room_id}'s size is fixed: {room.note}")
     if room.pinned:
         raise MoveError(f"room{room_id} is pinned: {room.note}")
     lo = room.y if ax else room.x

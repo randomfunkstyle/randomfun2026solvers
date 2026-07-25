@@ -66,6 +66,10 @@ __all__ = [
     "circuits",
     "BlockSquash",
     "squash_report",
+    "Span",
+    "spans",
+    "merge_candidates",
+    "near_merges",
     "PipeRole",
     "pipe_roles",
     "ring_groups",
@@ -242,9 +246,10 @@ def _occupants(ast: Ast, axis: str, index: int) -> list[Occupant]:
                 Occupant(tag, "own wall", 1, False, f"{axis} {index} IS the box edge")
             )
             continue
-        if room.pinned:
-            out.append(Occupant(tag, f"pinned {room.kind}", room.h if ax else room.w, False,
-                                room.note or "pinned"))
+        if room.rigid_size or room.pinned:
+            why = "size is fixed" if room.rigid_size else "pinned"
+            out.append(Occupant(tag, f"{why} {room.kind}", room.h if ax else room.w, False,
+                                room.note or why))
             continue
         # The two perpendicular walls the line crosses give way: the box narrows.
         out.append(Occupant(tag, "crossing walls", 2, True, f"{room.kind} box narrows by 1"))
@@ -843,7 +848,7 @@ def squash_report(ast: Ast, *, verify: bool = True) -> list[BlockSquash]:
             p.id for p in ast.pipes if p.src == room.id or p.dst == room.id
         ]
         lines: list[RoomLine] = []
-        if verify and not room.pinned:
+        if verify and not (room.rigid_size or room.pinned):
             for axis, idxs in (("col", free_cols), ("row", free_rows)):
                 for i in idxs:
                     trial, outcome = try_squash(ast, room.id, axis, i)
@@ -860,30 +865,35 @@ def squash_report(ast: Ast, *, verify: bool = True) -> list[BlockSquash]:
             node=f"room{room.id}",
             kind=room.kind,
             interior=(room.w, room.h),
-            free_cols=free_cols if not room.pinned else [],
-            free_rows=free_rows if not room.pinned else [],
+            free_cols=free_cols if not (room.rigid_size or room.pinned) else [],
+            free_rows=free_rows if not (room.rigid_size or room.pinned) else [],
             live_cells=len(live),
             attached_pipes=sorted(attached),
-            pinned=room.pinned,
+            pinned=room.rigid_size or room.pinned,
             note=room.note,
             lines=lines,
         ))
     return out
 
 
-def _abuts_pinned(ast: Ast, rep: LineReport) -> str:
-    """The pinned room whose wall a pipe on this line attaches to, if any.
+def _abuts_fixed(ast: Ast, rep: LineReport) -> str:
+    """The size-fixed room whose wall a pipe on this line attaches to, if any.
 
-    A pipe can only reach a wall from the line immediately outside it. If that
-    wall belongs to a room that may not move, the line is not spare geometry
-    however empty of instructions it looks — which is the case on ``plotter``'s
-    row 0: it carries one pipe and nothing else, and it is the only row from which
-    the display's top wall (its ADDR port) can ever be written.
+    A pipe can only reach a wall from the line immediately outside it, so a
+    pipe-only line next to such a wall is not the spare geometry it looks like —
+    ``plotter``'s row 0 carries one pipe and no instruction, and is the only row
+    from which the display's top wall (its ADDR port) can be written.
+
+    Reported as forced *at this position*, not forced absolutely, because the room's
+    address is free even when its size is not. That distinction is the move: on
+    ``plotter`` the band above the worker only collapsed once the panel slid four
+    columns west, which put free cells under two of its own wall columns. A report
+    that called the line impossible would have hidden the one thing to try.
     """
     ax = 0 if rep.axis == "col" else 1
     pinned_walls: dict[tuple[int, int], str] = {}
     for room in ast.rooms:
-        if not room.pinned:
+        if not (room.rigid_size or room.pinned):
             continue
         bw, bh = room.size
         for dx in range(bw):
@@ -898,6 +908,123 @@ def _abuts_pinned(ast: Ast, rep: LineReport) -> str:
                 if (nx, ny) in pinned_walls:
                     return pinned_walls[(nx, ny)]
     return ""
+
+
+# ── the lever that actually shrinks a packed grid ────────────────────────────
+@dataclass(frozen=True)
+class Span:
+    """What one grid line occupies, as an extent rather than a count.
+
+    The extent is the part that matters and the count is the part that misleads.
+    A row holding two glyphs in thirty-nine columns is nearly empty by count and
+    completely blocked by extent, and it is the extent that decides whether
+    anything else can share the line.
+    """
+
+    axis: str
+    index: int
+    lo: int
+    hi: int
+    cells: int
+    owners: tuple[str, ...]
+
+    @property
+    def width(self) -> int:
+        return self.hi - self.lo + 1
+
+    @property
+    def density(self) -> float:
+        return self.cells / self.width if self.width else 0.0
+
+    def disjoint_from(self, other: Span) -> bool:
+        return self.hi < other.lo or other.hi < self.lo
+
+    def __str__(self) -> str:
+        return (
+            f"{self.axis} {self.index:3d}  {self.lo:3d}..{self.hi:<3d} "
+            f"({self.width:2d} wide, {self.cells:3d} cells, {self.density:.0%} dense)  "
+            f"{', '.join(self.owners)}"
+        )
+
+
+def other_of(w: int, h: int, axis: str) -> int:
+    """The extent the score falls back to when `axis` shrinks."""
+    return w if axis == "row" else h
+
+
+def spans(ast: Ast, axis: str) -> list[Span]:
+    """The occupied extent of every line on `axis`."""
+    ax = 0 if axis == "col" else 1
+    other = 1 - ax
+    rows = render(ast)
+    by_line: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for node in ast.nodes:
+        tag = f"{type(node).__name__.replace('Node', '').lower()}{node.id}"
+        for c in node.paint():
+            by_line[c[ax]].append((c[other], tag))
+    out = []
+    for i in sorted(by_line):
+        coords = [c for c, _ in by_line[i]]
+        out.append(Span(
+            axis=axis,
+            index=i,
+            lo=min(coords),
+            hi=max(coords),
+            cells=len(coords),
+            owners=tuple(sorted({t for _, t in by_line[i]})),
+        ))
+    _ = rows
+    return out
+
+
+def merge_candidates(ast: Ast, axis: str) -> list[tuple[Span, Span]]:
+    """Pairs of lines that could **share** one line, by extent.
+
+    This is the move that shrinks a grid nothing else will touch, and it is the one
+    a cut-based compactor cannot see. ``plotter`` came down 64 rows to 56 almost
+    entirely this way — the worker's north wall put on the same row as the SWAP leg
+    because SWAP holds columns 2..6 and the wall 8..46; the prologue put on the same
+    row as the base block because the reads end at 14 and the first pop is at 17.
+    Neither row was *free*. Both were half-empty in a way only the extent shows.
+
+    Reported as candidates, not moves. Folding two lines together is a placer's job
+    and the usual blocker is not geometry but binding: two ops that were on
+    different rows may end up equidistant from two pipes. What this supplies is the
+    shortlist, ranked by how much slack the pair has.
+    """
+    all_spans = spans(ast, axis)
+    pairs = []
+    for i, a in enumerate(all_spans):
+        for b in all_spans[i + 1 :]:
+            if a.disjoint_from(b):
+                pairs.append((a, b))
+    # Widest gap first: the more clearance between the two extents, the less likely
+    # a shared line puts two ops close enough to re-bind.
+    return sorted(pairs, key=lambda p: -(max(p[0].lo, p[1].lo) - min(p[0].hi, p[1].hi)))
+
+
+def near_merges(ast: Ast, axis: str, *, limit: int = 8) -> list[tuple[Span, Span, int]]:
+    """Pairs that would fold if one of them moved `k` cells along the line.
+
+    A grid that is already packed reports no disjoint pair at all, which is true and
+    useless — so the useful question is *how far off* the closest pairs are. On
+    ``plotter`` this is precisely how the row above the worker was recovered: the
+    display's bottom wall overlapped the worker's north wall across every column, and
+    moving the panel four columns west put free cells under two of its own wall
+    columns, at which point the two lines folded and the band went 2 rows to 1.
+
+    So the overlap is the price of the fold, quoted in cells to shift. A pair
+    overlapping by 3 is a real lead; one overlapping by 40 is two things that both
+    span the grid.
+    """
+    all_spans = spans(ast, axis)
+    out = []
+    for i, a in enumerate(all_spans):
+        for b in all_spans[i + 1 :]:
+            overlap = min(a.hi, b.hi) - max(a.lo, b.lo) + 1
+            if overlap > 0:
+                out.append((a, b, overlap))
+    return sorted(out, key=lambda t: (t[2], t[0].cells + t[1].cells))[:limit]
 
 
 # ── the whole answer, as text ────────────────────────────────────────────────
@@ -989,7 +1116,7 @@ def report(ast: Ast, *, capacity: dict[tuple[int, ...], int] | None = None) -> s
     pipe_only = [r for r in f.pipe_only_lines() if r.axis == axis]
     if pipe_only:
         lines += ["", f"── re-route candidates: {axis}s holding pipe and nothing else ──"]
-        forced = {r.index: n for r in pipe_only if (n := _abuts_pinned(ast, r))}
+        forced = {r.index: n for r in pipe_only if (n := _abuts_fixed(ast, r))}
         solo = [
             r for r in pipe_only if len(r.pipes_here) == 1 and r.index not in forced
         ]
@@ -1001,8 +1128,9 @@ def report(ast: Ast, *, capacity: dict[tuple[int, ...], int] | None = None) -> s
             )
             if r.index in forced:
                 lines.append(
-                    f"    FORCED: a pipe here attaches to {forced[r.index]}, and this is the "
-                    f"only {axis} from which that wall can be reached — not slack"
+                    f"    FORCED while {forced[r.index]} stays put: a pipe here attaches to "
+                    f"its wall and this is the only {axis} that reaches it. Its SIZE is fixed, "
+                    f"its POSITION is not — moving it is the way out"
                 )
         extent = h if axis == "row" else w
         other = w if axis == "row" else h
@@ -1036,6 +1164,30 @@ def report(ast: Ast, *, capacity: dict[tuple[int, ...], int] | None = None) -> s
             lines.append(f"{axis} {r.index}: {len(r.blockers)} blocker(s)")
             for o in r.blockers:
                 lines.append(f"    {o}")
+
+    # Sharing a line is the lever that shrinks a grid with no free line left, so it
+    # is reported on the binding axis whether or not anything else was found.
+    cands = merge_candidates(ast, axis)
+    lines += ["", f"── {axis}s that could SHARE one line (disjoint extents) ──"]
+    if not cands:
+        lines.append(
+            "none are disjoint today — so the question becomes how far off the closest "
+            "pairs are, since moving one of them along the line creates the gap:"
+        )
+        for a, b, overlap in near_merges(ast, axis):
+            lines.append(f"  shift {overlap:3d} to fold  {a}")
+            lines.append(f"                     {b}")
+    else:
+        extent = h if axis == "row" else w
+        lines.append(
+            f"{len(cands)} pair(s); folding k of them takes the {axis} extent {extent} -> "
+            f"{extent - 1} each, factor {max(extent, other_of(w, h, axis)) ** 2:,} -> "
+            f"{max(extent - 1, other_of(w, h, axis)) ** 2:,} for the first"
+        )
+        for a, b in cands[:8]:
+            gap = max(a.lo, b.lo) - min(a.hi, b.hi) - 1
+            lines.append(f"  gap {gap:3d}  {a}")
+            lines.append(f"            {b}")
 
     lines += ["", "── blocks ──"]
     lines += [str(b) for b in squash_report(ast)]

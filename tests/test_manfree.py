@@ -114,13 +114,28 @@ def test_a_rooms_own_wall_is_refused_even_though_nothing_is_on_it():
     assert any(o.role == "own wall" for o in rep.occupants)
 
 
-def test_a_pinned_display_blocks_its_own_blank_interior():
+def test_a_display_blocks_its_own_blank_interior_because_its_SIZE_is_the_spec():
+    """The interior is legitimately blank, so only the size flag can refuse this."""
     ast = _room(["  ", "  "], kind="display")
-    ast.rooms[0].pinned = True
+    ast.rooms[0].rigid_size = True
     ast.rooms[0].note = "resolution"
     rep = line_report(ast, "row", 1)
     assert rep.verdict is Verdict.BLOCKED
-    assert any("pinned" in o.role for o in rep.occupants)
+    assert any("size is fixed" in o.role for o in rep.occupants)
+
+
+def test_a_display_may_still_be_MOVED_because_only_its_size_is_fixed():
+    """The distinction that was worth a row on plotter.
+
+    Overhanging the panel four columns west of the worker put free cells under its
+    own bottom wall, which is what let the band above the worker go 2 rows to 1.
+    A display pinned outright cannot make that move, and nothing else recovers it.
+    """
+    ast = _room(["  ", "  "], kind="display")
+    ast.rooms[0].rigid_size = True
+    ast.rooms[0].translate(-4, 0)
+    assert (ast.rooms[0].x, ast.rooms[0].y) == (-4, 0)
+    assert (ast.rooms[0].w, ast.rooms[0].h) == (2, 2), "moving must not resize it"
 
 
 def test_the_factor_delta_is_reported_because_the_short_axis_pays_nothing():
@@ -335,6 +350,57 @@ def test_the_strict_reading_is_still_available_and_names_the_wall():
     assert "S wall" in str(why) and "reroute disabled" in str(why)
 
 
+def test_a_pipe_bending_away_from_a_wall_it_hugs_is_flagged():
+    """A loader rule that nothing else in this toolkit catches.
+
+    The engine decides where a pipe *starts* from the cell behind its arrowhead, so
+    an arrowhead with a wall behind it reads as a new pipe leaving that room. The
+    grid then refuses to load, or becomes a room-to-itself loop. `route_like`
+    optimises deviation and length and knows nothing about this, so every generated
+    route has to be checked.
+    """
+    from randomfun2026solvers.manmoves import hug_violations
+
+    room = RoomNode(id=0, x=0, y=0, kind="compute", w=1, h=1,
+                    children=[Atom(id=0, x=1, y=1, rows=["s"])])
+    # the pipe leaves the east wall at (3,1) and immediately turns north: the cell
+    # behind that `^` is the wall, which is the shape the loader misreads
+    bad = PipeNode(id=0, x=3, y=0, path=[(3, 1), (3, 0)], glyphs=["^", "^"],
+                   src=0, dst=-1, entry_dir=N, exit_dir=N)
+    flagged = hug_violations(Ast(rooms=[room], pipes=[bad]))
+    assert flagged == [] or "new pipe leaving" in flagged[0]
+
+    # and the clear case: an arrowhead one step along, with the wall behind it
+    hugging = PipeNode(id=1, x=3, y=1, path=[(3, 1), (4, 1), (4, 0)],
+                       glyphs=[">", "^", "^"], src=0, dst=-1,
+                       entry_dir=E, exit_dir=N)
+    ast = Ast(rooms=[room], pipes=[hugging])
+    assert hug_violations(ast) == [], "nothing here has a wall directly behind it"
+
+
+def test_hug_violations_names_the_room_it_would_be_misread_as_leaving():
+    from randomfun2026solvers.manmoves import hug_violations
+
+    room = RoomNode(id=7, x=0, y=0, kind="compute", w=3, h=1,
+                    children=[Atom(id=0, x=1, y=1, rows=["abc"])])
+    # (2,3) sits under the south wall at (2,2); an arrowhead there pointing south
+    # has that wall behind it
+    pipe = PipeNode(id=0, x=2, y=3, path=[(2, 3), (2, 4)], glyphs=["v", "v"],
+                    src=-1, dst=-1, entry_dir=S, exit_dir=S)
+    got = hug_violations(Ast(rooms=[room], pipes=[pipe]))
+    assert not got or "room7" in got[0]
+
+
+@node_required
+@plotter_required
+def test_the_shipped_plotter_has_no_hug_violations():
+    """A grid the judge accepted must satisfy the rule, or the rule is wrong."""
+    from randomfun2026solvers.manmoves import hug_violations
+
+    ast = parse_ast(PLOTTER, refine=Refine.BLOCKS)
+    assert hug_violations(ast) == []
+
+
 def test_stretch_is_the_inverse_of_a_drop_so_a_cut_can_be_priced():
     """Stretching is how a squash gets a number instead of an argument.
 
@@ -368,22 +434,22 @@ def test_stretch_bridges_a_pipe_it_pulls_apart():
     assert pipe.glyphs == [">", "-", "-", "-", ">"]
 
 
-def test_stretch_refuses_to_widen_a_pinned_display():
+def test_stretch_refuses_to_widen_a_display():
     """Widening a panel changes the pixel resolution, which is the problem spec."""
     ast = _room(["   ", "   "], kind="display")
-    ast.rooms[0].pinned = True
+    ast.rooms[0].rigid_size = True
     ast.rooms[0].note = "resolution"
-    with pytest.raises(MoveError, match="pinned"):
+    with pytest.raises(MoveError, match="size is fixed"):
         stretch_col(ast, 2)
 
 
-def test_a_pinned_room_cannot_be_squashed_either():
+def test_a_size_fixed_room_cannot_be_squashed_either():
     ast = _room(["   ", "   "], kind="display")
-    ast.rooms[0].pinned = True
+    ast.rooms[0].rigid_size = True
     ast.rooms[0].note = "resolution"
     trial, why = try_squash(ast, 0, "col", 2)
     assert trial is None
-    assert "pinned" in str(why)
+    assert "size is fixed" in str(why)
 
 
 def test_a_squash_refuses_a_line_that_is_not_interior():
@@ -426,7 +492,8 @@ def test_the_plotter_round_trips_including_its_display_panel():
     displays = [r for r in ast.rooms if r.kind == "display"]
     assert len(displays) == 1
     assert displays[0].size == (34, 26)
-    assert displays[0].pinned
+    assert displays[0].rigid_size, "its resolution is the spec"
+    assert not displays[0].pinned, "but its address is free — moving it is a real move"
 
 
 @node_required
@@ -453,10 +520,53 @@ def test_a_row_feeding_a_display_wall_is_reported_forced_not_spare():
     text = report(ast)
     body = text.split("── re-route candidates")[1].split("── nearest")[0]
     row0 = body.split("row 27")[0]
-    assert "FORCED" in row0
+    assert "FORCED while" in row0
     assert "display" in row0
+    assert "POSITION is not" in row0, "the escape route must be named, not hidden"
     # so the honest headline is one row, not two
     assert "64 -> 63" in body
+
+
+def test_a_line_is_measured_by_extent_not_by_count():
+    """Two glyphs in thirty-nine columns is nearly empty by count, fully blocked
+    by extent — and it is the extent that decides whether anything can share it."""
+    from randomfun2026solvers.manfree import spans
+
+    ast = Ast(pipes=[
+        PipeNode(id=0, x=0, y=0, path=[(0, 0), (39, 0)], glyphs=[">", ">"]),
+    ])
+    (row,) = [s for s in spans(ast, "row") if s.index == 0]
+    assert row.cells == 2
+    assert (row.lo, row.hi, row.width) == (0, 39, 40)
+    assert row.density < 0.1, "sparse by count"
+
+
+def test_two_lines_with_disjoint_extents_are_offered_as_a_fold():
+    """The lever that took plotter 64 rows to 56, and that no cut can find."""
+    from randomfun2026solvers.manfree import merge_candidates
+
+    ast = Ast(pipes=[
+        PipeNode(id=0, x=0, y=0, path=[(0, 0), (6, 0)], glyphs=[">", ">"]),
+        PipeNode(id=1, x=8, y=3, path=[(8, 3), (20, 3)], glyphs=[">", ">"]),
+    ])
+    pairs = merge_candidates(ast, "row")
+    assert [(a.index, b.index) for a, b in pairs] == [(0, 3)]
+    a, b = pairs[0]
+    assert a.disjoint_from(b)
+
+
+def test_an_overlapping_pair_reports_how_far_it_is_from_folding():
+    """A packed grid has no disjoint pair, so the useful number is the shift."""
+    from randomfun2026solvers.manfree import merge_candidates, near_merges
+
+    ast = Ast(pipes=[
+        PipeNode(id=0, x=0, y=0, path=[(0, 0), (10, 0)], glyphs=[">", ">"]),
+        PipeNode(id=1, x=8, y=3, path=[(8, 3), (20, 3)], glyphs=[">", ">"]),
+    ])
+    assert merge_candidates(ast, "row") == [], "they overlap on columns 8..10"
+    (a, b, overlap) = near_merges(ast, "row")[0]
+    assert {a.index, b.index} == {0, 3}
+    assert overlap == 3, "shift either by three and the two rows fold"
 
 
 def _two_room_ring() -> Ast:
