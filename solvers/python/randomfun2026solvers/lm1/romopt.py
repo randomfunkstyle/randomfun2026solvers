@@ -216,6 +216,7 @@ def search_handmade(
     program_slug: str,
     rounds: int = 10,
     shape: Shape = "auto",
+    baseline_rom_rows: int | None = None,
     log=print,
 ) -> HandmadeRomSearch:
     """Refold a generator-identical top ROM while preserving a hand-made tail.
@@ -226,7 +227,12 @@ def search_handmade(
     rows.
     """
     problem_slug = programs.problem_of(program_slug)
-    baseline_machine = machine.build_for(program_slug)
+    registered = machine.build_for(program_slug)
+    baseline_machine = (
+        registered
+        if baseline_rom_rows is None
+        else _build(program_slug, baseline_rom_rows)
+    )
     handmade_rows = tuple(grid.read_text(encoding="utf-8").splitlines())
     old_width, old_height = _top_room_size(handmade_rows)
     generated_width, generated_height = _top_room_size(baseline_machine.rows)
@@ -339,6 +345,11 @@ def main() -> None:
         action="store_true",
         help="refold a generator-identical top ROM and preserve the hand-made suffix",
     )
+    ap.add_argument(
+        "--baseline-rom-rows",
+        type=int,
+        help="current top-ROM row count for a hand-made grid (default: registered fold)",
+    )
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
 
@@ -348,6 +359,7 @@ def main() -> None:
             program_slug=args.program,
             rounds=args.rounds,
             shape=args.shape,
+            baseline_rom_rows=args.baseline_rom_rows,
         )
         print(
             f"result ROM rows={handmade.rom_rows} "

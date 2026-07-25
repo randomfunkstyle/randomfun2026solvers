@@ -231,3 +231,11 @@ For `littleman/examples/snake-handmade.man`, 8 ROM rows are the local optimum:
 121×100 becomes 102×102 and the measured public objective falls from
 1,738,577,755.20 to 1,219,369,608.00. The lower 90-line hand-made suffix is
 otherwise byte-identical.
+
+ROM10 was also run against every current best submitted generator-backed CPU
+solution. Gradebook (31 rows), sudoku-validity (23), snake (8), and matmul (5)
+are strict neighboring-fold optima. TCP has a neutral 3–5-row plateau. Brackets
+can spend otherwise free height: 7→13 ROM rows keeps the grid width and 95²
+factor unchanged while reducing public average ticks from 25,593 to 25,579
+(objective 230,976,825 → 230,850,475). The verified standalone result is
+`tasks/compacted/brackets_submitted_rom10.man`.
