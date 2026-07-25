@@ -172,19 +172,21 @@ def build() -> dict:
     for name, delta in (("MVUP", -16), ("MVRIGHT", 1), ("MVDOWN", 16),
                         ("MVLEFT", -1)):
         step = ["M", L(abs(delta))] + (["N"] if delta < 0 else []) + ["+"]
+
         # A painter run is `1, addr, colour`, and the two constants clobber A --
-        # but not B.  Parking the address in B instead of the scratch FIFO turns
-        # `sg sg 1 sp rg sp 0 sp` into a straight `M 1 sp W sp M 0 sp W` with no
-        # pipe op between the sends at all: 11 zone transitions become 4, and
-        # this is the block that runs once per robot move.
-        def paint(colour):
+        # but not B.  Parking the address in B rather than in the scratch FIFO
+        # turns `sg sg 1 sp rg sp 0 sp` into a straight `M 1 sp W sp M 0 sp W`
+        # with no pipe op at all between the sends: 11 pipe-zone transitions
+        # become 4, in the block that runs once per robot move.
+        def paint(colour: int) -> list[str]:
             return ["M", L(1), "sp", "W", "sp", "M", L(colour), "sp", "W"]
+
         P[name] = ([
             "rg",                      # drop acc
             "rf", "sf", "rf",          # rotate Q; A = p, F = [Q]
-            *paint(0),                 # vacated cell back to path; A = p
+            *paint(0),                 # the vacated cell back to path; A = p
             *step,                     # A = p'
-            *paint(10),                # entered cell; A = p'
+            *paint(10),                # the entered cell; A = p'
             "sf",                      # F = [Q, p']
             L(0), "sp",                # commit the frame
         ], "ROTPRE")
