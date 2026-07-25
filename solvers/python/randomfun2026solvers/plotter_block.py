@@ -681,27 +681,33 @@ IN_C, RET_C, FWD_C, PNT_C = 1, 29, 31, 39     # grid columns of the four ports
 # locally and eats the one row a later pipe needed, so the collision only ever moves;
 # stating all seven and allocating the shared rows and columns up front is what closes
 # the box. `_PATHS` is checked against the ports as it is drawn.
-BLOCK_W, BLOCK_H = 58, 70
-_DX, _DY = 16, 1                 # display walls: cols 16..49, rows 1..26
-_WX, _WY = 16, 31                # worker walls:  cols 15..56, rows 30..52
-_PX, _PY = 16, 59                # painter walls: cols 15..31, rows 58..64
-_RX, _RY = 41, 59                # relay walls:   cols 40..44, rows 58..65
-_IX, _IY = 11, 31                # the input room, west of the worker
+BLOCK_W, BLOCK_H = 50, 66
+_DX, _DY = 9, 1                  # display walls: cols 9..42, rows 1..26
+_WX, _WY = 9, 31                 # worker walls:  cols 8..49, rows 30..52
+_PX, _PY = 9, 59                 # painter walls: cols 8..24, rows 58..64
+_RX, _RY = 34, 58                # relay walls:   cols 33..37, rows 57..64
+_IX, _IY = 4, 31                 # the input room, west of the worker
 
 # Shared resources, allocated before anything is drawn:
 #   band over the worker's north wall   row 27 SWAP, row 28 ring-return, row 29 input
-#   west channels (painter -> display)  col 2 ADDR, col 4 DATA, col 6 SWAP
+#   west channels (painter -> display)  col 0 ADDR, col 1 DATA, col 2 SWAP
 #   row each display pipe bends west    56 ADDR, 55 DATA, 54 SWAP
-# Channels and bend rows nest opposite ways (2<4<6 against 56>55>54), which is what
+# Channels and bend rows nest opposite ways (0<1<2 against 56>55>54), which is what
 # keeps the three display pipes from crossing; the band rows are one each.
+#
+# The channels are *adjacent*, not spaced. Two parallel pipes may touch — a pipe is
+# followed by its own arrowheads, so neighbouring flows never merge (the painter probe
+# ran two touching channels for 28 rows and drew a correct frame). Closing those gaps,
+# and bringing the increment's return leg up under the relay instead of three rows
+# below it, took the box from 57x70 to 50x67.
 _PATHS = {
-    "fwd":   ([(46, 53), (46, 61), (45, 61)], "r_in"),
-    "pnt":   ([(54, 53), (54, 69), (14, 69), (14, 61)], "p_in"),
-    "r_out": ([(42, 57), (42, 53), (10, 53), (10, 28), (44, 28), (44, 29)], "ret"),
-    "i_out": ([(12, 30), (12, 29), (16, 29)], "in"),
-    "addr":  ([(17, 57), (17, 56), (2, 56), (2, 0), (17, 0)], "d_addr"),
-    "data":  ([(21, 57), (21, 55), (4, 55), (4, 3), (15, 3)], "d_data"),
-    "swap":  ([(28, 57), (28, 54), (6, 54), (6, 27), (46, 27)], "d_swap"),
+    "fwd":   ([(39, 53), (39, 60), (38, 60)], "r_in"),
+    "pnt":   ([(47, 53), (47, 65), (7, 65), (7, 61)], "p_in"),
+    "r_out": ([(35, 56), (35, 53), (3, 53), (3, 28), (37, 28), (37, 29)], "ret"),
+    "i_out": ([(5, 30), (5, 29), (9, 29)], "in"),
+    "addr":  ([(10, 57), (10, 56), (0, 56), (0, 0), (10, 0)], "d_addr"),
+    "data":  ([(14, 57), (14, 55), (1, 55), (1, 3), (8, 3)], "d_data"),
+    "swap":  ([(21, 57), (21, 54), (2, 54), (2, 27), (39, 27)], "d_swap"),
 }
 
 
@@ -717,8 +723,11 @@ def _block_ports():
         "ret":    ((_WX + 28, wn), N),
         "fwd":    ((_WX + 30, ws), S),         # worker: ring-forward, increment
         "pnt":    ((_WX + 38, ws), S),
+        # The relay's own north wall, not the painter's: it rides one row higher so
+        # both rooms' south walls line up and the increment's return leg can come up
+        # under them instead of clearing the lower of the two.
         "r_in":   ((_RX + RELAY_W, _RY + 2), E),
-        "r_out":  ((_RX + 1, pn), N),
+        "r_out":  ((_RX + 1, _RY - 1), N),
         "p_in":   ((pw, _PY + 2), W),
         "addr":   ((_PX + S_ADDR, pn), N),     # painter: the three display sends
         "data":   ((_PX + S_DATA, pn), N),
@@ -756,6 +765,61 @@ def build_block() -> list[str]:
     if not timing_ok(lens["addr"], lens["data"], lens["swap"]):
         raise ValueError(f"display pipes deliver out of order: {lens}")
     return [r.rstrip() for r in g.rows()]
+
+
+def block_debug():
+    """A labelled overlay of the assembled block, for reading the layout by eye."""
+    from randomfun2026solvers.man_debug import DebugMap
+
+    d = DebugMap("plotter block — 20/20, score 66,665,235 (CPU version: 7,760,316,749)")
+    d.region("display", _DX, _DY, DISPLAY_W + 2, DISPLAY_H + 2,
+             note="LM-75 32x24. Top wall = ADDR, left = DATA, bottom = SWAP. The panel "
+                  "alone is 34x26, which is why a CPU here costs almost everything.",
+             color="#334155")
+    d.region("worker", _WX - 1, _WY - 1, WW + 2, WH + 2,
+             note="owns f in B; reads {step, den, U, U+V} off the ring each lap and "
+                  "sends the painter one increment per pixel. Spans nearly the full "
+                  "width, which is what makes pipe channels scarce.",
+             color="#0ea5e9")
+    d.region("worker:prologue", _WX + 2, _WY + 1, 14, 1,
+             note="all four input reads live here with only pushes between them: `r` "
+                  "takes the *nearest* incoming pipe, so an input read must never sit "
+                  "between two ring pops.",
+             color="#22c55e")
+    d.region("worker:loop", _WX + 3, _WY + 14, 35, 5,
+             note="the pixel loop, five rows because four paths must not cross. `X` "
+                  "branches on the sign of f+step; the carry lane owns the straight and "
+                  "the CW exit, so its hop back cannot double as a corridor.",
+             color="#f59e0b")
+    d.region("worker:drain", _WX + 2, _WY + 19, 18, 2,
+             note="four POPs. Each lap pushes all four constants back, so at BP==0 they "
+                  "are still circulating and the next round would pop them instead of "
+                  "its own x0/y0. Every segment alone was perfect; sequences were "
+                  "garbage until this went in.",
+             color="#ef4444")
+    d.region("painter", _PX - 1, _PY - 1, PAINTER_W + 2, PAINTER_H + 2,
+             note="owns addr in B; one lap per pixel, 14 ticks. Commits with SWAP<-0, "
+                  "which also clears `next`, so each round starts black.",
+             color="#a855f7")
+    d.region("relay", _RX - 1, _RY - 1, RELAY_W + 2, RELAY_H + 2,
+             note="the ring's turnaround, 4 values per 14-cell circuit. One pipe each "
+                  "way, so no send or receive in it needs a binding argument — which is "
+                  "why it can talk out of whichever walls the routing needs.",
+             color="#ec4899")
+    d.region("input", _IX, _IY, 3, 3,
+             note="west of the worker, not above it: from above the input pipe would "
+                  "cross the ring-return in the two-row band over the north wall.",
+             color="#64748b")
+    d.region("band", 0, 27, BLOCK_W, 3,
+             note="the contended band: row 27 SWAP, row 28 ring-return, row 29 input — "
+                  "one row each, allocated before any pipe was drawn.",
+             color="#eab308")
+    d.region("channels", 0, 0, 8, 57,
+             note="cols 2/4/6 carry ADDR/DATA/SWAP up past the worker. They nest "
+                  "against the bend rows 56/55/54 the opposite way round, which is what "
+                  "keeps the three from crossing.",
+             color="#14b8a6")
+    return d
 
 
 def build_worker_probe():

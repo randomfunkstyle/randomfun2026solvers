@@ -218,11 +218,25 @@ keeps the three display pipes from crossing. Three placements do the rest:
 
 ## Result
 
-**20/20 cases, score 66,665,235** — against 7,760,316,749 for the CPU version, a
-116x improvement. 70x70 footprint (area² 4900) and ~13,600 average ticks, so the win
-is almost entirely ticks: ~19 per pixel instead of ~19,000. The footprint is now the
-larger factor and the box is loose — it was sized for slack once the routing was
-understood, and the rooms could be packed considerably tighter.
+**20/20 cases, score 58,124,068** — against 7,760,316,749 for the CPU version, a
+**134x improvement**. 50x66 (area² 4356) and ~13,300 average ticks, so the win is
+almost entirely ticks: ~19 per pixel instead of ~19,000.
+
+The first box that worked was 57x70. Two things compacted it:
+
+* **Parallel pipes may touch.** The three display channels were spaced a column
+  apart out of caution; a pipe carries its own arrowheads, so neighbouring flows
+  never merge, and cols 0/1/2 work as well as 2/4/6.
+* **The relay rides a row higher than the painter**, so both south walls line up and
+  the increment's return leg comes up under them rather than clearing the lower one.
+
+What is left is load-bearing. Row 0 exists because a pipe entering the display's top
+wall needs a cell above it, and in LM-75 the top wall *is* the ADDR port. The
+increment's bottom leg cannot move up into the gap either: rows 53-54 are the two
+stub cells of each worker south port, rows 55-60 are ring-forward's descent, and rows
+61-64 are the relay's walls — the barrier reappears wherever the relay is moved to.
+The remaining height is the display (26 rows) and the worker (23), so shrinking
+further means reshaping the worker itself, wider and shorter.
 
 ## Verification
 

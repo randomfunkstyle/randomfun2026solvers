@@ -1,0 +1,16 @@
+# plotter — submission 03b41975-f6a7-4e28-8c18-21ce703f0d6d
+
+verdict      done: 20/20 cases, area2 4356, avgTicks 13,343, score 58,124,068
+submitted    2026-07-25T14:16:42+0300
+grid         50x66
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  61f4e4c5ee808702140bd7bea825bf87edb1b6da7708a5050e0cbde17b2c14a6
+commit       2759dcb
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+compacted: adjacent channels, relay up one row, 57x70 -> 50x66
