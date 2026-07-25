@@ -1,0 +1,16 @@
+# plotter — submission 40c3ab0a-5ccc-4409-a9cc-11b15af3e133
+
+verdict      done: 20/20 cases, area2 3721, avgTicks 8,392, score 31,226,446
+submitted    2026-07-25T15:27:54+0300
+grid         49x61
+problem id   0c3e3d4d-2901-45f1-81cf-5704d49c9139
+fingerprint  693fb33183058638d9f796429b79b09c681458564dad72dcfc001f75a37f223f
+commit       9940caf
+local        plotter: all public frame cases match (emulator)
+source       tasks/solutions/plotter_block.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+increment into the painter's east wall, input into the worker's west wall: 62 -> 61 rows

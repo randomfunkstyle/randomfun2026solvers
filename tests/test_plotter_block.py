@@ -188,23 +188,34 @@ def test_every_worker_send_and_receive_binds_to_the_pipe_it_means():
     Anything placed with a bare `c.set` bypasses the cursor, so the two checks are
     not redundant: a mis-bound `r` loads fine and quietly reads the wrong pipe,
     which is the one class of bug the reference interpreter will not report.
+
+    The round reads exactly four values from the input room (x0, y0, x1, y1) and
+    sends the painter exactly four (base, n, and one increment per lane), so the
+    *counts* pin the bindings down: any pop that strayed near enough to the north
+    wall to outbid the input, or any push that strayed east of the increment
+    boundary, moves one of these totals.
     """
     from randomfun2026solvers.plotter_block import (
-        PAINT_MIN, POP_MIN, PUSH_MAX, RIN_MAX, build_worker,
+        PAINT_MIN, PUSH_MAX, _nearer_input, build_worker,
     )
 
     rows = build_worker().rows()
-    seen = {"r": 0, "s": 0}
+    reads = sends = pops = pushes = 0
     for y, row in enumerate(rows):
         for x, ch in enumerate(row):
-            if ch not in seen:
-                continue
-            seen[ch] += 1
-            # An `r` is an input read iff it is west of the boundary, a ring pop iff
-            # east of it; either is legal, but the midpoint column never is.
-            lo, hi = (RIN_MAX, POP_MIN) if ch == "r" else (PUSH_MAX, PAINT_MIN)
-            assert x <= lo or x >= hi, f"{ch!r} at {(x, y)} is a reading-order tie"
-    assert seen["r"] and seen["s"], "found no pipe glyphs at all — wrong grid?"
+            if ch == "r":
+                # `_nearer_input` raises on a tie, which the interpreter would settle
+                # by reading order — never something the layout should lean on.
+                if _nearer_input(x, y):
+                    reads += 1
+                else:
+                    pops += 1
+            elif ch == "s":
+                assert x <= PUSH_MAX or x >= PAINT_MIN, f"s at {(x, y)} is a tie"
+                sends += 1 if x >= PAINT_MIN else 0
+                pushes += 1 if x <= PUSH_MAX else 0
+    assert (reads, sends) == (4, 4), f"{reads} input reads, {sends} painter sends"
+    assert pops and pushes, "found no ring glyphs at all — wrong grid?"
 
 
 @pytest.mark.slow
@@ -244,6 +255,56 @@ def test_the_worker_grid_matches_the_model_on_the_reference_interpreter():
             got = next(ln[len("output:"):] for ln in out.splitlines()
                        if ln.startswith("output:"))
             assert got.split() == [str(v) for v in m.paint], seg
+
+
+@pytest.mark.slow
+def test_the_engine_agrees_with_the_layout_about_every_worker_binding():
+    """Ask the interpreter itself, via `lm.mjs route`, on the assembled grid.
+
+    The layout's own predicate could be wrong about the metric — it reasons about the
+    cell where each pipe meets the room, and the ring-return and the input arrive on
+    *opposite walls*, so the row term decides and there is no column boundary to eyeball.
+    This is the check that cannot drift: `route` is the engine's own answer.
+    """
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from randomfun2026solvers.plotter_block import (
+        _PATHS, _WX, _WY, PUSH_MAX, WH, WW, _nearer_input, build_block,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    node, lm = shutil.which("node"), root / "littleman" / "lm.mjs"
+    if not node or not lm.exists():
+        pytest.skip("needs node and littleman/lm.mjs")
+
+    head = {name: tuple(cells[0]) for name, (cells, _) in _PATHS.items()}
+    with tempfile.TemporaryDirectory() as td:
+        man = Path(td) / "block.man"
+        rows = build_block()
+        man.write_text("\n".join(rows) + "\n")
+        checked = 0
+        for iy in range(WH):
+            for ix in range(WW):
+                gx, gy = _WX + ix, _WY + iy
+                row = rows[gy]
+                ch = row[gx] if gx < len(row) else " "
+                if ch not in "rs":
+                    continue
+                checked += 1
+                out = subprocess.run(
+                    [node, str(lm), "route", str(man), str(gx), str(gy)],
+                    capture_output=True, text=True, check=True, timeout=60)
+                got = tuple(json.loads(out.stdout)["cells"][0])
+                want = ("i_out" if _nearer_input(ix, iy) else "r_out") if ch == "r" \
+                    else ("fwd" if ix <= PUSH_MAX else "pnt")
+                assert got == head[want], (
+                    f"{ch!r} at interior {(ix, iy)}: layout says {want}, engine "
+                    f"routes it to the pipe starting at {got}")
+    assert checked == 70, f"expected 70 pipe glyphs in the worker, found {checked}"
 
 
 @pytest.mark.slow
