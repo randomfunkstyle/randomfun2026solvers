@@ -19,6 +19,7 @@ if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
 from randomfun2026solvers.manstruct import (  # noqa: E402
+    DEAD_KINDS,
     DIRS,
     CapacityHint,
     CellInfo,
@@ -143,8 +144,9 @@ def test_the_structural_read_agrees_with_the_engine_on_a_real_grid(program) -> N
     # partition: no glyph in two blocks, none missed
     owned = [c for b in s.blocks for c in b.cells]
     assert len(owned) == len(set(owned)), "a cell belongs to at most one block"
-    dead = {Kind.FLOOR, Kind.WALL, Kind.PIPE, Kind.VOID}
-    live = {c for c, i in s.cells.items() if i.room is not None and i.kind not in dead}
+    live = {
+        c for c, i in s.cells.items() if i.room is not None and i.kind not in DEAD_KINDS
+    }
     assert set(owned) == live
 
     # an IO room's shape is SPEC's, not ours

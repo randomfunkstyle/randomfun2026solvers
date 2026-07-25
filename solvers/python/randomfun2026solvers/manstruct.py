@@ -60,6 +60,7 @@ __all__ = [
     "Kind",
     "Freedom",
     "DIRS",
+    "DEAD_KINDS",
     "CellInfo",
     "Block",
     "PipeInfo",
@@ -90,6 +91,7 @@ class Kind(StrEnum):
     VOID = "void"  # outside every room and pipe: free space
     WALL = "wall"  # room border; entering it is fatal
     FLOOR = "floor"  # blank inside a room: transparent AND shareable
+    NOP = "nop"  # `.` — SPEC "do nothing", so floor that happens to be visible
     OP = "op"  # executes and returns the man to his heading
     LITERAL = "literal"  # a backtick span (or a bare digit)
     STEER = "steer"  # > < ^ v : forces a heading unconditionally
@@ -132,11 +134,13 @@ class CellInfo:
     def shareable(self) -> bool:
         """Another transit lane may cross without perturbing any semantics.
 
-        True only for bare floor. An :attr:`Kind.OP` cell is *transparent* — the
-        man keeps his heading — but crossing it would **execute** it, so it is
-        not shareable. That distinction is the whole game.
+        True for bare floor and for ``.``, which SPEC lists as "do nothing" — so
+        crossing one executes a nop, which is no change at all. An
+        :attr:`Kind.OP` cell is *transparent* — the man keeps his heading — but
+        crossing it would **execute** it, so it is not shareable. That
+        distinction is the whole game.
         """
-        return self.kind is Kind.FLOOR
+        return self.kind in (Kind.FLOOR, Kind.NOP)
 
     def crossable_by(self, heading: str) -> bool:
         """Could a lane heading `heading` pass through and come out unchanged?"""
@@ -306,6 +310,11 @@ def _classify_glyph(glyph: str, *, on_border: bool) -> Kind:
         return Kind.IO if glyph in "IO" else Kind.WALL
     if glyph == " ":
         return Kind.FLOOR
+    if glyph == ".":
+        # SPEC: "`.` and space | Do nothing (nop)". Generators use it as a
+        # *visible* corridor marker, so it must still be rendered — but for every
+        # structural purpose it is floor, and a compactor may erase or redraw it.
+        return Kind.NOP
     if glyph == "@":
         return Kind.SPAWN
     if glyph in "IO":
@@ -351,10 +360,18 @@ def _build_cells(program: Program) -> dict[tuple[int, int], CellInfo]:
 
 
 # ── layer 1: blocks ──────────────────────────────────────────────────────────
+#: In-room cell kinds that are *not* live code. ``NOP`` belongs here: letting
+#: ``.`` join a clump would glue every unrelated body in a room into one giant
+#: atom through the corridors between them, which is the difference between a
+#: room that can be compacted and one that cannot.
+DEAD_KINDS = frozenset({Kind.FLOOR, Kind.NOP, Kind.WALL, Kind.PIPE, Kind.VOID})
+
+
 def _live_in_room(cells: dict[tuple[int, int], CellInfo]) -> set[tuple[int, int]]:
-    """In-room cells the man executes: everything but floor and the walls."""
-    dead = {Kind.FLOOR, Kind.WALL, Kind.PIPE, Kind.VOID}
-    return {c for c, info in cells.items() if info.room is not None and info.kind not in dead}
+    """In-room cells the man executes: everything but floor, nops, and walls."""
+    return {
+        c for c, info in cells.items() if info.room is not None and info.kind not in DEAD_KINDS
+    }
 
 
 def _components(live: set[tuple[int, int]]) -> list[list[tuple[int, int]]]:
@@ -493,6 +510,11 @@ def _build_slack(program: Program, cells: dict[tuple[int, int], CellInfo]) -> li
         if not inner or not inner[0]:
             continue
         h, w = len(inner), len(inner[0])
+        # A `.` is a nop, so a row holding only nops and blanks is dead space.
+        # It can also only ever be *crossed* vertically: travelling east along a
+        # row requires a steer glyph in that row, and a nop is not one — so
+        # deleting such a row can never cut the man's path, only shorten it.
+        inner = [row.replace(".", " ") for row in inner]
         live = sum(1 for row in inner for ch in row if ch != " ")
         blank_rows = [y for y in range(h) if not inner[y].strip()]
         blank_cols = [x for x in range(w) if all(inner[y][x] == " " for y in range(h))]
@@ -568,6 +590,7 @@ _KIND_COLOR = {
     Kind.VOID: "#f8fafc",
     Kind.WALL: "#475569",
     Kind.FLOOR: "#e2e8f0",
+    Kind.NOP: "#cbd5e1",
     Kind.OP: "#2563eb",
     Kind.LITERAL: "#7c3aed",
     Kind.STEER: "#ea580c",
