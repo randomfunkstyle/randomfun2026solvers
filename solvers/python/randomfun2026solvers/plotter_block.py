@@ -407,9 +407,9 @@ if __name__ == "__main__":
 # rather than a grid that loads and quietly reads the wrong pipe.
 
 GLYPH = {E: ">", W: "<", N: "^", S: "v"}
-WW, WH = 37, 17                      # worker interior
+WW, WH = 35, 17                      # worker interior
 IN_COL = -1                          # west wall: input (see RIN_REF)
-RET_COL, FWD_COL, PNT_COL = 18, 30, 34   # south wall: ring-return, ring-fwd, painter
+RET_COL, FWD_COL, PNT_COL = 15, 28, 32   # south wall: ring-return, ring-fwd, painter
 # The two send regions: the boundary is the midpoint of the two ports, and a glyph
 # exactly on it would be a reading-order tie, so both sides exclude it.
 #
@@ -424,9 +424,11 @@ PUSH_MAX, PAINT_MIN = _S_BOUND - 1, _S_BOUND + 1
 # the north wall no `r` could pop the ring west of column 15 — and is now only a
 # layout choice — and it is the other half of the same trade: moving the bands west
 # moves their pushes west, which lets the two south ports close up. It stops at 14
-# because band C's first pop sits here, and at column 13 on band C's row that pop is
-# equidistant from the ring and the input.
-BAND_X0 = 14
+# because band C's first pop sits here, and one column further west that pop is
+# equidistant from the ring and the input — which is also why `RET_COL` is as far west
+# as it is: dragging the ring's port west drags that limit west with it, until the base
+# block's own pop on row 0 becomes the binding one instead.
+BAND_X0 = 12
 # Where each incoming pipe meets the room, in interior coordinates: one cell beyond
 # the wall it crosses. `test_plotter_block` re-checks every glyph against the *built*
 # grid with the interpreter's own `route` oracle, so this stays honest.
@@ -680,8 +682,11 @@ def build_worker():
     # the four POPs: east to the POP region, drain, then west and up column 0.
     c.set(2, 14, "v")
     c.set(2, 15, ">")
+    # The four pops sit at the *west* end of this row, not out at `BAND_X0`. The ring
+    # arrives on the south wall, so down here it is the near pipe by a wide margin —
+    # a pop on this row binds it from column 2 east — and the drain is walked once per
+    # round, out and back, so every column of it is two ticks.
     drain = Cur(c, 3, 15, E)
-    drain.to(BAND_X0)
     drain.seq([P("POP")] * 4)
     drain.turn(S)
     c.set(drain.x, 16, "<")
@@ -699,8 +704,13 @@ def build_worker():
 # the four pipe bindings and the BP-counted loop — without the painter or display in
 # the way. Verified on (0,0,31,23), its reverse, (0,23,31,0), (5,5,5,20), (3,7,29,7)
 # and the single point (0,0,0,0).
-PROBE_WX, PROBE_WY = 1, 4                      # worker interior origin -> walls rows 3..23
-IN_C = PROBE_WX + IN_COL                       # grid columns of the four ports
+#
+# Its four ports are placed so the probe's binding geometry is *identical* to the
+# block's, not merely similar: input two cells off the west wall on interior row
+# `IN_ROW`, ring-return and ring-forward and the increment all two cells under the
+# south wall on their own columns. So the distances every `r`/`s` sees here are the
+# distances it sees in the box, and a binding that is right in one is right in both.
+PROBE_WX, PROBE_WY = 6, 4                      # worker interior origin
 RET_C, FWD_C, PNT_C = (PROBE_WX + c for c in (RET_COL, FWD_COL, PNT_COL))
 
 
@@ -728,9 +738,9 @@ RET_C, FWD_C, PNT_C = (PROBE_WX + c for c in (RET_COL, FWD_COL, PNT_COL))
 # locally and eats the one row a later pipe needed, so the collision only ever moves;
 # stating all seven and allocating the shared rows and columns up front is what closes
 # the box. `_PATHS` is checked against the ports as it is drawn.
-BLOCK_W, BLOCK_H = 47, 56
+BLOCK_W, BLOCK_H = 45, 56
 _DX, _DY = 5, 1                  # display walls: cols 5..38, rows 1..26
-_WX, _WY = 9, 28                 # worker walls:  cols 8..46, rows 27..45
+_WX, _WY = 9, 28                 # worker walls:  cols 8..44, rows 27..45
 _PX, _PY = 9, 51                 # painter walls: cols 8..24, rows 50..55
 _RX, _RY = 31, 47                # relay walls:   cols 30..36, rows 46..49
 _IX = 3                          # the input room, west of the worker; its row is taken
@@ -786,9 +796,9 @@ _IX = 3                          # the input room, west of the worker; its row i
 # the return came in over the north wall it had to climb the whole box — 93 cells,
 # and 84% of every pixel's cost was the worker standing at an `r` waiting for it.
 _PATHS = {
-    "fwd":   ([(39, 46), (39, 47), (37, 47)], "r_in"),
-    "r_out": ([(29, 48), (27, 48), (27, 46)], "ret"),
-    "pnt":   ([(43, 46), (43, 52), (25, 52)], "p_in"),
+    "fwd":   ([(37, 46), (37, 47)], "r_in"),
+    "r_out": ([(29, 48), (24, 48), (24, 46)], "ret"),
+    "pnt":   ([(41, 46), (41, 52), (25, 52)], "p_in"),
     # Two cells, straight across the gap: the input room's east wall to the worker's
     # west wall. Over the north wall it needed a stub pointing away from the room
     # before it could bend, and that bend row cost a whole row of the box. Two and not
@@ -945,12 +955,12 @@ def block_debug():
 
 
 def build_worker_probe():
-    south, north = PROBE_WY + WH, PROBE_WY - 1
+    south, west = PROBE_WY + WH, PROBE_WX - 1
     g = Circuit(58, south + 18)
     stamp(g, PROBE_WX, PROBE_WY, build_worker().rows())
     walls(g, PROBE_WX, PROBE_WY, WW, WH)
 
-    rx, ry = 25, south + 4                       # relay, directly under the worker
+    rx, ry = 23, south + 4                       # relay, directly under the worker
     stamp(g, rx, ry, relay_rows())
     walls(g, rx, ry, RELAY_W, RELAY_H)
 
@@ -961,16 +971,17 @@ def build_worker_probe():
     # A pipe's first cell must point *away* from the wall it leaves: the analyser
     # derives the source room from the cell behind the flow, so a first leg that runs
     # along the wall gets `src: -1` and no `s` in the room can ever bind to it.
-    n_fwd = pipe(g, [(FWD_C, south + 1), (FWD_C, ry + 1)],
+    n_fwd = pipe(g, [(FWD_C, south + 1), (FWD_C, ry + 1), (rx + RELAY_W + 1, ry + 1)],
                  into=(rx + RELAY_W, ry + 1))
-    n_ret = pipe(g, [(rx - 2, ry), (RET_C, ry), (RET_C, south + 1)],
+    n_ret = pipe(g, [(rx + 1, ry - 2), (rx + 1, south + 1), (RET_C, south + 1)],
                  into=(RET_C, south))
 
     # the increment pipe, standing in for the painter
     stamp(g, 43, ry - 1, ["+-+", "|O|", "+-+"])
     pipe(g, [(PNT_C, south + 1), (PNT_C, ry), (42, ry)], into=(43, ry))
-    # and the input
-    stamp(g, 55, 0, ["+-+", "|I|", "+-+"])
-    pipe(g, [(54, 1), (IN_C, 1), (IN_C, 2)], into=(IN_C, north))
+    # and the input, entering the west wall exactly as it does in the box
+    stamp(g, 0, PROBE_WY + IN_ROW - 1, ["+-+", "|I|", "+-+"])
+    pipe(g, [(3, PROBE_WY + IN_ROW), (4, PROBE_WY + IN_ROW)],
+         into=(west, PROBE_WY + IN_ROW))
 
     return [r.rstrip() for r in g.rows()]
