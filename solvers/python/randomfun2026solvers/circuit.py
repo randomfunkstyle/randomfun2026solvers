@@ -212,8 +212,8 @@ class Circuit:
 
         A clockwise ring can host a `d` test at every corner (arriving east, CW is
         south; arriving south, CW is west; and so on), so both side columns carry
-        their own `[body, m]` with a test in front of it. BP still counts *values*,
-        exactly like :meth:`counted_loop` — no division, just cheaper:
+        their own `[body, m]` with a test in front of it. BP still counts passes,
+        exactly like :meth:`counted_loop`. For the usual two-cell body:
 
             (x,y)=`>`      (x+1,y)=`d`        <- test, then the right column
             (x,y+1)=`m`    (x+1,y+1)=body[0]
@@ -222,16 +222,19 @@ class Circuit:
             (x,y+4)=`d`    (x+1,y+4)=`<`      <- test, then the left column (going up)
 
         10 cells, 2 values/lap = 5 ticks/value against 8 for :meth:`counted_loop`.
-        Returns the two exit cells: [east of the top-right `d`, west of the
-        bottom-left `d`]. Both must be routed to the same continuation.
+        A longer body grows both columns symmetrically. Returns the two exit
+        cells: [east of the top-right `d`, west of the bottom-left `d`]. Both
+        must be routed to the same continuation.
         """
-        assert len(body) == 2, "body is one (recv, send) pair"
+        k = len(body)
+        if not k:
+            raise ValueError("counted ring body cannot be empty")
         # right column, walked downward: test, body, m
         self.set(x + 1, y, "d")
         self.run(x + 1, y + 1, body + "m", d=S)
-        self.set(x + 1, y + 4, "<")
+        self.set(x + 1, y + k + 2, "<")
         # left column, walked upward: test, body, m
-        self.set(x, y + 4, "d")
-        self.run(x, y + 3, body + "m", d=N)
+        self.set(x, y + k + 2, "d")
+        self.run(x, y + k + 1, body + "m", d=N)
         self.set(x, y, ">")
-        return [(x + 2, y), (x - 1, y + 4)]
+        return [(x + 2, y), (x - 1, y + k + 2)]

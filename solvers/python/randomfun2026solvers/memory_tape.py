@@ -120,6 +120,12 @@ RELAY = ["+----+",
          "|  sr|",
          "|  ^<|",
          "+----+"]
+COMPACT_RELAY = [
+    "+----+",
+    "|@>rv|",
+    "| ^s<|",
+    "+----+",
+]
 RELAY_IN_ROW = 2
 
 
@@ -248,7 +254,7 @@ V2_FWD_ROW = 8              # right wall
 V2_RET_COL = 12             # bottom wall
 
 
-def worker_v2(n: int) -> Circuit:
+def worker_v2(n: int, *, init_body: str | None = None) -> Circuit:
     c = Circuit(V2_IW, V2_IH)
     L = lit(n)
     GUT = V2_IW - 1                       # right gutter: P2 exit climbs to MAIN
@@ -256,8 +262,14 @@ def worker_v2(n: int) -> Circuit:
     # ── INIT (row 0) ──────────────────────────────────────────────────────
     x, _ = c.run(1, 0, "@" + L + "b")     # A=N, BP=N
     c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
-    fill, _ = c.counted_loop(17, 5, "0s")  # fill the ring with N zeros
-    c.route((fill, 5), E, [(GUT, 5), (GUT, 1)], (0, 1), S)
+    if init_body is not None:
+        if n % 2:
+            raise Collision("paired initialization requires an even memory size")
+        fill_exit, _odd_fill = c.counted_ring(17, 5, init_body)
+    else:
+        fill, _ = c.counted_loop(17, 5, "0s")
+        fill_exit = (fill, 5)
+    c.route(fill_exit, E, [(GUT, 5), (GUT, 1)], (0, 1), S)
     c.turn(0, 2, E)                        # left gutter -> MAIN
 
     # ── MAIN (row 2): r(in)->op ; X  (op==0 straight = READ, 1 = CW = WRITE)
@@ -300,7 +312,7 @@ def worker_v2(n: int) -> Circuit:
     return c
 
 
-def assemble_v2(n: int, fold: int = 2) -> list[str]:
+def assemble_v2(n: int, fold: int = 2, *, init_body: str | None = None) -> list[str]:
     """Compact build: worker_v2 + I/O rooms + relay + the folded tape ring.
 
     `fold` widens the return pipe's zig-zag; :func:`build_v2` searches it for the
@@ -309,7 +321,7 @@ def assemble_v2(n: int, fold: int = 2) -> list[str]:
     """
     IW, IH = V2_IW, V2_IH
     g = Circuit(400, 200)
-    wk = worker_v2(n)
+    wk = worker_v2(n, init_body=init_body)
     WX, WY = 7, 7
     for (x, y), ch in wk.cell.items():
         g.set(WX + x, WY + y, ch)
@@ -367,6 +379,111 @@ def build_v2(n: int) -> list[str]:
     for fold in (0, 2, 4, 6, 8, 10):
         try:
             return assemble_v2(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def build_v2_fast_init(n: int) -> list[str]:
+    """Build v2 with a two-zero-per-lap initializer for even memory sizes."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2(n, fold, init_body="0s")
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def build_v2_paced_init(n: int) -> list[str]:
+    """Pair zero writes while matching the relay's six-tick throughput."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2(n, fold, init_body="0.s")
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def assemble_v2_compact_relay(n: int, fold: int = 0) -> list[str]:
+    """Fit v2 in 31x31 by tightening both the relay and its pipe band.
+
+    The steady relay cycle is still the minimum six ticks: receive, send, and
+    four turns. Its smaller box frees one row and lets the east tape columns
+    move one cell toward the worker without reducing the ring below N+1 slots.
+    """
+    iw, ih = V2_IW, V2_IH
+    g = Circuit(400, 200)
+    wk = worker_v2(n)
+    wx, wy = 7, 7
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    iy = wy + V2_IN_ROW
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+    ox = wx + V2_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    bottom_y = wy + ih
+    fy = wy + V2_FWD_ROW
+    ret_col = wx + V2_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 5
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    for i, row in enumerate(COMPACT_RELAY):
+        for j, ch in enumerate(row):
+            g.set(1 + j, relay_y + i, ch)
+    adj = 1 + len(COMPACT_RELAY[0])
+
+    n_fwd = _draw_pipe(
+        g,
+        [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (adj, r_a),
+            (east - 1, r_a),
+            (east - 1, r_b),
+            (adj + fold, r_b),
+            (adj + fold, r_c),
+            (ret_col, r_c),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    return [row.rstrip() for row in g.rows() if row.strip()]
+
+
+def build_v2_compact_relay(n: int) -> list[str]:
+    """Smallest v2 build using the compact relay."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v2_compact_relay(n, fold)
         except Collision as exc:
             last = exc
             if "slots" not in str(exc):
@@ -867,6 +984,126 @@ def assemble_v2_debug(n: int) -> tuple[list[str], DebugMap]:
     # assemble_v2 removes leading all-blank rows, so translate the sidecar too.
     first_row = wy - 6
     return rows, dbg.translated(0, -first_row)
+
+
+def assemble_v2_compact_relay_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the relay experiment with sidecar geometry matching its pipes."""
+    rows = build_v2_compact_relay(n)
+    _, dbg = assemble_v2_debug(n)
+    dbg.title = f"memory tape v2 compact relay n={n}"
+    dbg.regions = [region for region in dbg.regions if region.name != "relay"]
+    dbg.lanes = [
+        lane
+        for lane in dbg.lanes
+        if lane.name not in ("tape-forward-pipe", "tape-return-pipe")
+    ]
+
+    wx, wy = 7, 7
+    bottom_y = wy + V2_IH
+    east = wx + V2_IW + 2
+    adj = 1 + len(COMPACT_RELAY[0])
+    first_row = wy - 6
+    dbg.region(
+        "compact-relay",
+        1,
+        bottom_y + 3 - first_row,
+        len(COMPACT_RELAY[0]),
+        len(COMPACT_RELAY),
+        note="minimum six-tick receive/send loop with a one-time @ entry tail",
+        color="#fb7185",
+    )
+    dbg.lane(
+        "tape-forward-pipe",
+        [
+            (wx + V2_IW + 1, wy + V2_FWD_ROW - first_row),
+            (east, wy + V2_FWD_ROW - first_row),
+            (east, bottom_y + 5 - first_row),
+            (adj, bottom_y + 5 - first_row),
+        ],
+        kind="pipe",
+        expect="worker sends values toward compact relay",
+        color="#34d399",
+    )
+    dbg.lane(
+        "tape-return-pipe",
+        [
+            (adj, bottom_y + 4 - first_row),
+            (east - 1, bottom_y + 4 - first_row),
+            (east - 1, bottom_y + 3 - first_row),
+            (adj, bottom_y + 3 - first_row),
+            (adj, bottom_y + 2 - first_row),
+            (wx + V2_RET_COL, bottom_y + 2 - first_row),
+            (wx + V2_RET_COL, bottom_y + 1 - first_row),
+        ],
+        kind="pipe",
+        expect="compact relay returns values into worker bottom wall",
+        color="#10b981",
+    )
+    return rows, dbg
+
+
+def assemble_v2_fast_init_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build v2 with the paired initializer and mark its two-value loop."""
+    rows = build_v2_fast_init(n)
+    _, dbg = assemble_v2_debug(n)
+    dbg.title = f"memory tape v2 paired zero initialization n={n}"
+    for i, region in enumerate(dbg.regions):
+        if region.name == "init":
+            dbg.regions[i] = type(region)(
+                region.name,
+                region.x,
+                region.y,
+                region.w,
+                region.h,
+                "fill the tape with two zero values per loop lap",
+                region.color,
+                region.tags,
+            )
+            break
+    first_row = 1
+    dbg.lane(
+        "paired-zero-fill",
+        [
+            (24, 12 - first_row),
+            (25, 12 - first_row),
+            (25, 16 - first_row),
+            (24, 16 - first_row),
+            (24, 12 - first_row),
+        ],
+        kind="expected",
+        expect="N=100 is even: emit two zero values per full lap, then exit east",
+        color="#facc15",
+    )
+    return rows, dbg
+
+
+def assemble_v2_paced_init_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build the relay-paced paired initializer with matching sidecar geometry."""
+    rows = build_v2_paced_init(n)
+    _, dbg = assemble_v2_fast_init_debug(n)
+    dbg.title = f"memory tape v2 relay-paced zero initialization n={n}"
+    for i, region in enumerate(dbg.regions):
+        if region.name == "init":
+            dbg.regions[i] = type(region)(
+                region.name,
+                region.x,
+                region.y,
+                region.w,
+                region.h,
+                "fill two zeros per lap, spaced at the relay's six-tick throughput",
+                region.color,
+                region.tags,
+            )
+            break
+    dbg.lanes = [lane for lane in dbg.lanes if lane.name != "paired-zero-fill"]
+    dbg.lane(
+        "relay-paced-zero-fill",
+        [(24, 11), (25, 11), (25, 16), (24, 16), (24, 11)],
+        kind="expected",
+        expect="emit two zeros per lap with six ticks between sends",
+        color="#facc15",
+    )
+    return rows, dbg
 
 
 if __name__ == "__main__" and any(
