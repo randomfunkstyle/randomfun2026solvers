@@ -132,6 +132,14 @@ MERGE_RELAY = [
     "| ^s<|",
     "+----+",
 ]
+PHASE_RELAY = [
+    "+------+",
+    "| v   <|",
+    "|@>rXs^|",
+    "|   >rv|",
+    "|   ^s<|",
+    "+------+",
+]
 RELAY_IN_ROW = 2
 
 
@@ -229,7 +237,16 @@ def tape_slots_of(n: int) -> tuple[int, int]:
 
 
 if __name__ == "__main__" and not any(
-    arg == "--v2" or arg.startswith("--debug-") for arg in sys.argv[1:]
+    arg
+    in (
+        "--v2",
+        "--v3",
+        "--v3-external-init",
+        "--v3-upstream-init",
+        "--v3-one-shot-init",
+    )
+    or arg.startswith("--debug-")
+    for arg in sys.argv[1:]
 ):
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     if "--worker" in sys.argv[2:]:
@@ -884,14 +901,27 @@ def initializing_relay(n: int) -> list[str]:
     return c.rows()
 
 
-def one_shot_initializer(n: int) -> list[str]:
+def one_shot_initializer(
+    n: int,
+    *,
+    paired: bool = True,
+    sentinel: bool = False,
+) -> list[str]:
     """Emit ``n`` zeroes to the nearest pipe, then halt permanently."""
-    if n % 2:
+    if paired and n % 2:
         raise Collision("paired one-shot initialization requires an even memory size")
-    c = Circuit(10, 5)
+    c = Circuit(10, 5 if paired else 4)
     x, _ = c.run(0, 0, "@" + lit(n) + "b")
-    even_exit, _odd_exit = c.counted_ring(x, 0, "0s")
-    c.set(even_exit[0], even_exit[1], "H")
+    if paired:
+        even_exit, _odd_exit = c.counted_ring(x, 0, "0s")
+        exit_cell = even_exit
+    else:
+        exit_cell = c.counted_loop(x, 0, "0s")
+    if sentinel:
+        c.set(exit_cell[0], exit_cell[1], "v")
+        c.run(exit_cell[0], 1, "1sH", d=S)
+    else:
+        c.set(exit_cell[0], exit_cell[1], "H")
     return c.rows()
 
 
@@ -1090,7 +1120,12 @@ def build_v3_upstream_init(n: int) -> list[str]:
     return assemble_v3_upstream_init(n)
 
 
-def assemble_v3_one_shot_init(n: int, east_extension: int = 2) -> list[str]:
+def assemble_v3_one_shot_init(
+    n: int,
+    east_extension: int = 3,
+    *,
+    paired_fill: bool = False,
+) -> list[str]:
     """Use a one-shot zero producer beside the persistent tape relay."""
     iw, ih = V3_IW, V3_IH
     g = Circuit(400, 200)
@@ -1120,12 +1155,11 @@ def assemble_v3_one_shot_init(n: int, east_extension: int = 2) -> list[str]:
 
     bottom_y = wy + ih
     fy = wy + V3_FWD_ROW
-    ret_col = wx + V3_RET_COL
     east = wx + iw + 2
     merge_east = east + east_extension
 
-    filler = one_shot_initializer(n)
-    fill_x, fill_y = 1, bottom_y + 5
+    filler = one_shot_initializer(n, paired=paired_fill, sentinel=True)
+    fill_x, fill_y = 1, bottom_y + 4
     for i, row in enumerate(filler):
         for j, ch in enumerate(row):
             g.set(fill_x + j, fill_y + i, ch)
@@ -1144,48 +1178,47 @@ def assemble_v3_one_shot_init(n: int, east_extension: int = 2) -> list[str]:
         g.set(fill_x - 1, fill_y + y, "|")
         g.set(fill_x + len(filler[0]), fill_y + y, "|")
 
-    relay_x, relay_y = 16, bottom_y + 4
-    for i, row in enumerate(MERGE_RELAY):
+    relay_x, relay_y = 24, bottom_y + 2
+    for i, row in enumerate(PHASE_RELAY):
         for j, ch in enumerate(row):
             g.set(relay_x + j, relay_y + i, ch)
 
-    # The relay merges two incoming pipes with `R`: the filler pipe closes
-    # forever after startup, while the CPU pipe remains the rotating tape.
+    # A sentinel makes the phase change data-driven. The relay's startup `r`
+    # drains only the filler pipe; after the sentinel turns at X, its steady `r`
+    # drains only the CPU pipe.
     n_fwd = _draw_pipe(
         g,
         [
             (wx + iw + 1, fy),
             (merge_east, fy),
-            (merge_east, fill_y + 3),
-            (relay_x + 8, fill_y + 3),
-            (relay_x + 8, fill_y + 4),
-            (relay_x + 2, fill_y + 4),
-            (relay_x + 2, relay_y + len(MERGE_RELAY)),
+            (merge_east, bottom_y + 9),
+            (fill_x + len(filler[0]) + 2, bottom_y + 9),
+            (fill_x + len(filler[0]) + 2, bottom_y + 8),
+            (merge_east - 1, bottom_y + 8),
+            (merge_east - 1, relay_y + 3),
+            (relay_x + len(PHASE_RELAY[0]), relay_y + 3),
         ],
     )
     n_fill = _draw_pipe(
         g,
         [
-            (fill_x + len(filler[0]) + 1, relay_y + 1),
-            (relay_x - 1, relay_y + 1),
+            (fill_x + len(filler[0]) + 1, fill_y + 2),
+            (relay_x - 2, fill_y + 2),
+            (relay_x - 2, relay_y + 2),
+            (relay_x - 1, relay_y + 2),
         ],
     )
     n_ret = _draw_pipe(
         g,
         [
-            (relay_x + len(MERGE_RELAY[0]), relay_y + 3),
-            (merge_east - 1, relay_y + 3),
-            (merge_east - 1, bottom_y + 6),
-            (relay_x + len(MERGE_RELAY[0]) + 1, bottom_y + 6),
-            (relay_x + len(MERGE_RELAY[0]) + 1, bottom_y + 5),
-            (merge_east - 1, bottom_y + 5),
-            (merge_east - 1, bottom_y + 4),
-            (relay_x + len(MERGE_RELAY[0]), bottom_y + 4),
-            (relay_x + len(MERGE_RELAY[0]), bottom_y + 3),
-            (merge_east - 1, bottom_y + 3),
-            (merge_east - 1, bottom_y + 2),
-            (ret_col, bottom_y + 2),
-            (ret_col, bottom_y + 1),
+            (relay_x + len(PHASE_RELAY[0]), relay_y + 1),
+            (merge_east - 1, relay_y + 1),
+            (merge_east - 1, wy + 10),
+            (merge_east - 2, wy + 10),
+            (merge_east - 2, bottom_y + 1),
+            (merge_east - 3, bottom_y + 1),
+            (merge_east - 3, wy + 9),
+            (wx + iw + 1, wy + 9),
         ],
     )
     if n_fwd + n_ret < n + 1:
@@ -1707,74 +1740,122 @@ def assemble_v3_one_shot_init_debug(n: int) -> tuple[list[str], DebugMap]:
     dbg.lanes = [
         lane
         for lane in dbg.lanes
-        if lane.name not in ("tape-forward-pipe", "tape-return-pipe")
+        if lane.name
+        not in (
+            "tape-forward-pipe",
+            "tape-return-pipe",
+            "independent-zero-fill",
+            "fill-to-steady-handoff",
+        )
     ]
     dbg.region(
         "one-shot-filler",
         0,
-        30,
+        29,
         12,
-        7,
-        note="second producer: emit exactly n zeroes to the forward pipe, then halt",
+        6,
+        note="emit n zeroes, append a positive sentinel, then halt permanently",
         color="#facc15",
     )
     dbg.region(
-        "ordinary-relay",
-        16,
-        30,
-        len(MERGE_RELAY[0]),
-        len(MERGE_RELAY),
-        note="R merges startup zeroes and the persistent CPU tape stream",
+        "phase-relay",
+        24,
+        28,
+        len(PHASE_RELAY[0]),
+        len(PHASE_RELAY),
+        note="drain filler until sentinel, then switch permanently to CPU tape input",
         color="#a78bfa",
+    )
+    dbg.region(
+        "relay-startup-loop",
+        24,
+        28,
+        8,
+        3,
+        note="only filler input is visible here; zeroes are forwarded to return",
+        color="#fb923c",
+    )
+    dbg.region(
+        "relay-steady-loop",
+        27,
+        31,
+        5,
+        3,
+        note="six-tick CPU receive/send loop entered only after the sentinel",
+        color="#c084fc",
     )
     dbg.lane(
         "cpu-forward-pipe",
         [
             (32, 14),
-            (35, 14),
+            (36, 14),
+            (36, 35),
+            (13, 35),
+            (13, 34),
             (35, 34),
-            (24, 34),
-            (24, 35),
-            (18, 35),
-            (18, 34),
+            (35, 31),
+            (32, 31),
         ],
         kind="pipe",
-        expect="persistent CPU producer enters one side of the relay merge",
+        expect="persistent CPU tape input, ignored until the sentinel phase switch",
         color="#34d399",
     )
     dbg.lane(
         "filler-pipe",
-        [(12, 31), (15, 31)],
+        [(12, 32), (22, 32), (22, 30), (23, 30)],
         kind="pipe",
-        expect="one-shot producer sends exactly n zeroes, then closes by halting",
+        expect="n zeroes followed by +1 sentinel; producer then halts",
         color="#fde047",
     )
     dbg.lane(
-        "filler-halt",
-        [(9, 31)],
+        "compact-zero-fill",
+        [(8, 30), (9, 30), (9, 33), (8, 33), (8, 30)],
         kind="expected",
-        expect="known-even loop exit executes H; filler never enters steady dataflow",
+        expect="single-send counted loop; relay startup loop is the throughput limit",
+        color="#facc15",
+    )
+    dbg.lane(
+        "sentinel-and-halt",
+        [(10, 30), (10, 33)],
+        kind="expected",
+        expect="emit +1 after all zeroes, then execute H",
         color="#fb923c",
+    )
+    dbg.lane(
+        "relay-startup",
+        [(27, 30), (30, 30), (30, 29), (26, 29), (26, 30)],
+        kind="expected",
+        expect="zero goes straight through X, is sent, and loops to filler receive",
+        color="#fdba74",
+    )
+    dbg.lane(
+        "sentinel-phase-switch",
+        [(28, 30), (28, 31)],
+        kind="expected",
+        expect="+1 turns south at X and enters the steady CPU loop",
+        color="#f472b6",
+    )
+    dbg.lane(
+        "relay-steady",
+        [(28, 31), (30, 31), (30, 32), (28, 32), (28, 31)],
+        kind="expected",
+        expect="persistent six-tick CPU receive/send loop",
+        color="#c084fc",
     )
     dbg.lane(
         "relay-to-cpu",
         [
-            (22, 33),
-            (34, 33),
-            (34, 32),
-            (23, 32),
-            (23, 31),
-            (34, 31),
-            (34, 30),
-            (22, 30),
-            (22, 29),
-            (34, 29),
-            (34, 28),
-            (19, 28),
-            (19, 27),
+            (32, 29),
+            (35, 29),
+            (35, 16),
+            (34, 16),
+            (34, 27),
+            (33, 27),
+            (33, 15),
+            (32, 15),
         ],
         kind="pipe",
-        expect="ordinary relay returns the circulating tape to the worker",
+        expect="phase relay returns filler zeroes, then circulating CPU tape values",
         color="#10b981",
     )
     return rows, dbg

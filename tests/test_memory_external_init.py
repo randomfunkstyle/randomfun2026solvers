@@ -46,8 +46,16 @@ def test_one_shot_initializer_halts_after_paired_fill() -> None:
     assert sum(row.count("H") for row in rows) == 1
 
 
+def test_compact_one_shot_initializer_uses_one_send_loop() -> None:
+    rows = one_shot_initializer(100, paired=False)
+
+    assert (max(map(len, rows)), len(rows)) == (10, 4)
+    assert sum(row.count("s") for row in rows) == 1
+    assert sum(row.count("H") for row in rows) == 1
+
+
 def test_one_shot_initializer_candidate_keeps_proof_bounds() -> None:
     rows = build_v3_one_shot_init(100)
 
-    assert (max(map(len, rows)), len(rows)) == (36, 37)
-    assert any("|@>Rv|" in row for row in rows)
+    assert (max(map(len, rows)), len(rows)) == (37, 36)
+    assert any("|@>rXs^|" in row for row in rows)

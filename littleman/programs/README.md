@@ -10,7 +10,7 @@ specs and public tests: [`../../tasks/problems/`](../../tasks/problems/).
 | `memory-v1-submitted.man` | `memory` | the 42x33 build that actually scored **158M** on the judge; kept as the known-good fallback |
 | `memory-v3-external-init.man` | `memory` | **22/22** independent initializer: paired zero fill lives in the relay room; 34x37, heavy avg 176,200 |
 | `memory-v3-upstream-init.man` | `memory` | **22/22** upstream initializer then ordinary relay; 34x37, heavy avg 177,200 |
-| `memory-v3-one-shot-init.man` | `memory` | **22/22** one-shot filler feeds merge relay then halts; 36x37, heavy avg **175,780** |
+| `memory-v3-one-shot-init.man` | `memory` | **22/22** sentinel-synchronized one-shot filler; 37x36, heavy avg **175,980** |
 | `memory-n8.man` | — | N=8 build of the same generator; small enough to trace by hand |
 | `register-cell.man` | — | the 1-value register block (store `1 v`, fetch `-1`) |
 | `two-roms.man` | — | two looping ROMs feeding one room: code banks, see [`../ARCH.md`](../ARCH.md) §5.5 |
@@ -204,19 +204,20 @@ as the marked architecture experiment; the combined fill/relay room remains the
 better scoring candidate.
 
 The corrected one-shot topology is `memory-v3-one-shot-init.man`. The filler
-does not relay CPU values: it sends 100 zeroes over its own four-cell pipe and
-halts on `H`. The ordinary relay uses `R` to merge that startup pipe with the
-CPU's persistent forward pipe, then sends every received value into the return
-pipe. The persistent ring has 43 + 80 = 123 slots; the startup pipe is not
-counted after its producer halts.
+does not relay CPU values: it sends 100 zeroes, then a `+1` sentinel, and halts
+on `H`. The phase relay drains only the filler pipe during startup. The sentinel
+turns its man into a separate six-tick steady loop which drains only the CPU
+pipe. This is dataflow synchronization; correctness does not depend on which
+room happens to run faster.
 
-The two-column east extension is deliberate: it changes the bounds from 34x37
-to 36x37, so `max(width, height)` and the score multiplier remain unchanged,
-while increasing persistent capacity enough to avoid backpressure. One column
-gives public avg 12,943; two gives 12,914; a third gives no further improvement.
+The compact placement is 37x36. The filler room is 12x6 and the phase relay is
+8x6. Its persistent ring has 78 + 43 = 121 slots; the 13-cell startup pipe is
+not counted after its producer halts. A 36x36 route was explored, but its two
+right-side pipes merge into a loop at the relay boundary and the loader rejects
+it.
 
 | suite | combined fill/relay | one-shot filler |
 |---|---:|---:|
-| public | **12,871** | 12,914 |
-| heavy | 176,200 | **175,780** |
-| edge | **9,640** | 9,670 |
+| public | **12,871** | 13,100 |
+| heavy | 176,200 | **175,980** |
+| edge | **9,640** | 9,840 |
