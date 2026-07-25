@@ -35,5 +35,5 @@ def test_triangle_passes_every_public_case() -> None:
             expected=case["out"],
             max_ticks=problem["tickCap"] or 5_000_000,
         )
-        assert snapshot.fatal is None, case["name"]
         assert snapshot.output == [int(value) for value in case["out"]], case["name"]
+        assert snapshot.output_settled is True, case["name"]

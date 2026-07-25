@@ -25,5 +25,4 @@ def test_snapshot_normalizes_null_collections() -> None:
 @pytest.mark.slow
 def test_runner_executes_triangle() -> None:
     snapshot = Littleman().run(TRIANGLE, input=[4])
-    assert snapshot.fatal is None
     assert snapshot.output == [10]

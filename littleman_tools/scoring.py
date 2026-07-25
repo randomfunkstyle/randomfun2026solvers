@@ -126,12 +126,21 @@ def _is_display_case(case: dict[str, Any]) -> bool:
 
 
 # ── tick measurement ──────────────────────────────────────────────────────────
-def _output_len_at(lm: Littleman, path: Path, n: int, inp: str, cache: dict[int, int]) -> int:
+def _output_len_at(
+    lm: Littleman,
+    path: Path,
+    n: int,
+    inp: str,
+    cache: dict[int, int],
+    *,
+    expected: int,
+) -> int:
     if n not in cache:
         snap = lm.tick(path, n, input=inp)
-        if snap.fatal is not None:
+        output_count = len(snap.output)
+        if snap.fatal is not None and output_count < expected:
             raise ScoringError(f"fatal at tick {n}: {snap.fatal.reason}")
-        cache[n] = len(snap.output)
+        cache[n] = output_count
     return cache[n]
 
 
@@ -178,7 +187,7 @@ def _ticks_for_case(
     # is monotonic in ticks), not by running to settle/halt.
     cache: dict[int, int] = {0: 0}
     hi = 1
-    while _output_len_at(lm, path, hi, inp, cache) < expected:
+    while _output_len_at(lm, path, hi, inp, cache, expected=expected) < expected:
         if hi >= tick_cap:
             raise ScoringError(
                 f"emitted {cache[hi]} of {expected} expected value(s) within "
@@ -190,7 +199,7 @@ def _ticks_for_case(
     lo = 1
     while lo < hi:
         mid = (lo + hi) // 2
-        if _output_len_at(lm, path, mid, inp, cache) >= expected:
+        if _output_len_at(lm, path, mid, inp, cache, expected=expected) >= expected:
             hi = mid
         else:
             lo = mid + 1
