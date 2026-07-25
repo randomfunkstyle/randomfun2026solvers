@@ -135,6 +135,14 @@ def _drop(ast: Ast, axis: str, index: int, capacity: dict[tuple[int, ...], int])
         # refusing, which is a breached box rather than a moved one.
         if index in (lo, hi):
             raise MoveError(f"{axis} {index} is a wall of room{room.id}")
+        # `pinned` was only being honoured on the branch that *moves* a room, so a
+        # cut straight through a pinned one shrank it instead. That is the single
+        # case the flag exists for: a display's interior is legitimately blank, its
+        # size IS the pixel resolution, and no glyph check will ever refuse the cut.
+        if room.pinned:
+            raise MoveError(
+                f"room{room.id} is pinned but {axis} {index} would shrink it: {room.note}"
+            )
         # A Corridor holds `.` cells, which SPEC calls a nop -- the same as a
         # blank. They are erasable, so they must not count as content here;
         # treating them as live is what made this sweep refuse cuts that plain

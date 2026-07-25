@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 
-from .manparse import Program, parse_program
+from .manparse import Program, parse_program, read_rows
 from .manstruct import Kind, _build_cells, _components, _live_in_room
 
 __all__ = [
@@ -491,6 +491,27 @@ def parse_ast(
             )
         )
 
+    # A display the analyser reports as bare geometry rather than as a room. It
+    # must still become a node: the panel on `plotter` is 34x26 of mostly blank
+    # interior, so a freedom scan that cannot see it reads two dozen rows as
+    # empty and removable when they are in fact the pixel resolution.
+    for i, disp in enumerate(prog.displays):
+        (dx0, dy0), (dx1, dy1) = tuple(disp["min"]), tuple(disp["max"])
+        rooms.append(
+            RoomNode(
+                id=len(prog.rooms) + i,
+                x=dx0,
+                y=dy0,
+                kind="display",
+                w=dx1 - dx0 - 1,
+                h=dy1 - dy0 - 1,
+                children=[],
+                ports=[],
+                pinned=True,
+                note="display panel: interior size is the pixel resolution",
+            )
+        )
+
     pipes = [
         PipeNode(
             id=p.id,
@@ -512,7 +533,11 @@ def parse_ast(
     ]
 
     # Anything the engine claimed for neither a room nor a pipe, kept verbatim.
-    src_rows = prog.to_grid()
+    # Compare against the ORIGINAL bytes, not `to_grid()`: that re-renders from
+    # the same rooms and pipes this AST is built from, so a cell the analyser
+    # never attributed is missing from both sides and `round_trip_ok` passes on a
+    # grid it has thrown a display panel away from.
+    src_rows = prog.to_grid() if isinstance(program, Program) else read_rows(program)
     claimed: set[tuple[int, int]] = set()
     for n in [*rooms, *pipes]:
         claimed |= n.cells
