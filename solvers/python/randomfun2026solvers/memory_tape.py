@@ -275,6 +275,7 @@ V2_IN_ROW = 2               # left wall
 V2_OUT_COL = 2              # top wall
 V2_FWD_ROW = 8              # right wall
 V2_RET_COL = 12             # bottom wall
+V2_ACK_OUT_ROW = 16         # left wall; used only by banked worker variants
 
 
 def worker_v2(
@@ -284,6 +285,7 @@ def worker_v2(
     constant_input: bool = False,
     width: int = V2_IW,
     height: int = V2_IH,
+    write_ack: bool = False,
 ) -> Circuit:
     c = Circuit(width, height)
     L = lit(n)
@@ -351,8 +353,12 @@ def worker_v2(
         c.run(17, 12, "rS", d=W)               # target -> output AND tape
         read_exit = (15, 12)
     else:
-        c.run(18, 11, "rS")                    # target -> output AND tape
-        read_exit = (20, 11)
+        if write_ack:
+            c.run(18, 11, "rS0M")              # B=0 marks READ through P2
+            read_exit = (22, 11)
+        else:
+            c.run(18, 11, "rS")                # target -> output AND tape
+            read_exit = (20, 11)
 
     # ── WRITE target (row 9, CCW/north) ──────────────────────────────────
     c.turn(15, 9, W)
@@ -367,9 +373,14 @@ def worker_v2(
     else:
         c.horizontal(9, 10, 2)
         c.run(2, 9, "r", d=W)                  # r(in) -> value
-        c.route((1, 9), W, [(1, 12)], (10, 12), E)
-        c.run(11, 12, "sr")                    # new value in, old one out
-        write_exit = 13
+        if write_ack:
+            c.route((1, 9), W, [(1, 12)], (12, 12), E)
+            c.run(13, 12, "sr1M")              # B=1 marks WRITE through P2
+            write_exit = 17
+        else:
+            c.route((1, 9), W, [(1, 12)], (10, 12), E)
+            c.run(11, 12, "sr")                # new value in, old one out
+            write_exit = 13
 
     # ── both arms -> P2 entry ─────────────────────────────────────────────
     if constant_input:
@@ -384,7 +395,7 @@ def worker_v2(
         c.route(
             read_exit,
             E,
-            [(20, 13), (10, 13), (10, 14)],
+            [(read_exit[0], 13), (10, 13), (10, 14)],
             (11, 14),
             E,
         )
@@ -394,6 +405,14 @@ def worker_v2(
             E,
             [(write_exit, 13)],
             (14, 13),
+            E,
+        )
+    elif write_ack:
+        c.route(
+            (write_exit, 12),
+            E,
+            [(write_exit, 13), (10, 13), (10, 14)],
+            (11, 14),
             E,
         )
     else:
@@ -410,7 +429,29 @@ def worker_v2(
         c.route(p2, S, [(GUT, 16), (GUT, 1)], (0, 1), S)
     else:
         p2, _ = c.counted_loop(11, 14, "rs")
-        c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+        if write_ack:
+            # Do not perturb the proven target+P2 tape timing.  B's marker is
+            # examined only after the full revolution has restored alignment.
+            c.route((p2, 14), E, [], (16, 14), E)
+            c.run(16, 14, "WX")
+            c.route((18, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+            c.route(
+                (17, 15),
+                S,
+                [(17, height - 1), (2, height - 1), (2, V2_ACK_OUT_ROW)],
+                (2, V2_ACK_OUT_ROW),
+                W,
+            )
+            c.run(1, V2_ACK_OUT_ROW, "s", d=W)
+            c.route(
+                (0, V2_ACK_OUT_ROW),
+                W,
+                [(0, height - 2), (GUT, height - 2), (GUT, 1)],
+                (0, 1),
+                S,
+            )
+        else:
+            c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
     return c
 
 

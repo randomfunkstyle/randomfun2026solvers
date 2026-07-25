@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Y-banked memory selector — low addr / high addr−50</title>
+<style>
+body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #111827; color: #e5e7eb; }
+.wrap { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100vh; }
+.canvas { overflow: auto; padding: 16px; position: relative; }
+.zoom-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; width: max-content; margin-bottom: 10px; padding: 6px; border: 1px solid #374151; background: #0b1120; }
+.zoom-toolbar button { width: 28px; height: 28px; padding: 0; border: 1px solid #64748b; border-radius: 3px; background: #111827; color: #e5e7eb; font: 16px ui-monospace, monospace; cursor: pointer; }
+.zoom-toolbar button:hover { background: #1e293b; }
+.zoom-toolbar output { min-width: 42px; color: #cbd5e1; font: 12px ui-monospace, monospace; text-align: center; }
+.zoom-stage { position: relative; }
+svg { display: block; background: #030712; border: 1px solid #374151; transform-origin: top left; }
+.cell { fill: #e5e7eb; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+.region { fill: color-mix(in srgb, var(--c), transparent 88%); stroke: var(--c); stroke-width: .75; }
+.circle-region { stroke-dasharray: 3.5 2; }
+.lane { fill: none; stroke: var(--c); stroke-width: 1.5; opacity: .88; marker-end: url(#arrow); }
+.lane.pipe { stroke-dasharray: 2 1.5; }
+.lane.expected { stroke-width: 2.5; opacity: .5; }
+.label, .lane-label { fill: #f9fafb; font: 6.5px ui-monospace, SFMono-Regular, Menlo, monospace; paint-order: stroke; stroke: #030712; stroke-width: 2px; }
+.debug-target { cursor: pointer; }
+svg .debug-target.is-active { filter: brightness(1.8); opacity: 1; stroke-width: 2; }
+svg text.debug-target.is-active { fill: #fff; font-weight: 700; }
+li.debug-target { cursor: pointer; border-left: 3px solid transparent; padding-left: 8px; }
+li.debug-target.is-active { background: #172554; border-left-color: #e5e7eb; }
+aside { overflow: auto; border-left: 1px solid #374151; padding: 16px; background: #0b1120; }
+li { margin: 0 0 10px; line-height: 1.35; }
+span { display: inline-block; width: 10px; height: 10px; margin-right: 8px; }
+#tooltip { position: fixed; z-index: 10; max-width: 340px; pointer-events: none; opacity: 0; transform: translate(14px, 14px); padding: 10px 12px; border: 1px solid #64748b; border-radius: 4px; background: #020617; box-shadow: 0 12px 30px #0008; transition: opacity .1s; }
+#tooltip.visible { opacity: 1; }
+#tooltip strong, #tooltip small, #tooltip p { display: block; margin: 0; }
+#tooltip small { margin-top: 2px; color: #94a3b8; text-transform: uppercase; }
+#tooltip p { margin-top: 6px; color: #e2e8f0; }
+</style>
+<div class="wrap">
+<div class="canvas">
+<div class="zoom-toolbar" aria-label="Diagram zoom">
+<button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out">-</button>
+<output id="zoom-value">100%</output>
+<button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+<button type="button" id="zoom-reset" title="Reset zoom" aria-label="Reset zoom">1:1</button>
+</div>
+<div class="zoom-stage" id="zoom-stage">
+<svg id="diagram" width="454" height="202" viewBox="0 0 454 202">
+<defs><marker id="arrow" markerWidth="2" markerHeight="2" refX="1.5" refY=".75" orient="auto"><path d="M0,0 L0,1.5 L1.75,.75 z" fill="#f9fafb"/></marker></defs>
+<rect class="region debug-target" data-name="input-and-split" data-kind="region" data-detail="The parent reads addr, copies it with M, then Y births one worker on each side." x="101.7" y="67.4" width="70" height="42" style="--c:#a855f7"><title>input-and-split: The parent reads addr, copies it with M, then Y births one worker on each side.</title></rect><text class="label debug-target" data-name="input-and-split" data-kind="region" data-detail="The parent reads addr, copies it with M, then Y births one worker on each side." x="108" y="66">input-and-split</text><rect class="region debug-target" data-name="high-bank-selector" data-kind="region" data-detail="Compute addr−50. Negative halts; zero/positive merge and emit local address." x="157.7" y="39.4" width="168" height="56" style="--c:#3b82f6"><title>high-bank-selector: Compute addr−50. Negative halts; zero/positive merge and emit local address.</title></rect><text class="label debug-target" data-name="high-bank-selector" data-kind="region" data-detail="Compute addr−50. Negative halts; zero/positive merge and emit local address." x="164" y="38">high-bank-selector</text><rect class="region debug-target" data-name="low-bank-selector" data-kind="region" data-detail="Compute addr−50. Negative adds 50 back and emits; zero/positive halt." x="157.7" y="81.4" width="154" height="56" style="--c:#22c55e"><title>low-bank-selector: Compute addr−50. Negative adds 50 back and emits; zero/positive halt.</title></rect><text class="label debug-target" data-name="low-bank-selector" data-kind="region" data-detail="Compute addr−50. Negative adds 50 back and emits; zero/positive halt." x="164" y="80">low-bank-selector</text>
+<polyline class="lane control debug-target" data-name="parent" data-kind="control lane" data-detail="rM leaves A=B=addr; Y duplicates both registers" points="122,89.1 164,89.1" style="--c:#a855f7"><title>parent: rM leaves A=B=addr; Y duplicates both registers</title></polyline><text class="lane-label debug-target" data-name="parent" data-kind="control lane" data-detail="rM leaves A=B=addr; Y duplicates both registers" x="122" y="75.8">parent</text><polyline class="lane control debug-target" data-name="high-child" data-kind="control lane" data-detail="active exactly for addr ≥ 50; output addr−50" points="164,75.1 262,75.1 262,89.1 290,89.1 290,75.1 318,75.1" style="--c:#3b82f6"><title>high-child: active exactly for addr ≥ 50; output addr−50</title></polyline><text class="lane-label debug-target" data-name="high-child" data-kind="control lane" data-detail="active exactly for addr ≥ 50; output addr−50" x="164" y="61.8">high-child</text><polyline class="lane control debug-target" data-name="low-child" data-kind="control lane" data-detail="active exactly for addr &lt; 50; output original addr" points="164,103.1 164,117.1 262,117.1 262,103.1 304,103.1" style="--c:#22c55e"><title>low-child: active exactly for addr &lt; 50; output original addr</title></polyline><text class="lane-label debug-target" data-name="low-child" data-kind="control lane" data-detail="active exactly for addr &lt; 50; output original addr" x="164" y="89.8">low-child</text>
+<text class="cell" x="94" y="24">+</text><text class="cell" x="108" y="24">-</text><text class="cell" x="122" y="24">-</text><text class="cell" x="136" y="24">-</text><text class="cell" x="150" y="24">-</text><text class="cell" x="164" y="24">-</text><text class="cell" x="178" y="24">-</text><text class="cell" x="192" y="24">-</text><text class="cell" x="206" y="24">-</text><text class="cell" x="220" y="24">-</text><text class="cell" x="234" y="24">-</text><text class="cell" x="248" y="24">-</text><text class="cell" x="262" y="24">-</text><text class="cell" x="276" y="24">-</text><text class="cell" x="290" y="24">-</text><text class="cell" x="304" y="24">-</text><text class="cell" x="318" y="24">-</text><text class="cell" x="332" y="24">-</text><text class="cell" x="346" y="24">+</text><text class="cell" x="94" y="38">|</text><text class="cell" x="346" y="38">|</text><text class="cell" x="94" y="52">|</text><text class="cell" x="346" y="52">|</text><text class="cell" x="94" y="66">|</text><text class="cell" x="262" y="66">H</text><text class="cell" x="346" y="66">|</text><text class="cell" x="24" y="80">+</text><text class="cell" x="38" y="80">-</text><text class="cell" x="52" y="80">+</text><text class="cell" x="94" y="80">|</text><text class="cell" x="164" y="80">&gt;</text><text class="cell" x="178" y="80">`</text><text class="cell" x="192" y="80">5</text><text class="cell" x="206" y="80">0</text><text class="cell" x="220" y="80">`</text><text class="cell" x="234" y="80">W</text><text class="cell" x="248" y="80">-</text><text class="cell" x="262" y="80">X</text><text class="cell" x="290" y="80">&gt;</text><text class="cell" x="304" y="80">s</text><text class="cell" x="318" y="80">H</text><text class="cell" x="346" y="80">|</text><text class="cell" x="388" y="80">+</text><text class="cell" x="402" y="80">-</text><text class="cell" x="416" y="80">+</text><text class="cell" x="24" y="94">|</text><text class="cell" x="38" y="94">I</text><text class="cell" x="52" y="94">|</text><text class="cell" x="66" y="94">&gt;</text><text class="cell" x="80" y="94">&gt;</text><text class="cell" x="94" y="94">|</text><text class="cell" x="122" y="94">@</text><text class="cell" x="136" y="94">r</text><text class="cell" x="150" y="94">M</text><text class="cell" x="164" y="94">Y</text><text class="cell" x="262" y="94">&gt;</text><text class="cell" x="290" y="94">^</text><text class="cell" x="346" y="94">|</text><text class="cell" x="360" y="94">&gt;</text><text class="cell" x="374" y="94">&gt;</text><text class="cell" x="388" y="94">|</text><text class="cell" x="402" y="94">O</text><text class="cell" x="416" y="94">|</text><text class="cell" x="24" y="108">+</text><text class="cell" x="38" y="108">-</text><text class="cell" x="52" y="108">+</text><text class="cell" x="94" y="108">|</text><text class="cell" x="164" y="108">v</text><text class="cell" x="262" y="108">&gt;</text><text class="cell" x="276" y="108">+</text><text class="cell" x="290" y="108">s</text><text class="cell" x="304" y="108">H</text><text class="cell" x="346" y="108">|</text><text class="cell" x="388" y="108">+</text><text class="cell" x="402" y="108">-</text><text class="cell" x="416" y="108">+</text><text class="cell" x="94" y="122">|</text><text class="cell" x="164" y="122">&gt;</text><text class="cell" x="178" y="122">`</text><text class="cell" x="192" y="122">5</text><text class="cell" x="206" y="122">0</text><text class="cell" x="220" y="122">`</text><text class="cell" x="234" y="122">W</text><text class="cell" x="248" y="122">-</text><text class="cell" x="262" y="122">X</text><text class="cell" x="276" y="122">H</text><text class="cell" x="346" y="122">|</text><text class="cell" x="94" y="136">|</text><text class="cell" x="262" y="136">H</text><text class="cell" x="346" y="136">|</text><text class="cell" x="94" y="150">|</text><text class="cell" x="346" y="150">|</text><text class="cell" x="94" y="164">+</text><text class="cell" x="108" y="164">-</text><text class="cell" x="122" y="164">-</text><text class="cell" x="136" y="164">-</text><text class="cell" x="150" y="164">-</text><text class="cell" x="164" y="164">-</text><text class="cell" x="178" y="164">-</text><text class="cell" x="192" y="164">-</text><text class="cell" x="206" y="164">-</text><text class="cell" x="220" y="164">-</text><text class="cell" x="234" y="164">-</text><text class="cell" x="248" y="164">-</text><text class="cell" x="262" y="164">-</text><text class="cell" x="276" y="164">-</text><text class="cell" x="290" y="164">-</text><text class="cell" x="304" y="164">-</text><text class="cell" x="318" y="164">-</text><text class="cell" x="332" y="164">-</text><text class="cell" x="346" y="164">+</text>
+</svg>
+</div>
+</div>
+<aside>
+<h1>Y-banked memory selector — low addr / high addr−50</h1>
+<p>29 x 11</p>
+<ul><li class="debug-target" data-name="input-and-split" data-kind="region" data-detail="The parent reads addr, copies it with M, then Y births one worker on each side."><span style="background:#a855f7"></span><b>input-and-split</b> The parent reads addr, copies it with M, then Y births one worker on each side.</li>
+<li class="debug-target" data-name="high-bank-selector" data-kind="region" data-detail="Compute addr−50. Negative halts; zero/positive merge and emit local address."><span style="background:#3b82f6"></span><b>high-bank-selector</b> Compute addr−50. Negative halts; zero/positive merge and emit local address.</li>
+<li class="debug-target" data-name="low-bank-selector" data-kind="region" data-detail="Compute addr−50. Negative adds 50 back and emits; zero/positive halt."><span style="background:#22c55e"></span><b>low-bank-selector</b> Compute addr−50. Negative adds 50 back and emits; zero/positive halt.</li>
+<li class="debug-target" data-name="parent" data-kind="control lane" data-detail="rM leaves A=B=addr; Y duplicates both registers"><span style="background:#a855f7"></span><b>parent</b> rM leaves A=B=addr; Y duplicates both registers</li>
+<li class="debug-target" data-name="high-child" data-kind="control lane" data-detail="active exactly for addr ≥ 50; output addr−50"><span style="background:#3b82f6"></span><b>high-child</b> active exactly for addr ≥ 50; output addr−50</li>
+<li class="debug-target" data-name="low-child" data-kind="control lane" data-detail="active exactly for addr &lt; 50; output original addr"><span style="background:#22c55e"></span><b>low-child</b> active exactly for addr &lt; 50; output original addr</li></ul>
+</aside>
+</div>
+<div id="tooltip" role="tooltip"><strong></strong><small></small><p></p></div>
+<script>
+const targets = [...document.querySelectorAll('.debug-target')];
+const tooltip = document.querySelector('#tooltip');
+const title = tooltip.querySelector('strong');
+const kind = tooltip.querySelector('small');
+const detail = tooltip.querySelector('p');
+let pinned = null;
+const canvas = document.querySelector('.canvas');
+const stage = document.querySelector('#zoom-stage');
+const diagram = document.querySelector('#diagram');
+const zoomValue = document.querySelector('#zoom-value');
+const baseWidth = 454;
+const baseHeight = 202;
+let zoom = 1;
+let pan = null;
+
+function setZoom(next) {
+  zoom = Math.min(3, Math.max(.35, next));
+  diagram.style.transform = `scale(${zoom})`;
+  stage.style.width = `${baseWidth * zoom}px`;
+  stage.style.height = `${baseHeight * zoom}px`;
+  zoomValue.value = `${Math.round(zoom * 100)}%`;
+  zoomValue.textContent = zoomValue.value;
+}
+document.querySelector('#zoom-in').addEventListener('click', () => setZoom(zoom * 1.25));
+document.querySelector('#zoom-out').addEventListener('click', () => setZoom(zoom / 1.25));
+document.querySelector('#zoom-reset').addEventListener('click', () => setZoom(1));
+canvas.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  setZoom(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+}, { passive: false });
+stage.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.target.closest('.debug-target')) return;
+  pan = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop };
+  stage.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+stage.addEventListener('pointermove', (event) => {
+  if (!pan) return;
+  canvas.scrollLeft = pan.left - (event.clientX - pan.x);
+  canvas.scrollTop = pan.top - (event.clientY - pan.y);
+});
+stage.addEventListener('pointerup', () => { pan = null; });
+stage.addEventListener('pointercancel', () => { pan = null; });
+setZoom(1);
+
+function setActive(name) {
+  for (const target of targets) target.classList.toggle('is-active', target.dataset.name === name);
+}
+function clearActive() {
+  if (!pinned) {
+    for (const target of targets) target.classList.remove('is-active');
+    tooltip.classList.remove('visible');
+  }
+}
+function show(target, event) {
+  title.textContent = target.dataset.name;
+  kind.textContent = target.dataset.kind;
+  detail.textContent = target.dataset.detail || 'No additional note.';
+  tooltip.style.left = event.clientX + 'px';
+  tooltip.style.top = event.clientY + 'px';
+  tooltip.classList.add('visible');
+  setActive(target.dataset.name);
+}
+for (const target of targets) {
+  target.addEventListener('pointerenter', (event) => show(target, event));
+  target.addEventListener('pointermove', (event) => show(target, event));
+  target.addEventListener('pointerleave', clearActive);
+  target.addEventListener('click', (event) => {
+    event.preventDefault();
+    pinned = pinned === target.dataset.name ? null : target.dataset.name;
+    if (pinned) show(target, event); else clearActive();
+  });
+}
+</script>
+</html>
