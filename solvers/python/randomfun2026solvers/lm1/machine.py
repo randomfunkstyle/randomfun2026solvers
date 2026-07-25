@@ -1870,6 +1870,12 @@ TAPE_SIZE = {
     # That is the whole point of the new tier: at n=16 an access is ~185 ticks rather
     # than the ~830 a 104-slot tape costs, and *none* of them is in the inner loop.
     "matmul": 16,
+    # snake keeps ten scalars plus a 64-slot body ring (BODY+63 = 79, so 80). The ring
+    # is sized to the *constraint*, not the public cases: 100 rounds allow at most 49
+    # growths, so the snake cannot exceed 50 cells, and 64 is the power of two whose
+    # `MODI` wrap costs nothing. The addresses are computed at run time, so this line
+    # is the only place the tape's real extent is stated.
+    "snake": 80,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
@@ -1913,6 +1919,11 @@ ROM_ROWS = {
     # STREAM block's ring band is as wide as the tape row above it, and its height is
     # what the ROM trades against; packed, the trade lands at 88x90 (8,100) on 5 rows.
     "matmul": 5,
+    # Like plotter: the panel adds rows, so height is binding and the fold has to stop
+    # trading width for it. 9 rows is the minimum of a full sweep — 123x129 (16,641),
+    # against the default's 119x142 (20,164). One row either side is worse (8 rows is
+    # 135 wide, 10 rows is 130 tall), so this is a real optimum, not a plateau.
+    "snake": 9,
 }
 
 

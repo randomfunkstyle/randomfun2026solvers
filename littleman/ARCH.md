@@ -1,7 +1,8 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: Semesters 1 and 2 are complete — 10 of the 12 graded problems are
-solved**, every one passing all its public cases on the reference interpreter.
+**Status: Semesters 1 and 2 are complete — 11 of the 16 graded problems are
+solved**, every one passing all its public cases on the reference interpreter, and
+`snake` opens Semester 4 by passing all **17** the judge actually runs.
 
 | set | problem | grid | score | how |
 |---|---|---|---|---|
@@ -15,6 +16,7 @@ solved**, every one passing all its public cases on the reference interpreter.
 | 2 | `plotter` | 112×116 | 2,749,462,237 | LM-1 + display |
 | 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
 | 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
+| 4 | `snake` | 123×129 | 16,647,839,451 | LM-1 + display (17/17, judged) |
 | — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
 
 `lm1/machine.py` takes an assembled program and emits the whole machine — looping
@@ -615,6 +617,34 @@ ADDR's column**. A 32×24 panel under a 48-wide CPU does that where it sits
 (`plotter`); `palette`'s 8×8 one does not, and the panel slides east until it does
 (`machine._panel_x`).
 
+#### The panel is a persistent framebuffer — measured, and it changes the cost model
+
+`plotter` and `palette` both commit with `SWAP ← 0`, which clears `next`, so both
+repaint every pixel they want in every frame. That is not the only mode. Probed on
+the engine (4×4 and 8×8 panels, single-stepped, frames dumped at every commit):
+
+- **`SWAP ← 1` keeps `next` *and* the cursor.** Paint one pixel, commit 1, paint a
+  second, commit 1: frame 2 holds **both**. So a round-based display problem can treat
+  the panel as a framebuffer that survives commits and write only the pixels that
+  *changed* — `snake`'s tick is 2 pixels rather than 256, which is the whole reason its
+  ticks are dominated by the tape and not by the panel.
+- **`next` starts all-zero**, so the first frame may paint a few pixels and commit.
+- **`ADDR ← row*w+col`, then `DATA` paints there and advances by one**; at the last
+  cell it wraps to 0 with no error. Row-major, verified on a non-square panel.
+- **Every `SWAP` emits exactly one frame, even an unchanged one**, and one `SWAP`
+  never emits two. There is no way to commit "silently", which is what makes a
+  no-frame round (`snake`'s direction rounds) a *hardware* obligation rather than an
+  optimisation: an extra commit desynchronises every later frame.
+- **The panel costs 0 ticks beyond pipe transit.** A value sent on tick *T* is
+  consumed during tick `T + (L-1)` for a pipe of `L` cells; all three ports can be made
+  to land on the same tick, and the same-tick order is ADDR → DATA → SWAP, so the pixel
+  written on a tick *is* in the frame committed on that tick. Unequal pipe lengths
+  reorder writes — plan latency, not send order. Values still in flight are processed
+  after the last man halts.
+- **Range faults are fatal on the arrival tick**, each with its own reason:
+  `display-value` for `DATA` outside 0–15, `display-addr` for `ADDR` outside
+  `0 … w*h-1`, `display-swap` for anything but 0/1.
+
 ## 5. Registers, words, and the code ring
 
 ### 5.1 Register model
@@ -1134,6 +1164,7 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
 | Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | — | C |
 | Practice | `hello-world` · `max-element` · `atoi` | 0–1 slots | ≤1 | 1/1 · 10/10 · 2/2 | A |
+| Sem 4 | `snake` | persistent framebuffer + FIFO body ring; needs `LDA`/`MOVA`/`INCM`/`DECM`/`DIV` | 10 scalars + 64 | 5/5 · P=249 · 215k | **✔ solved by the synthesiser** (123×129, 1,000,411 ticks avg, score 16.6bn, **17/17** on the judge) |
 | Practice | `palette` | display ADDR/DATA/SWAP, 16 solid frames | 1 | 1/1 · P=89 · 59k | **✔ solved by the synthesiser** (98×98, 151,147 ticks, score 1.45bn) |
 
 Stages: **A** = CPU + SPILL only · **B** = SPILL + the tape · **C** = tape +

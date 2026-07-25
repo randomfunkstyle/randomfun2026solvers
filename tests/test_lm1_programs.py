@@ -52,7 +52,7 @@ BLOCKED = {
 }
 
 #: Problems graded on committed frames rather than on program output.
-DISPLAY_PROBLEMS = {"plotter", "palette"}
+DISPLAY_PROBLEMS = {"plotter", "palette", "snake"}
 
 #: Programs whose *emulated* tick estimate exceeds ``TICK_CAP`` on the largest
 #: public case. Empty since ``matmul`` moved onto the STREAM block: every program
@@ -81,6 +81,7 @@ def test_the_expected_programs_exist() -> None:
         "gradebook",
         "sudoku-validity",
         "matmul",
+        "snake",
     }
 
 
@@ -159,6 +160,25 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # command words (8*arg + code) out of N, M and K. No indexed opcode at all any
         # more — matmul never addresses memory randomly (see matmul.asm, stream.py).
         "matmul": {"MUL", "SND", "RCV"},
+        # snake keeps the whole game on cell indices (`y * 16 + x`, which is also the
+        # display's ADDR word), so every extension here is either an indexed access or
+        # a port: `LDA` reads the body FIFO's ring slot, `MOVA` writes it, `INCM`/`DECM`
+        # move the two FIFO counters in one access each, `MODI` wraps the ring address
+        # (free, where masking a stored counter would cost two more accesses a tick),
+        # `DIV` is the wall test's runtime divisor, and `NEG` builds the two negative
+        # direction deltas the ROM cannot hold.
+        "snake": {
+            "DECM",
+            "DIV",
+            "DSPA",
+            "DSPD",
+            "DSPS",
+            "INCM",
+            "LDA",
+            "MODI",
+            "MOVA",
+            "NEG",
+        },
     }
 
 
