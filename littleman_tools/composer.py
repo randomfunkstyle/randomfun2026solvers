@@ -19,6 +19,9 @@ class Gate:
     inputs: tuple[str, ...]
     output: str
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "inputs", tuple(self.inputs))
+
 
 @dataclass(frozen=True)
 class Netlist:
@@ -32,6 +35,10 @@ class Netlist:
     levels: Mapping[str, int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "inputs", tuple(self.inputs))
+        object.__setattr__(self, "gates", tuple(self.gates))
+        object.__setattr__(self, "outputs", tuple(self.outputs))
+
         producers: dict[str, Gate | None] = {}
         consumers: dict[str, list[Gate]] = {}
         levels: dict[str, int] = {}

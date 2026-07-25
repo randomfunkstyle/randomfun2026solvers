@@ -5,6 +5,31 @@ import pytest
 from littleman_tools.composer import Gate, Netlist
 
 
+def test_netlist_normalizes_mutable_sequence_fields_to_tuples() -> None:
+    gate_inputs = ["a", "b"]
+    netlist_inputs = ["a", "b"]
+    gates = [Gate("and-gate.man", gate_inputs, "product")]
+    outputs = ["product"]
+
+    netlist = Netlist(netlist_inputs, gates, outputs)
+
+    assert isinstance(netlist.gates[0].inputs, tuple)
+    assert isinstance(netlist.inputs, tuple)
+    assert isinstance(netlist.gates, tuple)
+    assert isinstance(netlist.outputs, tuple)
+
+    gate_inputs.clear()
+    netlist_inputs.clear()
+    gates.clear()
+    outputs.clear()
+
+    assert netlist.gates[0].inputs == ("a", "b")
+    assert netlist.inputs == ("a", "b")
+    assert netlist.gates == (Gate("and-gate.man", ("a", "b"), "product"),)
+    assert netlist.outputs == ("product",)
+    assert netlist.producers == {"a": None, "b": None, "product": netlist.gates[0]}
+
+
 def test_netlist_records_signal_graph_and_dependency_levels() -> None:
     product_gate = Gate("and-gate.man", ("a", "b"), "product")
     result_gate = Gate("xor-gate.man", ("product", "b"), "result")
