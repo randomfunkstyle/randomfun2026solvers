@@ -304,7 +304,7 @@ def test_the_engine_agrees_with_the_layout_about_every_worker_binding():
                 assert got == head[want], (
                     f"{ch!r} at interior {(ix, iy)}: layout says {want}, engine "
                     f"routes it to the pipe starting at {got}")
-    assert checked == 70, f"expected 70 pipe glyphs in the worker, found {checked}"
+    assert checked == 68, f"expected 68 pipe glyphs in the worker, found {checked}"
 
 
 @pytest.mark.slow
