@@ -117,3 +117,35 @@ def test_sixteen_cells_answer_random_streams_on_the_reference_engine(seed: int) 
     stream, want = _stream(16, 60, seed)
     snap = Littleman().judge(src, input=stream, expected=want, max_ticks=300000)
     assert snap.output == want, (snap.output, want)
+
+
+def test_the_checked_in_field_matches_the_generator():
+    from pathlib import Path
+
+    path = Path("littleman/examples/memory-men-field-16.man")
+    if not path.is_file():  # pragma: no cover - only when run from another cwd
+        pytest.skip(f"{path} not reachable from this working directory")
+    on_disk = path.read_text(encoding="utf-8").rstrip("\n")
+    assert on_disk == build_field_line(16).source(), (
+        "regenerate with: uv run python -m randomfun2026solvers.memory_men_line "
+        "--cells 16 --man littleman/examples/memory-men-field-16.man "
+        "--html littleman/examples/memory-men-field-16.html "
+        "--json littleman/examples/memory-men-field-16.json"
+    )
+
+
+def test_the_overlay_labels_every_cell_with_the_address_it_holds():
+    # The labels are the whole point of the sidecar: sixteen identical four-column
+    # tiles say nothing about which one holds address 5.
+    built = build_field_line(16)
+    assert built.debug is not None
+    side = built.debug.to_dict()
+    names = {r["name"] for r in side["regions"]}
+    assert {f"cell addr {j}" for j in range(16)} <= names
+    assert len(side["circles"]) == 16, "one circle per split"
+    rows = list(built.rows)
+    for region in side["regions"]:
+        if region["name"].startswith("cell addr "):
+            assert rows[region["y"]][region["x"]] == ">", region["name"]
+    for circle in side["circles"]:
+        assert rows[circle["cy"]][circle["cx"]] == "Y", circle["name"]

@@ -99,3 +99,19 @@ Submit it and archive it in one step — see the README's *Submitting to the con
 Local scores understate: the server grades private cases too (`brackets` is 9
 public but 26 graded), so treat a local number as a lower bound. Resubmitting an
 unchanged grid is refused by hash, so profiling and resubmitting is cheap to repeat.
+
+### The `Y`-born cell field
+
+```sh
+uv run python -m randomfun2026solvers.memory_men_line --cells 16 \
+  --man littleman/examples/memory-men-field-16.man \
+  --html littleman/examples/memory-men-field-16.html \
+  --json littleman/examples/memory-men-field-16.json
+```
+
+This one is the case for the convention twice over. Sixteen identical four-column
+tiles share **one room**, so nothing in the ASCII says which tile holds address 5 —
+and nothing says which `Y` on the spawner corridor gave birth to which resident.
+The overlay names both, and the cell-to-address labels are checked against the
+engine (write `1000+a` to every address, snapshot the runners, assert each holder
+stands inside the region named `cell addr a`) rather than asserted from the layout.
