@@ -55,6 +55,45 @@ def test_parse_program_reports_source_locations(source: str, message: str) -> No
         parse_program(source)
 
 
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        (
+            "inputs a\nx = fanout_extra(a)\noutputs x\n",
+            "line 2, column 5: unknown primitive 'fanout_extra'",
+        ),
+        (
+            "inputs a\nfoo = foo(a)\noutputs foo\n",
+            "line 2, column 7: unknown primitive 'foo'",
+        ),
+    ],
+)
+def test_parse_program_reports_unknown_primitive_at_rhs_callee(
+    source: str, message: str
+) -> None:
+    with pytest.raises(LanguageError, match=re.escape(message)):
+        parse_program(source)
+
+
+@pytest.mark.parametrize(
+    ("target", "name"),
+    (
+        ("inputs", "inputs"),
+        ("inputs ", "inputs"),
+        ("outputs", "outputs"),
+        ("outputs ", "outputs"),
+    ),
+)
+def test_parse_program_rejects_reserved_assignment_targets_consistently(
+    target: str, name: str
+) -> None:
+    with pytest.raises(
+        LanguageError,
+        match=re.escape(f"line 2, column 1: reserved assignment target {name!r}"),
+    ):
+        parse_program(f"inputs a\n{target}= not(a)\noutputs a\n")
+
+
 def test_parse_program_ignores_blank_lines_and_comments() -> None:
     netlist = parse_program(
         """\

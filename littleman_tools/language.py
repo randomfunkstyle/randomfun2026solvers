@@ -150,25 +150,33 @@ def parse_program(source: str) -> Netlist:
     outputs_statement: _Statement | None = None
 
     for index, statement in enumerate(statements[1:], start=1):
-        if re.match(r"outputs(?:\s|$)", statement.text):
-            if index != len(statements) - 1:
-                raise LanguageError(
-                    "outputs statement must be final", statement.line, statement.column
-                )
-            outputs = _parse_outputs(statement)
-            outputs_statement = statement
-            break
-
-        if re.match(r"inputs(?:\s|$)", statement.text):
-            raise LanguageError(
-                "inputs statement must appear first", statement.line, statement.column
-            )
-
         left, separator, right = statement.text.partition("=")
-        if not separator or "=" in right:
+        if not separator:
+            if re.match(r"outputs(?:\s|$)", statement.text):
+                if index != len(statements) - 1:
+                    raise LanguageError(
+                        "outputs statement must be final", statement.line, statement.column
+                    )
+                outputs = _parse_outputs(statement)
+                outputs_statement = statement
+                break
+
+            if re.match(r"inputs(?:\s|$)", statement.text):
+                raise LanguageError(
+                    "inputs statement must appear first", statement.line, statement.column
+                )
+
+            raise LanguageError("expected assignment", statement.line, statement.column)
+
+        if "=" in right:
             raise LanguageError("expected assignment", statement.line, statement.column)
         left = left.strip()
+        right_leading = len(right) - len(right.lstrip())
         right = right.strip()
+        if left in {"inputs", "outputs"}:
+            raise LanguageError(
+                f"reserved assignment target {left!r}", statement.line, statement.column
+            )
 
         fanout_call = re.fullmatch(r"fanout\s*\((.*)\)", right)
         if fanout_call is not None:
@@ -214,8 +222,6 @@ def parse_program(source: str) -> Netlist:
             fanout = FanOut(source=fanout_source, branches=branches)
             fanout_statement = statement
             continue
-        if right.startswith("fanout"):
-            raise LanguageError("malformed fanout call", statement.line, statement.column)
 
         assignment = re.fullmatch(
             rf"({_IDENTIFIER})\s*\((.*)\)",
@@ -229,7 +235,13 @@ def parse_program(source: str) -> Netlist:
         try:
             artifact = _PRIMITIVES[primitive]
         except KeyError as error:
-            column = statement.column + statement.text.index(primitive)
+            column = (
+                statement.column
+                + statement.text.index("=")
+                + 1
+                + right_leading
+                + assignment.start(1)
+            )
             raise LanguageError(
                 f"unknown primitive {primitive!r}", statement.line, column
             ) from error
