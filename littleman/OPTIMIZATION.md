@@ -201,7 +201,7 @@ uv run python -m randomfun2026solvers.manopt \
 | 3 | `sudoku-validity` | 83×80, score 3,043,333,207 | 1 | fixed point; internal cuts rebound 24 ops and the behavior-preserving bottom cut had zero objective value |
 | 4 | `tcp` | 109×74, score 1,678,313,030 | 2 | removed row 47; 109×73, public objective 1,051,587,310 → 1,050,755,640 |
 | 5 | `matmul` | 88×90, score 1,464,201,360 | 1 | fixed point; the only compacting row cuts rebound 48 ops |
-| 6 | `brackets` | 95×69, score 444,583,302 | 3 | removed column 40 and row 50; 94×68, public objective 230,976,825 → 225,413,232.44 |
+| 6 | `brackets` | 95×69, score 444,583,302 | ROM7 + AST3 | ROM 7→13 rows, then removed column 40 and row 56; 94×74, public objective 230,976,825 → 225,289,528.44 |
 | 7 | `memory` | 31×31, score 55,105,622 | 1 | fixed point with the inferred 121-cell ring total held exactly |
 | 8 | `plotter` | 44×56, score 22,774,730 | 1 | fixed point; the feed-row cut rebound 2 ops and room moves rebound 37 |
 
@@ -238,4 +238,7 @@ are strict neighboring-fold optima. TCP has a neutral 3–5-row plateau. Bracket
 can spend otherwise free height: 7→13 ROM rows keeps the grid width and 95²
 factor unchanged while reducing public average ticks from 25,593 to 25,579
 (objective 230,976,825 → 230,850,475). The verified standalone result is
-`tasks/compacted/brackets_submitted_rom10.man`.
+`tasks/compacted/brackets_submitted_rom10.man`. Applying AST10 afterward removes
+one binding-side column and one execution row; the composed
+`tasks/compacted/brackets_submitted_rom_ast10.man` reaches 94×74, 25,496.78
+average ticks, and objective 225,289,528.44.
