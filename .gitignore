@@ -12,3 +12,6 @@ __pycache__/
 
 # Swift build output — never commit (module caches bake in absolute worktree paths)
 solvers/swift/.build/
+
+# agent worktrees and local session state
+.claude/
