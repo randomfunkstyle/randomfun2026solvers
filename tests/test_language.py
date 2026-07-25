@@ -2,7 +2,8 @@ import re
 
 import pytest
 
-from littleman_tools.composer import FanOut, Gate, Netlist
+from littleman_tools.compiler_cli import main as compiler_main
+from littleman_tools.composer import FanOut, Gate, Netlist, compose
 from littleman_tools.language import LanguageError, parse_file, parse_program
 
 HALF_ADDER = """\
@@ -68,9 +69,7 @@ def test_parse_program_reports_source_locations(source: str, message: str) -> No
         ),
     ],
 )
-def test_parse_program_reports_unknown_primitive_at_rhs_callee(
-    source: str, message: str
-) -> None:
+def test_parse_program_reports_unknown_primitive_at_rhs_callee(source: str, message: str) -> None:
     with pytest.raises(LanguageError, match=re.escape(message)):
         parse_program(source)
 
@@ -128,9 +127,7 @@ outputs sum
 def test_parse_program_maps_supported_primitives(
     spelling: str, artifact: str, arguments: str
 ) -> None:
-    netlist = parse_program(
-        f"inputs a, b, c\nresult = {spelling}({arguments})\noutputs result\n"
-    )
+    netlist = parse_program(f"inputs a, b, c\nresult = {spelling}({arguments})\noutputs result\n")
 
     assert netlist.gates == (Gate(artifact, tuple(arguments.split(", ")), "result"),)
 
@@ -192,3 +189,31 @@ def test_language_api_is_exported_from_package() -> None:
     assert ExportedLanguageError is LanguageError
     assert exported_parse_file is parse_file
     assert exported_parse_program is parse_program
+
+
+def test_compile_cli_writes_requested_man_file(tmp_path) -> None:
+    source = tmp_path / "half_adder.lmc"
+    output = tmp_path / "nested" / "half_adder.man"
+    source.write_text(HALF_ADDER, encoding="utf-8")
+
+    assert compiler_main([str(source), "-o", str(output)]) == 0
+    assert output.read_text(encoding="utf-8") == compose(parse_program(HALF_ADDER))
+
+
+def test_compile_cli_requires_an_output_path(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        compiler_main(["program.lmc"])
+
+    assert "the following arguments are required: -o/--output" in capsys.readouterr().err
+
+
+def test_compile_cli_reports_malformed_source_without_creating_output(tmp_path, capsys) -> None:
+    source = tmp_path / "invalid.lmc"
+    output = tmp_path / "nested" / "invalid.man"
+    source.write_text("inputs a\nx = unknown(a)\noutputs x\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="2"):
+        compiler_main([str(source), "-o", str(output)])
+
+    assert "line 2, column 5: unknown primitive 'unknown'" in capsys.readouterr().err
+    assert not output.parent.exists()

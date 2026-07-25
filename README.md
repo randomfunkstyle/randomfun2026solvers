@@ -38,6 +38,23 @@ uv run python -m littleman_tools.runner run \
   tasks/solutions/triangle.man --input "4" --json
 ```
 
+## Compile a circuit
+
+```text
+inputs a, b
+(xor_a, xor_b), (and_a, and_b) = fanout(a, b)
+sum = xor(xor_a, xor_b)
+carry = and(and_a, and_b)
+outputs sum, carry
+```
+
+```sh
+littleman-compile half_adder.lmc -o half_adder.man
+```
+
+`fanout` copies the complete ordered input frame through `S`. The compiler CLI
+writes only the path explicitly requested with `-o`.
+
 ## Score a solution
 
 Score a `.man` program against the public cases in a task definition:

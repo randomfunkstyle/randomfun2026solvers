@@ -10,6 +10,7 @@ dependencies = [
 [project.scripts]
 littleman = "littleman_tools.runner:main"
 littleman-score = "littleman_tools.scoring:main"
+littleman-compile = "littleman_tools.compiler_cli:main"
 
 [dependency-groups]
 dev = [
