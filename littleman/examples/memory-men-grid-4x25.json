@@ -1,0 +1,426 @@
+{
+  "title": "grid man-memory 4x25: 4 igniters walking at once",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "router / broadcaster",
+      "x": 1,
+      "y": 6,
+      "w": 150,
+      "h": 8,
+      "note": "one op in, three words out to every column at once. The strip spans the whole width so each column's pipe is a two-cell stub off its south wall, and it owns no other outgoing pipe \u2014 `S` would broadcast into that too.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "collector strip",
+      "x": 1,
+      "y": 106,
+      "w": 150,
+      "h": 2,
+      "note": "`R` takes from any incoming pipe, so answers need no addressing. It is on the *bottom* on purpose: answer pipes never cross broadcast pipes, and every column's answer travels the same distance, so a later op's answer cannot overtake an earlier one.",
+      "color": "#facc15",
+      "tags": []
+    },
+    {
+      "name": "input",
+      "x": 1,
+      "y": 0,
+      "w": 3,
+      "h": 3,
+      "note": "`0 addr` / `1 addr value`",
+      "color": "#e879f9",
+      "tags": []
+    },
+    {
+      "name": "output",
+      "x": 2,
+      "y": 111,
+      "w": 3,
+      "h": 3,
+      "note": "one word per READ",
+      "color": "#e879f9",
+      "tags": []
+    },
+    {
+      "name": "column 0: addr 0-24",
+      "x": 1,
+      "y": 18,
+      "w": 36,
+      "h": 84,
+      "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 0 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "repeater 0",
+      "x": 1,
+      "y": 18,
+      "w": 5,
+      "h": 3,
+      "note": "`r S` three times: take a word off the strip, shout it at this column",
+      "color": "#60a5fa",
+      "tags": []
+    },
+    {
+      "name": "column 1: addr 25-49",
+      "x": 39,
+      "y": 18,
+      "w": 36,
+      "h": 84,
+      "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 25 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "repeater 1",
+      "x": 39,
+      "y": 18,
+      "w": 5,
+      "h": 3,
+      "note": "`r S` three times: take a word off the strip, shout it at this column",
+      "color": "#60a5fa",
+      "tags": []
+    },
+    {
+      "name": "column 2: addr 50-74",
+      "x": 77,
+      "y": 18,
+      "w": 36,
+      "h": 84,
+      "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 50 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "repeater 2",
+      "x": 77,
+      "y": 18,
+      "w": 5,
+      "h": 3,
+      "note": "`r S` three times: take a word off the strip, shout it at this column",
+      "color": "#60a5fa",
+      "tags": []
+    },
+    {
+      "name": "column 3: addr 75-99",
+      "x": 115,
+      "y": 18,
+      "w": 36,
+      "h": 84,
+      "note": "its own igniter, its own `@`, walking at tick 0 like every other column's. It is handed 75 as a literal and counts up, so these decoders hold global addresses and the head above them decodes nothing.",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "repeater 3",
+      "x": 115,
+      "y": 18,
+      "w": 5,
+      "h": 3,
+      "note": "`r S` three times: take a word off the strip, shout it at this column",
+      "color": "#60a5fa",
+      "tags": []
+    }
+  ],
+  "circles": [
+    {
+      "name": "base 0",
+      "cx": 11,
+      "cy": 21,
+      "r": 1,
+      "note": "read walking south, `M` into B, then `+1` a band: 0..24",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "base 25",
+      "cx": 49,
+      "cy": 21,
+      "r": 1,
+      "note": "read walking south, `M` into B, then `+1` a band: 25..49",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "base 50",
+      "cx": 87,
+      "cy": 21,
+      "r": 1,
+      "note": "read walking south, `M` into B, then `+1` a band: 50..74",
+      "color": "#a78bfa",
+      "tags": []
+    },
+    {
+      "name": "base 75",
+      "cx": 125,
+      "cy": 21,
+      "r": 1,
+      "note": "read walking south, `M` into B, then `+1` a band: 75..99",
+      "color": "#a78bfa",
+      "tags": []
+    }
+  ],
+  "scenarios": [],
+  "lanes": [
+    {
+      "name": "broadcast -> column 0",
+      "points": [
+        [
+          3,
+          15
+        ],
+        [
+          3,
+          17
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value",
+      "tags": [],
+      "cells": [
+        [
+          3,
+          15
+        ],
+        [
+          3,
+          16
+        ],
+        [
+          3,
+          17
+        ]
+      ]
+    },
+    {
+      "name": "answer <- column 0",
+      "points": [
+        [
+          34,
+          103
+        ],
+        [
+          34,
+          105
+        ]
+      ],
+      "note": "same length in every column, which is what keeps answers in order",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ",
+      "tags": [],
+      "cells": [
+        [
+          34,
+          103
+        ],
+        [
+          34,
+          104
+        ],
+        [
+          34,
+          105
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> column 1",
+      "points": [
+        [
+          41,
+          15
+        ],
+        [
+          41,
+          17
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value",
+      "tags": [],
+      "cells": [
+        [
+          41,
+          15
+        ],
+        [
+          41,
+          16
+        ],
+        [
+          41,
+          17
+        ]
+      ]
+    },
+    {
+      "name": "answer <- column 1",
+      "points": [
+        [
+          72,
+          103
+        ],
+        [
+          72,
+          105
+        ]
+      ],
+      "note": "same length in every column, which is what keeps answers in order",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ",
+      "tags": [],
+      "cells": [
+        [
+          72,
+          103
+        ],
+        [
+          72,
+          104
+        ],
+        [
+          72,
+          105
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> column 2",
+      "points": [
+        [
+          79,
+          15
+        ],
+        [
+          79,
+          17
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value",
+      "tags": [],
+      "cells": [
+        [
+          79,
+          15
+        ],
+        [
+          79,
+          16
+        ],
+        [
+          79,
+          17
+        ]
+      ]
+    },
+    {
+      "name": "answer <- column 2",
+      "points": [
+        [
+          110,
+          103
+        ],
+        [
+          110,
+          105
+        ]
+      ],
+      "note": "same length in every column, which is what keeps answers in order",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ",
+      "tags": [],
+      "cells": [
+        [
+          110,
+          103
+        ],
+        [
+          110,
+          104
+        ],
+        [
+          110,
+          105
+        ]
+      ]
+    },
+    {
+      "name": "broadcast -> column 3",
+      "points": [
+        [
+          117,
+          15
+        ],
+        [
+          117,
+          17
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "addr, op, value",
+      "tags": [],
+      "cells": [
+        [
+          117,
+          15
+        ],
+        [
+          117,
+          16
+        ],
+        [
+          117,
+          17
+        ]
+      ]
+    },
+    {
+      "name": "answer <- column 3",
+      "points": [
+        [
+          148,
+          103
+        ],
+        [
+          148,
+          105
+        ]
+      ],
+      "note": "same length in every column, which is what keeps answers in order",
+      "color": "#34d399",
+      "kind": "pipe",
+      "expect": "the stored value, on a selected READ",
+      "tags": [],
+      "cells": [
+        [
+          148,
+          103
+        ],
+        [
+          148,
+          104
+        ],
+        [
+          148,
+          105
+        ]
+      ]
+    }
+  ]
+}

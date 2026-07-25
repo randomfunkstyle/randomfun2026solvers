@@ -21,7 +21,7 @@
       "y": 6,
       "w": 3,
       "h": 8,
-      "note": "`r` the op and `X` on it, then broadcast exactly three words: addr, op, value. A READ has no value, so it sends a dummy 0 \u2014 fixed width means an unselected decoder needs no branch to know how much to swallow. This room owns no other outgoing pipe on purpose: `S` would broadcast into it too.",
+      "note": "`U` the op (the input pipe is on the north wall, so `U` is a receive and a turn in one cell), `M` it aside, `r` the address and `S` it, `W` the op back and `S` that. Only then does `X` run, and all it decides is where the *third* word comes from: a READ falls through to the shared final `S` still holding the 0 it sent as its op, a WRITE turns west onto a second `U` for the value. Three words, fixed width, so an unselected decoder needs no branch to know how much to swallow. This room owns no other outgoing pipe on purpose: `S` would broadcast into it too.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -51,7 +51,7 @@
       "y": 7,
       "w": 5,
       "h": 3,
-      "note": "B = 0 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 0 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -61,7 +61,7 @@
       "y": 7,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -71,7 +71,7 @@
       "y": 10,
       "w": 5,
       "h": 3,
-      "note": "B = 1 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 1 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -81,7 +81,7 @@
       "y": 10,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -91,7 +91,7 @@
       "y": 13,
       "w": 5,
       "h": 3,
-      "note": "B = 2 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 2 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -101,7 +101,7 @@
       "y": 13,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -111,7 +111,7 @@
       "y": 16,
       "w": 5,
       "h": 3,
-      "note": "B = 3 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 3 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -121,7 +121,7 @@
       "y": 16,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -131,7 +131,7 @@
       "y": 19,
       "w": 5,
       "h": 3,
-      "note": "B = 4 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 4 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -141,7 +141,7 @@
       "y": 19,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -151,7 +151,7 @@
       "y": 22,
       "w": 5,
       "h": 3,
-      "note": "B = 5 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 5 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -161,7 +161,7 @@
       "y": 22,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -171,7 +171,7 @@
       "y": 25,
       "w": 5,
       "h": 3,
-      "note": "B = 6 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 6 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -181,7 +181,7 @@
       "y": 25,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -191,7 +191,7 @@
       "y": 28,
       "w": 5,
       "h": 3,
-      "note": "B = 7 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 7 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -201,7 +201,7 @@
       "y": 28,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -211,7 +211,7 @@
       "y": 31,
       "w": 5,
       "h": 3,
-      "note": "B = 8 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 8 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -221,7 +221,7 @@
       "y": 31,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -231,7 +231,7 @@
       "y": 34,
       "w": 5,
       "h": 3,
-      "note": "B = 9 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 9 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -241,7 +241,7 @@
       "y": 34,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -251,7 +251,7 @@
       "y": 37,
       "w": 5,
       "h": 3,
-      "note": "B = 10 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 10 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -261,7 +261,7 @@
       "y": 37,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -271,7 +271,7 @@
       "y": 40,
       "w": 5,
       "h": 3,
-      "note": "B = 11 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 11 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -281,7 +281,7 @@
       "y": 40,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -291,7 +291,7 @@
       "y": 43,
       "w": 5,
       "h": 3,
-      "note": "B = 12 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 12 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -301,7 +301,7 @@
       "y": 43,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -311,7 +311,7 @@
       "y": 46,
       "w": 5,
       "h": 3,
-      "note": "B = 13 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 13 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -321,7 +321,7 @@
       "y": 46,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -331,7 +331,7 @@
       "y": 49,
       "w": 5,
       "h": 3,
-      "note": "B = 14 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 14 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -341,7 +341,7 @@
       "y": 49,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -351,7 +351,7 @@
       "y": 52,
       "w": 5,
       "h": 3,
-      "note": "B = 15 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine (forward op and value down), clockwise = not mine (swallow both, climb home east of the mine lane).",
+      "note": "B = 15 for life. `r` the broadcast address, `~` it against B: 0 only here. `X` straight = mine \u2014 round the ring, `r` the op and `s` it on, `r` the value and `s` it on. Clockwise = not mine: cut west across the middle swallowing both words, and rejoin at the ring's west column, which both paths share.",
       "color": "#a78bfa",
       "tags": []
     },
@@ -361,7 +361,7 @@
       "y": 52,
       "w": 5,
       "h": 3,
-      "note": "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. WRITE: `r` the value, `M` stores it. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
+      "note": "value in B. Both ops read the same two words \u2014 `r` the op, `b` it into the backpack, `r` the value \u2014 so only the tail differs and `d` picks it at the south-east corner: READ carries on into `W M s`, WRITE turns west onto `M`. Never blocks anyone else \u2014 its decoder only speaks when this address is called.",
       "color": "#22c55e",
       "tags": []
     },
@@ -392,7 +392,7 @@
       "cx": 9,
       "cy": 8,
       "r": 1,
-      "note": "`+` with A=1 pinned: A = 1 + B. Then `M` puts it back in B and `1` restores A, so the next `Y` hands out the next address. This is the only difference between the two rooms' spawners.",
+      "note": "`+` with A=1 pinned: A = 1 + B. Then `M` puts it back in B and `1` restores A, so the next `Y` hands out the next address. The cell room walks the same path with these three cells blank \u2014 cells are addressed by which pipe speaks to them and never learn a number.",
       "color": "#a78bfa",
       "tags": []
     },

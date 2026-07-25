@@ -70,8 +70,8 @@ __all__ = [
     "build_addr",
 ]
 
-#: Interior rows one cell occupies: return corridor, main line, branch lane.
-#: Three, not five, because the only branch left in a tile is two-way.
+#: Interior rows one cell occupies. Three, not five: a tile is a ring whose
+#: perimeter is the program, and the three interior cells are its one branch.
 BAND = 3
 
 
@@ -157,11 +157,25 @@ ROUTER_ROWS: tuple[str, ...] = (
     ">>^",
 )
 
-#: Where the input pipe must arrive (interior row of the ``r`` that reads ``op``).
-ROUTER_IN_ROW = 0
+
+#: Digits in a column's zero-padded base literal. Fixed width so that every
+#: column of a grid puts its bands on the same rows whatever number it starts at.
+_BASE_DIGITS = 3
 
 
-def band_room(n: int, tile: Sequence[str], *, increment: bool) -> tuple[list[str], list[int]]:
+def _init_height(base: int | None) -> int:
+    """Rows the igniter's preamble needs above the first band."""
+    return 1 if base is None else _BASE_DIGITS + 6
+
+
+def band_room(
+    n: int,
+    tile: Sequence[str],
+    *,
+    increment: bool,
+    base: int | None = None,
+    init_h: int = 1,
+) -> tuple[list[str], list[int]]:
     """``n`` copies of ``tile`` in one room, one per three-row band.
 
     Returns the interior rows and each band's *main* row — the row a tile reads
@@ -185,9 +199,11 @@ def band_room(n: int, tile: Sequence[str], *, increment: bool) -> tuple[list[str
     ycol = x0 - 1  # the `Y`, so that its east child lands on the tile
     tile_w = max(len(r) for r in tile)
     iw = x0 + tile_w
-    # one extra row on top: a man spawns facing east and has to be turned south
-    # before he can enter the first `Y` heading south.
-    ih = BAND * n + 1
+    # at least one row on top: a man spawns facing east and has to be turned south
+    # before he can enter the first `Y` heading south. `base` and `init_h` buy more
+    # rows for a starting address and for keeping two rooms' bands level.
+    init_h = max(init_h, _init_height(base))
+    ih = init_h + BAND * n
     rows = [[" "] * iw for _ in range(ih)]
 
     def put(x: int, y: int, glyph: str) -> None:
@@ -196,13 +212,25 @@ def band_room(n: int, tile: Sequence[str], *, increment: bool) -> tuple[list[str
         rows[y][x] = glyph
 
     put(0, 0, "@")
-    if increment:
-        put(1, 0, "1")  # A = 1 for the whole walk; every `+` is an increment
-    put(ycol, 0, "v")
+    if base is not None:
+        # A whole column of memory starts at `base`, so the igniter is handed one
+        # number and counts up from it. The literal is read walking *south* — big
+        # literals work in any direction — and is zero-padded to a fixed width so
+        # every column's bands sit on the same rows whatever its base.
+        put(1, 0, "v")
+        literal = f"`{base:0{_BASE_DIGITS}d}`M1"
+        for dy, glyph in enumerate(literal):
+            put(1, 1 + dy, glyph)
+        put(1, 1 + len(literal), ">")
+        put(ycol, 1 + len(literal), "v")
+    else:
+        if increment:
+            put(1, 0, "1")  # A = 1 for the whole walk; every `+` is an increment
+        put(ycol, 0, "v")
 
     main_rows: list[int] = []
     for j in range(n):
-        top = BAND * j + 1
+        top = init_h + BAND * j
         r_ret, r_main, r_alt = top, top + 1, top + 2
         main_rows.append(r_main)
 
@@ -357,10 +385,14 @@ def build_addr(n: int) -> Addr:
         router_iw,
         len(ROUTER_ROWS),
         note=(
-            "`r` the op and `X` on it, then broadcast exactly three words: addr, op, "
-            "value. A READ has no value, so it sends a dummy 0 — fixed width means an "
-            "unselected decoder needs no branch to know how much to swallow. This room "
-            "owns no other outgoing pipe on purpose: `S` would broadcast into it too."
+            "`U` the op (the input pipe is on the north wall, so `U` is a receive and "
+            "a turn in one cell), `M` it aside, `r` the address and `S` it, `W` the op "
+            "back and `S` that. Only then does `X` run, and all it decides is where the "
+            "*third* word comes from: a READ falls through to the shared final `S` still "
+            "holding the 0 it sent as its op, a WRITE turns west onto a second `U` for "
+            "the value. Three words, fixed width, so an unselected decoder needs no "
+            "branch to know how much to swallow. This room owns no other outgoing pipe "
+            "on purpose: `S` would broadcast into it too."
         ),
         color=C_MID,
     )
@@ -397,8 +429,9 @@ def build_addr(n: int) -> Addr:
         1,
         note=(
             "`+` with A=1 pinned: A = 1 + B. Then `M` puts it back in B and `1` restores "
-            "A, so the next `Y` hands out the next address. This is the only difference "
-            "between the two rooms' spawners."
+            "A, so the next `Y` hands out the next address. The cell room walks the same "
+            "path with these three cells blank — cells are addressed by which pipe speaks "
+            "to them and never learn a number."
         ),
         color=C_MID,
     )
@@ -422,8 +455,10 @@ def build_addr(n: int) -> Addr:
             BAND,
             note=(
                 f"B = {j} for life. `r` the broadcast address, `~` it against B: 0 only "
-                "here. `X` straight = mine (forward op and value down), clockwise = not "
-                "mine (swallow both, climb home east of the mine lane)."
+                "here. `X` straight = mine — round the ring, `r` the op and `s` it on, "
+                "`r` the value and `s` it on. Clockwise = not mine: cut west across the "
+                "middle swallowing both words, and rejoin at the ring's west column, "
+                "which both paths share."
             ),
             color=C_MID,
         )
@@ -434,9 +469,11 @@ def build_addr(n: int) -> Addr:
             len(CELL_TILE[1]),
             BAND,
             note=(
-                "value in B. READ: swallow the dummy, `W M s` sends it and puts it back. "
-                "WRITE: `r` the value, `M` stores it. Never blocks anyone else — its "
-                "decoder only speaks when this address is called."
+                "value in B. Both ops read the same two words — `r` the op, `b` it into "
+                "the backpack, `r` the value — so only the tail differs and `d` picks it "
+                "at the south-east corner: READ carries on into `W M s`, WRITE turns west "
+                "onto `M`. Never blocks anyone else — its decoder only speaks when this "
+                "address is called."
             ),
             color=C_STORE,
         )
