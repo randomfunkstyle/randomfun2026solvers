@@ -53,6 +53,7 @@ __all__ = [
     "Refine",
     "Node",
     "Atom",
+    "Port",
     "Corridor",
     "Run",
     "Joint",
@@ -111,6 +112,27 @@ class Node:
         return set(self.paint())
 
 
+@dataclass(frozen=True)
+class Port:
+    """Where the man crosses a node's boundary, and with what heading.
+
+    Offsets are relative to the node's own origin, so they survive placement.
+    ``after`` is the tick at which the man reaches this port measured from entry —
+    the piece of information that turns a black box into something schedulable:
+    "enters at (0,0), leaves at (0,4) after 9 ticks".
+    """
+
+    dx: int
+    dy: int
+    heading: tuple[int, int]
+    after: int | None = None
+    note: str = ""
+
+    def at(self, x: int, y: int) -> tuple[int, int]:
+        """Absolute cell of this port for a node placed at ``(x, y)``."""
+        return (x + self.dx, y + self.dy)
+
+
 @dataclass
 class Atom(Node):
     """A verbatim rectangle: the escape hatch, and the do-not-touch node.
@@ -118,9 +140,32 @@ class Atom(Node):
     Holds its glyphs exactly as they were read. Blanks inside are kept, because
     an atom's *shape* is part of its contract — a gadget's blank cell may be a
     corridor the man walks, and we do not presume to know which.
+
+    ``entry``/``exits`` are what make an atom **composable rather than merely
+    movable**. Without them a placer knows the bounding box and nothing else, so
+    it can slide the rectangle but never wire anything to it. With them it knows
+    where the man goes in, where he comes out, which heading he has at each, and
+    how many ticks the crossing costs. ``exits=()`` means he never comes out.
+
+    They are optional because a parsed grid genuinely does not reveal them — a
+    clump recovered from ASCII has no declared interface — so ``None`` honestly
+    means "unknown", not "none".
     """
 
     rows: list[str] = field(default_factory=list)
+    entry: Port | None = None
+    exits: tuple[Port, ...] | None = None
+    #: ticks from entry to exit, when it is a fixed cost (a loop's is not)
+    ticks: int | None = None
+
+    def port_cells(self) -> dict[str, tuple[int, int]]:
+        """Absolute cells of every declared port, for wiring and for asserting."""
+        out: dict[str, tuple[int, int]] = {}
+        if self.entry is not None:
+            out["in"] = self.entry.at(self.x, self.y)
+        for i, p in enumerate(self.exits or ()):
+            out[f"out{i}"] = p.at(self.x, self.y)
+        return out
 
     @property
     def size(self) -> tuple[int, int]:
@@ -415,9 +460,18 @@ def parse_ast(
             attach[p.dst].append(p.dst_attach)
 
     for room in prog.rooms:
-        # An IO room's 3x3 shape and a display's resolution are the problem's,
-        # not ours; pin them so no move can reshape or relocate them.
-        pinned = room.kind in ("input", "output", "display")
+        # `pinned` means "may not even translate", and an IO room does not qualify:
+        # SPEC fixes its *shape* (3x3, one marker, at most one pipe), not its
+        # address. Pinning it conflates the two flags this model exists to keep
+        # apart, and it silently blocks legitimate compaction -- every cut that
+        # needed to slide an output room one row was refused on those grounds.
+        #
+        # Its shape needs no flag: a cut through the interior lands on the `I`/`O`
+        # glyph and a cut at the edge lands on a wall, and both are already
+        # refused. A display is different -- its interior size *is* the pixel
+        # resolution and its interior is legitimately blank, so nothing else would
+        # stop a cut shrinking it. That one stays pinned.
+        pinned = room.kind == "display"
         rooms.append(
             RoomNode(
                 id=room.id,
@@ -429,7 +483,11 @@ def parse_ast(
                 children=_room_children(prog, room, refine),
                 ports=attach[room.id],
                 pinned=pinned,
-                note=f"{room.kind} room: shape fixed by SPEC" if pinned else "",
+                note=(
+                    "display room: interior size is the pixel resolution"
+                    if pinned
+                    else ""
+                ),
             )
         )
 
