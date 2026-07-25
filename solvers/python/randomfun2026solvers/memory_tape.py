@@ -374,6 +374,422 @@ def build_v2(n: int) -> list[str]:
     raise Collision(f"no fold gives enough tape slots: {last}")
 
 
+V3_IW, V3_IH = 24, 20
+V3_IN_ROW = 2
+V3_OUT_COL = 2
+V3_FWD_ROW = 8
+V3_RET_COL = 12
+
+
+def worker_v3(n: int) -> Circuit:
+    """Two-value-per-lap variant of :func:`worker_v2`.
+
+    ``counted_ring`` exits east for an even count and west for an odd count.
+    Each pair of exits is explicitly merged after the loop; no branch relies on
+    a particular address parity.
+    """
+    c = Circuit(V3_IW, V3_IH, strict_corridors=True)
+    L = lit(n)
+    gut = V3_IW - 1
+    return_gut = gut - 1
+
+    x, _ = c.run(1, 0, "@" + L + "b")
+    c.turn(return_gut, 1, W)
+    c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
+    fill, _ = c.counted_loop(17, 5, "0s")
+    c.route((fill, 5), E, [(gut, 5), (gut, 1)], (0, 1), S)
+    c.turn(0, 2, E)
+
+    c.run(1, 2, "rX")
+    read_setup, _ = c.run(3, 2, "rbM" + L + "-M")
+    c.turn(2, 3, E)
+    write_setup, _ = c.run(3, 3, "rbM" + L + "-NM")
+    c.route((write_setup, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+    c.route((read_setup, 2), E, [(15, 2), (15, 4)], (10, 4), W)
+    c.turn(10, 4, S)
+    c.turn(10, 5, E)
+
+    p1_even, p1_odd = c.counted_ring(11, 5, "rs")
+    c.route(p1_even, E, [], (13, 10), E)
+    c.route(p1_odd, W, [(9, 9), (9, 10)], (13, 10), E)
+
+    # Negating only A swaps the branch directions while preserving B's sign.
+    # READ goes north and restores A before deriving N-1-addr; WRITE goes south
+    # with A already positive.
+    c.run(14, 10, "WNX")
+
+    c.turn(16, 9, E)
+    read_target, _ = c.run(17, 9, "NbmrS")
+
+    c.turn(16, 11, W)
+    c.run(15, 11, "bm", d=W)
+    c.horizontal(11, 13, 2)
+    c.run(2, 11, "r", d=W)
+    c.route((1, 11), W, [(1, 12)], (10, 12), E)
+    c.run(11, 12, "sr")
+
+    c.route(
+        (13, 12),
+        E,
+        [(14, 12), (14, 13), (10, 13), (10, 14)],
+        (11, 14),
+        E,
+    )
+    c.route(
+        (read_target, 9),
+        E,
+        [(gut, 9), (gut, 13), (10, 13), (10, 14)],
+        (11, 14),
+        E,
+    )
+
+    p2_even, p2_odd = c.counted_ring(11, 14, "rs")
+    c.route(p2_even, E, [(return_gut, 14), (return_gut, 1)], (0, 1), S)
+    c.route(
+        p2_odd,
+        W,
+        [(9, 18), (9, 19), (return_gut, 19)],
+        (return_gut, 14),
+        N,
+    )
+    return c
+
+
+def assemble_v3(n: int, fold: int = 2) -> list[str]:
+    """Assemble :func:`worker_v3` with the same persistent tape protocol."""
+    iw, ih = V3_IW, V3_IH
+    g = Circuit(400, 200)
+    wk = worker_v3(n)
+    wx, wy = 7, 7
+    for (x, y), ch in wk.cell.items():
+        g.set(wx + x, wy + y, ch)
+    for x in range(-1, iw + 1):
+        g.set(wx + x, wy - 1, "+" if x in (-1, iw) else "-")
+        g.set(wx + x, wy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(wx - 1, wy + y, "|")
+        g.set(wx + iw, wy + y, "|")
+
+    iy = wy + V3_IN_ROW
+    for i, row in enumerate(["+-+", "|I|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(wx - 6 + j, iy - 1 + i, ch)
+    g.set(wx - 3, iy, ">")
+    g.set(wx - 2, iy, ">")
+    ox = wx + V3_OUT_COL
+    for i, row in enumerate(["+-+", "|O|", "+-+"]):
+        for j, ch in enumerate(row):
+            g.set(ox - 1 + j, wy - 6 + i, ch)
+    g.set(ox, wy - 2, "^")
+    g.set(ox, wy - 3, "^")
+
+    bottom_y = wy + ih
+    fy = wy + V3_FWD_ROW
+    ret_col = wx + V3_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 6
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    for i, row in enumerate(RELAY):
+        for j, ch in enumerate(row):
+            g.set(1 + j, relay_y + i, ch)
+    adj = len(RELAY[0]) + 1
+    n_fwd = _draw_pipe(
+        g,
+        [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)],
+    )
+    n_ret = _draw_pipe(
+        g,
+        [
+            (adj, r_a),
+            (east - 1, r_a),
+            (east - 1, r_b),
+            (adj + fold, r_b),
+            (adj + fold, r_c),
+            (ret_col, r_c),
+            (ret_col, bottom_y + 1),
+        ],
+    )
+    if n_fwd + n_ret < n + 1:
+        raise Collision(f"tape holds {n_fwd + n_ret} slots, need >= {n + 1}")
+    return [row.rstrip() for row in g.rows() if row.strip()]
+
+
+def build_v3(n: int) -> list[str]:
+    """Smallest two-value-loop build whose tape holds at least N+1 values."""
+    last = None
+    for fold in (0, 2, 4, 6, 8, 10):
+        try:
+            return assemble_v3(n, fold)
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    raise Collision(f"no fold gives enough tape slots: {last}")
+
+
+def assemble_v3_debug(n: int) -> tuple[list[str], DebugMap]:
+    """Build v3 together with the geometry used to generate it."""
+    last: Collision | None = None
+    fold = 0
+    rows: list[str] | None = None
+    for candidate in (0, 2, 4, 6, 8, 10):
+        try:
+            rows = assemble_v3(n, candidate)
+            fold = candidate
+            break
+        except Collision as exc:
+            last = exc
+            if "slots" not in str(exc):
+                raise
+    if rows is None:
+        raise Collision(f"no fold gives enough tape slots: {last}")
+
+    wx, wy = 7, 7
+    iw, ih = V3_IW, V3_IH
+    worker = (wx, wy)
+    dbg = DebugMap(f"memory tape v3 n={n}, fold={fold}")
+    dbg.region(
+        "worker",
+        wx,
+        wy,
+        iw,
+        ih,
+        note="operation decode, paired tape passes, and target access",
+        color="#38bdf8",
+    )
+    dbg.region_relative(
+        "init",
+        worker,
+        0,
+        0,
+        24,
+        7,
+        note="fill the tape with n zero values",
+        color="#64748b",
+    )
+    dbg.region_relative(
+        "main-dispatch",
+        worker,
+        0,
+        2,
+        16,
+        3,
+        note="opcode 0 enters read setup; opcode 1 enters write setup",
+        color="#60a5fa",
+    )
+    dbg.region_relative(
+        "first-pass",
+        worker,
+        9,
+        5,
+        5,
+        6,
+        note="two values are rotated per lap; parity exits merge below",
+        color="#22c55e",
+    )
+    dbg.region_relative(
+        "target-dispatch",
+        worker,
+        14,
+        9,
+        3,
+        3,
+        note="read turns north; write turns south",
+        color="#f59e0b",
+    )
+    dbg.region_relative(
+        "read-target",
+        worker,
+        17,
+        9,
+        7,
+        5,
+        note="read target; S emits it and returns it to tape",
+        color="#a78bfa",
+    )
+    dbg.region_relative(
+        "write-target",
+        worker,
+        1,
+        11,
+        14,
+        3,
+        note="receive new input, append it, consume old target",
+        color="#fb923c",
+    )
+    dbg.region_relative(
+        "second-pass",
+        worker,
+        9,
+        14,
+        14,
+        6,
+        note="paired loop returns the remaining values and restores alignment",
+        color="#14b8a6",
+    )
+
+    iy = wy + V3_IN_ROW
+    ox = wx + V3_OUT_COL
+    dbg.region(
+        "input-room",
+        wx - 6,
+        iy - 1,
+        3,
+        3,
+        note="operation stream",
+        color="#22c55e",
+    )
+    dbg.region(
+        "output-room",
+        ox - 1,
+        wy - 6,
+        3,
+        3,
+        note="read results",
+        color="#a78bfa",
+    )
+
+    bottom_y = wy + ih
+    fy = wy + V3_FWD_ROW
+    ret_col = wx + V3_RET_COL
+    east = wx + iw + 2
+    b_fwd = bottom_y + 6
+    r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
+    relay_y = bottom_y + 3
+    adj = len(RELAY[0]) + 1
+    fwd = [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)]
+    ret = [
+        (adj, r_a),
+        (east - 1, r_a),
+        (east - 1, r_b),
+        (adj + fold, r_b),
+        (adj + fold, r_c),
+        (ret_col, r_c),
+        (ret_col, bottom_y + 1),
+    ]
+    dbg.region(
+        "relay",
+        1,
+        relay_y,
+        len(RELAY[0]),
+        len(RELAY),
+        note="turnaround room for the value ring",
+        color="#fb7185",
+    )
+    dbg.lane(
+        "tape-forward-pipe",
+        fwd,
+        kind="pipe",
+        expect="worker sends values toward relay",
+        color="#34d399",
+    )
+    dbg.lane(
+        "tape-return-pipe",
+        ret,
+        kind="pipe",
+        expect="relay returns values into worker bottom wall",
+        color="#10b981",
+    )
+    dbg.lane(
+        "input-pipe",
+        [(wx - 3, iy), (wx - 1, iy)],
+        kind="pipe",
+        expect="operations enter worker",
+        color="#22c55e",
+    )
+    dbg.lane(
+        "output-pipe",
+        [(ox, wy - 2), (ox, wy - 5)],
+        kind="pipe",
+        expect="read values leave worker",
+        color="#a78bfa",
+    )
+
+    dbg.lane_relative(
+        "read-setup",
+        worker,
+        [(3, 2), (15, 2), (15, 4), (10, 4)],
+        kind="expected",
+        expect="op=0: prepare addr for the first paired pass",
+        color="#60a5fa",
+    )
+    dbg.lane_relative(
+        "write-setup",
+        worker,
+        [(3, 3), (15, 3), (15, 4), (10, 4)],
+        kind="expected",
+        expect="op=1: preserve write state while preparing addr",
+        color="#fb923c",
+    )
+    dbg.lane_relative(
+        "first-paired-loop",
+        worker,
+        [(11, 5), (12, 5), (12, 9), (11, 9), (11, 5)],
+        kind="expected",
+        expect="rotate exactly addr values, two per full lap",
+        color="#22c55e",
+    )
+    dbg.lane_relative(
+        "first-odd-exit",
+        worker,
+        [(10, 9), (9, 9), (9, 10), (13, 10)],
+        kind="expected",
+        expect="odd addr exits west and rejoins the even path",
+        color="#84cc16",
+    )
+    dbg.lane_relative(
+        "read-target-access",
+        worker,
+        [(16, 10), (16, 9), (22, 9)],
+        kind="expected",
+        expect="target read is sent to output and back to tape",
+        color="#a78bfa",
+    )
+    dbg.lane_relative(
+        "write-target-access",
+        worker,
+        [(16, 10), (16, 11), (1, 11), (1, 12), (13, 12)],
+        kind="expected",
+        expect="new value enters before old target is discarded",
+        color="#fb923c",
+    )
+    dbg.lane_relative(
+        "second-paired-loop",
+        worker,
+        [(11, 14), (12, 14), (12, 18), (11, 18), (11, 14)],
+        kind="expected",
+        expect="restore alignment, two values per full lap",
+        color="#14b8a6",
+    )
+    dbg.lane_relative(
+        "second-odd-exit",
+        worker,
+        [(10, 18), (9, 18), (9, 19), (22, 19), (22, 14)],
+        kind="expected",
+        expect="odd remainder exits west and rejoins the even return",
+        color="#2dd4bf",
+    )
+    dbg.scenario(
+        "write-read-7",
+        "1 7 42 0 7",
+        500,
+        1600,
+        watch=[
+            "write-setup",
+            "first-paired-loop",
+            "write-target-access",
+            "second-paired-loop",
+            "tape-forward-pipe",
+            "tape-return-pipe",
+        ],
+        note="write 42 at address 7, then read address 7",
+    )
+
+    first_row = wy - 6
+    return rows, dbg.translated(0, -first_row)
+
+
 def assemble_v2_debug(n: int) -> tuple[list[str], DebugMap]:
     """Build the compact tape machine plus named regions, pipes, and routes.
 
@@ -454,11 +870,13 @@ def assemble_v2_debug(n: int) -> tuple[list[str], DebugMap]:
 
 
 if __name__ == "__main__" and any(
-    arg == "--v2" or arg.startswith("--debug-") for arg in sys.argv[1:]
+    arg in ("--v2", "--v3") or arg.startswith("--debug-") for arg in sys.argv[1:]
 ):
     numeric_args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
     n = int(numeric_args[0]) if numeric_args else 100
-    rows, debug = assemble_v2_debug(n)
+    rows, debug = (
+        assemble_v3_debug(n) if "--v3" in sys.argv[1:] else assemble_v2_debug(n)
+    )
     for arg in sys.argv[1:]:
         if arg.startswith("--debug-json="):
             debug.write_json(arg.split("=", 1)[1])
