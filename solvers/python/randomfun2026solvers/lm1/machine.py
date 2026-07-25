@@ -1092,7 +1092,19 @@ def _check_pipe_count(rows: list[str], *, expected: int) -> None:
 #: ``tcp`` allows n=48, so addresses reach BUF+47 = 51 even though no public case
 #: goes past 35. ``ARCH.md`` §4.1: footprint is 32x32 whatever N is and cost is
 #: ~105 + 8.3N ticks, so there is no trade-off — just size it to the real maximum.
-TAPE_SIZE = {"brackets": 8, "tcp": 52}
+#: ``matmul`` is the exception to that rule: it wants 512 slots for A and B at
+#: 16x16x16 and :func:`tape_block` tops out at **108** (fold=0; every larger fold
+#: shortens the return pipe, it does not lengthen it), so this is the ceiling
+#: rather than a choice. See ``programs/matmul.asm``'s header and
+#: ``tests/test_lm1_matmul.py::test_the_tape_cannot_hold_a_full_size_matmul``.
+TAPE_SIZE = {"brackets": 8, "tcp": 52, "matmul": 107}
+
+#: ROM literal rows per problem, overriding :func:`rom.rows_for_budget`. That
+#: heuristic aims the ROM at the CPU's own ~48 columns, which is the wrong target
+#: whenever the machine is already width-bound by the tape band: it then trades
+#: width the machine is not paying for into height it is. Each entry below is the
+#: minimum of a full sweep over every fold (see the tests).
+ROM_ROWS = {"matmul": 18}
 
 
 def build_for(slug: str) -> Machine:
@@ -1101,7 +1113,7 @@ def build_for(slug: str) -> Machine:
 
     if slug not in TAPE_SIZE:
         raise MachineError(f"no tape size recorded for {slug!r}; have {sorted(TAPE_SIZE)}")
-    return build(programs.load(slug), tape_n=TAPE_SIZE[slug])
+    return build(programs.load(slug), tape_n=TAPE_SIZE[slug], rom_rows=ROM_ROWS.get(slug))
 
 
 def main(argv: list[str] | None = None) -> int:
