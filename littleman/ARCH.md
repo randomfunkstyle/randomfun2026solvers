@@ -932,6 +932,49 @@ Footprint, for a 60-word program: ROM ≈ 300 cells (~20×15), ring ≈ 62 cells
 CPU ≈ 40×24, STORE stub small. Bounding box ~70×50 → `footprint ≈ 4900`, so a
 250k-tick run scores ~1.2e9. Ugly, and expected (§1).
 
+### 7.6 The lane-order shortcut is already spent — measured, not argued
+
+A lane that touches no memory does **not** walk out to the shared `mem_x`
+column: `_flat_lane` only pads a lane that contains a `Band.MEM` glyph, so short
+lanes already turn south early. That shortcut is in.
+
+The obvious refinement — order lanes by their *true* east extent rather than by
+micro-program length — **loses**. The two differ because a memory lane reaches
+`max_prefix + (len(micro) − first_mem) − 1` while a memory-free lane stops at
+`len(micro) − 1`, and the existing order is genuinely not monotone in the true
+extent (`ST` extent 4 sat above `SUB` extent 5). Reordering to fix that was
+measured on all three generated solutions:
+
+| | micro-length order | true-extent order |
+|---|---|---|
+| `brackets` | **363,687,473** | 364,229,566 |
+| `tcp` | **1,215,797,931** | 1,217,620,992 |
+| `sudoku-validity` | **12,712,904,437** | 12,739,766,825 |
+
+Uniformly ~0.2% worse, so it was reverted. The reason is that **the drop
+staircase is not what sets the width**: for `brackets` the width decomposes as
+`9 + 33 (cpu) + 4 + 13 (adapter) + 6 + 33 (tape) = 98` and is floored by the
+structures band (`struct_east = 28` against a maximum `lane_end` of 22), so lane
+order changes only *which* row each opcode gets, never the box.
+
+What that leaves as the real per-row lever is **vertical** travel, and its shape
+is worth knowing before anyone tries again. A lane costs
+`|row − centre|` to reach plus `collector − row` to drop. For `row > centre`
+those sum to `collector − centre`, a **constant**; for `row < centre` they sum to
+`collector + centre − 2·row`, which *decreases* as the row moves down. So rows
+above the trie centre are strictly worse than rows below it, and the only
+profitable ordering rule is to keep hot opcodes at or below centre — which needs
+dynamic opcode frequencies, not static lane geometry. Untested.
+
+Two other footprint facts fell out of the same measurement:
+
+- `rows_for_budget(..., max(40, W))` caps the ROM at 40 columns even when the
+  grid is 98 wide. Folding it to the true width would drop ~10 rows of height at
+  no footprint cost — and height slack is exactly what a depth-5 trie (+~32 rows)
+  would need to be affordable.
+- The tape is a fixed 33 columns at **any** `N` (checked at `tape_n` 5, 6, 8 —
+  all give 98×79 for `brackets`), so shrinking `tape_n` buys nothing.
+
 ## 8. Coverage by semester
 
 Semesters do not map onto capability tiers — the tiers cut across them. But
