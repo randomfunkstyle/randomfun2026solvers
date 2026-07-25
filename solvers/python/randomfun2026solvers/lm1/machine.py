@@ -1966,6 +1966,11 @@ TAPE_SIZE = {
     # is 40 slots instead of 512. Every slot taxes every read by ~8 ticks (§4.1),
     # which is also why its power-of-two masks are computed rather than tabulated.
     "pathfinder": 52,
+    # pathfinder-unit keeps the identical tape: moving the *painting* into a
+    # coprocessor changes the opcode count and the trie's depth, not the data. The
+    # board still lives in the CPU's four bitset words, unlike snake-ring, where the
+    # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
+    "pathfinder-unit": 52,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
@@ -2024,6 +2029,9 @@ ROM_ROWS = {
     # almost square. Swept: 24/40/60/72/80/100/140 rows give footprints of 267k/98k/
     # 45k/33.9k/36.9k/44.9k/63.5k, so 72 (180x184) is a real minimum, not a plateau.
     "pathfinder": 72,
+    # pathfinder-unit: P is 2,416 and the CPU is smaller (depth-4 trie, three fewer
+    # lanes), so the fold optimum moves; swept once the block exists.
+    "pathfinder-unit": 72,
 }
 
 

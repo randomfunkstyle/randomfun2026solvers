@@ -20,6 +20,7 @@ from 15.9bn to **3.37bn**.
 | 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
 | 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
 | 4 | `snake` | 121×136 | **3,369,020,288** | LM-1 + body-ring coprocessor (17/17, judged) |
+| 4 | `pathfinder` | 180×184 | — (17/18, unscored) | LM-1 + display, bit-parallel BFS (§8.3) |
 | — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
 
 `lm1/machine.py` takes an assembled program and emits the whole machine — looping
@@ -1338,6 +1339,74 @@ Two rules the build produced, both of which generalise beyond `snake`:
   three pipe *lengths* can be asserted against each other (`addr` = `data`, `swap` ≥
   `data`, or a commit overtakes the pixels it commits), and the drawing fuses into the
   ring commands — `GROW` appends *and* paints *and* commits.
+
+### 8.3 `pathfinder`: bitwise ops change the algorithm, and the profile says what is left
+
+The language has `&`, `|`, `~`, `{`, `}` (`SPEC.md`), which none of the earlier problems
+needed. That turns a 16x16 board from a 256-cell array into **four 64-bit words**, so one
+BFS level is ~16 word operations instead of a queue over 256 tape cells. `MULI`/`DIVI` by
+powers of two serve as the shifts, which is sound only because of one invariant:
+
+> **Bit 63 of every bitset is clear.** Bit 63 of word `w` is cell `64w` — row `4w`,
+> column 0 — and the spec guarantees every border cell is a wall. So every word is
+> non-negative and a floor-divide really is a *logical* shift. `MULI` is a wrapping
+> multiply and needs no such caveat.
+
+Bit order is **reversed** (bit `b` is cell `64w + (63 - b)`), which is not cosmetic: it is
+what lets setup fold the input stream with `acc = 2*acc + v`. The natural order needs a
+`1 << 63` literal, which the ROM cannot encode as a positive word, and it would drive the
+accumulator negative and break the invariant above.
+
+**The tie-break costs nothing.** Take the four directions as up, right, down, left and
+*consume* the unreached set as each is taken; a cell reachable two ways at one level keeps
+only the first. That is exactly the spec's preference order — no priority masks, no
+complements. Confirmed against the contest's own expected frames, which `pathfinder.json`
+ships per round and `pathfinder_sim` reproduces byte for byte on all seven public cases.
+
+| | measured |
+|---|---|
+| grid | 180x184 = 33,856 |
+| public avg ticks (engine) | 5,000,658 |
+| judge | **17/18** — a full pass is required, so it scores nothing |
+| cost model (engine, 7 cases) | `1,680,572 + 61,159 x moves`, max residual 248k |
+| the 15M cap is reached at | **~218 total moves** |
+
+The spec bounds each path at 64 moves but places **no bound on the number of rounds**, so
+~10 long rounds exceed the cap. The 18th case is a *ticks* failure, not a wrong answer.
+
+Where the ticks go (gated to the scored tick, CPU runner pinned by hand — `critical_runner`
+picks the tape's man on this machine, §4.1's first profiler trap, and reports `tape 100%`):
+
+| bucket | share | note |
+|---|---|---|
+| **lanes** | **43.7 %** | `LD` alone is 24.1 % and `ADD` 6.1 %, and the hottest cell of each is the mem-response `r` — this is blocked tape latency, not work |
+| slabs | 23.5 % | `JMPF` 17.9 %, `BRZ` 5.6 % — the ROM lap a backward jump pays |
+| return | 13.6 % | pure walking |
+| trie | 8.8 % | depth **5**, because the CPU paints the panel itself |
+| fetch | 1.0 % | |
+
+Three things that follow, and the third is the one that matters:
+
+- **More unrolling is nearly spent.** Per move the jump cost is
+  `(P - LEVELS*b_level)/LEVELS + (P - WALKS*b_walk)/WALKS` words, and going from
+  (2,4) to (4,8) to (8,16) copies moves that from ~1,174 to ~807 to ~638 words, i.e.
+  ~5 % of the per-move cost for a P that nearly triples. The 23.5 % slab share is mostly
+  the *setup* loop, which is fixed cost and does not touch the slope.
+- **Sixteen opcodes is still free money, but it is not the cap.** The three display
+  opcodes are what force depth 5; a write-only coprocessor spends one `SND` instead
+  (`lm1/path_unit.py`, `pathfinder-unit.asm`). That attacks the trie's 8.8 % and part of
+  the return path's 13.6 %, and `snake`'s identical 17->16 step measured -19 % ticks and
+  -41 % footprint. Worth taking; ~-19 % where the cap needs ~-55 %.
+- **The slope is tape reads and nothing else.** ~89 reads a move at ~415 ticks is ~58 % of
+  the 61,159. Shrinking the tape helps at ~1.9 ticks per slot per access (§8.1), i.e. a few
+  percent. Halving the *count* needs the level step itself in hardware — `snake` measured
+  24x on exactly that move (§8.0) — and a unit that computes levels must also walk and
+  paint, because it cannot answer back.
+
+One measured negative worth keeping, because it looked obvious: **guarding a word's block
+on an empty frontier loses.** A word can only be skipped when its own frontier *and both
+neighbours'* are empty, since the cross-word terms feed it, and the frontier occupies ~1.9
+of 4 words *contiguously* — so the guard almost never fires. 4.99M -> 5.06M, i.e. worse.
 
 ### 8.1 `plotter` was 6 % over the step cap, and the fix was tape accesses per pixel
 
