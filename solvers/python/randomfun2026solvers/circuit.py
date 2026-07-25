@@ -196,6 +196,35 @@ class Circuit:
         self.blanks(x, y + 2, k - 1, d=S)
         return x + 2, y
 
+    def counted_loop_horizontal(
+        self,
+        x: int,
+        y: int,
+        body: str,
+    ) -> tuple[int, int]:
+        """Rotate :meth:`counted_loop` clockwise into a two-row block.
+
+        Enter heading SOUTH at the top-right cell. A positive BP turns west
+        through ``body``; zero continues south through the bottom-right exit.
+
+        For ``body="rs"``::
+
+            > mv
+            ^srd
+        """
+        k = len(body)
+        if not k:
+            raise ValueError("counted loop body cannot be empty")
+        right = x + k + 1
+        self.set(x, y, ">")
+        self.blanks(x + 1, y, k - 1, d=E)
+        self.set(x + k, y, "m")
+        self.set(right, y, "v")
+        self.set(x, y + 1, "^")
+        self.run(x + k, y + 1, body, d=W)
+        self.set(right, y + 1, "d")
+        return right, y + 2
+
     # -- render --------------------------------------------------------------
     def rows(self) -> list[str]:
         return ["".join(self.get(x, y) for x in range(self.w)) for y in range(self.h)]

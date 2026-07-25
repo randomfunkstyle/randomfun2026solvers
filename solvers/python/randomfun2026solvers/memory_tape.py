@@ -259,10 +259,12 @@ def worker_v2(
     *,
     init_body: str | None = None,
     constant_input: bool = False,
+    width: int = V2_IW,
+    height: int = V2_IH,
 ) -> Circuit:
-    c = Circuit(V2_IW, V2_IH)
+    c = Circuit(width, height)
     L = lit(n)
-    GUT = V2_IW - 1                       # right gutter: P2 exit climbs to MAIN
+    GUT = width - 1                       # right gutter: P2 exit climbs to MAIN
 
     # ── INIT (row 0) ──────────────────────────────────────────────────────
     init_n = "r" if constant_input else L
@@ -346,14 +348,14 @@ def worker_v2(
         c.run(11, 12, "sr")                    # new value in, old one out
         write_exit = 13
 
-    # ── both arms -> P2 entry (row 14) ───────────────────────────────────
+    # ── both arms -> P2 entry ─────────────────────────────────────────────
     if constant_input:
         c.route(
             read_exit,
             W,
-            [(15, 13), (10, 13), (10, 14)],
-            (11, 14),
-            E,
+            [(15, 13)],
+            (14, 13),
+            W,
         )
     else:
         c.route(
@@ -367,8 +369,8 @@ def worker_v2(
         c.route(
             (write_exit, 12),
             E,
-            [(write_exit, 13), (10, 13), (10, 14)],
-            (11, 14),
+            [(write_exit, 13)],
+            (14, 13),
             E,
         )
     else:
@@ -379,8 +381,13 @@ def worker_v2(
             (11, 14),
             E,
         )
-    p2, _ = c.counted_loop(11, 14, "rs")       # pass N-1-addr values through
-    c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+    if constant_input:
+        c.turn(14, 13, S)
+        p2 = c.counted_loop_horizontal(11, 14, "rs")
+        c.route(p2, S, [(GUT, 16), (GUT, 1)], (0, 1), S)
+    else:
+        p2, _ = c.counted_loop(11, 14, "rs")
+        c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
     return c
 
 
@@ -585,9 +592,9 @@ def assemble_v2_constant_register(n: int, fold: int = 0) -> list[str]:
     two setup arms consume one value per operation; all other receives remain
     closer to either the input or tape-return pipe.
     """
-    iw, ih = V2_IW, V2_IH
+    iw, ih = V2_IW - 2, V2_IH - 1
     g = Circuit(400, 200)
-    wk = worker_v2(n, constant_input=True)
+    wk = worker_v2(n, constant_input=True, width=iw, height=ih)
     wx, wy = 7, 8
     for (x, y), ch in wk.cell.items():
         g.set(wx + x, wy + y, ch)
@@ -624,7 +631,7 @@ def assemble_v2_constant_register(n: int, fold: int = 0) -> list[str]:
 
     bottom_y = wy + ih
     fy = wy + V2_FWD_ROW
-    ret_col = wx + V2_RET_COL
+    ret_col = wx + V2_RET_COL + 1
     east = wx + iw + 2
     b_fwd = bottom_y + 5
     r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
@@ -636,7 +643,20 @@ def assemble_v2_constant_register(n: int, fold: int = 0) -> list[str]:
 
     n_fwd = _draw_pipe(
         g,
-        [(wx + iw + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)],
+        [
+            (wx + iw + 1, fy),
+            (east, fy),
+            (east, fy + 2),
+            (east - 1, fy + 2),
+            (east - 1, fy + 4),
+            (east, fy + 4),
+            (east, fy + 6),
+            (east - 1, fy + 6),
+            (east - 1, fy + 8),
+            (east, fy + 8),
+            (east, b_fwd),
+            (adj, b_fwd),
+        ],
     )
     n_ret = _draw_pipe(
         g,
@@ -1242,7 +1262,15 @@ def assemble_v2_constant_register_debug(n: int) -> tuple[list[str], DebugMap]:
         region
         for region in dbg.regions
         if region.name
-        not in ("input-room", "main-dispatch", "read-target", "write-target")
+        not in (
+            "worker",
+            "input-room",
+            "main-dispatch",
+            "read-target",
+            "write-target",
+            "second-pass",
+            "compact-relay",
+        )
     ]
     dbg.lanes = [
         lane
@@ -1254,8 +1282,20 @@ def assemble_v2_constant_register_debug(n: int) -> tuple[list[str], DebugMap]:
             "write-setup",
             "read-target-access",
             "write-target-access",
+            "second-tape-pass",
+            "tape-forward-pipe",
+            "tape-return-pipe",
         )
     ]
+    dbg.region(
+        "worker",
+        6,
+        7,
+        V2_IW - 2,
+        V2_IH - 1,
+        note="narrow worker with shared decode and horizontal second pass",
+        color="#38bdf8",
+    )
     dbg.region(
         "constant-register",
         11,
@@ -1301,6 +1341,24 @@ def assemble_v2_constant_register_debug(n: int) -> tuple[list[str], DebugMap]:
         note="short path to lower input, then append new value and discard old",
         color="#fb923c",
     )
+    dbg.region(
+        "horizontal-second-pass",
+        17,
+        20,
+        9,
+        4,
+        note="clockwise rotation of the same eight-tick counted rs loop",
+        color="#14b8a6",
+    )
+    dbg.region(
+        "compact-relay",
+        0,
+        27,
+        len(COMPACT_RELAY[0]),
+        len(COMPACT_RELAY),
+        note="minimum six-tick receive/send turnaround",
+        color="#fb7185",
+    )
     dbg.lane(
         "constant-pipe",
         [(12, 4), (12, 5)],
@@ -1345,9 +1403,8 @@ def assemble_v2_constant_register_debug(n: int) -> tuple[list[str], DebugMap]:
             (24, 19),
             (21, 19),
             (21, 20),
-            (16, 20),
-            (16, 21),
-            (17, 21),
+            (20, 20),
+            (20, 21),
         ],
         kind="expected",
         expect="folded bm/down/left-rS reaches P2 without the old east corridor",
@@ -1355,10 +1412,44 @@ def assemble_v2_constant_register_debug(n: int) -> tuple[list[str], DebugMap]:
     )
     dbg.lane(
         "write-target-access",
-        [(21, 16), (10, 16), (10, 19), (17, 19), (17, 20), (16, 20)],
+        [(21, 16), (10, 16), (10, 19), (17, 19), (17, 20), (20, 20)],
         kind="expected",
         expect="receive new value nearby, append it, then consume old target",
         color="#fb923c",
+    )
+    dbg.lane(
+        "second-tape-pass",
+        [(20, 20), (20, 22), (17, 22), (17, 21), (20, 21), (20, 22)],
+        kind="expected",
+        expect="horizontal eight-tick loop passes exactly n-1-addr values",
+        color="#14b8a6",
+    )
+    dbg.lane(
+        "tape-forward-pipe",
+        [
+            (27, 15),
+            (28, 15),
+            (28, 17),
+            (27, 17),
+            (27, 19),
+            (28, 19),
+            (28, 21),
+            (27, 21),
+            (27, 23),
+            (28, 23),
+            (28, 29),
+            (6, 29),
+        ],
+        kind="pipe",
+        expect="43-slot worker-to-relay lane with two inward capacity notches",
+        color="#34d399",
+    )
+    dbg.lane(
+        "tape-return-pipe",
+        [(6, 28), (27, 28), (27, 27), (6, 27), (6, 26), (19, 26), (19, 25)],
+        kind="pipe",
+        expect="58-slot relay-to-worker lane; total ring capacity is 101",
+        color="#10b981",
     )
     return rows, dbg
 

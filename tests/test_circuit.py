@@ -31,3 +31,13 @@ def test_counted_ring_grows_symmetrically_for_spaced_body() -> None:
     assert circuit.get(2, 2) == "0"
     assert circuit.get(2, 4) == "s"
     assert circuit.get(1, 3) == "s"
+
+
+def test_horizontal_counted_loop_is_rotated_without_extra_cycle_cells() -> None:
+    circuit = Circuit(6, 4)
+
+    exit_cell = circuit.counted_loop_horizontal(1, 1, "rs")
+
+    assert exit_cell == (4, 3)
+    assert circuit.rows()[1][1:5] == "> mv"
+    assert circuit.rows()[2][1:5] == "^srd"
