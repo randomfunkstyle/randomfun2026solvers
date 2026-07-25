@@ -72,3 +72,24 @@ def test_q_lets_a_cell_take_a_write_without_blocking_its_refresh():
     # 0 first: a fresh cell reads zero with no initialisation pass at all.
     assert result.output[0] == 0
     assert result.output[1:8] == [77] * 7, result.output[:8]
+
+
+def test_one_hot_decode_selects_exactly_one_cell_and_spares_b():
+    # The point: `b` `]`*j `x` touch only BP, so a cell can decode a broadcast
+    # address while still holding its value in B. Comparing the raw address cannot
+    # be done at all — every comparison glyph reads B.
+    from randomfun2026solvers.memory_men_field import build_onehot_probe
+
+    for j in (0, 1, 3):
+        src = build_onehot_probe(j)
+        for addr in range(5):
+            result = FastLittleman(src).run(input=str(1 << addr), max_ticks=200)
+            answered = result.output == [7]
+            assert answered == (addr == j), (j, addr, result.output)
+
+
+def test_one_hot_cell_shift_chain_grows_with_the_index():
+    from randomfun2026solvers.memory_men_field import onehot_cell_rows
+
+    assert onehot_cell_rows(0)[1] == "@rbx"
+    assert onehot_cell_rows(3)[1] == "@rb]]]x"

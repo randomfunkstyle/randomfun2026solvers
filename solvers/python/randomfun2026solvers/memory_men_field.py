@@ -60,6 +60,8 @@ __all__ = [
     "build_park_probe",
     "build_field_probe",
     "build_q_cell_probe",
+    "onehot_cell_rows",
+    "build_onehot_probe",
 ]
 
 #: The complete cell: 5x3 interior, ten glyphs, two pipes, no walls of its own.
@@ -169,3 +171,61 @@ def _trim(g: Circuit) -> str:
     while rows and not rows[-1]:
         rows.pop()
     return "\n".join(rows)
+
+
+# ── the broadcast decoder: addressing without a walk ─────────────────────────
+#
+# `R` reads from ANY incoming pipe, so n senders reach one room in O(1) with one
+# glyph and no addressing — a many-to-one teleport, which is why the collector is
+# free. `S` is its mirror: it writes A into EVERY outgoing pipe at once. Together
+# they mean a request need not be *routed* to a cell at all — it can be shouted at
+# all of them, with each cell deciding for itself.
+#
+# The obvious way to do that does not work. A cell's value lives in `B`, and every
+# comparison glyph (`-`, `~`, `%`, `{`, ...) reads `B`, so a cell holding a value
+# literally cannot compare a broadcast address against its own index.
+#
+# Broadcasting **one-hot** does work. The router builds `1 << addr` in a single
+# glyph (`{`), and cell j tests bit j with `b` `]`*j `x` — all three touch only
+# `BP`, so `B` is never disturbed. `x` always turns, so the test is a clean two-way
+# branch with no third case to merge. Probed for j = 0, 1, 3 against every address:
+# each cell answers for exactly its own and stays silent otherwise, and what it
+# answers is the value that was in `B` all along.
+#
+# Cost: j shifts in cell j, all cells testing *in parallel*, so an access is
+# bounded by the slowest cell (~n ticks) rather than by a walk (10 ticks per lane
+# passed). Area: the shift chains are O(n^2/2) glyphs — 136 for n = 16.
+
+
+def onehot_cell_rows(j: int, *, value_probe: bool = False) -> list[str]:
+    """Cell ``j``'s decode: does the broadcast word have bit ``j`` set?
+
+    With ``value_probe`` the cell is a self-contained test — it loads 7 into ``B``
+    and sends it when selected, which is what proves the decode leaves ``B`` alone.
+    """
+    if j < 0:
+        raise ValueError("cell index must not be negative")
+    code = ("@7M" if value_probe else "@") + "r" + "b" + "]" * j + "x"
+    w = len(code)
+    return [
+        " " * (w - 1) + "H",  # bit clear -> counter-clockwise: not this cell
+        code,
+        " " * (w - 1) + "W",  # bit set -> clockwise: mine. W brings the value to A
+        " " * (w - 1) + "s",
+        " " * (w - 1) + "H",
+    ]
+
+
+def build_onehot_probe(j: int) -> str:
+    """One decode cell wired I to O: feed ``1 << addr`` and see whether it answers."""
+    rows = onehot_cell_rows(j, value_probe=True)
+    w = max(len(r) for r in rows)
+    g = Circuit(w + 22, 18)
+    rx, ry = 6, 2
+    _room(g, rx, ry, [r.ljust(w) for r in rows])
+    _io_room(g, rx - 5, ry + 1, "I")
+    draw_pipe(g, [(rx - 3, ry + 1), (rx - 2, ry + 1), (rx - 1, ry + 1)])
+    sx = rx + w - 1
+    draw_pipe(g, [(sx, ry + 6), (sx, ry + 7), (sx, ry + 8)])
+    _io_room(g, sx, ry + 9, "O")
+    return _trim(g)
