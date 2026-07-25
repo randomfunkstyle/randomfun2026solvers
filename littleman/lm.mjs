@@ -316,6 +316,33 @@ async function cmdJudge(opts) {
   process.stdout.write(JSON.stringify(snap, null, opts.json ? 2 : 0) + "\n");
 }
 
+async function cmdTrace(opts) {
+  const rows = readManFile(opts.positional[0]);
+  const input = resolveInput(opts.input);
+  const expected = opts.expected != null ? normalizeInput(opts.expected) : "";
+  const frames = opts.frames ? JSON.parse(opts.frames) : "";
+  const { session, snap: loadSnap } = await loadProgram(rows, input, expected, frames);
+
+  const snapshots = [loadSnap];
+  let snap = loadSnap;
+  let ticks = snap.step ?? 0;
+  while (!snap.halted && !snap.fatal && !snap.outputSettled) {
+    if (ticks >= opts.maxTicks) break;
+    const prev = snap.step;
+    snap = session.stepN(1, false);
+    snapshots.push(snap);
+    if (snap.step === prev) break;
+    ticks = snap.step ?? ticks + 1;
+  }
+  session.close();
+  await new Promise((resolve, reject) => {
+    process.stdout.write(JSON.stringify({ snapshots }, null, opts.json ? 2 : 0) + "\n", (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
 const USAGE = `littleman runner
 
   lm.mjs run     <file.man> [--input "1 2 3"] [--json] [--max-ticks N]
@@ -323,12 +350,14 @@ const USAGE = `littleman runner
   lm.mjs analyze <file.man> [--json]
   lm.mjs route   <file.man> <x> <y> [--json]
   lm.mjs judge   <file.man> [--input "…"] [--expected "…"] [--frames JSON] [--json]
+  lm.mjs trace   <file.man> [--input "…"] [--expected "…"] [--frames JSON] [--json]
 
 run     execute to completion; print program output (space-joined integers).
 tick    advance n ticks (default 1); print ASCII map + hands/backpack/output.
 analyze print the structural analysis JSON (rooms, pipes, displays).
 route   print the pipe cells a send/recv instruction at (x,y) binds to.
 judge   run with engine-side round-gating (needs --expected); print the settle snapshot.
+trace   run one judged tick at a time; print every gated snapshot as JSON.
 
 Flags:
   --input "…"    whitespace-separated integers for the program's input room
@@ -348,6 +377,7 @@ async function main() {
     else if (cmd === "analyze") await cmdAnalyze(opts);
     else if (cmd === "route") await cmdRoute(opts);
     else if (cmd === "judge") await cmdJudge(opts);
+    else if (cmd === "trace") await cmdTrace(opts);
     else {
       process.stdout.write(USAGE);
       process.exitCode = cmd ? 1 : 0;

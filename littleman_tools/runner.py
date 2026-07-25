@@ -37,6 +37,7 @@ __all__ = [
     "PipeSeg",
     "PipeGeom",
     "Analysis",
+    "ActivityProfile",
     "Entities",
     "Fatal",
     "Snapshot",
@@ -255,6 +256,18 @@ class Snapshot(_Model):
         return self.halted and self.fatal is None
 
 
+class ActivityProfile(_Model):
+    """Runner-level work classification until a judged output stream settles."""
+
+    total_ticks: int = 0
+    runner_ticks: int = 0
+    compute_ticks: int = 0
+    control_ticks: int = 0
+    walking_ticks: int = 0
+    stall_ticks: int = 0
+    straight_through_arrows: int = 0
+
+
 class DisplayRun(_Model):
     """One display-judged case replayed: the frames it committed, and at which tick.
 
@@ -398,6 +411,81 @@ class Littleman:
         if max_ticks is not None:
             extra += ["--max-ticks", str(max_ticks)]
         return self._invoke("judge", program, input=input, extra=extra)
+
+    def trace(
+        self,
+        program: str | os.PathLike[str],
+        *,
+        input: str | Sequence[int] | None = None,
+        expected: str | Sequence[int],
+        max_ticks: int | None = None,
+    ) -> list[Snapshot]:
+        """Return every snapshot of a judge-equivalent, round-gated run."""
+        extra = ["--expected", _input_to_str(expected) or ""]
+        if max_ticks is not None:
+            extra += ["--max-ticks", str(max_ticks)]
+        data = self._run_json("trace", program, input=input, extra=extra)
+        return [Snapshot.model_validate(snapshot) for snapshot in data.get("snapshots") or []]
+
+    def activity_profile(
+        self,
+        program: str | os.PathLike[str],
+        *,
+        input: str | Sequence[int] | None = None,
+        expected: str | Sequence[int],
+        max_ticks: int | None = None,
+    ) -> ActivityProfile:
+        """Classify runner work until ``expected`` settles in the reference engine.
+
+        A no-op, a straight-through direction glyph, and a blocked send/receive
+        are counted separately from useful compute and real control turns.
+        """
+        path, cleanup = _resolve_program(program)
+        try:
+            source = path.read_text(encoding="utf-8").splitlines()
+            snapshots = self.trace(path, input=input, expected=expected, max_ticks=max_ticks)
+        finally:
+            if cleanup is not None:
+                cleanup()
+
+        if not snapshots:
+            raise LittlemanError("trace returned no snapshots")
+        if snapshots[-1].output_settled is not True:
+            raise LittlemanError("trace ended before expected output settled")
+
+        profile = ActivityProfile(total_ticks=snapshots[-1].step)
+        turn_targets = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1), "V": (0, 1)}
+        pipe_ops = {"r", "R", "U", "s", "S"}
+
+        for before, after in zip(snapshots[:-1], snapshots[1:], strict=True):
+            next_runners = {runner.id: runner for runner in after.entities.runners}
+            for runner in before.entities.runners:
+                if runner.halted:
+                    continue
+                profile.runner_ticks += 1
+                glyph = source[runner.pos.y][runner.pos.x]
+                if glyph in ". @":
+                    profile.walking_ticks += 1
+                elif glyph in turn_targets:
+                    if runner.dir.as_tuple() == turn_targets[glyph]:
+                        profile.walking_ticks += 1
+                        profile.straight_through_arrows += 1
+                    else:
+                        profile.control_ticks += 1
+                elif glyph in pipe_ops:
+                    next_runner = next_runners.get(runner.id)
+                    if next_runner is not None and next_runner.pos == runner.pos:
+                        profile.stall_ticks += 1
+                    elif glyph == "U":
+                        profile.control_ticks += 1
+                    else:
+                        profile.compute_ticks += 1
+                elif glyph in {"X", "H", "Y", "d", "a", "x"}:
+                    profile.control_ticks += 1
+                else:
+                    profile.compute_ticks += 1
+
+        return profile
 
     def display_frames(
         self,
