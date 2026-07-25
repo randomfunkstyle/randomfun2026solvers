@@ -162,3 +162,28 @@ def test_all_legal_segments():
                         if len(bad) > 5:
                             pytest.fail(f"mismatches: {bad}")
     assert not bad
+
+
+def test_every_worker_send_and_receive_binds_to_the_pipe_it_means():
+    """`Cur` checks bindings as it draws; this checks the *finished* grid.
+
+    Anything placed with a bare `c.set` bypasses the cursor, so the two checks are
+    not redundant: a mis-bound `r` loads fine and quietly reads the wrong pipe,
+    which is the one class of bug the reference interpreter will not report.
+    """
+    from randomfun2026solvers.plotter_block import (
+        PAINT_MIN, POP_MIN, PUSH_MAX, RIN_MAX, build_worker,
+    )
+
+    rows = build_worker().rows()
+    seen = {"r": 0, "s": 0}
+    for y, row in enumerate(rows):
+        for x, ch in enumerate(row):
+            if ch not in seen:
+                continue
+            seen[ch] += 1
+            # An `r` is an input read iff it is west of the boundary, a ring pop iff
+            # east of it; either is legal, but the midpoint column never is.
+            lo, hi = (RIN_MAX, POP_MIN) if ch == "r" else (PUSH_MAX, PAINT_MIN)
+            assert x <= lo or x >= hi, f"{ch!r} at {(x, y)} is a reading-order tie"
+    assert seen["r"] and seen["s"], "found no pipe glyphs at all — wrong grid?"

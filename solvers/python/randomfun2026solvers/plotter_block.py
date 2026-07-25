@@ -390,11 +390,12 @@ if __name__ == "__main__":
 # error rather than a grid that loads and quietly reads the wrong pipe.
 
 GLYPH = {E: ">", W: "<", N: "^", S: "v"}
-WW, WH = 40, 18                      # worker interior
-IN_COL, RET_COL = 0, 24              # north wall: input, ring-return
-FWD_COL, PNT_COL = 28, 38            # south wall: ring-forward, painter
-# binding regions that follow from those four columns
-RIN_MAX, POP_MIN, PUSH_MAX, PAINT_MIN = 11, 13, 32, 34
+WW, WH = 40, 19                      # worker interior
+IN_COL, RET_COL = 0, 28              # north wall: input, ring-return
+FWD_COL, PNT_COL = 30, 38            # south wall: ring-forward, painter
+# binding regions that follow from those four columns: the boundary is the midpoint,
+# and a glyph exactly on it would be a reading-order tie, so both sides exclude it.
+RIN_MAX, POP_MIN, PUSH_MAX, PAINT_MIN = 13, 15, 33, 35
 
 
 class Cur:
@@ -487,4 +488,139 @@ def branch(c, cur, d, neg, pos, neg_is_le=False):
     return cur
 
 
+# ── the worker's grid ────────────────────────────────────────────────────────
+def _riser(c, x, y0, y1, g="^"):
+    """Fill a column of `g` from y0 down to y1 inclusive (order does not matter)."""
+    for y in range(min(y0, y1), max(y0, y1) + 1):
+        c.set(x, y, g)
 
+
+def build_worker():
+    c = Circuit(WW, WH)
+    # ── the round is a loop, so the spawn and the return leg must merge ────────
+    # `@` is a nop that spawns heading east, so it cannot turn anyone; the returning
+    # man arrives heading north up column 0 and is turned east by `>` at (0,1).
+    # Both paths meet on (1,1), which is why the prologue starts at x=2.
+    c.set(0, 0, "@")
+    c.set(1, 0, "v")
+    c.set(0, 1, ">")
+    c.set(1, 1, ">")
+
+    # ── prologue, row 1: all four RINs sit at x <= RIN_MAX ────────────────────
+    cur = Cur(c, 2, 1, E)
+    cur.seq([P(o) for o in ["RIN", "M", "RIN", "PUSH", "W", "PUSH", "PUSH",
+                            "RIN", "PUSH", "W", "PUSH", "RIN", "PUSH"]])
+    cur.turn(S)                                   # (15,1) -> down
+    c.set(15, 2, ">")                             # turn east into the base block
+
+    # ── base, row 2 (east): 5 M r { M r +   ... s@PAINT ──────────────────────
+    cur = Cur(c, 16, 2, E)
+    cur.seq([P(o) for o in [("LIT", 5), "M", "POP", "SHL", "M", "POP", "ADD"]])
+    cur.to(PAINT_MIN).op(*P("PAINT"))
+    cur.turn(S)
+    _riser(c, cur.x, 3, 4, "v")
+    c.set(cur.x, 5, "<")                          # band B is walked WEST
+
+    # ── band B: row 5 — TWO branches share it (disjoint column ranges) ────────
+    cur = Cur(c, cur.x - 1, 5, W)
+    cur.seq([P(o) for o in ["POP", "M", "POP", "SUB"]])        # A = x1-x0, B = x0
+    branch(c, cur, W,
+           neg=["NEG", "M", "ADD", "PUSH", ("LIT", 1), "NEG", "PUSH"],
+           pos=["M", "ADD", "PUSH", ("LIT", 1), "PUSH"])
+    cur.seq([P(o) for o in ["POP", "M", "POP", "SUB"]])        # A = y1-y0
+    branch(c, cur, W,
+           neg=["NEG", "M", "ADD", "PUSH", ("LIT", 5), "M", ("LIT", 1), "SHL",
+                "NEG", "PUSH"],
+           pos=["M", "ADD", "PUSH", ("LIT", 5), "M", ("LIT", 1), "SHL", "PUSH"])
+    cur.to(2).turn(S)                             # down column 2 into band C
+    _riser(c, 2, 6, 7, "v")
+    c.set(2, 8, ">")
+
+    # ── band C: row 8 — the major-axis compare ───────────────────────────────
+    cur = Cur(c, 3, 8, E)
+    cur.to(POP_MIN)
+    cur.seq([P(o) for o in ["POP", "M", "POP", "PUSH", "POP", "SUB"]])
+    branch(c, cur, E,
+           neg=["ADD", "PUSH", "W", "PUSH", "POP", "M", "POP", "PUSH", "ADD", "PUSH"],
+           pos=["W", "PUSH", "ADD", "PUSH", "POP", "M", "POP", "W", "PUSH", "ADD",
+                "PUSH"],
+           neg_is_le=True)
+    cur.to(WW - 1).turn(S)
+    _riser(c, WW - 1, 9, 10, "v")
+    c.set(WW - 1, 11, "<")
+
+    # ── preamble: recover M as den>>1, send n, set BP, leave B = f ────────────
+    # Row 11 is only a corridor: the block needs a POP first and a PAINT last, so it
+    # has to run west-to-east, and band C left the man on the east side.
+    Cur(c, WW - 2, 11, W).to(15)
+    c.set(15, 11, "v")
+    c.set(15, 12, ">")
+    cur = Cur(c, 16, 12, E)
+    cur.seq([P(o) for o in ["POP", "PUSH", ("LIT", 1), "M", "POP", "PUSH", "SHR",
+                            "ADD"]])
+    cur.to(PAINT_MIN).op(*P("PAINT"))             # n -> painter
+    cur.turn(S)                                   # the tail rides the return leg,
+    c.set(cur.x, 13, "<")                         # which keeps the room 40 wide
+    cur = Cur(c, cur.x - 1, 13, W)
+    cur.seq([P(o) for o in ["BP", "SUB", "NEG", "M"]])         # BP = n, B = f
+    cur.seq([P(o) for o in ["POP", "PUSH", "POP", "PUSH"]])    # ring back in order
+    cur.to(4).turn(S)                             # column 4 down into the loop
+    c.set(4, 14, "v")
+    c.set(4, 15, ">")
+
+    # ── the pixel loop: five rows, because four paths must not cross ─────────
+    #
+    #   14 |         > M r s r s ......... s@P r  v |   no-carry code (CCW exit)
+    #   15 | > ... r s + X > M r s W - M r s r s .. s@P v |   shared + carry (straight+CW)
+    #   16 |         > ^                        v      |   the CW exit's two-cell hop
+    #   17 |   ^   < < < < ...................  <      |   carry's return leg
+    #   18 | ^ d m < ................ s ......  <      |   no-carry's return leg
+    #
+    # A >= 0 is the carry, so the carry lane owns *both* the straight and the CW exit
+    # and the CW exit needs a two-cell hop back onto the shared row. That hop is why
+    # row 16 cannot also be a return corridor, and the two lanes cannot share one
+    # return row either: the no-carry lane still owes a PUSH after its PAINT, and the
+    # carry lane must not execute it.
+    cur = Cur(c, 5, 15, E)
+    cur.to(POP_MIN)
+    cur.seq([P(o) for o in ["POP", "PUSH", "ADD"]])            # A = f + step, B = f
+    x, y = cur.x, cur.y
+    c.set(x, y, "X")
+    c.set(x, y + 1, ">")                          # CW exit: out, along, and back up
+    c.set(x + 1, y + 1, "^")
+    c.set(x + 1, y, ">")                          # the merge cell
+    lane = Cur(c, x + 2, y, E)
+    lane.seq([P(o) for o in ["M", "POP", "PUSH", "W", "SUB", "M",
+                             "POP", "PUSH", "POP", "PUSH"]])   # B = f' - den; UV
+    lane.to(PAINT_MIN).op(*P("PAINT"))            # the increment is U + V
+    lane.turn(S)                                  # down to its return leg
+    c.set(lane.x, 16, "v")
+    c.set(lane.x, 17, "<")
+    Cur(c, lane.x - 1, 17, W).to(6)
+    c.set(5, 17, "v")                             # drop onto the shared merge row
+
+    # ── the no-carry lane: PAINT cannot be last ──────────────────────────────
+    # `A` is clobbered by every `r`, so the increment must be sent *before* UV is
+    # recycled — hence one crossing east to the painter and a return leg west.
+    c.set(x, y - 1, ">")                          # CCW exit
+    nc = Cur(c, x + 1, y - 1, E)
+    nc.seq([P(o) for o in ["M", "POP", "PUSH", "POP", "PUSH"]])
+    nc.to(PAINT_MIN).op(*P("PAINT"))              # the increment is U
+    nc.seq([P(o) for o in ["POP"]])               # UV, read here...
+    nc.to(nc.x + 1).turn(S)
+    _riser(c, nc.x, 15, 17, "v")
+    c.set(nc.x, 18, "<")
+    nc = Cur(c, nc.x - 1, 18, W)
+    nc.to(PUSH_MAX).op(*P("PUSH"))                # ...and pushed back, west of 34
+    nc.to(5)
+
+    # ── one `m` per lap, then the BP test ────────────────────────────────────
+    c.set(5, 18, "<")                             # carry arrives south, no-carry west
+    c.set(4, 18, "m")                             # BP -= 1
+    c.set(3, 18, "d")                             # BP > 0 ? north into the loop : on
+    _riser(c, 3, 16, 17)
+    c.set(3, 15, ">")                             # ...back to the loop head
+    Cur(c, 2, 18, W).to(0)
+    c.set(0, 18, "^")                             # BP == 0: up column 0, next round
+    _riser(c, 0, 2, 17)
+    return c
