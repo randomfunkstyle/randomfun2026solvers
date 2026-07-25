@@ -290,9 +290,11 @@ class SnakeUnit:
     cells: a growth needs a spawn round *and* a tick round).
     """
 
-    #: arm -> command code. The real unit derives these from its trie's geometry, and
-    #: the tests assert the two tables agree — move a leaf and this has to move too.
-    CODES = {"GROW": 0, "STEP": 1, "FRUIT": 2, "RED": 3}
+    #: arm -> command code. The real unit *reads* these off its decode trie's geometry
+    #: (``snake_unit.arm_codes``), so they are not free to choose: ``STEP`` is the
+    #: easternmost leaf because it is the only arm that outgrows its columns. The tests
+    #: assert the two tables are equal — move a leaf and this has to move with it.
+    CODES = {"STEP": 0, "FRUIT": 1, "RED": 2, "GROW": 3}
 
     #: ``display.py``'s port numbers, repeated rather than imported to keep this
     #: module free of the display model.

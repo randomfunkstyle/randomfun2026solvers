@@ -205,8 +205,12 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     # A display problem gets a panel and no `O` room: SPEC.md makes emitting any
     # program output an error there. A STREAM problem has an `O` room too, but the
     # block owns it rather than the CPU (see stream.py).
+    #
+    # Taken from the *problem*, not from the CPU's opcodes, because a coprocessor may
+    # own the panel: `snake-ring`'s CPU has no `DSP*` lane at all and its machine still
+    # has to have exactly one panel (see snake_unit.py).
     grid = "".join(m.rows)
-    display = any(s.value.startswith("display") for s in m.plan.sem.values())
+    display = machine.display_for(slug) is not None
     assert (":" in grid and "=" in grid) is display
     assert ("O" in grid) is not display
 

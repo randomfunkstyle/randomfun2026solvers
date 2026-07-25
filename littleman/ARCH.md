@@ -2,7 +2,10 @@
 
 **Status: Semesters 1 and 2 are complete — 11 of the 16 graded problems are
 solved**, every one passing all its public cases on the reference interpreter, and
-`snake` opens Semester 4 by passing all **17** the judge actually runs.
+`snake` opens Semester 4 by passing all **17** the judge actually runs. It is also the
+first problem solved on a *third* tier — a coprocessor that holds the data structure
+the program iterates and owns the display (§8.0, `lm1/snake_unit.py`), which took it
+from 15.9bn to **3.37bn**.
 
 | set | problem | grid | score | how |
 |---|---|---|---|---|
@@ -16,7 +19,7 @@ solved**, every one passing all its public cases on the reference interpreter, a
 | 2 | `plotter` | 112×116 | 2,749,462,237 | LM-1 + display |
 | 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
 | 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
-| 4 | `snake` | 123×129 | 16,647,839,451 | LM-1 + display (17/17, judged) |
+| 4 | `snake` | 121×136 | **3,369,020,288** | LM-1 + body-ring coprocessor (17/17, judged) |
 | — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
 
 `lm1/machine.py` takes an assembled program and emits the whole machine — looping
@@ -1204,7 +1207,7 @@ word count `P` and average estimated ticks. "—" means not yet written.
 | Sem 3 | `subset-sum` | 20 values + subset search | 24 | — | C |
 | Sem 3 | `sudoku-validity` | 81 cells + 27 set checks | 81 | — | C |
 | Practice | `hello-world` · `max-element` · `atoi` | 0–1 slots | ≤1 | 1/1 · 10/10 · 2/2 | A |
-| Sem 4 | `snake` | persistent framebuffer + FIFO body ring; needs `LDA`/`MOVA`/`INCM`/`DECM`/`DIV` | 10 scalars + 64 | 5/5 · P=249 · 215k | **✔ solved by the synthesiser** (123×129, 1,000,411 ticks avg, score 16.6bn, **17/17** on the judge) |
+| Sem 4 | `snake` | persistent framebuffer + a body FIFO; the tape version needs `LDA`/`MOVA`/`INCM`/`DECM`/`DIV`, the coprocessor version needs none of them | 8 scalars (was 11 + 50) | 5/5 · P=183 · 122k | **✔ solved twice**: `snake.asm` on the tape alone (123×129, score 15.9bn) and `snake-ring.asm` on the SNAKE unit (121×136, avg 182,149, **score 3.37bn**, 17/17) |
 | Practice | `palette` | display ADDR/DATA/SWAP, 16 solid frames | 1 | 1/1 · P=89 · 59k | **✔ solved by the synthesiser** (98×98, 151,147 ticks, score 1.45bn) |
 
 Stages: **A** = CPU + SPILL only · **B** = SPILL + the tape · **C** = tape +
@@ -1215,6 +1218,55 @@ frame on the wasm* — twice over, in fact: `lm.mjs judge --frames` reads back t
 engine's own `frameJudge` verdict, and `tools/display-frames.mjs` steps with
 `stopOnFrame` and compares the snapshots in Python. Neither is the old "no fatal, no
 output" check, which proved nothing on a problem that emits no output.
+
+### 8.0 `snake`: what a coprocessor is worth, measured twice
+
+`snake` is the only problem solved both ways on the same ISA, so it prices the tiers
+against each other on one program. Both pass all 17 cases the judge runs.
+
+| | `snake.asm` | `snake-ring.asm` |
+|---|---|---|
+| body of ≤50 cells lives in | the tape, a 50-slot ring | the unit's value ring |
+| self-collision test | a scan: 5 reads **and a ROM lap** per cell | one `STEP` command |
+| the panel is driven by | the CPU (3 lanes, 3 pipes) | the unit |
+| opcodes | 23 (depth-5 trie) | **16 (depth-4)** |
+| tape | N=66, ~653 ticks a read | N=9, ~180 |
+| grid | 123×129 = 16,641 | 121×136 = 18,496 |
+| judge avg ticks | 954,945 | **182,149** |
+| **judge score** | 15,891,242,682 | **3,369,020,288** |
+
+Three results worth keeping:
+
+- **A `STEP` on a six-cell body costs 218 engine ticks — about 1.35 CPU
+  instructions** — where the tape scan it replaces cost ~5,300. Rotating a ring is a
+  pipe's cost; a tape read is 523 ticks and a ROM lap ~1,000 more.
+- **The box got bigger and the score fell 4.7×.** 18,496 against 16,641: a
+  coprocessor is not a footprint optimisation, and `max(w,h)²` is worth paying when
+  the tick factor moves by 5×.
+- **The 17th opcode costs a trie level *plus* its lane rows.** Dropping `NEG` (build
+  it as `LDI 0` / `SUBI n`) and the final `HALT` (a blocking `IN` instead — the case
+  has ended, so no input ever comes) took exactly 17 opcodes to 16 and the machine
+  from **158×167 to 121×136, and the average from 151,544 ticks to 122,264** — the
+  footprint *and* every instruction's decode. Sixteen is the number to design to.
+
+Where the ticks now are (gated profile, longest public case): lanes 33.6 %, jump/branch
+slabs **25.7 %**, return path 20.5 %, trie 9.2 %, fetch 2.0 %. The tape has stopped
+being the story; `P` = 183 words and the return path are what is left.
+
+Two rules the build produced, both of which generalise beyond `snake`:
+
+- **A coprocessor should not answer back.** §7.1 makes an incoming pipe a rival for
+  every `r` in the CPU, including the jump slab's ROM read — so a *replying* unit
+  cannot be placed on a machine that has jumps at all. Measured: all 4,800 (fold,
+  `mem_pad`, `stream_pad`) combinations fail, always on that binding, and `matmul`
+  escapes it only by containing no `JMPF`. Give the unit enough authority to act on
+  what it finds — `STEP` either moves the snake or ends the game — and the machine
+  places at once.
+- **A unit that owns the display costs the CPU nothing.** The three port lanes and
+  their pipes disappear from the CPU, the panel is placed inside the block where its
+  three pipe *lengths* can be asserted against each other (`addr` = `data`, `swap` ≥
+  `data`, or a commit overtakes the pixels it commits), and the drawing fuses into the
+  ring commands — `GROW` appends *and* paints *and* commits.
 
 ### 8.1 `plotter` was 6 % over the step cap, and the fix was tape accesses per pixel
 

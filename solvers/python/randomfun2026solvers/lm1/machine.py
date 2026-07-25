@@ -1397,8 +1397,18 @@ def build(
         for pad in pads:
             try:
                 m = _assemble(
-                    program, p, words, tape_n, rom_rows, pad, display, stream, resp_pad,
-                    spad, packed_rom, short_return,
+                    program,
+                    p,
+                    words,
+                    tape_n,
+                    rom_rows,
+                    pad,
+                    display,
+                    stream,
+                    resp_pad,
+                    spad,
+                    packed_rom,
+                    short_return,
                 )
             except MachineError as exc:
                 last = exc
@@ -1448,9 +1458,7 @@ def _assemble(
     packed_rom: bool = True,
     short_return: bool = True,
 ) -> Machine:
-    cpu = build_cpu(
-        program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return
-    )
+    cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
@@ -1585,12 +1593,14 @@ def _assemble(
     stream_touches: dict[str, tuple[int, int]] = {}
     blk = None
     if cpu.stream_cols:
-        if stream is None:
+        # The snake unit's ring is sized to the problem's own bound (50 cells) inside
+        # its builder, so only the STREAM block takes sizes from the caller.
+        if stream is None and program.unit == "stream":
             raise MachineError(
                 "the program drives the STREAM block but no ring sizes were given; "
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
-        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream)
+        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
 
     rows = g.rows()
 
@@ -1666,20 +1676,36 @@ def _assemble(
 
 
 def _stream(
-    g: _Grid, cpu: _Cpu, cx: int, wall_y: int, sizes: tuple[int, int, int]
+    g: _Grid,
+    cpu: _Cpu,
+    cx: int,
+    wall_y: int,
+    sizes: tuple[int, int, int] | None,
+    *,
+    unit: str = "stream",
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
-    """Place the STREAM block below the CPU and wire its two pipes. Returns touches.
+    """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
     The command pipe drops straight out of the CPU's south wall into the block's
-    north wall; the response pipe climbs the block's *east* side, runs west above
-    it and turns north into its own lane's column. That is why ``STREAM_BANDS`` puts
-    the response lane east of the command lane: the westward leg then stops east of
-    the command pipe's descent instead of crossing it.
-    """
-    from . import stream as streammod
+    north wall; a response pipe, if the unit has one, climbs the block's *east* side,
+    runs west above it and turns north into its own lane's column. That is why
+    ``STREAM_BANDS`` puts the response lane east of the command lane: the westward leg
+    then stops east of the command pipe's descent instead of crossing it.
 
-    a_slots, b_slots, c_slots = sizes
-    blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
+    Which block is placed comes from the program's ``.unit`` (``asm.UNITS``). The
+    snake unit brings its own ring *and* the LM-75 panel, so on that machine there is
+    no separate ``_display`` call and the CPU has no display lanes at all.
+    """
+    if unit == "snake":
+        from . import snake_unit
+
+        blk = snake_unit.build_snake()
+    else:
+        from . import stream as streammod
+
+        assert sizes is not None
+        a_slots, b_slots, c_slots = sizes
+        blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
     bx, by = 1, wall_y + 5
     g.blit(bx, by, blk.cells)
 
@@ -1886,6 +1912,10 @@ TAPE_SIZE = {
     # runs the longest public case in 2,169,980 / 2,617,836 ticks — 18.7k ticks per slot
     # per case, i.e. ~8.3 ticks per slot on every one of its ~2,250 accesses (§4.1).
     "snake": 66,
+    # snake-ring keeps *only* scalars: the body lives in the coprocessor's ring, so the
+    # tape is eight slots and a read costs ~180 ticks instead of ~653. That is the whole
+    # point of the rewrite — see snake-ring.asm's header.
+    "snake-ring": 9,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
@@ -1934,6 +1964,11 @@ ROM_ROWS = {
     # against the default's 119x142 (20,164). One row either side is worse (8 rows is
     # 135 wide, 10 rows is 130 tall), so this is a real optimum, not a plateau.
     "snake": 9,
+    # snake-ring is height-bound: the coprocessor block is 66x60 and sits below the
+    # CPU, so the box is set by rows whatever the fold does to the width. 6 rows is the
+    # sweep minimum at 122x136; 5 is 144x135 and 7 is 111x137, so this is a real
+    # optimum rather than a plateau.
+    "snake-ring": 6,
 }
 
 

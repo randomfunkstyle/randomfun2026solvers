@@ -324,3 +324,150 @@ def test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot(
         machine.build(talks, tape_n=2, stream=(0, 0, 0))
     m = machine.build(quiet, tape_n=2, stream=(0, 0, 0))
     assert m.width > 0 and m.height > 0
+
+
+# ── snake-ring: the same game on the body-ring coprocessor ────────────────────
+# The shipped machine. `snake.asm` is kept as the tape-only reference — it is the one
+# that proves the CPU can do this unaided, and it is what the coprocessor's numbers are
+# measured against.
+RING_GRID = REPO / "tasks" / "solutions" / "snake-ring_cpu.man"
+RING_SHAPE = (121, 136)
+RING_FOOTPRINT = 18_496
+
+
+@lru_cache(maxsize=1)
+def _ring_machine() -> machine.Machine:
+    return machine.build_for("snake-ring")
+
+
+def test_the_ring_program_drives_the_unit_and_never_draws_itself() -> None:
+    """The CPU has no display lanes at all: the coprocessor owns the panel.
+
+    So a ``DSP*`` opcode appearing here would mean the panel had been wired to the CPU
+    as well — two rooms driving one port, which binds to whichever is nearer and is
+    invisible in the ASCII.
+    """
+    prog = programs.load("snake-ring")
+    assert prog.unit == "snake"
+    assert not [op for op in prog.ops_used if op.mnemonic.startswith("DSP")]
+    assert "SND" in [op.mnemonic for op in prog.ops_used]
+    # No RCV: an incoming pipe would compete with every `r` in the CPU (see
+    # test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot).
+    assert "RCV" not in [op.mnemonic for op in prog.ops_used]
+
+
+def test_sixteen_opcodes_exactly_which_is_a_depth_four_trie() -> None:
+    """The 17th opcode costs a whole trie level *plus* its lane rows.
+
+    Measured: dropping ``NEG`` (built as ``LDI 0`` / ``SUBI n``) and the final ``HALT``
+    (a blocking ``IN`` instead — the case has ended, so no input ever comes) took the
+    machine from 158x167 to 121x136 **and** the average from 151,544 ticks to 122,264,
+    because every instruction's trie walk got shorter too.
+    """
+    assert len(programs.load("snake-ring").ops_used) == 16
+
+
+def test_the_command_codes_are_the_hardwares_own() -> None:
+    """The unit reads its codes off its trie's geometry, so the program must not guess.
+
+    ``STEP`` is 0 because it is the easternmost leaf — it is the only arm that outgrows
+    its columns. Move a leaf and these numbers move with it.
+    """
+    from randomfun2026solvers.lm1 import snake_unit
+    from randomfun2026solvers.lm1.store import SnakeUnit
+
+    codes = snake_unit.arm_codes()
+    assert codes == SnakeUnit.CODES
+    equs = programs.load("snake-ring").equs
+    for arm, code in codes.items():
+        assert equs[f"C_{arm}"] == code, f"the program's C_{arm} disagrees with the trie"
+
+
+@pytest.mark.parametrize("case", _cases(), ids=lambda c: c["name"])
+def test_the_ring_program_draws_every_public_frame_on_the_emulator(case: dict) -> None:
+    """Same frames as the tape version, but every pixel comes out of the unit's model.
+
+    ``store.SnakeUnit`` writes through the emulator's ``display_writes`` hook, so this
+    is the same comparison as for ``snake.asm`` even though this CPU never draws.
+    """
+    (name, rounds) = next(
+        (n, r) for n, r in programs.rounds_for_problem("snake") if n == case["name"]
+    )
+    res = Emulator(programs.load("snake-ring")).run(rounds, max_instructions=MAX_INSTRUCTIONS)
+    got = frames_from_writes(res.display_writes, width=16, height=16)
+    want = _expected_frames(case)
+    assert not res.output, f"{name}: a display problem must emit no program output"
+    assert got == want, f"{name}: frames differ"
+
+
+@node_required
+def test_the_checked_in_ring_grid_matches_the_generator() -> None:
+    expected = "\n".join(_ring_machine().rows) + "\n"
+    assert RING_GRID.read_text(encoding="utf-8") == expected, (
+        "snake-ring_cpu.man is stale; regenerate with `python -m randomfun2026solvers.lm1.machine "
+        f"snake-ring --man {RING_GRID.relative_to(REPO)}`"
+    )
+
+
+@node_required
+def test_the_ring_machine_is_the_shape_we_scored() -> None:
+    m = _ring_machine()
+    assert (m.width, m.height) == RING_SHAPE
+    assert m.footprint == RING_FOOTPRINT
+    assert m.footprint > EXPECTED_FOOTPRINT  # bigger box, 5x better score: it is the ticks
+    assert "O" not in "".join(m.rows)
+    # The panel belongs to the block, so the CPU declares no display of its own.
+    assert m.display is None
+    named = {r.name for r in m.debug_map().regions}
+    for arm in ("GROW", "STEP", "FRUIT", "RED"):
+        assert f"stream:unit:{arm}" in named, f"the {arm} arm is unnamed in the overlay"
+    assert {"stream:ring", "stream:relay", "stream:panel"} <= named
+
+
+@node_required
+def test_the_engine_plays_the_losing_case_on_the_ring_machine() -> None:
+    """The cheap end-to-end proof, on the real wasm: CPU -> cmd pipe -> unit -> panel."""
+    from randomfun2026solvers.littleman import Littleman
+
+    case = next(c for c in _cases() if c["name"] == CHEAP_CASE)
+    (res,) = Littleman().display_frames(RING_GRID, [case], max_ticks=STEP_CAP)
+    want = _expected_frames(case)
+    assert res.fatal is None, res.fatal
+    assert not res.output
+    assert res.frames == want
+    assert set("".join(want[-1])) == {"0", "9"}, "the losing frame is red, not green"
+
+
+@pytest.mark.slow  # drives the engine over the whole problem
+@node_required
+def test_every_public_case_commits_the_expected_frames_on_the_ring_machine() -> None:
+    from randomfun2026solvers.littleman import Littleman
+
+    cases = _cases()
+    got = Littleman().display_frames(RING_GRID, cases, max_ticks=STEP_CAP)
+    assert len(got) == len(cases)
+    for case, res in zip(cases, got, strict=True):
+        assert res.fatal is None, f"{case['name']}: {res.fatal}"
+        assert not res.output, f"{case['name']}: emitted output on a display problem"
+        assert res.frames == _expected_frames(case), f"{case['name']}: frames differ"
+
+
+@pytest.mark.slow  # a full scoring run
+@node_required
+def test_the_coprocessor_is_five_times_the_tape_version() -> None:
+    """The whole point of the rewrite, as one number.
+
+    Submitted at 3,369,020,264 against the tape version's 15,891,242,682 — the judge's
+    17 cases average 182,149 ticks where they averaged 954,945. Locally: 18,496 x
+    122,264. The box got *bigger* (18,496 against 16,641) and the score fell 4.7x,
+    which is the trade the coprocessor exists to make.
+    """
+    from randomfun2026solvers.scoring import score_program
+
+    res = score_program(RING_GRID, "snake")
+    assert not res.approx, "display ticks fell back to the settle-tick estimate"
+    assert (res.width, res.height) == RING_SHAPE
+    assert res.avg_ticks is not None and res.avg_ticks < 130_000, res.avg_ticks
+    assert res.score < 2_400_000_000, res.score
+    # ~378k of the 15M cap on the dearest public case: a 39x margin.
+    assert max(c.ticks for c in res.cases) < STEP_CAP // 8, [c.ticks for c in res.cases]

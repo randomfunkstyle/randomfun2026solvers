@@ -1,0 +1,16 @@
+# snake — submission 03975755-9f0c-442e-a119-5b8c0e90d929
+
+verdict      done: 17/17 cases, area2 27889, avgTicks 225,556, score 6,290,518,160
+submitted    2026-07-25T22:36:57+0300
+grid         158x167
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  45392d2f1845b67ebaee0ab34a7fe00815cbee147e74eaa70c160bdf3383481c
+commit       d452156
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_ring.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Body-ring coprocessor (lm1/snake_unit.py): the snake's body lives in a value ring and the unit owns the LM-75, so the CPU has no display lanes and an 8-slot tape. Write-only protocol - an incoming pipe competes with every r in the CPU (7.1), so STEP acts on a collision instead of reporting it. 158x167, local avg 151,544 (was 611,152).

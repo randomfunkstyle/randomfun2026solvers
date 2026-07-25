@@ -1,0 +1,16 @@
+# snake — submission 1f465324-8903-42ef-b1f0-d6c8509f3aef
+
+verdict      done: 17/17 cases, area2 18496, avgTicks 182,149, score 3,369,020,288
+submitted    2026-07-25T22:42:17+0300
+grid         121x136
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  7ac77f6a6e2f058e7eaa276e334228e9270ad3913560ad70ceaab5fd215c35bf
+commit       d452156
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_ring.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Same machine, ending on a blocking IN instead of a spin loop: the case has ended so no input ever arrives, which terminates the run cleanly and is one ROM word cheaper. 121x136, local avg 122,264.

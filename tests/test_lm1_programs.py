@@ -167,6 +167,13 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # (free, where masking a stored counter would cost two more accesses a tick),
         # `DIV` is the wall test's runtime divisor, and `NEG` builds the two negative
         # direction deltas the ROM cannot hold.
+        # snake-ring moves the body into a coprocessor ring, so every *indexed* opcode
+        # disappears with it: `SND` is the whole interface, `MODI`/`DIV` are the wall
+        # test, `INCM` grows the length in one read. Exactly sixteen opcodes, i.e. a
+        # depth-4 trie — `NEG` became `LDI 0`/`SUBI n` and the ending became a blocking
+        # `IN`, because a seventeenth costs a trie level plus its lane rows (measured:
+        # 158x167 against 121x136).
+        "snake-ring": {"DIV", "INCM", "MODI", "SND"},
         "snake": {
             "DECM",
             "DIV",
