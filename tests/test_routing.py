@@ -40,6 +40,21 @@ def _dependent_layout() -> _Layout:
     )
 
 
+def _parallel_half_adder_layout() -> _Layout:
+    from littleman_tools.composer import _plan_layout
+
+    return _plan_layout(
+        Netlist(
+            inputs=("a", "b"),
+            gates=(
+                Gate("xor-gate.man", ("a", "b"), "sum"),
+                Gate("and-gate.man", ("a", "b"), "carry"),
+            ),
+            outputs=("sum", "carry"),
+        )
+    )
+
+
 def _bottleneck_layout() -> _Layout:
     def endpoint(
         name: str,
@@ -149,6 +164,19 @@ def test_routes_do_not_cross_overlap_or_enter_unowned_keepouts() -> None:
             source.stub + source.escape + target.stub + target.escape
         )
         occupied.update(path)
+
+
+def test_parallel_half_adder_routes_deterministically_without_overlaps() -> None:
+    layout = _parallel_half_adder_layout()
+
+    first = _route_layout(layout)
+    second = _route_layout(layout)
+
+    assert first == second
+    occupied: set[tuple[int, int]] = set()
+    for route in first.routes:
+        assert occupied.isdisjoint(route.path)
+        occupied.update(route.path)
 
 
 def test_each_route_owns_only_its_endpoint_escape_cells() -> None:

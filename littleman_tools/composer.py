@@ -30,7 +30,7 @@ class ActiveRoom:
     grid: tuple[str, ...]
     width: int
     height: int
-    runner: tuple[int, int]
+    runner: tuple[int, int] | None
 
 
 class _AdapterFlow(StrEnum):
@@ -135,6 +135,34 @@ def _make_scalar_fanout(output_count: int) -> _GeneratedAdapter:
     return _GeneratedAdapter(room=room, ports=tuple(ports))
 
 
+def _mirror_adapter_vertically(adapter: _GeneratedAdapter) -> _GeneratedAdapter:
+    """Mirror a generated runner room while preserving its instruction flow."""
+
+    height = adapter.room.height
+    grid = tuple(
+        row.translate(str.maketrans({"^": "v", "v": "^"})) for row in reversed(adapter.room.grid)
+    )
+    side_map = {
+        Side.NORTH: Side.SOUTH,
+        Side.EAST: Side.EAST,
+        Side.SOUTH: Side.NORTH,
+        Side.WEST: Side.WEST,
+    }
+    return _GeneratedAdapter(
+        room=_room_from_grid(grid),
+        ports=tuple(
+            _AdapterPort(
+                name=port.name,
+                flow=port.flow,
+                side=side_map[port.side],
+                wall=(port.wall[0], height - 1 - port.wall[1]),
+                instructions=tuple((x, height - 1 - y) for x, y in port.instructions),
+            )
+            for port in adapter.ports
+        ),
+    )
+
+
 def _make_two_field_packer() -> _GeneratedAdapter:
     """Pack two scalar streams into one ordered serial frame."""
 
@@ -228,7 +256,8 @@ def _room_from_grid(grid: tuple[str, ...]) -> ActiveRoom:
         width=len(grid[0]),
         height=len(grid),
         runner=next(
-            (x, y) for y, row in enumerate(grid) for x, cell in enumerate(row) if cell == "@"
+            ((x, y) for y, row in enumerate(grid) for x, cell in enumerate(row) if cell == "@"),
+            None,
         ),
     )
 
@@ -385,11 +414,13 @@ class Netlist:
 class _RoomRole(StrEnum):
     """Why a room exists in the lowered netlist layout."""
 
+    INPUT_INTERFACE = "input_interface"
     INPUT_DEMULTIPLEXER = "input_demultiplexer"
     FANOUT = "fanout"
     PACKER = "packer"
     PRIMITIVE = "primitive"
     OUTPUT_JOINER = "output_joiner"
+    OUTPUT_INTERFACE = "output_interface"
 
 
 @dataclass(frozen=True)
@@ -531,11 +562,13 @@ _SIDE_DIRECTIONS: Mapping[Side, tuple[int, int]] = MappingProxyType(
 _SIDE_ORDER = (Side.NORTH, Side.EAST, Side.SOUTH, Side.WEST)
 _ROLE_ORDER: Mapping[_RoomRole, int] = MappingProxyType(
     {
-        _RoomRole.INPUT_DEMULTIPLEXER: 0,
-        _RoomRole.FANOUT: 1,
-        _RoomRole.PACKER: 2,
-        _RoomRole.PRIMITIVE: 3,
-        _RoomRole.OUTPUT_JOINER: 4,
+        _RoomRole.INPUT_INTERFACE: 0,
+        _RoomRole.INPUT_DEMULTIPLEXER: 1,
+        _RoomRole.FANOUT: 2,
+        _RoomRole.PACKER: 3,
+        _RoomRole.PRIMITIVE: 4,
+        _RoomRole.OUTPUT_JOINER: 5,
+        _RoomRole.OUTPUT_INTERFACE: 6,
     }
 )
 
@@ -579,9 +612,20 @@ def _lower_layout_rooms(
     connections: list[_Connection] = []
     signal_sources: dict[str, _PortRef] = {}
     signal_targets: dict[str, list[_PortRef]] = {signal: [] for signal in netlist.producers}
+    fanout_orientation_counter = [0]
+    gates_per_level = Counter(netlist.levels[gate.output] for gate in netlist.gates)
+    gate_ordinal_by_level: Counter[int] = Counter()
 
+    specs.append(_io_interface_spec("input.io", _RoomRole.INPUT_INTERFACE, 0, "I"))
     input_adapter = _make_input_demultiplexer(len(netlist.inputs))
     specs.append(_adapter_spec("input", _RoomRole.INPUT_DEMULTIPLEXER, 0, input_adapter))
+    connections.append(
+        _Connection(
+            signal="input:frame",
+            source=_PortRef("input.io", "frame"),
+            target=_PortRef("input", "frame"),
+        )
+    )
     signal_sources.update(
         {
             signal: _PortRef("input", f"field[{index}]")
@@ -591,6 +635,8 @@ def _lower_layout_rooms(
 
     for index, gate in enumerate(netlist.gates):
         level = netlist.levels[gate.output]
+        level_ordinal = gate_ordinal_by_level[level]
+        gate_ordinal_by_level[level] += 1
         gate_name = f"gate[{index}]"
         room = extract_active_room(primitive_root / gate.kind)
         primitive_ports = _select_primitive_ports(room, contract_for(gate.kind))
@@ -613,6 +659,8 @@ def _lower_layout_rooms(
                 if len(gate.inputs) == 2
                 else _make_output_joiner(len(gate.inputs))
             )
+            if gates_per_level[level] > 1 and level_ordinal % 2 == 0:
+                packer = _mirror_adapter_vertically(packer)
             specs.append(_adapter_spec(packer_name, _RoomRole.PACKER, level, packer))
             for field_index, signal in enumerate(gate.inputs):
                 signal_targets[signal].append(_PortRef(packer_name, f"field[{field_index}]"))
@@ -629,6 +677,14 @@ def _lower_layout_rooms(
     output_level = max(netlist.levels[signal] for signal in netlist.outputs) + 1
     output_adapter = _make_output_joiner(len(netlist.outputs))
     specs.append(_adapter_spec("output", _RoomRole.OUTPUT_JOINER, output_level, output_adapter))
+    specs.append(_io_interface_spec("output.io", _RoomRole.OUTPUT_INTERFACE, output_level, "O"))
+    connections.append(
+        _Connection(
+            signal="output:frame",
+            source=_PortRef("output", "frame"),
+            target=_PortRef("output.io", "frame"),
+        )
+    )
     for index, signal in enumerate(netlist.outputs):
         signal_targets[signal].append(_PortRef("output", f"field[{index}]"))
 
@@ -641,6 +697,7 @@ def _lower_layout_rooms(
             specs=specs,
             connections=connections,
             counter=[0],
+            orientation_counter=fanout_orientation_counter,
         )
 
     return tuple(specs), tuple(connections)
@@ -656,6 +713,36 @@ def _adapter_spec(
     return _RoomSpec(name=name, role=role, level=level, room=adapter.room, ports=adapter.ports)
 
 
+def _io_interface_spec(
+    name: str,
+    role: _RoomRole,
+    level: int,
+    label: str,
+) -> _RoomSpec:
+    """Create a structural one-pipe runtime input or output boundary room."""
+
+    room = _room_from_grid(("+-+", f"|{label}|", "+-+"))
+    if label == "I":
+        port = _AdapterPort(
+            name="frame",
+            flow=_AdapterFlow.OUTGOING,
+            side=Side.EAST,
+            wall=(2, 1),
+            instructions=(),
+        )
+    elif label == "O":
+        port = _AdapterPort(
+            name="frame",
+            flow=_AdapterFlow.INCOMING,
+            side=Side.WEST,
+            wall=(0, 1),
+            instructions=(),
+        )
+    else:
+        raise ValueError(f"Unknown runtime I/O room label {label!r}")
+    return _RoomSpec(name=name, role=role, level=level, room=room, ports=(port,))
+
+
 def _connect_signal_with_fanout(
     *,
     signal: str,
@@ -665,6 +752,7 @@ def _connect_signal_with_fanout(
     specs: list[_RoomSpec],
     connections: list[_Connection],
     counter: list[int],
+    orientation_counter: list[int],
 ) -> None:
     if not targets:
         raise ValueError(f"Signal {signal!r} has no consumer or selected output")
@@ -676,6 +764,9 @@ def _connect_signal_with_fanout(
     fanout_name = f"fanout[{signal}][{counter[0]}]"
     counter[0] += 1
     fanout = _make_scalar_fanout(branch_count)
+    if orientation_counter[0] % 2:
+        fanout = _mirror_adapter_vertically(fanout)
+    orientation_counter[0] += 1
     specs.append(_adapter_spec(fanout_name, _RoomRole.FANOUT, level, fanout))
     connections.append(_Connection(signal, source, _PortRef(fanout_name, "input")))
 
@@ -689,6 +780,7 @@ def _connect_signal_with_fanout(
             specs=specs,
             connections=connections,
             counter=counter,
+            orientation_counter=orientation_counter,
         )
 
 
@@ -821,19 +913,31 @@ def _place_room_specs(
 ) -> tuple[tuple[_RoomPlacement, ...], tuple[_Rect, ...]]:
     indexed_specs = tuple(enumerate(specs))
     levels = sorted({spec.level for spec in specs})
+    specs_by_level = {
+        level: _order_level_specs(
+            tuple((index, spec) for index, spec in indexed_specs if spec.level == level)
+        )
+        for level in levels
+    }
+    band_widths = {
+        level: sum(
+            spec.room.width + 2 * (_STUB_LENGTH + _DEFAULT_CLEARANCE)
+            for _, spec in specs_by_level[level]
+        )
+        + _ROOM_AISLE * (len(specs_by_level[level]) - 1)
+        for level in levels
+    }
+    max_band_width = max(band_widths.values())
     placements: list[_RoomPlacement] = []
     band_ranges: list[tuple[int, int]] = []
     band_top = 0
 
     for level in levels:
-        level_specs = sorted(
-            ((index, spec) for index, spec in indexed_specs if spec.level == level),
-            key=lambda item: (_ROLE_ORDER[item[1].role], item[0]),
-        )
+        level_specs = specs_by_level[level]
         band_height = max(
             spec.room.height + 2 * (_STUB_LENGTH + _DEFAULT_CLEARANCE) for _, spec in level_specs
         )
-        left = 0
+        left = (max_band_width - band_widths[level]) // 2
         for _, spec in level_specs:
             placement = _place_room_spec(spec, left, band_top)
             placements.append(placement)
@@ -852,6 +956,43 @@ def _place_room_specs(
         for (_, upper_bottom), (lower_top, _) in zip(band_ranges, band_ranges[1:], strict=False)
     )
     return tuple(placements), aisles
+
+
+def _order_level_specs(
+    indexed_specs: tuple[tuple[int, _RoomSpec], ...],
+) -> tuple[tuple[int, _RoomSpec], ...]:
+    """Reserve a deterministic planar order for generated sibling branches."""
+
+    standard = tuple(sorted(indexed_specs, key=lambda item: (_ROLE_ORDER[item[1].role], item[0])))
+    fanouts = tuple(item for item in standard if item[1].role is _RoomRole.FANOUT)
+    input_core = tuple(
+        item
+        for item in standard
+        if item[1].role in {_RoomRole.INPUT_INTERFACE, _RoomRole.INPUT_DEMULTIPLEXER}
+    )
+    if len(fanouts) >= 2 and len(fanouts) + len(input_core) == len(standard):
+        left = tuple(reversed(fanouts[::2]))
+        right = fanouts[1::2]
+        return left + input_core + right
+
+    packers = {
+        spec.name.removesuffix(".packer"): (index, spec)
+        for index, spec in standard
+        if spec.role is _RoomRole.PACKER and spec.name.endswith(".packer")
+    }
+    pairs = [
+        (packers[spec.name], (index, spec))
+        for index, spec in standard
+        if spec.role is _RoomRole.PRIMITIVE and spec.name in packers
+    ]
+    if len(pairs) >= 2 and 2 * len(pairs) == len(standard):
+        left = tuple(
+            item for packer, primitive in reversed(pairs[1::2]) for item in (packer, primitive)
+        )
+        right = tuple(item for packer, primitive in pairs[::2] for item in (primitive, packer))
+        return left + right
+
+    return standard
 
 
 def _place_room_spec(spec: _RoomSpec, left: int, top: int) -> _RoomPlacement:

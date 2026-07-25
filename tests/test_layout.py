@@ -17,19 +17,32 @@ def _dependent_netlist() -> Netlist:
     )
 
 
+def _parallel_half_adder_netlist() -> Netlist:
+    return Netlist(
+        inputs=("a", "b"),
+        gates=(
+            Gate("xor-gate.man", ("a", "b"), "sum"),
+            Gate("and-gate.man", ("a", "b"), "carry"),
+        ),
+        outputs=("sum", "carry"),
+    )
+
+
 def test_layout_is_deterministic_and_orders_primitive_rooms_by_dependency_level() -> None:
     first = _plan_layout(_dependent_netlist())
     second = _plan_layout(_dependent_netlist())
 
     assert first == second
     assert [(room.name, room.origin) for room in first.placements] == [
-        ("input", (4, 4)),
-        ("fanout[b][0]", (31, 4)),
-        ("gate[0].packer", (4, 22)),
-        ("gate[0]", (25, 22)),
-        ("gate[1].packer", (4, 40)),
-        ("gate[1]", (25, 40)),
-        ("output", (4, 58)),
+        ("input.io", (4, 4)),
+        ("input", (21, 4)),
+        ("fanout[b][0]", (48, 4)),
+        ("gate[0].packer", (15, 22)),
+        ("gate[0]", (36, 22)),
+        ("gate[1].packer", (15, 40)),
+        ("gate[1]", (36, 40)),
+        ("output", (16, 58)),
+        ("output.io", (39, 58)),
     ]
     primitives = [room for room in first.placements if room.role is _RoomRole.PRIMITIVE]
     assert [(room.name, room.level) for room in primitives] == [
@@ -130,6 +143,65 @@ def test_layout_records_generated_adapters_connections_and_is_immutable() -> Non
 
     with pytest.raises(FrozenInstanceError):
         layout.placements[0].level = 99  # type: ignore[misc]
+
+
+def test_parallel_siblings_alternate_generated_adapter_orientation() -> None:
+    layout = _plan_layout(_parallel_half_adder_netlist())
+    left = {placement.name: placement.footprint.left for placement in layout.placements}
+    ports = {
+        placement.name: {port.name: port.side for port in placement.ports}
+        for placement in layout.placements
+    }
+
+    assert ports["fanout[a][0]"] == {
+        "input": Side.NORTH,
+        "copy[0]": Side.EAST,
+        "copy[1]": Side.SOUTH,
+    }
+    assert ports["fanout[b][0]"] == {
+        "input": Side.SOUTH,
+        "copy[0]": Side.EAST,
+        "copy[1]": Side.NORTH,
+    }
+    assert ports["gate[0].packer"] == {
+        "field[0]": Side.SOUTH,
+        "field[1]": Side.NORTH,
+        "frame": Side.EAST,
+    }
+    assert ports["gate[1].packer"] == {
+        "field[0]": Side.NORTH,
+        "field[1]": Side.SOUTH,
+        "frame": Side.EAST,
+    }
+    assert left["fanout[a][0]"] < left["input.io"] < left["input"] < left["fanout[b][0]"]
+    assert left["gate[1].packer"] < left["gate[1]"] < left["gate[0]"] < left["gate[0].packer"]
+    centers = {
+        placement.name: placement.footprint.left + placement.footprint.width // 2
+        for placement in layout.placements
+    }
+    assert centers["gate[1]"] < centers["output"] < centers["gate[0]"]
+
+
+def test_single_gate_levels_keep_the_standard_packer_orientation() -> None:
+    layout = _plan_layout(_dependent_netlist())
+    packers = {
+        placement.name: {port.name: port.side for port in placement.ports}
+        for placement in layout.placements
+        if placement.role is _RoomRole.PACKER
+    }
+
+    assert packers == {
+        "gate[0].packer": {
+            "field[0]": Side.NORTH,
+            "field[1]": Side.SOUTH,
+            "frame": Side.EAST,
+        },
+        "gate[1].packer": {
+            "field[0]": Side.NORTH,
+            "field[1]": Side.SOUTH,
+            "frame": Side.EAST,
+        },
+    }
 
 
 @pytest.mark.parametrize(

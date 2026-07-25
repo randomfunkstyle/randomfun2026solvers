@@ -155,10 +155,10 @@ def test_write_creates_only_parents_and_writes_exact_composed_source(tmp_path: P
     assert list(requested.parent.iterdir()) == [requested]
 
 
-def test_composed_source_has_runtime_visible_rooms_and_connected_pipes() -> None:
+def test_composed_source_has_runtime_visible_io_rooms_and_connected_pipes() -> None:
     analysis = Littleman().analyze(composer.compose(_not_netlist()))
 
-    assert len(analysis.rooms) == 3
-    assert len(analysis.pipes) == 2
+    assert len(analysis.rooms) == 5
+    assert len(analysis.pipes) == 4
     assert all(pipe.src is not None and pipe.dst is not None for pipe in analysis.pipes)
     assert analysis.displays == []
