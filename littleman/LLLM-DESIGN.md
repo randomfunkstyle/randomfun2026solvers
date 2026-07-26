@@ -185,7 +185,7 @@ so cell `i` of a word sits at bits `8*(7-i)`; a short final word is left-shifted
 by the shortfall, which is a single `{`. Kept here only because the packed store
 is the obvious footprint optimisation once the layout exists.
 
-## CPU or ring? — measured, not argued
+## CPU or ring? — measured, and it is a wash
 
 The ring is charged from its **height**: 159x222, and `max(w,h)^2` bills only the
 larger side, so the 63 columns of slack to the west are free and narrowing the
@@ -197,64 +197,82 @@ Where the rows go, measured on `lllm_layout.build_room`:
     53 of the 63 blocks have exactly ONE glyph row, and still cost 2 (non-branching)
     or 4 (branching) rows apiece
 
-So 58% of the charged dimension is lane plumbing, and it is structural: the module
-docstring says it "lays one block to a row band and spends rows freely", which was
-the right call when correctness was the risk and is what now sets the score.
-Shaving channels fights the scheme rather than replacing it.
+58% of the charged dimension is lane plumbing. It is structural, not sloppy: the
+module docstring says it "lays one block to a row band and spends rows freely",
+which was right when correctness was the risk.
 
-`LLM-DESIGN.md` ran this comparison in the opposite direction and rejected the ring
-for the sibling task: ~3.3 rows a block would have put LLM near 600 rows and
-`area2` ~360,000, against a CPU's 41,616, because **a CPU pays for control flow in
-ROM words, which are dense data, not in rows**. LLLM is the same trade with the
-numbers reversed, so it was worth asking the question here.
+`LLM-DESIGN.md` ran this comparison the other way and rejected the ring for the
+sibling task, because **a CPU pays for control flow in ROM words, which are dense
+data, not in rows**. So the question was worth asking here. It was answered with
+`lm1.machine.build`, which synthesises a machine from a `Program` and reports its
+dimensions — a CPU can therefore be priced against a synthetic program of the
+right size and opcode mix *without writing the interpreter*.
 
-Answered with `lm1.machine.build`, which synthesises a whole machine from a
-`Program` and reports its dimensions — so the footprint of a CPU can be measured
-against a synthetic program of a given size *without writing the interpreter*.
-`tape_n=280`, `display=(16,16)`, sweeping the ROM fold for the square optimum
-(ARCH.md 7.3b):
+**Footprint says yes.** Sweeping the ROM fold for the square optimum (ARCH 7.3b),
+`tape_n=280`, `display=(16,16)`:
 
-| interpreter | best `rom_rows` | w x h | `area2` | vs the ring |
-|---|---|---|---|---|
-| 300 instrs | 20 | 95x91 | **9,025** | 5.46x smaller |
-| 400 | 28 | 92x99 | 9,801 | 5.03x |
-| 600 | 36 | 104x107 | 11,449 | 4.30x |
-| 900 | 48 | 117x119 | 14,161 | 3.48x |
-| 1,200 | (default fold) | 111x213 | 45,369 | 1.09x |
+| interpreter | best `rom_rows` | w x h | `area2` |
+|---|---|---|---|
+| 300 instrs | 20 | 95x91 | 9,025 |
+| 400 | 28 | 92x99 | 9,801 |
+| 600 | 36 | 104x107 | 11,449 |
+| 900 | 48 | 117x119 | 14,161 |
 
-**A CPU wins for any interpreter under ~1,200 instructions**, and the fold matters
-as much as the program: at 600 instructions the default fold gives 19,600 and the
-swept one 11,449, because the sweep lands the machine square (104x107).
+The fold matters as much as the program: 600 instructions is 19,600 at the default
+fold and 11,449 swept, because the sweep lands the machine square at 104x107.
 
-How big would the interpreter be? LLM's is 1,757 instructions for a language with
-rooms, pipes, three men, pipe-train shifts and wall-freeze ordering. LLLM has one
-room, one man, and ten operations — no room finding, no pipe walk, no scheduling,
-which is the bulk of LLM's code. The reference interpreters put the ratio at
-299 lines against 808, and the ring worker is 63 blocks / 614 glyph cells. **400
-to 700 instructions is the honest bracket, and every point of it wins.**
+**Ticks say no, and ticks decide it.** The first pass of this estimate omitted ROM
+recirculation and put a CPU at ~2.5M ticks. That was wrong. `LLM-DESIGN.md` prices
+a taken branch at **12 ticks per ROM word it recirculates**, and at `P = 1,022`
+words that term dominates everything else. Applying the full engine-measured model
+against the *measured* workload — 58.5 interpreted ticks and 11.6 rounds a case,
+not the 182 the round budgets suggest:
 
-Ticks are the constraint to respect, not the footprint: 1.46M today against a
-**15M cap**. A CPU is much slower per interpreted tick. Budgeting ~50 instructions
-and ~3 store reads a tick, at ~143 ticks an instruction (decode depth 5) and
-`8.0 * N` = 2,240 a read at `N = 280`:
+    setup, 256 program cells    4,017,664     <- 3.08M of it is recirculation alone
+    the interpreted ticks        1,458,639     (24,934 a tick)
+    rounds and frames              443,677
+    TOTAL                        5,919,980     (cap 15,000,000)
 
-    (50 x 143) + (3 x 2,240) = 13,870 ticks an interpreted tick
-    x 182 interpreted ticks  = ~2.5M ticks a case
+| | `area2` | ticks | score |
+|---|---|---|---|
+| **the ring, measured** | 49,284 | 1,460,882 | **7.20e10** |
+| CPU, 300 instrs | 9,025 | 5.92M | 5.34e10 |
+| CPU, 600 instrs | 11,449 | 5.92M | **6.78e10** |
+| CPU, 900 instrs | 14,161 | 5.92M | 8.38e10 — *worse* |
 
-That is a 6x margin under the cap, and store reads are 48% of it — so the sibling
-task's two-tier seam applies directly if it ever gets tight. At `area2` 11,449 and
-~3M ticks the score lands near **3.4e10 against the ring's 7.20e10**.
+Break-even at `area2` 11,449 is 6.29M ticks against an estimated 5.92M, which is
+inside the model's error bars. **A 4.3x smaller box buys 6%**, because the CPU is
+4.1x slower, and it goes negative if the interpreter passes ~700 instructions.
 
-Not yet done, and the reason this section is a finding rather than a machine: the
-interpreter itself. The bracket above is measured on synthetic programs of the
-right *size* and opcode mix, not on LLLM's actual code, so it bounds the answer
-without settling it. The 15M cap makes the tick estimate the thing to check first
-when building it — footprint is no longer in doubt.
+The two machines cost almost exactly the same per interpreted tick — **24,934 for
+the CPU against the ring's measured 24,972** — which is the cross-task finding in
+miniature: the fetch-decode-return tax gives back what dense control flow wins.
+A block machine avoids that tax by construction, and the ring already is one.
 
-### The alternative, priced for completeness
+**Where the CPU's cost actually sits**, and why this is not a closed door: 68% of
+it is the setup loop that loads 256 program cells, and 3.08M of that 4.02M is a
+loop closure recirculating `P - body` words 256 times. This is exactly the
+pathology `LLM-DESIGN.md` records costing the sibling 4.4M ticks a case doing
+nothing. Code banks (ARCH 5.5, one looping ROM per subprogram) make a closure
+nearly free and would take the CPU to ~2.9M ticks and **~3.3e10** — a real 2.2x.
+But code banks are unbuilt (`ROM-RECIRCULATION.md` lists them still-open), so that
+number prices a machine that does not exist.
 
-Staying on the ring, 9 of the 109 lane rows are provably dead: `d` branches
-declare only `pos`/`zero` so their north free row can never be taken (3 blocks),
-and `x` branches have no straight lane at all (`_straight_key` returns `None`, 6
-blocks). Reclaiming them is 222 -> 213 rows, `area2` 49,284 -> 45,369, **-7.9%**.
-Real, safe, and an order of magnitude less than replacing the scheme.
+### The branch that trades nothing away
+
+Packing the ring is the only option that attacks the charged side without giving
+up the block machine's tick profile. The overhead is 109 of 189 rows and 53 blocks
+carry a single glyph row, so the headroom is large; halving it is 222 -> 168 rows,
+`area2` 28,224 and **4.12e10 at unchanged ticks — 1.75x, and no new hardware.**
+
+Cheapest slice of that, already located: 9 lane rows are *provably* dead. A `d`
+branch declares only `pos`/`zero`, so its north free row can never be taken (3
+blocks), and an `x` branch has no straight lane at all (`_straight_key` returns
+`None`, 6 blocks) — yet `build_room` allocates all three overhead rows for every
+branching block. Reclaiming them is 222 -> 213, `area2` 45,369, **-7.9%**.
+
+Not done here: none of the three is built. The CPU bracket is measured on
+synthetic programs of the right size, not on LLLM's code, and the tick figures are
+the engine-measured cost model applied to a budgeted instruction mix rather than a
+running interpreter. What the numbers do settle is the *ordering* — pack the ring
+first, and only revisit the CPU if code banks land.
