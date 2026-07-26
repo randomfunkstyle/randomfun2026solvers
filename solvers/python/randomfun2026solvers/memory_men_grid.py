@@ -187,7 +187,7 @@ def build_grid(cols: int, rows: int) -> Grid:
     # last row — the band below it is a tile's third row, which owns no pipe. So
     # its room stops early and the strip comes up behind it, as far as the two
     # cells of pipe and the neighbouring rooms' walls allow.
-    coll_room_h = init_h + BAND * (rows - 1) + 2
+    coll_room_h = init_h + BAND * (rows - 1) + 1
     coll_y = max(col_y + coll_room_h + _GAP, col_y + col_h + 2)
     out_y = coll_y + 2 + _GAP
 
@@ -275,11 +275,20 @@ def build_grid(cols: int, rows: int) -> Grid:
         ans_x = cx["coll"] + 1
         draw_pipe(grid, [(ans_x, y) for y in range(col_y + coll_room_h + 1, coll_y)])
 
-        for main in mains:
+        for i, main in enumerate(mains):
             y = col_y + main
             draw_pipe(grid, [(x, y) for x in range(cx["rep"] + _REP_W + 1, cx["dec"])])
             draw_pipe(grid, [(x, y) for x in range(cx["dec"] + _DEC_W + 1, cx["cell"])])
-            draw_pipe(grid, [(x, y) for x in range(cx["cell"] + _CELL_W + 1, cx["coll"])])
+            west = cx["cell"] + _CELL_W + 1
+            if i + 1 < len(mains):
+                draw_pipe(grid, [(x, y) for x in range(west, cx["coll"])])
+            else:
+                # The last band's answer *bends* inside the same two cells of gap:
+                # east, north, east. That is what lets the collector's room stop a
+                # row above the band it serves, and the strip come up behind it.
+                draw_pipe(
+                    grid, [(west, y), (west + 1, y), (west + 1, y - 1), (cx["coll"] - 1, y - 1)]
+                )
 
         dbg.region(
             f"column {j}: addr {base}-{base + rows - 1}",
