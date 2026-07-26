@@ -63,7 +63,7 @@ still has. Lower is better; `max(w,h)² × avg ticks`.
 
 | Slug | Best rival scores | Implied footprint (score ÷ tick cap) | Our best |
 |---|---|---|---|
-| `snake` | 200,000,000 · 2,500,000,000 | ≥ 13² at 15M ticks | **3,369,020,288** (17/17) |
+| `snake` | 200,000,000 · 2,500,000,000 | ≥ 13² at 15M ticks | **1,782,079,128** (17/17, 102×102) |
 | `pathfinder` | 50,000,000,000 · 300,000,000,000 | ≥ 58² at 15M ticks | **11,096,155,486** (18/18, bespoke 84×175) |
 | `little-little-little-man` | 1,300,000,000,000 | ≥ 295² at 15M ticks | — |
 | `little-little-man` | not seen yet | — | — |

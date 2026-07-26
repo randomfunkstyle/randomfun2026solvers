@@ -88,6 +88,7 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -436,7 +437,7 @@ class _Plan:
     sem: dict[str, Sem] = field(default_factory=dict)
 
 
-def plan(program: Program) -> _Plan:
+def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Plan:
     """Assign lane rows by pipe need, then derive opcode numbers from the trie.
 
     The trie sorts its leaves in **bit-reversed** order (``ARCH.md`` §2.4), so
@@ -445,6 +446,14 @@ def plan(program: Program) -> _Plan:
     south wall their pipes leave from, and everything else in between — longest
     micro-program first, so the drop columns form a descending staircase and short
     lanes can turn south early instead of all walking out to a shared column.
+
+    ``middle_order`` overrides that last rule — the order of the *unpinned* lanes,
+    north to south. Length-descending is a good guess in the dark, but the row a
+    lane sits on is a **tick** cost and the weight on it is how often the opcode
+    runs, which length knows nothing about: a lane's return walk is
+    ``2 * drop_x - row`` (east to the drop column, south to the collector, west
+    along it), so a hot lane wants to be *low* on both terms at once. See
+    ``LANE_ORDER`` for the per-program orders this bought and §7.6 for the method.
     """
     used = [op.mnemonic for op in program.ops_used]
     sems = {op.mnemonic: op.sem for op in program.ops_used}
@@ -494,7 +503,16 @@ def plan(program: Program) -> _Plan:
     for g in (3, 2):
         for m in reversed([n for n in order if group(n) == g]):
             placed[m] = slots.pop()
-    for m in [n for n in order if group(n) == 1]:
+    middle = [n for n in order if group(n) == 1]
+    if middle_order is not None:
+        want = list(middle_order)
+        if sorted(want) != sorted(middle):
+            raise MachineError(
+                f"middle_order must be a permutation of the unpinned lanes "
+                f"{sorted(middle)}; got {sorted(want)}"
+            )
+        middle = want
+    for m in middle:
         placed[m] = slots.pop(0)
 
     return _Plan(
@@ -764,8 +782,11 @@ def build_cpu(
                 c = floor
                 if c > struct_east:
                     # A micro-program long enough to reach the slabs has to join the
-                    # structured lanes' discipline rather than risk their columns.
-                    c = struct_east + 1
+                    # structured lanes' uniqueness discipline rather than risk
+                    # their columns.  Never reset it to ``struct_east + 1``:
+                    # ``floor`` is the suffix maximum that proves this column clears
+                    # the current lane and every lane below it. Moving west from that
+                    # floor can put the drop directly on a live lane glyph.
                     while c in assigned:
                         c += 1
             drop_x[r] = c
@@ -1125,6 +1146,12 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 
 
 # ── the tape, as a STORE block ───────────────────────────────────────────────
+#: Every memory tier ``build`` will accept, in the order they are worth trying.
+#: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
+#: footprint despite an access cost that ignores ``n``.
+STORE_TIERS = ("tape", "grid", "men", "men-y")
+
+
 @dataclass
 class _Tape:
     cells: dict[tuple[int, int], str]
@@ -1189,6 +1216,43 @@ def _tape_of(g: Circuit, in_cell: tuple[int, int], out_cell: tuple[int, int], sl
         in_cell=in_cell,
         out_cell=out_cell,
         slots=slots,
+    )
+
+
+def grid_block(n: int) -> _Tape:
+    """``memory_men_addr``'s address-carrying man-memory, wired as STORE.
+
+    One little man per slot, all ``n`` of them holding their own address in B, so
+    the router *broadcasts* rather than walks: **an access costs ~31 ticks and the
+    cost does not depend on ``n``**, against the rotating tape's ~316 + 8.06·n. On
+    a machine whose reads dominate — and §4.1 measured a tape read at 523 ticks
+    versus 19 for a write — that is the difference between a memory that sets the
+    tick count and one that does not.
+
+    What it costs instead is *shape*. The block is 36 columns wide whatever ``n``
+    is, and ``~3n`` rows tall, where the tape is 32x32 flat. So this is a good
+    trade exactly when the machine's bounding box is already set by its **height**
+    and has slack in width — the block then hides underneath a dimension already
+    being paid for, and the swap is free on footprint. It is a bad trade on a
+    short, wide machine, where every one of those rows is a new longest side.
+
+    There is also a one-off ``~5n`` ticks of **ignition** while the spawner walks
+    south handing each band its address. It is charged once per case, not per
+    access, so it disappears against any program doing real work.
+    """
+    from ..memory_men_addr import build_addr
+
+    a = build_addr(n, io=False)
+    assert a.in_cell is not None and a.out_cell is not None, "io=False must report stubs"
+    cells = {
+        (x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "
+    }
+    return _Tape(
+        cells=cells,
+        width=a.width,
+        height=a.height,
+        in_cell=a.in_cell,
+        out_cell=a.out_cell,
     )
 
 
@@ -1509,10 +1573,15 @@ def build(
     packed_rom: bool = True,
     short_return: bool | None = None,
     store: str = "tape",
+    middle_order: Sequence[str] | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
-    ``store`` picks the memory tier: ``"tape"`` is the rotating ring (§4.1,
+    ``store`` picks the memory tier. ``"grid"`` is the address-carrying man-memory
+    (:func:`grid_block`) and is the one to reach for first: its access cost is ~31
+    ticks *independent of ``n``*, so it wins on ticks at every size, and it pays for
+    that in rows rather than ticks — free on footprint whenever the machine's
+    bounding box is already set by height. ``"tape"`` is the rotating ring (§4.1,
     ``105 + 8.3n`` ticks per access at 33 columns whatever ``n`` is), ``"men"`` is
     ``memory_men_store.men_block`` — one little man per value, a measured
     ``22 + 14 * addr`` per access. The man-memory is faster per access at every
@@ -1542,9 +1611,16 @@ def build(
     for the original fixed-width fold; the word stream is identical either way, so it
     is purely a size/speed choice.
     """
+    # Checked here rather than in ``_assemble``, which the pad search calls up to 40
+    # times while *catching* MachineError — so a typo'd tier came back as whichever
+    # unrelated collision the last pad happened to hit.
+    if store not in STORE_TIERS:
+        raise MachineError(
+            f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
+        )
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
-    p = plan(program)
+    p = plan(program, middle_order=middle_order)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
     top = _highest_address(program)
@@ -1723,10 +1799,14 @@ def _assemble(
         from ..memory_men_y import y_men_block
 
         tape = y_men_block(tape_n)
+    elif store == "grid":
+        tape = grid_block(tape_n)
     elif store == "tape":
         tape = tape_block(tape_n)
     else:
-        raise MachineError(f"unknown store tier {store!r}; expected 'tape', 'men', or 'men-y'")
+        raise MachineError(
+            f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
+        )
     TX = AX + ADAPTER_W + 6
     TY = CY
     g.blit(TX, TY, tape.cells)
@@ -1844,7 +1924,11 @@ def _assemble(
     # The memory tier's own internal pipes: the tape's two ring legs, or the
     # man-memory's command and answer pipe per cell. Everything the machine itself
     # drew is already in ``touches``, plus the one response pipe drawn half here.
-    store_pipes = tape.pipes if store == "men-y" else (2 * tape_n if store == "men" else 2)
+    # ``grid`` bands three pipes per slot — router->decoder, decoder->cell,
+    # cell->collector — and every one of them is a two-cell stub between facing
+    # walls, which is exactly why the extra decoder hop is nearly free.
+    _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
+    store_pipes = tape.pipes if store == "men-y" else _STORE_PIPES[store]
     _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -2129,6 +2213,60 @@ TAPE_SIZE = {
 #: because a ring is briefly holding one more than it stores.
 STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 
+#: Lane orders that beat ``plan``'s length-descending default, north to south.
+#:
+#: A lane's row is a **tick** cost: the return walk is ``2 * drop_x - row`` (east to
+#: the drop column, south to the collector, west along it), and ``drop_x`` is the
+#: running suffix maximum of the lane extents at or below that row. So a hot opcode
+#: wants to sit *low* — both terms improve at once — while a *long* one wants to sit
+#: high, because everything above it pays for its extent. Length-descending gets the
+#: second half right and knows nothing about the first, which is where these come
+#: from: weight each lane by how often the opcode actually runs (measured on the
+#: emulator over the public cases) and minimise the weighted walk.
+#:
+#: Every entry was found by search and then **verified on the engine**, keeping only
+#: candidates whose footprint did not grow — that filter is not optional, because the
+#: order picks ``mem_pad``, which sets the memory lanes' length, which sets the CPU's
+#: width, which is squared in the score. Measured, against the same build with the
+#: default order:
+#:
+#: | program | footprint | ticks | score |
+#: |---|---|---|---|
+#: | `brackets` | 9,025 → 9,025 | 26,000 → 25,111 | **0.966x** |
+#: | `gradebook` | 12,996 → **12,769** | 301,571 → 298,571 | **0.973x** |
+#: | `matmul` | 8,100 → 8,100 | 120,714 → 118,638 | **0.988x** |
+#: | `sudoku-validity` | 6,889 → 6,889 | 434,667 → 432,167 | **0.994x** |
+#:
+#: `gradebook` also *loses* a column, which is the tell that the default was not on
+#: the frontier at all: 114 → 113 is a footprint win the length rule left behind.
+#: `tcp` and `snake-ring` were searched the same way and kept their default order —
+#: see §7.6. Re-run `scratch/lane_order_search.py` when a program's `.asm` changes,
+#: since the weights come from its own execution profile.
+#:
+#: One trap, because it cost an hour and a wrong conclusion:
+#: ``test_lm1_matmul`` pins each case's **exact** settle tick ("the recorded tick is
+#: enough, and one tick fewer is not"), so a *faster* grid fails it and the failure
+#: reads exactly like a wrong answer. `matmul` was dropped from this table on that
+#: evidence and put back after checking the outputs directly — they were correct on
+#: all seven public cases, on the reference engine, at every case's new lower tick.
+#: When a pinned-tick test fails here, confirm which half of the assertion broke
+#: before concluding anything about correctness.
+LANE_ORDER: dict[str, tuple[str, ...]] = {
+    "brackets": (
+        "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
+        "ST", "MULI", "SUBI", "DIVI", "MODI", "BRZ",
+    ),
+    "gradebook": (
+        "MUL", "DIV", "MOVA", "SUB", "ADD", "JMPF", "BRN",
+        "AND", "BRZ", "ST", "LD", "LDI", "SUBI", "MULI",
+    ),
+    "matmul": ("MUL", "BRN", "SUB", "ADDI", "ST", "LD"),
+    "sudoku-validity": (
+        "HALT", "STP", "ADD", "LDP", "MULI", "ST",
+        "MODI", "DIVI", "SUBI", "ADDI", "BRZ",
+    ),
+}
+
 #: ROM fold overrides, where the default heuristic is not the footprint optimum.
 #: The default folds the ROM toward the *CPU's own* width, which is right only while
 #: the CPU and the tape are the sole things setting the bounding box.
@@ -2226,6 +2364,7 @@ def build_for(slug: str, *, store: str = "tape") -> Machine:
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
+        middle_order=LANE_ORDER.get(slug),
     )
 
 

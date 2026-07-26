@@ -15,10 +15,13 @@ Two gates protect correctness:
   match exactly. An explicit ``Littleman`` or ``LM_VALIDATOR=reference`` selects
   the reference Node/WASM engine instead. A candidate that fails verification is
   never accepted (worst case, the optimizer returns the input unchanged).
-* :func:`bindings_preserved` — a fast structural pre-filter. After a re-layout
-  it re-checks, via the ``route`` oracle, that every send/recv instruction still
-  binds to the *same* pipe (SPEC "nearest, not nearest-ready"), catching a
-  silent re-bind that might pass the public cases but fail private ones.
+* :func:`bindings_preserved` — a structural accept gate for re-layout moves.
+  Before accepting a moved grid it re-checks, via the ``route`` oracle, that every
+  send/recv instruction still binds to the *same* pipe (SPEC "nearest, not
+  nearest-ready"), catching a silent re-bind that might pass the public cases but
+  fail private ones. It re-parses and re-routes through the Node oracle, so the
+  driver runs it only once a candidate has already passed :func:`verify` and beaten
+  the score — never on the many candidates rejected earlier and more cheaply.
 
 The cheap inner-loop proxy is :func:`footprint` alone (instant, deterministic);
 the full judged score is computed only when a move is otherwise accepted.
@@ -66,6 +69,7 @@ __all__ = [
     "relayout",
     "relayout_keep_capacity",
     "PASSES",
+    "semantic_passes",
     "OptimizeResult",
     "optimize",
     "main",
@@ -551,24 +555,71 @@ _GAPS: tuple[tuple[int, int], ...] = ((0, 0), (1, 0), (0, 1), (1, 1), (2, 1), (2
 _MAX_CANDIDATES = 16
 
 
+def _placed_span_area2(placement: Placement, graph: Graph) -> int:
+    """``max(w, h)²`` of the container bounding box of a placement, ignoring pipes.
+
+    Cheap (no routing): just the span of the placed blocks. The routed grid must
+    contain every container, so this is a **lower bound** on the final footprint —
+    if it already can't beat the base, routing (which only ever grows the box with
+    pipes) can't either, so the caller skips the expensive route.
+    """
+    by_id = graph.by_id
+    xs0: list[int] = []
+    ys0: list[int] = []
+    xs1: list[int] = []
+    ys1: list[int] = []
+    for cid, placed in placement.items():
+        c = by_id[cid].variant(placed.variant_index)
+        ox, oy = placed.offset
+        xs0.append(ox)
+        ys0.append(oy)
+        xs1.append(ox + c.width)
+        ys1.append(oy + c.height)
+    if not xs0:
+        return 0
+    w = max(xs1) - min(xs0)
+    h = max(ys1) - min(ys0)
+    return max(w, h) ** 2
+
+
 def _relayout(prog: Program, router, tag: str) -> list[Candidate]:
     """Sweep gaps × target widths; return the smallest-footprint packings that route.
 
-    Every (gap, width) pair is placed and routed, then ranked by ``area2`` and cut
-    to :data:`_MAX_CANDIDATES` -- so the caller only pays for engine verification
-    on packings that could actually win. Candidates no smaller than the current
-    grid are dropped outright: footprint is squared, so a bigger box essentially
-    never wins back the difference on ticks.
+    Every (gap, width) pair is *placed* (cheap), pruned on its container-span
+    footprint lower bound, deduplicated, and only the survivors are *routed* (the
+    expensive step). The routed packings are ranked by ``area2`` and cut to
+    :data:`_MAX_CANDIDATES`, so engine verification only pays for packings that
+    could actually win. Two prunes make this affordable on large archives, where
+    the width sweep is hundreds wide: a placement whose bare container span already
+    reaches the base footprint can never beat it once pipes are added
+    (:func:`_placed_span_area2` — a lower bound, so this is exact, never drops a
+    winner), and the many target widths that shelf-pack to the *same* placement are
+    routed once. Candidates no smaller than the current grid are dropped: footprint
+    is squared, so a bigger box essentially never wins back the difference on ticks.
     """
     graph = prog.to_graph()
     _, _, base_area2 = footprint("\n".join(prog.to_grid()))
     ranked: list[tuple[int, Candidate]] = []
     seen: set[tuple[str, ...]] = set()
+    seen_place: set[tuple[tuple[str, Cell], ...]] = set()
     for h_gap, v_gap in _GAPS:
         for w in _candidate_widths(graph):
-            engine = LayoutEngine(
-                placement=CompactPlacement(w, h_gap=h_gap, v_gap=v_gap), router=router
-            )
+            strat = CompactPlacement(w, h_gap=h_gap, v_gap=v_gap)
+            try:
+                placement = strat.place(graph)
+            except LayoutError:
+                continue
+            # Cheap prune #1: container-span footprint is a lower bound on the
+            # routed footprint — no point routing a placement that already lost.
+            if _placed_span_area2(placement, graph) >= base_area2:
+                continue
+            # Cheap prune #2: distinct target widths often shelf-pack identically;
+            # route each unique placement only once.
+            pkey = tuple(sorted((cid, pl.offset) for cid, pl in placement.items()))
+            if pkey in seen_place:
+                continue
+            seen_place.add(pkey)
+            engine = LayoutEngine(placement=strat, router=router)
             try:
                 layout = engine.run(graph)
             except LayoutError:
@@ -631,6 +682,36 @@ def relayout_keep_capacity(prog: Program) -> list[Candidate]:
 PASSES = [trim_margins, relayout, relayout_keep_capacity]
 
 
+# ── semantic (content-rewrite) passes: OPT-IN ─────────────────────────────────
+# The rule-catalog families, ordered for the driver. Geometric passes (PASSES)
+# run FIRST — they only move rooms, so they compact the box every content rewrite
+# then works inside. The pure content rewrites come next (arith/const/steer/io/pipe:
+# constant-fold, identity elision, steer coalescing, dead-panel/pipe reshapes — none
+# grow the footprint). The loop family is LAST because its win, unrolling, *enlarges*
+# the box (more ticks/lap traded for fewer laps): placing it after the compaction and
+# the neutral rewrites lets the strict-`<` driver judge that footprint↔ticks trade
+# against an already-minimal grid, and accept the unroll only when the tick saving
+# actually pays for the squared footprint growth. ``loop.mirror_horizontal`` is inert
+# on its own (it needs a man re-router the rule does not carry); it is left enabled
+# because the driver's verify simply rejects the unusable candidate — no regression.
+_SEMANTIC_FAMILY_ORDER: tuple[str, ...] = ("arith", "const", "steer", "io", "pipe", "loop")
+
+
+def semantic_passes() -> list[Any]:
+    """The content-rewrite passes, one per rule family, in driver order.
+
+    Each is a :func:`manrewrite.rule_pass` that recognises its family's patterns and
+    emits rewritten grids (``placement=None``; gated by ``verify`` alone). Building them
+    imports the whole rule catalog (incl. the cross-family macros in ``rules_macros``, so
+    the flagship ``loop.const_unroll`` is reachable). Opt-in: pass ``semantic=True`` to
+    :func:`optimize`, or splice this list into ``passes`` yourself (as the benchmark does)
+    — :data:`PASSES` is unchanged, so default behaviour is untouched.
+    """
+    from .manrewrite import rule_pass
+
+    return [rule_pass(fam) for fam in _SEMANTIC_FAMILY_ORDER]
+
+
 # ── driver ────────────────────────────────────────────────────────────────────
 @dataclass
 class OptimizeResult:
@@ -657,6 +738,7 @@ def optimize(
     *,
     lm: Littleman | None = None,
     passes: Sequence[Any] = PASSES,
+    semantic: bool = False,
     max_sweeps: int = 3,
     tick_cap: int = scoring.DEFAULT_TICK_CAP,
 ) -> OptimizeResult:
@@ -666,54 +748,127 @@ def optimize(
     verifying candidates with the engine and accepting any that strictly lowers
     the real score. Repeats until a sweep makes no progress (or ``max_sweeps``).
     Never returns a grid that fails verification — worst case, the input.
+
+    ``semantic=True`` appends the content-rewrite passes (:func:`semantic_passes`) after
+    ``passes``, opting into the rule catalog. It is off by default so the geometric-only
+    behaviour every existing caller relies on is unchanged; the same strict accept gate
+    guards the extra candidates, so enabling it can only find wins, never regress.
     """
+    # Correctness (verify) runs on the in-process FastLittleman by default — the
+    # backend AGENTS.md/`manbench` document, differentially verdict-identical to the
+    # reference and 5–239× faster (no Node boot per public case). `lm` (the reference
+    # Node/WASM oracle) is still needed for parse/analyze/route and `bindings_preserved`,
+    # but forwarding it into `verify` would silently force every candidate through the
+    # slow path. So verify gets the caller's `lm` ONLY when they explicitly supplied one
+    # (a test double / a deliberate `reference` pin); otherwise `None`, so verify picks
+    # FastLittleman (still honouring `LM_VALIDATOR=reference`).
+    verify_lm = lm
     lm = lm or Littleman()
     prob = load_problem(problem)
 
+    passes = list(passes)
+    if semantic:
+        passes = passes + semantic_passes()
+
+    # Memoise verification by grid text (and tick cap): distinct passes and successive
+    # sweeps can re-emit an identical grid, and re-running every public case on it is
+    # pure waste. A grid's verdict is a pure function of (grid, problem, cap), so this
+    # never changes a decision — it only skips repeat engine work within this call.
+    verify_cache: dict[tuple[str, int], VerifyResult] = {}
+
+    def _verify(grid: list[str], cap: int) -> VerifyResult:
+        key = ("\n".join(grid), cap)
+        cached = verify_cache.get(key)
+        if cached is None:
+            cached = verify(key[0], prob, lm=verify_lm, tick_cap=cap)
+            verify_cache[key] = cached
+        return cached
+
     prog = parse_program(program, lm=lm)
     best_grid = prog.to_grid()
-    base_res = verify(best_grid, prob, lm=lm, tick_cap=tick_cap)
+    base_res = _verify(best_grid, tick_cap)
     if not base_res.passed:
         raise OptimizeError(
             "input program does not pass its own public cases; refusing to optimize"
         )
-    base_score = score_grid(best_grid, prob, result=base_res, lm=lm)
+    base_score = score_grid(best_grid, prob, result=base_res, lm=verify_lm)
     best_score = base_score
     log: list[str] = [f"baseline score={base_score}"]
 
+    # Candidate tick budget (footprint-tick problems only). The score is
+    # ``area2 × avg_ticks``, so a candidate improves iff
+    # ``area2 × avg_ticks < best_score`` — i.e. its *total* ticks stay under
+    # ``n_cases × best_score / area2``. Since ``area2`` is known before verifying (it
+    # is a pure function of the grid), we can cap each candidate's verification at that
+    # budget: a run that blows past it can't beat the score no matter how it ends, so
+    # capping there only ever marks the candidate FAILED — it never accepts a wrong one
+    # and never truncates a run that would have won (a winner settles inside the
+    # budget). This turns the 5M-tick runaway a broken/deadlocked candidate would burn
+    # into a bounded one, and it is *exact*, not a heuristic: as ``best_score`` drops on
+    # each accepted win the budget tightens automatically. ``footprint`` problems have
+    # no tick term, so they keep the full ``tick_cap`` (frames still need a full run).
+    n_cases = len(base_res.cases)
+    footprint_only = prob.get("scoring") == "footprint"
+
+    def _cand_cap(area2: int) -> int:
+        if footprint_only or best_score is None or n_cases == 0 or area2 <= 0:
+            return tick_cap
+        # +1024 cushion so a boundary-settling winner is never lost to rounding; a
+        # candidate settling in the cushion still scores >= best_score and is rejected
+        # by the strict `<` gate, so the cushion cannot cause a false accept.
+        budget = int(n_cases * best_score / area2) + 1024
+        return min(tick_cap, max(budget, 1))
+
+    # Parse the current best grid through the Node/WASM oracle at most once per distinct
+    # grid: `best_grid` only changes when a candidate is accepted, so re-parsing it for
+    # every pass in a sweep (the common no-acceptance case) is redundant. Cache the parse
+    # and rebuild it only when the grid text actually changes.
+    cur: Program | None = None
+    cur_key: str | None = None
     for sweep in range(max_sweeps):
         improved = False
         for pass_fn in passes:
-            cur = parse_program("\n".join(best_grid), lm=lm)
+            key = "\n".join(best_grid)
+            if cur is None or cur_key != key:
+                cur = parse_program(key, lm=lm)
+                cur_key = key
             for cand in pass_fn(cur):
                 if cand.grid == best_grid:
                     continue
                 # The footprint pre-filter lives in the pass (`_relayout` drops
                 # anything not strictly smaller); this is just for the log.
                 _, _, area2 = footprint("\n".join(cand.grid))
+                # Gate order is a cost decision, not a correctness one: a candidate
+                # is accepted only when it both verifies AND (for a relayout move)
+                # preserves every pipe binding, so the order these are checked never
+                # changes the outcome. `verify` runs the in-process FastLittleman
+                # (~0.1s); `bindings_preserved` re-parses and re-routes through the
+                # Node oracle (seconds). So verify + score FIRST and pay the Node
+                # binding gate only on a candidate that would otherwise be accepted —
+                # skipping it on the many that fail verify or don't beat the score.
+                res = _verify(cand.grid, _cand_cap(area2))
+                if not res.passed:
+                    log.append(f"sweep{sweep} {cand.label}: rejected (verify failed)")
+                    continue
+                sc = score_grid(cand.grid, prob, result=res, lm=verify_lm)
+                if sc is None or (best_score is not None and sc >= best_score):
+                    log.append(f"sweep{sweep} {cand.label}: no improvement (score={sc})")
+                    continue
                 if cand.placement is not None and not bindings_preserved(
                     cur, cand.placement, cand.grid, lm=lm
                 ):
                     log.append(f"sweep{sweep} {cand.label}: rejected (binding changed)")
                     continue
-                res = verify(cand.grid, prob, lm=lm, tick_cap=tick_cap)
-                if not res.passed:
-                    log.append(f"sweep{sweep} {cand.label}: rejected (verify failed)")
-                    continue
-                sc = score_grid(cand.grid, prob, result=res, lm=lm)
-                if sc is not None and (best_score is None or sc < best_score):
-                    log.append(
-                        f"sweep{sweep} {cand.label}: accept score {best_score} -> {sc} "
-                        f"(area2={area2})"
-                    )
-                    best_grid, best_score = cand.grid, sc
-                    improved = True
-                else:
-                    log.append(f"sweep{sweep} {cand.label}: no improvement (score={sc})")
+                log.append(
+                    f"sweep{sweep} {cand.label}: accept score {best_score} -> {sc} "
+                    f"(area2={area2})"
+                )
+                best_grid, best_score = cand.grid, sc
+                improved = True
         if not improved:
             break
 
-    final_res = verify(best_grid, prob, lm=lm, tick_cap=tick_cap)
+    final_res = _verify(best_grid, tick_cap)
     return OptimizeResult(
         grid=best_grid,
         score=best_score,
@@ -735,6 +890,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("program", help="path to a .man file")
     parser.add_argument("problem", help="problem slug, .json path, or file")
     parser.add_argument("--max-sweeps", type=int, default=3, dest="max_sweeps")
+    parser.add_argument(
+        "--semantic",
+        action="store_true",
+        help="also run the content-rewrite rule catalog (opt-in; geometric-only by default)",
+    )
     parser.add_argument("--tick-cap", type=int, default=scoring.DEFAULT_TICK_CAP, dest="tick_cap")
     parser.add_argument("--out", help="write the optimized grid here")
     parser.add_argument("--verbose", action="store_true", help="print the search log")
@@ -744,6 +904,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         res = optimize(
             Path(args.program),
             args.problem,
+            semantic=args.semantic,
             max_sweeps=args.max_sweeps,
             tick_cap=args.tick_cap,
         )
