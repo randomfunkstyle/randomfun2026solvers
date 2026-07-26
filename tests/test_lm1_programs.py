@@ -173,12 +173,15 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         "plotter": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
         # little-little-man interprets a 2D language, so its extensions are what an
-        # interpreter needs: the three ports, `LDA`/`MOVA` to reach the program grid at
-        # the address a man happens to stand on, and `DIVI`/`MODI` to split a cell word
-        # into the colour a repaint wants and the class a dispatch wants. Nineteen
-        # opcodes, so a depth-5 trie — see `littleman/LLM-DESIGN.md` on what folding
-        # the three ports into one `SND` would buy.
-        "little-little-man": {"DIVI", "MODI", "LDA", "MOVA", "DSPA", "DSPD", "DSPS"},
+        # interpreter needs: `LDA`/`MOVA` to reach the program grid at the address a
+        # man happens to stand on, and `DIVI`/`MODI` to split a cell word into the
+        # colour a repaint wants and the class a dispatch wants.
+        #
+        # The three port opcodes are gone, and so is `MULI`. `DSP p` is v1, not an
+        # extension, which is why folding to it *shortens* this set: the program now
+        # uses 16 opcodes and a depth-4 trie, taking the lane band from 63 rows to 31
+        # and the machine from 192x194 to 184x183. See `lm1/dsprelay.py`.
+        "little-little-man": {"DIVI", "MODI", "LDA", "MOVA"},
         "triangle-closed": {"MUL", "DIVI"},
         # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
         # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
