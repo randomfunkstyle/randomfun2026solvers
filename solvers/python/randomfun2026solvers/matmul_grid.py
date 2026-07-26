@@ -1208,15 +1208,23 @@ def build_grid() -> tuple[list[str], object, dict[str, object]]:
     return art, d, info
 
 
-if __name__ == "__main__":  # pragma: no cover - a development probe
-    p = plan()
-    print(f"code columns {p.bands.x0}..{p.bands.x1}")
-    for name in p.bands.recv_order:
-        print(f"  {name:3s} r{p.bands.recv_span[name]}@{p.bands.recv_col[name]}"
-              f"  s{p.bands.send_span[name]}@{p.bands.send_col[name]}")
-    print(f"{len(p.chains)} chains, {p.pen_rows} walked rows")
-    room = build_room(p)
-    print(f"{len(room.lanes)} lanes, {room.margin} channels, "
-          f"interior {room.iw}x{room.ih}")
-    check_room(room)
-    print("every block walks its own tokens")
+if __name__ == "__main__":  # pragma: no cover - the generator's CLI
+    import argparse
+    from pathlib import Path
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--man", "--out", dest="man", type=Path, help="write the grid here")
+    ap.add_argument("--html", type=Path, help="write a labelled debug overlay here")
+    ap.add_argument("--json", type=Path, help="write the debug region sidecar here")
+    args = ap.parse_args()
+    grid, dbg, meta = build_grid()
+    if args.man:
+        args.man.write_text("\n".join(grid) + "\n")
+    if args.html:
+        dbg.write_html(grid, args.html)
+    if args.json:
+        dbg.write_json(args.json)
+    if not (args.man or args.html or args.json):
+        print("\n".join(grid))
+    else:
+        print(meta)
