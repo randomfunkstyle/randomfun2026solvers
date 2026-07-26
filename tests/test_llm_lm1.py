@@ -180,3 +180,34 @@ def test_the_shipped_machine_is_inside_the_judge_s_time_cap() -> None:
     men = simcost.live_runners(GRID)
     assert men <= 8, f"{men} live men — a man-memory crept in"
     assert men * 20_275_186 < simcost.JUDGE_TIMEOUT_FLOOR
+
+
+# ── the hot bank's size ───────────────────────────────────────────────────────
+
+
+def test_the_hot_bank_is_sized_to_what_it_uses() -> None:
+    """A reserved slot nobody uses is a dead ring cell every hot read rotates past.
+
+    The bank is a pipe tape (``machine.TIER_PIPE_BANK``) answering in
+    ``~8 * n / skip_batch``, so its size is a latency knob, not just capacity — and
+    it shifts the cold region up as well, inflating the whole address space. Sized
+    at 104 against 52 used, that cost 6.6% of the score.
+    """
+    from randomfun2026solvers.llm_asm import Asm
+
+    a = Asm(hot_slots=llm_lm1.HOT_SLOTS)
+    llm_lm1._declare(a, packed_cells=False)
+    assert a.hot_used == 52
+    # One spare, and no more: the sweep is monotonic above the used count.
+    assert llm_lm1.HOT_SLOTS == a.hot_used + 1
+
+
+def test_a_bank_with_no_spare_slot_is_refused() -> None:
+    """Sizing it to exactly the used count is a fault, not a tight fit.
+
+    It builds and passes ten of the fourteen public cases, then kills the runner
+    with ``fatal: wall`` on the other four — a symptom that points at the
+    interpreter when the cause is this one number.
+    """
+    with pytest.raises(ValueError, match="at least one spare"):
+        llm_lm1.build_asm(hot_slots=52)
