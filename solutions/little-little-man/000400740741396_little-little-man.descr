@@ -1,0 +1,16 @@
+# little-little-man — submission 833348a6-2dd1-4d83-a424-f41c6d2b2471
+
+verdict      done: 28/28 cases, area2 41616, avgTicks 9,629,487, score 400,740,741,396
+submitted    2026-07-26T15:58:11+0300
+grid         204x199
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  93ab510cc3d4031cf8b1f67364e9884aeedc4d234ae1114026fa3bb7f32cb5b5
+commit       b40b177
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+banked pipe-tape store: hot 104-slot ring + full cold ring behind the range adapter and merger. 8 live men (a pipe tape is 4 at any size), so worst runner-ticks 0.110bn -- BELOW the 0.151bn of the 28/28 machine. local avg 19.35M -> 8.79M at 204x204

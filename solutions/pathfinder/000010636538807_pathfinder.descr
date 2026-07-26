@@ -1,0 +1,16 @@
+# pathfinder — submission 547674ee-6d04-4fa1-ad5e-89a931c8ba7a
+
+verdict      done: 18/18 cases, area2 29929, avgTicks 355,392, score 10,636,538,807
+submitted    2026-07-26T16:10:44+0300
+grid         82x173
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  ca51bd13b808d729be05e4cd6b49d5aaf34864c15fcd05356a36aeca6da4d2de
+commit       0868aeb
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 10/10: second bounded adjacency sweep from the 173-row layout; place AFTERLOAD immediately before OUTT. Same 82x173 box, shorter setup/control travel; 72 focused/stress tests and both engines pass 7/7. Local score 8,150,615,877 versus 8,155,823,523.
