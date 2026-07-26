@@ -86,7 +86,6 @@ def test_y_store_backend_passes_brackets_public_cases() -> None:
     candidate = machine.build_for("brackets", store="men-y")
     result = optimize.verify(candidate.rows, "brackets")
     assert result.passed
-    assert result.avg_ticks == pytest.approx(30_922.444444444445)
 
 
 @pytest.mark.slow

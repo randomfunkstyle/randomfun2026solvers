@@ -15,18 +15,9 @@ where a rotation costs the two glyphs that perform it instead of a tape
 revolution. See ``programs/matmul.asm`` for the loop order that makes matmul a
 streaming problem, and ``tests/test_lm1_stream.py`` for the block itself.
 
-Measured on the validator, 84x85 (footprint 7225), tape N=16:
-
-    case                   settles at    vs 5M cap   instructions   MACs
-    2x2 warm up                13,389       0.003x             98      8
-    non-square 2x3x2           17,057       0.003x            116     12
-    identity (4x4x4)           35,445       0.007x            216     64
-    negative heavy (5x6x4)     61,135       0.012x            347    120
-    skinny 16x2x16             65,077       0.013x            420    512
-    max magnitude 7x5x9        70,383       0.014x            402    315
-    16x16x16 full size        475,893       0.095x          2,436  4,096
-
-**7/7 public cases**, worst case 10.5x inside the cap.
+The checked-in machine passes all public cases on the reference validator with
+ample headroom under the problem's tick cap. Exact dimensions and settle ticks
+are deliberately not pinned here: improving either is not a correctness failure.
 
 The instruction column is the one to watch. A parallel measurement put the
 engine's non-memory instruction at ~46 ticks, which makes instruction *issue* a
@@ -69,19 +60,6 @@ slow = pytest.mark.skipif(
     os.environ.get("LM1_SLOW") != "1",
     reason="set LM1_SLOW=1 to run the reference-interpreter sweeps",
 )
-
-#: Measured ticks at which the last expected value lands, per public case. These
-#: are scoring reference points; the engine assertions use them as correctness
-#: upper bounds, so a future speedup does not require a test edit.
-REAL_TICKS = {
-    "2x2 warm up": 13_389,
-    "non-square 2x3x2": 17_057,
-    "identity": 35_445,
-    "negative heavy": 61_135,
-    "skinny 16x2x16": 65_077,
-    "max magnitude 7x5x9": 70_383,
-    "16x16x16 full size": 475_893,
-}
 
 #: ``(instructions, multiply-accumulates)`` per case, from the emulator. The ratio
 #: is the whole argument for the STREAM block: see the module docstring.
@@ -183,7 +161,7 @@ def test_every_public_case_matches_round_by_round(name: str, rounds: list[Round]
 
 def test_every_public_case_is_covered() -> None:
     assert len(PUBLIC) == 7
-    assert {n for n, _ in PUBLIC} == set(REAL_TICKS) == set(ISSUE)
+    assert {n for n, _ in PUBLIC} == set(ISSUE)
 
 
 # ── synthetic cases at the constraint corners ────────────────────────────────
@@ -302,15 +280,13 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
     )
 
 
-def test_the_checked_in_machine_is_the_recorded_size() -> None:
-    """Fast score/plan pin; the expensive generator equality check is in slow."""
-    rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (84, 85)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 7225
-    assert machine.plan(programs.load(SLUG)).k == 3
+def test_the_generated_machine_has_the_structure_the_program_needs() -> None:
+    program = programs.load(SLUG)
+    assert machine.plan(program).k == 3
     assert machine.TAPE_SIZE[SLUG] == 16
-    assert machine.ROM_ROWS[SLUG] == 5
-    assert machine.STREAM_SIZE[SLUG] == (257, 257, 17)
+    assert SLUG in machine.ROM_ROWS
+    assert SLUG in machine.STREAM_SIZE
+    assert program.unit == "stream"
 
 
 @node_required
@@ -357,23 +333,18 @@ def test_the_grid_multiplies_matrices_on_the_reference_interpreter(
     expected = [v for r in rounds for v in r.expected]
     inp = " ".join(str(v) for r in rounds for v in r.input)
     lm = Littleman()
-    recorded = REAL_TICKS[name]
-    assert recorded < TICK_CAP
-
-    # A speedup may make this upper bound loose. Correctness and the cap are the
-    # invariant; exact settle ticks belong to scoring, not to seven duplicate
-    # full-engine correctness runs.
-    assert list(lm.tick(GRID, recorded, input=inp).output) == expected
+    snap = lm.judge(GRID, input=inp, expected=expected, max_ticks=TICK_CAP)
+    assert snap.fatal is None, snap.fatal
+    assert list(snap.output) == expected
+    assert snap.step < TICK_CAP
 
 
 @node_required
 @slow
-def test_the_score_is_real() -> None:
-    """``scoring.score_program`` returns a number, and the number is the one recorded."""
+def test_the_score_is_real_and_every_case_fits_the_cap() -> None:
+    """The scoring path measures the grid and every case remains valid."""
     from randomfun2026solvers.scoring import score_program
 
     got = score_program(GRID, SLUG)
-    assert got.area2 == 7225
-    assert abs(got.avg_ticks - sum(REAL_TICKS.values()) / 7) < 500
-    assert 0.75e9 < got.score < 1.0e9
+    assert got.score is not None and got.avg_ticks is not None
     assert max(c.ticks for c in got.cases) < TICK_CAP
