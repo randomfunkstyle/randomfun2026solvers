@@ -189,7 +189,7 @@ def build_grid(cols: int, rows: int) -> Grid:
 
     init_h = _init_height(0)  # every column carries a base literal, zero included
     col_h = init_h + BAND * rows
-    col_w = _REP_W + _GAP + _DEC_W + _GAP + _CELL_W + _GAP + _COLL_W
+    col_w = _REP_W + _GAP + _DEC_W + _GAP + _CELL_W
 
     # ── vertical plan ─────────────────────────────────────────────────────────
     # I room, its pipe, the router strip, its pipes, the columns, their pipes,
@@ -201,8 +201,7 @@ def build_grid(cols: int, rows: int) -> Grid:
     # last row — the band below it is a tile's third row, which owns no pipe. So
     # its room stops early and the strip comes up behind it, as far as the two
     # cells of pipe and the neighbouring rooms' walls allow.
-    coll_room_h = init_h + BAND * (rows - 1) + 1
-    coll_y = max(col_y + coll_room_h + _GAP, col_y + col_h + 2)
+    coll_y = col_y + col_h + _GAP
     out_y = coll_y + 2 + _GAP
 
     x0 = 1
@@ -214,8 +213,7 @@ def build_grid(cols: int, rows: int) -> Grid:
         rep = base
         dec = rep + _REP_W + _GAP
         cell = dec + _DEC_W + _GAP
-        coll = cell + _CELL_W + _GAP
-        return {"rep": rep, "dec": dec, "cell": cell, "coll": coll, "end": coll + _COLL_W}
+        return {"rep": rep, "dec": dec, "cell": cell, "end": cell + _CELL_W}
 
     def spanned(body: Sequence[str], iw: int, h: int) -> list[str]:
         # Every room in a column is as tall as the column: a pipe's first cell has
@@ -280,29 +278,21 @@ def build_grid(cols: int, rows: int) -> Grid:
         _room(grid, cx["rep"], col_y, spanned(REPEATER, _REP_W, col_h))
         _room(grid, cx["dec"], col_y, spanned(dec_body, _DEC_W, col_h))
         _room(grid, cx["cell"], col_y, spanned(cell_body, _CELL_W, col_h))
-        _room(grid, cx["coll"], col_y, spanned(COLLECTOR, _COLL_W, coll_room_h))
 
         # router strip -> this column's repeater, down two cells into its north wall
         feed_x = cx["rep"] + 2
         draw_pipe(grid, [(feed_x, y) for y in range(router_y + router_h + 1, col_y)])
-        # this column's collector -> the collector strip, likewise
-        ans_x = cx["coll"] + 1
-        draw_pipe(grid, [(ans_x, y) for y in range(col_y + coll_room_h + 1, coll_y)])
+        # this column's ONE answer pipe, straight down out of the cell room. At
+        # most one cell sends per operation — a cell only reaches its `s` if its
+        # decoder spoke to it, and exactly one decoder does — so the whole room
+        # needs a single outgoing pipe, and the strip's `R` takes it from there.
+        ans_x = cx["cell"] + 1
+        draw_pipe(grid, [(ans_x, y) for y in range(col_y + col_h + 1, coll_y)])
 
-        for i, main in enumerate(mains):
+        for main in mains:
             y = col_y + main
             draw_pipe(grid, [(x, y) for x in range(cx["rep"] + _REP_W + 1, cx["dec"])])
             draw_pipe(grid, [(x, y) for x in range(cx["dec"] + _DEC_W + 1, cx["cell"])])
-            west = cx["cell"] + _CELL_W + 1
-            if i + 1 < len(mains):
-                draw_pipe(grid, [(x, y) for x in range(west, cx["coll"])])
-            else:
-                # The last band's answer *bends* inside the same two cells of gap:
-                # east, north, east. That is what lets the collector's room stop a
-                # row above the band it serves, and the strip come up behind it.
-                draw_pipe(
-                    grid, [(west, y), (west + 1, y), (west + 1, y - 1), (cx["coll"] - 1, y - 1)]
-                )
 
         dbg.region(
             f"column {j}: addr {base}-{base + rows - 1}",
@@ -343,7 +333,7 @@ def build_grid(cols: int, rows: int) -> Grid:
         )
         dbg.lane(
             f"answer <- column {j}",
-            [(ans_x, col_y + coll_room_h + 1), (ans_x, coll_y - 1)],
+            [(ans_x, col_y + col_h + 1), (ans_x, coll_y - 1)],
             kind="pipe",
             expect="the stored value, on a selected READ",
             note="same length in every column, which is what keeps answers in order",

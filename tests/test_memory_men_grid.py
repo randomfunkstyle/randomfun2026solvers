@@ -10,6 +10,7 @@ different columns come back in operation order.
 from __future__ import annotations
 
 import random
+from collections import Counter
 
 import pytest
 from randomfun2026solvers.littleman import Littleman
@@ -88,8 +89,10 @@ def test_one_column_is_the_previous_solution_untouched():
 def test_every_pipe_has_a_source_room(cols, rows):
     analysis = Littleman().analyze(build_grid(cols, rows).source())
     assert all(p.src >= 0 for p in analysis.pipes), [p.src for p in analysis.pipes]
-    # per column: one feed, one answer, and three per cell; plus input and output
-    assert len(analysis.pipes) == cols * (3 * rows + 2) + 2
+    # Per column: one feed down, two per cell (repeater->decoder, decoder->cell),
+    # and ONE answer out. The answer path needs no pipe per cell because at most
+    # one cell sends per operation. Plus the program's input and output.
+    assert len(analysis.pipes) == cols * (2 * rows + 2) + 2
 
 
 @pytest.mark.parametrize(("cols", "rows"), [(2, 2), (5, 2), (2, 5), (4, 4), (7, 3)])
@@ -134,7 +137,7 @@ def test_the_fixed_cost_falls_with_the_number_of_columns():
     fixed, slopes = {}, {}
     for cols, rows in [(1, 100), (4, 25), (10, 10), (25, 4)]:
         fixed[cols], slopes[cols] = _fixed_and_slope(build_grid(cols, rows).source(), lm)
-    assert fixed == {1: 701.0, 4: 181.0, 10: 76.0, 25: 34.0}
+    assert fixed == {1: 701.0, 4: 177.0, 10: 72.0, 25: 30.0}
     # ~7 ticks a band, and only ONE column's worth of it is on the clock
     for cols, rows in [(1, 100), (4, 25), (10, 10), (25, 4)]:
         assert fixed[cols] == pytest.approx(7 * rows, abs=6), (cols, rows)
@@ -143,7 +146,7 @@ def test_the_fixed_cost_falls_with_the_number_of_columns():
     assert set(slopes.values()) == {16.0}
     # Which is the model both judged runs came out of, to 0.2%:
     #   1x100  701 + 16*99 = 2,285   judged 2,283
-    #   4x25   181 + 16*99 = 1,765   judged 1,758
+    #   4x25   177 + 16*99 = 1,761   judged 1,762
     assert fixed[1] + 16 * 99 == pytest.approx(2283, rel=0.005)
     assert fixed[4] + 16 * 99 == pytest.approx(1758, rel=0.01)
 
@@ -162,3 +165,18 @@ def test_the_flat_router_is_the_same_program_lying_down():
     assert code(ROUTER_FLAT) == code(ROUTER_ROWS) == sorted("UMrSWSXUS")
     assert (max(len(r) for r in ROUTER_FLAT), len(ROUTER_FLAT)) == (9, 3)
     assert (max(len(r) for r in ROUTER_ROWS), len(ROUTER_ROWS)) == (3, 8)
+
+
+def test_a_cell_room_needs_exactly_one_outgoing_pipe():
+    # The answer path collapses to one pipe per *column*, not one per cell: a cell
+    # only reaches its `s` if its decoder spoke to it, and exactly one decoder
+    # speaks per operation, so at most one cell in the room ever sends. `s` binds
+    # to the nearest outgoing pipe and there is only one, which is also why the
+    # per-column collector room could go entirely — the strip's `R` takes the
+    # answer straight off the pipe.
+    cols, rows = 3, 4
+    analysis = Littleman().analyze(build_grid(cols, rows).source())
+    out = Counter(p.src for p in analysis.pipes)
+    # input: 1, router strip: one per column, then per column the repeater and the
+    # decoder fan out to every band while the cell room sends once; strip: 1
+    assert sorted(out.values()) == sorted([1, cols, *([rows, rows, 1] * cols), 1])
