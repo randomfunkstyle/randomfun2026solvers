@@ -265,6 +265,26 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
 
 @node_required
 @slow
+def test_compact_mode_moves_only_declared_blocks_and_still_solves_the_task() -> None:
+    """Constraint placement is opt-in and cannot translate an undeclared block."""
+    from randomfun2026solvers import optimize
+
+    baseline = machine.build_for("brackets")
+    compact = machine.build_for("brackets", compact=True)
+
+    assert compact.compact
+    assert compact.footprint <= baseline.footprint
+    assert compact.regions.keys() == baseline.regions.keys()
+    for name in baseline.regions:
+        if name != "tape":
+            assert compact.regions[name] == baseline.regions[name]
+    tx, ty, tw, th = baseline.regions["tape"]
+    assert compact.regions["tape"] == (tx, ty + compact.store_offset[1], tw, th)
+    assert optimize.verify(compact.rows, "brackets").passed
+
+
+@node_required
+@slow
 def test_checked_in_grids_match_the_generator() -> None:
     """The ``.man`` files under ``tasks/solutions`` are generated, not hand-edited."""
     for slug in TARGETS:
