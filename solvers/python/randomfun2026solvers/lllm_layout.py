@@ -62,7 +62,7 @@ from randomfun2026solvers.lllm_ring import WORKER
 if TYPE_CHECKING:  # pragma: no cover
     from randomfun2026solvers.man_debug import DebugMap
 
-__all__ = ["Plan", "Room", "build_room", "plan_blocks"]
+__all__ = ["Geometry", "Plan", "Room", "build_room", "plan_blocks"]
 
 #: Which pipe band each pipe op has to stand in.
 TOKEN_ZONE: dict[str, str] = {
@@ -139,26 +139,52 @@ ZONE_COLS = {
 IW = CODE0 + 130
 
 
-def _nearest(cols: dict[str, int], x: int) -> str:
-    """Which pipe an op at column `x` binds to: nearest column, ties westward."""
-    return min(cols, key=lambda k: (abs(x - cols[k]), cols[k]))
+@dataclass(frozen=True)
+class Geometry:
+    """Everything about a room that `plan_blocks` needs to be told.
+
+    Splitting this out is what makes the planner reusable: `lllm_ring` and
+    `snake_ring` are both token CFGs of the same type, but their pipe *counts*
+    differ (three rings versus one), and with them the bands and the room width.
+    """
+
+    token_zone: dict[str, str]          # token -> band name
+    zone_cols: dict[str, tuple[int, int]]   # band -> inclusive column range
+    pipe_in: dict[str, int]             # band -> column of its incoming pipe
+    pipe_out: dict[str, int]            # band -> column of its outgoing pipe
+    code0: int                          # first code column, east of the channels
+    iw: int                             # room interior width
+
+    def binds(self, x: int, token: str) -> str:
+        """Which band's pipe an op at column `x` reaches: nearest, ties westward."""
+        cols = self.pipe_in if token[0] == "r" else self.pipe_out
+        return min(cols, key=lambda k: (abs(x - cols[k]), cols[k]))
+
+    def check_binding(self, x: int, token: str) -> None:
+        want = self.token_zone[token]
+        got = self.binds(x, token)
+        if got != want:
+            raise Collision(f"{token!r} at column {x} binds {got}, wanted {want}")
+
+
+LLLM = Geometry(
+    token_zone=TOKEN_ZONE,
+    zone_cols=ZONE_COLS,
+    pipe_in={"ST": PIPE_COL["store_in"], "FI": PIPE_COL["file_in"],
+             "IO": PIPE_COL["input"]},
+    pipe_out={"ST": PIPE_COL["store_out"], "FI": PIPE_COL["file_out"],
+              "IO": PIPE_COL["painter"]},
+    code0=CODE0,
+    iw=IW,
+)
 
 
 def check_binding(x: int, token: str) -> None:
-    want = TOKEN_ZONE[token]
-    if token in ("rr", "rq", "ri"):
-        cols = {"ST": PIPE_COL["store_in"], "FI": PIPE_COL["file_in"],
-                "IO": PIPE_COL["input"]}
-    else:
-        cols = {"ST": PIPE_COL["store_out"], "FI": PIPE_COL["file_out"],
-                "IO": PIPE_COL["painter"]}
-    got = _nearest(cols, x)
-    if got != want:
-        raise Collision(f"{token!r} at column {x} binds {got}, wanted {want}")
+    LLLM.check_binding(x, token)
 
 
 # ── planning one block ────────────────────────────────────────────────────────
-def _items(tok: str) -> list[tuple[str, object]]:
+def _items(tok: str, geo: Geometry) -> list[tuple[str, object]]:
     """A token as placeable items: ('g', glyph) or ('lit', digits).
 
     The pipe tokens name *which* pipe, which is a column discipline rather than
@@ -167,7 +193,7 @@ def _items(tok: str) -> list[tuple[str, object]]:
     if tok.startswith("L"):
         v = int(tok[1:])
         return [("g", str(v))] if 0 <= v <= 9 else [("lit", str(v))]
-    if tok in TOKEN_ZONE:
+    if tok in geo.token_zone:
         return [("g", "r" if tok[0] == "r" else "s")]
     return [("g", tok)]
 
@@ -175,10 +201,11 @@ def _items(tok: str) -> list[tuple[str, object]]:
 class _Pen:
     """Pours glyphs along a row, wrapping when a band lies behind the pen."""
 
-    def __init__(self, backticks: set[int]) -> None:
+    def __init__(self, backticks: set[int], geo: Geometry) -> None:
+        self.geo = geo
         self.backticks = backticks
-        self.rows: list[Row] = [Row(east=True, start=CODE0)]
-        self.x = CODE0
+        self.rows: list[Row] = [Row(east=True, start=geo.code0)]
+        self.x = geo.code0
 
     @property
     def row(self) -> Row:
@@ -193,7 +220,7 @@ class _Pen:
         self.x += 1 if self.rows[-1].east else -1
 
     def put(self, glyph: str) -> int:
-        if not (CODE0 <= self.x < IW - 1):
+        if not (self.geo.code0 <= self.x < self.geo.iw - 1):
             raise Collision(f"row ran off the room at column {self.x}")
         at = self.x
         self.row.cells.append((at, glyph))
@@ -203,9 +230,9 @@ class _Pen:
     def ensure(self, need: int) -> None:
         """Wrap if `need` cells do not fit ahead of the pen on this row."""
         if self.row.east:
-            if self.x + need > IW - 2:
+            if self.x + need > self.geo.iw - 2:
                 self.wrap()
-        elif self.x - need < CODE0:
+        elif self.x - need < self.geo.code0:
             self.wrap()
 
     def seek(self, lo: int, hi: int) -> None:
@@ -236,24 +263,24 @@ class _Pen:
         self.backticks.update((open_col, close_col))
 
 
-def plan_blocks(order: list[str], worker=WORKER) -> dict[str, Plan]:
+def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM) -> dict[str, Plan]:
     backticks: set[int] = set()
     plans: dict[str, Plan] = {}
     for name in order:
         toks, succ = worker[name]
         branch = toks[-1] if isinstance(succ, dict) else None
-        pen = _Pen(backticks)
+        pen = _Pen(backticks, geo)
         for i, tok in enumerate(toks):
-            zone = TOKEN_ZONE.get(tok)
+            zone = geo.token_zone.get(tok)
             if zone is not None:
-                pen.seek(*ZONE_COLS[zone])
+                pen.seek(*geo.zone_cols[zone])
             if branch is not None and i == len(toks) - 1:
                 # the branch glyph must not be the row's first cell: its lanes
                 # leave from the cells above and below it, and the entry walk
                 # has to have room to reach it.
                 if not pen.row.cells:
                     pen.put(" ")
-            for kind, payload in _items(tok):
+            for kind, payload in _items(tok, geo):
                 if kind == "lit":
                     # +8 of slack: the backtick columns are globally unique, so
                     # both ends may have to step past columns already spent.
@@ -263,7 +290,7 @@ def plan_blocks(order: list[str], worker=WORKER) -> dict[str, Plan]:
                     pen.ensure(2)
                     col = pen.put(str(payload))
                     if zone is not None:
-                        check_binding(col, tok)
+                        geo.check_binding(col, tok)
         pen.row.end = pen.x
         plans[name] = Plan(name, pen.rows, branch,
                            pen.rows[-1].cells[-1][0] if branch else 0)
