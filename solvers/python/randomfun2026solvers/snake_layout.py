@@ -197,8 +197,10 @@ def _bands(worker, order: list[str], plans: dict[str, Plan]) -> tuple[dict[str, 
 # from the public cases scores better on paper and measured *worse* on the
 # engine (17.7k ticks against 15.8k), because weighting collapses the cold death
 # paths onto the hot loop and lengthens the corridors that carry it.
-ORDER_STEPS = 30_000
-ORDER_SEED = 7
+#: The descent plateaus long before 20,000 moves and then sticks, so the search
+#: is restarted rather than lengthened; a fixed seed list keeps it reproducible.
+ORDER_STEPS = 20_000
+ORDER_SEEDS = (1, 5, 11, 23, 42, 99)
 
 
 def _metrics(worker, plans: dict[str, Plan]) -> dict[str, tuple[int, int, dict[str, int]]]:
@@ -226,20 +228,22 @@ def tuned_order(worker, plans: dict[str, Plan], base: list[str]) -> list[str]:
         return sum(abs(y[t] + metric[t][1] - y[n] - off)
                    for n in order for off, t in lanes[n])
 
-    rng = random.Random(ORDER_SEED)
-    best = cur = list(base)
-    best_c = cur_c = cost(cur)
-    for _ in range(ORDER_STEPS):
-        i, j = rng.randrange(1, len(cur)), rng.randrange(1, len(cur))
-        if i == j:
-            continue
-        cand = list(cur)
-        cand.insert(j, cand.pop(i))
-        c = cost(cand)
-        if c <= cur_c:                     # plateau moves keep it from sticking
-            cur, cur_c = cand, c
-            if c < best_c:
-                best, best_c = list(cand), c
+    best, best_c = list(base), cost(base)
+    for seed in ORDER_SEEDS:
+        rng = random.Random(seed)
+        cur = list(base)
+        cur_c = cost(cur)
+        for _ in range(ORDER_STEPS):
+            i, j = rng.randrange(1, len(cur)), rng.randrange(1, len(cur))
+            if i == j:
+                continue
+            cand = list(cur)
+            cand.insert(j, cand.pop(i))
+            c = cost(cand)
+            if c <= cur_c:                 # plateau moves keep it from sticking
+                cur, cur_c = cand, c
+                if c < best_c:
+                    best, best_c = list(cand), c
     return best
 
 
