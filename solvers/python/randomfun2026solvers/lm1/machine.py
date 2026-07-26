@@ -758,8 +758,11 @@ def build_cpu(
                 c = floor
                 if c > struct_east:
                     # A micro-program long enough to reach the slabs has to join the
-                    # structured lanes' discipline rather than risk their columns.
-                    c = struct_east + 1
+                    # structured lanes' uniqueness discipline rather than risk
+                    # their columns.  Never reset it to ``struct_east + 1``:
+                    # ``floor`` is the suffix maximum that proves this column clears
+                    # the current lane and every lane below it. Moving west from that
+                    # floor can put the drop directly on a live lane glyph.
                     while c in assigned:
                         c += 1
             drop_x[r] = c

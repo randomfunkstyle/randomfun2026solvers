@@ -1,0 +1,410 @@
+{
+  "title": "brackets \u2014 submitted 63x15 optimizer result",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "parser worker",
+      "x": 5,
+      "y": 0,
+      "w": 49,
+      "h": 14,
+      "note": "Arithmetic classifier, shared push/pop handlers, EOS, and control loop.",
+      "color": "#3b82f6",
+      "tags": [
+        "compute",
+        "optimized"
+      ]
+    },
+    {
+      "name": "register-ring relay",
+      "x": 56,
+      "y": 4,
+      "w": 7,
+      "h": 6,
+      "note": "Persistent [packed stack, position] turnaround.",
+      "color": "#3b82f6",
+      "tags": [
+        "compute",
+        "optimized"
+      ]
+    },
+    {
+      "name": "output",
+      "x": 0,
+      "y": 5,
+      "w": 3,
+      "h": 3,
+      "note": "Output room.",
+      "color": "#3b82f6",
+      "tags": [
+        "output",
+        "optimized"
+      ]
+    },
+    {
+      "name": "input",
+      "x": 0,
+      "y": 12,
+      "w": 3,
+      "h": 3,
+      "note": "Input room.",
+      "color": "#3b82f6",
+      "tags": [
+        "input",
+        "optimized"
+      ]
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "maximum balanced depth",
+      "input": "64 40 91 123 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 41 125 93 41",
+      "from_tick": 0,
+      "to_tick": 8000,
+      "watch": [
+        "arithmetic classifier",
+        "shared push",
+        "shared pop"
+      ],
+      "note": "Exercises the legal depth-32 and n=64 bounds."
+    }
+  ],
+  "lanes": [
+    {
+      "name": "arithmetic classifier",
+      "points": [
+        [
+          10,
+          2
+        ],
+        [
+          22,
+          2
+        ]
+      ],
+      "note": "char/32 identifies family; the remainder expression selects open/close.",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          2
+        ],
+        [
+          11,
+          2
+        ],
+        [
+          12,
+          2
+        ],
+        [
+          13,
+          2
+        ],
+        [
+          14,
+          2
+        ],
+        [
+          15,
+          2
+        ],
+        [
+          16,
+          2
+        ],
+        [
+          17,
+          2
+        ],
+        [
+          18,
+          2
+        ],
+        [
+          19,
+          2
+        ],
+        [
+          20,
+          2
+        ],
+        [
+          21,
+          2
+        ],
+        [
+          22,
+          2
+        ]
+      ]
+    },
+    {
+      "name": "shared pop",
+      "points": [
+        [
+          23,
+          2
+        ],
+        [
+          45,
+          2
+        ]
+      ],
+      "note": "Convert family to base-3 tag, compare stack top, and pop.",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          23,
+          2
+        ],
+        [
+          24,
+          2
+        ],
+        [
+          25,
+          2
+        ],
+        [
+          26,
+          2
+        ],
+        [
+          27,
+          2
+        ],
+        [
+          28,
+          2
+        ],
+        [
+          29,
+          2
+        ],
+        [
+          30,
+          2
+        ],
+        [
+          31,
+          2
+        ],
+        [
+          32,
+          2
+        ],
+        [
+          33,
+          2
+        ],
+        [
+          34,
+          2
+        ],
+        [
+          35,
+          2
+        ],
+        [
+          36,
+          2
+        ],
+        [
+          37,
+          2
+        ],
+        [
+          38,
+          2
+        ],
+        [
+          39,
+          2
+        ],
+        [
+          40,
+          2
+        ],
+        [
+          41,
+          2
+        ],
+        [
+          42,
+          2
+        ],
+        [
+          43,
+          2
+        ],
+        [
+          44,
+          2
+        ],
+        [
+          45,
+          2
+        ]
+      ]
+    },
+    {
+      "name": "shared push",
+      "points": [
+        [
+          23,
+          4
+        ],
+        [
+          40,
+          4
+        ]
+      ],
+      "note": "Convert family to tag, push, advance position, and decrement count.",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          23,
+          4
+        ],
+        [
+          24,
+          4
+        ],
+        [
+          25,
+          4
+        ],
+        [
+          26,
+          4
+        ],
+        [
+          27,
+          4
+        ],
+        [
+          28,
+          4
+        ],
+        [
+          29,
+          4
+        ],
+        [
+          30,
+          4
+        ],
+        [
+          31,
+          4
+        ],
+        [
+          32,
+          4
+        ],
+        [
+          33,
+          4
+        ],
+        [
+          34,
+          4
+        ],
+        [
+          35,
+          4
+        ],
+        [
+          36,
+          4
+        ],
+        [
+          37,
+          4
+        ],
+        [
+          38,
+          4
+        ],
+        [
+          39,
+          4
+        ],
+        [
+          40,
+          4
+        ]
+      ]
+    },
+    {
+      "name": "ring leg 1",
+      "points": [
+        [
+          54,
+          5
+        ],
+        [
+          55,
+          5
+        ]
+      ],
+      "note": "Packed-stack state ring, capacity 2.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          54,
+          5
+        ],
+        [
+          55,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "ring leg 2",
+      "points": [
+        [
+          55,
+          8
+        ],
+        [
+          54,
+          8
+        ]
+      ],
+      "note": "Packed-stack state ring, capacity 2.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          55,
+          8
+        ],
+        [
+          54,
+          8
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# brackets — submission c1b68030-27df-44bb-ab43-4e02c233864e
+
+verdict      done: 26/26 cases, area2 3969, avgTicks 2,210, score 8,771,490
+submitted    2026-07-26T02:38:14+0300
+grid         63x15
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  cdcf48b3c781f649d3dac0da209e684cd79b27d15b9c6fd806e42a63bf71abc6
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 1,197 ticks
+source       tasks/compacted/brackets_compact_optimized.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+AST optimizer result from validated 66x19 compact parser. Binding-preserving global cuts plus semantic interior squash; ring pipes (0,2) retain >=3 shared cells. Final 63x15, exhaustive length<=4, exact bounds, fast and reference validation pass.

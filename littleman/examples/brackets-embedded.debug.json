@@ -1,0 +1,230 @@
+{
+  "title": "brackets failed embedded lookup probe (AST generated)",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "worker",
+      "x": 5,
+      "y": 0,
+      "w": 20,
+      "h": 14,
+      "note": "Reads n; B keeps n while four X joints compare k-n.",
+      "color": "#3b82f6",
+      "tags": [
+        "compute",
+        "ast"
+      ]
+    },
+    {
+      "name": "input",
+      "x": 0,
+      "y": 1,
+      "w": 3,
+      "h": 3,
+      "note": "Only the length prefix is consumed.",
+      "color": "#3b82f6",
+      "tags": []
+    },
+    {
+      "name": "output",
+      "x": 0,
+      "y": 9,
+      "w": 3,
+      "h": 3,
+      "note": "One embedded answer is emitted.",
+      "color": "#3b82f6",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "unclosed openers",
+      "input": "3 40 91 123",
+      "from_tick": 0,
+      "to_tick": 30,
+      "watch": [
+        "comparison staircase",
+        "output pipe"
+      ],
+      "note": "n=3 takes the third equality exit and emits 4."
+    }
+  ],
+  "lanes": [
+    {
+      "name": "comparison staircase",
+      "points": [
+        [
+          11,
+          11
+        ],
+        [
+          11,
+          9
+        ],
+        [
+          14,
+          9
+        ],
+        [
+          14,
+          7
+        ],
+        [
+          17,
+          7
+        ],
+        [
+          17,
+          5
+        ],
+        [
+          20,
+          5
+        ],
+        [
+          20,
+          3
+        ]
+      ],
+      "note": "Negative k-n climbs to the next comparison; zero exits east.",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          11,
+          11
+        ],
+        [
+          11,
+          10
+        ],
+        [
+          11,
+          9
+        ],
+        [
+          12,
+          9
+        ],
+        [
+          13,
+          9
+        ],
+        [
+          14,
+          9
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          14,
+          7
+        ],
+        [
+          15,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          17,
+          7
+        ],
+        [
+          17,
+          6
+        ],
+        [
+          17,
+          5
+        ],
+        [
+          18,
+          5
+        ],
+        [
+          19,
+          5
+        ],
+        [
+          20,
+          5
+        ],
+        [
+          20,
+          4
+        ],
+        [
+          20,
+          3
+        ]
+      ]
+    },
+    {
+      "name": "input pipe",
+      "points": [
+        [
+          3,
+          2
+        ],
+        [
+          4,
+          2
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          3,
+          2
+        ],
+        [
+          4,
+          2
+        ]
+      ]
+    },
+    {
+      "name": "output pipe",
+      "points": [
+        [
+          4,
+          10
+        ],
+        [
+          3,
+          10
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          4,
+          10
+        ],
+        [
+          3,
+          10
+        ]
+      ]
+    }
+  ]
+}

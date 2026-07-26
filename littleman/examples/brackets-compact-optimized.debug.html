@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>brackets — submitted 63x15 optimizer result</title>
+<style>
+body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #111827; color: #e5e7eb; }
+.wrap { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100vh; }
+.canvas { overflow: auto; padding: 16px; position: relative; }
+.zoom-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; width: max-content; margin-bottom: 10px; padding: 6px; border: 1px solid #374151; background: #0b1120; }
+.zoom-toolbar button { width: 28px; height: 28px; padding: 0; border: 1px solid #64748b; border-radius: 3px; background: #111827; color: #e5e7eb; font: 16px ui-monospace, monospace; cursor: pointer; }
+.zoom-toolbar button:hover { background: #1e293b; }
+.zoom-toolbar output { min-width: 42px; color: #cbd5e1; font: 12px ui-monospace, monospace; text-align: center; }
+.zoom-stage { position: relative; }
+svg { display: block; background: #030712; border: 1px solid #374151; transform-origin: top left; }
+.cell { fill: #e5e7eb; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+.region { fill: color-mix(in srgb, var(--c), transparent 88%); stroke: var(--c); stroke-width: .75; }
+.circle-region { stroke-dasharray: 3.5 2; }
+.lane { fill: none; stroke: var(--c); stroke-width: 1.5; opacity: .88; marker-end: url(#arrow); }
+.lane.pipe { stroke-dasharray: 2 1.5; }
+.lane.expected { stroke-width: 2.5; opacity: .5; }
+.label, .lane-label { fill: #f9fafb; font: 6.5px ui-monospace, SFMono-Regular, Menlo, monospace; paint-order: stroke; stroke: #030712; stroke-width: 2px; }
+.debug-target { cursor: pointer; }
+svg .debug-target.is-active { filter: brightness(1.8); opacity: 1; stroke-width: 2; }
+svg text.debug-target.is-active { fill: #fff; font-weight: 700; }
+li.debug-target { cursor: pointer; border-left: 3px solid transparent; padding-left: 8px; }
+li.debug-target.is-active { background: #172554; border-left-color: #e5e7eb; }
+aside { overflow: auto; border-left: 1px solid #374151; padding: 16px; background: #0b1120; }
+li { margin: 0 0 10px; line-height: 1.35; }
+span { display: inline-block; width: 10px; height: 10px; margin-right: 8px; }
+#tooltip { position: fixed; z-index: 10; max-width: 340px; pointer-events: none; opacity: 0; transform: translate(14px, 14px); padding: 10px 12px; border: 1px solid #64748b; border-radius: 4px; background: #020617; box-shadow: 0 12px 30px #0008; transition: opacity .1s; }
+#tooltip.visible { opacity: 1; }
+#tooltip strong, #tooltip small, #tooltip p { display: block; margin: 0; }
+#tooltip small { margin-top: 2px; color: #94a3b8; text-transform: uppercase; }
+#tooltip p { margin-top: 6px; color: #e2e8f0; }
+</style>
+<div class="wrap">
+<div class="canvas">
+<div class="zoom-toolbar" aria-label="Diagram zoom">
+<button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out">-</button>
+<output id="zoom-value">100%</output>
+<button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+<button type="button" id="zoom-reset" title="Reset zoom" aria-label="Reset zoom">1:1</button>
+</div>
+<div class="zoom-stage" id="zoom-stage">
+<svg id="diagram" width="930" height="258" viewBox="0 0 930 258">
+<defs><marker id="arrow" markerWidth="2" markerHeight="2" refX="1.5" refY=".75" orient="auto"><path d="M0,0 L0,1.5 L1.75,.75 z" fill="#f9fafb"/></marker></defs>
+<rect class="region debug-target" data-name="parser worker" data-kind="region" data-detail="Arithmetic classifier, shared push/pop handlers, EOS, and control loop." x="87.7" y="11.4" width="686" height="196" style="--c:#3b82f6"><title>parser worker: Arithmetic classifier, shared push/pop handlers, EOS, and control loop.</title></rect><text class="label debug-target" data-name="parser worker" data-kind="region" data-detail="Arithmetic classifier, shared push/pop handlers, EOS, and control loop." x="94" y="10">parser worker</text><rect class="region debug-target" data-name="register-ring relay" data-kind="region" data-detail="Persistent [packed stack, position] turnaround." x="801.7" y="67.4" width="98" height="84" style="--c:#3b82f6"><title>register-ring relay: Persistent [packed stack, position] turnaround.</title></rect><text class="label debug-target" data-name="register-ring relay" data-kind="region" data-detail="Persistent [packed stack, position] turnaround." x="808" y="66">register-ring relay</text><rect class="region debug-target" data-name="output" data-kind="region" data-detail="Output room." x="17.7" y="81.4" width="42" height="42" style="--c:#3b82f6"><title>output: Output room.</title></rect><text class="label debug-target" data-name="output" data-kind="region" data-detail="Output room." x="24" y="80">output</text><rect class="region debug-target" data-name="input" data-kind="region" data-detail="Input room." x="17.7" y="179.4" width="42" height="42" style="--c:#3b82f6"><title>input: Input room.</title></rect><text class="label debug-target" data-name="input" data-kind="region" data-detail="Input room." x="24" y="178">input</text>
+<polyline class="lane control debug-target" data-name="arithmetic classifier" data-kind="control lane" data-detail="char/32 identifies family; the remainder expression selects open/close." points="164,47.1 332,47.1" style="--c:#f97316"><title>arithmetic classifier: char/32 identifies family; the remainder expression selects open/close.</title></polyline><text class="lane-label debug-target" data-name="arithmetic classifier" data-kind="control lane" data-detail="char/32 identifies family; the remainder expression selects open/close." x="164" y="33.8">arithmetic classifier</text><polyline class="lane control debug-target" data-name="shared pop" data-kind="control lane" data-detail="Convert family to base-3 tag, compare stack top, and pop." points="346,47.1 654,47.1" style="--c:#f97316"><title>shared pop: Convert family to base-3 tag, compare stack top, and pop.</title></polyline><text class="lane-label debug-target" data-name="shared pop" data-kind="control lane" data-detail="Convert family to base-3 tag, compare stack top, and pop." x="346" y="33.8">shared pop</text><polyline class="lane control debug-target" data-name="shared push" data-kind="control lane" data-detail="Convert family to tag, push, advance position, and decrement count." points="346,75.1 584,75.1" style="--c:#f97316"><title>shared push: Convert family to tag, push, advance position, and decrement count.</title></polyline><text class="lane-label debug-target" data-name="shared push" data-kind="control lane" data-detail="Convert family to tag, push, advance position, and decrement count." x="346" y="61.8">shared push</text><polyline class="lane pipe debug-target" data-name="ring leg 1" data-kind="pipe lane" data-detail="Packed-stack state ring, capacity 2." points="780,89.1 794,89.1" style="--c:#f97316"><title>ring leg 1: Packed-stack state ring, capacity 2.</title></polyline><text class="lane-label debug-target" data-name="ring leg 1" data-kind="pipe lane" data-detail="Packed-stack state ring, capacity 2." x="780" y="75.8">ring leg 1</text><polyline class="lane pipe debug-target" data-name="ring leg 2" data-kind="pipe lane" data-detail="Packed-stack state ring, capacity 2." points="794,131.1 780,131.1" style="--c:#f97316"><title>ring leg 2: Packed-stack state ring, capacity 2.</title></polyline><text class="lane-label debug-target" data-name="ring leg 2" data-kind="pipe lane" data-detail="Packed-stack state ring, capacity 2." x="794" y="117.8">ring leg 2</text>
+<text class="cell" x="94" y="24">+</text><text class="cell" x="108" y="24">-</text><text class="cell" x="122" y="24">-</text><text class="cell" x="136" y="24">-</text><text class="cell" x="150" y="24">-</text><text class="cell" x="164" y="24">-</text><text class="cell" x="178" y="24">-</text><text class="cell" x="192" y="24">-</text><text class="cell" x="206" y="24">-</text><text class="cell" x="220" y="24">-</text><text class="cell" x="234" y="24">-</text><text class="cell" x="248" y="24">-</text><text class="cell" x="262" y="24">-</text><text class="cell" x="276" y="24">-</text><text class="cell" x="290" y="24">-</text><text class="cell" x="304" y="24">-</text><text class="cell" x="318" y="24">-</text><text class="cell" x="332" y="24">-</text><text class="cell" x="346" y="24">-</text><text class="cell" x="360" y="24">-</text><text class="cell" x="374" y="24">-</text><text class="cell" x="388" y="24">-</text><text class="cell" x="402" y="24">-</text><text class="cell" x="416" y="24">-</text><text class="cell" x="430" y="24">-</text><text class="cell" x="444" y="24">-</text><text class="cell" x="458" y="24">-</text><text class="cell" x="472" y="24">-</text><text class="cell" x="486" y="24">-</text><text class="cell" x="500" y="24">-</text><text class="cell" x="514" y="24">-</text><text class="cell" x="528" y="24">-</text><text class="cell" x="542" y="24">-</text><text class="cell" x="556" y="24">-</text><text class="cell" x="570" y="24">-</text><text class="cell" x="584" y="24">-</text><text class="cell" x="598" y="24">-</text><text class="cell" x="612" y="24">-</text><text class="cell" x="626" y="24">-</text><text class="cell" x="640" y="24">-</text><text class="cell" x="654" y="24">-</text><text class="cell" x="668" y="24">-</text><text class="cell" x="682" y="24">-</text><text class="cell" x="696" y="24">-</text><text class="cell" x="710" y="24">-</text><text class="cell" x="724" y="24">-</text><text class="cell" x="738" y="24">-</text><text class="cell" x="752" y="24">-</text><text class="cell" x="766" y="24">+</text><text class="cell" x="94" y="38">|</text><text class="cell" x="108" y="38">H</text><text class="cell" x="122" y="38">s</text><text class="cell" x="724" y="38">&lt;</text><text class="cell" x="766" y="38">|</text><text class="cell" x="94" y="52">|</text><text class="cell" x="150" y="52">&gt;</text><text class="cell" x="164" y="52">r</text><text class="cell" x="178" y="52">M</text><text class="cell" x="192" y="52">`</text><text class="cell" x="206" y="52">3</text><text class="cell" x="220" y="52">2</text><text class="cell" x="234" y="52">`</text><text class="cell" x="248" y="52">W</text><text class="cell" x="262" y="52">/</text><text class="cell" x="276" y="52">W</text><text class="cell" x="290" y="52">+</text><text class="cell" x="304" y="52">N</text><text class="cell" x="318" y="52">&amp;</text><text class="cell" x="332" y="52">X</text><text class="cell" x="346" y="52">W</text><text class="cell" x="360" y="52">M</text><text class="cell" x="374" y="52">3</text><text class="cell" x="388" y="52">W</text><text class="cell" x="402" y="52">%</text><text class="cell" x="416" y="52">M</text><text class="cell" x="430" y="52">r</text><text class="cell" x="444" y="52">W</text><text class="cell" x="458" y="52">s</text><text class="cell" x="472" y="52">W</text><text class="cell" x="486" y="52">M</text><text class="cell" x="500" y="52">3</text><text class="cell" x="514" y="52">W</text><text class="cell" x="528" y="52">/</text><text class="cell" x="542" y="52">s</text><text class="cell" x="556" y="52">r</text><text class="cell" x="570" y="52">s</text><text class="cell" x="584" y="52">r</text><text class="cell" x="598" y="52">~</text><text class="cell" x="612" y="52">X</text><text class="cell" x="626" y="52">r</text><text class="cell" x="640" y="52">X</text><text class="cell" x="654" y="52">r</text><text class="cell" x="724" y="52">^</text><text class="cell" x="766" y="52">|</text><text class="cell" x="94" y="66">|</text><text class="cell" x="108" y="66">H</text><text class="cell" x="122" y="66">s</text><text class="cell" x="584" y="66">r</text><text class="cell" x="598" y="66">r</text><text class="cell" x="612" y="66">&lt;</text><text class="cell" x="640" y="66">&gt;</text><text class="cell" x="654" y="66">s</text><text class="cell" x="668" y="66">r</text><text class="cell" x="682" y="66">M</text><text class="cell" x="696" y="66">1</text><text class="cell" x="710" y="66">+</text><text class="cell" x="724" y="66">s</text><text class="cell" x="738" y="66">m</text><text class="cell" x="752" y="66">v</text><text class="cell" x="766" y="66">|</text><text class="cell" x="94" y="80">|</text><text class="cell" x="332" y="80">&gt;</text><text class="cell" x="346" y="80">W</text><text class="cell" x="360" y="80">M</text><text class="cell" x="374" y="80">3</text><text class="cell" x="388" y="80">W</text><text class="cell" x="402" y="80">%</text><text class="cell" x="416" y="80">M</text><text class="cell" x="430" y="80">r</text><text class="cell" x="444" y="80">W</text><text class="cell" x="458" y="80">+</text><text class="cell" x="472" y="80">+</text><text class="cell" x="486" y="80">+</text><text class="cell" x="500" y="80">s</text><text class="cell" x="514" y="80">r</text><text class="cell" x="528" y="80">M</text><text class="cell" x="542" y="80">1</text><text class="cell" x="556" y="80">+</text><text class="cell" x="570" y="80">s</text><text class="cell" x="584" y="80">m</text><text class="cell" x="752" y="80">v</text><text class="cell" x="766" y="80">|</text><text class="cell" x="808" y="80">+</text><text class="cell" x="822" y="80">-</text><text class="cell" x="836" y="80">-</text><text class="cell" x="850" y="80">-</text><text class="cell" x="864" y="80">-</text><text class="cell" x="878" y="80">-</text><text class="cell" x="892" y="80">+</text><text class="cell" x="24" y="94">+</text><text class="cell" x="38" y="94">-</text><text class="cell" x="52" y="94">+</text><text class="cell" x="94" y="94">|</text><text class="cell" x="766" y="94">|</text><text class="cell" x="780" y="94">&gt;</text><text class="cell" x="794" y="94">&gt;</text><text class="cell" x="808" y="94">|</text><text class="cell" x="836" y="94">&gt;</text><text class="cell" x="850" y="94">r</text><text class="cell" x="878" y="94">v</text><text class="cell" x="892" y="94">|</text><text class="cell" x="24" y="108">|</text><text class="cell" x="38" y="108">O</text><text class="cell" x="52" y="108">|</text><text class="cell" x="66" y="108">&lt;</text><text class="cell" x="80" y="108">&lt;</text><text class="cell" x="94" y="108">|</text><text class="cell" x="108" y="108">H</text><text class="cell" x="122" y="108">s</text><text class="cell" x="612" y="108">&lt;</text><text class="cell" x="766" y="108">|</text><text class="cell" x="808" y="108">|</text><text class="cell" x="822" y="108">@</text><text class="cell" x="836" y="108">^</text><text class="cell" x="892" y="108">|</text><text class="cell" x="24" y="122">+</text><text class="cell" x="38" y="122">-</text><text class="cell" x="52" y="122">+</text><text class="cell" x="94" y="122">|</text><text class="cell" x="122" y="122">v</text><text class="cell" x="150" y="122">d</text><text class="cell" x="752" y="122">&lt;</text><text class="cell" x="766" y="122">|</text><text class="cell" x="808" y="122">|</text><text class="cell" x="892" y="122">|</text><text class="cell" x="94" y="136">|</text><text class="cell" x="612" y="136">r</text><text class="cell" x="766" y="136">|</text><text class="cell" x="780" y="136">&lt;</text><text class="cell" x="794" y="136">&lt;</text><text class="cell" x="808" y="136">|</text><text class="cell" x="836" y="136">^</text><text class="cell" x="864" y="136">s</text><text class="cell" x="878" y="136">&lt;</text><text class="cell" x="892" y="136">|</text><text class="cell" x="94" y="150">|</text><text class="cell" x="122" y="150">&gt;</text><text class="cell" x="556" y="150">r</text><text class="cell" x="570" y="150">M</text><text class="cell" x="584" y="150">1</text><text class="cell" x="598" y="150">-</text><text class="cell" x="612" y="150">X</text><text class="cell" x="626" y="150">0</text><text class="cell" x="696" y="150">v</text><text class="cell" x="766" y="150">|</text><text class="cell" x="808" y="150">+</text><text class="cell" x="822" y="150">-</text><text class="cell" x="836" y="150">-</text><text class="cell" x="850" y="150">-</text><text class="cell" x="864" y="150">-</text><text class="cell" x="878" y="150">-</text><text class="cell" x="892" y="150">+</text><text class="cell" x="94" y="164">|</text><text class="cell" x="108" y="164">H</text><text class="cell" x="122" y="164">s</text><text class="cell" x="696" y="164">&lt;</text><text class="cell" x="766" y="164">|</text><text class="cell" x="94" y="178">|</text><text class="cell" x="766" y="178">|</text><text class="cell" x="24" y="192">+</text><text class="cell" x="38" y="192">-</text><text class="cell" x="52" y="192">+</text><text class="cell" x="80" y="192">&gt;</text><text class="cell" x="94" y="192">|</text><text class="cell" x="108" y="192">@</text><text class="cell" x="122" y="192">r</text><text class="cell" x="136" y="192">b</text><text class="cell" x="626" y="192">1</text><text class="cell" x="640" y="192">s</text><text class="cell" x="654" y="192">1</text><text class="cell" x="668" y="192">s</text><text class="cell" x="752" y="192">^</text><text class="cell" x="766" y="192">|</text><text class="cell" x="24" y="206">|</text><text class="cell" x="38" y="206">I</text><text class="cell" x="52" y="206">|</text><text class="cell" x="66" y="206">&gt;</text><text class="cell" x="80" y="206">^</text><text class="cell" x="94" y="206">+</text><text class="cell" x="108" y="206">-</text><text class="cell" x="122" y="206">-</text><text class="cell" x="136" y="206">-</text><text class="cell" x="150" y="206">-</text><text class="cell" x="164" y="206">-</text><text class="cell" x="178" y="206">-</text><text class="cell" x="192" y="206">-</text><text class="cell" x="206" y="206">-</text><text class="cell" x="220" y="206">-</text><text class="cell" x="234" y="206">-</text><text class="cell" x="248" y="206">-</text><text class="cell" x="262" y="206">-</text><text class="cell" x="276" y="206">-</text><text class="cell" x="290" y="206">-</text><text class="cell" x="304" y="206">-</text><text class="cell" x="318" y="206">-</text><text class="cell" x="332" y="206">-</text><text class="cell" x="346" y="206">-</text><text class="cell" x="360" y="206">-</text><text class="cell" x="374" y="206">-</text><text class="cell" x="388" y="206">-</text><text class="cell" x="402" y="206">-</text><text class="cell" x="416" y="206">-</text><text class="cell" x="430" y="206">-</text><text class="cell" x="444" y="206">-</text><text class="cell" x="458" y="206">-</text><text class="cell" x="472" y="206">-</text><text class="cell" x="486" y="206">-</text><text class="cell" x="500" y="206">-</text><text class="cell" x="514" y="206">-</text><text class="cell" x="528" y="206">-</text><text class="cell" x="542" y="206">-</text><text class="cell" x="556" y="206">-</text><text class="cell" x="570" y="206">-</text><text class="cell" x="584" y="206">-</text><text class="cell" x="598" y="206">-</text><text class="cell" x="612" y="206">-</text><text class="cell" x="626" y="206">-</text><text class="cell" x="640" y="206">-</text><text class="cell" x="654" y="206">-</text><text class="cell" x="668" y="206">-</text><text class="cell" x="682" y="206">-</text><text class="cell" x="696" y="206">-</text><text class="cell" x="710" y="206">-</text><text class="cell" x="724" y="206">-</text><text class="cell" x="738" y="206">-</text><text class="cell" x="752" y="206">-</text><text class="cell" x="766" y="206">+</text><text class="cell" x="24" y="220">+</text><text class="cell" x="38" y="220">-</text><text class="cell" x="52" y="220">+</text>
+</svg>
+</div>
+</div>
+<aside>
+<h1>brackets — submitted 63x15 optimizer result</h1>
+<p>63 x 15</p>
+<ul><li class="debug-target" data-name="parser worker" data-kind="region" data-detail="Arithmetic classifier, shared push/pop handlers, EOS, and control loop."><span style="background:#3b82f6"></span><b>parser worker</b> Arithmetic classifier, shared push/pop handlers, EOS, and control loop.</li>
+<li class="debug-target" data-name="register-ring relay" data-kind="region" data-detail="Persistent [packed stack, position] turnaround."><span style="background:#3b82f6"></span><b>register-ring relay</b> Persistent [packed stack, position] turnaround.</li>
+<li class="debug-target" data-name="output" data-kind="region" data-detail="Output room."><span style="background:#3b82f6"></span><b>output</b> Output room.</li>
+<li class="debug-target" data-name="input" data-kind="region" data-detail="Input room."><span style="background:#3b82f6"></span><b>input</b> Input room.</li>
+<li class="debug-target" data-name="arithmetic classifier" data-kind="control lane" data-detail="char/32 identifies family; the remainder expression selects open/close."><span style="background:#f97316"></span><b>arithmetic classifier</b> char/32 identifies family; the remainder expression selects open/close.</li>
+<li class="debug-target" data-name="shared pop" data-kind="control lane" data-detail="Convert family to base-3 tag, compare stack top, and pop."><span style="background:#f97316"></span><b>shared pop</b> Convert family to base-3 tag, compare stack top, and pop.</li>
+<li class="debug-target" data-name="shared push" data-kind="control lane" data-detail="Convert family to tag, push, advance position, and decrement count."><span style="background:#f97316"></span><b>shared push</b> Convert family to tag, push, advance position, and decrement count.</li>
+<li class="debug-target" data-name="ring leg 1" data-kind="pipe lane" data-detail="Packed-stack state ring, capacity 2."><span style="background:#f97316"></span><b>ring leg 1</b> Packed-stack state ring, capacity 2.</li>
+<li class="debug-target" data-name="ring leg 2" data-kind="pipe lane" data-detail="Packed-stack state ring, capacity 2."><span style="background:#f97316"></span><b>ring leg 2</b> Packed-stack state ring, capacity 2.</li></ul>
+</aside>
+</div>
+<div id="tooltip" role="tooltip"><strong></strong><small></small><p></p></div>
+<script>
+const targets = [...document.querySelectorAll('.debug-target')];
+const tooltip = document.querySelector('#tooltip');
+const title = tooltip.querySelector('strong');
+const kind = tooltip.querySelector('small');
+const detail = tooltip.querySelector('p');
+let pinned = null;
+const canvas = document.querySelector('.canvas');
+const stage = document.querySelector('#zoom-stage');
+const diagram = document.querySelector('#diagram');
+const zoomValue = document.querySelector('#zoom-value');
+const baseWidth = 930;
+const baseHeight = 258;
+let zoom = 1;
+let pan = null;
+
+function setZoom(next) {
+  zoom = Math.min(3, Math.max(.35, next));
+  diagram.style.transform = `scale(${zoom})`;
+  stage.style.width = `${baseWidth * zoom}px`;
+  stage.style.height = `${baseHeight * zoom}px`;
+  zoomValue.value = `${Math.round(zoom * 100)}%`;
+  zoomValue.textContent = zoomValue.value;
+}
+document.querySelector('#zoom-in').addEventListener('click', () => setZoom(zoom * 1.25));
+document.querySelector('#zoom-out').addEventListener('click', () => setZoom(zoom / 1.25));
+document.querySelector('#zoom-reset').addEventListener('click', () => setZoom(1));
+canvas.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  setZoom(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+}, { passive: false });
+stage.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.target.closest('.debug-target')) return;
+  pan = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop };
+  stage.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+stage.addEventListener('pointermove', (event) => {
+  if (!pan) return;
+  canvas.scrollLeft = pan.left - (event.clientX - pan.x);
+  canvas.scrollTop = pan.top - (event.clientY - pan.y);
+});
+stage.addEventListener('pointerup', () => { pan = null; });
+stage.addEventListener('pointercancel', () => { pan = null; });
+setZoom(1);
+
+function setActive(name) {
+  for (const target of targets) target.classList.toggle('is-active', target.dataset.name === name);
+}
+function clearActive() {
+  if (!pinned) {
+    for (const target of targets) target.classList.remove('is-active');
+    tooltip.classList.remove('visible');
+  }
+}
+function show(target, event) {
+  title.textContent = target.dataset.name;
+  kind.textContent = target.dataset.kind;
+  detail.textContent = target.dataset.detail || 'No additional note.';
+  tooltip.style.left = event.clientX + 'px';
+  tooltip.style.top = event.clientY + 'px';
+  tooltip.classList.add('visible');
+  setActive(target.dataset.name);
+}
+for (const target of targets) {
+  target.addEventListener('pointerenter', (event) => show(target, event));
+  target.addEventListener('pointermove', (event) => show(target, event));
+  target.addEventListener('pointerleave', clearActive);
+  target.addEventListener('click', (event) => {
+    event.preventDefault();
+    pinned = pinned === target.dataset.name ? null : target.dataset.name;
+    if (pinned) show(target, event); else clearActive();
+  });
+}
+</script>
+</html>
