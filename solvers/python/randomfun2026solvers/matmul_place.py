@@ -18,6 +18,30 @@ Two things have to be translated for `blockplace` to see that:
 * **The bands are the banks.**  A bank is a column window that binds a set of
   zones; here the windows are unions of adjacent bands, so a bank is named by
   the bands it spans and binds their fourteen half-zones.
+
+## The verdict: measured, and negative
+
+On `snake` this method won 2.48x.  On `matmul` it **loses**, and the numbers say
+why.  Swept over band totals 40..58 and lookbacks 2..6, the best packed machine
+scores **3.47e8** against the chain layout's **3.03e8** -- 1.15x *worse*:
+
+    chain (shipped)   89 x 98   31,553 ticks   3.030e8
+    packed, best      80 x 95   38,494 ticks   3.474e8
+
+Packing does work: the room goes from 64x81 to 55x78, and to 55x67 if the router
+is allowed to fail.  But height only binds until it meets width, and the machine
+is 25 columns wider than its worker -- the east strip that coils the `x` and `b`
+rings -- so ten rows saved buys nine points of `max(w,h)` and no more.
+
+The ticks are what kills it.  `matmul_grid` groups its blocks into 17
+fall-through **chains**: an edge inside a chain costs *nothing*, because the pen
+simply keeps writing and the man keeps walking.  `blockplace` has no such notion
+-- all 44 edges become corridors -- and `matmul`'s corridors are long, because
+its blocks are spread across a 55-column room by the bands their pipe ops stand
+in.  That is +21% on ticks, against -3% on `max(w, h)`.
+
+So this module is kept as the measurement, not as the generator.  What it says
+about the shipped machine is that **the room is not the problem**: the bands are.
 """
 
 from __future__ import annotations
@@ -188,6 +212,40 @@ def assign_banks(wrk, banks: dict[str, B.Bank], base_geo) -> dict[str, tuple]:
     return out
 
 
+def plan_all(geom: G.Geometry | None = None, nch: int = 1):
+    """Every block's glyph rows and the bank it was laid in, before packing."""
+    from randomfun2026solvers.lllm_layout import block_order, plan_blocks
+
+    geom = geom or G.GEOMETRY
+    bands = G.layout_bands(geom.recv_order, geom.send_order,
+                           geom.recv_w, geom.send_w)
+    wrk = worker()
+    base = geometry(bands, 0, bands.x1 + 1)
+    cands = assign_banks(wrk, span_banks(bands, nch), base)
+    backticks: set[int] = set()
+    plans, chosen = {}, {}
+    for name in block_order(wrk, G.ENTRY):
+        for bank in cands[name]:
+            spent = set(backticks)
+            try:
+                plans.update(plan_blocks([name], wrk,
+                                         B.bank_geometry(bank, base), backticks))
+            except Exception:                              # noqa: BLE001 - retried
+                backticks = spent
+                continue
+            chosen[name] = bank
+            break
+        else:
+            raise Collision(f"{name} fits no bank")
+    return bands, wrk, base, plans, chosen
+
+
+def plan_rows(geom: G.Geometry | None = None, nch: int = 1) -> dict[str, int]:
+    """How tall each block is, for `blockorder.anneal` to arrange against."""
+    _b, wrk, _g, plans, _c = plan_all(geom, nch)
+    return {n: len(p.rows) + (2 if p.branch else 0) for n, p in plans.items()}
+
+
 # ── the room, in the shape the walkers already understand ─────────────────────
 @dataclass
 class PlacedRoom:
@@ -243,7 +301,8 @@ class PlacedRoom:
 
 def build_room(geom: G.Geometry | None = None, specs=None, *,
                nch: int = 1, order: list[str] | None = None, seed: int = 0,
-               attempts: int = 24) -> PlacedRoom:
+               attempts: int = 24, pad: int = 0, width: int | None = None,
+               lookback: int | None = 4) -> PlacedRoom:
     """Plan, pack, stamp and route the worker with :mod:`blockplace`."""
     geom = geom or G.GEOMETRY
     bands = G.layout_bands(geom.recv_order, geom.send_order,
@@ -252,10 +311,31 @@ def build_room(geom: G.Geometry | None = None, specs=None, *,
     banks = banks_of(bands, specs) if specs else span_banks(bands, nch)
     base = geometry(bands, 0, bands.x1 + 1)
     room = B.build(wrk, G.ENTRY, assign_banks(wrk, banks, base), base,
-                   order=order, attempts=attempts, seed=seed)
+                   order=order, attempts=attempts, seed=seed, pad=pad,
+                   width=width, lookback=lookback)
     c = Circuit(room.width, room.height)
     for y, line in enumerate(room.rows()):
         for x, ch in enumerate(line):
             if ch != " ":
                 c.set(x, y, ch)
     return PlacedRoom(c, bands, room, room.width, room.height)
+
+
+# ── pricing a layout by the contest's own objective ───────────────────────────
+def grid_size(room) -> tuple[int, int]:
+    """``(width, height)`` of the finished machine around a worker room.
+
+    Everything outside the worker is fixed by `matmul_grid.build_grid`: the west
+    wall, three clear columns and the three-block east strip on one side, the
+    north band and two walls on the other.  Pricing a room without drawing it is
+    what makes a search over band geometries affordable.
+    """
+    return G.WX + room.iw + 3 + G.STRIP_W * 3, room.ih + G.NB + 2
+
+
+def evaluate(room, traces) -> tuple[float, int, int, float]:
+    """``(score, width, height, mean ticks)`` -- the contest's objective."""
+    G.check_room(room)
+    w, h = grid_size(room)
+    ticks = sum(G.estimate_ticks(room, r, ln) for r, ln in traces) / len(traces)
+    return max(w, h) ** 2 * ticks, w, h, ticks
