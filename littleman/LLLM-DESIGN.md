@@ -184,3 +184,77 @@ Bytes accumulate `word = word*256 + class` in raster order in the packed variant
 so cell `i` of a word sits at bits `8*(7-i)`; a short final word is left-shifted
 by the shortfall, which is a single `{`. Kept here only because the packed store
 is the obvious footprint optimisation once the layout exists.
+
+## CPU or ring? — measured, not argued
+
+The ring is charged from its **height**: 159x222, and `max(w,h)^2` bills only the
+larger side, so the 63 columns of slack to the west are free and narrowing the
+machine is worth exactly zero. All of the score is in rows.
+
+Where the rows go, measured on `lllm_layout.build_room`:
+
+    63 blocks -> 189 interior rows =  80 glyph rows + 109 lane-overhead rows
+    53 of the 63 blocks have exactly ONE glyph row, and still cost 2 (non-branching)
+    or 4 (branching) rows apiece
+
+So 58% of the charged dimension is lane plumbing, and it is structural: the module
+docstring says it "lays one block to a row band and spends rows freely", which was
+the right call when correctness was the risk and is what now sets the score.
+Shaving channels fights the scheme rather than replacing it.
+
+`LLM-DESIGN.md` ran this comparison in the opposite direction and rejected the ring
+for the sibling task: ~3.3 rows a block would have put LLM near 600 rows and
+`area2` ~360,000, against a CPU's 41,616, because **a CPU pays for control flow in
+ROM words, which are dense data, not in rows**. LLLM is the same trade with the
+numbers reversed, so it was worth asking the question here.
+
+Answered with `lm1.machine.build`, which synthesises a whole machine from a
+`Program` and reports its dimensions — so the footprint of a CPU can be measured
+against a synthetic program of a given size *without writing the interpreter*.
+`tape_n=280`, `display=(16,16)`, sweeping the ROM fold for the square optimum
+(ARCH.md 7.3b):
+
+| interpreter | best `rom_rows` | w x h | `area2` | vs the ring |
+|---|---|---|---|---|
+| 300 instrs | 20 | 95x91 | **9,025** | 5.46x smaller |
+| 400 | 28 | 92x99 | 9,801 | 5.03x |
+| 600 | 36 | 104x107 | 11,449 | 4.30x |
+| 900 | 48 | 117x119 | 14,161 | 3.48x |
+| 1,200 | (default fold) | 111x213 | 45,369 | 1.09x |
+
+**A CPU wins for any interpreter under ~1,200 instructions**, and the fold matters
+as much as the program: at 600 instructions the default fold gives 19,600 and the
+swept one 11,449, because the sweep lands the machine square (104x107).
+
+How big would the interpreter be? LLM's is 1,757 instructions for a language with
+rooms, pipes, three men, pipe-train shifts and wall-freeze ordering. LLLM has one
+room, one man, and ten operations — no room finding, no pipe walk, no scheduling,
+which is the bulk of LLM's code. The reference interpreters put the ratio at
+299 lines against 808, and the ring worker is 63 blocks / 614 glyph cells. **400
+to 700 instructions is the honest bracket, and every point of it wins.**
+
+Ticks are the constraint to respect, not the footprint: 1.46M today against a
+**15M cap**. A CPU is much slower per interpreted tick. Budgeting ~50 instructions
+and ~3 store reads a tick, at ~143 ticks an instruction (decode depth 5) and
+`8.0 * N` = 2,240 a read at `N = 280`:
+
+    (50 x 143) + (3 x 2,240) = 13,870 ticks an interpreted tick
+    x 182 interpreted ticks  = ~2.5M ticks a case
+
+That is a 6x margin under the cap, and store reads are 48% of it — so the sibling
+task's two-tier seam applies directly if it ever gets tight. At `area2` 11,449 and
+~3M ticks the score lands near **3.4e10 against the ring's 7.20e10**.
+
+Not yet done, and the reason this section is a finding rather than a machine: the
+interpreter itself. The bracket above is measured on synthetic programs of the
+right *size* and opcode mix, not on LLLM's actual code, so it bounds the answer
+without settling it. The 15M cap makes the tick estimate the thing to check first
+when building it — footprint is no longer in doubt.
+
+### The alternative, priced for completeness
+
+Staying on the ring, 9 of the 109 lane rows are provably dead: `d` branches
+declare only `pos`/`zero` so their north free row can never be taken (3 blocks),
+and `x` branches have no straight lane at all (`_straight_key` returns `None`, 6
+blocks). Reclaiming them is 222 -> 213 rows, `area2` 49,284 -> 45,369, **-7.9%**.
+Real, safe, and an order of magnitude less than replacing the scheme.
