@@ -252,55 +252,8 @@ footprint because the machine already has a 93x111 hole east of the CPU band.
 What A needs is the one thing the CPU does not have: **a second store seam**.  The
 adapter routes on the *sign* of the request word today (`+a` read, `-a` write); a
 second tier means routing on its *range* as well, plus `machine.py` placing the
-block and binding four more pipes.
-
-## The seam, built and measured
-
-`machine.build(program, hot=(cols, rows))` (`lm1/machine.py`,
-`tests/test_lm1_two_tier.py`).  Measured on the engine over all 14 public cases at
-a 50M tick cap, against the shipped machine:
-
-| | footprint | avg ticks | max ticks | score |
-|---|---|---|---|---|
-| tape only, N=427 | 41,616 | 20,275,186 | 31,809,643 | **8.44e11** |
-| **+ 52-slot man-memory tier** | **41,616** | **8,605,207** | **13,676,774** | **3.58e11** |
-
-**2.36x, at an unchanged 203x204** — better than the 4.6e11 predicted above,
-because the model charged the tier for reads it does not make: a hot *write* is
-fire-and-forget on either tier, and moving the reads off the tape also stops the
-CPU stalling on the ring's phase.
-
-Four pieces, and each one is checked on the reference engine on its own:
-
-* **`memory_men_grid_store.grid_block(cols, rows, base=T)`** — the grid packaged
-  as a placeable `STORE` (`_Tape`'s interface: cells, a request stub entered
-  heading east, an answer stub leaving north).  `base` is why there is **no
-  address translation anywhere**: a column carries a global base literal, so the
-  tier decodes the CPU's own slot numbers.
-* **`machine.two_tier_adapter(hot_top)`** — the same `U`/`X` sign branch, plus a
-  range test `A = a - (hot_top + 1)` in each half.  Four arms, and the *only*
-  difference between a hot arm and a cold one is which row of the room it sits
-  in, because `s` binds the nearest outgoing pipe (§7.1).  Hot slots are the
-  **low** addresses so that `X`'s third way — straight, on zero — lands on the
-  first cold address rather than on the seam itself.
-* **A merger room**, `R`/`s` in a six-cell loop, so the CPU keeps its one response
-  pipe and the ISA is untouched.  Ordering is free: the CPU blocks on every read,
-  so exactly one answer is ever in flight.
-* **`llm_asm.Asm(hot_slots=K)`** and `hot=True` on `slot()`/`array()`, which
-  allocate out of the reserved low block.  Which 52 came from measuring reads per
-  slot in `lm1.emulator` over all 14 cases and taking whole declarations greedily
-  by reads-per-slot: **90.6 % of the 3,185 reads a case**.
-
-The shape is pinned by the box, not by taste.  `memory_men_grid` is `27 * cols`
-wide and `32 + 3 * rows` tall; two columns is the widest that still leaves room
-for the tape beside it inside the ROM's 203 columns, and 26 rows the tallest that
-fits above the panel — so 52 cells is what falls out, at 59x103.  Three columns
-(81 wide) pushes the machine to 212 and costs 8 % of footprint for 2 % more reads.
-
-The cold path pays for it: the tape's request is routed the long way round, south
-under both blocks, to keep the corridor above the CPU clear for the two answers.
-That is ~250 cells on a path already 3,416 ticks long, and the ~9 % of reads that
-take it are the 256-cell program grid, which is read once a cell a round.
+block and binding four more pipes.  That is the whole remaining job, and it is
+worth ~45% of the score.
 
 The version of the idea that *would* pay is `snake-ring`'s: not swapping the
 store, but taking the big structure *out* of it.  The 256-cell grid in a

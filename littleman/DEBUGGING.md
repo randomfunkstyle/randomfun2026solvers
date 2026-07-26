@@ -150,3 +150,23 @@ the `+` that is the whole address generator, and circles all sixteen births. The
 labels are engine-checked twice over: the man standing in the region named
 `decoder addr j` is asserted to be holding `B = j` on the reference engine, and
 the cells are read back end to end.
+
+### The grid: M columns of N cells
+
+```sh
+uv run python -m randomfun2026solvers.memory_men_grid --cols 4 --rows 25 \
+  --man littleman/examples/memory-men-grid-4x25.man \
+  --html littleman/examples/memory-men-grid-4x25.html \
+  --json littleman/examples/memory-men-grid-4x25.json
+```
+
+The overlay earns its keep differently here. The *tiles* are readable by now — the
+same decoder and cell rings as the single column — but the grid is four copies of
+them, and nothing in 108x107 characters says which copy holds address 60, why one
+room in each column is two glyphs wide, or why the answer leaves a column through
+a single pipe when the request arrives through twenty-five. So it names each
+column with the addresses it owns, circles the base literal that is the only text
+distinguishing one column from another, and labels the two strips with the reason
+they are on opposite sides: broadcast pipes must never cross answer pipes, and
+every column's answer must travel the same distance or a later operation's answer
+overtakes an earlier one.

@@ -21,55 +21,24 @@ __all__ = ["Asm"]
 class Asm:
     """Emits LM-1 assembly text with named slots, arrays and unique labels."""
 
-    def __init__(self, first_slot: int = 1, *, hot_slots: int = 0) -> None:
-        """``hot_slots`` reserves the *lowest* addresses for a second store tier.
-
-        ``lm1.machine.build(hot=...)`` routes a request on the magnitude of its
-        address word: ``1 .. hot_slots`` go to a man-memory tier that answers in
-        ~200 ticks and everything above to the tape, which answers in ``8 * N``.
-        The split is by *range*, so a hot slot is one the allocator hands out of a
-        reserved low block — declare it with ``hot=True`` and it lands there.
-
-        A read costs the same at every tape address, so before the tier existed
-        the ordering here was free and slots were grouped by phase. It is not free
-        any more: which side of ``hot_slots`` a slot falls on is worth 3,200 ticks
-        a read.
-        """
+    def __init__(self, first_slot: int = 1) -> None:
         self.lines: list[str] = []
         self.equs: list[tuple[str, int, str]] = []
-        self._hot_base = first_slot
-        self._hot_next = first_slot
-        self._hot_top = first_slot + hot_slots
-        self._next = self._hot_top
+        self._next = first_slot
         self._uid = 0
         self._names: dict[str, int] = {}
 
     # ── storage ──────────────────────────────────────────────────────────────
-    def slot(self, name: str, note: str = "", *, hot: bool = False) -> str:
-        return self.array(name, 1, note, hot=hot)
+    def slot(self, name: str, note: str = "") -> str:
+        return self.array(name, 1, note)
 
-    def array(self, name: str, n: int, note: str = "", *, hot: bool = False) -> str:
+    def array(self, name: str, n: int, note: str = "") -> str:
         if name in self._names:
             raise ValueError(f"slot {name} declared twice")
-        if hot and self._hot_top > self._hot_next:
-            if self._hot_next + n > self._hot_top:
-                raise ValueError(
-                    f"{name} wants {n} hot slots but only "
-                    f"{self._hot_top - self._hot_next} are left in the tier"
-                )
-            addr = self._hot_next
-            self._hot_next += n
-        else:
-            addr = self._next
-            self._next += n
-        self._names[name] = addr
-        self.equs.append((name, addr, note if n == 1 else f"{note} [{n}]"))
+        self._names[name] = self._next
+        self.equs.append((name, self._next, note if n == 1 else f"{note} [{n}]"))
+        self._next += n
         return name
-
-    @property
-    def hot_used(self) -> int:
-        """Slots handed out of the reserved hot block."""
-        return self._hot_next - self._hot_base
 
     def const(self, name: str, value: int, note: str = "") -> str:
         """A pure assemble-time constant — no storage."""
