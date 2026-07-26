@@ -226,6 +226,27 @@ def test_every_public_case_passes_on_the_fast_engine():
 
 
 @pytest.mark.slow
+def test_the_shapes_the_public_cases_do_not_reach_also_pass():
+    """The corners of the constraint box, on the engine rather than the model.
+
+    The judge's cases are not the public ones, and the two that matter here are
+    ``K = 1`` -- one lane of one group, so the `c` ring is at its shortest -- and
+    ``M = 1``, which turns the `t` loop over exactly once.  Both are shapes where
+    a ring holding fewer words than its pipe is long would stall rather than
+    deadlock, and would show up only as a slow wrong answer.
+    """
+    from randomfun2026solvers.fast_littleman import FastLittleman
+
+    machine = FastLittleman(GRID)
+    for n, m, k in [(1, 1, 1), (2, 2, 1), (16, 16, 1), (16, 1, 16),
+                    (2, 16, 2), (16, 2, 2), (3, 16, 16), (16, 16, 3)]:
+        case = _case(n, m, k, seed=n * 1000 + m * 10 + k)
+        exp = cfg.matmul_reference(case)
+        res = machine.run(input=case, expected=exp, max_ticks=3_000_000)
+        assert list(res.output) == exp, (n, m, k)
+
+
+@pytest.mark.slow
 def test_every_public_case_passes_on_the_reference_engine():
     if os.environ.get("LM_VALIDATOR", "").lower() != "reference":
         pytest.skip("set LM_VALIDATOR=reference to cross-check the wasm engine")
