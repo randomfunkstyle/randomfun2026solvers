@@ -214,7 +214,7 @@ right size and opcode mix *without writing the interpreter*.
 | interpreter | best `rom_rows` | w x h | `area2` |
 |---|---|---|---|
 | 300 instrs | 20 | 95x91 | 9,025 |
-| 400 | 28 | 92x99 | 9,801 |
+| 400 | 26 | 98x97 | 9,604 |
 | 600 | 36 | 104x107 | 11,449 |
 | 900 | 48 | 117x119 | 14,161 |
 
