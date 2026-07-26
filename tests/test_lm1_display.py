@@ -67,7 +67,7 @@ DISPLAY_TARGETS = ("palette", "plotter")
 
 #: ``max(width, height)²`` and the shape it comes from, pinned per slug so a
 #: regression in either dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = {"plotter": (109, 104), "palette": (95, 89)}
+EXPECTED_SHAPE = {"plotter": (109, 103), "palette": (95, 88)}
 EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 9_025}
 
 MAX_INSTRUCTIONS = 400_000
@@ -244,6 +244,7 @@ def test_the_panel_model_matches_the_engine_on_addr_data_swap_order() -> None:
 
 # ── the generated grid, through the engine's structural analysis ──────────────
 @node_required
+@slow
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
 def test_the_checked_in_display_grid_matches_the_generator(slug: str) -> None:
     expected = "\n".join(machine.build_for(slug).rows) + "\n"
@@ -254,6 +255,7 @@ def test_the_checked_in_display_grid_matches_the_generator(slug: str) -> None:
 
 
 @node_required
+@slow
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
 def test_the_generated_shape_is_the_one_we_scored(slug: str) -> None:
     m = machine.build_for(slug)
@@ -263,6 +265,14 @@ def test_the_generated_shape_is_the_one_we_scored(slug: str) -> None:
     # No `O` room: emitting output on a display problem is an error, and an unused
     # outgoing pipe would still compete for every `s` (§7.1).
     assert "O" not in "".join(m.rows)
+
+
+@pytest.mark.parametrize("slug", DISPLAY_TARGETS)
+def test_the_checked_in_display_shape_is_the_one_we_scored(slug: str) -> None:
+    """Fast score pin; generator equality and placement search live in slow."""
+    rows = _grid_path(slug).read_text(encoding="utf-8").rstrip("\n").splitlines()
+    assert (max(map(len, rows)), len(rows)) == EXPECTED_SHAPE[slug]
+    assert max(max(map(len, rows)), len(rows)) ** 2 == EXPECTED_FOOTPRINT[slug]
 
 
 @node_required
@@ -294,6 +304,7 @@ def test_exactly_one_panel_at_the_stated_resolution_with_one_pipe_per_side(slug:
 
 
 @node_required
+@slow
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
 def test_the_engine_finds_exactly_the_pipes_the_generator_drew(slug: str) -> None:
     """ROM, 3 x panel, mem request/response, adapter -> tape, the tape's two ring pipes.
@@ -309,6 +320,7 @@ def test_the_engine_finds_exactly_the_pipes_the_generator_drew(slug: str) -> Non
 
 
 @node_required
+@slow
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
 def test_every_port_s_routes_to_its_own_side_of_the_panel(slug: str) -> None:
     """The nearest-pipe oracle, on the real grid (``ARCH.md`` §7.1).
@@ -340,6 +352,7 @@ def test_every_port_s_routes_to_its_own_side_of_the_panel(slug: str) -> None:
 
 
 @node_required
+@slow
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
 def test_folding_the_rom_is_what_buys_plotters_footprint(slug: str) -> None:
     """``rows_for_budget`` aims the ROM at the *CPU's* width and knows nothing about
@@ -489,11 +502,11 @@ STEP_CAP = 5_000_000
 #: This used to be a 32-pixel *diagonal* at 265.5k ticks a round, which put 20 rounds
 #: 6% over the step cap; the packed single-add loop is what took it to ~97k.
 WORST_SEGMENT = (31, 1, 0, 0)
-WORST_ROUND_TICKS = 68_122
+WORST_ROUND_TICKS = 65_106
 
 #: 20 rounds of ``WORST_SEGMENT`` on the engine — the number the step cap is checked
 #: against, and the one figure that has to stay honest.
-WORST_20_ROUND_TICKS = 1_359_533
+WORST_20_ROUND_TICKS = 1_299_213
 
 
 def _judge_segments(segments: list[tuple[int, ...]]) -> object:
@@ -547,6 +560,7 @@ def test_only_the_public_cases_are_graded_which_is_why_plotter_is_submittable() 
 
 
 @node_required
+@slow
 def test_the_worst_legal_20_round_load_fits_the_step_cap_on_the_engine() -> None:
     """The margin, measured on the engine at the constraints' limit — 20 rounds.
 

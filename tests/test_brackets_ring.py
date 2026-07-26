@@ -85,6 +85,7 @@ def test_exact_bound_and_adversarial_cases(case) -> None:
     assert result.passed, (case.name, result.fatal, result.output)
 
 
+@pytest.mark.slow
 def test_every_string_through_length_four() -> None:
     """1,555 inputs exhaust all six-character combinations at small depth."""
     machine = FastLittleman(SOLUTION)

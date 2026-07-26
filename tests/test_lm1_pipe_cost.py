@@ -107,6 +107,7 @@ def _measure(slug: str, cap: int, tmp_path: Path, **kw: object) -> tuple[int, in
 
 
 @node_required
+@pytest.mark.slow
 def test_a_short_tape_pays_almost_the_whole_pipe_cell(tmp_path) -> None:
     """``brackets``, N=8: 1.08 ticks per added cell per read — §7.4b as written.
 
@@ -119,6 +120,7 @@ def test_a_short_tape_pays_almost_the_whole_pipe_cell(tmp_path) -> None:
 
 
 @node_required
+@pytest.mark.slow
 def test_a_longer_tape_hides_most_of_the_pipe_behind_its_own_rotation(tmp_path) -> None:
     """``tcp``, N=52: 0.52 — half of §7.4b's figure, on the same generator.
 
@@ -132,6 +134,7 @@ def test_a_longer_tape_hides_most_of_the_pipe_behind_its_own_rotation(tmp_path) 
 
 
 @node_required
+@pytest.mark.slow
 def test_the_streaming_matmuls_own_response_pipe_is_a_six_percent_lever(tmp_path) -> None:
     """The number that decides whether to bother shortening it: ~0.9 per read.
 

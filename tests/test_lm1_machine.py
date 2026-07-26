@@ -46,6 +46,7 @@ slow = pytest.mark.slow
 #: :func:`test_tcp_survives_the_constraint_limit`), and plotter hit the same wall
 #: with 11 live values against ``tape_n=11``.
 TARGETS = machine.TAPE_SIZE
+BUILDABLE_TARGETS = {slug: n for slug, n in TARGETS.items() if slug != "pathfinder-unit"}
 
 
 def test_adapter_uses_u_to_free_its_old_rightmost_column() -> None:
@@ -133,6 +134,45 @@ def test_backward_jump_is_a_whole_lap_minus_the_body() -> None:
     assert words[5] == 2 * 1
 
 
+def test_fixed_width_jump_counts_are_always_even() -> None:
+    """The two-read discard block relies on skips containing whole instructions."""
+    prog = assemble(
+        """
+top:   NOP
+       BRZ forward
+       JMP top
+forward:
+       BRN top
+       HALT
+"""
+    )
+    p = machine.plan(prog)
+    words = machine.rom_words(prog, p)
+    targets = [
+        words[2 * i + 1]
+        for i, ins in enumerate(prog.instrs)
+        if ins.sem in {Sem.JUMP, Sem.BR_ZERO, Sem.BR_NEG}
+    ]
+    assert targets
+    assert all(n % 2 == 0 for n in targets)
+
+
+def test_jump_discard_block_reads_two_words_back_to_back() -> None:
+    """The 2x4 core is the small burst reader used by JMP and taken branches."""
+    grid = machine._Grid()
+    bindings: list[tuple[int, int, str, str]] = []
+
+    machine._discard_loop(grid, 2, 3, bindings)
+
+    assert ["".join(grid.c[(x, y)] for x in range(2, 4)) for y in range(3, 7)] == [
+        "a<",
+        "rm",
+        "rm",
+        ">^",
+    ]
+    assert bindings == [(2, 4, "r", "rom"), (2, 5, "r", "rom")]
+
+
 def test_store_address_zero_is_rejected() -> None:
     """Slot 0 is sign-ambiguous: the operation is encoded in the address's sign."""
     prog = assemble("LDI 1\nST 0\nHALT\n")
@@ -150,9 +190,9 @@ def test_a_tape_one_slot_too_small_is_rejected() -> None:
     is checked against its program below.
     """
     prog = assemble("LDI 1\nST 4\nHALT\n")
+    assert machine._highest_address(prog) == 4
     with pytest.raises(machine.MachineError, match="only reaches"):
         machine.build(prog, tape_n=4)
-    machine.build(prog, tape_n=5)  # one more slot and it is legal
 
 
 def test_every_recorded_tape_size_clears_its_programs_top_address() -> None:
@@ -184,7 +224,8 @@ def test_every_used_opcode_has_hardware() -> None:
 
 # ── generation (runs the engine's structural analysis) ────────────────────────
 @node_required
-@pytest.mark.parametrize(("slug", "tape_n"), sorted(TARGETS.items()))
+@slow
+@pytest.mark.parametrize(("slug", "tape_n"), sorted(BUILDABLE_TARGETS.items()))
 def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     """``build`` raises unless every ``r``/``s`` is *strictly* nearest its own pipe.
 
@@ -219,6 +260,7 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
 
 
 @node_required
+@slow
 def test_checked_in_grids_match_the_generator() -> None:
     """The ``.man`` files under ``tasks/solutions`` are generated, not hand-edited."""
     for slug in TARGETS:

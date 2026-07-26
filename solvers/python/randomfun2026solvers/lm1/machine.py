@@ -611,7 +611,7 @@ def image_program(program: Program, p: _Plan | None = None) -> Program:
 # ── the CPU room ─────────────────────────────────────────────────────────────
 _STRUCT_X0 = 2  # slabs hug the west wall, keeping their `r` nearest the ROM pipe
 _SLAB_PITCH = 13  # columns per slab: each gets its own band (see _slab)
-_JUMP_SLAB_ROWS = 5
+_JUMP_SLAB_ROWS = 4
 _BRANCH_SLAB_ROWS = 8
 
 
@@ -890,9 +890,15 @@ def build_cpu(
         s0, dx = slab_at[m], drop_x[p.row[m]]
         base = slab_base[m]
         g.put(dx, s0, "<")
-        for x in range(base + 1, dx):
-            g.soft(x, s0, "<")
-        g.put(base, s0, "v")
+        if p.sem[m] in _JUMP_SEMS:
+            # The compact discard loop owns `a<` at base..base+1 and is entered
+            # directly from the westbound slab-entry corridor.
+            for x in range(base + 2, dx):
+                g.soft(x, s0, "<")
+        else:
+            for x in range(base + 1, dx):
+                g.soft(x, s0, "<")
+            g.put(base, s0, "v")
 
     # ── collector -> west riser -> back into the fetch cell ──────────────────
     # `soft` after the drops, so a slab-entry column that has to pass *through* the
@@ -1006,18 +1012,19 @@ def _slab(
     and the other two go straight back to the fetch site.
     """
     sem = p.sem[mnemonic]
-    g.soft(base, s0 + 1, ".")
 
     if sem in _JUMP_SEMS:
-        _discard_loop(g, base, s0 + 2, pipe_glyphs)
-        exit_col = base + 2
-        # Rise back to the collector, which is now *above* the slabs: the exit is a
-        # `^` column, and the collector's own `<` turns the arriving man west.
-        g.put(exit_col, s0 + 2, "^")
-        for y in range(collector + 1, s0 + 2):
-            g.soft(exit_col, y, ".")
-        return {exit_col}
+        _discard_loop(g, base, s0, pipe_glyphs)
+        # BP==0 leaves the `a` westbound. Join the CPU's existing x=1 return
+        # riser, which stays west of every slab and cannot cross live code.
+        for xx in range(2, base):
+            g.soft(xx, s0, "<")
+        g.put(1, s0, "^")
+        for yy in range(collector + 1, s0):
+            g.soft(1, yy, ".")
+        return {1}
 
+    g.soft(base, s0 + 1, ".")
     g.put(base, s0 + 2, ">")
     g.put(base + 1, s0 + 2, "X")
     g.put(base + 1, s0 + 1, ">")  # ACC < 0: CCW from east is north
@@ -1028,7 +1035,6 @@ def _slab(
     # crosses the eastward run of an arm below it.
     cols = {"neg": base + 9, "zero": base + 6, "pos": base + 3}
     taken = "zero" if sem is Sem.BR_ZERO else "neg"
-    loop_y = s0 + 5
     drops: set[int] = set()
 
     turn_row = s0 + 4
@@ -1059,47 +1065,53 @@ def _slab(
     # the engine breaks by reading order, so the jump silently blocks on an empty
     # pipe forever (§7.1: nearest, not nearest-that-can-proceed).
     g.put(cols[taken], turn_row, "<")
-    for c in range(base + 1, cols[taken]):
+    for c in range(base + 2, cols[taken]):
         g.soft(c, turn_row, ".")
-    g.put(base, turn_row, "v")
-
-    _discard_loop(g, base, loop_y, pipe_glyphs)
-    # East of every arm, which is not cosmetic. The exit now *rises* to the
-    # collector, so it crosses all three arm rows on the way — and `base + 2` is
-    # exactly where each arm keeps its `W`, so a riser there walks the returning man
-    # through a register swap. `base + 11` clears `cols["neg"]` (`base + 9`) and
-    # still fits inside _SLAB_PITCH.
-    exit_col = base + 11
-    # Only the turn cell is an arrow: the body must be `.` because it also crosses
-    # shallower slabs' westbound entry rows, where a `^` would send that man north.
-    g.put(exit_col, loop_y, "^")
-    for y in range(collector + 1, loop_y):
-        g.soft(exit_col, y, ".")
-    drops.add(exit_col)
+    _discard_loop(g, base, turn_row, pipe_glyphs)
+    for c in range(2, base):
+        g.soft(c, turn_row, "<")
+    g.put(1, turn_row, "^")
+    for y in range(collector + 1, turn_row):
+        g.soft(1, y, ".")
+    drops.add(1)
     return drops
 
 
-def _discard_loop(g: _Grid, x: int, y: int, pipe_glyphs: list[tuple[int, int, str, str]]) -> None:
-    """A ``b``-counted loop that discards one ROM word per lap.
+def _discard_loop(
+    g: _Grid,
+    x: int,
+    y: int,
+    pipe_glyphs: list[tuple[int, int, str, str]],
+) -> None:
+    """Discard two adjacent ROM words per lap.
 
-    ``circuit.counted_loop``'s shape, inlined. It **tests before the body**, so a
-    count of 0 runs it zero times — which is exactly what a not-taken branch and a
-    ``JMPF 0`` both need::
+    The generated ROM image is fixed-width: every instruction is exactly two
+    words, and :func:`rom_words` scales every jump target by two.  BP is therefore
+    even on every entry to this block.  Spending that invariant gives a compact
+    2x4 burst loop instead of testing around every single read::
 
-        (x,y)=`>`   (x+1,y)=`d`     d: BP>0 -> south into the body, 0 -> east, out
-        (x,y+1)=`m` (x+1,y+1)=`r`   r discards a word, m decrements on the way back
-        (x,y+2)=`^` (x+1,y+2)=`<`
+        a<
+        rm
+        rm
+        >^
 
-    The `r` sits near the west wall, which is what makes it bind to the ROM pipe
-    rather than to the input or STORE pipes (§7.1).
+    Enter the top-right ``<`` heading west.  At the top-left ``a``, BP > 0 turns
+    counter-clockwise/south through two consecutive ``r`` cells; the right edge
+    decrements twice on the way back.  BP == 0 continues west.  Thus a zero skip
+    still performs no reads, while every non-zero skip costs four walked cells
+    per discarded word instead of six.
+
+    Both ``r`` cells stay at the slab's west edge so they bind to the ROM pipe,
+    not an input, STORE, or coprocessor response pipe (§7.1).
     """
-    g.put(x, y, ">")
-    g.put(x + 1, y, "d")
-    g.put(x, y + 1, "m")
-    g.put(x + 1, y + 1, "r")
-    pipe_glyphs.append((x + 1, y + 1, "r", "rom"))
-    g.put(x, y + 2, "^")
-    g.put(x + 1, y + 2, "<")
+    g.put(x, y, "a")
+    g.put(x + 1, y, "<")
+    for yy in (y + 1, y + 2):
+        g.put(x, yy, "r")
+        pipe_glyphs.append((x, yy, "r", "rom"))
+        g.put(x + 1, yy, "m")
+    g.put(x, y + 3, ">")
+    g.put(x + 1, y + 3, "^")
 
 
 # ── the adapter: sign-biased request -> the tape's real wire protocol ────────
@@ -1265,8 +1277,8 @@ def tape_block(n: int) -> _Tape:
     replaced here by pipe stubs the caller extends. The **worker is untouched at
     every size**, which is the point: it is measured hardware (``ARCH.md`` §4.1) and
     this must not perturb it. Only the ring around it is re-routed, and only above
-    107 slots — every ``n <= 107`` emits the same cells it always did, which is what
-    keeps the ten checked-in ``.man`` files byte-identical.
+    107 slots — every ``n <= 107`` emits the same tape cells it always did, keeping
+    tape layout changes out of the checked-in ``.man`` files.
 
     ``n`` is the slot count. Ring **capacity is pipe length** (``SPEC.md``: a pipe
     is a FIFO whose capacity equals its cell count) and it must be ``>= n + 1`` — a
@@ -1282,9 +1294,9 @@ def tape_block(n: int) -> _Tape:
     ``n=108``, 46 at ``n=380``, 48 at ``n=420``. That height is usually *free*,
     because the block sits east of the adapter beside the CPU's own panel/stream
     stack, which is taller. Rebuilt at ``n=420``, nine of the ten machines rebuilt
-    keep their bounding box to the cell: ``brackets`` 95x69, ``tcp`` 109x74,
-    ``gradebook`` 114x101, ``plotter`` 109x104, ``snake`` 123x129, ``pathfinder``
-    180x184. The exception is ``matmul`` (88x90 -> 100x90, 8,100 -> 10,000): it is the
+    keep their bounding box to the cell: ``brackets`` 95x69, ``tcp`` 109x73,
+    ``gradebook`` 114x100, ``plotter`` 109x103, ``snake`` 123x128, ``pathfinder``
+    180x183. The exception is ``matmul`` (86x90 -> 100x90, 8,100 -> 10,000): it is the
     one machine that is both square *and* has a STREAM block under the CPU, so the
     extra rows push the pad search onto a wider ``mem_pad``. Size to the real high
     address, as always — this is not a knob to spend.
@@ -2283,7 +2295,7 @@ LANE_ORDER: dict[str, tuple[str, ...]] = {
 #: their height is free and the default costs nothing.
 ROM_ROWS = {
     # The panel adds ~30 rows and makes height binding, so the ROM has to stop being
-    # what sets the width and then stop: 111x104 (12,321) at 8 rows, against the
+    # what sets the width and then stop: 109x103 (11,881) at 8 rows, against the
     # default's 111x123 (15,129). `plotter` is height-bound past that point, which is
     # why unrolling its inner loop (see plotter.asm) is a real footprint trade rather
     # than a free one. See tests/test_lm1_display.py.
@@ -2292,7 +2304,7 @@ ROM_ROWS = {
     # why a loop iteration costs a whole ROM lap), so its image is 836 words and the
     # ROM, not the tape, sets the box. 31 rows is the first fold that gets the ROM
     # under the machine's own 113 columns; wider costs width, narrower only costs
-    # height. 113x101 (12,769). See tests/test_lm1_gradebook.py.
+    # height. 113x100 (12,769). See tests/test_lm1_gradebook.py.
     "gradebook": 31,
     # No display and a 30-slot tape leave the machine 83 columns wide, so the same
     # rule applies one size down: 23 rows is where the ROM stops setting the width.
@@ -2300,16 +2312,16 @@ ROM_ROWS = {
     "sudoku-validity": 23,
     # matmul is the one machine that came out *square* on the padded ROM (96x96). The
     # STREAM block's ring band is as wide as the tape row above it, and its height is
-    # what the ROM trades against; packed, the trade lands at 88x90 (8,100) on 5 rows.
+    # what the ROM trades against; packed, the trade lands at 86x90 (8,100) on 5 rows.
     "matmul": 5,
     # Like plotter: the panel adds rows, so height is binding and the fold has to stop
-    # trading width for it. 9 rows is the minimum of a full sweep — 123x129 (16,641),
+    # trading width for it. 9 rows is the minimum of a full sweep — 123x128 (16,384),
     # against the default's 119x142 (20,164). One row either side is worse (8 rows is
     # 135 wide, 10 rows is 130 tall), so this is a real optimum, not a plateau.
     "snake": 9,
     # snake-ring is height-bound: the coprocessor block is 66x60 and sits below the
     # CPU, so the box is set by rows whatever the fold does to the width. 6 rows is the
-    # sweep minimum at 122x136; 5 is 144x135 and 7 is 111x137, so this is a real
+    # sweep minimum at 121x135; 5 is 144x134 and 7 is 111x136, so this is a real
     # optimum rather than a plateau.
     "snake-ring": 6,
     # pathfinder's P is 2,484 words — the level step is unrolled over the four board

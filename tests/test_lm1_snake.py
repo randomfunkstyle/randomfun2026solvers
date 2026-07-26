@@ -51,8 +51,8 @@ node_required = pytest.mark.skipif(
 
 #: The shape and score this grid was submitted at, so a regression in either
 #: dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = (123, 129)
-EXPECTED_FOOTPRINT = 16_641
+EXPECTED_SHAPE = (123, 128)
+EXPECTED_FOOTPRINT = 16_384
 
 #: The cheapest public case that ends in a loss — 5 rounds, ~73k engine ticks. A
 #: mis-bound port or an inverted wall test both show up here.
@@ -164,6 +164,7 @@ def test_the_rom_image_draws_what_the_source_program_draws() -> None:
 
 # ── the generated grid ───────────────────────────────────────────────────────
 @node_required
+@pytest.mark.slow
 def test_the_checked_in_grid_matches_the_generator() -> None:
     expected = "\n".join(_machine().rows) + "\n"
     assert GRID.read_text(encoding="utf-8") == expected, (
@@ -173,6 +174,7 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
 
 
 @node_required
+@pytest.mark.slow
 def test_the_generated_shape_is_the_one_we_scored() -> None:
     m = _machine()
     assert (m.width, m.height) == EXPECTED_SHAPE
@@ -181,20 +183,26 @@ def test_the_generated_shape_is_the_one_we_scored() -> None:
     assert "O" not in "".join(m.rows), "output on a display problem is an error"
 
 
+def test_the_checked_in_shape_is_the_one_we_scored() -> None:
+    rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
+    assert (max(map(len, rows)), len(rows)) == EXPECTED_SHAPE
+    assert max(max(map(len, rows)), len(rows)) ** 2 == EXPECTED_FOOTPRINT
+
+
 @node_required
+@pytest.mark.slow
 def test_the_rom_fold_is_the_footprint_optimum() -> None:
     """The default fold aims the ROM at the *CPU's* width and knows nothing about the
     panel, which adds rows and makes height binding — the same trade ``plotter`` makes.
 
-    Unlike ``plotter``, the optimum here *spends* width: unfolding the ROM from 22 rows
-    to 9 takes it from 119x142 to 123x129, four columns wider and thirteen rows shorter.
-    ``max(w, h)²`` is scored, and 123 < 142, so the wider machine is the smaller one.
+    The two-read jump block changed the default fold's geometry, but the explicit
+    9-row fold still wins on the scored maximum dimension.
     """
     default = machine.build(programs.load("snake"), tape_n=80, display=(16, 16))
     tuned = _machine()
     assert tuned.rom_rows == machine.ROM_ROWS["snake"] == 9
     assert tuned.footprint < default.footprint
-    assert tuned.width > default.width and tuned.height < default.height
+    assert tuned.height < default.height
 
 
 @node_required
@@ -296,6 +304,7 @@ def _stub_unit(**_sizes: int) -> object:
 
 
 @node_required
+@pytest.mark.slow
 def test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -331,8 +340,8 @@ def test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot(
 # that proves the CPU can do this unaided, and it is what the coprocessor's numbers are
 # measured against.
 RING_GRID = REPO / "tasks" / "solutions" / "snake-ring_cpu.man"
-RING_SHAPE = (121, 136)
-RING_FOOTPRINT = 18_496
+RING_SHAPE = (121, 135)
+RING_FOOTPRINT = 18_225
 
 
 @lru_cache(maxsize=1)
@@ -401,6 +410,7 @@ def test_the_ring_program_draws_every_public_frame_on_the_emulator(case: dict) -
 
 
 @node_required
+@pytest.mark.slow
 def test_the_checked_in_ring_grid_matches_the_generator() -> None:
     expected = "\n".join(_ring_machine().rows) + "\n"
     assert RING_GRID.read_text(encoding="utf-8") == expected, (
@@ -410,6 +420,7 @@ def test_the_checked_in_ring_grid_matches_the_generator() -> None:
 
 
 @node_required
+@pytest.mark.slow
 def test_the_ring_machine_is_the_shape_we_scored() -> None:
     m = _ring_machine()
     assert (m.width, m.height) == RING_SHAPE
@@ -422,6 +433,12 @@ def test_the_ring_machine_is_the_shape_we_scored() -> None:
     for arm in ("GROW", "STEP", "FRUIT", "RED"):
         assert f"stream:unit:{arm}" in named, f"the {arm} arm is unnamed in the overlay"
     assert {"stream:ring", "stream:relay", "stream:panel"} <= named
+
+
+def test_the_checked_in_ring_shape_is_the_one_we_scored() -> None:
+    rows = RING_GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
+    assert (max(map(len, rows)), len(rows)) == RING_SHAPE
+    assert max(max(map(len, rows)), len(rows)) ** 2 == RING_FOOTPRINT
 
 
 @node_required

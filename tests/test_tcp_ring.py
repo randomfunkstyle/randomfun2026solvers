@@ -75,7 +75,7 @@ def test_the_cpu_build_is_left_alone() -> None:
     """
     cpu = ROOT / "tasks" / "solutions" / "tcp_cpu.man"
     rows = cpu.read_text().rstrip("\n").split("\n")
-    assert (max(len(r) for r in rows), len(rows)) == (109, 74)
+    assert (max(len(r) for r in rows), len(rows)) == (109, 73)
 
 
 def test_footprint_does_not_regress() -> None:
@@ -112,6 +112,7 @@ def test_public_cases(case: dict) -> None:
     assert list(snap.output) == want
 
 
+@pytest.mark.slow
 def test_the_score_beats_the_cpu_build_by_two_orders_of_magnitude() -> None:
     result = score_program(SOLUTION, PROBLEM)
     assert {c.name: c.ticks for c in result.cases} == CASE_TICKS
