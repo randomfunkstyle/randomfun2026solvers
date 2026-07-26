@@ -1450,7 +1450,7 @@ HOT = (2, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 
-def build_asm(*, packed_cells: bool = False, hot_slots: int = 0) -> tuple[str, int]:
+def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tuple[str, int]:
     """Return the ``.asm`` text and the tape slot count it needs.
 
     ``hot_slots`` reserves the lowest addresses for ``machine.build(hot=...)``'s
@@ -1487,13 +1487,16 @@ ROM_ROWS = 84
 
 
 def build_machine(
-    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = None
+    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = HOT
 ):
     """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel.
 
     ``hot=(cols, rows)`` adds the second store tier: a man-memory grid holding the
     lowest ``cols * rows`` slots, which answers in ~200 ticks against the tape's
-    ``8 * 427`` = 3,416. Pass :data:`HOT` for the measured shape.
+    ``8 * 427`` = 3,416.  :data:`HOT` is the measured shape and the default;
+    ``hot=None`` builds the single-tape machine this replaced, for comparison —
+    engine-measured, the tier is **2.36x**: 20,275,186 ticks a case against
+    8,605,207, at an unchanged 203x204.
     """
     from randomfun2026solvers.lm1 import machine
     from randomfun2026solvers.lm1.asm import assemble
