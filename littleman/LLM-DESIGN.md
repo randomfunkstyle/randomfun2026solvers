@@ -367,6 +367,47 @@ to predict this one before sending it (estimated 9,632k, judge measured 9,629,48
   one wall, which is the right idea for a seam whose merger is west of the block.
   It does not place: `collision at (109, 93)`, because `_two_tier` still routes the
   answer as if it left the east side. Parked behind `TIER_SIDE_PORTS = False`.
+## Where the box actually goes: half of it is empty
+
+Measured on the 195x196 machine — 38,220 cells in the bounding box, **18,467 used
+(48%)**:
+
+| band | columns | rows | cells | used |
+|---|---|---|---:|---:|
+| ROM, west | 0..104 | 0..91 | 9,660 | 88% |
+| ROM, east | 105..194 | 0..91 | 8,280 | 89% |
+| CPU stack, west | 0..104 | 92..195 | 10,920 | 23% |
+| **CPU stack, east** | **105..194** | **92..195** | **9,360** | **0%** |
+
+**A quarter of the bounding box is one dead rectangle**, because the layout is a
+*stack*: the ROM spans the full width on top, the CPU stack is only 105 columns
+wide underneath, and nothing was ever placed to the right of it.
+
+That also explains why compacting the CPU's *columns* buys nothing today while
+compacting its *rows* pays: width is set by the ROM's fold (195) against a stack
+that ends at x=104, so only rows convert into score. It is a property of the pose,
+not of the CPU.
+
+The ROM is the element that can fill the hole — it is one folded pipe snake with
+no natural shape, so it can be **L-shaped**: a top band plus a leg down the east
+side beside the CPU. That makes the fold a two-variable problem, and the optimum
+moves a long way:
+
+| ROM width | east leg | top rows | height | box | area2 |
+|---|---|---:|---:|---|---:|
+| 195 (today) | — | 88 | 196 | 195x196 | 38,416 |
+| 160 | 55x104 | 76 | 180 | 180x180 | 32,400 |
+| **170** | **65x104** | **66** | **170** | **170x170** | **28,900** |
+| 175 | 70x104 | 61 | 165 | 175x175 | 30,625 |
+
+**~25% at the optimum**, and the floor is lower still: 18,467 used cells is a
+136x136 square, so even 70% packing efficiency would be ~163 a side.
+
+Two things make it real work rather than a parameter change: the ROM is one
+looping ring, so an L-shaped fold has to keep the boustrophedon continuous around
+the corner (`rom.build_packed_rom` folds into a plain rectangle and carries a
+per-column backtick-parity invariant), and the fetch pipe into the CPU still has
+to bind by nearest column.
 
 ## What is left on the table
 

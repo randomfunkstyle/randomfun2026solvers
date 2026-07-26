@@ -1,0 +1,16 @@
+# history-lesson — submission 6f9685f4-bd9d-4974-abd9-5e9b4d279853
+
+verdict      done: 1/1 cases, area2 8100, footprint-only, score 8,100
+submitted    2026-07-26T15:32:15+0300
+grid         90x90
+problem id   3ef9ec95-03ff-4825-b42d-dbad3ee54af0
+fingerprint  afa0f9c40512e458d1ce84b9e48044b1bf83320d8c5e4d776b5d42fc3a6c7f17
+commit       03f2e49
+local        history-lesson: 1/1 public cases, avg 83,629 ticks
+source       ../../../../../../../../private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers--claude-worktrees-sort-numbers-ring/8d6fb213-c37a-4fac-896b-a6b9363874f1/scratchpad/hl90.man
+
+runner output:
+Passed 1/1 test cases
+
+notes:
+history-lesson is scored FOOTPRINT-ONLY (the 151x124 verdict came back 'footprint-only, score 22,801' with no tick term), so ticks are free and only max(w,h)^2 matters. This serpentine base-N ROM grid is 90x90 = 8,100, beating both the 151x124 ROM build (22,801) and history-lesson_base128.man at 97x90 (9,409). Verified 1/1 public case on the engine at 83,629 ticks.

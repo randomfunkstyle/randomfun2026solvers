@@ -246,7 +246,9 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     assert m.plan.lanes == 1 << m.plan.k >= used
     assert m.tape_n == tape_n
     assert "@" in "".join(m.rows)
-    assert {"rom->cpu", "cpu->adapter", "adapter->store", "store->cpu"} <= m.route_lengths
+    # `.keys()`, not the dict: `set <= dict` is a TypeError, so this assertion raised
+    # for every slug rather than checking anything.
+    assert {"rom->cpu", "cpu->adapter", "adapter->store", "store->cpu"} <= m.route_lengths.keys()
     assert all(length >= 2 for length in m.route_lengths.values())
     if any(sem is Sem.INPUT for sem in m.plan.sem.values()):
         assert "input->cpu" in m.route_lengths
@@ -261,6 +263,26 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     display = machine.display_for(slug) is not None
     assert (":" in grid and "=" in grid) is display
     assert ("O" in grid) is not display
+
+
+@node_required
+@slow
+def test_compact_mode_moves_only_declared_blocks_and_still_solves_the_task() -> None:
+    """Constraint placement is opt-in and cannot translate an undeclared block."""
+    from randomfun2026solvers import optimize
+
+    baseline = machine.build_for("brackets")
+    compact = machine.build_for("brackets", compact=True)
+
+    assert compact.compact
+    assert compact.footprint <= baseline.footprint
+    assert compact.regions.keys() == baseline.regions.keys()
+    for name in baseline.regions:
+        if name != "tape":
+            assert compact.regions[name] == baseline.regions[name]
+    tx, ty, tw, th = baseline.regions["tape"]
+    assert compact.regions["tape"] == (tx, ty + compact.store_offset[1], tw, th)
+    assert optimize.verify(compact.rows, "brackets").passed
 
 
 @node_required

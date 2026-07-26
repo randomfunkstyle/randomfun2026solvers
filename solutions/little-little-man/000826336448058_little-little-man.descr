@@ -1,0 +1,16 @@
+# little-little-man — submission 990928f7-5726-4888-ad98-9e87d5f33066
+
+verdict      done: 28/28 cases, area2 38809, avgTicks 21,292,392, score 826,336,448,058
+submitted    2026-07-26T14:14:16+0300
+grid         195x197
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  1f07ee79fa071c0b93e9047bb386e6892059f99d10d099a9d7f9fc5e4fee9df5
+commit       77f09d4
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+packed structures band: 195x197, 19.43M avg ticks local

@@ -1453,7 +1453,7 @@ HOT = (4, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 
-def build_asm(*, packed_cells: bool = False, hot_slots: int = 0) -> tuple[str, int]:
+def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tuple[str, int]:
     """Return the ``.asm`` text and the tape slot count it needs.
 
     ``hot_slots`` reserves the lowest addresses for ``machine.build(hot=...)``'s
@@ -1480,9 +1480,11 @@ def build_asm(*, packed_cells: bool = False, hot_slots: int = 0) -> tuple[str, i
     return a.text(header), a.slots
 
 
-#: The ROM fold from a full sweep at this program's size. Compact whole-machine
-#: routing moves the minimum to 85 rows and a 200x199 box.
-ROM_ROWS = 85
+#: The ROM fold, re-swept after two independent compactions landed together: the
+#: packed structures band (stacked slab entry rows, 20 rows -> 10) and main's
+#: compact whole-machine routing.  Rows the CPU gives up only pay once the fold
+#: converts them into width, so the sweep has to be redone whenever either moves.
+ROM_ROWS = 88
 
 
 def build_machine(

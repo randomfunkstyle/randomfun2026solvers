@@ -97,7 +97,7 @@ def test_a_north_lane_pointing_downwards_is_rejected():
 # ── the placer ────────────────────────────────────────────────────────────────
 def _placer() -> tuple[Circuit, pg.Placer]:
     c = Circuit(pg.IW, 64, strict_corridors=True)
-    p = pg.Placer(c, set())
+    p = pg.Placer(c, {})
     p.start(0)
     return c, p
 
@@ -133,13 +133,25 @@ def test_placer_never_leaves_the_code_area():
             assert pg.CW0 <= x <= pg.CW1 or x == pg.ENTRY_COL
 
 
-def test_placer_refuses_to_reuse_a_backtick_column():
+def test_placer_refuses_unsafe_backtick_column_reuse():
     c = Circuit(pg.IW, 64, strict_corridors=True)
-    taken = set(range(pg.CW0, pg.CW1 + 1))
+    taken = {x: 0 for x in range(pg.CW0, pg.CW1 + 1)}
+    for x in taken:
+        c.set(x, 1, "M")
     p = pg.Placer(c, taken)
-    p.start(0)
+    p.start(2)
     with pytest.raises(Collision, match="backtick"):
         p.literal("256")
+
+
+def test_placer_reuses_backtick_columns_over_only_blanks():
+    c = Circuit(pg.IW, 64, strict_corridors=True)
+    taken = {pg.CW0: 0, pg.CW0 + 3: 0}
+    p = pg.Placer(c, taken)
+    p.start(2)
+    p.literal("16")
+    assert c.get(pg.CW0, 2) == "`"
+    assert c.get(pg.CW0 + 3, 2) == "`"
 
 
 def test_a_block_always_ends_heading_west_out_of_the_code_area():
