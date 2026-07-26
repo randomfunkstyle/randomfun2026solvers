@@ -1,0 +1,44 @@
+# sudoku-validity — submission 73b1f0b0-290b-4e6e-8532-6a3679a38689
+
+verdict      done: 20/20 cases, area2 729, avgTicks 12,100.9, score 8,821,556 (uberStrict PASSED)
+submitted    2026-07-26
+grid         27x27
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+local        6/6 public cases, avg 11,913 ticks, local score 8,684,577
+source       tasks/solutions/sudoku-validity_ring.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+2,384,422,055 -> 8,821,556, a 270x, by dropping the LM-1 CPU for an 11-block
+token CFG. Server ticks ran only 1.016x local (12,101 vs 11,913).
+
+The design idea: TRANSPOSE THE STORE. Not 27 masks indexed by (row/col/box,
+index), but 9 words indexed by the VALUE v, each holding 27 live bits — bit r
+for rows, bit 9+c for cols, bit 18+b for boxes. A round then touches exactly
+ONE word instead of three.
+
+Test-and-set is 5 glyphs:  rr + sr & - X   with P = (1<<r)|(1<<(9+c))|(1<<(18+b))
+Adding P carries OUT of any bit already set, so that bit of the sum is 0 and
+t&P != P. A carry can only enter a P bit from a lower P bit that was itself set,
+i.e. from a violation already being reported — no false verdicts either way.
+B = P stays pinned from prologue through access: `s` leaves A alone, `&`/`-`/`+`
+leave B, and r/s/d/m never write B, so it survives the ring rotation.
+
+Layouts measured and rejected (ticks/round): 27-slot ring 170 (dies on rotation
+alone — 24 counted rotations at 5 ticks); 4 words x 7 masks packed 135 (packing
+moves cost from rotation into ADDRESSING — each access must build j=9*i+v-1,
+split with /, rebuild 1<<s, and spill a third live value); 4 men one-hot ~200.
+Transposed 9-word: 99.
+
+WALKING-BOUND, NOT PIPE-BOUND. Op model predicted 99 ticks/round; the grid runs
+250. The gap is corridor cells: ~54 ticks of blank inside a seven-row serpentine
+(IO/FILE band alternation forces a wrap per row) and ~63 crossing the room twice
+per round. Both turnaround rooms swept 4x3 -> 8x6 moved ticks by 1 part in
+10,000, and manopt --moves all --speed-for-space finds nothing at 27x27 or 28x28.
+
+Deferred, now measurable: merging ROT2 into ROT1 (ROUND never touches the ring,
+so the two rotations are adjacent in ring terms) is worth ~40 ticks/round and
+~3 rows — one block removed = 16% of per-round cost. Block count is not a proxy
+for cost; traverse count is.

@@ -1,10 +1,12 @@
-"""`pathfinder` on the generated CPU: a bit-parallel BFS over four 64-bit words.
+"""`pathfinder` on generated CPUs: a bit-parallel BFS over four 64-bit words.
 
 The emulator tests here grade *frames*, not output words, because the program emits
-no output at all — it paints the LM-75 directly. Every expected frame comes from :mod:`randomfun2026solvers.pathfinder_sim`, which is verified
-against its own straightforward BFS oracle on the public cases and a random sweep,
-so this file compares two independently-derived answers rather than a program with
-itself.
+no output at all. The direct CPU paints the LM-75 itself; the completed CPU+PATH
+variant sends paint commands to a write-only unit and uses a shallower decode trie.
+Every expected frame comes from :mod:`randomfun2026solvers.pathfinder_sim`, which is
+verified against its own straightforward BFS oracle on the public cases and a random
+sweep, so this file compares two independently-derived answers rather than a program
+with itself.
 """
 
 from __future__ import annotations
@@ -18,9 +20,10 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "solvers" / "python"))
 
-from randomfun2026solvers.lm1 import assemble_file  # noqa: E402
+from randomfun2026solvers.lm1 import assemble_file, machine  # noqa: E402
 from randomfun2026solvers.lm1.display import frames_from_writes  # noqa: E402
 from randomfun2026solvers.lm1.emulator import Emulator, Round  # noqa: E402
+from randomfun2026solvers.man_debug import render_html  # noqa: E402
 from randomfun2026solvers.pathfinder_sim import (  # noqa: E402
     case_stats,
     frame_rows,
@@ -30,6 +33,9 @@ from randomfun2026solvers.pathfinder_sim import (  # noqa: E402
 
 ASM = REPO / "solvers" / "python" / "randomfun2026solvers" / "lm1" / "programs" / "pathfinder.asm"
 PROBLEM = REPO / "tasks" / "problems" / "pathfinder.json"
+UNIT_GRID = REPO / "tasks" / "solutions" / "pathfinder-unit_cpu.man"
+UNIT_HTML = REPO / "littleman" / "examples" / "pathfinder-unit-cpu.html"
+UNIT_JSON = REPO / "littleman" / "examples" / "pathfinder-unit-cpu.json"
 
 #: The judge's cap for this problem, from `pathfinder.json`.
 STEP_CAP = 15_000_000
@@ -67,7 +73,7 @@ def test_every_public_case_commits_exactly_the_expected_frames(index: int) -> No
         f"{case['name']!r}: committed {len(got)} frames, expected {len(want)} "
         f"(one for the setup round plus one per move)"
     )
-    for i, (g, w) in enumerate(zip(got, want)):
+    for i, (g, w) in enumerate(zip(got, want, strict=True)):
         assert g == w, f"{case['name']!r}: frame {i} differs"
 
 
@@ -135,3 +141,25 @@ def test_the_model_agrees_with_the_contests_own_expected_frames() -> None:
         board, rx, ry, flags = parse_case_rounds(_rounds(case))
         mine = [frame_rows(f) for f in solve_case(board, rx, ry, flags)]
         assert mine == official, f"{case['name']!r}: model disagrees with the contest"
+
+
+@pytest.mark.slow
+def test_the_completed_cpu_path_target_and_debug_sidecars_match_the_generator() -> None:
+    built = machine.build_for("pathfinder-unit")
+    dbg = built.debug_map()
+
+    assert built.tape_skip_batch == 4
+    assert built.tape_relay_size == (6, 4)
+    assert UNIT_GRID.read_text(encoding="utf-8") == "\n".join(built.rows) + "\n"
+    assert json.loads(UNIT_JSON.read_text(encoding="utf-8")) == dbg.to_dict()
+    assert UNIT_HTML.read_text(encoding="utf-8") == render_html(built.rows, dbg)
+
+
+@pytest.mark.slow
+def test_the_completed_cpu_path_target_passes_every_public_frame() -> None:
+    from randomfun2026solvers import optimize
+
+    result = optimize.verify(UNIT_GRID, "pathfinder", tick_cap=STEP_CAP)
+    failed = [(case.name, case.detail) for case in result.cases if not case.passed]
+    assert not failed, failed
+    assert len(result.cases) == len(_cases())
