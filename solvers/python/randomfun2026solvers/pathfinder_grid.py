@@ -146,7 +146,7 @@ CW0, CW1 = NCHW, IW - 1
 #: The column that carries every block's entry ``>``; wires never run down it.
 ENTRY_COL = NCHW - 1
 
-_SEND_T = 4
+_SEND_T = 3
 _RECV_T = 6
 #: Left-to-right order of the four pipe loops.  Measured over all 24
 #: permutations: the ones that shave a row or two off the height (the
