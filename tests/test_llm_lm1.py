@@ -149,3 +149,17 @@ def test_the_registered_asm_still_matches_the_generator() -> None:
 
     text, _slots = llm_lm1.build_asm()
     assert lm1_programs.available()[SLUG].read_text() == text
+
+
+def test_the_shipped_machine_is_inside_the_judge_s_time_cap() -> None:
+    """Ticks are the score; ``runners x ticks`` is what the judge actually spends.
+
+    The two-tier build was 2.36x faster in ticks and was rejected ``4/28`` with
+    ``10 time-cap`` — 114 live men against this machine's 5.  This asserts the
+    axis that failure exposed, on the machine we ship.
+    """
+    from randomfun2026solvers import simcost
+
+    men = simcost.live_runners(GRID)
+    assert men <= 8, f"{men} live men — a man-memory crept in"
+    assert men * 20_275_186 < simcost.JUDGE_TIMEOUT_FLOOR
