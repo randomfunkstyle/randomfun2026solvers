@@ -191,10 +191,10 @@ def _items(tok: str) -> list[tuple[str, object]]:
 class _Pen:
     """Pours glyphs along a row, wrapping when a band lies behind the pen."""
 
-    def __init__(self, backticks: set[int]) -> None:
+    def __init__(self, backticks: set[int], start: int = CODE0) -> None:
         self.backticks = backticks
-        self.rows: list[Row] = [Row(east=True, start=CODE0)]
-        self.x = CODE0
+        self.rows: list[Row] = [Row(east=True, start=start)]
+        self.x = start
 
     @property
     def row(self) -> Row:
@@ -252,13 +252,33 @@ class _Pen:
         self.backticks.update((open_col, close_col))
 
 
+def _start_col(toks: list[str]) -> int:
+    """The column a block's first glyph may stand in.
+
+    Starting every block at ``CODE0`` costs twice. The man walks dead columns to
+    reach his first band, and — the expensive one — the block's entry sits at the
+    far west, so every edge into it has to come back west, and a west leg reserves
+    a whole row.
+
+    A block may start at its own first band instead, provided it never needs a band
+    further west later: the zones run ``ST -> FI -> IO`` west to east, so any block
+    holding an ``ST`` op must still begin at ``CODE0``. Blocks with no pipe ops keep
+    ``CODE0`` too — they are short, and moving them east buys no drop their length
+    would not already allow.
+    """
+    zones = [TOKEN_ZONE[t] for t in toks if t in TOKEN_ZONE]
+    if not zones or "ST" in zones:
+        return CODE0
+    return ZONE_COLS["FI" if "FI" in zones else "IO"][0]
+
+
 def plan_blocks(order: list[str], worker=WORKER) -> dict[str, Plan]:
     backticks: set[int] = set()
     plans: dict[str, Plan] = {}
     for name in order:
         toks, succ = worker[name]
         branch = toks[-1] if isinstance(succ, dict) else None
-        pen = _Pen(backticks)
+        pen = _Pen(backticks, _start_col(toks))
         for i, tok in enumerate(toks):
             zone = TOKEN_ZONE.get(tok)
             if zone is not None:
@@ -329,7 +349,7 @@ class Room:
 
 def _first_col(plan: Plan) -> int:
     """The column a block's entry walk has to reach before it does anything."""
-    return plan.rows[0].cells[0][0] if plan.rows[0].cells else CODE0
+    return plan.rows[0].cells[0][0] if plan.rows[0].cells else plan.rows[0].start
 
 
 def _droppable(order: list[str], plans: dict[str, Plan], worker) -> dict[str, str]:

@@ -2,8 +2,8 @@
 
 **Status: shipped and passing.** `tasks/solutions/little-little-little-man_ring.man`
 
-    w x h = 159 x 204     area2 = 41,616     avg_ticks = 1,387,994.30
-    score = 5.78e10       10 / 10 public cases on the engine, worst 4,932,048 ticks
+    w x h = 159 x 202     area2 = 40,804     avg_ticks = 1,373,035.30
+    score = 5.60e10       10 / 10 public cases on the engine, worst 4,869,930 ticks
 
 | piece | where | state |
 |---|---|---|
@@ -380,3 +380,30 @@ cap. Cumulatively against the shipped 159x222 the two slices are **-19.8%**.
 `_droppable` is deliberately a separate pass over `(order, plans)` rather than a
 condition inside the allocator: whether a drop is possible depends on the *target's*
 column, which the allocator does not know while it is still deciding rows.
+
+## A block may start at its own band — but it may not be *entered* there
+
+Starting every block at `CODE0` costs twice: the man walks dead columns to reach
+his first band, and the block's first glyph sits at the far west, which is what
+decides whether an incoming fall-through can drop east into it.
+
+The zones run `ST -> FI -> IO` west to east, so a block may begin at its own first
+band provided it never needs a band further west later — i.e. provided it holds no
+`ST` op. 52 of 63 blocks qualify (27 begin at `FI`, 2 at `IO`, 23 have no pipe op
+at all and keep `CODE0` because they are short enough that moving them buys no drop
+their own length would not already allow).
+
+    159x204, 41,616, 1,387,994.30   ->   159x202, 40,804, 1,373,035.30
+    5.78e10 -> 5.60e10, -3.0%
+
+**What does not work, measured:** moving each block's *entry* east to match its
+start. It looks like the natural other half of the change and it fails, because the
+channel bank is west: an arriving man turns east at his channel and runs to the
+entry, so pushing the entry east lengthens that run across the very region the
+lanes occupy — `entry run to L_DIGIT blocked at (35,41)`. Entries cannot move east
+while channels stay west, and moving the channel bank east is a different machine.
+
+That is the same wall the earlier attempts hit, stated in its general form: **every
+horizontal run in this room touches the west bank, so one row carries one run.**
+Rows are shareable only for traffic that never goes west, which is exactly what the
+east-falling drop is and nothing else in the current scheme is.
