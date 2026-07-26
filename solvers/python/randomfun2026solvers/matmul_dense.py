@@ -29,7 +29,40 @@ ring's two pipes are two independent nearest-sets, so `sx` can attach beside
 ``TBODY`` reads it.  The ring is then a long pipe between the two, which is
 exactly what a ring wants: pipe cells *are* its storage.
 
-## The open problem: the rectangle's anchors make the north band unroutable
+## The open problem: a wrong value reaches `MAC` on a case bigger than 2x2x2
+
+Public case 0 (2x2x2) emits `19 22 43 50`, which is right.  Case 2 (4x4x4)
+emits nothing: from about tick 20,000 the worker stands on ``MAC``'s `rb` and
+never moves again, and its `A` holds **2^21** -- `LANE`, a constant out of the
+`k` ring -- where an entry of `A` (at most 99 in magnitude) belongs.  So the
+spill handed `MAC` a constant, which means the `x` ring it came from held one.
+
+What that is *not*, each checked rather than assumed:
+
+* **not a binding error.**  All 66 pipe ops in the room were put to the
+  runtime's own ``lm.mjs route`` one cell at a time and compared against the
+  band they were laid in: **0 mismatches**, sends and receives alike.  (Read the
+  *last* cell of a receive's route and the *first* of a send's -- both ends
+  touch the north wall, and taking the wrong one makes every receive look
+  unbound.)
+* **not a dead relay.**  Seven runners, none halted, at every tick sampled.
+  Two men touching would stop both and freeze a ring for good.
+* **not two pipes fused.**  ``Circuit.set`` permits a write when the cell
+  already holds the same glyph, so two pipes crossing where both want `-` would
+  merge silently and leak values between rings -- but the ring cells the builder
+  draws (2,028) and the pipe glyphs on the grid (2,242, the difference being the
+  two I/O pipes) agree, so no cell is shared.
+* **not the shared-relay deadlock** predicted earlier: every ring got its own
+  turnaround room, so no relay ever chooses between two rings.
+
+The suspect left is **capture**: a pipe ends at the first arrowhead whose
+forward cell lies on *any* room border, so a ring's pipe running past another
+ring's turnaround room in the strip can be swallowed by it.  That relay would
+then have two incoming pipes, its `r` would take the nearer, and `k`'s constants
+would arrive in `x` -- which is exactly the value seen.  The check is to count
+the pipes attaching to each relay room; it must be two.
+
+## The old open problem: the rectangle's anchors make the north band unroutable
 
 A ring's two pipes leave the worker's north wall, climb to a row of their own in
 the north band, run east to the strip and drop into a turnaround room.  That is
