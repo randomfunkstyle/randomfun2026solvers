@@ -57,6 +57,8 @@ __all__ = [
     "build_tree",
     "cell_at",
     "collector_rows",
+    "teleport",
+    "teleport_v",
     "main",
     "router_rows",
 ]
@@ -487,17 +489,65 @@ HEAD_IN = ((1, 0), (8, 2))
 HEAD_OUT = ((5, 0), (10, 1))
 
 
-def collector_rows(n_in: int) -> tuple[list[str], list[tuple[int, int]]]:
-    """``R``/``s`` in a six-cell loop: forward whichever answer arrived.
+def teleport(width: int, *, n_in: int | None = None) -> tuple[list[str], list[tuple[int, int]]]:
+    """A **teleport**: a long room that moves a value across itself for free.
 
-    ``R`` takes from any incoming pipe, so a collector needs no pipe affinity at
-    all — which is why the answer path can be a chain of these next to the cells
-    they serve instead of ``n`` long pipes converging on one room.
+    Six cells — ``@>Rv`` over `` ^s<`` — at the room's west end, padded to ``width``.
+    A man loops ``R`` (take) / ``s`` (forward) forever.
+
+    The reason to call it a teleport rather than a collector is the cost, and it comes
+    straight out of ``SPEC.md``: ``R`` receives from **any** incoming pipe in the room,
+    and unlike ``r`` it has **no distance term** — "nearest" is only ``r``'s rule. So a
+    man standing at the west end takes a value out of a pipe attached at the *east*
+    end of the room in one instruction. The value crosses the room's whole length
+    without transiting a single pipe cell.
+
+    That makes a wide room a horizontal teleport and (via :func:`teleport_v`) a tall
+    one a vertical teleport, and it is what lets two blocks far apart answer into one
+    place with two short stubs instead of two long lanes that have to avoid crossing:
+
+        LLLLLLL<        L = this room, value leaves west
+           ^   U        U = teleport_v, value leaves north
+          B1   U
+           --> U
+          B2   U
+
+    Incoming pipes may attach anywhere along the **top wall**, not only at the
+    returned ``ports`` — those are a convenience for the contiguous case. The single
+    outgoing pipe attaches wherever is nearest the ``s``, which with one outgoing pipe
+    is anywhere.
+
+    Cost is one little man per teleport, and *not* a function of length — which is the
+    property that matters on a machine whose wall-clock budget is ``runners x ticks``.
     """
-    iw = max(4, n_in)
+    iw = max(4, width if n_in is None else max(width, n_in))
     rows = [list("@>Rv".ljust(iw)), list(" ^s<".ljust(iw))]
-    ports = [(i, 0) for i in range(n_in)]
+    ports = [(i, 0) for i in range(n_in if n_in is not None else width)]
     return ["".join(r) for r in rows], ports
+
+
+def teleport_v(height: int) -> tuple[list[str], list[tuple[int, int]]]:
+    """A **tall** teleport: value leaves at the north, pipes attach down either side.
+
+    The loop is not rotated — it is the identical, engine-verified six cells sitting at
+    the room's north end, and the room is simply made ``height`` tall underneath them.
+    Nothing about ``R`` is orientation-sensitive: it takes from any incoming pipe in the
+    room, so a pipe entering the *south* end of a tall room is read by the man at the
+    north end in one instruction, exactly as a wide room reads its east end.
+
+    Rotating the glyphs would mean inventing and re-verifying a second loop for no
+    gain, so this deliberately does not.
+    """
+    ih = max(2, height)
+    rows = ["@>Rv", " ^s<"] + [" " * 4] * (ih - 2)
+    #: Every interior row down the **east** side is a legal attachment row.
+    ports = [(3, i) for i in range(ih)]
+    return rows, ports
+
+
+#: The teleport under its old name. Ten modules call it as a one-input answer sink,
+#: where the "long room" property is unused; new code should say ``teleport``.
+collector_rows = teleport
 
 
 #: Pipe glyphs by step direction. Every cell of a pipe drawn here carries an

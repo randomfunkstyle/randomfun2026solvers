@@ -1333,38 +1333,109 @@ class _Tape:
 _TAPE_WX, _TAPE_WY = 8, 8
 
 
-def _tape_shell(n: int) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
+def _resolve_tape_skip_batch(
+    n: int,
+    skip_batch: int | None,
+    jump_threshold: int,
+) -> int:
+    """Resolve explicit batch 1/2 or auto-select by STORE size."""
+    if jump_threshold < 1:
+        raise ValueError(f"jump_threshold must be positive, got {jump_threshold}")
+    if skip_batch is None:
+        return 2 if n >= jump_threshold else 1
+    if skip_batch not in (1, 2):
+        raise ValueError(f"skip_batch must be 1, 2, or None, got {skip_batch}")
+    return skip_batch
+
+
+def _tape_worker_spec(skip_batch: int):
+    """Return the worker and wall anchors for one tape skip implementation."""
+    from ..memory_tape import (
+        V2_FWD_ROW,
+        V2_IH,
+        V2_IN_ROW,
+        V2_IW,
+        V2_JUMP_FWD_ROW,
+        V2_JUMP_IH,
+        V2_JUMP_IW,
+        V2_JUMP_RET_COL,
+        V2_OUT_COL,
+        V2_RET_COL,
+        worker_v2,
+        worker_v2_jump,
+    )
+
+    if skip_batch == 1:
+        return (
+            worker_v2,
+            V2_IW,
+            V2_IH,
+            V2_IN_ROW,
+            V2_OUT_COL,
+            V2_FWD_ROW,
+            V2_RET_COL,
+        )
+    if skip_batch == 2:
+        return (
+            worker_v2_jump,
+            V2_JUMP_IW,
+            V2_JUMP_IH,
+            V2_IN_ROW,
+            V2_OUT_COL,
+            V2_JUMP_FWD_ROW,
+            V2_JUMP_RET_COL,
+        )
+    raise ValueError(f"skip_batch must be 1 or 2, got {skip_batch}")
+
+
+def _tape_shell(
+    n: int,
+    *,
+    skip_batch: int = 1,
+) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
     """The worker room and the two CPU-facing pipe stubs — the part no ring changes.
 
     Shared by both ring layouts so neither can drift from the other. What fixes every
     ``r``/``s`` binding *inside* the worker is the worker's four wall anchors, not the
-    shape of the ring: a ring may be routed any way at all so long as it still leaves
-    the east wall on ``memory_tape.V2_FWD_ROW`` and comes back north into the bottom
-    wall at ``memory_tape.V2_RET_COL``. That is the licence the serpentine uses.
+    shape of the ring: a ring may be routed any way at all so long as it uses the
+    selected worker's forward-row and return-column anchors. That is the licence the
+    serpentine uses.
 
     Returns the canvas plus the request and response stub cells.
     """
     from ..circuit import Circuit
-    from ..memory_tape import V2_IH, V2_IN_ROW, V2_IW, V2_OUT_COL, worker_v2
+    (
+        worker,
+        worker_width,
+        worker_height,
+        input_row,
+        output_col,
+        _forward_row,
+        _return_col,
+    ) = _tape_worker_spec(skip_batch)
 
     g = Circuit(400, 200)
-    wk = worker_v2(n)
+    wk = worker(n)
     WX, WY = _TAPE_WX, _TAPE_WY
     for (x, y), ch in wk.cell.items():
         g.set(WX + x, WY + y, ch)
-    for x in range(-1, V2_IW + 1):
-        g.set(WX + x, WY - 1, "+" if x in (-1, V2_IW) else "-")
-        g.set(WX + x, WY + V2_IH, "+" if x in (-1, V2_IW) else "-")
-    for y in range(V2_IH):
+    for x in range(-1, worker_width + 1):
+        g.set(WX + x, WY - 1, "+" if x in (-1, worker_width) else "-")
+        g.set(
+            WX + x,
+            WY + worker_height,
+            "+" if x in (-1, worker_width) else "-",
+        )
+    for y in range(worker_height):
         g.set(WX - 1, WY + y, "|")
-        g.set(WX + V2_IW, WY + y, "|")
+        g.set(WX + worker_width, WY + y, "|")
 
     # request stub: two cells pointing east into the worker's left wall
-    iy = WY + V2_IN_ROW
+    iy = WY + input_row
     g.set(WX - 3, iy, ">")
     g.set(WX - 2, iy, ">")
     # response stub: two cells climbing north out of the worker's top wall
-    ox = WX + V2_OUT_COL
+    ox = WX + output_col
     g.set(ox, WY - 2, "^")
     g.set(ox, WY - 3, "^")
     return g, (WX - 3, iy), (ox, WY - 3)
@@ -1419,17 +1490,23 @@ def grid_block(n: int) -> _Tape:
     )
 
 
-def tape_block(n: int) -> _Tape:
+def tape_block(
+    n: int,
+    *,
+    skip_batch: int | None = 1,
+    jump_threshold: int = 128,
+) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
 
     ``memory_tape.assemble_v2`` builds the tape as a standalone answer to the
     ``memory`` problem, so it comes with its own ``I`` and ``O`` rooms. A program
     may have at most one of each and the CPU owns them, so those two rooms are
-    replaced here by pipe stubs the caller extends. The **worker is untouched at
-    every size**, which is the point: it is measured hardware (``ARCH.md`` §4.1) and
-    this must not perturb it. Only the ring around it is re-routed, and only above
-    107 slots — every ``n <= 107`` emits the same tape cells it always did, keeping
-    tape layout changes out of the checked-in ``.man`` files.
+    replaced here by pipe stubs the caller extends.  ``skip_batch=1`` is the
+    measured legacy worker and remains byte-identical at every size.
+    ``skip_batch=2`` selects :func:`memory_tape.worker_v2_jump`: its two-sided
+    counted rings test BP once per word but carry two words per lap.  It is wider
+    (45 rather than 33 block columns) and therefore deliberately opt-in.
+    ``skip_batch=None`` selects it automatically when ``n >= jump_threshold``.
 
     ``n`` is the slot count. Ring **capacity is pipe length** (``SPEC.md``: a pipe
     is a FIFO whose capacity equals its cell count) and it must be ``>= n + 1`` — a
@@ -1451,28 +1528,34 @@ def tape_block(n: int) -> _Tape:
     otherwise make the documentation stale. Size to the real high address, as
     always — this is not a knob to spend.
 
-    Cost is unchanged too — measured **8.00 ticks per slot per access**, dead linear
-    and with no step at the 107/108 seam. Excess ring capacity only delays the first
-    value of a lap; the worker's own ``rs`` loop is an order of magnitude slower than
-    one cell per tick, so the worker stays the bottleneck and overshoot is free.
+    At ``skip_batch=1`` the cost is **8.00 ticks per slot per access**, dead linear
+    and with no step at the 107/108 seam.  The two-sided worker reduces the dominant
+    loop to about five ticks per skipped word; its odd exit re-enters with BP=0, so
+    it never consumes a speculative extra word.  Excess ring capacity only delays
+    the first value of a lap; in both modes the worker remains the bottleneck.
     """
-    from ..memory_tape import (
-        RELAY,
-        V2_FWD_ROW,
-        V2_IH,
-        V2_IW,
-        V2_RET_COL,
-        _draw_pipe,
-    )
+    from ..memory_tape import RELAY, _draw_pipe
+
+    skip_batch = _resolve_tape_skip_batch(n, skip_batch, jump_threshold)
+
+    (
+        _worker,
+        worker_width,
+        worker_height,
+        _input_row,
+        _output_col,
+        forward_row,
+        return_col,
+    ) = _tape_worker_spec(skip_batch)
 
     WX, WY = _TAPE_WX, _TAPE_WY
     for fold in (0, 2, 4, 6, 8, 10, 12):
-        g, in_cell, out_cell = _tape_shell(n)
+        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch)
 
-        bottom_y = WY + V2_IH
-        fy = WY + V2_FWD_ROW
-        ret_col = WX + V2_RET_COL
-        east = WX + V2_IW + 2
+        bottom_y = WY + worker_height
+        fy = WY + forward_row
+        ret_col = WX + return_col
+        east = WX + worker_width + 2
         b_fwd = bottom_y + 6
         r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
         relay_y = bottom_y + 3
@@ -1482,7 +1565,15 @@ def tape_block(n: int) -> _Tape:
         relay_wall = len(RELAY[0])
         adj = relay_wall + 1
 
-        n_fwd = _draw_pipe(g, [(WX + V2_IW + 1, fy), (east, fy), (east, b_fwd), (adj, b_fwd)])
+        n_fwd = _draw_pipe(
+            g,
+            [
+                (WX + worker_width + 1, fy),
+                (east, fy),
+                (east, b_fwd),
+                (adj, b_fwd),
+            ],
+        )
         n_ret = _draw_pipe(
             g,
             [
@@ -1498,7 +1589,7 @@ def tape_block(n: int) -> _Tape:
         if n_fwd + n_ret < n + 1:
             continue
         return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
-    return _serpentine_tape(n)
+    return _serpentine_tape(n, skip_batch=skip_batch)
 
 
 #: Columns the big ring reserves under the worker, in block coordinates.
@@ -1515,7 +1606,7 @@ _SNAKE_WEST = 10
 _SNAKE_TOP = 4
 
 
-def _serpentine_tape(n: int) -> _Tape:
+def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
     """The same ring, with the forward pipe snaked so capacity scales with area.
 
     Two L-shaped pipes give a *perimeter* of capacity and the band under the worker
@@ -1548,19 +1639,29 @@ def _serpentine_tape(n: int) -> _Tape:
     The row count must be **odd** so the last leg runs west; that wastes at most one
     row of capacity, and capacity overshoot is free (see :func:`tape_block`).
     """
-    from ..memory_tape import RELAY, V2_FWD_ROW, V2_IH, V2_IW, V2_RET_COL, _draw_pipe
+    from ..memory_tape import RELAY, _draw_pipe
+
+    (
+        _worker,
+        worker_width,
+        worker_height,
+        _input_row,
+        _output_col,
+        forward_row,
+        return_col_offset,
+    ) = _tape_worker_spec(skip_batch)
 
     WX, WY = _TAPE_WX, _TAPE_WY
-    bottom_y = WY + V2_IH
-    fy = WY + V2_FWD_ROW
-    ret_col = WX + V2_RET_COL
-    east = WX + V2_IW + 2
+    bottom_y = WY + worker_height
+    fy = WY + forward_row
+    ret_col = WX + return_col_offset
+    east = WX + worker_width + 2
     top = bottom_y + _SNAKE_TOP
 
     # Seventeen rows carry the ~420 slots a little-little-man interpreter wants; the
     # last tier here holds 1976 values, at which point the block is 112 rows tall.
     for rows in range(5, 82, 2):
-        g, in_cell, out_cell = _tape_shell(n)
+        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch)
         last = top + rows - 1  # the final, relay-bound westbound leg
         relay_y = last - 3  # so `last` is the relay's bottom interior row
         for i, row in enumerate(RELAY):
@@ -1568,7 +1669,11 @@ def _serpentine_tape(n: int) -> _Tape:
                 g.set(1 + j, relay_y + i, ch)
         adj = len(RELAY[0]) + 1  # first column east of the relay's wall
 
-        snake: list[tuple[int, int]] = [(WX + V2_IW + 1, fy), (east, fy), (east, top)]
+        snake: list[tuple[int, int]] = [
+            (WX + worker_width + 1, fy),
+            (east, fy),
+            (east, top),
+        ]
         for i in range(rows):
             y = top + i
             if i == rows - 1:
@@ -1638,6 +1743,7 @@ class Machine:
     tape_n: int
     rom_rows: int
     mem_pad: int
+    tape_skip_batch: int = 1
     stream_pad: int = 0
     display: tuple[int, int] | None = None
     #: Where each display band's ``s`` glyph ended up, in *grid* coordinates — the
@@ -1694,7 +1800,10 @@ class Machine:
                 f"{self.rom_capacity} words of buffer (a pipe's capacity is its length)"
             ),
             "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
-            "tape": f"rotating pipe tape, N={self.tape_n} (~105+8.3N ticks/access)",
+            "tape": (
+                f"rotating pipe tape, N={self.tape_n}, "
+                f"skip_batch={self.tape_skip_batch}"
+            ),
             "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
             "display": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
             "cpu:fetch": ">rbr — opcode into BP, then the operand into A (fixed-width 2 words)",
@@ -1741,7 +1850,8 @@ class Machine:
             f"{self.program.name}: {self.width}x{self.height} "
             f"footprint {self.footprint}, {len(self.plan.number)} opcodes "
             f"(depth {self.plan.k}), P={self.program.P} words on {self.rom_rows} ROM rows, "
-            f"tape N={self.tape_n}, mem_pad={self.mem_pad}{stream}{panel}{routes}"
+            f"tape N={self.tape_n}, skip_batch={self.tape_skip_batch}, "
+            f"mem_pad={self.mem_pad}{stream}{panel}{routes}"
             f"{placement}"
         )
 
@@ -1765,6 +1875,8 @@ def build(
     packed_rom: bool = True,
     short_return: bool | None = None,
     store: str = "tape",
+    tape_skip_batch: int | None = 1,
+    tape_jump_threshold: int = 128,
     middle_order: Sequence[str] | None = None,
     rom_buffer: int | None = None,
     compact: bool = False,
@@ -1796,6 +1908,10 @@ def build(
     LM-75's interior ``(width, height)`` and is required by any program using a
     ``DSP*`` opcode — the panel resolution is the problem's, not the program's.
 
+    ``tape_skip_batch`` selects the tape worker: ``1`` is the compact legacy loop
+    and ``2`` is the wider two-word counted ring. Pass ``None`` to choose batch 2
+    when ``tape_n >= tape_jump_threshold`` and batch 1 below it.
+
     ``tape_n`` is a **slot count**, so the usable addresses are ``1 .. tape_n - 1``:
     slot 0 is sign-ambiguous (see the module docstring) and slot ``tape_n`` does not
     exist. Addressing it does not fault — the tape's worker walks past the end of its
@@ -1820,11 +1936,26 @@ def build(
         raise MachineError(
             f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
         )
+    if tape_skip_batch not in (None, 1, 2):
+        raise MachineError(
+            f"tape_skip_batch must be 1, 2, or None, got {tape_skip_batch}"
+        )
+    if tape_jump_threshold < 1:
+        raise MachineError(
+            f"tape_jump_threshold must be positive, got {tape_jump_threshold}"
+        )
+    if store != "tape" and tape_skip_batch != 1:
+        raise MachineError("tape_skip_batch applies only to store='tape'")
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
     p = plan(program, middle_order=middle_order)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
+    effective_skip_batch = _resolve_tape_skip_batch(
+        tape_n,
+        tape_skip_batch,
+        tape_jump_threshold,
+    )
     top = _highest_address(program)
     if top >= tape_n:
         raise MachineError(
@@ -1866,6 +1997,7 @@ def build(
                     mem_offset[0],
                     mem_offset[1],
                     hot,
+                    tape_skip_batch=effective_skip_batch,
                 )
             except MachineError as exc:
                 last = exc
@@ -1911,6 +2043,7 @@ def build(
                     0,
                     0,
                     hot,
+                    tape_skip_batch=effective_skip_batch,
                 )
             except MachineError:
                 continue
@@ -1978,6 +2111,7 @@ def _assemble(
     mem_dx: int = 0,
     mem_dy: int = 0,
     hot: tuple[int, int] | None = None,
+    tape_skip_batch: int = 1,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
@@ -2097,7 +2231,17 @@ def _assemble(
         # A second store seam. The hot bank is a small pipe tape and the cold one the
         # full store; the adapter routes by address range and the merger's ``R`` takes
         # whichever answers. See :func:`_two_tier` and ``TIER_PIPE_BANK``.
-        seam = _two_tier(g, cpu, CX, CY, W, AX, tape_n, hot)
+        seam = _two_tier(
+            g,
+            cpu,
+            CX,
+            CY,
+            W,
+            AX,
+            tape_n,
+            hot,
+            tape_skip_batch=tape_skip_batch,
+        )
         extra_regions = seam.regions
         req_row, resp_row = seam.req_row, seam.resp_row
         store_pipes = seam.pipes
@@ -2161,7 +2305,7 @@ def _assemble(
         elif store == "grid":
             tape = grid_block(tape_n)
         elif store == "tape":
-            tape = tape_block(tape_n)
+            tape = tape_block(tape_n, skip_batch=tape_skip_batch)
         else:
             raise MachineError(
                 f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
@@ -2377,6 +2521,7 @@ def _assemble(
         tape_n=tape_n,
         rom_rows=romlay.rows_used,
         mem_pad=mem_pad,
+        tape_skip_batch=tape_skip_batch,
         stream_pad=stream_pad,
         display=display if dsp_touches else None,
         dsp_glyphs={
@@ -2723,6 +2868,8 @@ def _two_tier(
     ax: int,
     tape_n: int,
     hot: tuple[int, int],
+    *,
+    tape_skip_batch: int = 1,
 ) -> _Seam:
     """Place a range-routing adapter, a hot man-memory tier, the tape, and a merger.
 
@@ -2761,7 +2908,10 @@ def _two_tier(
         # still 8x better than the 427-slot cold bank — and the men are what the
         # grader's wall clock is spent on, not the ticks.
         hot_top = cols * rows_
-        tier = _PipeBank(tape_block(hot_top), hot_top)
+        tier = _PipeBank(
+            tape_block(hot_top, skip_batch=tape_skip_batch),
+            hot_top,
+        )
     else:
         if TIER_SIDE_PORTS:
             from ..memory_men_grid_side import grid_side_block as tier_block
@@ -2776,7 +2926,7 @@ def _two_tier(
             f"{tape_n}-slot store; drop the tier or grow the program"
         )
     adapter = two_tier_adapter(hot_top)
-    tape = tape_block(tape_n)
+    tape = tape_block(tape_n, skip_batch=tape_skip_batch)
     # One column further east than the one-tier adapter: the request pipe drops
     # down a corridor column and has to turn east *before* the west wall, so it
     # needs a cell between its descent and the room.
@@ -3373,6 +3523,12 @@ def display_for(slug: str) -> tuple[int, int] | None:
     Read from the problem JSON rather than recorded here: "exactly one display at
     the stated resolution" (``SPEC.md``) makes this the problem's number, and a
     panel of the wrong size fails every case.
+
+    ``tape_skip_batch`` is the tape worker implementation parameter.  ``1`` keeps
+    the compact legacy loop; ``2`` uses the wider two-word counted ring.  The latter
+    is intended for large stores (for example ``tape_n=200``) whose runtime is
+    dominated by reads/skips.  It is explicit because fewer ticks can still lose
+    contest score when its wider STORE increases the machine's squared footprint.
     """
     from . import programs
 
@@ -3380,7 +3536,14 @@ def display_for(slug: str) -> tuple[int, int] | None:
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
 
-def build_for(slug: str, *, store: str = "tape", compact: bool = False) -> Machine:
+def build_for(
+    slug: str,
+    *,
+    store: str = "tape",
+    tape_skip_batch: int | None = 1,
+    tape_jump_threshold: int = 128,
+    compact: bool = False,
+) -> Machine:
     """Generate the machine for a checked-in task program.
 
     Everything not derivable from the ``.asm`` comes from the registry above, except
@@ -3400,6 +3563,8 @@ def build_for(slug: str, *, store: str = "tape", compact: bool = False) -> Machi
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
+        tape_skip_batch=tape_skip_batch,
+        tape_jump_threshold=tape_jump_threshold,
         middle_order=LANE_ORDER.get(slug),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
@@ -3426,9 +3591,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use opt-in constraint routing for movable/compactable connections",
     )
+    ap.add_argument(
+        "--tape-skip-batch",
+        choices=("1", "2", "auto"),
+        default="1",
+        help="tape values advanced per counted skip lap, or auto by size (default: 1)",
+    )
+    ap.add_argument(
+        "--tape-jump-threshold",
+        type=int,
+        default=128,
+        help="minimum tape size where --tape-skip-batch auto selects 2 (default: 128)",
+    )
     args = ap.parse_args(argv)
 
-    m = build_for(args.slug, compact=args.compact)
+    m = build_for(
+        args.slug,
+        tape_skip_batch=None if args.tape_skip_batch == "auto" else int(args.tape_skip_batch),
+        tape_jump_threshold=args.tape_jump_threshold,
+        compact=args.compact,
+    )
     if args.report:
         import sys as _sys
 

@@ -277,6 +277,13 @@ V2_FWD_ROW = 8              # right wall
 V2_RET_COL = 12             # bottom wall
 V2_ACK_OUT_ROW = 16         # left wall; used only by banked worker variants
 
+# The two-value skip worker keeps the same wall protocol but uses a wider room.
+# Its horizontal counted rings sit close to the tape ports and far from the
+# request port, which makes every receive binding deterministic.
+V2_JUMP_IW, V2_JUMP_IH = 34, 18
+V2_JUMP_FWD_ROW = 7
+V2_JUMP_RET_COL = 21
+
 
 def worker_v2(
     n: int,
@@ -452,6 +459,97 @@ def worker_v2(
             )
         else:
             c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+    return c
+
+
+def worker_v2_jump(n: int) -> Circuit:
+    """A parameterized v2 worker whose skip loops move two tape words per lap.
+
+    The request protocol and stored representation are identical to
+    :func:`worker_v2`; only P1/P2 use
+    :meth:`~randomfun2026solvers.circuit.Circuit.counted_ring_horizontal`.
+    BP is still tested once per word.  Consequently zero and odd counts are
+    exact, while a long skip costs about five worker ticks per word instead of
+    eight.
+
+    The room is deliberately wider but not taller.  Keeping the original
+    height lets the tape-return pipe remain the closest incoming pipe to both
+    skip loops, while the WRITE-value receive remains closest to the request
+    pipe.
+    """
+    c = Circuit(V2_JUMP_IW, V2_JUMP_IH)
+    L = lit(n)
+    GUT = V2_JUMP_IW - 1
+
+    # INIT lives in the otherwise-unused north-east corner.  It retains the
+    # one-value loop because initialization runs once, while P1/P2 run for
+    # every access.
+    x, _ = c.run(1, 0, "@" + L + "b")
+    c.route((x, 0), E, [(29, 0)], (29, 2), E)
+    fill, _ = c.counted_loop(30, 2, "0s")
+    c.route((fill, 2), E, [(GUT, 2), (GUT, 1)], (0, 1), S)
+    c.turn(0, 2, E)
+
+    # MAIN and the signed remaining-distance setup are byte-for-byte the v2
+    # protocol.  B carries +(N-addr) for READ and -(N-addr) for WRITE.
+    c.run(1, 2, "rX")
+    rx, _ = c.run(3, 2, "rbM" + L + "-M")
+    c.turn(2, 3, E)
+    wx, _ = c.run(3, 3, "rbM" + L + "-NM")
+    c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
+    c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+
+    # P1.  The north exit is the odd-count tail.  It points east along the
+    # shared entry corridor, re-enters with BP=0, and then takes the one south
+    # exit.  Thus downstream code has a single entry for both parities.
+    c.turn(10, 4, S)
+    c.turn(10, 5, E)
+    c.horizontal(5, 10, 23)
+    c.turn(23, 5, S)
+    p1_exit, p1_odd = c.counted_ring_horizontal(19, 6, "rs")
+    c.turn(*p1_odd, E)
+
+    # Dispatch.  READ turns south, WRITE north.  The target arms are placed
+    # east of P1 so the WRITE arm never crosses the ring.
+    c.route(p1_exit, S, [(23, 10)], (23, 10), E)
+    c.run(24, 10, "WX")
+
+    c.turn(25, 11, E)
+    c.run(26, 11, "bmrS")
+    read_exit = (30, 11)
+
+    c.turn(25, 9, E)
+    c.run(26, 9, "Nbm")
+    write_target_exit = (29, 9)
+
+    # Fetch the WRITE value beside the west request port, then carry it back
+    # to the tape.  READ and WRITE converge on P2's entry; the same eastbound
+    # corridor is also the odd-tail re-entry path.
+    c.route(
+        write_target_exit,
+        E,
+        [(32, 9), (32, 12)],
+        (3, 12),
+        W,
+    )
+    c.run(2, 12, "r", d=W)
+    c.route((1, 12), W, [(0, 12), (0, 13)], (16, 13), E)
+    c.run(16, 13, "sr")
+
+    c.route(read_exit, E, [(31, 11), (31, 13)], (23, 13), S)
+    c.turn(19, 13, E)
+    c.turn(23, 13, S)
+    p2_exit, _p2_odd = c.counted_ring_horizontal(19, 14, "rs")
+
+    # Both the normal P2 exit and INIT share the northbound gutter back to
+    # MAIN.  Only one runner can occupy this return path at a time.
+    c.route(
+        p2_exit,
+        S,
+        [(23, 17), (GUT, 17), (GUT, 1)],
+        (0, 1),
+        S,
+    )
     return c
 
 

@@ -1,0 +1,16 @@
+# little-little-man — submission 3ba9f345-e15b-44eb-92d3-f2e9987e16a6
+
+verdict      done: 28/28 cases, area2 38809, avgTicks 9,628,002, score 373,653,124,074
+submitted    2026-07-26T16:48:48+0300
+grid         197x192
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  a6c07e3a3e11ea576dde3f152da53852541bc18389ace9bfb491aab3f442e11c
+commit       6888ba7
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+L/U teleports replace the merger and both answer lanes: a long room is a teleport because R has no distance term (verified: 66 ticks at 1 column and at 31). Cold bank's stub enters U 37 rows from its R. Ticks unchanged (~0.02%) since pipe transit was never the cost; the point is no crossings left, which unblocks the ROM refold.
