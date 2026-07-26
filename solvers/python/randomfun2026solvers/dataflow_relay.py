@@ -116,6 +116,7 @@ ROTATION_MODEL: dict[tuple[int, int, int], float] = {
     (2, 6, 4): 3.5,
     (3, 6, 4): 3.2,
     (3, 8, 6): 3.0,
+    (4, 8, 6): 2.75,
 }
 
 

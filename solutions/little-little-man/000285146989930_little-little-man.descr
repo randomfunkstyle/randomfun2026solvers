@@ -1,0 +1,16 @@
+# little-little-man — submission 5f308357-d349-429f-a846-0145676a8b18
+
+verdict      done: 28/28 cases, area2 37636, avgTicks 7,576,442, score 285,146,989,930
+submitted    2026-07-26T20:14:02+0300
+grid         192x194
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  5b90e2575dfbbb57a3cb0f5d5030e7a41937c4db6fb48fdd4e41ec1b25702d21
+commit       dabc78c
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+four-word-per-lap tape worker (skip_batch=4) on both banks: avg 7,482,282 -> 6,890,324 at an unchanged 192x194/37,636 and 9 live men, runner-ticks 0.107bn -> 0.099bn. The block goes 45 -> 60 columns, free here because the ROM sets the width.

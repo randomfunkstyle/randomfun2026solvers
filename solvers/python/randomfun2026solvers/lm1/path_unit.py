@@ -36,16 +36,15 @@ MOVE 3``. ``x`` turns clockwise on BP's low bit and a man heading south turns
 clockwise to the *west*, so a west branch means that bit is 1 — which is why
 ``MOVE`` (``11``) is the **westernmost** leaf and ``CELL`` (``00``) the easternmost.
 
-Which arms are real, and which are stubs
-----------------------------------------
+The four arms are the hardware protocol
+---------------------------------------
 
-This module is PART 2 of the build: the room, the panel, the pipes and the
-assertions that keep them legal. What sits in each arm's column now is the
-*geometric* skeleton — which row every ``s`` stands on, and which column the arm
-climbs when it needs to paint twice — and it happens to be a working
-micro-program. **PART 3 owns the behaviour**: the colours, which arms commit, and
-what a command does to the register are all decided inside :data:`ARM_STUBS`'
-columns and may be rewritten freely, as long as a send stays on its band's row.
+The room, panel, pipes, and arm micro-program are one checked block. In
+particular, ``CELL`` sends only DATA: the panel's DATA port advances its cursor,
+so the 256 setup commands paint row-major without paying an ADDR command per
+cell. Its binary argument is multiplied by seven inside the arm, mapping
+``path=0`` and ``wall=1`` to their panel colours. ``ROBOT``, ``FLAG``, and
+``MOVE`` use explicit addresses after setup.
 
 Geometry: three rules, all asserted at build time
 -------------------------------------------------
@@ -186,10 +185,9 @@ TRIE_COL = LEAF0 + LEAF_PITCH * ((1 << TRIE_BITS) - 1) // 2  # 9
 #: is a whole pitch away and nothing else lives between them).
 ARMS: tuple[str, ...] = ("MOVE", "ROBOT", "FLAG", "CELL")
 
-#: What each arm's column holds today, and what PART 3 may change about it. The
-#: *rows* are geometry and are asserted; everything else here is policy.
+#: What each arm's column implements. The *rows* are also pipe-binding geometry.
 ARM_STUBS: dict[str, str] = {
-    "CELL": "ADDR=cell, DATA=7 (wall). No commit: round 0 shows one frame.",
+    "CELL": "DATA=7*bit; the panel cursor advances. No commit: setup shows one frame.",
     "ROBOT": "reg=cell, ADDR=cell, DATA=10, SWAP=1 — round 0's only commit.",
     "FLAG": "ADDR=cell, DATA=9. No commit: the flag appears in the next move's frame.",
     "MOVE": (
@@ -314,12 +312,12 @@ def unit_interior() -> Unit:
     for x in col.values():
         c.run(x, R_ARG, "M8W/", d=S)
 
-    # ── CELL: paint one board cell. PART 3 owns the colour and the commit ─────
+    # ── CELL: paint one board bit at the panel's advancing cursor ─────────────
+    # A is the binary input cell. DATA advances the panel cursor, so setup needs
+    # no ADDR traffic: 0 -> path colour 0, 1 -> wall colour 7.
     x = col["CELL"]
-    c.vertical(x, R_ARG + 3, R_ADDR)
-    pipe(x, R_ADDR, "s", "addr")
-    c.vertical(x, R_ADDR, R_DATA - 1)
-    c.set(x, R_DATA - 1, str(WALL))
+    c.run(x, R_ARG + 4, f"M{WALL}*", d=S)
+    c.vertical(x, R_ADDR, R_DATA)
     pipe(x, R_DATA, "s", "data")
     c.vertical(x, R_DATA, R_COLLECT)
 

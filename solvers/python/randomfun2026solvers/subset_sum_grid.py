@@ -48,9 +48,10 @@ op actually resolves to — a mis-bound `s` is otherwise completely silent.
 The search examines every candidate pair at most once, so it costs
 `2^hL * (2^hR + 1) = 1,052,672` element comparisons at `n = 20` **whatever the
 input**.  Engine-measured on the finished grid, the ceiling is **6,329,884
-ticks** (`6,329,954` including the walk out to the no-solution lane) — twenty values, all even, an odd target, so nothing is satisfiable and
-every left mask is tried against all 257 words of ring B.  That is 42% of the
-15,000,000 cap.  The seven public cases run 116,690 to 1,235,098 and average 292,147.
+ticks** (`6,329,912` including the walk out to the no-solution lane) — twenty
+values, all even, an odd target, so nothing is satisfiable and every left mask
+is tried against all 257 words of ring B.  That is 42% of the 15,000,000 cap.
+The seven public cases run 116,690 to 1,235,098 and average 292,126.
 
 Two facts hold the cost model up, and both were re-measured here rather than
 inherited:
@@ -107,8 +108,10 @@ BRET_COL, BFWD_COL = 30, 31
 #: which is not something a block should be allowed to depend on.
 BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)}
 
-#: Worker interior.
-IW, IH = 46, 230
+#: Worker interior.  ``IH`` is set by :data:`NOSOL_ROW` — the deepest thing in the
+#: room is the no-solution emit, and everything below the last code block is the
+#: corridor that reaches it.  One row of slack past that row is all it needs.
+IW, IH = 46, 179
 
 
 def _op(c: Circuit, x: int, y: int, glyph: str, band: str) -> None:
@@ -590,7 +593,7 @@ P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 24, 32, 39, 45, 50
 #: four lanes it fans out into were what defeated the first attempt at a tight
 #: layout; there is no area pressure on this problem, so they get room.
 SCAN_TOP, SCAN_SOUTH, SCAN_NORTH = 60, 35, 34
-MISS_ROW, HIT_ROW, HIT_COL, P3_HEAD = 53, 70, 12, 90
+MISS_ROW, HIT_ROW, HIT_COL, P3_HEAD = 53, 70, 12, 72
 
 
 def _phase2(c: Circuit) -> None:
@@ -734,7 +737,16 @@ def _scan(c: Circuit) -> None:
 
 #: Where the exhausted lane and the no-solution answer live: far east of every
 #: lane, far south of every block.  Nothing else is within ten columns of it.
-NOSOL_COL, NOSOL_ROW = 44, 220
+#:
+#: ``NOSOL_ROW`` **sets the machine's charged side**, because the room is taller
+#: than it is wide and everything below the last code block is corridor reaching
+#: this row.  It was 220 against a deepest code block at 193; 196 is the floor,
+#: and it is a hard one — 195 lands on ``_emit``'s ``H`` at column 5 and 194 on
+#: its ``0`` at column 8, both build errors.  Between 192 and 195 the grid still
+#: *builds* and the ``no solution`` case fails on the engine instead, which is
+#: the failure worth naming: south of the emit block the corridor is unobstructed
+#: but the answer no longer binds the ``O`` pipe.
+NOSOL_COL, NOSOL_ROW = 44, 178
 
 
 def _nosol(c: Circuit) -> None:
@@ -768,7 +780,7 @@ def _hit_probe(c: Circuit) -> None:
 
 #: Phase 3's rows.  It is phase 2's lap with `CR` driving it, so it reuses every
 #: block; only the prologue and the final comparison differ.
-P3_MASK, P3_SKIP, P3_PEEL, P3_TEST = 96, 103, 108, 114
+P3_MASK, P3_SKIP, P3_PEEL, P3_TEST = 78, 85, 90, 96
 
 
 def _phase3(c: Circuit) -> None:
@@ -827,9 +839,9 @@ def _phase3(c: Circuit) -> None:
 #: Emit's rows.  Three laps: count the bits and answer `k`, then the left half's
 #: chosen values, then the right half's.  Left before right **is** increasing
 #: index order, which is why no combined mask and no output buffer are needed.
-E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 122, 126, 132, 138, 143
-E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 148, 152, 158, 163, 168, 173
-E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 178, 182, 188, 193
+E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 104, 108, 114, 120, 125
+E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 130, 134, 140, 145, 150, 155
+E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 160, 164, 170, 175
 
 
 def _emit(c: Circuit) -> None:

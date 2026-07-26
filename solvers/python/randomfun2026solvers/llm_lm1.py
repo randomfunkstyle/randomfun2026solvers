@@ -1468,18 +1468,20 @@ def _emit_pick(a: Asm, sites: int) -> None:
 #: so ``(4, 26)`` = 104 slots costs three extra men and was judged **28/28 at
 #: 400,740,741,396** — 2.12x the single-tape machine, at a *lower* runner-tick
 #: product (0.110bn against 0.151bn). See ``machine.TIER_PIPE_BANK`` and LLM-DESIGN.
-#: Both banks use the two-word-per-lap tape worker (``machine.tape_block``'s
-#: ``skip_batch=2``): it tests ``BP`` once per word but carries two, so the rotation a
-#: read waits on roughly halves. Measured over all 14 public cases at an identical
-#: 192x194 / 37,636 and an identical 8 live men:
+#: Both banks use the four-word tape worker (``machine.tape_block``'s
+#: ``skip_batch=4``): it peels the exact 0..3 tail from BP, then carries four words
+#: per counted unit. Measured over all 14 public cases at an identical 192x194 /
+#: 37,636 and an identical 8 live men:
 #:
 #:     skip_batch=1   avg 8,803,337   worst 13,788,195   0.1103bn   judged 363,025,672,731
-#:     skip_batch=2   avg 7,680,119   worst 12,151,119   0.0972bn
+#:     skip_batch=2   avg 7,482,282   worst 11,879,752   (same-box fat relay)
+#:     skip_batch=4   avg 6,890,324   worst 11,037,953   (8x6 relay)
 #:
-#: So it is ~12.8% of the score for no area and *fewer* runner-ticks. The block is 45
-#: columns rather than 33, which is free here because the banks end well west of the
-#: ROM's own width.
-TAPE_SKIP_BATCH = 2
+#: Batch 4 is another 7.9% below the improved batch 2 and 10.3% below the old
+#: batch-2 timing, for no area: all variants remain 192x194 because both banks end
+#: west of the ROM. The larger relay wins ~0.6% over 6x4 and is also footprint-free.
+TAPE_SKIP_BATCH = 4
+TAPE_RELAY_SIZE = (8, 6)
 
 #: The hot bank, as ``(cols, rows)`` — but :data:`lm1.machine.TIER_PIPE_BANK` makes
 #: it a pipe tape, and a tape only cares about the product.
@@ -1576,7 +1578,12 @@ ROM_ROWS = 89
 
 
 def build_machine(
-    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = HOT
+    *,
+    packed_cells: bool = False,
+    rom_rows: int = ROM_ROWS,
+    hot: tuple[int, int] | None = HOT,
+    tape_skip_batch: int = TAPE_SKIP_BATCH,
+    tape_relay_size: tuple[int, int] | None = TAPE_RELAY_SIZE,
 ):
     """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel.
 
@@ -1599,7 +1606,8 @@ def build_machine(
         display=(PANEL, PANEL),
         rom_rows=rom_rows,
         hot=hot,
-        tape_skip_batch=TAPE_SKIP_BATCH,
+        tape_skip_batch=tape_skip_batch,
+        tape_relay_size=tape_relay_size,
     )
     return built, program, text
 
