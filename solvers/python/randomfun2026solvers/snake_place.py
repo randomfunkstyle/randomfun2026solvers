@@ -52,10 +52,12 @@ __all__ = ["BANKS", "build_grid", "build_room", "layout"]
 #: :data:`REACH` cells for nothing, and the relay is 10 columns of empty north
 #: band wide already, so those columns cost the grid nothing at all.
 #:
-#: ``8`` is what that leaves: rows 0-3 are the relay, 4-7 are the risers, and the
-#: pair holds ``2*(8-4) + 6 = 14``.  The ring is also two cells *shorter* than the
-#: straight one it replaces (34 against 36), so the fold is not a trade.
-BAND_H = 8
+#: ``6`` is what a joint search over band, reach, bank widths and block order
+#: settles on: rows 0-3 are the relay, 4-5 are the risers, and the pair holds
+#: ``2*(6-4) + 10 = 14`` -- exactly :data:`~snake_layout.RING_MIN` and not one
+#: cell of latency more.  Six rows handed back, and the room spends them on
+#: being four columns narrower: 79x76 was **width**-bound.
+BAND_H = 6
 
 #: How far the outgoing riser reaches west along the row under the relay.
 #:
@@ -65,19 +67,25 @@ BAND_H = 8
 #: :func:`audit_bindings` then refuses.  West is free -- the columns there are
 #: north band nobody uses -- and it leaves both anchors exactly where the
 #: straight risers had them, so the bands are unchanged.
-REACH = 6
+#:
+#: 10 buys the six rows :data:`BAND_H` gave up.  It is free in columns -- the fold
+#: runs under the relay through north band nobody uses -- and free in latency,
+#: because the ring still holds exactly the 14 words it must.
+REACH = 10
 
 #: The relay's interior width.  Its ports are the outgoing riser's fold end and
 #: the incoming riser's foot, ``SPREAD + REACH`` apart, so ``REACH + SPREAD + 1``
-#: is the floor.  10 is what `snake_ring.FLAT_RELAY` already is.
-RELAY_W = 10
+#: is the floor, and `dataflow_relay.flat_relay` builds it at any width.  14 is
+#: that floor at ``REACH = 10``; it also carries 11 words a lap against
+#: `snake_ring.FLAT_RELAY`'s 7, so the turnaround stopped being the ring's cap.
+RELAY_W = 14
 
 #: Columns between the two pipes of a pair.  Both midpoints still land on the
 #: split, and the gap is what the input room stands in.
 SPREAD = 3
 
 #: channel columns and code columns of each bank, west to east
-BANKS = ((5, 11), (5, 11), (5, 11))
+BANKS = ((4, 11), (5, 11), (4, 9))
 
 
 def layout(banks=BANKS):
@@ -128,16 +136,21 @@ def default_split(order: list[str], frac: float = 0.7) -> dict[str, str]:
     return {n: ("P" if i < k else "Q") for i, n in enumerate(ring)}
 
 
-#: The order :func:`tuned_order` settles on, pinned so the generator is
-#: deterministic and does not pay for an anneal on every build.  Re-derive it
-#: with ``python -m randomfun2026solvers.snake_place --order``.
+#: The block order, pinned so the generator is deterministic and pays for no
+#: search.  **Found on measured ticks, jointly with the bank widths and the north
+#: band** -- not by :func:`tuned_order`, whose unweighted MinLA this beats.
+#:
+#: That the objective can be the real one is the whole trick: `build_room` costs
+#: ~18s, but `optimize.verify` on the fast engine costs **0.08s**, so ranking
+#: candidates on a proxy was shortlisting for a decider worth 0.4% of the price.
 ORDER = [
-    "INIT", "FR_PUSH", "FR_BODY", "FRUIT", "FR_END", "FR2_PUSH", "FR2_BODY",
-    "FR2_END", "G_PUSH", "G_BODY", "G_END", "T_GROW", "MAIN", "TICK", "T_H",
-    "T_H_OK", "T_F", "DEAD_HV", "T_V_OK", "DEAD_V", "T_V", "T_MOVE", "M_END",
-    "M_BODY", "M_KEEP", "M_CMP", "DEAD_C", "DC_A_PIX", "DC_A", "DC_MARK",
-    "DC_B_PIX", "DC_B", "DEAD_DONE", "HALT", "DEAD_PIX", "DEAD_PAINT", "DIR",
-    "DIR_V", "DIR_NEG", "DIR_H", "DIR_SET", "ROT_END", "ROT_PUSH", "ROT_BODY",
+    "INIT", "FR_BODY", "FR_PUSH", "FR2_PUSH", "FR_END", "FR2_BODY",
+    "FR2_END", "G_PUSH", "G_BODY", "G_END", "T_GROW", "MAIN", "TICK",
+    "T_H", "T_V_OK", "T_H_OK", "DEAD_PAINT", "DC_A_PIX", "DEAD_HV",
+    "DEAD_V", "T_V", "DEAD_DONE", "M_END", "M_BODY", "M_KEEP", "M_CMP",
+    "DEAD_C", "DC_A", "FRUIT", "DC_MARK", "DC_B_PIX", "DC_B", "T_MOVE",
+    "HALT", "DEAD_PIX", "T_F", "DIR", "DIR_V", "DIR_NEG", "DIR_H",
+    "DIR_SET", "ROT_END", "ROT_PUSH", "ROT_BODY",
 ]
 
 
@@ -184,6 +197,7 @@ def build_grid(banks=BANKS, order=None, frac: float = 0.7, seed: int = 0,
 
     room = build_room(banks, order, frac, seed)
     walked_cells_all_hold_a_glyph(room)
+    B.walks_are_the_program(room, WORKER_L)
     geo, _bk = layout(banks)
     iw, ih = geo.iw, room.height
     wy = band_h + 1

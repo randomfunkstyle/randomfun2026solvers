@@ -15,7 +15,7 @@ import pytest
 from randomfun2026solvers import blockplace as B
 from randomfun2026solvers import optimize
 from randomfun2026solvers import snake_place as SP
-from randomfun2026solvers.blockplace import E, N, S, W
+from randomfun2026solvers.blockplace import Collision, E, N, S, W
 from randomfun2026solvers.snake_layout import TOKEN_ZONE, WORKER_L
 
 
@@ -96,6 +96,39 @@ def room():
 def test_every_block_walks_its_own_tokens(room) -> None:
     """A block whose row lost a glyph still loads; it just computes something else."""
     SP.walked_cells_all_hold_a_glyph(room)
+
+
+def test_a_run_the_pen_dropped_is_caught_against_the_cfg_not_the_plan(room) -> None:
+    """The two checks are not the same check, and only one of them can disagree.
+
+    `walked_cells_all_hold_a_glyph` compares the *grid* against the *plan*, so a
+    plan that never held the glyph passes it.  That is precisely the failure that
+    cost a `matmul` machine six sessions: its checker expanded the pen's own
+    output on both sides, so four missing constant runs were invisible while
+    bindings, placement and pipes were all genuinely fine.  `walks_are_the_program`
+    compares the plan against `WORKER_L`, which is the source.
+    """
+    victim = next(n for n, p in room.placed.items()
+                  if sum(len(r.cells) for r in p.plan.rows) > 3)
+    rows = room.placed[victim].plan.rows
+    row = next(r for r in rows if r.cells)
+    dropped, row.cells = row.cells, row.cells[:-1]
+    try:
+        SP.walked_cells_all_hold_a_glyph(room)      # grid vs plan: still agrees
+        with pytest.raises(Collision):
+            B.walks_are_the_program(room, WORKER_L)
+    finally:
+        row.cells = dropped
+    B.walks_are_the_program(room, WORKER_L)
+
+
+def test_a_token_compiles_to_the_cells_it_is_written_with() -> None:
+    """A literal is written between backticks unless it is a single digit."""
+    assert B.token_glyphs("L7") == "7"
+    assert B.token_glyphs("L2048") == "`2048`"
+    assert B.token_glyphs("rr") == B.token_glyphs("ri") == "r"
+    assert B.token_glyphs("sq") == B.token_glyphs("so") == "s"
+    assert B.token_glyphs("X") == "X"
 
 
 def test_every_lane_of_the_finished_field_arrives_where_the_cfg_says(room) -> None:
