@@ -144,14 +144,64 @@ LAID: dict[str, tuple[list[str], dict[str, str] | str]] = {
     name: (expand(toks), succ) for name, (toks, succ) in WORKER.items()
 }
 
+#: Ring letter -> the band its ops stand in.  Two pipes share a band when one of
+#: them is only ever *sent* to and the other only ever *received* from: sends and
+#: receives are independent nearest-sets, so they cost one band between them.
+RINGS: dict[str, str] = {c: c for c in "xbcsqk"}
+
+#: The block the man starts in.  Its chain is laid first and gets the ``@``.
+ENTRY = "HEAD"
+
+
+@dataclass(frozen=True)
+class Spec:
+    """One man's CFG and the vocabulary his room is cut into bands for.
+
+    The compiler below reads five module globals.  A second man needs all five
+    changed together and nothing else, so they are bundled here and swapped by
+    :func:`use` -- which keeps the one-man build's globals as the default and
+    lets :mod:`matmul_pair_grid` compile two rooms out of the same code.
+    """
+
+    laid: dict[str, tuple[list[str], dict[str, str] | str]]
+    rings: dict[str, str]
+    self_loops: tuple[str, ...]
+    dead_lanes: frozenset[tuple[str, str]]
+    entry: str = "HEAD"
+
+    @classmethod
+    def of(cls, worker: dict, rings: dict[str, str], entry: str,
+           self_loops: tuple[str, ...],
+           dead_lanes: frozenset[tuple[str, str]] = frozenset()) -> "Spec":
+        laid = {n: (expand(t), s) for n, (t, s) in worker.items()}
+        return cls(laid, dict(rings), tuple(self_loops), frozenset(dead_lanes), entry)
+
+
+def use(spec: Spec):
+    """Point the compiler at one man's CFG, for the duration of a ``with``."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _swap():
+        global LAID, RINGS, SELF_LOOPS, DEAD_LANES, ENTRY
+        saved = (LAID, RINGS, SELF_LOOPS, DEAD_LANES, ENTRY)
+        LAID, RINGS = spec.laid, spec.rings
+        SELF_LOOPS, DEAD_LANES, ENTRY = spec.self_loops, set(spec.dead_lanes), spec.entry
+        try:
+            yield spec
+        finally:
+            LAID, RINGS, SELF_LOOPS, DEAD_LANES, ENTRY = saved
+
+    return _swap()
+
 
 # ── tokens ────────────────────────────────────────────────────────────────────
 def band_of(tok: str) -> str | None:
     """Which band a token has to stand in, or `None` if it is a plain glyph."""
     if tok in ("ri", "so"):
         return "io"
-    if len(tok) == 2 and tok[0] in "rs" and tok[1] in "xbcsqk":
-        return tok[1]
+    if len(tok) == 2 and tok[0] in "rs" and tok[1] in RINGS:
+        return RINGS[tok[1]]
     return None
 
 
@@ -439,7 +489,7 @@ def chains_of() -> list[Chain]:
             taken.add(tgt)
 
     heads = [n for n in LAID if n not in taken]
-    heads.sort(key=lambda n: ("HEAD" != n, n))
+    heads.sort(key=lambda n: (ENTRY != n, n))
     chains: list[Chain] = []
     for head in heads:
         blocks, cur = [head], head
