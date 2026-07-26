@@ -2292,6 +2292,83 @@ _MERGER = ("@>Rv", " ^s<")
 _MERGER_W = 4
 _MERGER_H = 2
 
+#: Rows kept clear between the CPU's top row and the two store blocks, for the two
+#: answer lanes to run west in.
+#:
+#: The original seam climbed to ``cy - 1`` / ``cy - 3`` — the band *above* the CPU —
+#: which worked only while the ROM's fold left that band empty. It does not any more:
+#: at ``rom_rows=85`` the ROM's bottom rows sit directly on the CPU's top and reach
+#: past the tape's column, so the tape's riser hit ``'-' vs '|'`` at ``(166, 88)`` on
+#: every pad pair. There is no clear row above, because the ROM is what is there.
+#:
+#: So the lanes move *below* the CPU's top row instead, which is also what the
+#: one-tier build was changed to do ("routing above the whole CPU was a large detour
+#: paid on every read"): the blocks drop three rows, and the two rows that frees are
+#: exactly the merger's own interior rows, so each answer runs straight west into a
+#: merger door with no climb and no descent at all.
+_ANS_BAND = 3
+
+#: Use the side-ported grid man-memory for the hot tier, so its answer leaves the
+#: same wall its request enters. The bottom-ported block forces the answer to travel
+#: the block's whole width and then back west across the machine; with both ports on
+#: one wall the answer is a few cells long and never leaves the adapter's column band.
+#:
+#: **Off, because it does not place yet.** With both stubs on the west wall the
+#: request pipe and the answer pipe leave the same side and cross:
+#: ``collision at (109, 93): '>' vs '|'``. The routing in :func:`_two_tier` still
+#: assumes the answer comes out east. Every measured number in ``LLM-DESIGN.md`` is
+#: the bottom-ported block, so this stays off until the west-wall routing is written.
+TIER_SIDE_PORTS = False
+
+#: Make the hot bank a **pipe tape** instead of a man-memory.
+#:
+#: The seam was built to accelerate the hot addresses, and it does — but every slot
+#: of a man-memory is a live little man, and the grader's cost is ``runners x ticks``.
+#: Measured on `little-little-man`: a 10-slot man tier scored 13% better in ticks and
+#: was refused ``11/28``; a 52-slot one was refused ``4/28``. A pipe tape stores its
+#: words as values in a rotating ring, so it has **four men at n=52 and four at
+#: n=427** — constant in size. Banking the store into a small hot ring and the full
+#: cold one therefore buys most of the latency win at almost none of the wall clock.
+TIER_PIPE_BANK = True
+
+
+@dataclass
+class _PipeBank:
+    """A :func:`tape_block` dressed as a tier: the seam only wants these six fields.
+
+    ``tape_block`` reports ``slots`` as the *ring cell* count (``2n + 4``), so the
+    addressable size has to be carried alongside it rather than read back off it.
+    """
+
+    tape: object
+    slots: int
+
+    @property
+    def cells(self) -> dict[tuple[int, int], str]:
+        return self.tape.cells
+
+    @property
+    def width(self) -> int:
+        return self.tape.width
+
+    @property
+    def height(self) -> int:
+        return self.tape.height
+
+    @property
+    def in_cell(self) -> tuple[int, int]:
+        return self.tape.in_cell
+
+    @property
+    def out_cell(self) -> tuple[int, int]:
+        return self.tape.out_cell
+
+    #: A tape's ring is two pipes at every size, and unlike the man-memory's the
+    #: block's own request and answer stubs are *not* halves of the section's pipes —
+    #: they are the ring legs themselves. So the seam's ``- 2`` has to be cancelled
+    #: here, which is what the extra two account for: 4 + 2 + 4 - 2 = 8.
+    pipes: int = 4
+
 
 def _two_tier(
     g: _Grid,
@@ -2327,11 +2404,28 @@ def _two_tier(
       top row on rows of their own; the cold request never enters that band, which
       is the only reason a single-layer grid can carry four pipes at once.
     """
-    from ..memory_men_grid_store import grid_block
-
+    # ``grid_side_block`` puts the answer stub on the **same wall** as the request
+    # instead of on the far side of the block, which is the whole reason it exists
+    # ("a tape-shaped slot"). Both of the tier's pipes then face the merger, so the
+    # answer needs no lane across the machine at all — see ``TIER_SIDE_PORTS``.
     cols, rows_ = hot
-    tier = grid_block(cols, rows_, base=1)
-    hot_top = tier.slots  # addresses 1..hot_top are the tier's; the rest are tape's
+    if TIER_PIPE_BANK:
+        # A *pipe tape* as the hot bank. Its whole point is that a stored word is a
+        # value in a pipe, not a little man, so this costs four men at any size while
+        # a man-memory costs two per slot plus a fixed staff. It answers in
+        # ``8.0 * hot_top`` rather than ~31 ticks, which is far worse per read and
+        # still 8x better than the 427-slot cold bank — and the men are what the
+        # grader's wall clock is spent on, not the ticks.
+        hot_top = cols * rows_
+        tier = _PipeBank(tape_block(hot_top), hot_top)
+    else:
+        if TIER_SIDE_PORTS:
+            from ..memory_men_grid_side import grid_side_block as tier_block
+        else:
+            from ..memory_men_grid_store import grid_block as tier_block
+
+        tier = tier_block(cols, rows_, base=1)
+        hot_top = tier.slots  # addresses 1..hot_top are the tier's; the rest are tape's
     if hot_top >= tape_n:
         raise MachineError(
             f"a {cols}x{rows_} tier holds slots 1..{hot_top}, which is the whole "
@@ -2365,14 +2459,14 @@ def _two_tier(
     )
 
     # ── the hot tier, immediately east of the adapter ────────────────────────
-    gx, gy = aw + 5, cy
+    gx, gy = aw + 5, cy + _ANS_BAND
     g.blit(gx, gy, tier.cells)
     hot_out = ay + adapter.hot_row
     tin_x, tin_y = gx + tier.in_cell[0], gy + tier.in_cell[1]
     g.draw_pipe([(aw + 1, hot_out), (aw + 3, hot_out), (aw + 3, tin_y), (tin_x - 1, tin_y)])
 
     # ── the tape, east of the tier; its request goes the long way, underneath ──
-    tx, ty = gx + tier.width + 4, cy
+    tx, ty = gx + tier.width + 4, cy + _ANS_BAND
     g.blit(tx, ty, tape.cells)
     cold_out = ay + adapter.cold_row
     bot = max(gy + tier.height, ty + tape.height) + 3
@@ -2403,32 +2497,29 @@ def _two_tier(
         ]
     )
 
-    # Both answers climb clear of every room, then run west on rows of their own.
-    # Two rules, and between them there is exactly one legal assignment:
+    # Both answers rise into the band the blocks vacated and run west into a merger
+    # door of their own. The lane rows *are* the merger's interior rows, so neither
+    # pipe turns twice and neither leaves the band.
     #
-    # * the **nearer** block takes the **lower** lane, or its riser would cut the
-    #   far block's westward run on the way up to a higher one;
-    # * the **upper** lane turns south at the **western** column, so its descent
-    #   crosses the lower lane one column west of where that lane's run stops.
-    hot_lane, cold_lane = cy - 1, cy - 3
-    turn = mx + _MERGER_W + 2
+    # One rule decides which lane is which: the **nearer** block takes the **lower**
+    # one. The far block's riser is east of the near block's, and it has to cross the
+    # near lane's row to reach a higher lane — so if the near block took the upper
+    # lane, the far riser would cut it. With the tier low, the tier's row stops west
+    # of the tape's riser and nothing crosses.
+    cold_lane, hot_lane = my, my + 1
     door = mx + _MERGER_W + 1
     g.draw_pipe(
         [
             (tx + tape.out_cell[0], ty + tape.out_cell[1] - 1),
             (tx + tape.out_cell[0], cold_lane),
-            (turn, cold_lane),
-            (turn, my),
-            (door, my),
+            (door, cold_lane),
         ]
     )
     g.draw_pipe(
         [
             (gx + tier.out_cell[0], gy + tier.out_cell[1] - 1),
             (gx + tier.out_cell[0], hot_lane),
-            (turn + 1, hot_lane),
-            (turn + 1, my + 1),
-            (door, my + 1),
+            (door, hot_lane),
         ]
     )
 

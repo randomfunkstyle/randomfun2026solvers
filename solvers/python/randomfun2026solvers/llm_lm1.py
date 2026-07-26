@@ -1442,11 +1442,14 @@ def _emit_pick(a: Asm, sites: int) -> None:
 #:     | tape only      |    41,616 | 20,275,186 | 31,809,643 | 8.44e11 |
 #:     | + 52-slot tier |    41,616 |  8,605,207 | 13,676,774 | 3.58e11 |
 #:
-#: **Not the default yet**: turning it on regenerates both shipped artifacts
-#: (``tasks/solutions/little-little-man_cpu.man`` and the registered ``.asm``,
-#: whose slot addresses move), which is a decision for whoever ships the next
-#: submission. ``build_machine(hot=HOT)`` is the whole switch.
-HOT = (2, 26)
+#: **This is now the default, and the hot bank is a pipe tape, not a man-memory.**
+#: The man-memory version of this tier was judged ``11/28`` at 10 slots and ``4/28``
+#: at 52 — refused on wall clock, because every slot of it is a live little man and
+#: the grader's cost is ``runners x ticks``. A pipe tape has four men at *any* size,
+#: so ``(4, 26)`` = 104 slots costs three extra men and was judged **28/28 at
+#: 400,740,741,396** — 2.12x the single-tape machine, at a *lower* runner-tick
+#: product (0.110bn against 0.151bn). See ``machine.TIER_PIPE_BANK`` and LLM-DESIGN.
+HOT = (4, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 
@@ -1483,7 +1486,7 @@ ROM_ROWS = 85
 
 
 def build_machine(
-    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = None
+    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = HOT
 ):
     """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel.
 
