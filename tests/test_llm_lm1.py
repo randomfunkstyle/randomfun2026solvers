@@ -67,11 +67,17 @@ def test_program_assembles_and_stays_inside_its_budgets(program) -> None:
     assert prog.P > 0
     assert slots <= 512, f"{slots} store slots"
     used = {op.mnemonic for op in prog.ops_used}
-    assert {"DSPA", "DSPD", "DSPS", "IN"} <= used, used
-    # The decode trie is full: 17 opcodes costs a whole extra 32-lane band, which
-    # measured at +32 rows and +43% on every instruction's issue cost.  This is a
-    # standing reminder of the cliff, not a claim that we are under it yet.
-    assert len(used) <= 20, sorted(used)
+    # One `DSP p` where there were three port opcodes: the lane sends the selector
+    # and ACC down one pipe and `dsprelay.py`'s room fans them out. Folding them is
+    # two of the three removals that take this program to 16 opcodes.
+    assert {"DSP", "IN"} <= used, used
+    assert not {"DSPA", "DSPD", "DSPS"} & used, "the port opcodes are folded into DSP"
+    # The lane band is `2 * (1 << k) - 1` rows and `k = (len(used) - 1).bit_length()`,
+    # so the band is a step function of this number, not a slope: 17, 18 and 19 all
+    # cost the same 63 rows and 16 costs 31. We are *on* the 16 step, and one more
+    # opcode costs 32 rows of the charged dimension. Tighten this, never relax it.
+    assert len(used) <= 16, sorted(used)
+    assert "MULI" not in used, "`MULI` is folded to four doublings; see `_times16`"
 
 
 @pytest.mark.parametrize("case", _cases())
@@ -116,13 +122,16 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
 def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     """``ROM_ROWS`` and ``ROM_BUFFER`` are swept *together*; this is what they bought.
 
-    Score is ``max(w, h)^2``, so only the larger side is charged, and these two
-    constants push opposite sides: a deeper fold narrows the ROM and lengthens the
-    machine, while a longer corridor only lengthens it. The optimum is therefore a
-    joint one, and it is not where either constant's own sweep would put it —
-    measured, ``(83, 2400)`` gives 205x207 and a 14.2% better score than the
-    baseline, against ``(84, 2000)``'s 203x206 at 13.5% and ``(82, 3600)``'s
-    212x212, which is worse than both.
+    Score is ``max(w, h)^2``, so only the larger side is charged, and ``ROM_ROWS``
+    and ``ROM_BUFFER`` push opposite sides: a deeper fold narrows the ROM and
+    lengthens the machine, while a longer corridor only lengthens it. They are
+    therefore swept *together*, and the optimum is not where either constant's own
+    sweep would put it: ``(85, 1800)`` measures 192x193 and -13.5% of score against
+    the unbuffered machine, ``(85, 1200)`` -12.0%, ``(84, 2400)`` -12.0%.
+
+    Re-swept for the sixteen-opcode fold, which shrank the machine to 184x183 and
+    so made the corridor's rows a larger share of it; ``ROM_ROWS`` has now come out
+    88, 89, 90, 83 and 85 against five different geometries.
 
     Pinned because the sweep is invalidated by *any* geometry change anywhere in
     the generator — the CPU, the ROM, the corridor and the tape all move the
@@ -131,8 +140,8 @@ def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     geometries.
     """
     machine, _program = built
-    assert (machine.width, machine.height) == (205, 207)
-    assert max(machine.width, machine.height) ** 2 == 42_849
+    assert (machine.width, machine.height) == (192, 193)
+    assert max(machine.width, machine.height) ** 2 == 37_249
 
 
 @pytest.mark.slow
@@ -215,3 +224,43 @@ def test_the_shipped_machine_is_inside_the_judge_s_time_cap() -> None:
     # 20.3M was this machine's per-case cost before the store was banked; it is now
     # ~8.3M, so this stays a conservative ceiling rather than a pin on today's speed.
     assert men * 20_275_186 < simcost.JUDGE_TIMEOUT_FLOOR
+
+
+# ── the hot bank's size ───────────────────────────────────────────────────────
+
+
+def test_the_hot_bank_holds_every_slot_that_wants_it() -> None:
+    """The bank must cover the hot set, with room to spare.
+
+    The "size it to exactly what is used" rule this once asserted was swept on a
+    *single* bank, where the whole length sits in every read's latency. The shipped
+    tier is ``HOT = (4, 26)`` — four banks of 26 — and a read only rotates its own
+    bank, so 104 reserved slots against 53 used costs nothing. Sizing is now a
+    property of the bank *length*, not the total, which is why the old equality no
+    longer holds and is not restored here.
+
+    53, not the 52 it was swept at: folding ``MULI`` out to reach 16 opcodes needs a
+    doubling scratch, and it has to be hot — four reads an execution is 124 a case,
+    and on the cold tape that would cost ~6% of ticks and swallow the win entirely.
+    """
+    from randomfun2026solvers.llm_asm import Asm
+
+    a = Asm(hot_slots=llm_lm1.HOT_SLOTS)
+    llm_lm1._declare(a, packed_cells=False)
+    assert a.hot_used == 53
+    assert llm_lm1.HOT_SLOTS > a.hot_used, "the bank needs at least one spare slot"
+
+
+def test_a_bank_with_no_spare_slot_is_refused() -> None:
+    """Sizing it to exactly the used count is a fault, not a tight fit.
+
+    It builds and passes ten of the fourteen public cases, then kills the runner
+    with ``fatal: wall`` on the other four — a symptom that points at the
+    interpreter when the cause is this one number.
+    """
+    from randomfun2026solvers.llm_asm import Asm
+
+    a = Asm(hot_slots=llm_lm1.HOT_SLOTS)
+    llm_lm1._declare(a, packed_cells=False)
+    with pytest.raises(ValueError, match="at least one spare"):
+        llm_lm1.build_asm(hot_slots=a.hot_used)

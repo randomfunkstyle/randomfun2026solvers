@@ -97,8 +97,17 @@ def test_each_port_is_a_w_s_w_sandwich_on_its_own_band(sem: Sem) -> None:
 
 
 def test_the_three_bands_are_exactly_the_three_ports() -> None:
-    assert set(machine.DSP_SEM_BAND.values()) == set(machine.DSP_BANDS)
+    """``DSP_BANDS`` means the panel's three sides, and stays three.
+
+    It is the west-to-east routing order — DATA turns west round the panel, ADDR
+    drops into its top, SWAP runs east and under — so nothing that is not a port
+    belongs in it. ``Band.DSP``, the single lane feeding `dsprelay`'s room, is a
+    *lane* band and lives in ``DSP_LANE_BANDS`` instead; conflating the two made
+    `palette` and `plotter` look up a port column that does not exist.
+    """
     assert len(machine.DSP_BANDS) == 3
+    assert set(machine.DSP_SEM_BAND.values()) == set(machine.DSP_LANE_BANDS)
+    assert set(machine.DSP_BANDS) < set(machine.DSP_LANE_BANDS)
 
 
 def test_display_lanes_sit_at_the_bottom_beside_the_south_wall() -> None:
@@ -183,11 +192,26 @@ def test_the_resolution_comes_from_the_problem() -> None:
     assert machine.display_for("brackets") is None
 
 
-def test_dsp_p_still_has_no_hardware() -> None:
-    """``ARCH.md`` §6's ``DSP p`` picks its pipe from a *word*; geometry cannot."""
-    assert machine.hw_micro(Sem.DISPLAY) == ()
-    with pytest.raises(machine.MachineError, match="no hardware micro-program"):
-        machine.plan(assemble("LDI 15\nDSP 1\nHALT\n"))
+def test_dsp_p_is_buildable_behind_the_seam() -> None:
+    """``DSP p`` picks its pipe from a *word*, and a lane cannot — but a room can.
+
+    This asserted the opposite for as long as the choice was expected to happen in
+    the lane, where §7.1 makes it impossible: which pipe an ``s`` talks to is a
+    static property of where the glyph sits. The lane still owns exactly one pipe.
+    What changed is that it now sends *two* words down it — the selector, then ACC —
+    and `dsprelay`'s room reads the first, branches three ways, and forwards the
+    second to the port it names, with its three ``s`` glyphs each sitting statically
+    beside their own outlet.
+
+    Worth the room because the lane band is ``2 * (1 << k) - 1`` rows: folding three
+    port opcodes into one is two of the three removals that take `little-little-man`
+    from 19 opcodes to 16, ``k`` from 5 to 4, and that band from 63 rows to 31.
+    """
+    micro = machine.hw_micro(Sem.DISPLAY)
+    assert [g for g, _band in micro] == ["s", "W", "s", "W"], micro
+    # Both sends go down the one lane pipe; the fan-out is the relay's, not the CPU's.
+    assert {band for _g, band in micro if band} == {machine.Band.DSP}
+    assert machine.plan(assemble("LDI 15\nDSP 1\nHALT\n")).lanes >= 1
 
 
 # ── the ROM image, on the emulator ───────────────────────────────────────────
@@ -258,6 +282,7 @@ def test_the_generated_machine_declares_the_right_panel_and_no_output(slug: str)
     # No `O` room: emitting output on a display problem is an error, and an unused
     # outgoing pipe would still compete for every `s` (§7.1).
     assert "O" not in "".join(m.rows)
+
 
 @node_required
 @pytest.mark.parametrize("slug", DISPLAY_TARGETS)
@@ -488,6 +513,8 @@ STEP_CAP = 5_000_000
 #: This used to be a 32-pixel *diagonal* at 265.5k ticks a round, which put 20 rounds
 #: 6% over the step cap; the packed single-add loop is what took it to ~97k.
 WORST_SEGMENT = (31, 1, 0, 0)
+
+
 def _judge_segments(segments: list[tuple[int, ...]]) -> object:
     """Run ``segments`` on the engine, with the emulator supplying expected frames.
 
