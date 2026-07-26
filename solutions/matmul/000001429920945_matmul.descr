@@ -1,0 +1,16 @@
+# matmul — submission e9145310-dab1-4571-942f-b724da665b29
+
+verdict      done: 20/20 cases, area2 8100, avgTicks 176,533, score 1,429,920,945
+submitted    2026-07-26T06:00:12+0200
+grid         88x90
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  2dd3cd90cc2e4a21ceeba8aa11d5e7b6d0421fcbb810a688cae5881d47c2ffce
+commit       b5174bb
+local        matmul: 7/7 public cases, avg 117,220 ticks
+source       ../../../.claude/jobs/516e38fe/tmp/matmul_opt.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+post-optimizer on polled server-best: 960.97M->949.48M (-1.2%) public avg-ticks, footprint unchanged; fast==reference wasm

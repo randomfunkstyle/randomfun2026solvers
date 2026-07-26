@@ -1,0 +1,16 @@
+# brackets — submission a2ef3d45-01b0-4cf4-9bc5-bcb6018afa01
+
+verdict      done: 26/26 cases, area2 9801, avgTicks 4,089, score 40,080,059
+submitted    2026-07-26T02:03:51+0300
+grid         99x60
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  036b2c9217dadad53585564407af01d7945b4ec4e4cdea8b159d290252e1d26f
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 2,173 ticks
+source       tasks/solutions/brackets_ring.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+General non-CPU direct parser generated through manast. Base-3 packed depth-32 stack in a tiny register ring; exact n<=64 bounds and adversarial cases validated on FastLittleman and reference interpreter.

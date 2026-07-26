@@ -1,0 +1,16 @@
+# brackets — submission be9d4dba-feac-4e97-acb2-bb9bb0af0de0
+
+verdict      done: 26/26 cases, area2 841, avgTicks 2,037, score 1,712,858
+submitted    2026-07-26T03:58:08+0300
+grid         29x29
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  f2a5db62b1b0152b49770875c14dc16002c479d2e1e1ba3fbbab0107bf182841
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 1,145 ticks
+source       tasks/solutions/brackets_dense.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+AST-generated 29x29 dense snake parser; compact east highway and 3 worker row squashes; exhaustive/bounds and Node/WASM validated

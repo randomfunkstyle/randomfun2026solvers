@@ -1,0 +1,16 @@
+# gradebook — submission b311e7ec-a049-4f85-8782-5ff3ce388577
+
+verdict      done: 20/20 cases, area2 12769, avgTicks 768,559, score 9,813,729,871
+submitted    2026-07-26T05:37:21+0300
+grid         113x100
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  aa0ceabfb9b82854b1b41ad5b50fea287f56a6f6e2c4eafd411b85046fcfa200
+commit       0ac03c6
+local        gradebook: 7/7 public cases, avg 298,001 ticks
+source       tasks/compacted/gradebook_laneorder_ast10.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+LANE_ORDER (opcode-frequency lane order) + AST10 drop-row 90; 113x100 (fp 12,996 -> 12,769), public ticks 300,702 -> 298,001

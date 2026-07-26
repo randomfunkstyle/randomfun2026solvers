@@ -529,6 +529,55 @@ slot count. It is free on footprint and linear on ticks — there is no trade-of
 to weigh.** `tcp` at N=48 is 1.9× cheaper per access than the N=100 build,
 `brackets` at N=32 is 2.6×, `sort-numbers` at N=16 is 4.1×.
 
+#### The man-memory as STORE: an access that ignores `n`, and it still loses
+
+`memory_men_addr` answers in **~31 ticks whatever `n` is** — the router *broadcasts*
+the address and the one cell holding it in B replies, so nothing walks — against the
+tape's `316 + 8.06n` in a generated machine. It is wired as a drop-in tier by
+`machine.grid_block` (`store="grid"`, `build_addr(n, io=False)` swapping the `I`/`O`
+rooms for stubs), and it is **correct on every program tried**: `brackets` 9/9,
+`gradebook` 7/7, `tcp` 6/6, `matmul` 7/7, `snake-ring` 5/5 frames.
+
+It is nevertheless the wrong trade almost everywhere, and the reason is geometry.
+The block is 36 columns wide whatever `n` is and **`3n + 9` rows tall**, where the
+tape is 32×32 flat. The ROM already occupies every row above the block, so those
+rows are *additive* below the ROM+CPU stack — raising the block gains nothing.
+Measured on the engine, same program, same cases, tape versus grid:
+
+| program | `n` | footprint | ticks | score |
+|---|---|---|---|---|
+| `snake-ring` | 9 | **1.000×** | 0.970× | **0.970×** |
+| `brackets` | 5 | 1.064× | 0.962× | 1.024× |
+| `matmul` | 16 | 1.335× | 0.875× | 1.169× |
+| `gradebook` | 32 | 1.617× | 0.777× | 1.257× |
+| `tcp` | 52 | 2.667× | **0.563×** | 1.501× |
+
+**Both columns are monotone in `n` and the footprint one wins, because it is
+squared.** The tick saving grows with `n` — exactly as it should, since the tape's
+`8.06n` is what is being deleted — but `3n` rows grow the longer side faster.
+Break-even sits at `n ≈ 9`, i.e. only where the block still fits inside the CPU's own
+height (`3n + 9 ≤ H`, and `H ≈ 54` on most of these machines, so `n ≤ 15`).
+
+Three consequences worth keeping:
+
+- **`tcp` is confirmed tape-bound: 44 % of its ticks were the tape** (0.563×), the
+  largest single-change tick win measured on any program here. What blocks it is
+  area, not the memory. `tcp` is the program to revisit if the buffer ever moves into
+  a STREAM ring the way `snake-ring` moved the snake's body — at `n ≤ 15` this tier
+  would then be free *and* keep the win.
+- **Multi-column grids do not rescue it.** `build_grid` puts the collector strip on
+  the *bottom* so answers cannot overtake, so a host's response would have to climb
+  ~250 cells back to the corridor — at one tick per cell (§7.4b) that is the whole
+  saving handed back. The one-column chain (router | decoder | cell | collector, answer
+  leaving north) is the only shape whose answer pipe is short, and it is 67 cells even
+  so — **already twice the memory's own 31**.
+- The `~5n` ignition (the spawner walking south handing each band its address) is
+  charged **once per case** and never showed up; it is not what makes this lose.
+
+**The rotating tape stays the default.** This is a negative result on the tier, not on
+the hardware: the man-memory is the right answer to the `memory` *problem* (§8.4) and
+the wrong one to a CPU that has to stand next to it.
+
 **The rule holds but this formula understates it badly, and the mechanism is the
 ring's phase.** Measured end-to-end on generated machines, one extra slot costs
 **~999 ticks per case on `tcp`** and ~114 on `brackets` (`tcp` at 52/70/90 slots:
@@ -1308,7 +1357,75 @@ those sum to `collector − centre`, a **constant**; for `row < centre` they sum
 `collector + centre − 2·row`, which *decreases* as the row moves down. So rows
 above the trie centre are strictly worse than rows below it, and the only
 profitable ordering rule is to keep hot opcodes at or below centre — which needs
-dynamic opcode frequencies, not static lane geometry. Untested.
+dynamic opcode frequencies, not static lane geometry.
+
+#### Tested, and it is worth a few percent — `LANE_ORDER`
+
+The paragraph above was right about the mechanism and wrong that nothing was left.
+Weighting each lane by **how often its opcode actually executes** (counted on the
+emulator over the public cases) and minimising
+
+    walk(lane) = (drop_x − lane_end) + (collector − row) + (drop_x − 1)
+
+pays, because it resolves a genuine two-sided tension the length rule cannot see: a
+**hot** lane wants to sit low — `− row` and `2·drop_x` both improve at once, since
+`drop_x` is the suffix maximum of the extents at or below it — while a **long** lane
+wants to sit high, because every lane above it pays for its extent. Length-descending
+optimises the second force alone. Measured on the reference engine at identical tick
+granularity (`scratch/lane_order_search.py`):
+
+| | footprint | ticks | score |
+|---|---|---|---|
+| `brackets` | 9,025 → 9,025 | 26,000 → **25,111** | **0.966×** |
+| `gradebook` | 12,996 → **12,769** | 301,571 → **298,571** | **0.973×** |
+| `matmul` | 8,100 → 8,100 | 120,714 → **118,638** | **0.988×** |
+| `sudoku-validity` | 6,889 → 6,889 | 434,667 → **432,167** | **0.994×** |
+
+Four things this exercise established that outlive the numbers:
+
+- **Width has to be a constraint, not a term.** The order picks `mem_pad`, which sets
+  the memory lanes' length, which sets the CPU's width, which is *squared*. The first
+  unconstrained search "won" 16% of walked cells and lost on score by widening the CPU
+  three columns. Note this **contradicts the paragraph above**: lane order *can* move
+  the box. It moved `gradebook`'s the good way too — 114 → 113 columns, a footprint win
+  the length rule had left on the table, and one `ROM_ROWS[gradebook]`'s own comment had
+  already assumed.
+- **Modelled cells over-predict ticks by ~3×.** `brackets` lost 16% of its walked cells
+  and 1.6% of its ticks. Walking that sits in front of a blocked memory `r` is free —
+  the man waits at the `r` either way — so the model ranks candidates correctly but must
+  never be read as a tick estimate.
+- **A pinned-tick test failing is not evidence of a wrong answer, and reading it that
+  way cost a real result.** `test_lm1_matmul` asserts each case's *exact* settle tick —
+  "the recorded tick is enough, and one tick fewer is not" — so a **faster** grid fails
+  it, with a message indistinguishable from a wrong product. `matmul` was struck from
+  `LANE_ORDER` on that evidence, and restored after checking the outputs directly:
+  correct on all seven public cases, on the reference engine, at every case's new lower
+  tick. The pin is a good test; it just answers a different question than it appears to.
+  Confirm *which half* of such an assertion broke before concluding anything.
+- **A public-case pass is still not proof of correctness**, independently of the above:
+  nine cases is thin cover for a stack machine, and a reordered grid is *different
+  hardware* running the same ISA. `brackets` therefore gets random and boundary inputs
+  past its public set, and the search grew `--extra-problem` for programs with thin
+  data. Note also that **`optimize.verify` defaults to the fast in-memory engine**, so a
+  check whose job is to catch a hardware bug must pass `lm=Littleman()`.
+
+`tcp` and `snake-ring` were searched over three seeds each and kept their defaults — no
+candidate that held the footprint beat them.
+
+Two follow-ups were run on top of the new orders and both came back empty, which is
+worth recording so they are not re-run:
+
+- **The ROM fold is at its optimum and the curve is flat.** Full sweeps (not `romopt`'s
+  ±1 neighbourhood) put `brackets` on 9,025 for *every* fold from 5 to 21 rows — width
+  is binding at 95 — with ticks falling monotonically by a total of 0.15% across that
+  whole range, and `gradebook` on 12,769 from 31 rows up, gaining 0.04%. Both are
+  therefore free to spend height on anything that wants it: `brackets` has 25 spare
+  rows under its own width, `gradebook` 12.
+- **`matmul` still cannot take the short return path.** Retested after the reorder,
+  because the recorded verdict was measured with the old lane order and the reorder moves
+  every drop column: it fails identically, `'.'` vs `'v'` at (22, 1), for every fold from
+  3 to 11 rows. That is one deterministic collision rather than a search that ran out of
+  room, so `_LONG_RETURN` stays as it is and the fix is a layout change, not a pad.
 
 Two other footprint facts fell out of the same measurement:
 

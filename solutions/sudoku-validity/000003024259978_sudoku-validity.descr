@@ -1,0 +1,16 @@
+# sudoku-validity — submission b906523d-ffc0-423d-a569-10c7618618c5
+
+verdict      done: 20/20 cases, area2 6889, avgTicks 438,998, score 3,024,259,978
+submitted    2026-07-26T06:00:39+0200
+grid         83x80
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  26a600fa5b8efa79ffe271c8ef6930936e71a20e74896b0140cdc6b3cb6d13b6
+commit       b5174bb
+local        sudoku-validity: 6/6 public cases, avg 431,556 ticks
+source       ../../../.claude/jobs/516e38fe/tmp/sudoku-validity_opt.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+post-optimizer on polled server-best: 2.97364B->2.97299B (-0.02%) public avg-ticks, footprint unchanged; fast==reference wasm
