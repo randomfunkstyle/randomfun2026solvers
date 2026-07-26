@@ -106,19 +106,24 @@ def built():
     return machine, program
 
 
+@pytest.mark.slow
 def test_checked_in_grid_still_matches_the_generator(built) -> None:
     machine, _program = built
     assert GRID.read_text() == "\n".join(machine.rows) + "\n"
 
 
+@pytest.mark.slow
 def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     machine, _program = built
+<<<<<<< HEAD
     assert (machine.width, machine.height) == (203, 204)
+=======
+    assert (machine.width, machine.height) == (204, 203)
+>>>>>>> b016681 (Compact LM-1 jump read loops)
 
 
-def test_the_tape_is_sized_to_the_program_not_the_public_cases(built) -> None:
-    _machine, program = built
-    _text, slots = llm_lm1.build_asm()
+def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:
+    program, slots = program
     # 4 <= W, H <= 16, so the grid is 256 cells whatever the case holds.
     assert slots > llm_lm1.PANEL * llm_lm1.PANEL
     assert program.P > 0

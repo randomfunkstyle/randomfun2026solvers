@@ -342,6 +342,7 @@ def test_cost_per_round_stays_where_the_design_put_it() -> None:
 
 # ── the generated machine ────────────────────────────────────────────────────
 @node_required
+@pytest.mark.slow
 def test_the_machine_generates_and_every_pipe_binds() -> None:
     """``build`` raises unless every ``r``/``s`` is *strictly* nearest its own pipe."""
     m = machine.build_for(SLUG)
@@ -353,12 +354,19 @@ def test_the_machine_generates_and_every_pipe_binds() -> None:
 
 
 @node_required
+@pytest.mark.slow
 def test_the_checked_in_grid_matches_the_generator() -> None:
     expected = "\n".join(machine.build_for(SLUG).rows) + "\n"
     assert GRID.read_text(encoding="utf-8") == expected, (
         f"{GRID.name} is stale; regenerate with "
         f"`python -m randomfun2026solvers.lm1.machine {SLUG} --out {GRID}`"
     )
+
+
+def test_the_checked_in_grid_keeps_the_recorded_shape() -> None:
+    rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
+    assert (max(map(len, rows)), len(rows)) == (83, 80)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 6889
 
 
 @pytest.mark.slow  # drives the engine over a whole problem

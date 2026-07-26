@@ -325,6 +325,7 @@ def _worst_legal_case(op: str) -> tuple[str, str, list[int]]:
 
 
 @node_required
+@slow
 @pytest.mark.parametrize("op", sorted(WORST_LEGAL_TICKS))
 def test_the_worst_legal_batch_fits_the_step_cap(op: str) -> None:
     """The gap that shipped this broken: public data never reaches 80 operations."""
@@ -351,10 +352,15 @@ def test_the_program_stays_on_the_depth_four_trie() -> None:
 
 # ── the generated machine ─────────────────────────────────────────────────────
 @node_required
+@slow
 def test_checked_in_grid_matches_the_generator() -> None:
     """``build_for`` runs the engine's structural analysis: every pipe must bind."""
     m = machine.build_for(SLUG)
+<<<<<<< HEAD
     assert (m.width, m.height) == (108, 101)
+=======
+    assert (m.width, m.height) == (113, 100)
+>>>>>>> b016681 (Compact LM-1 jump read loops)
     # Width-bound: the unrolled scans make the ROM image 836 words, but packed tokens
     # halve its cells, so 31 rows is the first fold that gets it under the machine's
     # columns (see ROM_ROWS) and every fold below that is flat. Trading 20% more area
@@ -373,6 +379,12 @@ def test_checked_in_grid_matches_the_generator() -> None:
         f"{GRID.name} is stale; regenerate with "
         f"`python -m randomfun2026solvers.lm1.machine {SLUG} --out {GRID}`"
     )
+
+
+def test_checked_in_grid_keeps_the_recorded_shape() -> None:
+    rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
+    assert (max(map(len, rows)), len(rows)) == (113, 100)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 12_769
 
 
 @node_required

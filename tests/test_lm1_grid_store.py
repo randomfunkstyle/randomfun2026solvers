@@ -86,7 +86,7 @@ def test_snake_ring_is_the_one_program_the_swap_is_free_for() -> None:
     def area2(m: machine.Machine) -> int:
         return max(max(len(r) for r in m.rows), len(m.rows)) ** 2
 
-    assert area2(grid) == area2(tape) == 18496
+    assert area2(grid) == area2(tape) == 18225
 
 
 @pytest.mark.slow

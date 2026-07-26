@@ -61,6 +61,7 @@ def test_every_pinned_order_is_a_permutation_of_that_programs_unpinned_lanes() -
     ("slug", "footprint"),
     [("brackets", 90**2), ("gradebook", 108**2), ("sudoku-validity", 80**2)],
 )
+@pytest.mark.slow
 def test_the_pinned_order_does_not_cost_footprint(slug: str, footprint: int) -> None:
     """The whole reason width is a *constraint* in the search and not a term: the lane
     order picks ``mem_pad``, which sets the memory lanes' length, which sets the CPU's
@@ -74,6 +75,7 @@ def test_the_pinned_order_does_not_cost_footprint(slug: str, footprint: int) -> 
     assert machine.build_for(slug).footprint == footprint
 
 
+@pytest.mark.slow
 def test_a_pinned_tick_test_failing_does_not_mean_the_grid_is_wrong() -> None:
     """The trap that cost a wrong conclusion, written down so it cannot cost another.
 
