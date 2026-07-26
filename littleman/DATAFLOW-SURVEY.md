@@ -133,7 +133,7 @@ traffic to delete; the cost is issue.
 | 10 | `matmul` | A | 272 | 96×96 = **1.18e9** | — | **done** — do not touch | — |
 | 11 | `memory` | C | 103 | 31×32 = **14.3e6** | ~2× from a relative-rotation tape | **already dataflow**; only sizing left | — |
 | 12 | `sort-numbers` | B | 17 | 25×25 = **2.08e6** | ~1.5× from `counted_ring` | **already dataflow** | — |
-| 13 | `reverse-a-list` | B | 17 | 21×21 = **0.48e6** | little | **already dataflow** | — |
+| 13 | `reverse-a-list` | B | 17 | 18×18 = **0.33e6** | little | **already dataflow** | — |
 | 14 | `triangle` | D | 1 | 8×8 = **960** | — | done, bespoke, closed form | — |
 | 15 | `history-lesson` | D | 0 | 97×90 = **9,409** | — | `footprint`-scored; ticks are free | — |
 | 16 | `hello-world` | D | 0 | not built | ~11×5 | trivial either way | — |

@@ -1,0 +1,16 @@
+# reverse-a-list — submission 76084220-a02d-4bfd-ac59-a3d5418e5606
+
+verdict      done: 20/20 cases, area2 324, avgTicks 1,589, score 514,706
+submitted    2026-07-26T10:23:57+0300
+grid         18x18
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  18f8fa2ac637535e610d7d63ee409ab425f547f3e5850b806caf4818088222e1
+commit       b4df783
+local        reverse-a-list: 8/8 public cases, avg 1,017 ticks
+source       tasks/solutions/reverse-a-list_ring.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+18x18 AST value ring; relay shifted left with >^<^ west-entry hook; exact 17-cell ring; public ticks unchanged

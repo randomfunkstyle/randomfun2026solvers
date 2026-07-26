@@ -11,7 +11,7 @@ from 15.9bn to **3.37bn**.
 |---|---|---|---|---|
 | 1 | `triangle` | 8×8 | **960** | bespoke |
 | 1 | `memory` | 31×31 | 55,105,622 server | bespoke (pipe tape) |
-| 1 | `reverse-a-list` | 21×21 | 482,564 | bespoke (value ring) |
+| 1 | `reverse-a-list` | 18×18 | 328,131 | bespoke (AST value ring) |
 | 1 | `sort-numbers` | 25×25 | 2,083,304 | bespoke (value ring) |
 | 2 | `history-lesson` | 97×90 | **9,409** | bespoke (base-128 ROM) |
 | 2 | `brackets` | 98×75 | 308,880,647 | LM-1 |
