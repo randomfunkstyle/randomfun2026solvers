@@ -3191,14 +3191,27 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: all seven public cases, on the reference engine, at every case's new lower tick.
 #: When a pinned-tick test fails here, confirm which half of the assertion broke
 #: before concluding anything about correctness.
+#: `gradebook` was in this table and is **not** any more, which is the clearest
+#: example of why the footprint constraint above is a constraint and not a term. Its
+#: pinned order was searched when STORE sat 33 columns east of the adapter, so the
+#: machine's width was the tape's east edge and the CPU's own width was slack the
+#: order could spend. :data:`MEM_PLACE` moved STORE up against the CPU, and the CPU's
+#: width is now the *whole* width — so the default order's two narrower columns are
+#: two columns off the machine. Measured, both re-swept against the relocated block:
+#:
+#: | order | box | area2 | avg ticks | score |
+#: |---|---|---|---|---|
+#: | pinned | 95x93 | 9,025 | 285,036 | 2,572,448,611 |
+#: | default | 93x92 | **8,649** | 286,287 | **2,476,096,263** |
+#:
+#: The tick win the order was bought for survived — it is still 0.4% — and it is now
+#: worth a great deal less than the 4.2% of area it costs. Re-run
+#: `scratch/lane_order_search.py` under the new geometry before pinning one again;
+#: the weights are unchanged but the width constraint it filters on is not.
 LANE_ORDER: dict[str, tuple[str, ...]] = {
     "brackets": (
         "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
         "ST", "MULI", "SUBI", "DIVI", "MODI", "BRZ",
-    ),
-    "gradebook": (
-        "MUL", "DIV", "MOVA", "SUB", "ADD", "JMPF", "BRN",
-        "AND", "BRZ", "ST", "LD", "LDI", "SUBI", "MULI",
     ),
     "matmul": ("MUL", "BRN", "SUB", "ADDI", "ST", "LD"),
     "sudoku-validity": (
@@ -3229,10 +3242,11 @@ ROM_ROWS = {
     # The panel adds rows, so the fold stops when height becomes binding.
     "plotter": 9,  # 103x99
     # The unrolled scans make the ROM set the width.
-    # Also re-swept against :data:`MEM_PLACE`. With STORE no longer 33 columns east of
-    # the adapter the fold is free to keep narrowing: 32 rows was the minimum only
-    # because everything below it was hidden behind the tape's 107th column. 95x93.
-    "gradebook": 40,
+    # Also re-swept against :data:`MEM_PLACE`, and again after `gradebook` left
+    # :data:`LANE_ORDER` — the narrower default CPU moves the width/height crossing, so
+    # the fold optimum moves with it. 32 rows was the minimum only because everything
+    # below it was hidden behind the tape's 107th column. 93x92, area2 8,649.
+    "gradebook": 38,
     "sudoku-validity": 25,  # 77x77
     # STREAM keeps its reference-safe west clearance; row five remains the sweep
     # minimum after the other serial routes are shortened.
@@ -3338,8 +3352,8 @@ _LONG_RETURN = {"matmul"}
 #:   distance north) leaves STORE beside the CPU and drops the adapter *under* it, so
 #:   the fourteen columns the adapter used to occupy in the chain disappear and STORE
 #:   slides west against the CPU. Height is unchanged, which is what `gradebook` needs
-#:   — it only has 22 spare rows and the block wants 34. 107x85 -> 95x93, area2
-#:   11,449 -> 9,025, +58 pipe cells for +5% ticks: a 17% score win.
+#:   — it only has 22 spare rows and the block wants 34. 107x85 -> 93x92, area2
+#:   11,449 -> 8,649, +58 pipe cells for +5% ticks: a 20% score win.
 #:
 #: Both are measured, engine-verified on every public case, and re-swept jointly with
 #: :data:`ROM_ROWS` — the fold is only free to keep narrowing once STORE has stopped
