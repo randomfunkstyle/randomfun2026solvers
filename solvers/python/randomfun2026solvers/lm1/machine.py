@@ -1121,6 +1121,12 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 
 
 # ── the tape, as a STORE block ───────────────────────────────────────────────
+#: Every memory tier ``build`` will accept, in the order they are worth trying.
+#: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
+#: footprint despite an access cost that ignores ``n``.
+STORE_TIERS = ("tape", "grid", "men", "men-y")
+
+
 @dataclass
 class _Tape:
     cells: dict[tuple[int, int], str]
@@ -1128,6 +1134,43 @@ class _Tape:
     height: int
     in_cell: tuple[int, int]  # where the request pipe must arrive, pointing east
     out_cell: tuple[int, int]  # where the response pipe leaves, pointing north
+
+
+def grid_block(n: int) -> _Tape:
+    """``memory_men_addr``'s address-carrying man-memory, wired as STORE.
+
+    One little man per slot, all ``n`` of them holding their own address in B, so
+    the router *broadcasts* rather than walks: **an access costs ~31 ticks and the
+    cost does not depend on ``n``**, against the rotating tape's ~316 + 8.06·n. On
+    a machine whose reads dominate — and §4.1 measured a tape read at 523 ticks
+    versus 19 for a write — that is the difference between a memory that sets the
+    tick count and one that does not.
+
+    What it costs instead is *shape*. The block is 36 columns wide whatever ``n``
+    is, and ``~3n`` rows tall, where the tape is 32x32 flat. So this is a good
+    trade exactly when the machine's bounding box is already set by its **height**
+    and has slack in width — the block then hides underneath a dimension already
+    being paid for, and the swap is free on footprint. It is a bad trade on a
+    short, wide machine, where every one of those rows is a new longest side.
+
+    There is also a one-off ``~5n`` ticks of **ignition** while the spawner walks
+    south handing each band its address. It is charged once per case, not per
+    access, so it disappears against any program doing real work.
+    """
+    from ..memory_men_addr import build_addr
+
+    a = build_addr(n, io=False)
+    assert a.in_cell is not None and a.out_cell is not None, "io=False must report stubs"
+    cells = {
+        (x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "
+    }
+    return _Tape(
+        cells=cells,
+        width=a.width,
+        height=a.height,
+        in_cell=a.in_cell,
+        out_cell=a.out_cell,
+    )
 
 
 def tape_block(n: int) -> _Tape:
@@ -1362,7 +1405,11 @@ def build(
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
-    ``store`` picks the memory tier: ``"tape"`` is the rotating ring (§4.1,
+    ``store`` picks the memory tier. ``"grid"`` is the address-carrying man-memory
+    (:func:`grid_block`) and is the one to reach for first: its access cost is ~31
+    ticks *independent of ``n``*, so it wins on ticks at every size, and it pays for
+    that in rows rather than ticks — free on footprint whenever the machine's
+    bounding box is already set by height. ``"tape"`` is the rotating ring (§4.1,
     ``105 + 8.3n`` ticks per access at 33 columns whatever ``n`` is), ``"men"`` is
     ``memory_men_store.men_block`` — one little man per value, a measured
     ``22 + 14 * addr`` per access. The man-memory is faster per access at every
@@ -1392,6 +1439,13 @@ def build(
     for the original fixed-width fold; the word stream is identical either way, so it
     is purely a size/speed choice.
     """
+    # Checked here rather than in ``_assemble``, which the pad search calls up to 40
+    # times while *catching* MachineError — so a typo'd tier came back as whichever
+    # unrelated collision the last pad happened to hit.
+    if store not in STORE_TIERS:
+        raise MachineError(
+            f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
+        )
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
     p = plan(program)
@@ -1573,10 +1627,14 @@ def _assemble(
         from ..memory_men_y import y_men_block
 
         tape = y_men_block(tape_n)
+    elif store == "grid":
+        tape = grid_block(tape_n)
     elif store == "tape":
         tape = tape_block(tape_n)
     else:
-        raise MachineError(f"unknown store tier {store!r}; expected 'tape', 'men', or 'men-y'")
+        raise MachineError(
+            f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
+        )
     TX = AX + ADAPTER_W + 6
     TY = CY
     g.blit(TX, TY, tape.cells)
@@ -1694,7 +1752,11 @@ def _assemble(
     # The memory tier's own internal pipes: the tape's two ring legs, or the
     # man-memory's command and answer pipe per cell. Everything the machine itself
     # drew is already in ``touches``, plus the one response pipe drawn half here.
-    store_pipes = tape.pipes if store == "men-y" else (2 * tape_n if store == "men" else 2)
+    # ``grid`` bands three pipes per slot — router->decoder, decoder->cell,
+    # cell->collector — and every one of them is a two-cell stub between facing
+    # walls, which is exactly why the extra decoder hop is nearly free.
+    _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
+    store_pipes = tape.pipes if store == "men-y" else _STORE_PIPES[store]
     _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
     return Machine(
         rows=rows,
