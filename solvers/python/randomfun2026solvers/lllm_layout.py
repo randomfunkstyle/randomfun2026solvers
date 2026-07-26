@@ -66,9 +66,12 @@ __all__ = ["Plan", "Room", "build_room", "plan_blocks"]
 
 #: Which pipe band each pipe op has to stand in.
 TOKEN_ZONE: dict[str, str] = {
-    "rr": "ST", "sr": "ST",
-    "rq": "FI", "sq": "FI",
-    "ri": "IO", "sp": "IO",
+    "rr": "ST",
+    "sr": "ST",
+    "rq": "FI",
+    "sq": "FI",
+    "ri": "IO",
+    "sp": "IO",
 }
 ZONE_ORDER = ("ST", "FI", "IO")
 
@@ -85,6 +88,18 @@ BRANCH_GLYPHS = ("X", "x", "d")
 def _straight_key(glyph: str) -> str | None:
     """Which lane of a branch continues straight ahead, if any."""
     return {"X": "zero", "d": "zero", "x": None}[glyph]
+
+
+def _straight_target(plan: Plan, succ: object) -> str | None:
+    """The block this one continues straight into, or ``None`` if it never does.
+
+    An `x` branch has no straight lane, so it needs no straight-lane row — and a
+    row is the charged dimension on this machine.
+    """
+    if isinstance(succ, str):
+        return succ
+    key = _straight_key(plan.branch)
+    return None if key is None else succ[key]  # type: ignore[index]
 
 
 def _turn_keys(glyph: str) -> dict[str, str]:
@@ -125,9 +140,12 @@ CODE0 = NC + 1
 #: its ring is the long one and its two pipes have to pass each other in the
 #: band above the room, which they cannot do if they start next to each other.
 PIPE_COL = {
-    "store_out": CODE0, "store_in": CODE0 + 13,
-    "file_in": CODE0 + 28, "file_out": CODE0 + 29,
-    "input": CODE0 + 64, "painter": CODE0 + 65,
+    "store_out": CODE0,
+    "store_in": CODE0 + 13,
+    "file_in": CODE0 + 28,
+    "file_out": CODE0 + 29,
+    "input": CODE0 + 64,
+    "painter": CODE0 + 65,
 }
 #: Usable column range per band, kept clear of the midpoints so that the
 #: incoming and outgoing nearest-column rules agree everywhere inside it.
@@ -147,11 +165,9 @@ def _nearest(cols: dict[str, int], x: int) -> str:
 def check_binding(x: int, token: str) -> None:
     want = TOKEN_ZONE[token]
     if token in ("rr", "rq", "ri"):
-        cols = {"ST": PIPE_COL["store_in"], "FI": PIPE_COL["file_in"],
-                "IO": PIPE_COL["input"]}
+        cols = {"ST": PIPE_COL["store_in"], "FI": PIPE_COL["file_in"], "IO": PIPE_COL["input"]}
     else:
-        cols = {"ST": PIPE_COL["store_out"], "FI": PIPE_COL["file_out"],
-                "IO": PIPE_COL["painter"]}
+        cols = {"ST": PIPE_COL["store_out"], "FI": PIPE_COL["file_out"], "IO": PIPE_COL["painter"]}
     got = _nearest(cols, x)
     if got != want:
         raise Collision(f"{token!r} at column {x} binds {got}, wanted {want}")
@@ -265,8 +281,7 @@ def plan_blocks(order: list[str], worker=WORKER) -> dict[str, Plan]:
                     if zone is not None:
                         check_binding(col, tok)
         pen.row.end = pen.x
-        plans[name] = Plan(name, pen.rows, branch,
-                           pen.rows[-1].cells[-1][0] if branch else 0)
+        plans[name] = Plan(name, pen.rows, branch, pen.rows[-1].cells[-1][0] if branch else 0)
     return plans
 
 
@@ -323,29 +338,48 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
     for name in order:
         p = plans[name]
         n = len(p.rows)
+        # Only allocate a lane row some edge can actually leave on. A branch's
+        # three lanes are not all reachable: `d` declares `pos`/`zero` only and `x`
+        # has no straight lane at all (`_straight_key` -> None), so allocating all
+        # three for every branch buries rows no man can ever stand on — and rows
+        # are the charged dimension. Which of the north/south pair a turn uses
+        # depends on the walk direction of the last glyph row, so decide both here
+        # exactly as the edge loop below will.
+        needs_n = needs_s = False
+        needs_st = _straight_target(p, worker[name][1]) is not None
         if p.branch:
+            turns = set(_turn_keys(p.branch).values())
+            east = p.rows[-1].east
+            has_cw, has_ccw = "cw" in turns, "ccw" in turns
+            # `cw` leaves south when the last row walks east and north when it walks
+            # west; `ccw` is the mirror. Same rule the edge loop applies below.
+            needs_n = (has_ccw and east) or (has_cw and not east)
+            needs_s = (has_cw and east) or (has_ccw and not east)
+        if p.branch and needs_n:
             if n == 1:
-                y += 1                       # free row: the north lane
+                y += 1  # free row: the north lane
                 ys = [y]
                 y += 1
             else:
                 ys = list(range(y, y + n - 1))
                 y += n - 1
-                y += 1                       # free row: the north lane
+                y += 1  # free row: the north lane
                 ys.append(y)
                 y += 1
-            south_y[name] = y
-            y += 1
         else:
             ys = list(range(y, y + n))
             y += n
-        straight_y[name] = y
-        y += 1
+        if needs_s:
+            south_y[name] = y
+            y += 1
+        if needs_st:
+            straight_y[name] = y
+            y += 1
         glyph_ys[name] = ys
     ih = y + 1
 
     # ── edges, and the channel column each routed one gets ────────────────────
-    routed: list[tuple[str, str, int, str]] = []   # (src, dst, lane row, kind)
+    routed: list[tuple[str, str, int, str]] = []  # (src, dst, lane row, kind)
     chained: dict[str, str] = {}
     for name in order:
         toks, succ = worker[name]
@@ -395,7 +429,7 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
         for i, row in enumerate(p.rows):
             for col, glyph in row.cells:
                 c.set(col, ys[i], glyph)
-            if i + 1 < len(p.rows):          # wrap link, straight down
+            if i + 1 < len(p.rows):  # wrap link, straight down
                 c.set(row.end, ys[i], "v")
                 c.set(row.end, ys[i + 1], ">" if p.rows[i + 1].east else "<")
 
@@ -449,7 +483,7 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
 RELAY = ["+----+", "|>@rv|", "|^.s<|", "+----+"]
 RELAY_IW, RELAY_IH = 4, 2
 
-BAND_H = 30          # rows above the worker, for the panel, rings and I/O
+BAND_H = 30  # rows above the worker, for the panel, rings and I/O
 WX, WY = 1, BAND_H + 1
 
 
@@ -482,7 +516,7 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
             if ch != " ":
                 g.set(WX + x, WY + y, ch)
     walls(g, WX, WY, iw, ih)
-    north = WY - 1                      # the worker's north wall row
+    north = WY - 1  # the worker's north wall row
     col = {k: WX + v for k, v in PIPE_COL.items()}
 
     # ── the panel, top right ─────────────────────────────────────────────────
@@ -492,35 +526,63 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
     lens = panel.attach_panel(g, px, py, px + 1, py + 6)
     # painter feed: straight up its own column, then east into the painter's
     # west wall, one column clear of the input pipe's riser.
-    pipe(g, [(col["painter"], north - 1), (col["painter"], py + 1),
-             (px - 2, py + 1)], into=(px - 1, py + 1))
+    pipe(
+        g,
+        [(col["painter"], north - 1), (col["painter"], py + 1), (px - 2, py + 1)],
+        into=(px - 1, py + 1),
+    )
 
     # ── input room ───────────────────────────────────────────────────────────
     ix, iy = 80, 22
     stamp(g, ix, iy, ["+-+", "|I|", "+-+"])
-    pipe(g, [(ix + 1, iy + 3), (ix + 1, iy + 4), (col["input"], iy + 4),
-             (col["input"], north - 1)], into=(col["input"], north))
+    pipe(
+        g,
+        [(ix + 1, iy + 3), (ix + 1, iy + 4), (col["input"], iy + 4), (col["input"], north - 1)],
+        into=(col["input"], north),
+    )
 
     # ── the store ring ───────────────────────────────────────────────────────
     # 257 words have to be resident, so the forward pipe snakes the whole
     # north-west quarter; the return takes the free column east of the snake.
     stamp(g, 2, 6, RELAY)
-    fwd = pipe(g, [(col["store_out"], north - 1), (col["store_out"], north - 2),
-                   *_serpentine(2, 38, north - 2, 10), (5, 10)], into=(5, 9))
+    fwd = pipe(
+        g,
+        [
+            (col["store_out"], north - 1),
+            (col["store_out"], north - 2),
+            *_serpentine(2, 38, north - 2, 10),
+            (5, 10),
+        ],
+        into=(5, 9),
+    )
     # A pipe's first cell must point *away* from its room, so both returns leave
     # their relay heading north before they may bend.
-    ret = pipe(g, [(4, 5), (4, 4), (col["store_in"], 4),
-                   (col["store_in"], north - 1)], into=(col["store_in"], north))
+    ret = pipe(
+        g,
+        [(4, 5), (4, 4), (col["store_in"], 4), (col["store_in"], north - 1)],
+        into=(col["store_in"], north),
+    )
     if fwd + ret < STORE_WORDS + 2:
         raise Collision(f"store ring holds {fwd + ret}, needs {STORE_WORDS + 2}")
 
     # ── the register file: six slots, and a *short* loop, because its latency
     # is paid on every rotation and there are about thirty a tick.
     stamp(g, 58, north - 6, RELAY)
-    ffwd = pipe(g, [(col["file_out"], north - 1), (col["file_out"], north - 2),
-                    (59, north - 2)], into=(59, north - 3))
-    fret = pipe(g, [(60, north - 7), (60, north - 8), (col["file_in"], north - 8),
-                    (col["file_in"], north - 1)], into=(col["file_in"], north))
+    ffwd = pipe(
+        g,
+        [(col["file_out"], north - 1), (col["file_out"], north - 2), (59, north - 2)],
+        into=(59, north - 3),
+    )
+    fret = pipe(
+        g,
+        [
+            (60, north - 7),
+            (60, north - 8),
+            (col["file_in"], north - 8),
+            (col["file_in"], north - 1),
+        ],
+        into=(col["file_in"], north),
+    )
     if ffwd + fret < FILE_WORDS + 2:
         raise Collision(f"file ring holds {ffwd + fret}, needs {FILE_WORDS + 2}")
 
@@ -530,24 +592,57 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
 
     # ── the sidecar ──────────────────────────────────────────────────────────
     d = DebugMap("little-little-little-man — ring machine")
-    d.region("panel", px - 1, 0, 21, 26, note="painter + LM-75, from lllm_panel",
-             color="#a855f7")
-    d.region("input", ix, iy, 3, 3, note="ASCII program, then one k a round",
-             color="#64748b")
-    d.region("store-relay", 2, 6, 6, 4, color="#0ea5e9",
-             note=f"turnaround of the {fwd + ret}-cell store ring")
-    d.region("file-relay", 58, north - 6, 6, 4, color="#0ea5e9",
-             note=f"turnaround of the {ffwd + fret}-cell register file")
-    d.region("channels", WX, WY, NC, ih, color="#94a3b8",
-             note=f"{room.channels} vertical corridors carrying every routed edge")
+    d.region("panel", px - 1, 0, 21, 26, note="painter + LM-75, from lllm_panel", color="#a855f7")
+    d.region("input", ix, iy, 3, 3, note="ASCII program, then one k a round", color="#64748b")
+    d.region(
+        "store-relay",
+        2,
+        6,
+        6,
+        4,
+        color="#0ea5e9",
+        note=f"turnaround of the {fwd + ret}-cell store ring",
+    )
+    d.region(
+        "file-relay",
+        58,
+        north - 6,
+        6,
+        4,
+        color="#0ea5e9",
+        note=f"turnaround of the {ffwd + fret}-cell register file",
+    )
+    d.region(
+        "channels",
+        WX,
+        WY,
+        NC,
+        ih,
+        color="#94a3b8",
+        note=f"{room.channels} vertical corridors carrying every routed edge",
+    )
     for band, (lo, hi) in ZONE_COLS.items():
-        d.region(f"band:{band}", WX + lo, WY, hi - lo + 1, ih, color="#1f2937",
-                 note=f"{band} pipe ops must stand here; nearest column binds")
+        d.region(
+            f"band:{band}",
+            WX + lo,
+            WY,
+            hi - lo + 1,
+            ih,
+            color="#1f2937",
+            note=f"{band} pipe ops must stand here; nearest column binds",
+        )
     for name in room.order:
         ys = room.glyph_ys[name]
-        d.region(f"block:{name}", WX + CODE0, WY + ys[0], iw - CODE0,
-                 ys[-1] - ys[0] + 1, note=" ".join(WORKER[name][0]),
-                 color="#f59e0b", tags=["block"])
+        d.region(
+            f"block:{name}",
+            WX + CODE0,
+            WY + ys[0],
+            iw - CODE0,
+            ys[-1] - ys[0] + 1,
+            note=" ".join(WORKER[name][0]),
+            color="#f59e0b",
+            tags=["block"],
+        )
 
     info = {
         "worker": (iw, ih),

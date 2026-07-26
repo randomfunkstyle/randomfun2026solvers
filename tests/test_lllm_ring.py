@@ -100,7 +100,7 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
 def test_footprint_is_what_was_measured(built) -> None:
     rows, _dbg, _info = built
     w, h = max(len(r) for r in rows), len(rows)
-    assert (w, h) == (159, 222)
+    assert (w, h) == (159, 213)
 
 
 def test_rings_are_sized_to_the_stated_constraints_not_the_public_cases(built) -> None:
