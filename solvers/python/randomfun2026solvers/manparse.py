@@ -122,7 +122,11 @@ class Program(_Model):
     height: int
     rooms: list[Room] = Field(default_factory=list)
     pipes: list[Pipe] = Field(default_factory=list)
-    # Best-effort passthrough of any display boxes analyze reports (rare).
+    # Display boxes analyze reports as bare geometry (not rooms). Each dict carries
+    # the analyser's ``min``/``max`` box plus a ``content`` list of the exact grid
+    # rows the box covers, so :meth:`to_grid` can repaint the panel byte-for-byte.
+    # A dropped panel is not inert: a pipe that fed it then "ends without reaching
+    # another room" and the round-tripped grid no longer loads.
     displays: list[dict] = Field(default_factory=list)
 
     @property
@@ -135,6 +139,15 @@ class Program(_Model):
         for room in self.rooms:
             ox, oy = room.min_
             for dy, row in enumerate(room.content):
+                for dx, ch in enumerate(row):
+                    if ch != " ":
+                        cells[(ox + dx, oy + dy)] = ch
+        # Display panels the analyser reports as bare geometry: repaint their exact
+        # captured content so a pipe feeding the panel still reaches a target.
+        for disp in self.displays:
+            content = disp.get("content") or []
+            ox, oy = tuple(disp["min"])
+            for dy, row in enumerate(content):
                 for dx, ch in enumerate(row):
                     if ch != " ":
                         cells[(ox + dx, oy + dy)] = ch
@@ -348,6 +361,19 @@ def parse_program(
             for room in rooms:
                 room.pipe_ops.sort(key=lambda o: (o.cell[1], o.cell[0]))
 
+    # Capture each display panel's exact content (analyze reports only its box), so
+    # to_grid can repaint it. Without this the panel — and the rooms fed by pipes
+    # that end at it — vanish on round-trip and the grid no longer loads.
+    displays: list[dict] = []
+    for disp in info.displays:
+        dmn = tuple(disp["min"])
+        dmx = tuple(disp["max"])
+        content = [
+            "".join(_char(rows, x, y) for x in range(dmn[0], dmx[0] + 1))
+            for y in range(dmn[1], dmx[1] + 1)
+        ]
+        displays.append({**disp, "content": content})
+
     width = max((len(r) for r in rows), default=0)
     height = len(rows)
     return Program(
@@ -355,5 +381,5 @@ def parse_program(
         height=height,
         rooms=rooms,
         pipes=pipes,
-        displays=list(info.displays),
+        displays=displays,
     )

@@ -278,23 +278,62 @@ class FastLittleman:
     def _room_at_border(self, pos: Cell) -> int | None:
         return self._border_owner.get(pos)
 
+    def _trace_cells(self, start: Cell, initial_dir: Dir) -> tuple[list[Cell], bool]:
+        """The cells a pipe from ``start`` would occupy and whether it reaches a
+        room border (a valid destination).
+
+        No validation — used only to decide which candidate starts are actually
+        mid-pipe continuations of some other pipe. Stops at the first border it
+        flows into, off the grid, or on a loop.
+        """
+        path: list[Cell] = []
+        pos, direction = start, initial_dir
+        seen: set[Cell] = set()
+        while pos not in seen:
+            seen.add(pos)
+            arrow = ARROW_DIR.get(self._char(*pos))
+            if arrow is not None:
+                direction = arrow
+            path.append(pos)
+            forward = _add(pos, direction)
+            if self._room_at_border(forward) is not None:
+                return path, True
+            if not (0 <= forward[0] < self.width and 0 <= forward[1] < self.height):
+                break
+            pos = forward
+        return path, False
+
     def _parse_pipes(self) -> list[_Pipe]:
-        starts: list[tuple[int, Cell, Dir, Cell]] = []
-        for room in self.rooms:
-            if room.kind == "display":
-                continue
-            x1, y1 = room.min
-            x2, y2 = room.max
-            for x in range(x1 + 1, x2):
-                for attach, direction in (((x, y1), NORTH), ((x, y2), SOUTH)):
-                    outside = _add(attach, direction)
-                    if ARROW_DIR.get(self._char(*outside)) == direction:
-                        starts.append((room.id, outside, direction, attach))
-            for y in range(y1 + 1, y2):
-                for attach, direction in (((x1, y), WEST), ((x2, y), EAST)):
-                    outside = _add(attach, direction)
-                    if ARROW_DIR.get(self._char(*outside)) == direction:
-                        starts.append((room.id, outside, direction, attach))
+        # A pipe starts at an arrowhead whose backward cell (opposite the arrow)
+        # lies on a room's border — corners included — with the arrow pointing
+        # away from the room. Arrow glyphs inside a room are steer instructions,
+        # so a pipe cell must lie strictly outside every room.
+        candidates: list[tuple[int, Cell, Dir, Cell]] = []
+        for y in range(self.height):
+            for x in range(self.width):
+                cell = (x, y)
+                direction = ARROW_DIR.get(self._char(x, y))
+                if direction is None:
+                    continue
+                if cell in self._border_owner or cell in self._interior_owner:
+                    continue
+                backward = (x - direction[0], y - direction[1])
+                src = self._border_owner.get(backward)
+                if src is None or self.rooms[src].kind == "display":
+                    continue
+                candidates.append((src, cell, direction, backward))
+
+        # A candidate is a real start unless another candidate's pipe flows
+        # through it — i.e. it is a mid-pipe cell (typically a bend sitting next
+        # to a wall). Only pipes that reach a destination claim their interior,
+        # so a stray arrowhead that merely points at a genuine start cannot
+        # suppress it (that arrowhead is not itself a room-attached pipe).
+        claimed: set[Cell] = set()
+        for _src, cell, direction, _backward in candidates:
+            cells, reached = self._trace_cells(cell, direction)
+            if reached:
+                claimed.update(cells[1:])
+        starts = [c for c in candidates if c[1] not in claimed]
 
         pipes: list[_Pipe] = []
         occupied: dict[Cell, int] = {}
