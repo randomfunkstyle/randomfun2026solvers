@@ -154,6 +154,10 @@ class Geometry:
     pipe_out: dict[str, int]            # band -> column of its outgoing pipe
     code0: int                          # first code column, east of the channels
     iw: int                             # room interior width
+    #: Cells a literal is assumed to need beyond its digits.  10 is the slack
+    #: `lllm` and the band layouts were tuned with; 0 means "work it out", which
+    #: is exact and lets a bank be as narrow as its widest literal really is.
+    lit_slack: int = 10
 
     def binds(self, x: int, token: str) -> str:
         """Which band's pipe an op at column `x` reaches: nearest, ties westward."""
@@ -250,6 +254,16 @@ class _Pen:
             self.wrap()
         raise Collision(f"cannot reach band [{lo},{hi}] from column {self.x}")
 
+    def lit_width(self, digits: str) -> int:
+        """Exactly the cells `literal` will spend, backticks already spent included."""
+        step, x, n = self._step(), self.x, 0
+        while x in self.backticks:
+            x, n = x + step, n + 1
+        x, n = x + step * (1 + len(digits)), n + 1 + len(digits)
+        while x in self.backticks:
+            x, n = x + step, n + 1
+        return n + 1
+
     def literal(self, digits: str) -> None:
         step = self._step()
         while self.x in self.backticks:
@@ -263,8 +277,12 @@ class _Pen:
         self.backticks.update((open_col, close_col))
 
 
-def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM) -> dict[str, Plan]:
-    backticks: set[int] = set()
+def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM,
+                backticks: set[int] | None = None) -> dict[str, Plan]:
+    # backticks pair down columns as well as along rows, so the set of columns
+    # already spent is a property of the *room*: a caller planning one bank at a
+    # time passes its own set in and keeps them unique across all of them.
+    backticks = set() if backticks is None else backticks
     plans: dict[str, Plan] = {}
     for name in order:
         toks, succ = worker[name]
@@ -284,7 +302,8 @@ def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM) -> dict[s
                 if kind == "lit":
                     # +8 of slack: the backtick columns are globally unique, so
                     # both ends may have to step past columns already spent.
-                    pen.ensure(len(str(payload)) + 10)
+                    pen.ensure(pen.lit_width(str(payload)) if geo.lit_slack == 0
+                               else len(str(payload)) + geo.lit_slack)
                     pen.literal(str(payload))
                 else:
                     pen.ensure(2)
