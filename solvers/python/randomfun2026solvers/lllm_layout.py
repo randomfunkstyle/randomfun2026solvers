@@ -263,8 +263,12 @@ class _Pen:
         self.backticks.update((open_col, close_col))
 
 
-def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM) -> dict[str, Plan]:
-    backticks: set[int] = set()
+def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM,
+                backticks: set[int] | None = None) -> dict[str, Plan]:
+    # backticks pair down columns as well as along rows, so the set of columns
+    # already spent is a property of the *room*: a caller planning one bank at a
+    # time passes its own set in and keeps them unique across all of them.
+    backticks = set() if backticks is None else backticks
     plans: dict[str, Plan] = {}
     for name in order:
         toks, succ = worker[name]
