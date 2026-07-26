@@ -46,13 +46,17 @@ anyway, because a layout that depends on an arithmetic argument for its
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
 
 from randomfun2026solvers.circuit import Circuit, Collision
 from randomfun2026solvers.dataflow_relay import relay
 from randomfun2026solvers.sudoku_cfg import FILE_WORDS, RING_WORDS
 from randomfun2026solvers.value_ring import draw_pipe, stamp, walls
 
-__all__ = ["IH", "IW", "build", "worker"]
+if TYPE_CHECKING:  # pragma: no cover
+    from randomfun2026solvers.man_debug import DebugMap
+
+__all__ = ["IH", "IW", "build", "build_grid", "worker"]
 
 # ── worker geometry ───────────────────────────────────────────────────────────
 #: Interior of the one worker room.
@@ -292,8 +296,63 @@ def build() -> list[str]:
     return [r.rstrip() for r in g.rows()]
 
 
-if __name__ == "__main__":
+#: Interior rows each block owns, for the debug sidecar and the row-census test.
+BLOCK_ROWS: dict[str, tuple[int, int]] = {
+    "INIT": (0, 0), "FILL": (0, 2), "ROUND": (4, 10), "ROT1": (11, 13),
+    "ACCESS": (14, 14), "BAD": (13, 13), "OK": (14, 14), "ROT2": (15, 17),
+}
+
+
+def build_grid() -> tuple[list[str], "DebugMap", dict[str, object]]:
+    """The grid, a labelled overlay and the numbers worth asserting on."""
+    from randomfun2026solvers.man_debug import DebugMap
+    from randomfun2026solvers.sudoku_cfg import WORKER, worker_glyph_cells
+
+    rows = build()
+    d = DebugMap("sudoku-validity - transposed ring machine")
+    d.region("input", *IN_ROOM, 3, 3, color="#64748b",
+             note="r c v, three ints a round")
+    d.region("output", *OUT_ROOM, 3, 3, color="#64748b",
+             note="1 while consistent, then a single 0")
+    d.region("file-relay", *FILE_RELAY, RELAY_W + 2, RELAY_H + 2, color="#0ea5e9",
+             note=f"turnaround of the {FILE_WORDS}-word scratch file")
+    d.region("ring-relay", *RING_RELAY, RELAY_W + 2, RELAY_H + 2, color="#0ea5e9",
+             note=f"turnaround of the {RING_WORDS}-word per-value store")
+    for name, (y0, y1) in BLOCK_ROWS.items():
+        d.region(f"block:{name}", WX, WY + y0, IW, y1 - y0 + 1,
+                 note=" ".join(WORKER[name][0]), color="#f59e0b", tags=["block"])
+    for band, (lo, hi) in (("IO", (0, 6)), ("FILE", (9, 17)), ("RING", (18, IW - 1))):
+        d.region(f"band:{band}", WX + lo, WY, hi - lo + 1, IH, color="#1f2937",
+                 note=f"{band} pipe ops must stand here; nearest column binds")
+    info = {
+        "grid": (max(len(r) for r in rows), len(rows)),
+        "worker": (IW, IH),
+        "blocks": len(WORKER),
+        "glyph_cells": worker_glyph_cells(),
+    }
+    return rows, d, info
+
+
+if __name__ == "__main__":  # pragma: no cover - the generator's CLI
+    import argparse
+    from pathlib import Path
+
     if len(sys.argv) > 1 and sys.argv[1] == "worker":
         print(worker().ruler())
+        raise SystemExit(0)
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--man", "--out", dest="man", type=Path, help="write the grid here")
+    ap.add_argument("--html", type=Path, help="write a labelled debug overlay here")
+    ap.add_argument("--json", type=Path, help="write the debug region sidecar here")
+    args = ap.parse_args()
+    grid, dbg, meta = build_grid()
+    if args.man:
+        args.man.write_text("\n".join(grid) + "\n")
+    if args.html:
+        dbg.write_html(grid, args.html)
+    if args.json:
+        dbg.write_json(args.json)
+    if not (args.man or args.html or args.json):
+        print("\n".join(grid))
     else:
-        print("\n".join(build()))
+        print(meta)
