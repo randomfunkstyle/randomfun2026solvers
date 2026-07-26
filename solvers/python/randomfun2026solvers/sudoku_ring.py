@@ -60,7 +60,7 @@ __all__ = ["IH", "IW", "build", "build_grid", "worker"]
 
 # ── worker geometry ───────────────────────────────────────────────────────────
 #: Interior of the one worker room.
-IW, IH = 26, 19
+IW, IH = 25, 18
 
 #: North-wall anchor columns, in the worker's interior coordinates.
 IN_COL, OUT_COL = 1, 4
@@ -107,131 +107,131 @@ def worker() -> Circuit:  # noqa: PLR0915 - one grid, laid out row by row
 
     # ══ INIT (row 0) + FILL (rows 0-2) ════════════════════════════════════════
     # `s` leaves A alone, so nine empty words is one literal and a counted loop.
+    # The setup path does not get a corridor row of its own: it drops down the
+    # one column the main loop never touches and merges into ROT2's own return.
     c.set(0, 0, "@")
     c.run(1, 0, "9b0")                       # A = 9; BP = 9; A = 0
-    c.horizontal(0, 3, 19)
-    c.counted_loop(19, 0, "s")               # 9 x { s(ring) }, exit (21,0) east
-    _s(c, 20, 1, "ring")
-    c.horizontal(0, 20, 25)
-    c.set(25, 0, "v")
-    c.vertical(25, 0, 3)
-    c.set(25, 3, "<")
-    c.horizontal(3, 25, 0)
-    c.set(0, 3, "v")
-    c.set(0, 4, ">")                         # ROUND's single entry cell
+    c.horizontal(0, 3, 20)
+    c.counted_loop(20, 0, "s")               # 9 x { s(ring) }, exit (22,0) east
+    _s(c, 21, 1, "ring")
+    c.horizontal(0, 21, 24)
+    c.set(24, 0, "v")
+    c.vertical(24, 0, 17)                    # the setup highway, east of everything
+    c.set(24, 17, "<")
 
-    # ══ ROUND (rows 4-10): read `r c v`, build P, arm the rotation ════════════
-    # row 4 east:  ri sq | M 3 W / M 6 + M 3 *
-    _r(c, 2, 4, "io")                        # A = r
-    _s(c, 9, 4, "file")                      # FILE = [r]
-    c.run(10, 4, "M3W/")                     # A = r/3, B = r%3
-    c.run(14, 4, "M6+M3*")                   # A = 3*(r/3 + 6) = 18 + 3*(r/3)
-    c.set(20, 4, "v")
-    c.set(20, 5, "<")
-    # row 5 west:  sq ri
-    _s(c, 18, 5, "file")                     # FILE = [r, 3q']
-    _r(c, 5, 5, "io")                        # A = c
-    c.set(4, 5, "v")
-    c.set(4, 6, ">")
-    # row 6 east:  sq | M 3 W / | M | rq sq rq | + M 1 {
-    _s(c, 9, 6, "file")                      # FILE = [r, 3q', c]
-    c.run(10, 6, "M3W/")                     # A = c/3, B = c%3
-    c.run(14, 6, "M")                        # B = c/3
-    _r(c, 15, 6, "file")                     # A = r
-    _s(c, 16, 6, "file")                     # r to the back: [3q', c, r]
-    _r(c, 17, 6, "file")                     # A = 3q'; FILE = [c, r]
-    c.run(18, 6, "+M1{")                     # A = BB = 1 << (18 + box)
-    c.set(22, 6, "v")
-    c.set(22, 7, "<")
-    # row 7 west: sq rq | M 9 + M 1 { | sq rq | M 1 { M
-    _s(c, 18, 7, "file")                     # FILE = [c, r, BB]
-    _r(c, 17, 7, "file")                     # A = c;  FILE = [r, BB]
-    c.run(16, 7, "M9+M1{", d=W)              # A = BC = 1 << (9 + c)
-    _s(c, 10, 7, "file")                     # FILE = [r, BB, BC]
-    _r(c, 9, 7, "file")                      # A = r;  FILE = [BB, BC]
-    c.run(8, 7, "M1{M", d=W)                 # A = B = BR = 1 << r
-    c.set(4, 7, "v")
-    c.set(4, 8, ">")
-    # row 8 east: rq + M rq + M
-    _r(c, 7, 8, "file")                      # A = BB
-    c.run(8, 8, "+M")                        # A = B = BB + BR
-    _r(c, 10, 8, "file")                     # A = BC
-    c.run(11, 8, "+M")                       # A = B = P -- B is pinned from here
-    c.set(13, 8, "v")
-    c.set(13, 9, "<")
-    # row 9 west: ri
-    _r(c, 5, 9, "io")                        # A = v
-    c.set(4, 9, "v")
-    c.set(4, 10, ">")
-    # row 10 east: sq b m
-    _s(c, 9, 10, "file")                     # FILE = [v]
-    c.run(10, 10, "bm")                      # BP = v - 1
-    c.set(12, 10, "v")
-    c.set(12, 11, ">")
-    c.horizontal(11, 12, 24)
+    # ══ ROUND (rows 3-9): read `r c v`, build P, arm the rotation ═════════════
+    c.set(0, 3, ">")                         # ROUND's single entry cell
+    # row 3 east:  ri sq | M 3 W / M 6 + M 3 *
+    _r(c, 2, 3, "io")                        # A = r
+    _s(c, 9, 3, "file")                      # FILE = [r]
+    c.run(10, 3, "M3W/")                     # A = r/3, B = r%3
+    c.run(14, 3, "M6+M3*")                   # A = 3*(r/3 + 6) = 18 + 3*(r/3)
+    c.set(20, 3, "v")
+    c.set(20, 4, "<")
+    # row 4 west:  sq ri
+    _s(c, 18, 4, "file")                     # FILE = [r, 3q']
+    _r(c, 5, 4, "io")                        # A = c
+    c.set(4, 4, "v")
+    c.set(4, 5, ">")
+    # row 5 east: sq | M 3 W / | M | rq sq rq | + M 1 {
+    _s(c, 9, 5, "file")                      # FILE = [r, 3q', c]
+    c.run(10, 5, "M3W/")                     # A = c/3, B = c%3
+    c.run(14, 5, "M")                        # B = c/3
+    _r(c, 15, 5, "file")                     # A = r
+    _s(c, 16, 5, "file")                     # r to the back: [3q', c, r]
+    _r(c, 17, 5, "file")                     # A = 3q'; FILE = [c, r]
+    c.run(18, 5, "+M1{")                     # A = BB = 1 << (18 + box)
+    c.set(22, 5, "v")
+    c.set(22, 6, "<")
+    # row 6 west: sq rq | M 9 + M 1 { | sq rq | M 1 { M
+    _s(c, 18, 6, "file")                     # FILE = [c, r, BB]
+    _r(c, 17, 6, "file")                     # A = c;  FILE = [r, BB]
+    c.run(16, 6, "M9+M1{", d=W)              # A = BC = 1 << (9 + c)
+    _s(c, 10, 6, "file")                     # FILE = [r, BB, BC]
+    _r(c, 9, 6, "file")                      # A = r;  FILE = [BB, BC]
+    c.run(8, 6, "M1{M", d=W)                 # A = B = BR = 1 << r
+    c.set(4, 6, "v")
+    c.set(4, 7, ">")
+    # row 7 east: rq + M rq + M
+    _r(c, 7, 7, "file")                      # A = BB
+    c.run(8, 7, "+M")                        # A = B = BB + BR
+    _r(c, 10, 7, "file")                     # A = BC
+    c.run(11, 7, "+M")                       # A = B = P -- B is pinned from here
+    c.set(13, 7, "v")
+    c.set(13, 8, "<")
+    # row 8 west: ri
+    _r(c, 5, 8, "io")                        # A = v
+    c.set(4, 8, "v")
+    c.set(4, 9, ">")
+    # row 9 east: sq b m
+    _s(c, 9, 9, "file")                      # FILE = [v]
+    c.run(10, 9, "bm")                       # BP = v - 1
+    c.set(12, 9, "v")
+    c.set(12, 10, ">")
+    c.horizontal(10, 12, 23)
 
-    # ══ ROT1 (rows 11-13): rotate `v - 1` slots to bring WORD[v] to the head ══
-    # `r` clobbers A only, so B = P rides through the loop untouched.  Row 11 is
+    # ══ ROT1 (rows 10-12): rotate `v - 1` slots to bring WORD[v] to the head ══
+    # `r` clobbers A only, so B = P rides through the loop untouched.  Row 10 is
     # both the odd-tail return lane and the way in: a man walking east over the
     # lane's `>` is merely re-told to head east.
-    c.set(24, 11, "v")
-    rot1 = c.counted_ring_horizontal(20, 12, "rs")
-    for x, y in ((21, 12), (23, 13)):
+    c.set(23, 10, "v")
+    rot1 = c.counted_ring_horizontal(19, 11, "rs")
+    for x, y in ((20, 11), (22, 12)):
         _r(c, x, y, "ring")
-    for x, y in ((22, 12), (22, 13)):
+    for x, y in ((21, 11), (21, 12)):
         _s(c, x, y, "ring")
-    assert rot1 == [(24, 14), (20, 11)], rot1
-    c.set(20, 11, ">")                       # the odd-tail lane, back to the entry
+    assert rot1 == [(23, 13), (19, 10)], rot1
+    c.set(19, 10, ">")                       # the odd-tail lane, back to the entry
 
-    # ══ ACCESS (row 14, walked west): the whole round's test and set ══════════
-    c.set(24, 14, "<")
-    _r(c, 23, 14, "ring")                    # A = WORD[v]
-    c.set(22, 14, "+")                       # A = WORD[v] + P
-    _s(c, 21, 14, "ring")                    # push it back
-    c.run(20, 14, "&-", d=W)                 # A = ((WORD[v] + P) & P) - P
-    c.set(18, 14, "X")                       # 0 -> west = OK, else BAD
+    # ══ ACCESS (row 13, walked west): the whole round's test and set ══════════
+    c.set(23, 13, "<")
+    _r(c, 22, 13, "ring")                    # A = WORD[v]
+    c.set(21, 13, "+")                       # A = WORD[v] + P
+    _s(c, 20, 13, "ring")                    # push it back
+    c.run(19, 13, "&-", d=W)                 # A = ((WORD[v] + P) & P) - P
+    c.set(17, 13, "X")                       # 0 -> west = OK, else BAD
 
-    # ── BAD (row 13): emit 0 and stop; the case ends here by the rules ────────
-    c.set(18, 13, "<")                       # X's counter-clockwise (negative) lane
-    c.horizontal(13, 18, 6)
-    c.run(6, 13, "0", d=W)
-    _s(c, 5, 13, "io")
-    c.set(4, 13, "H")
+    # ── BAD (row 12): emit 0 and stop; the case ends here by the rules ────────
+    c.set(17, 12, "<")                       # X's counter-clockwise (negative) lane
+    c.horizontal(12, 17, 6)
+    c.run(6, 12, "0", d=W)
+    _s(c, 5, 12, "io")
+    c.set(4, 12, "H")
     # X's clockwise (positive) lane.  Unreachable -- see the module docstring --
     # but wired, so that the control flow does not rest on the argument.
-    c.set(18, 15, " ")                       # crosses OK's run east at a blank
-    c.set(18, 16, "<")
-    c.horizontal(16, 18, 11)
-    c.set(11, 16, "^")
-    c.set(11, 15, " ")
+    c.set(17, 14, " ")                       # crosses OK's run east at a blank
+    c.set(17, 15, "<")
+    c.horizontal(15, 17, 11)
+    c.set(11, 15, "^")
     c.set(11, 14, " ")
-    c.set(11, 13, "<")                       # merges into BAD, already heading west
+    c.set(11, 13, " ")
+    c.set(11, 12, "<")                       # merges into BAD, already heading west
 
-    # ── OK (row 14): emit 1, then arm the `9 - v` slots back to phase 0 ───────
-    c.horizontal(14, 18, 10)
-    c.run(9, 14, "1", d=W)
-    _s(c, 8, 14, "io")
-    _r(c, 7, 14, "file")                     # A = v
-    c.run(6, 14, "NM9+b", d=W)               # BP = 9 - v
-    c.set(1, 14, "v")
-    c.set(1, 15, ">")
-    c.horizontal(15, 1, 24)
+    # ── OK (row 13): emit 1, then arm the `9 - v` slots back to phase 0 ───────
+    c.horizontal(13, 17, 10)
+    c.run(9, 13, "1", d=W)
+    _s(c, 8, 13, "io")
+    _r(c, 7, 13, "file")                     # A = v
+    c.run(6, 13, "NM9+b", d=W)               # BP = 9 - v
+    c.set(1, 13, "v")
+    c.set(1, 14, ">")
+    c.horizontal(14, 1, 23)
 
-    # ══ ROT2 (rows 15-17): the phase restore ═════════════════════════════════
-    c.set(24, 15, "v")
-    rot2 = c.counted_ring_horizontal(20, 16, "rs")
-    for x, y in ((21, 16), (23, 17)):
+    # ══ ROT2 (rows 14-16): the phase restore ═════════════════════════════════
+    c.set(23, 14, "v")
+    rot2 = c.counted_ring_horizontal(19, 15, "rs")
+    for x, y in ((20, 15), (22, 16)):
         _r(c, x, y, "ring")
-    for x, y in ((22, 16), (22, 17)):
+    for x, y in ((21, 15), (21, 16)):
         _s(c, x, y, "ring")
-    assert rot2 == [(24, 18), (20, 15)], rot2
-    c.set(20, 15, ">")                       # the odd-tail lane, back to the entry
+    assert rot2 == [(23, 17), (19, 14)], rot2
+    c.set(19, 14, ">")                       # the odd-tail lane, back to the entry
 
-    # ── back to ROUND, up column 0 ───────────────────────────────────────────
-    c.set(24, 18, "<")
-    c.horizontal(18, 24, 0)
-    c.set(0, 18, "^")
-    c.vertical(0, 18, 4)
+    # ── back to ROUND, up column 0; the setup path merges in from the east ────
+    c.set(23, 17, "<")
+    c.horizontal(17, 23, 0)
+    c.set(0, 17, "^")
+    c.vertical(0, 17, 3)
     return c
 
 
@@ -298,8 +298,8 @@ def build() -> list[str]:
 
 #: Interior rows each block owns, for the debug sidecar and the row-census test.
 BLOCK_ROWS: dict[str, tuple[int, int]] = {
-    "INIT": (0, 0), "FILL": (0, 2), "ROUND": (4, 10), "ROT1": (11, 13),
-    "ACCESS": (14, 14), "BAD": (13, 13), "OK": (14, 14), "ROT2": (15, 17),
+    "INIT": (0, 0), "FILL": (0, 2), "ROUND": (3, 9), "ROT1": (10, 12),
+    "ACCESS": (13, 13), "BAD": (12, 12), "OK": (13, 13), "ROT2": (14, 16),
 }
 
 

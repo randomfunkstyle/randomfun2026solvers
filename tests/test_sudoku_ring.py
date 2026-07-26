@@ -73,7 +73,7 @@ def test_the_generator_emits_all_three_artefacts() -> None:
 def test_the_footprint_is_square_and_the_box_is_what_it_claims() -> None:
     grid = rows()
     w, h = max(len(r) for r in grid), len(grid)
-    assert (w, h) == (28, 28)
+    assert (w, h) == (27, 27)
     assert all(row.strip() for row in grid), "a blank row would be clipped away"
 
 
@@ -83,26 +83,26 @@ def test_the_footprint_is_square_and_the_box_is_what_it_claims() -> None:
 #: neighbour is caught by the *token* comparison below rather than by luck.
 BLOCK_CELLS: dict[str, list[tuple[int, int]]] = {
     "INIT": [(1, 0), (2, 0), (3, 0)],
-    "FILL": [(20, 0)],
-    "FILL_BODY": [(20, 1), (19, 1)],
+    "FILL": [(21, 0)],
+    "FILL_BODY": [(21, 1), (20, 1)],
     "ROUND": [
-        (2, 4), (9, 4), *((x, 4) for x in range(10, 20)),
-        (18, 5), (5, 5),
-        (9, 6), *((x, 6) for x in range(10, 15)), (15, 6), (16, 6), (17, 6),
-        *((x, 6) for x in range(18, 22)),
-        (18, 7), (17, 7), *((x, 7) for x in range(16, 10, -1)),
-        (10, 7), (9, 7), *((x, 7) for x in range(8, 4, -1)),
-        (7, 8), (8, 8), (9, 8), (10, 8), (11, 8), (12, 8),
-        (5, 9),
-        (9, 10), (10, 10), (11, 10),
+        (2, 3), (9, 3), *((x, 3) for x in range(10, 20)),
+        (18, 4), (5, 4),
+        (9, 5), *((x, 5) for x in range(10, 15)), (15, 5), (16, 5), (17, 5),
+        *((x, 5) for x in range(18, 22)),
+        (18, 6), (17, 6), *((x, 6) for x in range(16, 10, -1)),
+        (10, 6), (9, 6), *((x, 6) for x in range(8, 4, -1)),
+        (7, 7), (8, 7), (9, 7), (10, 7), (11, 7), (12, 7),
+        (5, 8),
+        (9, 9), (10, 9), (11, 9),
     ],
-    "ROT1": [(20, 12)],
-    "ROT1_BODY": [(21, 12), (22, 12), (23, 12)],
-    "ACCESS": [(23, 14), (22, 14), (21, 14), (20, 14), (19, 14), (18, 14)],
-    "BAD": [(6, 13), (5, 13), (4, 13)],
-    "OK": [(9, 14), (8, 14), (7, 14), (6, 14), (5, 14), (4, 14), (3, 14), (2, 14)],
-    "ROT2": [(20, 16)],
-    "ROT2_BODY": [(21, 16), (22, 16), (23, 16)],
+    "ROT1": [(19, 11)],
+    "ROT1_BODY": [(20, 11), (21, 11), (22, 11)],
+    "ACCESS": [(22, 13), (21, 13), (20, 13), (19, 13), (18, 13), (17, 13)],
+    "BAD": [(6, 12), (5, 12), (4, 12)],
+    "OK": [(9, 13), (8, 13), (7, 13), (6, 13), (5, 13), (4, 13), (3, 13), (2, 13)],
+    "ROT2": [(19, 15)],
+    "ROT2_BODY": [(20, 15), (21, 15), (22, 15)],
 }
 
 #: What each CFG token looks like once written into a cell.  `rr`/`sr`/`ri`/... are
@@ -247,7 +247,7 @@ def test_the_score_is_measured_from_the_generated_grid() -> None:
     """`littleman-validate` caps at 5,000,000 whatever the problem says; the
     contest cap for a `footprint-tick` problem comes from the problem file."""
     result = score_program(SOLUTION, PROBLEM)
-    assert result.area2 == 784
+    assert result.area2 == 729
     assert result.avg_ticks is not None
     assert result.score == pytest.approx(result.area2 * result.avg_ticks)
     assert result.score < 2_384_422_055, "must beat the submitted CPU build"
