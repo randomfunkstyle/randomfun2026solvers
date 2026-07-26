@@ -1,0 +1,135 @@
+"""The 2D block placer: what a cell does to a man, and what a corridor may do to it.
+
+Everything here is the shape tier — no engine.  The failures this repo has
+actually been bitten by on CFG machines are all silent: a corridor that steers
+somebody else's man, a cell that is walked but holds no op, a backtick that
+pairs down a column.  None of them stop the grid loading.
+"""
+from __future__ import annotations
+
+import pytest
+from randomfun2026solvers import blockplace as B
+from randomfun2026solvers import snake_place as SP
+from randomfun2026solvers.blockplace import E, N, S, W
+from randomfun2026solvers.snake_layout import TOKEN_ZONE, WORKER_L
+
+
+# ── the field ─────────────────────────────────────────────────────────────────
+def test_two_corridors_may_cross_a_blank_in_different_directions() -> None:
+    """A man is only ever on a cell for one tick; a blank is a blank to both."""
+    f = B.Field(5, 5)
+    f.step((2, 2), E, E)
+    assert f.can_step((2, 2), S, S)
+    f.step((2, 2), S, S)
+    assert f.get(2, 2) == " "
+
+
+def test_a_turn_may_not_land_on_a_blank_somebody_crosses_the_other_way() -> None:
+    f = B.Field(5, 5)
+    f.step((2, 2), E, E)                      # a corridor crosses heading east
+    assert f.can_step((2, 2), S, S)           # straight through is still fine
+    assert not f.can_step((2, 2), N, W)       # but a `<` here would turn him west
+    assert f.can_step((2, 2), N, E)           # ... unless the turn agrees with it
+
+
+def test_a_corridor_may_merge_into_a_turn_glyph_that_already_points_its_way() -> None:
+    f = B.Field(5, 5)
+    f.step((2, 2), E, S)                      # places `v`
+    assert f.get(2, 2) == "v"
+    assert f.can_step((2, 2), W, S)           # arrives west, leaves south: merge
+    assert not f.can_step((2, 2), W, W)       # `v` would steer him south anyway
+
+
+def test_an_op_is_never_crossable() -> None:
+    f = B.Field(5, 5)
+    f.op(2, 2, "r")
+    for din in (E, W, N, S):
+        for dout in (E, W, N, S):
+            assert not f.can_step((2, 2), din, dout)
+
+
+def test_a_cell_a_block_walks_over_may_be_crossed_but_never_turned_on() -> None:
+    """The one that hijacked INIT: `seek` jumps the pen, the man does not."""
+    f = B.Field(9, 3)
+    f.walk(2, 1, 5, E)                        # five blanks the block's man crosses
+    assert (3, 1) in f.walked
+    r = B.shortest(f, (3, 0), S, (8, 1))
+    assert r is None or all(cell not in f.walked or din == dout
+                            for cell, din, dout in r.steps)
+
+
+# ── the router ────────────────────────────────────────────────────────────────
+def test_the_router_finds_a_way_round_a_wall_of_ops() -> None:
+    f = B.Field(9, 5)
+    for y in range(4):
+        f.op(4, y, "M")
+    f.op(8, 2, ">")
+    r = B.shortest(f, (0, 2), E, (8, 2))
+    assert r is not None
+    assert (4, 4) in r.cells                  # under the wall, not through it
+
+
+def test_a_corridor_that_would_have_to_reverse_into_its_target_is_refused() -> None:
+    f = B.Field(6, 3)
+    f.op(2, 1, ">")
+    assert B.shortest(f, (5, 1), W, (2, 1)) is None
+
+
+# ── one whole room ────────────────────────────────────────────────────────────
+@pytest.fixture(scope="module")
+def room():
+    return SP.build_room()
+
+
+def test_every_block_walks_its_own_tokens(room) -> None:
+    """A block whose row lost a glyph still loads; it just computes something else."""
+    SP.walked_cells_all_hold_a_glyph(room)
+
+
+def test_every_lane_of_the_finished_field_arrives_where_the_cfg_says(room) -> None:
+    """Re-walked on the *finished* grid, not on the routes: a later corridor that
+    drops a turn onto an earlier one re-steers it and nothing complains."""
+    B.walk_edges(room.field, WORKER_L, room.placed)
+
+
+def test_no_two_blocks_overlap(room) -> None:
+    seen: dict[tuple[int, int], str] = {}
+    for name, p in room.placed.items():
+        for i, r in enumerate(p.plan.rows):
+            for c, _g in r.cells:
+                assert (c, p.ys[i]) not in seen, (name, seen.get((c, p.ys[i])))
+                seen[(c, p.ys[i])] = name
+
+
+def test_every_pipe_op_stands_in_a_column_that_binds_its_own_band(room) -> None:
+    geo, _banks = SP.layout()
+    for name, p in room.placed.items():
+        toks = [t for t in WORKER_L[name][0] if t in TOKEN_ZONE]
+        cols = [c for r in p.plan.rows for c, g in r.cells if g in ("r", "s")]
+        for col, tok in zip(cols, toks, strict=True):
+            geo.check_binding(col, tok)
+
+
+def test_no_column_holds_two_backticks(room) -> None:
+    """Backticks pair down columns as well as along rows, and a vertical pair
+    with a turn glyph between them is a load error."""
+    seen: dict[int, int] = {}
+    for y, line in enumerate(room.rows()):
+        for x, ch in enumerate(line):
+            if ch == "`":
+                assert x not in seen, (x, seen[x], y)
+                seen[x] = y
+
+
+def test_the_banks_do_not_overlap_and_the_split_lies_between_the_zones() -> None:
+    geo, banks = SP.layout()
+    ring_hi, io_lo = geo.zone_cols["RING"][1], geo.zone_cols["IO"][0]
+    assert ring_hi < io_lo
+    for x in (geo.zone_cols["RING"][0], ring_hi):
+        geo.check_binding(x, "rr")
+        geo.check_binding(x, "sr")
+    for x in (io_lo, geo.zone_cols["IO"][1]):
+        geo.check_binding(x, "ri")
+        geo.check_binding(x, "sp")
+    for a, b in ((banks["P"], banks["Q"]), (banks["Q"], banks["R"])):
+        assert a.code_hi < b.ch0

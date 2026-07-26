@@ -54,7 +54,7 @@ WY = BAND_H + 1
 SPREAD = 3
 
 #: channel columns and code columns of each bank, west to east
-BANKS = ((5, 13), (5, 13), (4, 13))
+BANKS = ((6, 12), (6, 12), (5, 12))
 
 
 def layout(banks=BANKS):
@@ -98,14 +98,14 @@ def assign(banks, first: dict[str, str]):
     return out
 
 
-def default_split(order: list[str], frac: float = 0.6) -> dict[str, str]:
+def default_split(order: list[str], frac: float = 0.7) -> dict[str, str]:
     """The first `frac` of the RING-only blocks go west, the rest into bank Q."""
     ring = [n for n in order if B.block_zones(WORKER_L, n, TOKEN_ZONE) <= {"RING"}]
     k = int(len(ring) * frac)
     return {n: ("P" if i < k else "Q") for i, n in enumerate(ring)}
 
 
-def build_room(banks=BANKS, order=None, frac: float = 0.6, seed: int = 0,
+def build_room(banks=BANKS, order=None, frac: float = 0.7, seed: int = 0,
                attempts: int = 40) -> B.Room:
     geo, bk = layout(banks)
     order = order or block_order(WORKER_L, "INIT")
@@ -130,7 +130,7 @@ def tuned_order(banks=BANKS, steps: int = 40_000) -> list[str]:
 
 
 # ── the whole machine ─────────────────────────────────────────────────────────
-def build_grid(banks=BANKS, order=None, frac: float = 0.6,
+def build_grid(banks=BANKS, order=None, frac: float = 0.7,
                seed: int = 0) -> tuple[list[str], DebugMap, dict[str, object]]:
     """Worker + ring + input + the proven painter/LM-75 harness, as one grid."""
     from randomfun2026solvers.man_debug import DebugMap
