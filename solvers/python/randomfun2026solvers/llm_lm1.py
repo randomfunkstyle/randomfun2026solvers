@@ -1442,6 +1442,23 @@ def _emit_pick(a: Asm, sites: int) -> None:
 #:     | tape only      |    41,616 | 20,275,186 | 31,809,643 | 8.44e11 |
 #:     | + 52-slot tier |    41,616 |  8,605,207 | 13,676,774 | 3.58e11 |
 #:
+#: **Sized by sweep under ``skip_batch=4``, which moved the optimum a long way down.**
+#: A bigger hot bank captures more of the traffic but lengthens the lap every one of
+#: those reads waits on, and batch 4 made short laps much cheaper — so the best size
+#: fell from 104 to 60. Measured, all 14 public cases, identical men and area:
+#:
+#:     52 slots   avg 6,172,291   FAILS 4 cases (too few hot slots: the TAPE_SIZE trap)
+#:     54 slots   avg 6,623,568
+#:     56 slots   avg 6,612,776   <- this, the floor of a very flat basin
+#:     58 slots   avg 6,622,432
+#:     60 slots   avg 6,632,415   judged    274,555,216,799
+#:     66 slots   avg 6,677,012
+#:     90 slots   avg 6,731,201
+#:    104 slots   avg 6,890,324   judged    284,219,348,749
+#:
+#: The basin is flat from 54 to 60 and the floor is shallow -- 56 beats 60 by 0.3% --
+#: so treat this as "small, just above the cliff at 52", not as a tuned constant.
+#:
 #: **This is now the default, and the hot bank is a pipe tape, not a man-memory.**
 #: The man-memory version of this tier was judged ``11/28`` at 10 slots and ``4/28``
 #: at 52 — refused on wall clock, because every slot of it is a live little man and
@@ -1464,7 +1481,7 @@ def _emit_pick(a: Asm, sites: int) -> None:
 TAPE_SKIP_BATCH = 4
 TAPE_RELAY_SIZE = (8, 6)
 
-HOT = (4, 26)
+HOT = (2, 28)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 
