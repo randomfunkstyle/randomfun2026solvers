@@ -753,8 +753,13 @@ def _walk(c: Circuit, y: int, x_from: int, x_to: int, glyph: str) -> None:
             raise Collision(f"lane on row {y} hits {here!r} at column {x}")
 
 
-def build_room(p: Plan | None = None) -> Room:
-    """Draw the whole worker: glyphs, wrap links, lanes and corridors."""
+def build_room(p: Plan | None = None, *, trim: bool = False) -> Room:
+    """Draw the whole worker: glyphs, wrap links, lanes and corridors.
+
+    `trim` drops the channel columns the router never reached.  It defaults off
+    so that the shipped `matmul_ring.man` stays byte-for-byte what it was; the
+    tuned generator turns it on.
+    """
     p = p or plan()
     lanes, entry_y, ih = assign_rows(p.chains)
     # The west margin is sized so that *every* lane could take a corridor of its
@@ -912,7 +917,36 @@ def build_room(p: Plan | None = None) -> Room:
         turns.update({(ch, lane.row), (ch, target_y)})
         _walk(c, target_y, ch, home, ">")   # merges are legal; _walk allows them
 
-    return Room(c, p.bands, p.chains, lanes, entry_y, margin, iw, ih)
+    room = Room(c, p.bands, p.chains, lanes, entry_y, margin, iw, ih)
+    return _trim_west(room) if trim else room
+
+
+def _trim_west(room: Room) -> Room:
+    """Drop the channel columns the router never reached.
+
+    `margin` is sized so that *every* lane could have a corridor column of its
+    own, because a long span over a busy room has no clear column inside the
+    code and must have a fallback.  The router almost never needs one: five of
+    the nine columns hold nothing at all, and each is a column of the whole
+    machine, paid for once in `max(w, h)` and again in the square.  Trimming
+    them is a pure translation -- the bands, the pipes and the code all move
+    west together -- so nothing about the binding changes, and `margin` is the
+    only number that has to move with them.
+    """
+    dead = 0
+    while dead < room.margin and all(room.circuit.get(dead, y) == " "
+                                     for y in range(room.ih)):
+        dead += 1
+    if not dead:
+        return room
+    c = Circuit(room.iw - dead, room.ih)
+    for (x, y), ch in room.circuit.cell.items():
+        if ch != " ":
+            c.set(x - dead, y, ch)
+    for lane in room.lanes:
+        lane.channel -= dead
+    return Room(c, room.bands, room.chains, room.lanes, room.entry_y,
+                room.margin - dead, room.iw - dead, room.ih)
 
 
 # ── how often each block and each lane runs ───────────────────────────────────
