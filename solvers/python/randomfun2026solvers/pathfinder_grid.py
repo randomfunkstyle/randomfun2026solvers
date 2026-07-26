@@ -107,6 +107,35 @@ check only requires the value to fit in 64 bits read either way.
 
 Measured, all seven public cases, both backends agreeing exactly: 84 x 175,
 ``area2`` 30,625, 277,368 avg ticks, score 8.49e9.
+
+## Widening the bands does not fold the strip — measured
+
+The shipped machine is 82 x 173, so it is charged entirely on **height**, and
+only 6.1% of that charged box holds a glyph.  The obvious read is that it is a
+tall strip which should be folded wider, and ``BAND_W`` looks like the knob.  It
+is not:
+
+===========  ===========  ================
+``BAND_W``   grid         ``area2``
+===========  ===========  ================
+12           82 x 173     29,929 (shipped)
+14           90 x 171     29,241  (-2.3%)
+>= 16        collision at row 7, north band
+===========  ===========  ================
+
+Height barely moves because a wider band does not remove a **row** — the
+serpentine spends a row on every *reversal* of the band sequence, and reversals
+are a property of the block graph's pipe-op order, not of how much room each band
+has.  Width grows immediately, so the two almost cancel; at 16 the north band's
+relays collide before the trade can be tested further.
+
+The band **count** is not a knob at all: there is one band per pipe, because
+§7.1 makes a code column's position decide which pipe its ops bind to.  Four
+pipes, four bands.
+
+So this machine's charged side is the serpentine's row count, and shortening it
+means reordering ``pathfinder_prog``'s blocks to cut band reversals — which is
+what improvements 1-10 have been doing, for 4% total.  It is not a fold.
 """
 
 from __future__ import annotations
