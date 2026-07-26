@@ -1,0 +1,16 @@
+# tcp — submission 8c8315bb-5219-45f3-809f-2dd2caaad488
+
+verdict      done: 20/20 cases, area2 10609, avgTicks 137,931, score 1,463,308,918
+submitted    2026-07-26T14:03:28+0300
+grid         103x67
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  1744f8f3b41046f85064564c695b5ad714a53d0479dc978f46d8a0310a4fdd65
+commit       8933b26
+local        tcp: 6/6 public cases, avg 86,413 ticks
+source       tasks/solutions/tcp_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+generator-level compact CPU routing applied to archived CPU baseline

@@ -1,0 +1,16 @@
+# gradebook — submission dea90de0-2d1f-4c76-b0a3-db0a2b4f4ce1
+
+verdict      done: 20/20 cases, area2 11449, avgTicks 704,241, score 8,062,853,492
+submitted    2026-07-26T14:02:45+0300
+grid         107x96
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  8124e8b62a0c6d1545d423b041374688eedb2e636acbc87482752022c4fe960e
+commit       8933b26
+local        gradebook: 7/7 public cases, avg 273,040 ticks
+source       tasks/solutions/gradebook_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+generator-level compact CPU routing applied to archived CPU baseline
