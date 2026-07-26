@@ -714,6 +714,27 @@ class Room:
         cols = self.bands.send_col if sending else self.bands.recv_col
         return cols[ring] + self.margin
 
+    # -- the walker's view of a room ------------------------------------------
+    # `walk_blocks`, `walk_costs` and `check_room` need only these three: the
+    # drawn cells, where each block's man starts, and which way he faces.  Any
+    # other layout that can answer them -- `matmul_place`'s packed room, say --
+    # is priced and proven by exactly the same code, which is the point.
+    @property
+    def starts(self) -> dict[tuple[int, int], str]:
+        """Cell -> the block whose first glyph stands on it."""
+        return {(col + self.margin, chain.rows[ri].y): name
+                for chain in self.chains
+                for name, (ri, col) in chain.start_at.items()}
+
+    def heading(self, name: str) -> tuple[tuple[int, int], tuple[int, int]]:
+        """Where a block's man stands at entry, and the way he is facing."""
+        for chain in self.chains:
+            if name in chain.start_at:
+                ri, col = chain.start_at[name]
+                row = chain.rows[ri]
+                return (col + self.margin, row.y), (E if row.east else W)
+        raise KeyError(name)                      # pragma: no cover
+
 
 def _walk(c: Circuit, y: int, x_from: int, x_to: int, glyph: str) -> None:
     """Reserve a straight horizontal run, exclusive of both ends."""
@@ -978,16 +999,8 @@ def walk_blocks(room: Room) -> dict[str, tuple[list[str], dict[str, str]]]:
     the man's feet from every block's first cell.
     """
     c = room.circuit
-    start: dict[tuple[int, int], str] = {}
-    for chain in room.chains:
-        for name, (ri, col) in chain.start_at.items():
-            start[(col + room.margin, chain.rows[ri].y)] = name
-
-    def heading_at(name: str) -> tuple[tuple[int, int], tuple[int, int]]:
-        chain = next(ch for ch in room.chains if name in ch.start_at)
-        ri, col = chain.start_at[name]
-        row = chain.rows[ri]
-        return (col + room.margin, row.y), (E if row.east else W)
+    start = room.starts
+    heading_at = room.heading
 
     def follow(pos: tuple[int, int], d: tuple[int, int]) -> str:
         """Walk turns and blanks until the man stands on some block's first cell."""
@@ -1057,10 +1070,7 @@ def walk_costs(room: Room) -> tuple[dict[str, int], dict[tuple[str, str], int]]:
     walking it rather than by counting rows.
     """
     c = room.circuit
-    start: dict[tuple[int, int], str] = {}
-    for chain in room.chains:
-        for name, (ri, col) in chain.start_at.items():
-            start[(col + room.margin, chain.rows[ri].y)] = name
+    start = room.starts
 
     def follow(pos: tuple[int, int], d: tuple[int, int]) -> int:
         for n in range(4 * (room.iw + room.ih)):
@@ -1075,10 +1085,7 @@ def walk_costs(room: Room) -> tuple[dict[str, int], dict[tuple[str, str], int]]:
     body: dict[str, int] = {}
     lane_cost: dict[tuple[str, str], int] = {}
     for name in LAID:
-        chain = next(ch for ch in room.chains if name in ch.start_at)
-        ri, col = chain.start_at[name]
-        row = chain.rows[ri]
-        pos, d = (col + room.margin, row.y), (E if row.east else W)
+        pos, d = room.heading(name)
         want, ops, steps = len(_glyphs(name)), 0, 0
         while True:
             ch = c.get(*pos)
