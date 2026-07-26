@@ -1,0 +1,38 @@
+# snake — submission 21f36991-451a-401c-90ab-d7648739f448
+
+verdict      done: 17/17 cases, area2 16641, avgTicks 22,932.4, score 381,618,264
+submitted    2026-07-26
+grid         70x129
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+local        snake: 5/5 public cases, avg 15,146.6 ticks, local score 252,054,571
+source       tasks/solutions/snake_ring.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Drops the LM-1 CPU entirely: the 43-block token CFG from snake-finish compiled
+through lllm_layout's now-generic planner. 1.69e9 -> 3.82e8, a 4.4x.
+Server ticks ran 1.51x local (22,932 vs 15,147).
+
+Three bugs the snake-finish branch left, none of which showed as a load error:
+ * FLAT_RELAY had never run — its returning man walked into the south wall and
+   its spawn sat where a turn was needed; `@` is only a nop.
+ * The two "proven" halves were proven against DIFFERENT protocols: WORKER emits
+   (addr, colour) pairs closed by a negative, painter() expected a leading count.
+   Each had passed its own verification. The worker cannot know the count — a
+   move's second colour waits on the collision scan and a death repaints a body
+   of unknown length — so the painter was rebuilt around the terminator.
+ * The router checked cells at draw time only, so a later edge could drop a `v`
+   inside an earlier edge's vertical and hijack that man.
+
+Measurement worth keeping: ordering blocks by a PROFILE of the public cases
+scored better on paper and measured WORSE (17.7k vs 15.8k ticks) — weighting
+folds the cold death paths into the hot loop. The objective is unweighted.
+
+Why not rank 1 (needs 3.42e7): pipe binding is nearest-Manhattan within one room,
+so the RING/IO split is a single linear order in x, and two side-by-side block
+banks would need the same pipe both west and east of the code. That forces one
+block per row band (~2 rows straight, ~3-4 per branch), so 44 blocks -> 118 rows.
+Height binds at 129 against width 70. Reaching rank 1 needs real 2D packing where
+blocks share rows with each other's corridors — a different placer.
