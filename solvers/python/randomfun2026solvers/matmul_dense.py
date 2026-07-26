@@ -954,10 +954,19 @@ def _relay_clear(box_x: int, ring: str, off: int) -> None:
     receive at 17, `c`'s send at 18 or `x`'s receive at 21.  Rotating the relay
     to a 2x4 interior narrows it to four columns and still does not fit.
 
-    So the rings force the anchors apart and the rectangle forces them together,
-    and the way out is to move `x`'s receive anchor west, away from the `s`/`b`/`c`
-    cluster -- which makes ``TBODY`` a horizontal two-glyph walk instead of the
-    vertical one the hot box is built around.  That is the next change.
+    It is **not** only `s`.  Enumerated over the anchors here, every one of the
+    four stacked rings is walled in the same way -- `q`'s only window holds
+    `x`'s receive, `k`'s hold `io`'s send or `b`'s, `c`'s hold `b`'s and `s`'s.
+    Moving `x`'s receive west was tried and measured: it frees nothing, because
+    `b` and `c` block `s` on their own, and it costs 2,000 ticks by turning
+    ``TBODY`` from a two-cell walk down one column into a seventeen-cell walk
+    across the room (23,547 -> 25,502).
+
+    So a *stacked* relay is out entirely, and the fix is not an anchor tweak: it
+    is to give every ring the treatment the coiled ones already get -- its own
+    north-band row and its own relay column range, per :func:`_north_rows` --
+    with the jog kept short for `s`, whose latency the MAC pays every lap.  The
+    room is 148 rows tall and 52 wide, so those columns are free.
     """
     mine = {ANCHORS[(ring, True)] + off, ANCHORS[(ring, False)] + off}
     for (other, send), c in ANCHORS.items():
