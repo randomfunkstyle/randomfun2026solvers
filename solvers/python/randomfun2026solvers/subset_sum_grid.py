@@ -466,6 +466,10 @@ def worker(stage: str = "full") -> Circuit:
         out(c, OUT_COL, 39)
         c.set(OUT_COL - 1, 39, "H")
         return c
+    if stage == "loadb":
+        _link(c, exit_, E, 22, (14, 24))
+        _spill_b(c, 24)
+        return c
     raise NotImplementedError(stage)
 
 
@@ -505,3 +509,29 @@ def build(stage: str = "full") -> list[str]:
     while rows and not rows[-1].strip():
         rows.pop()
     return rows
+
+
+def _spill_b(c: Circuit, y: int) -> None:
+    """Stage `loadb`: pour ring B out of the output pipe and halt on the sentinel.
+
+    The doubling pass is the one block whose output no later phase can be read
+    back from, so it gets its own stage: 256 biased right-half sums followed by
+    the `-1` that closes the ring.
+    """
+    c.set(WEST_COL, y, ">")
+    c.horizontal(y, WEST_COL, 28)
+    br(c, 28, y)
+    bs(c, 29, y)
+    c.set(30, y, "v")
+    c.set(30, y + 1, "<")
+    c.horizontal(y + 1, 30, OUT_COL)
+    out(c, OUT_COL, y + 1)
+    c.set(OUT_COL - 1, y + 1, "v")
+    c.set(OUT_COL - 1, y + 2, ">")
+    c.horizontal(y + 2, OUT_COL - 1, 31)
+    c.set(31, y + 2, "X")                   # sum -> south and round again
+    c.set(31, y + 3, "<")
+    c.horizontal(y + 3, 31, WEST_COL)
+    c.set(WEST_COL, y + 3, "^")
+    c.vertical(WEST_COL, y + 3, y)
+    c.set(31, y + 1, "H")                   # sentinel -> stop
