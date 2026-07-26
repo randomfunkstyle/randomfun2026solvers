@@ -143,6 +143,48 @@ def test_the_estimator_agrees_with_the_engine_on_the_full_size_case(room):
     assert abs(est - 130_644) < 0.02 * 130_644
 
 
+def test_macs_self_loop_return_leg_is_a_floor_and_not_slack(room):
+    """The hot loop costs 34 cells a lap, of which 19 are the walk back.
+
+    That looked like corridor to reclaim.  It is not.  A self-loop laid on one
+    east-walked row -- which `matmul_grid` requires, because the return has to
+    come up into the cell west of the block's first glyph -- has a return leg
+    equal to its own column span, and `MAC`'s span is set by how far apart the
+    `s` and `c` bands can be brought:
+
+        span = (c.recv_lo - s.recv_lo) + 5 = 11 + 5 = 16
+
+    `s` cannot be narrower than 7 because it hosts a stacked turnaround room,
+    and `b`, which sits between them, is already at 4.  Sixteen columns for
+    twelve glyphs is four cells of slack in the whole loop.  This test fails if
+    someone finds a way through -- which would be worth about 5% of the machine.
+    """
+    body, cost = mg.walk_costs(room)
+    assert body["MAC"] == 15
+    assert cost[("MAC", "pos")] == 19
+    lo_s = min(room.bands.recv_span["s"][0], room.bands.send_span["s"][0])
+    lo_c = min(room.bands.recv_span["c"][0], room.bands.send_span["c"][0])
+    assert lo_c - lo_s == 11
+    assert mp.GEOMETRY.recv_w["s"] == 7
+    assert mp.GEOMETRY.recv_w["b"] == 4
+
+
+def test_loada_gos_walk_across_the_room_is_still_there(room):
+    """`ri sx` reads `io` and sends to `x`, and they are 25 columns apart.
+
+    Four glyphs, 54 cells a lap.  Bringing the two bands together is legal --
+    the block is a self-loop, so `x` has to be *east* of `io`, which every
+    adjacent order respects -- and it was searched over all 5,040 of them.  They
+    either fail to lay or score worse: `io` is also paired with `k` and `q` by
+    `HEAD`, `BL1_R`, `BL2_R` and `GRP_GO`, and moving it costs more than this
+    saves.  Two cells came off it here as a side effect of the wider `q`.
+    """
+    body, cost = mg.walk_costs(room)
+    assert (body["LOADA_GO"], cost[("LOADA_GO", "pos")]) == (25, 29)
+    ring, _dbg, _info = mg.walk_costs(mg.build_room())[0], None, None
+    assert ring["LOADA_GO"] == 26
+
+
 def test_the_band_widths_are_the_ones_the_search_settled_on():
     assert mp.GEOMETRY.recv_order == ("q", "k", "io", "s", "b", "c", "x")
     assert mp.GEOMETRY.recv_w == {"q": 18, "k": 7, "io": 4, "s": 7,

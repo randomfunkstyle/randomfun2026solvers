@@ -30,22 +30,34 @@ height meets width.  And `blockplace` routes every edge, where `matmul_grid`
 groups its blocks into 17 fall-through chains whose internal edges cost nothing:
 +21% ticks against -3% on the side.  The measurement is kept in that module.
 
-**`MAC`'s self-loop return leg.**  It costs 19 cells against a 15-cell body, and
-that looked like pure corridor to reclaim.  It is not: the return leg of a
-self-loop laid on one row *is* the block's column span, and `MAC`'s span is 16
-columns for 12 glyphs -- four cells of slack in the whole loop.  Nothing was
-recovered here and nothing could be without splitting the loop across two rows,
-which `matmul_grid` forbids for a self-loop because the return has to come up
-into the cell west of the block's first glyph.
+**`MAC`'s self-loop return leg.**  It costs 19 cells against a 15-cell body --
+39% of the whole machine at 16x16x16 -- and that looked like pure corridor to
+reclaim.  It is not.  A self-loop laid on one east-walked row has a return leg
+equal to its own column span, and `MAC`'s span is fixed by how close the `s` and
+`c` bands can be brought:
+
+    span = (c.recv_lo - s.recv_lo) + 5 = 11 + 5 = 16   for 12 glyphs
+
+`s` cannot be narrower than 7 -- it hosts a stacked turnaround room, and it is
+the one-word spill the `MAC` re-reads every lap, so it cannot be moved out to
+the strip either -- and `b`, which sits between them, is already at its floor of
+4.  **It did not fall, and it is a floor rather than slack.**
 
 **`LOADA_GO`'s 56-cell walk for four glyphs.**  ``ri sx`` reads the input pipe
-and sends to the `x` ring, and the two bands sit 25 columns apart.  Since the
-block is a self-loop it must fit one *east-walked* row, which forces `x` east of
-`io` -- so the fix is to make them adjacent, and the geometry search can express
-it.  It was searched over all 5,040 band orders.  Every order that puts them
+and sends to the `x` ring, and the two bands sit 25 columns apart.  The block is
+a self-loop, so it must fit one *east-walked* row, which forces `x` **east** of
+`io` -- the fix is exactly to make them adjacent, and the geometry search can
+express it.  All 5,040 band orders were enumerated.  Every order that puts them
 adjacent either fails to lay or scores worse: `io` is also read by `HEAD`,
 `BL1_R`, `BL2_R` and `GRP_GO`, all of which pair it with `k` and `q`, and moving
-`io` east of them costs more than `LOADA_GO` saves.
+`io` past them costs more than `LOADA_GO` saves.  **It fell by two cells a lap
+(56 -> 54), as a side effect of the wider `q`, and not by the 48 the adjacency
+would have bought.**
+
+So neither band-spread cost was the lever it looked like.  The 464 ticks that
+did come off are spread thinly -- `GRP_GO` 61 -> 59 body cells, `LOADA_GO` one
+cell off each leg -- and are rows unwrapped by the wider `q` rather than bands
+brought together.
 """
 
 from __future__ import annotations
