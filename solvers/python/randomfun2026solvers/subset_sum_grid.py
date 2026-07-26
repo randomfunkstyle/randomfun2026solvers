@@ -90,7 +90,7 @@ BRET_COL, BFWD_COL = 30, 31
 BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)}
 
 #: Worker interior.
-IW, IH = 46, 160
+IW, IH = 46, 230
 
 
 def _op(c: Circuit, x: int, y: int, glyph: str, band: str) -> None:
@@ -478,17 +478,21 @@ def worker(stage: str = "full") -> Circuit:
         out(c, OUT_COL, 39)
         c.set(OUT_COL - 1, 39, "H")
         return c
-    if stage == "p2":
+    if stage in ("p2", "full"):
         _link(c, exit_, E, 22, (14, P2_HEAD))
         _phase2(c)
         _nosol(c)
-        _hit_probe(c)
+        if stage == "p2":
+            _hit_probe(c)
+            return c
+        _phase3(c)
+        _emit(c)
         return c
     if stage == "loadb":
         _link(c, exit_, E, 22, (14, 24))
         _spill_b(c, 24)
         return c
-    raise NotImplementedError(stage)
+    raise ValueError(f"unknown stage {stage!r}")
 
 
 def build(stage: str = "full") -> list[str]:
@@ -712,7 +716,7 @@ def _scan(c: Circuit) -> None:
 
 #: Where the exhausted lane and the no-solution answer live: far east of every
 #: lane, far south of every block.  Nothing else is within ten columns of it.
-NOSOL_COL, NOSOL_ROW = 44, 150
+NOSOL_COL, NOSOL_ROW = 44, 220
 
 
 def _nosol(c: Circuit) -> None:
@@ -742,3 +746,161 @@ def _hit_probe(c: Circuit) -> None:
     c.horizontal(P3_HEAD + 1, WEST_COL + 1, OUT_COL)
     out(c, OUT_COL, P3_HEAD + 1)
     c.set(OUT_COL - 1, P3_HEAD + 1, "H")
+
+
+#: Phase 3's rows.  It is phase 2's lap with `CR` driving it, so it reuses every
+#: block; only the prologue and the final comparison differ.
+P3_MASK, P3_SKIP, P3_PEEL, P3_TEST = 96, 103, 108, 114
+
+
+def _phase3(c: Circuit) -> None:
+    """One lap per right-half mask, lexicographic, first hit wins.
+
+    Phase 2 proved the residual is a right-half sum, so this always terminates on
+    a match.  The accumulator starts at **1**, not 0, because `RR` holds `r + 1`:
+    biasing both sides is one glyph and saves the comparison a correction.
+    """
+    y = P3_HEAD
+    c.run(14, y, "1M")                      # A = 1, B = 1
+    vr(c, 16, y)                            # C and G belong to phase 2
+    vs(c, 17, y)
+    vr(c, 18, y)
+    vs(c, 19, y)
+    vr(c, 20, y)                            # A = CR
+    c.set(21, y, "X")                       # CR > 0 -> south; == 0 is unreachable
+    c.set(22, y, "H")
+    c.set(21, y + 1, "<")
+    c.set(20, y + 1, "-")                   # A = CR - 1 = this lap's counter
+    c.set(19, y + 1, "v")
+    c.set(19, y + 2, ">")
+    vs(c, 20, y + 2)                        # send the counter back: CR = cr
+    c.set(21, y + 2, "M")                   # B = cr
+    vr(c, 22, y + 2)                        # A = GR = 256
+    vs(c, 23, y + 2)                        # GR goes straight back
+    c.run(24, y + 2, "+b1M0")               # BP = cr + 256, A = 0, B = 1
+    _link(c, (29, y + 2), E, P3_MASK - 2, (17, P3_MASK))
+
+    _bits(c, 20, P3_MASK, shift=True)
+    c.run(21, P3_MASK, "}b")                # BP = the mask; B is already 1
+    _link(c, (23, P3_MASK), E, P3_SKIP - 2, (19, P3_SKIP))
+
+    _rot(c, VRET_COL, P3_SKIP)              # skip the left values, stop on MB
+    _link(c, (22, P3_SKIP - 1), N, P3_PEEL - 2, (18, P3_PEEL))
+
+    _peel_sum(c, VRET_COL, P3_PEEL)         # B = 1 + the right half's sum
+    _link(c, (22, P3_PEEL - 1), N, P3_TEST - 2, (14, P3_TEST))
+
+    y = P3_TEST
+    vr(c, 14, y)                            # A = RR = r + 1
+    vs(c, 15, y)
+    c.set(16, y, "-")                       # A = (r+1) - (1+sum) = r - sum
+    c.set(17, y, "X")                       # 0 -> east, the winning right mask
+    c.set(17, y - 1, "<")                   # > 0 and < 0 alike: try the next one
+    c.horizontal(y - 1, 17, LOOP_COL)
+    c.set(LOOP_COL, y - 1, "^")
+    c.set(17, y + 1, "<")
+    c.horizontal(y + 1, 17, LOOP_COL)
+    c.set(LOOP_COL, y + 1, "^")
+    for row in range(P3_HEAD + 1, y + 2):
+        c.set(LOOP_COL, row, "^")
+    c.set(LOOP_COL, P3_HEAD, ">")
+
+
+#: Emit's rows.  Three laps: count the bits and answer `k`, then the left half's
+#: chosen values, then the right half's.  Left before right **is** increasing
+#: index order, which is why no combined mask and no output buffer are needed.
+E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 122, 126, 132, 138, 143
+E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 148, 152, 158, 163, 168, 173
+E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 178, 182, 188, 193
+
+
+def _emit(c: Circuit) -> None:
+    """Read the answer back out of the ring the search left behind.
+
+    `C` and `CR` hold the winning counters, and a population count is invariant
+    under bit reversal, so `k` is `popcount(C) + popcount(CR)` with no reversal
+    at all — and the two fit in one backpack as `C * 256 + CR`, because `C < 2^12`
+    and `CR < 256` cannot overlap.  That is one lap, and the two emit laps after
+    it each reverse one counter and peel one half.
+    """
+    _link(c, (18, P3_TEST), E, E1_HEAD - 2, (14, E1_HEAD))
+    y = E1_HEAD
+    vr(c, 14, y)                            # A = C
+    vs(c, 15, y)
+    c.run(16, y, "M8W{M")                   # B = C << 8
+    vr(c, 21, y)                            # G, rotated
+    vs(c, 22, y)
+    vr(c, 23, y)                            # A = CR
+    vs(c, 24, y)
+    c.run(25, y, "+b1M0")                   # BP = C*256 + CR, A = 0, B = 1
+    _link(c, (30, y), E, E1_COUNT - 2, (17, E1_COUNT))
+
+    _bits(c, 20, E1_COUNT, shift=False)     # A = the number of chosen indices
+    _link(c, (21, E1_COUNT), E, E1_EMIT - 2, (14, E1_EMIT))
+    y = E1_EMIT
+    c.set(14, y, "v")
+    c.set(14, y + 1, "<")
+    c.horizontal(y + 1, 14, OUT_COL)
+    out(c, OUT_COL, y + 1)                  # answer k
+    c.set(OUT_COL - 1, y + 1, "v")
+    c.set(OUT_COL - 1, y + 2, ">")
+    c.horizontal(y + 2, OUT_COL - 1, VRET_COL)
+    vr(c, VRET_COL, y + 2)                  # GR, rotated
+    vs(c, VRET_COL + 1, y + 2)
+    _link(c, (VRET_COL + 2, y + 2), E, E1_MB - 2, (19, E1_MB))
+    _rot(c, VRET_COL, E1_MB)                # on to MB
+    _link(c, (22, E1_MB - 1), N, E1_MT - 2, (19, E1_MT))
+    _rot(c, VRET_COL, E1_MT)                # on to MT
+    _link(c, (22, E1_MT - 1), N, E2_HEAD - 3, (14, E2_HEAD))
+
+    # ── lap 2: reverse C and emit the left half's chosen values ──────────────
+    y = E2_HEAD
+    c.run(14, y, "1M")
+    vr(c, 16, y)                            # RR, the last word of lap 1
+    vs(c, 17, y)
+    vr(c, 18, y)                            # A = C
+    vs(c, 19, y)
+    c.set(20, y, "M")                       # B = C
+    vr(c, 21, y)                            # A = G
+    vs(c, 22, y)
+    c.run(23, y, "+b1M0")                   # BP = C + 2^hL, A = 0, B = 1
+    _link(c, (28, y), E, E2_MASK - 2, (17, E2_MASK))
+    _bits(c, 20, E2_MASK, shift=True)
+    c.run(21, E2_MASK, "}b")                # BP = the left mask
+    _link(c, (23, E2_MASK), E, E2_ROT - 2, (14, E2_ROT))
+    y = E2_ROT
+    vr(c, 14, y)                            # CR and GR, rotated
+    vs(c, 15, y)
+    vr(c, 16, y)
+    vs(c, 17, y)
+    _link(c, (18, y), E, E2_PEEL - 3, (18, E2_PEEL))
+    _peel_emit(c, VRET_COL, E2_PEEL, OUT_COL)
+    _link(c, (22, E2_PEEL - 1), N, E2_MT - 2, (19, E2_MT))
+    _rot(c, VRET_COL, E2_MT)                # on to MT
+    _link(c, (22, E2_MT - 1), N, E2_RR - 2, (14, E2_RR))
+    y = E2_RR
+    vr(c, 14, y)                            # RR, rotated
+    vs(c, 15, y)
+    _link(c, (16, y), E, E3_HEAD - 2, (14, E3_HEAD))
+
+    # ── lap 3: reverse CR and emit the right half's chosen values ────────────
+    y = E3_HEAD
+    c.run(14, y, "1M")
+    vr(c, 16, y)                            # C and G, rotated
+    vs(c, 17, y)
+    vr(c, 18, y)
+    vs(c, 19, y)
+    vr(c, 20, y)                            # A = CR
+    vs(c, 21, y)
+    c.set(22, y, "M")                       # B = CR
+    vr(c, 23, y)                            # A = GR = 256
+    vs(c, 24, y)
+    c.run(25, y, "+b1M0")                   # BP = CR + 256, A = 0, B = 1
+    _link(c, (30, y), E, E3_MASK - 2, (17, E3_MASK))
+    _bits(c, 20, E3_MASK, shift=True)
+    c.run(21, E3_MASK, "}b")                # BP = the right mask
+    _link(c, (23, E3_MASK), E, E3_SKIP - 2, (19, E3_SKIP))
+    _rot(c, VRET_COL, E3_SKIP)              # skip the left values, stop on MB
+    _link(c, (22, E3_SKIP - 1), N, E3_PEEL - 3, (18, E3_PEEL))
+    _peel_emit(c, VRET_COL, E3_PEEL, OUT_COL)
+    c.set(22, E3_PEEL - 1, "H")             # MT: every chosen value is out
