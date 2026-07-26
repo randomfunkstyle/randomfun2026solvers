@@ -314,3 +314,38 @@ deliberately, because `SEEK`/`REST` are the only hot loops and want to be one
 column from the entry, so reordering is a tick risk on top of a footprint loss;
 and the remaining 101 overhead rows are the one-block-per-row-band scheme itself,
 which is the redesign this document already declines.
+
+### And a wrap removed is not a row saved
+
+The 14 `seek` wraps are program-shaped, so the next attempt was in
+`lllm_ring.WORKER` rather than the layout: reorder a block's pipe ops so it stops
+revisiting a band it has passed.
+
+Which ops may move is not a free choice. `sq`/`rq` ride the **register file** and
+`sr` the **store**, and both are rotating rings — the ring advances per operation,
+so the order of those ops *is* which slot they touch, and they are pinned. Only
+`sp` (painter) and `ri` (input) are separate channels that can be re-interleaved,
+and then only when no value flows between them.
+
+`WALL_CELL` is the clean case: `["ri", "L4", "sp", "L10", "sr", "m"]`, zones
+IO, IO, ST — the worst possible order under `ST -> FI -> IO`. Both payloads are
+constants loaded immediately before their send, so nothing flows from the input
+read to either, and hoisting the store op to the front preserves every
+per-channel sequence. Reordered to `["L10", "sr", "ri", "L4", "sp", "m"]` it is
+**semantically clean — all 10 public cases still reproduce frame for frame at
+token level.**
+
+It also makes the machine *bigger*: interior 181 -> **182 rows**, 159x214,
+`area2` 45,796 against the shipped 45,369. Reverted.
+
+The reason is the finding worth keeping: **the row budget is coupled through
+fall-through.** A block chains into its successor for free only when the
+successor's first glyph row lands immediately below its straight lane, which
+depends on its own glyph-row count. Removing a wrap changes that count, and a
+chain that stops being adjacent becomes a routed lane — which costs a channel and
+can cost more rows than the wrap saved.
+
+So the 14 wraps are **not worth 14 rows**. Each has to be evaluated end to end on
+the built room, not counted, and the first one tried came out negative. That does
+not prove the other 13 all do, but it does mean the lead is worth much less than
+its row count suggests, and each candidate costs a build to price.
