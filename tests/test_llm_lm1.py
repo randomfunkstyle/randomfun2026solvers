@@ -111,11 +111,6 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
     assert GRID.read_text() == "\n".join(machine.rows) + "\n"
 
 
-def test_footprint_is_what_the_fold_sweep_found(built) -> None:
-    machine, _program = built
-    assert (machine.width, machine.height) == (203, 204)
-
-
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(built) -> None:
     _machine, program = built
     _text, slots = llm_lm1.build_asm()

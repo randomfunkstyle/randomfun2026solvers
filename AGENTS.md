@@ -38,6 +38,38 @@ passing on the reference interpreter — keep it, mark it slow, and make sure th
 fast tier still fails if the *generator* changes shape (e.g. assert the checked-in
 grid still matches what the generator emits).
 
+## Tests assert correctness, not quality
+
+**Do not assert a footprint, a score, or a tick count as a recorded value.** The
+judge already keeps our best submission, so "did we do better" is knowledge for a
+doc or a commit message — never a test. A test that pins a deliverable metric fails
+on *improvement*, and that failure is indistinguishable from a wrong answer.
+
+That is not a hypothetical. `matmul` was pulled out of `machine.LANE_ORDER` because
+a faster grid tripped `assert lm.tick(GRID, recorded - 1).output < expected`, and it
+had to be restored once the outputs were checked by hand
+(`test_lm1_lane_order.test_a_pinned_tick_test_failing_does_not_mean_the_grid_is_wrong`).
+Meanwhile the pins were not even catching regressions: `test_lm1_matmul` carried
+9216 through the whole 8100 era and `test_lm1_sudoku` carried 8836 through the whole
+83x80 era, because both sit behind `LM1_SLOW`.
+
+So:
+
+| assert | do not assert |
+|---|---|
+| the output is right, round by round | `footprint == 8100` |
+| every pipe binds (the generator raises) | `avg_ticks == 30_922.44` |
+| the checked-in `.man` is what the generator emits | `(width, height) == (108, 101)` |
+| no case exceeds the judge's tick cap, with margin | `score < 5e9` |
+| two engines agree with **each other** | each engine agrees with a recorded tick |
+| an optimiser rule beats its own baseline | a shipped grid beats a recorded number |
+
+The artifact-matches-generator assertion is what makes this safe: no shape can change
+without that test failing and a regenerated `.man` in the diff. A per-case tick may be
+used as a **budget** (`<=`, "no slower than measured"), never as an equality — and
+`snake-ring` is the standing reminder that smaller is not better: its box is *larger*
+than `snake`'s and it scores 4.7x better, because score is `footprint x avg_ticks`.
+
 ## Little Man validation backends
 
 `optimize.verify` uses the independent in-memory `FastLittleman` validator by

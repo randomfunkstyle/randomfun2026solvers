@@ -398,19 +398,29 @@ PLOTTER_TICKS = {
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("backend", ["fast", "reference"])
-def test_a_checked_in_display_solution_passes_with_the_known_ticks(backend: str):
+def test_the_two_engines_agree_on_a_checked_in_display_solution():
     """Both engines must agree, frame for frame and tick for tick.
 
-    ``plotter_block.man`` is the grid behind submission 5b3df73a (20/20 cases,
-    area2 3136). Its six public cases are the ones measured here.
+    Asserted *between the backends* rather than each against ``PLOTTER_TICKS``. The old
+    form parametrized over backend and pinned both to the recorded dict, so it only tested
+    agreement transitively — and it failed on any grid that got faster.
+
+    ``plotter_block.man`` is the grid behind submission 5b3df73a (20/20 cases, area2
+    3136); ``PLOTTER_TICKS`` is what its six public cases measured at, used as a ceiling.
     """
-    res = check_all(PLOTTER_MAN, "plotter", backend=backend)
-    assert res.passed, [c.error for c in res.cases if not c.passed]
-    assert {c.name: c.ticks for c in res.cases} == PLOTTER_TICKS
-    assert (res.width, res.height, res.area2) == (44, 56, 3136)
-    assert res.avg_ticks == 4990.5
-    assert res.score == pytest.approx(3136 * 4990.5)
+    fast = check_all(PLOTTER_MAN, "plotter", backend="fast")
+    ref = check_all(PLOTTER_MAN, "plotter", backend="reference")
+
+    for res in (fast, ref):
+        assert res.passed, [c.error for c in res.cases if not c.passed]
+    assert {c.name: c.ticks for c in fast.cases} == {c.name: c.ticks for c in ref.cases}
+    assert fast.avg_ticks == ref.avg_ticks
+    assert (fast.width, fast.height, fast.area2) == (ref.width, ref.height, ref.area2)
+    assert fast.score == pytest.approx(fast.area2 * fast.avg_ticks)
+
+    over = {c.name: (c.ticks, PLOTTER_TICKS[c.name]) for c in fast.cases
+            if c.ticks > PLOTTER_TICKS[c.name]}
+    assert not over, f"slower than the measured budget: {over}"
 
 
 @pytest.mark.slow

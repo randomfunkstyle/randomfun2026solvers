@@ -57,21 +57,26 @@ def test_every_pinned_order_is_a_permutation_of_that_programs_unpinned_lanes() -
         assert len(rows) == len(set(rows)), f"{slug}: two lanes on one row"
 
 
-@pytest.mark.parametrize(
-    ("slug", "footprint"),
-    [("brackets", 90**2), ("gradebook", 108**2), ("sudoku-validity", 80**2)],
-)
-def test_the_pinned_order_does_not_cost_footprint(slug: str, footprint: int) -> None:
+@pytest.mark.parametrize("slug", ["brackets", "gradebook", "sudoku-validity"])
+def test_the_pinned_order_does_not_cost_footprint(slug: str) -> None:
     """The whole reason width is a *constraint* in the search and not a term: the lane
     order picks ``mem_pad``, which sets the memory lanes' length, which sets the CPU's
     width — and width is squared in the score, so a tick win that widens the machine is
-    usually a loss. `gradebook` actually *gains* a column here (109 → 108).
+    usually a loss. `gradebook` actually *gains* a column here.
 
-    All three shed five more columns when ``ADAPTER_TAPE_GAP`` went 6 → 1, which is a
-    corridor width and nothing to do with the lane order; the pinned numbers moved with
-    it (95/113/83 → 90/108/80) but what this test asserts did not.
+    Asserted against the **default order**, not against recorded numbers. Those numbers
+    moved twice for reasons that had nothing to do with the lane order (`mem_pad`, then
+    ``ADAPTER_TAPE_GAP`` 6 → 1), and each time this test had to be edited without what
+    it asserts having changed at all. Comparing the two orders tests the claim directly.
     """
-    assert machine.build_for(slug).footprint == footprint
+    prog = programs.load(slug)
+    kw = {"tape_n": machine.TAPE_SIZE[slug], "rom_rows": machine.ROM_ROWS.get(slug)}
+    tuned = machine.build(prog, middle_order=machine.LANE_ORDER[slug], **kw)
+    default = machine.build(prog, **kw)
+    assert tuned.footprint <= default.footprint, (
+        f"{slug}: the tuned lane order costs footprint — "
+        f"{tuned.width}x{tuned.height} against {default.width}x{default.height}"
+    )
 
 
 def test_a_pinned_tick_test_failing_does_not_mean_the_grid_is_wrong() -> None:

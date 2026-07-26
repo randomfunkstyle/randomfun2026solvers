@@ -36,7 +36,8 @@ def test_banked_machine_passes_all_public_memory_cases() -> None:
     result = verify(rows, "memory", tick_cap=2_000_000)
 
     assert result.passed, result.cases
-    assert result.avg_ticks == pytest.approx(15118.57142857143)
+    # A ceiling, not a pin: ~15,119 ticks average when measured. Faster is not a failure.
+    assert result.avg_ticks <= 15_200, result.avg_ticks
 
 
 def test_checked_in_banked_machine_matches_generator() -> None:
