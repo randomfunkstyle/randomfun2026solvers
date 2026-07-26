@@ -1,0 +1,175 @@
+         +----------------++----------++----------+             +-----------+
+         |>@rsrsrsrsrsrsrv||>@rsrsrsrv||>@rsrsrsrv|    >------->|> mv<    s<|>---v
+         |^.srsrsrsrsrsrs<||^.srsrsrs<||^.srsrsrs<|    |        |^srd^ sr<  |>v  |
+         +----------------++----------++----------++-+ |      v<|   > @rba1^| |  |
+           ^            v    v ^        ^ v        |I| |      | +-----------+ v  |
+           |            |    | |        | |        +-+ |      |+================+|
+           ^----<       |    | |        | |         v  |      |:                :|
+                | v-----<    | |        | |         >v |      |:                :|
+                ^ v          v ^        ^ v          v ^      |:                :|
++-----------------------------------------------------------+ |:                :|
+|@         >`256`                               s0s4v       | |:                :|
+|         v                        s                <       | |:                :|
+|     >    >M1W-        s`64`b0Mv                           | |:                :|
+|        v                      <                           | >:                :|
+|       >  >                                    rN++M1+Mmv  |  :                :|
+|          v                                             <  |  :                :|
+|        > >v                                               |  :                :|
+|      vd   <                                               |  :                :|
+|      >   >s0s0s0sv                                        |  :                :|
+|          v       <                                        |  :                :|
+|         >>            rv                                  |  :                :|
+|    vX                  <                                  |  :                :|
+|     H                                                     |  +================+|
+|    >     >0s4         sv                                  |                  ^-<
+|         v              <                                  |
+|  >       >M1W-        sv                                  |
+|                    vsr <                                  |
+|                    >              sv                      |
+|           vb`46`srsrsr             <                      |
+|           >                       rMv                     |
+|        v                            <                     |
+|     >>   >7                                   sWM+mv      |
+|       v                                            <      |
+|    >     >Mv                                              |
+|     ^X     <                                              |
+|      >   >0                                   sWM+mv      |
+|          v                                         <      |
+|       >> >v                                               |
+|   vd      <                                               |
+|   >     >>            rv                                  |
+| vX                     <                                  |
+|  H                                                        |
+| >        >                                    rv          |
+|                                             vs <          |
+|                                             > rM4W{Mv     |
+|                     vs                      +r      <     |
+|                     >             s1          sv          |
+|                                            vsr <          |
+|                                            >  s`10`s0s4bv |
+|         v                                               < |
+|        > >rsrsrsrsmv                                      |
+|          v         <                                      |
+|         >>v                                               |
+|       vd  <                                               |
+|       >  >rsv                                             |
+|         v   <                                             |
+|       >  >            rv                                  |
+|          v             <                                  |
+|>        >>                                    rv          |
+|                                             vs <          |
+|                                             > rM4W{Mv     |
+|                                vss        +rsr      <     |
+|        v<                      >  rsMv                    |
+|       ^ X                       -r   <                    |
+|        >>>1                                   sv          |
+|                                vsr             <          |
+|                                >              s9sv        |
+|                          v-`36`Msr               <        |
+|                          >        s4bv                    |
+|                   vrsr               <                    |
+|                   >   rv                                  |
+|         v            s <                                  |
+|        > >rMr|Mr|Mr|  s           rsrv                    |
+|                    vMs        {1Ms   <                    |
+|                    >  r~v                                 |
+|                 vs0s0s  <                                 |
+|                 >     rM`64`+     smv                     |
+|          v                          <                     |
+|         >>v                                               |
+|       vd  <                                               |
+|       >  >                        rsrv                    |
+|          v                           <                    |
+| >        >rsM`47`-                s0sv                    |
+|                    vsr               <                    |
+|                    >              srs4bv                  |
+|         v                              <                  |
+|        > >                        rM`64`+sv               |
+|                    vsr                    <               |
+|                    >  ssr}sWNMr{Mr|Mr|srsrsv              |
+|          v     msrsrsr                     <              |
+|         >>v                                               |
+|       vd  <                                               |
+|     >    >            r           rsrM1       sWsM0sWMv   |
+|                                             v1M+N`61` <   |
+|                                             > sWsM `10`sWv|
+|                                            v0s           <|
+|                                            >  sv          |
+|         v                                      <          |
+|    >     >            r           rsrM1       sWsM0sWM1+Mv|
+|                                             v`01`   MsWs1<|
+|                                             > sWv         |
+|                                            v0s  <         |
+|                                            >  sv          |
+|        v                                       <          |
+|   >      >            r           rsrM1       sWsM0sWMv   |
+|                                        v1M+`61`       <   |
+|                                        >      sWsM   `10`v|
+|                                            v0s         Ws<|
+|                                            >  sv          |
+|      v                                         <          |
+|  >       >            r           rsrM1       sWsM0sWM1N+v|
+|                                         v`01`      MsWs1M<|
+|                                         >     sWv         |
+|                                            v0s  <         |
+|                                            >  sv          |
+|          v                                     <          |
+|      > >>>r                       rrv                     |
+|                     vs              <                     |
+|                     > sv                                  |
+|                   vMsr <                                  |
+|        v<         >   r           s-v                     |
+|      v  X                           <                     |
+|       >  >                        rrv                     |
+|     x                 b}W`23` Msrs  <                     |
+|     >    >            rsM`15`W}bv                         |
+|    x                            <                         |
+|    >     >            rsbv                                |
+|   x                      <                                |
+|   >      >            rsM   `17`W}bv                      |
+|  x                                 <                      |
+|  >       >            r           rv                      |
+|       v         b4srsr             <                      |
+|     >    >rsM    `48`W}           sv                      |
+|          v     msrsrsr             <                      |
+|       >  >v                                               |
+|    vd     <                                               |
+|    >     >0                       srsrv                   |
+|                 v0srsr                <                   |
+|                 >     s4bv                                |
+|       v                  <                                |
+|     >    >r           ssssssrsrM1W{v                      |
+|                 v{W`61`     Mrs}rs <                      |
+|                 >     sr}srM `48`W{v                      |
+|                    vM|rM|rM|rMrsrs <                      |
+|                    >  r|M         r|Mv                    |
+|                     vr               <                    |
+|                     > s&Mv                                |
+|                   vs|r   <                                |
+|                   >   rsrsr~v                             |
+|                   vsrs      <                             |
+|                   >   rsrv                                |
+|          v          ms   <                                |
+|       >  >v                                               |
+|    vd     <                                               |
+|    >     >            rv                                  |
+| ^                      <                                  |
+|      >   >4bv                                             |
+|       v     <                                             |
+|      >   >rsrsrsrsmv                                      |
+|          v         <                                      |
+|       >  >v                                               |
+|^     d    <                                               |
+|        >>>4bv                                             |
+|         v   <                                             |
+|        > >r           sv                                  |
+|                   vrMr <                                  |
+|                   >   sv                                  |
+|                  vsWsr <                                  |
+|                  >    rv                                  |
+|                     vs <                                  |
+|                     > rv                                  |
+|          v          ms <                                  |
+|         >>v                                               |
+| ^      d  <                                               |
++-----------------------------------------------------------+
