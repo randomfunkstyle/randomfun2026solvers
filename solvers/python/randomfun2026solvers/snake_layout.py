@@ -101,6 +101,7 @@ class Room:
     order: list[str]
     plans: dict[str, Plan]
     glyph_ys: dict[str, list[int]]
+    lane_ys: dict[str, dict[str, int]]
     channels: int
     edges: list[tuple[str, str, str, int, int]] = field(default_factory=list)
 
@@ -127,6 +128,23 @@ def _lanes_of(worker, name: str, plan: Plan) -> list[tuple[str, str]]:
     return out
 
 
+def _twin_lane(worker, name: str, plan: Plan) -> str | None:
+    """The turn lane a branch's straight lane may share a corridor with.
+
+    `X` over a body value asks "is this the END sentinel", and both answers that
+    are not the sentinel go to the same block — eight of snake's seventeen
+    branches are that shape.  Two lanes with one target need one corridor.
+    """
+    succ = worker[name][1]
+    key = _straight_key(plan.branch)
+    if not isinstance(succ, dict) or key is None:
+        return None
+    for lane, turn in _turn_keys(plan.branch).items():
+        if succ[lane] == succ[key]:
+            return turn
+    return None
+
+
 def _bands(worker, order: list[str], plans: dict[str, Plan]) -> tuple[dict[str, _Band], int]:
     """Assign every block its glyph rows and its lane rows, top to bottom."""
     bands: dict[str, _Band] = {}
@@ -146,10 +164,15 @@ def _bands(worker, order: list[str], plans: dict[str, Plan]) -> tuple[dict[str, 
             # counter-clockwise (north) on negative; entered west, the two swap.
             lanes = {"cw": south if east else north, "ccw": north if east else south}
             if "straight" in kinds:
-                if east:
-                    lanes["straight"], y = y, y + 1
-                else:
+                if not east:
                     lanes["straight"] = last       # keeps walking west, for free
+                elif (twin := _twin_lane(worker, name, p)) is not None:
+                    # `pos` and `zero` of a body loop are the same block: one
+                    # corridor can carry both, so the straight lane drops onto
+                    # the turn's row instead of buying a row of its own.
+                    lanes["straight"] = lanes[twin]
+                else:
+                    lanes["straight"], y = y, y + 1
         else:
             ys = list(range(y, y + len(p.rows)))
             y += len(p.rows)
@@ -261,16 +284,25 @@ def build_room(worker=WORKER_L, code_w: int = 34, entry: str = "INIT",
         claims = _Claims()
         for name in order:
             p, b = plans[name], bands[name]
+            corridors: dict[int, tuple[str, str, int]] = {}
             for kind, target in _lanes_of(worker, name, p):
                 row, start = b.lanes[kind], _exit_col(p, kind)
                 if kind != "straight":               # turn out of the branch
                     c.set(p.branch_col, row, "<")
+                    start = p.branch_col
                 elif row != b.ys[-1]:                # drop onto the turnaround row
                     c.set(start, b.ys[-1], "v")
                     c.set(start, row, "<")
                     # the drop crosses whatever rows lie between; keep it clear
                     claims.spine([(start, yy) for yy in range(b.ys[-1], row + 1)], 1)
-                edges.append((name, target, kind, row, start))
+                # two lanes sharing a row share a target, hence one corridor,
+                # which starts at whichever of their turns stands furthest west
+                had = corridors.get(row)
+                if had is not None and had[1] != target:
+                    raise Collision(f"{name}: lanes on row {row} disagree on target")
+                corridors[row] = (kind if had is None else had[0], target,
+                                  start if had is None else min(had[2], start))
+            edges += [(name, t, k, row, s) for row, (k, t, s) in corridors.items()]
 
         # Longest hops first: they are the ones a crowded bank cannot place.
         edges.sort(key=lambda e: -abs(glyph_ys[e[1]][0] - e[3]))
@@ -279,7 +311,8 @@ def build_room(worker=WORKER_L, code_w: int = 34, entry: str = "INIT",
         except Collision as exc:
             last = exc
             continue
-        return Room(c, geo, nch, order, plans, glyph_ys, used, edges)
+        lane_ys = {n: b.lanes for n, b in bands.items()}
+        return Room(c, geo, nch, order, plans, glyph_ys, lane_ys, used, edges)
     raise Collision(f"routing never fit: {last}")
 
 

@@ -80,10 +80,14 @@ def test_no_column_holds_two_backticks(built) -> None:
 
 
 # ── the room ──────────────────────────────────────────────────────────────────
-def test_every_branch_lane_is_drawn_and_every_edge_is_routed(room) -> None:
-    lanes = sum(len(snake_layout._lanes_of(WORKER_L, n, room.plans[n]))
-                for n in room.order)
-    assert len(room.edges) == lanes
+def test_every_lane_lands_on_a_corridor_that_goes_where_it_should(room) -> None:
+    """Lanes may share a corridor, but only when they share a target — a merge
+    that got that wrong would silently send one answer to the other's block."""
+    routed = {(src, row): dst for src, dst, _k, row, _s in room.edges}
+    for name in room.order:
+        rows = room.lane_ys[name]
+        for kind, target in snake_layout._lanes_of(WORKER_L, name, room.plans[name]):
+            assert routed[(name, rows[kind])] == target, (name, kind)
 
 
 def test_every_block_is_entered_at_the_head_of_its_first_glyph_row(room) -> None:
