@@ -104,6 +104,20 @@ COLLECTOR: tuple[str, ...] = (
     "@^",
 )
 
+#: The router, laid flat for the strip. Same program as ``ROUTER_ROWS`` and the
+#: same laps — READ 16, WRITE 18 — but 9x3 instead of 3x8, because a strip spans
+#: the width anyway and spends only rows.
+#:
+#: It works only with the input pipe on the **west** wall: ``U`` turns the man away
+#: from the pipe's side, so a west feed faces him *east*, which is the direction
+#: the code runs. That is the same trick the tall one plays with a north feed, and
+#: it is why the router cannot simply be rotated without moving its input.
+ROUTER_FLAT: tuple[str, ...] = (
+    "@v     S<",
+    " UMrSWSX^",
+    "       U^",
+)
+
 #: Interior width of each room in a column, in order.
 _REP_W = max(len(r) for r in REPEATER)
 _DEC_W = tile_x0(True) + max(len(r) for r in DECODER_TILE)

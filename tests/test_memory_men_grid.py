@@ -13,8 +13,14 @@ import random
 
 import pytest
 from randomfun2026solvers.littleman import Littleman
-from randomfun2026solvers.memory_men_addr import CELL_TILE, DECODER_TILE, band_room, build_addr
-from randomfun2026solvers.memory_men_grid import REPEATER, build_grid
+from randomfun2026solvers.memory_men_addr import (
+    CELL_TILE,
+    DECODER_TILE,
+    ROUTER_ROWS,
+    band_room,
+    build_addr,
+)
+from randomfun2026solvers.memory_men_grid import REPEATER, ROUTER_FLAT, build_grid
 
 
 def _stream(n, ops, seed):
@@ -140,3 +146,19 @@ def test_the_fixed_cost_falls_with_the_number_of_columns():
     #   4x25   181 + 16*99 = 1,765   judged 1,758
     assert fixed[1] + 16 * 99 == pytest.approx(2283, rel=0.005)
     assert fixed[4] + 16 * 99 == pytest.approx(1758, rel=0.01)
+
+
+def test_the_flat_router_is_the_same_program_lying_down():
+    # Kept, not used. `ROUTER_FLAT` is 9x3 where `ROUTER_ROWS` is 3x8, with the
+    # same laps (READ 16, WRITE 18) — but it needs its input on the *west* wall,
+    # because `U` turns the man away from the pipe and the code runs east. The
+    # strip spans every column, so its west wall is at x=0 and a west feed would
+    # need x=-1; the whole grid shifts two columns east to make room. That is a
+    # loss while the grid is width-bound (132 wide against 105 tall) and a win as
+    # soon as it is not — a taller, narrower shape should switch to it.
+    def code(rows):
+        return sorted(g for r in rows for g in r if g not in " @<>^v")
+
+    assert code(ROUTER_FLAT) == code(ROUTER_ROWS) == sorted("UMrSWSXUS")
+    assert (max(len(r) for r in ROUTER_FLAT), len(ROUTER_FLAT)) == (9, 3)
+    assert (max(len(r) for r in ROUTER_ROWS), len(ROUTER_ROWS)) == (3, 8)
