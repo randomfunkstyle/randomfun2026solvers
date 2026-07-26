@@ -1206,6 +1206,31 @@ STORE_TIERS = ("tape", "grid", "men", "men-y")
 CPU_ADAPTER_GAP = 4
 ADAPTER_TAPE_GAP = 1
 
+#: Whole-machine placement floors. These are geometric minima, not visual
+#: padding:
+#:
+#: * with an input room, columns 3..5 hold that room, 6..7 are the mandatory
+#:   two-cell pipe, and the CPU west wall can therefore start at x=8;
+#: * without input, the ROM corridor itself needs two cells (x=1..2), so the CPU
+#:   can start at x=3;
+#: * STREAM layouts retain their own west clearance. FastLittleman accepts the
+#:   x=3 placement, but the reference engine leaves the coprocessor machine
+#:   permanently blocked there, so this is a separately validated floor;
+#: * with an input room, the ordinary ROM and CPU walls may be adjacent. The
+#:   input-free x=3 layout needs one blank row for reference-engine compatibility;
+#:   a buffered boustrophedon needs still more clearance.
+CPU_X_WITH_INPUT = 8
+CPU_X_WITHOUT_INPUT = 3
+CPU_X_WITH_STREAM = 8
+ROM_CPU_GAP = 1
+ROM_CPU_GAP_WITHOUT_INPUT = 2
+ROM_BUFFER_CPU_GAP = 3
+
+#: The memory response runs above the adapter/tape attachment, not above the
+#: whole CPU. One row above the highest attachment is the geometric minimum;
+#: zero collides the horizontal and vertical legs on real depth-4 layouts.
+MEM_RESPONSE_CLEARANCE = 1
+
 #: Programs that need a wider adapter-to-STORE gap than the default.
 #:
 #: ``matmul`` is the only one, and it does not merely fail to *place* at 1 — it places,
@@ -1376,13 +1401,12 @@ def tape_block(n: int) -> _Tape:
     and then ``31 + rows``, i.e. two more rows per 48 further slots — 36 at
     ``n=108``, 46 at ``n=380``, 48 at ``n=420``. That height is usually *free*,
     because the block sits east of the adapter beside the CPU's own panel/stream
-    stack, which is taller. Rebuilt at ``n=420``, nine of the ten machines rebuilt
-    keep their bounding box to the cell: ``brackets`` 90x69, ``tcp`` 104x73,
-    ``gradebook`` 109x100, ``plotter`` 109x103, ``snake`` 123x128, ``pathfinder``
-    180x183. The exception is ``matmul`` (86x90 -> 100x90, 8,100 -> 10,000): it is the
-    one machine that is both square *and* has a STREAM block under the CPU, so the
-    extra rows push the pad search onto a wider ``mem_pad``. Size to the real high
-    address, as always — this is not a knob to spend.
+    stack, which is taller. A nearly square machine with a STREAM block under the
+    CPU is the exception: extra tape rows can push the pad search onto a wider
+    ``mem_pad``. Exact whole-machine dimensions belong in generated reports, not
+    this low-level block description, because independent routing improvements
+    otherwise make the documentation stale. Size to the real high address, as
+    always — this is not a knob to spend.
 
     Cost is unchanged too — measured **8.00 ticks per slot per access**, dead linear
     and with no step at the 107/108 seam. Excess ring capacity only delays the first
@@ -1582,6 +1606,9 @@ class Machine:
     #: words. The straight corridor is incidental (~30); anything more is ROM-PLUS
     #: buffering bought on purpose (see :data:`ROM_BUFFER`).
     rom_capacity: int = 0
+    #: Pipe lengths for the serial routes whose latency is paid on every
+    #: instruction or STORE access.
+    route_lengths: dict[str, int] = field(default_factory=dict)
     #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
     #: the only thing that knows what any cell *means* — the grid carries no
     #: comments — so it records that here for ``man_debug`` overlays and for
@@ -1649,11 +1676,19 @@ class Machine:
     def report(self) -> str:
         panel = f", LM-75 {self.display[0]}x{self.display[1]}" if self.display else ""
         stream = f", stream_pad={self.stream_pad}" if self.stream else ""
+        routes = (
+            ", routes "
+            + " ".join(
+                f"{name}={length}" for name, length in sorted(self.route_lengths.items())
+            )
+            if self.route_lengths
+            else ""
+        )
         return (
             f"{self.program.name}: {self.width}x{self.height} "
             f"footprint {self.footprint}, {len(self.plan.number)} opcodes "
             f"(depth {self.plan.k}), P={self.program.P} words on {self.rom_rows} ROM rows, "
-            f"tape N={self.tape_n}, mem_pad={self.mem_pad}{stream}{panel}"
+            f"tape N={self.tape_n}, mem_pad={self.mem_pad}{stream}{panel}{routes}"
         )
 
 
@@ -1833,6 +1868,7 @@ def _assemble(
         romlay = rommod.build_rom(words, rows=nrows)
 
     g = _Grid()
+    route_lengths: dict[str, int] = {}
 
     # ── ROM room, top-left ───────────────────────────────────────────────────
     RX, RY = 0, 0
@@ -1843,18 +1879,29 @@ def _assemble(
     # ── CPU room ─────────────────────────────────────────────────────────────
     # The west margin carries two pipes that must not cross: the ROM corridor runs
     # down column 1, west of the I room, and only turns east on the fetch row —
-    # which is far below the I room, so the two never meet.
+    # which is far below the I room, so the two never meet. Two cells are the
+    # minimum pipe length, hence x=8 with the input room (room 3..5, pipe 6..7)
+    # and x=3 when the program has no input (ROM pipe 1..2).
     #
     # ROM-PLUS (``ROM_BUFFER``) buys its queue in the band between the ROM's bottom
-    # wall and the CPU's top, which is otherwise five dead rows. Those rows are above
-    # everything except the ROM, so the snake collides with nothing; it is held inside
-    # the CPU's own columns so it can never be what sets the machine's width, and the
-    # rows it adds push the CPU *down* — free on any machine whose box is set by width.
-    CX = 9
+    # wall and the CPU's top. Its final horizontal leg needs one blank row before
+    # the CPU wall. The ordinary straight corridor uses adjacent room walls when
+    # an input room keeps the CPU at x=8; the input-free x=3 layout needs one blank
+    # row for reference-engine compatibility.
+    CX = (
+        CPU_X_WITH_STREAM
+        if stream
+        else CPU_X_WITH_INPUT if cpu.has_in else CPU_X_WITHOUT_INPUT
+    )
     band_rows = 0
     if rom_buffer:
         band_rows = rom_corridor_rows(rom_buffer, (CX + W + 1) - 1)
-    CY = rom_bottom + 6 + band_rows
+    cpu_gap = (
+        ROM_BUFFER_CPU_GAP
+        if band_rows
+        else ROM_CPU_GAP if cpu.has_in else ROM_CPU_GAP_WITHOUT_INPUT
+    )
+    CY = rom_bottom + cpu_gap + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
     g.blit(CX, CY, cpu.cells)
 
@@ -1873,6 +1920,7 @@ def _assemble(
             wall_x=CX - 1,
         )
     )
+    route_lengths["rom->cpu"] = rom_capacity
 
     # ── I room -> CPU west wall at the IN lane's row ─────────────────────────
     # The input pipe goes on the *west* wall too, far from every memory glyph: that
@@ -1887,14 +1935,16 @@ def _assemble(
     if cpu.has_in:
         g.room(3, iy - 1, 5, iy + 1)
         g.put(4, iy, "I")
-        g.draw_pipe([(6, iy), (CX - 1, iy)])
+        route_lengths["input->cpu"] = g.draw_pipe([(6, iy), (CX - 1, iy)])
 
     # ── CPU south wall -> O room ─────────────────────────────────────────────
     # Omitted on a display problem: emitting program output there is an error
     # (``SPEC.md``), and an unused outgoing pipe would still compete for every `s`.
     oy = CY + H + 2
     if cpu.has_out:
-        g.draw_pipe([(CX + cpu.out_col, oy), (CX + cpu.out_col, oy + 1)])
+        route_lengths["cpu->output"] = g.draw_pipe(
+            [(CX + cpu.out_col, oy), (CX + cpu.out_col, oy + 1)]
+        )
         g.room(CX + cpu.out_col - 1, oy + 2, CX + cpu.out_col + 1, oy + 4)
         g.put(CX + cpu.out_col, oy + 3, "O")
 
@@ -1914,7 +1964,9 @@ def _assemble(
     g.room(AX, AY, AX + ADAPTER_W + 1, AY + ADAPTER_H + 1)
     g.blit(AX, AY, adapter_cells(address_first=store == "men-y"))
     req_row = AY + ADAPTER_IN_ROW
-    g.draw_pipe([(CX + W + 2, req_row), (AX - 1, req_row)])
+    route_lengths["cpu->adapter"] = g.draw_pipe(
+        [(CX + W + 2, req_row), (AX - 1, req_row)]
+    )
 
     # ── tape, east of the adapter ────────────────────────────────────────────
     if store == "men":
@@ -1941,7 +1993,7 @@ def _assemble(
     tin_x, tin_y = TX + tape.in_cell[0], TY + tape.in_cell[1]
     ax_out = AX + ADAPTER_W + 2
     mid = ax_out + 2
-    g.draw_pipe(
+    route_lengths["adapter->store"] = g.draw_pipe(
         [
             (ax_out, AY + ADAPTER_OUT_ROW),
             (mid, AY + ADAPTER_OUT_ROW),
@@ -1950,11 +2002,12 @@ def _assemble(
         ]
     )
 
-    # the tape's response stub -> CPU east wall. It climbs clear of both rooms
-    # before running back west, so it crosses neither the request pipe nor the tape.
+    # The tape's response stub -> CPU east wall. It only climbs above the three
+    # attachment rows before running west; routing above the whole CPU was a large
+    # detour paid on every read.
     tout_x, tout_y = TX + tape.out_cell[0], TY + tape.out_cell[1]
     resp_row = CY + cpu.mem_in_row
-    top = min(AY, CY) - 3
+    top = min(AY, tout_y, resp_row) - MEM_RESPONSE_CLEARANCE
     # ``resp_pad`` inserts a there-and-back jog in the corridor above the machine,
     # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
     # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
@@ -1964,7 +2017,7 @@ def _assemble(
         if resp_pad
         else [(tout_x, top)]
     )
-    g.draw_pipe(
+    route_lengths["store->cpu"] = g.draw_pipe(
         [
             (tout_x, tout_y - 1),
             *jog,
@@ -2076,6 +2129,7 @@ def _assemble(
         },
         stream=blk,
         rom_capacity=rom_capacity,
+        route_lengths=route_lengths,
     )
 
 
@@ -2407,50 +2461,26 @@ LANE_ORDER: dict[str, tuple[str, ...]] = {
 #: against the default in the tests, so a regression in the heuristic is a failure
 #: rather than a quietly worse score.
 #:
-#: All of them were re-swept for the **packed** ROM (``rom.build_packed_rom``), which
-#: is the default. Packed tokens are roughly half the cells, so the same word count
-#: wants about half as many rows and every entry moved: a fold tuned for the padded
-#: fixed-width ROM now overshoots and makes height binding again. ``brackets`` and
-#: ``tcp`` still need no entry — they are width-bound by the machine, not the ROM, so
-#: their height is free and the default costs nothing.
+#: All of them were re-swept for the **packed** ROM
+#: (``rom.build_packed_rom``), which is the default. Width-bound programs are
+#: recorded too: choosing the shallowest useful fold on their footprint plateau
+#: produces the tightest MxN box even when ``max(M,N)^2`` is unchanged.
 ROM_ROWS = {
-    # The panel adds ~30 rows and makes height binding, so the ROM has to stop being
-    # what sets the width and then stop: 109x103 (11,881) at 8 rows, against the
-    # default's 111x123 (15,129). `plotter` is height-bound past that point, which is
-    # why unrolling its inner loop (see plotter.asm) is a real footprint trade rather
-    # than a free one. See tests/test_lm1_display.py.
-    "plotter": 8,
-    # gradebook's three per-student scans are unrolled 16 ways (see gradebook.asm on
-    # why a loop iteration costs a whole ROM lap), so its image is 836 words and the
-    # ROM, not the tape, sets the box. 31 rows is the first fold that gets the ROM
-    # under the machine's own 113 columns; wider costs width, narrower only costs
-    # height. 108x100 (11,664). See tests/test_lm1_gradebook.py.
-    "gradebook": 31,
-    # No display and a 30-slot tape leave the machine 83 columns wide, so the same
-    # rule applies one size down: 23 rows is where the ROM stops setting the width.
-    # 83x80 (6,889). See tests/test_lm1_sudoku.py.
-    "sudoku-validity": 23,
-    # matmul is the one machine that came out *square* on the padded ROM (96x96). The
-    # STREAM block's ring band is as wide as the tape row above it, and its height is
-    # what the ROM trades against; packed, the trade lands at 86x90 (8,100) on 5 rows.
+    "brackets": 7,  # 89x63
+    "palette": 8,  # 84x75
+    "tcp": 3,  # 103x67
+    # The panel adds rows, so the fold stops when height becomes binding.
+    "plotter": 9,  # 103x99
+    # The unrolled scans make the ROM set the width.
+    "gradebook": 32,  # 107x96
+    "sudoku-validity": 25,  # 77x77
+    # STREAM keeps its reference-safe west clearance; row five remains the sweep
+    # minimum after the other serial routes are shortened.
     "matmul": 5,
-    # Like plotter: the panel adds rows, so height is binding and the fold has to stop
-    # trading width for it. 9 rows is the minimum of a full sweep — 123x128 (16,384),
-    # against the default's 119x142 (20,164). One row either side is worse (8 rows is
-    # 135 wide, 10 rows is 130 tall), so this is a real optimum, not a plateau.
-    "snake": 9,
-    # snake-ring is height-bound: the coprocessor block is 66x60 and sits below the
-    # CPU, so the box is set by rows whatever the fold does to the width. 6 rows is the
-    # sweep minimum at 121x135; 5 is 144x134 and 7 is 111x136, so this is a real
-    # optimum rather than a plateau.
-    "snake-ring": 6,
-    # pathfinder's P is 2,484 words — the level step is unrolled over the four board
-    # words and then twice again — so the ROM dominates the box and wants folding
-    # almost square. Swept: 24/40/60/72/80/100/140 rows give footprints of 267k/98k/
-    # 45k/33.9k/36.9k/44.9k/63.5k, so 72 (180x184) is a real minimum, not a plateau.
-    "pathfinder": 72,
-    # pathfinder-unit: P is 2,416 and the CPU is smaller (depth-4 trie, three fewer
-    # lanes), so the fold optimum moves; swept once the block exists.
+    "snake": 9,  # 123x123
+    "snake-ring": 6,  # 121x130
+    "pathfinder": 73,  # 177x179
+    # The command arms are not complete and no checked-in grid exists yet.
     "pathfinder-unit": 72,
 }
 

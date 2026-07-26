@@ -38,6 +38,26 @@ passing on the reference interpreter — keep it, mark it slow, and make sure th
 fast tier still fails if the *generator* changes shape (e.g. assert the checked-in
 grid still matches what the generator emits).
 
+## Tests assert correctness, not quality
+
+**Do not assert a footprint, score, or measured tick count as a recorded value.**
+The judge already keeps our best submission, so an improvement is not a test
+failure. Exact deliverable metrics belong in generator reports, submission
+archives, docs, and commit messages.
+
+Assert behavior instead:
+
+- outputs and frames are correct, round by round;
+- every pipe binds and the grid loads;
+- a checked-in generated `.man` matches its generator;
+- cases stay within the problem's semantic tick cap;
+- independent engines agree with each other;
+- an optimizer candidate improves relative to the baseline from the same run.
+
+This is safe because the artifact-matches-generator assertion makes every shape
+change visible as a regenerated `.man` diff. Do not pin dimensions or settle ticks
+to force that visibility.
+
 ## Little Man validation backends
 
 `optimize.verify` uses the independent in-memory `FastLittleman` validator by
