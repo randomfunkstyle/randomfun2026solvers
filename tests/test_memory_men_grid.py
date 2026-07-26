@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from pathlib import Path
 
 import pytest
 from randomfun2026solvers.littleman import Littleman
@@ -180,3 +181,48 @@ def test_a_cell_room_needs_exactly_one_outgoing_pipe():
     # input: 1, router strip: one per column, then per column the repeater and the
     # decoder fan out to every band while the cell room sends once; strip: 1
     assert sorted(out.values()) == sorted([1, cols, *([rows, rows, 1] * cols), 1])
+
+
+def test_the_checked_in_grid_matches_the_generator():
+    path = Path("littleman/examples/memory-men-grid-4x25.man")
+    if not path.is_file():  # pragma: no cover - only when run from another cwd
+        pytest.skip(f"{path} not reachable from this working directory")
+    assert path.read_text(encoding="utf-8").rstrip("\n") == build_grid(4, 25).source(), (
+        "regenerate with: uv run python -m randomfun2026solvers.memory_men_grid "
+        "--cols 4 --rows 25 --man littleman/examples/memory-men-grid-4x25.man "
+        "--html littleman/examples/memory-men-grid-4x25.html "
+        "--json littleman/examples/memory-men-grid-4x25.json"
+    )
+
+@pytest.mark.parametrize(("cols", "rows"), [(6, 20), (8, 27), (7, 61)])
+def test_a_grid_past_a_hundred_cells_answers_on_the_engine(cols, rows):
+    """A column base of 100 or more needs a third digit, and the digit needs a column.
+
+    Below that the geometry is untouched — `test_nothing_under_a_hundred_moved`
+    pins that — so this is purely the case the family could not build before:
+    `build_grid` raised `IndexError` out of `band_room`'s `put` for any shape whose
+    last column started past 99, which capped the whole family near 110 cells.
+    """
+    grid = build_grid(cols, rows)
+    n = cols * rows
+    top = n - 1
+    snap = Littleman().judge(
+        grid.source(), input=f"1 {top} 77 0 {top} 1 0 5 0 0 0 {top}",
+        expected=[77, 5, 77], max_ticks=4_000_000,
+    )
+    assert list(snap.output) == [77, 5, 77], snap.output
+
+
+def test_nothing_under_a_hundred_moved() -> None:
+    """The wider preamble is a special case, not a change of shape.
+
+    Every grid whose last column starts below 100 must be the grid it was — the
+    shipped `memory` solution is 4x25 and must stay byte-identical.
+    """
+    from randomfun2026solvers.memory_men_addr import _BASE_DIGITS, preamble_width
+
+    assert preamble_width(_BASE_DIGITS) == 8, "two digits is the eight-column room"
+    assert preamble_width(3) == 9, "three digits buys exactly one column"
+    for cols, rows in ((4, 25), (10, 11), (5, 20), (2, 10)):
+        assert (cols - 1) * rows <= 99
+        assert build_grid(cols, rows).width == 27 * cols
