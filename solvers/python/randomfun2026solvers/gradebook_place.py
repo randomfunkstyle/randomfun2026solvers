@@ -88,15 +88,28 @@ def bands_of(pipe_in: dict[str, int], pipe_out: dict[str, int],
 SPREAD = 2
 
 
+def _rooms_span(zone: str) -> tuple[int, int]:
+    """Columns a band's rooms occupy, relative to its bank centre.
+
+    A ring gets one turnaround room centred on the band; ``IO`` gets an input
+    room over the incoming riser and an output room beside the outgoing one.
+    """
+    if zone == "IO":
+        return (-(SPREAD // 2) - 2, SPREAD // 2 + 3)
+    return (-(RELAY_W // 2) - 1, RELAY_W // 2 + 1)
+
+
 def layout(banks: tuple[tuple[int, int], ...], zones: tuple[str, ...] = ZONES):
     """Bank columns, the eight pipe columns and the four bands, from bank widths.
 
-    `banks` is ``(channel columns, code columns)`` per band, west to east.  The
-    pipe pair of band *k* is dropped on the centre of bank *k*'s code window and
-    one column east of it, which puts every split inside the channel columns of
-    the next bank along: the gap between two code windows is ``nch + 1`` wide and
-    a split lands in its middle whenever the two banks are within a gap's width
-    of each other, which :func:`bands_of` then confirms rather than assumes.
+    `banks` is ``(channel columns, code columns)`` per band, west to east.  Band
+    *k*'s pipe pair straddles the centre of bank *k*'s code window, which puts
+    every split inside the channel columns of the next bank along: the gap
+    between two code windows is ``nch + 1`` wide and a split lands in its middle
+    whenever the two banks are within a gap's width of each other.  Both halves
+    of that -- that the bands land where they should, and that the room's fixtures
+    still fit above them -- are then *checked* rather than assumed, so a bank
+    sweep can propose any shape it likes and be told no.
     """
     if len(banks) != len(zones):
         raise ValueError(f"{len(banks)} banks for {len(zones)} bands")
@@ -117,6 +130,15 @@ def layout(banks: tuple[tuple[int, int], ...], zones: tuple[str, ...] = ZONES):
         if lo > bk.code0 or hi < bk.code_hi:
             raise Collision(f"band {z} is [{lo},{hi}], bank {bk.name} wants "
                             f"[{bk.code0},{bk.code_hi}]")
+    # Each band's rooms stand over its own centre -- a turnaround room for a
+    # ring, the input and output rooms for `IO` -- so two bands whose centres are
+    # too close cannot both have theirs.  Caught here rather than at stamping
+    # time, so a bank sweep skips such shapes instead of crashing on one.
+    for a, b in zip(zones, zones[1:], strict=False):
+        need = _rooms_span(a)[1] - _rooms_span(b)[0]
+        if centre[b] - centre[a] <= need:
+            raise Collision(f"bands {a},{b} are {centre[b] - centre[a]} columns "
+                            f"apart; their rooms need more than {need}")
     geo = Geometry(TOKEN_ZONE, cols, pipe_in, pipe_out, made[0].code0, iw,
                    lit_slack=0)
     return geo, spans(made, zones)
@@ -167,11 +189,23 @@ def assign(banks: dict[str, B.Bank], zones: tuple[str, ...],
 
 
 #: Bank shapes, ``(channel columns, code columns)`` per band, west to east.
-BANKS = ((5, 11), (5, 11), (5, 11), (5, 11))
+#:
+#: They are deliberately unequal, because the bands are.  ``RING`` and ``IDS``
+#: hold nothing but one- to three-cell blocks and want almost no width; ``IO``
+#: holds ``TOP`` (33 cells) and ``T_END`` (21) and wants all it can get.
+#:
+#: **Width is free here and corridor cells are not.**  The room's height barely
+#: moves -- 62 to 64 rows across every shape ``--sweep`` will accept -- because
+#: what makes a block tall is how often its tokens cross a band, and that is the
+#: program's business, not the layout's.  So the side that is squared is the
+#: *height*, at 77, and any shape narrower than that scores the same 5,929.  The
+#: tie is broken on corridor length, which is ticks: this shape walks 2,783 cells
+#: of corridor where the square one walks 3,002.
+BANKS = ((6, 8), (5, 8), (6, 10), (6, 13))
 
 
 def build_room(banks=BANKS, zones=ZONES, order=None, home=None,
-               seed: int = 0, attempts: int = 40) -> B.Room:
+               seed: int = 0, attempts: int = 60) -> B.Room:
     geo, bk = layout(banks, zones)
     order = list(order or block_order(WORKER, "INIT"))
     return B.build(WORKER, "INIT", assign(bk, zones, home), geo,
@@ -179,13 +213,26 @@ def build_room(banks=BANKS, zones=ZONES, order=None, home=None,
 
 
 # ── the north band: three turnaround rooms, two I/O rooms, eight pipes ────────
-#: Turnaround interior.  13x3 carries 11 words a lap by
-#: :func:`dataflow_relay.relay_words`, and 13+2 fits inside one band's 17 columns.
-RELAY_W, RELAY_H = 13, 3
+#: Turnaround interior height.  3 is the shortest a perimeter walk may be, and
+#: every row of the north band is charged against the room's height.
+RELAY_H = 3
 
 #: Rows above the worker room: the relays take the top ``RELAY_H + 2`` and the
 #: eight risers have what is left.
+#:
+#: 11 is the floor.  A riser is a staircase (:func:`_riser`), so it gathers
+#: ``2(BAND_H - RELAY_H - 3)`` cells, and a ring needs :data:`RING_WORDS` across
+#: both of them plus the one its turnaround room holds -- which makes
+#: ``4(BAND_H - 6) + 1 >= 17``, and 10 misses by a word.
 BAND_H = 11
+
+#: How far a riser's port stands from its band's centre: half the pipe spread,
+#: plus one column for every row of staircase after the first.
+_REACH = SPREAD // 2 + (BAND_H - RELAY_H - 4)
+
+#: Turnaround interior width -- exactly what the two ports need and no more,
+#: because the relay's width is what sets how close two bands may stand.
+RELAY_W = 2 * _REACH + 1
 
 #: Words a ring must hold at rest: ``N`` cells and a sentinel, at the largest
 #: roster the rules allow.  An under-capacity ring deadlocks in *silence* -- the
@@ -350,10 +397,10 @@ def anchors_are_the_nearest_cells(pipes, iw: int, north: int) -> None:
     This is the premise the whole band discipline rests on: if every pipe's only
     cell within reach is the one on the north wall, then "nearest pipe" reduces
     to "nearest column" and `Geometry.binds` -- which the planner consults, one
-    block at a time, before any of this is drawn -- is exactly right.  It holds
-    because a riser is straight, so its second cell is a full row further away
-    and can never make up the ground; stating it costs one loop over the room's
-    top row and buys the right to reason about columns everywhere else.
+    block at a time, before any of this is drawn -- is exactly right.  It is what
+    :func:`_riser`'s cone is built to preserve, and it is cheap enough to check
+    outright: every pipe cell against every column of the room's top row, which
+    bounds every row below it because they all lie further south.
     """
     for key, cells in pipes.items():
         # An incoming pipe flows relay -> room, so the room end is its *last*
@@ -376,9 +423,10 @@ def audit_bindings(room: B.Room, wx: int, wy: int,
                    pipes: dict[str, list[tuple[int, int]]]) -> None:
     """Every `r`/`s` glyph must reach the pipe its band promised it.
 
-    Measured over *every cell* of every pipe, which is stricter than planning's
-    single-column rule: the coiled risers spread a ring's cells across its whole
-    band, and "nearest" is decided on the cells, not on the anchor column.
+    Measured over *every cell* of every pipe, which is stricter than the spec's
+    "segment attached to the room" and stricter than the column rule the planner
+    used: if this passes, no reading of "nearest" can make the machine bind the
+    wrong ring.  It is the check that caught the flat coil.
     """
     for name, p in room.placed.items():
         toks = [t for t in WORKER[name][0] if t in TOKEN_ZONE]
@@ -410,3 +458,60 @@ def walked_cells_all_hold_a_glyph(room: B.Room) -> None:
                 if got != glyph:
                     raise Collision(f"{name} row {i}: ({col},{p.ys[i]}) holds "
                                     f"{got!r}, compiled {glyph!r}")
+
+
+if __name__ == "__main__":  # pragma: no cover - the generator's CLI
+    import argparse
+    from pathlib import Path
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--man", "--out", dest="man", type=Path, help="the grid")
+    ap.add_argument("--html", type=Path, help="a labelled debug overlay")
+    ap.add_argument("--json", type=Path, help="the debug region sidecar")
+    ap.add_argument("--zones", action="store_true",
+                    help="re-derive the band order and print the table")
+    ap.add_argument("--sweep", action="store_true",
+                    help="re-derive BANKS: try bank shapes, print the best few")
+    args = ap.parse_args()
+    if args.sweep:
+        import random
+
+        cands = [((n, wr), (5, wi), (n, wf), (n, wo))
+                 for n in (5, 6, 7) for wr in (7, 9, 11, 13)
+                 for wi in (8, 10, 12) for wf in (9, 11, 13, 15)
+                 for wo in (13, 15, 17, 19, 21)]
+        random.Random(1).shuffle(cands)
+        seen = []
+        for b in cands:
+            try:
+                r = build_room(b, attempts=30)
+            except Exception:                               # noqa: BLE001 - skipped
+                continue
+            w, h = r.width + 3, r.height + BAND_H + 2
+            seen.append((max(w, h) ** 2, r.corridor_cells, w, h, b))
+        for a2, corr, w, h, b in sorted(seen)[:8]:
+            print(f"area2 {a2:5d}  {w:3d}x{h:3d}  corridor {corr:5d}  {b}")
+        raise SystemExit
+    if args.zones:
+        import itertools
+
+        for zs in itertools.permutations(ZONES):
+            try:
+                r = build_room(BANKS, zs)
+                w, h = r.width + 3, r.height + BAND_H + 2
+                print(f"{' '.join(zs):22s} {w:3d}x{h:3d}  area2 {max(w, h) ** 2:5d}"
+                      f"  corridor {r.corridor_cells}")
+            except Collision as exc:
+                print(f"{' '.join(zs):22s} does not lay out: {exc}")
+        raise SystemExit
+    grid, dbg, meta = build_grid()
+    if args.man:
+        args.man.write_text("\n".join(grid) + "\n")
+    if args.html:
+        dbg.write_html(grid, args.html)
+    if args.json:
+        dbg.write_json(args.json)
+    if not (args.man or args.html or args.json):
+        print("\n".join(grid))
+    else:
+        print(meta)
