@@ -196,3 +196,23 @@ def test_a_fall_through_that_lands_east_costs_no_lane_row() -> None:
         assert plans[src].rows[-1].end < _first_col(plans[dst])
         # and the target really is adjacent, which is what makes the drop reachable
         assert room.glyph_ys[dst][0] > room.glyph_ys[src][-1]
+def test_wall_rows_hold_only_the_two_glyphs_the_biased_hash_covers() -> None:
+    """The assumption `WALL_BIAS` rests on, checked against every public case.
+
+    A wall row's bytes are biased before they are hashed, and the table has
+    entries for exactly two of them — `+` and `-`. A rectangular room's top and
+    bottom rows are `+---...---+`, so that is every byte that can arrive; a `|`
+    or a space there would hash to a nibble nobody wrote and decode to garbage.
+    The hash cannot be widened to cover `|` as well (no `(K, S)` is injective
+    over fifteen values), so the guard is this test rather than the table.
+    """
+    for case in _cases():
+        first = case["rounds"][0]["in"]
+        w, h = int(first[0]), int(first[1])
+        codes = [int(v) for v in first[2 : 2 + w * h]]
+        for y in (0, h - 1):
+            row = codes[y * w : (y + 1) * w]
+            assert set(row) <= {43, 45}, (
+                f"{case['name']}: wall row {y} holds "
+                f"{sorted({chr(c) for c in row} - {'+', '-'})}"
+            )
