@@ -170,7 +170,7 @@ candidate passed every public output/frame with the independent native validator
 |---|---:|---:|---:|---|
 | Pathfinder | 147,140,354,273 | 128,783,668,267 | **127,813,359,906** | batch 4, 6×4 |
 | TCP | **568,891,733** | 640,800,976 | 866,425,973 | batch 1 |
-| Snake | 8,693,241,406 | **7,332,602,688** | 7,864,634,700 | existing task build |
+| Snake (tape reference) | 8,693,241,406 | **7,332,602,688** | 7,864,634,700 | batch 2, 4×3 |
 | Gradebook | **2,476,096,263** | 2,966,282,550 | not routable in current placement | batch 1 |
 | Sudoku Validity | **2,343,268,274** | 2,854,317,828 | 4,083,535,733 | batch 1 |
 | Little-Little-Man | 281,603,173,417 | 281,603,173,417 | **259,324,223,311** | batch 4, 8×6 |
@@ -182,7 +182,9 @@ at the identical 192×194 footprint. Pathfinder remains 177×176 in every mode;
 
 TCP, Gradebook, and Sudoku demonstrate why batch 4 is not the global default:
 their tick reductions cannot repay a wider squared footprint. Snake is the
-middle case—batch 4 is faster, but batch 2 has the better score.
+middle case—batch 4 is faster, but batch 2 has the better score and remains
+inside the same box. This selects the tape reference machine; the submitted
+`snake-ring` coprocessor does not use this tape.
 
 ## Implemented file map
 
