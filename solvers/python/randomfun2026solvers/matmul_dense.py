@@ -29,7 +29,23 @@ ring's two pipes are two independent nearest-sets, so `sx` can attach beside
 ``TBODY`` reads it.  The ring is then a long pipe between the two, which is
 exactly what a ring wants: pipe cells *are* its storage.
 
-## Four things that were measured and do not work, so they are not re-tried
+## Five things that were measured and do not work, so they are not re-tried
+
+**The box stack cannot be folded into two columns.**  The drawn room is 52x148
+and `max(w, h)` charges the 148, so folding the stack into two columns of ~74
+rows is the obvious move -- and it is impossible, not merely awkward.  Every
+pipe attaches to the *north* wall, so "nearest pipe" collapses to nearest
+column; a box shifted east by the width of the first column has all of its cells
+east of every anchor, and every `r` in it therefore binds to whichever ring owns
+the easternmost receive anchor and every `s` to the easternmost send anchor,
+whatever the block wanted.  Measured at columns 24, 30, 40, 52 and 76: **every
+`r` binds `x` and every `s` binds `s`.**  A second anchor set on the south wall
+would fix it and cannot exist -- a ring has one send pipe and one receive pipe,
+not two.  The legal way to spend width on height is to **spread the anchors**:
+wider bands make every box wider, so the pen wraps less and the stack gets
+shorter.  That is a change to :data:`ANCHORS`, not to the packer, and it has to
+keep `MAC`'s six anchors inside seven consecutive columns or the 8x2 rectangle
+stops closing.
 
 **The three changes above only pay together.**  A rectangle is worth nothing in
 `matmul_grid`'s geometry: there `s`, `b`, `c` span columns 26..44, so ``MAC``'s

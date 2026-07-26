@@ -127,6 +127,21 @@ def test_the_relay_and_the_rectangle_want_the_anchors_apart_and_together(
         D.build_grid()
 
 
+def test_a_second_column_of_boxes_cannot_bind(b: D.Bands) -> None:
+    """Why the 52x148 stack cannot be folded into two columns of 74.
+
+    Every pipe is on the north wall, so "nearest pipe" is nearest *column*: a box
+    shifted east past the last anchor takes the easternmost anchor for every one
+    of its ops, whatever the block wanted.  Width has to be spent on wider
+    *bands*, not on a second column.
+    """
+    recv = {r: c for (r, s), c in D.ANCHORS.items() if not s}
+    send = {r: c for (r, s), c in D.ANCHORS.items() if s}
+    for x in (D.IW, D.IW + 6, 2 * D.IW, 3 * D.IW):
+        assert min(recv, key=lambda r: (abs(x - recv[r]), r)) == "x"
+        assert min(send, key=lambda r: (abs(x - send[r]), r)) == "s"
+
+
 def test_the_cold_chains_all_lay_in_their_own_boxes(b: D.Bands) -> None:
     """Every chain but the hot one pours into a box no wider than its bands."""
     laid = 0
