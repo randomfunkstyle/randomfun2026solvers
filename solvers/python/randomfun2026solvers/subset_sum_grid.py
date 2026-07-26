@@ -65,9 +65,12 @@ numeric literal at all and the vertical-pairing load error cannot arise.
 from __future__ import annotations
 
 from randomfun2026solvers.circuit import E, N, Circuit
+from randomfun2026solvers.subset_sum_mitm import public_cases
 
 __all__ = [
     "BANDS",
+    "debug_map",
+    "main",
     "BFWD_COL",
     "BRET_COL",
     "IN_COL",
@@ -904,3 +907,73 @@ def _emit(c: Circuit) -> None:
     _link(c, (22, E3_SKIP - 1), N, E3_PEEL - 3, (18, E3_PEEL))
     _peel_emit(c, VRET_COL, E3_PEEL, OUT_COL)
     c.set(22, E3_PEEL - 1, "H")             # MT: every chosen value is out
+
+
+def debug_map() -> "DebugMap":
+    """The overlay that says what each band of the grid is for.
+
+    A generated `.man` carries no comments, so this is the only thing that knows
+    a cell's meaning; it is written in the same invocation as the grid so the two
+    cannot drift.
+    """
+    from randomfun2026solvers.man_debug import DebugMap
+
+    dbg = DebugMap("subset-sum — meet in the middle on two pipe rings")
+    ox, oy = WX, WY - 2                     # two blank rows are stripped on render
+    dbg.region("load", ox, oy, IW, 22,
+               note="Read n, derive hL = n-8, lay ring V's header GL,GL,256,256, "
+                    "append the values with MB between the halves, and double "
+                    "ring B by each right value until it holds all 256 sums.",
+               tags=["setup"])
+    dbg.region("phase 2 — left masks", ox, oy + P2_HEAD, IW, P2_TEST - P2_HEAD + 4,
+               note="One lap per left mask, counter walked DOWN so bitrev(C) "
+                    "visits index sets in lexicographic order. Peel, reach MT, "
+                    "turn the sum into r+1, write RR, scan.",
+               tags=["compute"])
+    dbg.region("scan station", ox + SCAN_NORTH, oy + SCAN_TOP - 1, 2, 5,
+               note="r s ~ X twice a lap: ten cells, two words, five ticks a "
+                    "word measured on the engine. A==0 hit, A>0 keep going, "
+                    "A<0 sentinel. Never entered with r+1 <= 0.",
+               tags=["compute", "hot"])
+    dbg.region("phase 3 — right masks", ox, oy + P3_HEAD, IW, P3_TEST - P3_HEAD + 3,
+               note="The same lap driven by CR, comparing the biased right-half "
+                    "sum against RR.",
+               tags=["compute"])
+    dbg.region("emit", ox, oy + E1_HEAD, IW, E3_PEEL - E1_HEAD + 4,
+               note="popcount(C*256 + CR) answers k without a bit reversal, then "
+                    "one lap emits the left half's chosen values and one the "
+                    "right — which is already increasing index order.",
+               tags=["output"])
+    name, values, target, _ = public_cases()[1]
+    dbg.scenario(name, " ".join(str(v) for v in [len(values), *values, target]),
+                 0, 4000, watch=["phase 2 — left masks"],
+                 note="Two subsets sum to 300; the lex pin picks {0,1}.")
+    return dbg
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--man", required=True, type=Path)
+    parser.add_argument("--html", required=True, type=Path)
+    parser.add_argument("--json", required=True, type=Path)
+    parser.add_argument("--stage", default="full",
+                        choices=("full", "p2", "load", "loadb"),
+                        help="'load'/'loadb' spill a ring instead of solving; "
+                             "'p2' answers only whether a subset exists")
+    args = parser.parse_args(argv)
+
+    rows = build(args.stage)
+    dbg = debug_map()
+    for path in (args.man, args.html, args.json):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    args.man.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    dbg.write_html(rows, args.html)
+    dbg.write_json(args.json)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
