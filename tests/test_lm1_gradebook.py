@@ -356,11 +356,7 @@ def test_the_program_stays_on_the_depth_four_trie() -> None:
 def test_checked_in_grid_matches_the_generator() -> None:
     """``build_for`` runs the engine's structural analysis: every pipe must bind."""
     m = machine.build_for(SLUG)
-<<<<<<< HEAD
-    assert (m.width, m.height) == (108, 101)
-=======
-    assert (m.width, m.height) == (113, 100)
->>>>>>> b016681 (Compact LM-1 jump read loops)
+    assert (m.width, m.height) == (108, 100)
     # Width-bound: the unrolled scans make the ROM image 836 words, but packed tokens
     # halve its cells, so 31 rows is the first fold that gets it under the machine's
     # columns (see ROM_ROWS) and every fold below that is flat. Trading 20% more area
@@ -383,8 +379,8 @@ def test_checked_in_grid_matches_the_generator() -> None:
 
 def test_checked_in_grid_keeps_the_recorded_shape() -> None:
     rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (113, 100)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 12_769
+    assert (max(map(len, rows)), len(rows)) == (108, 100)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 11_664
 
 
 @node_required

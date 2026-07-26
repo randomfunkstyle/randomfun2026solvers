@@ -377,7 +377,7 @@ def test_the_score_is_real() -> None:
 <<<<<<< HEAD
     # 8100, not the 9216 this pinned for a while: 96² was the shape before the ROM
     # packing landed, and because the assertion is gated behind LM1_SLOW it went stale
-    # unnoticed. `matmul` is 88x90 and is the one program `ADAPTER_TAPE_GAP` did *not*
+    # unnoticed. `matmul` is 86x90 and is the one program `ADAPTER_TAPE_GAP` did *not*
     # move (it is pinned to 6 by `ADAPTER_TAPE_GAP_FOR`), so this is the same number it
     # has been for some time — it agrees with the shape pinned at the top of this file.
 =======

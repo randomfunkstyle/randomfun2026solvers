@@ -72,7 +72,7 @@ DISPLAY_TARGETS = ("palette", "plotter")
 #: the two display programs answer it differently: ``palette`` is bound by that corridor
 #: and goes 95 → 90 (9,025 → 8,100), while ``plotter``'s 109 is set by its folded ROM
 #: sitting west of the corridor, so it keeps every column and banks only the ticks.
-EXPECTED_SHAPE = {"plotter": (109, 104), "palette": (90, 89)}
+EXPECTED_SHAPE = {"plotter": (109, 103), "palette": (90, 88)}
 EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 8_100}
 =======
 EXPECTED_SHAPE = {"plotter": (109, 103), "palette": (95, 88)}

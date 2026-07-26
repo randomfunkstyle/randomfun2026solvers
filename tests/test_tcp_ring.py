@@ -76,11 +76,7 @@ def test_the_cpu_build_is_left_alone() -> None:
     """
     cpu = ROOT / "tasks" / "solutions" / "tcp_cpu.man"
     rows = cpu.read_text().rstrip("\n").split("\n")
-<<<<<<< HEAD
-    assert (max(len(r) for r in rows), len(rows)) == (104, 74)
-=======
-    assert (max(len(r) for r in rows), len(rows)) == (109, 73)
->>>>>>> b016681 (Compact LM-1 jump read loops)
+    assert (max(len(r) for r in rows), len(rows)) == (104, 73)
 
 
 def test_footprint_does_not_regress() -> None:

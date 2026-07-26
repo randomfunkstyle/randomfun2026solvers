@@ -60,15 +60,9 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-<<<<<<< HEAD
-    # 105,580 until ``ADAPTER_TAPE_GAP`` went 6 → 1. A read is strictly serial and pays
-    # the whole response pipe, so five columns off the adapter-to-STORE corridor is 310
-    # ticks off this case — the tick half of that change, measured, on top of the 95 → 90
-    # columns it takes off `palette`'s box.
-    assert result.step == 105_270
-=======
-    assert result.step == 105_250
->>>>>>> b016681 (Compact LM-1 jump read loops)
+    # The adapter corridor and two-read jump loop improvements compose: 105,580
+    # before either change, 105,270 after the corridor, and 104,940 with both.
+    assert result.step == 104_940
     assert result.output == []
 
 

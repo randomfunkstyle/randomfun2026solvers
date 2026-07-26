@@ -1363,8 +1363,8 @@ def tape_block(n: int) -> _Tape:
     ``n=108``, 46 at ``n=380``, 48 at ``n=420``. That height is usually *free*,
     because the block sits east of the adapter beside the CPU's own panel/stream
     stack, which is taller. Rebuilt at ``n=420``, nine of the ten machines rebuilt
-    keep their bounding box to the cell: ``brackets`` 95x69, ``tcp`` 109x73,
-    ``gradebook`` 114x100, ``plotter`` 109x103, ``snake`` 123x128, ``pathfinder``
+    keep their bounding box to the cell: ``brackets`` 90x69, ``tcp`` 104x73,
+    ``gradebook`` 109x100, ``plotter`` 109x103, ``snake`` 123x128, ``pathfinder``
     180x183. The exception is ``matmul`` (86x90 -> 100x90, 8,100 -> 10,000): it is the
     one machine that is both square *and* has a STREAM block under the CPU, so the
     extra rows push the pad search onto a wider ``mem_pad``. Size to the real high
@@ -2410,7 +2410,7 @@ ROM_ROWS = {
     # why a loop iteration costs a whole ROM lap), so its image is 836 words and the
     # ROM, not the tape, sets the box. 31 rows is the first fold that gets the ROM
     # under the machine's own 113 columns; wider costs width, narrower only costs
-    # height. 113x100 (12,769). See tests/test_lm1_gradebook.py.
+    # height. 108x100 (11,664). See tests/test_lm1_gradebook.py.
     "gradebook": 31,
     # No display and a 30-slot tape leave the machine 83 columns wide, so the same
     # rule applies one size down: 23 rows is where the ROM stops setting the width.

@@ -365,8 +365,8 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
 
 def test_the_checked_in_grid_keeps_the_recorded_shape() -> None:
     rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (83, 80)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 6889
+    assert (max(map(len, rows)), len(rows)) == (80, 80)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 6400
 
 
 @pytest.mark.slow  # drives the engine over a whole problem

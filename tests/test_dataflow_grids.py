@@ -68,8 +68,8 @@ GRIDS: dict[str, tuple[object, Path, int, int]] = {
     "reverse-a-list": (
         build_reverse,
         REPO / "tasks" / "solutions" / "reverse-a-list_ring.man",
-        21,
-        21,
+        18,
+        18,
     ),
     "sort-numbers": (
         build_sort,
@@ -87,7 +87,7 @@ GRIDS: dict[str, tuple[object, Path, int, int]] = {
 #: different grid.
 SCORES: dict[str, float] = {
     "memory": 1024 * 19201.571428571428,
-    "reverse-a-list": 441 * 1094.25,
+    "reverse-a-list": 324 * 1012.75,
     "sort-numbers": 625 * 3333.2857142857142,
 }
 
