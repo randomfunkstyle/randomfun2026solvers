@@ -88,7 +88,7 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -344,6 +344,11 @@ class MachineError(RuntimeError):
 class _Grid:
     def __init__(self) -> None:
         self.c: dict[tuple[int, int], str] = {}
+        #: Every cell this grid drew as part of a *pipe*, as opposed to a room wall
+        #: or a room's interior. Nothing on the grid says which is which — ``|`` is
+        #: both a wall and a vertical pipe body — so a router that wants to keep its
+        #: legs off other pipes has to be told, and this is the record.
+        self.drawn: set[tuple[int, int]] = set()
 
     def put(self, x: int, y: int, ch: str) -> None:
         old = self.c.get((x, y))
@@ -412,6 +417,7 @@ class _Grid:
             else:
                 ch = glyph[dout]
             self.put(x, y, ch)
+        self.drawn.update(cells)
         return n
 
     def rows(self) -> list[str]:
@@ -1232,6 +1238,28 @@ ROM_BUFFER_CPU_GAP = 3
 #: zero collides the horizontal and vertical legs on real depth-4 layouts.
 MEM_RESPONSE_CLEARANCE = 1
 
+#: Slack, in cells, added around the endpoints' bounding rectangle when ``compact``
+#: routes a STORE connection. Zero is right only while STORE is east of everything
+#: it talks to; a block moved west or south has to leave the rectangle to turn
+#: around, because both ends' headings are fixed by the rooms they attach to.
+_ROUTE_MARGIN = 2
+
+
+def _keepout(g: _Grid, spare: Iterable[tuple[int, int]] = ()) -> frozenset[tuple[int, int]]:
+    """Occupied cells, plus a one-cell halo around every pipe already drawn.
+
+    Two pipes in adjacent cells are legal glyphs and an illegal *machine*: the engine
+    reads the pair as one pipe, and the failure is silent — a ``send`` lands in the
+    wrong FIFO. The router is a shortest-path search over free cells and has no
+    concept of "free but too close", so the separation has to arrive as blocked
+    cells. Room walls get no halo: every route in this generator has to finish
+    against one.
+    """
+    out = set(g.c)
+    for x, y in g.drawn:
+        out |= {(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)}
+    return frozenset(out - set(spare))
+
 #: Programs that need a wider adapter-to-STORE gap than the default.
 #:
 #: ``matmul`` is the only one, and it does not merely fail to *place* at 1 — it places,
@@ -1614,6 +1642,9 @@ class Machine:
     #: fixed blocks remain at their normal coordinates.
     compact: bool = False
     store_offset: tuple[int, int] = (0, 0)
+    #: How far the whole memory subsystem (adapter + STORE) was moved off its
+    #: default east-of-the-CPU anchor, in grid cells.
+    mem_offset: tuple[int, int] = (0, 0)
     #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
     #: the only thing that knows what any cell *means* — the grid carries no
     #: comments — so it records that here for ``man_debug`` overlays and for
@@ -1721,6 +1752,8 @@ def build(
     middle_order: Sequence[str] | None = None,
     rom_buffer: int | None = None,
     compact: bool = False,
+    mem_offset: tuple[int, int] = (0, 0),
+    store_offset: tuple[int, int] = (0, 0),
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -1811,6 +1844,10 @@ def build(
                     store,
                     rom_buffer,
                     False,
+                    store_offset[1],
+                    store_offset[0],
+                    mem_offset[0],
+                    mem_offset[1],
                 )
             except MachineError as exc:
                 last = exc
@@ -1915,6 +1952,9 @@ def _assemble(
     rom_buffer: int | None = None,
     compact: bool = False,
     store_dy: int = 0,
+    store_dx: int = 0,
+    mem_dx: int = 0,
+    mem_dy: int = 0,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
@@ -2017,24 +2057,49 @@ def _assemble(
         g.put(CX + cpu.out_col, oy + 3, "O")
 
     # ── adapter, east of the CPU ─────────────────────────────────────────────
-    AX = CX + W + CPU_ADAPTER_GAP
+    AX0 = CX + W + CPU_ADAPTER_GAP
     # Aligned so the request pipe leaves the CPU beside the memory lanes, but never
     # so high that the response pipe's westward leg grazes the adapter's top corner.
     # A small machine (few lanes, no memory) is the case that needs the clamp.
-    AY = max(CY + cpu.mem_out_row - ADAPTER_IN_ROW, CY + cpu.mem_in_row + 3)
+    AY0 = max(CY + cpu.mem_out_row - ADAPTER_IN_ROW, CY + cpu.mem_in_row + 3)
     resp_row_check = CY + cpu.mem_in_row
-    if resp_row_check >= AY - 1:
+    if resp_row_check >= AY0 - 1:
         raise MachineError(
             f"response row {resp_row_check} is not clear of the adapter's top wall "
-            f"at {AY}: its westward leg would touch the adapter's corner and the "
+            f"at {AY0}: its westward leg would touch the adapter's corner and the "
             "engine would read a second, spurious pipe into the CPU"
         )
+    # ``req_row`` is where the request pipe meets the *CPU*, so it is a property of
+    # the CPU's memory lanes and stays put however far the memory moves. Only the
+    # far end of that pipe travels with the adapter.
+    req_row = AY0 + ADAPTER_IN_ROW
+    AX, AY = AX0 + mem_dx, AY0 + mem_dy
+    if AX < 1 or AY < 1:
+        raise MachineError(f"the memory block leaves the grid: adapter at ({AX}, {AY})")
     g.room(AX, AY, AX + ADAPTER_W + 1, AY + ADAPTER_H + 1)
     g.blit(AX, AY, adapter_cells(address_first=store == "men-y"))
-    req_row = AY + ADAPTER_IN_ROW
-    route_lengths["cpu->adapter"] = g.draw_pipe(
-        [(CX + W + 2, req_row), (AX - 1, req_row)]
-    )
+    cpu_out = (CX + W + 2, req_row)
+    adapter_in = (AX - 1, AY + ADAPTER_IN_ROW)
+    if mem_dx or mem_dy:
+        try:
+            request = constrained_route(
+                cpu_out,
+                adapter_in,
+                box=RouteBox(
+                    left=max(0, min(cpu_out[0], adapter_in[0]) - _ROUTE_MARGIN),
+                    top=max(0, min(cpu_out[1], adapter_in[1]) - _ROUTE_MARGIN),
+                    right=max(cpu_out[0], adapter_in[0]) + _ROUTE_MARGIN,
+                    bottom=max(cpu_out[1], adapter_in[1]) + _ROUTE_MARGIN,
+                ),
+                blocked=_keepout(g, (cpu_out, adapter_in)),
+                start_direction=(1, 0),
+                end_direction=(1, 0),
+            )
+        except RouteError as exc:
+            raise MachineError(f"cannot route the CPU's request to the adapter: {exc}") from exc
+        route_lengths["cpu->adapter"] = g.draw_pipe(request)
+    else:
+        route_lengths["cpu->adapter"] = g.draw_pipe([cpu_out, adapter_in])
 
     # ── tape, east of the adapter ────────────────────────────────────────────
     if store == "men":
@@ -2053,10 +2118,10 @@ def _assemble(
         raise MachineError(
             f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
         )
-    TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store)
-    TY = CY + store_dy
-    if TY < 0:
-        raise MachineError(f"STORE placement leaves the grid: y={TY}")
+    TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
+    TY = CY + mem_dy + store_dy
+    if TY < 0 or TX < 0:
+        raise MachineError(f"STORE placement leaves the grid: ({TX}, {TY})")
     g.blit(TX, TY, tape.cells)
 
     # adapter east wall -> the tape's request stub
@@ -2065,18 +2130,27 @@ def _assemble(
     mid = ax_out + 2
     adapter_out = (ax_out, AY + ADAPTER_OUT_ROW)
     store_in = (tin_x - 1, tin_y)
-    if compact:
+    moved = bool(mem_dx or mem_dy or store_dx)
+    if compact or moved:
         try:
+            # The box is the endpoints' bounding rectangle plus a two-cell margin.
+            # A STORE placed *west* of the adapter needs that margin: the pipe leaves
+            # the adapter eastward and must arrive eastward, so it has to overshoot
+            # west of its own target and come back — a detour the tight box forbids.
             store_request = constrained_route(
                 adapter_out,
                 store_in,
                 box=RouteBox(
-                    left=min(adapter_out[0], store_in[0]),
-                    top=min(adapter_out[1], store_in[1]),
-                    right=max(adapter_out[0], store_in[0]),
-                    bottom=max(adapter_out[1], store_in[1]),
+                    # ``TX`` is the block's own empty column 0 — the one lane that
+                    # runs the full height of the STORE block without meeting the
+                    # relay. An adapter parked *below* the block has to use it to
+                    # climb back up to the request stub, so the box must reach it.
+                    left=max(0, min(adapter_out[0], store_in[0], TX) - _ROUTE_MARGIN),
+                    top=max(0, min(adapter_out[1], store_in[1]) - _ROUTE_MARGIN),
+                    right=max(adapter_out[0], store_in[0]) + _ROUTE_MARGIN,
+                    bottom=max(adapter_out[1], store_in[1]) + _ROUTE_MARGIN,
                 ),
-                blocked=g.c,
+                blocked=_keepout(g, (adapter_out, store_in)) if moved else g.c,
                 start_direction=(1, 0),
                 end_direction=(1, 0),
             )
@@ -2106,28 +2180,33 @@ def _assemble(
     # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
     # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
     # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
-    if compact:
+    if compact or moved:
         start = (tout_x, tout_y - 1)
         end = (CX + W + 2, resp_row)
+        # The corridor between the CPU and the adapter is spoken for: the request
+        # pipe crosses it on ``req_row``. A STORE that no longer sits north-east of
+        # everything therefore has to climb *east of the adapter*, so the box has to
+        # reach past the adapter's east wall or no route exists at all.
         box = RouteBox(
-            left=min(start[0], end[0]),
+            left=max(0, min(start[0], end[0]) - _ROUTE_MARGIN),
             top=max(0, top - (1 if resp_pad else 0)),
-            right=max(start[0], end[0] + 1),
-            bottom=max(start[1], end[1]),
+            right=max(start[0], end[0] + 1, ax_out) + _ROUTE_MARGIN,
+            bottom=max(start[1], end[1]) + _ROUTE_MARGIN,
         )
+        blocked = _keepout(g, (start, end)) if moved else g.c
         try:
             shortest = constrained_route(
                 start,
                 end,
                 box=box,
-                blocked=g.c,
+                blocked=blocked,
                 end_direction=(-1, 0),
             )
             response_route = constrained_route(
                 start,
                 end,
                 box=box,
-                blocked=g.c,
+                blocked=blocked,
                 min_cells=len(shortest) + 2 * resp_pad,
                 end_direction=(-1, 0),
             )
@@ -2254,7 +2333,8 @@ def _assemble(
         rom_capacity=rom_capacity,
         route_lengths=route_lengths,
         compact=compact,
-        store_offset=(0, store_dy),
+        store_offset=(store_dx, store_dy),
+        mem_offset=(mem_dx, mem_dy),
     )
 
 
@@ -2593,11 +2673,17 @@ LANE_ORDER: dict[str, tuple[str, ...]] = {
 ROM_ROWS = {
     "brackets": 7,  # 89x63
     "palette": 8,  # 84x75
-    "tcp": 3,  # 103x67
+    # Re-swept jointly with :data:`MEM_PLACE`: with the memory stacked under the CPU
+    # the width floor is the ROM's own, and the shallowest fold that still fits inside
+    # the height the block now costs is the two-row one. 80x80, area2 6,400.
+    "tcp": 2,
     # The panel adds rows, so the fold stops when height becomes binding.
     "plotter": 9,  # 103x99
     # The unrolled scans make the ROM set the width.
-    "gradebook": 32,  # 107x96
+    # Also re-swept against :data:`MEM_PLACE`. With STORE no longer 33 columns east of
+    # the adapter the fold is free to keep narrowing: 32 rows was the minimum only
+    # because everything below it was hidden behind the tape's 107th column. 95x93.
+    "gradebook": 40,
     "sudoku-validity": 25,  # 77x77
     # STREAM keeps its reference-safe west clearance; row five remains the sweep
     # minimum after the other serial routes are shortened.
@@ -2684,6 +2770,40 @@ def rom_corridor_rows(want: int, span: int) -> int:
 _LONG_RETURN = {"matmul"}
 
 
+#: Where the memory subsystem sits, per slug: ``(mem_offset, store_offset)``, both
+#: in grid cells relative to the default "adapter east of the CPU, STORE east of the
+#: adapter" anchor. Absent means the default, which is right for most programs.
+#:
+#: The default chains CPU -> adapter -> STORE **west to east**, so the machine's width
+#: is ``cpu + 4 + adapter(14) + 1 + store(33)`` whatever else is true of it. On a
+#: width-bound machine with height to spare that chain is the score, because only the
+#: larger side is squared: `tcp` was 103x57, i.e. 46 wasted rows paying for 103
+#: columns. Two rearrangements undo it, and which one wins is set by how much height
+#: the program can afford:
+#:
+#: * **stacked below** (``mem_offset`` south and west, ``store_offset`` zero) moves
+#:   adapter and STORE together into the band under the CPU. Width collapses to the
+#:   ROM's, height grows by the block's ~34 rows. `tcp` 103x57 -> 80x80, area2
+#:   10,609 -> 6,400, and it costs +82 pipe cells, worth +3% ticks — a 38% score win.
+#: * **stacked vertically in place** (``mem_offset`` south, ``store_offset`` the same
+#:   distance north) leaves STORE beside the CPU and drops the adapter *under* it, so
+#:   the fourteen columns the adapter used to occupy in the chain disappear and STORE
+#:   slides west against the CPU. Height is unchanged, which is what `gradebook` needs
+#:   — it only has 22 spare rows and the block wants 34. 107x85 -> 95x93, area2
+#:   11,449 -> 9,025, +58 pipe cells for +5% ticks: a 17% score win.
+#:
+#: Both are measured, engine-verified on every public case, and re-swept jointly with
+#: :data:`ROM_ROWS` — the fold is only free to keep narrowing once STORE has stopped
+#: setting the width, which is why those two numbers move together. `matmul` and
+#: `sudoku-validity` are deliberately absent: `matmul` is height-bound at 86 rows and
+#: `sudoku-validity` is square at 77x77, so for both of them the first row either
+#: rearrangement adds is a straight loss.
+MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
+    "tcp": ((-23, 40), (0, 0)),
+    "gradebook": ((0, 26), (-12, -26)),
+}
+
+
 def display_for(slug: str) -> tuple[int, int] | None:
     """The problem's LM-75 resolution, or ``None`` when it has no display.
 
@@ -2720,6 +2840,8 @@ def build_for(slug: str, *, store: str = "tape", compact: bool = False) -> Machi
         middle_order=LANE_ORDER.get(slug),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
+        mem_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[0],
+        store_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[1],
     )
 
 
