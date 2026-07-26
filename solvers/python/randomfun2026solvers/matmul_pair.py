@@ -275,6 +275,8 @@ def simulate_pair(values: list[int], *, cap: dict[str, int] | None = None,
     out: list[int] = []
 
     men = {"C": _Man(WORKER_C, "HEAD"), "M": _Man(WORKER_M, "MHEAD")}
+    runs: dict[str, dict[str, int]] = {"C": {"HEAD": 1}, "M": {"MHEAD": 1}}
+    lanes: dict[str, dict[tuple[str, str], int]] = {"C": {}, "M": {}}
     reads = {"C": {"p": "p", **{r: r for r in OWNED_C}},
              "M": {"x": "x", **{r: r for r in OWNED_M}}}
     writes = {"C": {"x": "x", **{r: r for r in OWNED_C}},
@@ -314,7 +316,7 @@ def simulate_pair(values: list[int], *, cap: dict[str, int] | None = None,
                 return {"out": out, "ticks": ticks,
                         "cells": {k: m.cells for k, m in men.items()},
                         "stalls": {k: m.stalls for k, m in men.items()},
-                        "high": high}
+                        "runs": runs, "lanes": lanes, "high": high}
             if t.startswith("L") and t != "L":
                 man.a = int(t[1:])
             elif t == "ri":
@@ -349,8 +351,26 @@ def simulate_pair(values: list[int], *, cap: dict[str, int] | None = None,
             else:  # pragma: no cover - the token table is closed
                 raise AssertionError(t)
             if man.pc >= len(toks):
+                key = (man.block, man.branch if isinstance(succ, dict) else "straight")
+                lanes[who][key] = lanes[who].get(key, 0) + 1
                 man.block = succ if isinstance(succ, str) else succ[man.branch]
                 man.pc = 0
+                runs[who][man.block] = runs[who].get(man.block, 0) + 1
+
+
+def public_cases() -> list[list[int]]:
+    """The seven public cases, as flat integer lists."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    prob = json.loads((root / "tasks/problems/matmul.json").read_text())
+    return [[int(v) for v in c["rounds"][0]["in"]] for c in prob["publicTestData"]]
+
+
+def public_traces() -> list[dict[str, object]]:
+    """Block and lane counts for both men over each public case."""
+    return [simulate_pair(case) for case in public_cases()]
 
 
 def report() -> None:  # pragma: no cover - the module's self-check
