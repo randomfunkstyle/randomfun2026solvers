@@ -168,7 +168,8 @@ candidate passed every public output/frame with the independent native validator
 
 | task | legacy/previous | batch 2 + 4×3 relay | best batch 4 | selected |
 |---|---:|---:|---:|---|
-| Pathfinder | 147,140,354,273 | 128,783,668,267 | **127,813,359,906** | batch 4, 6×4 |
+| Pathfinder (direct-panel CPU) | 147,140,354,273 | 128,783,668,267 | **127,813,359,906** | batch 4, 6×4 |
+| Pathfinder (CPU+PATH unit) | 105,794,282,683 | 86,992,342,399 | **84,002,439,826** | batch 4, 6×4 |
 | TCP | **568,891,733** | 640,800,976 | 866,425,973 | batch 1 |
 | Snake (tape reference) | 8,693,241,406 | **7,332,602,688** | 7,864,634,700 | batch 2, 4×3 |
 | Gradebook | **2,476,096,263** | 2,966,282,550 | not routable in current placement | batch 1 |
@@ -177,7 +178,8 @@ candidate passed every public output/frame with the independent native validator
 
 For Little-Little-Man, the “previous” column is already the improved same-box
 batch-2 relay. Batch 4 reduces public average ticks from 7,482,282 to 6,890,324
-at the identical 192×194 footprint. Pathfinder remains 177×176 in every mode;
+at the identical 192×194 footprint. Direct-panel Pathfinder remains 177×176 in
+every mode; the completed CPU+PATH variant remains 153×157. In both variants,
 6×4 and 8×6 have identical task ticks, so the smaller relay is selected.
 
 TCP, Gradebook, and Sudoku demonstrate why batch 4 is not the global default:

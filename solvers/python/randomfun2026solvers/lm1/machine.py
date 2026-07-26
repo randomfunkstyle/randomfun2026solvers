@@ -1432,11 +1432,11 @@ def _tape_worker_spec(skip_batch: int):
         V2_IH,
         V2_IN_ROW,
         V2_IW,
-        V2_JUMP_FWD_ROW,
         V2_JUMP4_FWD_ROW,
         V2_JUMP4_IH,
         V2_JUMP4_IW,
         V2_JUMP4_RET_COL,
+        V2_JUMP_FWD_ROW,
         V2_JUMP_IH,
         V2_JUMP_IW,
         V2_JUMP_RET_COL,
@@ -1490,8 +1490,8 @@ def _resolve_tape_relay(
     Batch 2 gets the two-word relay with the same 4x3 interior/exterior size;
     batch 4 defaults to the engine-pinned 8x6 relay.
     """
-    from ..memory_tape import RELAY
     from ..dataflow_relay import relay
+    from ..memory_tape import RELAY
 
     if relay_size is None:
         if skip_batch == 1:
@@ -2046,7 +2046,7 @@ def build(
 
     | free (+0.0%) | costly |
     |---|---|
-    | `pathfinder` 31,329, `snake` 15,129, `snake-ring` 14,641, `pathfinder-unit` 24,649 | `sudoku-validity` +33.6%, `tcp` +32.2%, `palette` +30.6%, `brackets` +28.8%, `gradebook` +27.5%, `matmul` +27.2%, `plotter` +24.7% |
+    | `pathfinder`, `snake`, `snake-ring`, `pathfinder-unit` | 7 width-bound targets |
 
     The costly ones are width-bound, and **re-sweeping the ROM fold does not rescue
     them** — it makes them worse, because a narrower fold is a taller machine: at its
@@ -2991,6 +2991,9 @@ TIER_SIDE_PORTS = False
 #: cold one therefore buys most of the latency win at almost none of the wall clock.
 TIER_PIPE_BANK = True
 
+#: Skip-batch for the *hot* bank only; ``None`` means share the cold bank's.
+HOT_SKIP_BATCH: int | None = None
+
 
 @dataclass
 class _PipeBank:
@@ -3080,10 +3083,15 @@ def _two_tier(
         # still 8x better than the 427-slot cold bank — and the men are what the
         # grader's wall clock is spent on, not the ticks.
         hot_top = cols * rows_
+        # The two banks need not share a worker. They are very different: the hot one
+        # is small and answers ~90% of reads, the cold one is 4x larger and answers the
+        # rest, so the lap-length/width trade lands differently on each.
+        # ``HOT_SKIP_BATCH`` overrides the hot bank alone; ``None`` means "same as the
+        # cold bank".
         tier = _PipeBank(
             tape_block(
                 hot_top,
-                skip_batch=tape_skip_batch,
+                skip_batch=tape_skip_batch if HOT_SKIP_BATCH is None else HOT_SKIP_BATCH,
                 relay_size=tape_relay_size,
             ),
             hot_top,
@@ -3482,8 +3490,10 @@ TAPE_SIZE = {
 #: the whole STORE, and its smaller 6x4 relay ties 8x6 on ticks. Snake's batch-2
 #: worker also remains inside the existing 123x113 box; this tunes the tape reference
 #: machine, while the submitted ``snake-ring`` coprocessor remains a separate build.
+#: Pathfinder-unit hides the same batch-4 worker inside its 153x157 CPU/PATH box.
 TASK_TAPE_CONFIG: dict[str, tuple[int, tuple[int, int] | None]] = {
     "pathfinder": (4, (6, 4)),
+    "pathfinder-unit": (4, (6, 4)),
     "snake": (2, None),
 }
 

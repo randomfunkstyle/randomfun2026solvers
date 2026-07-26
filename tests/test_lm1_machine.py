@@ -46,7 +46,7 @@ slow = pytest.mark.slow
 #: :func:`test_tcp_survives_the_constraint_limit`), and plotter hit the same wall
 #: with 11 live values against ``tape_n=11``.
 TARGETS = machine.TAPE_SIZE
-BUILDABLE_TARGETS = {slug: n for slug, n in TARGETS.items() if slug != "pathfinder-unit"}
+BUILDABLE_TARGETS = TARGETS
 
 
 def test_adapter_uses_u_to_free_its_old_rightmost_column() -> None:
@@ -292,9 +292,6 @@ def test_checked_in_grids_match_the_generator() -> None:
     for slug in TARGETS:
         path = REPO / "tasks" / "solutions" / f"{slug}_cpu.man"
         if not path.exists():
-            # `pathfinder-unit` now has its room and pipes, but not the PART 3 command
-            # arms that make it solve the task. Until then origin/main intentionally
-            # has no checked-in grid; all complete targets must still match exactly.
             continue
         expected = "\n".join(machine.build_for(slug).rows) + "\n"
         assert path.read_text(encoding="utf-8") == expected, (
