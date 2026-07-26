@@ -1,0 +1,16 @@
+# little-little-man — submission 728070f8-7602-4f9c-96f3-a6b00fd73887
+
+verdict      done: 28/28 cases, area2 41209, avgTicks 21,277,461, score 876,822,878,575
+submitted    2026-07-26T13:13:44+0300
+grid         203x203
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  de9612f04eadc371accb06dd55a091ad553ecc406667f42ad70aad164c799289
+commit       f906c39
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+compacted jump loops: 203x203, 19.41M avg ticks local
