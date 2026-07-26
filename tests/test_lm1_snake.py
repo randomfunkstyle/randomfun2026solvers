@@ -51,7 +51,10 @@ node_required = pytest.mark.skipif(
 
 #: The shape and score this grid was submitted at, so a regression in either
 #: dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = (123, 123)
+# 123x128 when this was scored; slab packing and then dropping the blank interior
+# row above the CPU's south wall took eleven rows off without touching the width, so
+# the machine went height-bound → width-bound and the footprint came down with it.
+EXPECTED_SHAPE = (123, 117)
 EXPECTED_FOOTPRINT = 15_129
 
 #: The cheapest public case that ends in a loss — 5 rounds, ~73k engine ticks. A
@@ -340,8 +343,10 @@ def test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot(
 # that proves the CPU can do this unaided, and it is what the coprocessor's numbers are
 # measured against.
 RING_GRID = REPO / "tasks" / "solutions" / "snake-ring_cpu.man"
-RING_SHAPE = (121, 130)
-RING_FOOTPRINT = 16_900
+# Same two row savings as `snake` above: 121x135 → 121x124, and the ring machine
+# crosses from height-bound to width-bound, 18,225 → 15,376.
+RING_SHAPE = (121, 124)
+RING_FOOTPRINT = 15_376
 
 
 @lru_cache(maxsize=1)

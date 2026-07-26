@@ -73,8 +73,10 @@ DISPLAY_TARGETS = ("palette", "plotter")
 #: sitting west of the corridor, so it keeps every column and banks only the ticks.
 #: Slab packing (stacked entry rows in the structures band) then takes rows off both —
 #: palette 88 → 85, plotter 103 → 93 — without moving either width, so the footprints
-#: hold and only the shapes change.
-EXPECTED_SHAPE = {"plotter": (109, 93), "palette": (90, 85)}
+#: hold and only the shapes change.  One more row goes when ``build_cpu`` stops
+#: treating the past-the-end ``bottom`` as the interior height (85 → 84, 93 → 92):
+#: that row held nothing but the two side walls.
+EXPECTED_SHAPE = {"plotter": (109, 92), "palette": (90, 84)}
 EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 8_100}
 
 MAX_INSTRUCTIONS = 400_000

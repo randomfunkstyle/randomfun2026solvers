@@ -942,7 +942,10 @@ def build_cpu(
         )
 
     width = ret_x + 1
-    height = bottom
+    # ``bottom`` is one *past* the deepest slab's last glyph row, so taking it as the
+    # interior height leaves a blank row above the south wall.  The slabs are the
+    # deepest thing in the room, so the last glyph row is the height.
+    height = bottom - 1
     mem_rows = sorted(
         r
         for r in all_rows

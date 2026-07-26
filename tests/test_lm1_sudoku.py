@@ -348,8 +348,11 @@ def test_the_machine_generates_and_every_pipe_binds() -> None:
     m = machine.build_for(SLUG)
     assert m.tape_n == TAPE_N
     assert m.plan.k == 4
-    assert (m.width, m.height) == (77, 77)
-    assert m.footprint == 5929
+    # 80x80 before ``build_cpu`` stopped counting the past-the-end ``bottom`` row as
+    # interior height; the row it dropped held only the two side walls, and the
+    # machine stays width-bound at 80, so the footprint does not move.
+    assert (m.width, m.height) == (80, 79)
+    assert m.footprint == 6400
     assert "@" in "".join(m.rows)
 
 
@@ -365,8 +368,8 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
 
 def test_the_checked_in_grid_keeps_the_recorded_shape() -> None:
     rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (77, 77)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 5929
+    assert (max(map(len, rows)), len(rows)) == (80, 79)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 6400
 
 
 @pytest.mark.slow  # drives the engine over a whole problem

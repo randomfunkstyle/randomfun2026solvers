@@ -86,7 +86,9 @@ def test_y_store_backend_passes_brackets_public_cases() -> None:
     candidate = machine.build_for("brackets", store="men-y")
     result = optimize.verify(candidate.rows, "brackets")
     assert result.passed
-    assert result.avg_ticks == pytest.approx(30_922.444444444445)
+    # 30,922.44 before the CPU shed its blank interior row; the rooms all move one
+    # row north, so every walk between them is a tick or two shorter.
+    assert result.avg_ticks == pytest.approx(28_659.333333333332)
 
 
 @pytest.mark.slow

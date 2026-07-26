@@ -73,10 +73,13 @@ def test_the_cpu_build_is_left_alone() -> None:
     adapter-to-STORE corridor. The point of the assertion is that the LM-1 grid is still
     *there* and still generator-consistent (``test_lm1_machine.py`` pins it against the
     generator), not that its shape never improves — it has now improved three times.
+    104x62 since the structures band packs its slab entry rows and ``build_cpu`` stopped
+    counting the past-the-end ``bottom`` as interior height; both take rows, not columns,
+    so the width-bound footprint is unchanged at 104².
     """
     cpu = ROOT / "tasks" / "solutions" / "tcp_cpu.man"
     rows = cpu.read_text().rstrip("\n").split("\n")
-    assert (max(len(r) for r in rows), len(rows)) == (103, 67)
+    assert (max(len(r) for r in rows), len(rows)) == (104, 62)
 
 
 def test_footprint_does_not_regress() -> None:

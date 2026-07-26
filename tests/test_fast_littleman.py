@@ -60,8 +60,10 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-    # Exact checked-in-grid pin: route compaction and the shallower ROM fold.
-    assert result.step == 104_779
+    # Exact checked-in-grid pin. 104,940 before the structures band was packed;
+    # 104,850 now that `build_cpu` stops leaving a blank interior row above the
+    # south wall, which moves every room one row north and shortens the walks.
+    assert result.step == 104_850
     assert result.output == []
 
 
