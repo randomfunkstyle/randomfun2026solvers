@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>brackets — three men over a one-register base-3 stack</title>
+<style>
+body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #111827; color: #e5e7eb; }
+.wrap { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100vh; }
+.canvas { overflow: auto; padding: 16px; position: relative; }
+.zoom-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; width: max-content; margin-bottom: 10px; padding: 6px; border: 1px solid #374151; background: #0b1120; }
+.zoom-toolbar button { width: 28px; height: 28px; padding: 0; border: 1px solid #64748b; border-radius: 3px; background: #111827; color: #e5e7eb; font: 16px ui-monospace, monospace; cursor: pointer; }
+.zoom-toolbar button:hover { background: #1e293b; }
+.zoom-toolbar output { min-width: 42px; color: #cbd5e1; font: 12px ui-monospace, monospace; text-align: center; }
+.zoom-stage { position: relative; }
+svg { display: block; background: #030712; border: 1px solid #374151; transform-origin: top left; }
+.cell { fill: #e5e7eb; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+.region { fill: color-mix(in srgb, var(--c), transparent 88%); stroke: var(--c); stroke-width: .75; }
+.circle-region { stroke-dasharray: 3.5 2; }
+.lane { fill: none; stroke: var(--c); stroke-width: 1.5; opacity: .88; marker-end: url(#arrow); }
+.lane.pipe { stroke-dasharray: 2 1.5; }
+.lane.expected { stroke-width: 2.5; opacity: .5; }
+.label, .lane-label { fill: #f9fafb; font: 6.5px ui-monospace, SFMono-Regular, Menlo, monospace; paint-order: stroke; stroke: #030712; stroke-width: 2px; }
+.debug-target { cursor: pointer; }
+svg .debug-target.is-active { filter: brightness(1.8); opacity: 1; stroke-width: 2; }
+svg text.debug-target.is-active { fill: #fff; font-weight: 700; }
+li.debug-target { cursor: pointer; border-left: 3px solid transparent; padding-left: 8px; }
+li.debug-target.is-active { background: #172554; border-left-color: #e5e7eb; }
+aside { overflow: auto; border-left: 1px solid #374151; padding: 16px; background: #0b1120; }
+li { margin: 0 0 10px; line-height: 1.35; }
+span { display: inline-block; width: 10px; height: 10px; margin-right: 8px; }
+#tooltip { position: fixed; z-index: 10; max-width: 340px; pointer-events: none; opacity: 0; transform: translate(14px, 14px); padding: 10px 12px; border: 1px solid #64748b; border-radius: 4px; background: #020617; box-shadow: 0 12px 30px #0008; transition: opacity .1s; }
+#tooltip.visible { opacity: 1; }
+#tooltip strong, #tooltip small, #tooltip p { display: block; margin: 0; }
+#tooltip small { margin-top: 2px; color: #94a3b8; text-transform: uppercase; }
+#tooltip p { margin-top: 6px; color: #e2e8f0; }
+</style>
+<div class="wrap">
+<div class="canvas">
+<div class="zoom-toolbar" aria-label="Diagram zoom">
+<button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out">-</button>
+<output id="zoom-value">100%</output>
+<button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+<button type="button" id="zoom-reset" title="Reset zoom" aria-label="Reset zoom">1:1</button>
+</div>
+<div class="zoom-stage" id="zoom-stage">
+<svg id="diagram" width="412" height="412" viewBox="0 0 412 412">
+<defs><marker id="arrow" markerWidth="2" markerHeight="2" refX="1.5" refY=".75" orient="auto"><path d="M0,0 L0,1.5 L1.75,.75 z" fill="#f9fafb"/></marker></defs>
+<rect class="region debug-target" data-name="room:CLASS" data-kind="region" data-detail="c &gt;&gt; 5 is the type; closer iff (bit0, bit1) = (1, 0)" x="31.7" y="81.4" width="126" height="112" style="--c:#f59e0b"><title>room:CLASS: c &gt;&gt; 5 is the type; closer iff (bit0, bit1) = (1, 0)</title></rect><text class="label debug-target" data-name="room:CLASS" data-kind="region" data-detail="c &gt;&gt; 5 is the type; closer iff (bit0, bit1) = (1, 0)" x="38" y="80">room:CLASS</text><rect class="region debug-target" data-name="room:WORK" data-kind="region" data-detail="B is the stack, v = 3v + d; pop is one sign test and one remainder" x="31.7" y="221.4" width="238" height="154" style="--c:#f59e0b"><title>room:WORK: B is the stack, v = 3v + d; pop is one sign test and one remainder</title></rect><text class="label debug-target" data-name="room:WORK" data-kind="region" data-detail="B is the stack, v = 3v + d; pop is one sign test and one remainder" x="38" y="220">room:WORK</text><rect class="region debug-target" data-name="room:COUNT" data-kind="region" data-detail="remaining in BP, position in B; the countdown sends the sentinel" x="171.7" y="67.4" width="196" height="126" style="--c:#f59e0b"><title>room:COUNT: remaining in BP, position in B; the countdown sends the sentinel</title></rect><text class="label debug-target" data-name="room:COUNT" data-kind="region" data-detail="remaining in BP, position in B; the countdown sends the sentinel" x="178" y="66">room:COUNT</text><rect class="region debug-target" data-name="I" data-kind="region" data-detail="" x="31.7" y="11.4" width="42" height="42" style="--c:#64748b"><title>I: </title></rect><text class="label debug-target" data-name="I" data-kind="region" data-detail="" x="38" y="10">I</text><rect class="region debug-target" data-name="O" data-kind="region" data-detail="" x="339.7" y="249.4" width="42" height="42" style="--c:#64748b"><title>O: </title></rect><text class="label debug-target" data-name="O" data-kind="region" data-detail="" x="346" y="248">O</text>
+<polyline class="lane pipe debug-target" data-name="pipe:in" data-kind="pipe lane" data-detail="2 cells of capacity" points="52,61.1 52,75.1" style="--c:#f97316"><title>pipe:in: 2 cells of capacity</title></polyline><text class="lane-label debug-target" data-name="pipe:in" data-kind="pipe lane" data-detail="2 cells of capacity" x="52" y="47.8">pipe:in</text><polyline class="lane pipe debug-target" data-name="pipe:tok" data-kind="pipe lane" data-detail="10 cells of capacity" points="136,201.1 136,215.1 122,215.1 108,215.1 94,215.1 94,201.1 80,201.1 66,201.1 52,201.1 52,215.1" style="--c:#f97316"><title>pipe:tok: 10 cells of capacity</title></polyline><text class="lane-label debug-target" data-name="pipe:tok" data-kind="pipe lane" data-detail="10 cells of capacity" x="136" y="187.8">pipe:tok</text><polyline class="lane pipe debug-target" data-name="pipe:ack" data-kind="pipe lane" data-detail="6 cells of capacity" points="248,215.1 248,201.1 262,201.1 262,215.1 276,215.1 276,201.1" style="--c:#f97316"><title>pipe:ack: 6 cells of capacity</title></polyline><text class="lane-label debug-target" data-name="pipe:ack" data-kind="pipe lane" data-detail="6 cells of capacity" x="248" y="201.8">pipe:ack</text><polyline class="lane pipe debug-target" data-name="pipe:term" data-kind="pipe lane" data-detail="7 cells of capacity" points="192,201.1 192,215.1 178,215.1 164,215.1 164,201.1 150,201.1 150,215.1" style="--c:#f97316"><title>pipe:term: 7 cells of capacity</title></polyline><text class="lane-label debug-target" data-name="pipe:term" data-kind="pipe lane" data-detail="7 cells of capacity" x="192" y="187.8">pipe:term</text><polyline class="lane pipe debug-target" data-name="pipe:out" data-kind="pipe lane" data-detail="5 cells of capacity" points="346,201.1 346,215.1 346,229.1 360,229.1 360,243.1" style="--c:#f97316"><title>pipe:out: 5 cells of capacity</title></polyline><text class="lane-label debug-target" data-name="pipe:out" data-kind="pipe lane" data-detail="5 cells of capacity" x="346" y="187.8">pipe:out</text>
+<text class="cell" x="38" y="24">+</text><text class="cell" x="52" y="24">-</text><text class="cell" x="66" y="24">+</text><text class="cell" x="38" y="38">|</text><text class="cell" x="52" y="38">I</text><text class="cell" x="66" y="38">|</text><text class="cell" x="38" y="52">+</text><text class="cell" x="52" y="52">-</text><text class="cell" x="66" y="52">+</text><text class="cell" x="52" y="66">v</text><text class="cell" x="52" y="80">v</text><text class="cell" x="178" y="80">+</text><text class="cell" x="192" y="80">-</text><text class="cell" x="206" y="80">-</text><text class="cell" x="220" y="80">-</text><text class="cell" x="234" y="80">-</text><text class="cell" x="248" y="80">-</text><text class="cell" x="262" y="80">-</text><text class="cell" x="276" y="80">-</text><text class="cell" x="290" y="80">-</text><text class="cell" x="304" y="80">-</text><text class="cell" x="318" y="80">-</text><text class="cell" x="332" y="80">-</text><text class="cell" x="346" y="80">-</text><text class="cell" x="360" y="80">+</text><text class="cell" x="38" y="94">+</text><text class="cell" x="52" y="94">-</text><text class="cell" x="66" y="94">-</text><text class="cell" x="80" y="94">-</text><text class="cell" x="94" y="94">-</text><text class="cell" x="108" y="94">-</text><text class="cell" x="122" y="94">-</text><text class="cell" x="136" y="94">-</text><text class="cell" x="150" y="94">+</text><text class="cell" x="178" y="94">|</text><text class="cell" x="234" y="94">&gt;</text><text class="cell" x="248" y="94">0</text><text class="cell" x="276" y="94">s</text><text class="cell" x="290" y="94">H</text><text class="cell" x="360" y="94">|</text><text class="cell" x="38" y="108">|</text><text class="cell" x="52" y="108">v</text><text class="cell" x="108" y="108">&lt;</text><text class="cell" x="122" y="108">&lt;</text><text class="cell" x="136" y="108">&lt;</text><text class="cell" x="150" y="108">|</text><text class="cell" x="178" y="108">|</text><text class="cell" x="220" y="108">&gt;</text><text class="cell" x="234" y="108">x</text><text class="cell" x="360" y="108">|</text><text class="cell" x="38" y="122">|</text><text class="cell" x="108" y="122">s</text><text class="cell" x="150" y="122">|</text><text class="cell" x="178" y="122">|</text><text class="cell" x="220" y="122">b</text><text class="cell" x="234" y="122">&gt;</text><text class="cell" x="248" y="122">1</text><text class="cell" x="262" y="122">+</text><text class="cell" x="276" y="122">s</text><text class="cell" x="290" y="122">H</text><text class="cell" x="360" y="122">|</text><text class="cell" x="38" y="136">|</text><text class="cell" x="52" y="136">&gt;</text><text class="cell" x="66" y="136">r</text><text class="cell" x="80" y="136">b</text><text class="cell" x="94" y="136">}</text><text class="cell" x="108" y="136">x</text><text class="cell" x="122" y="136">s</text><text class="cell" x="150" y="136">|</text><text class="cell" x="178" y="136">|</text><text class="cell" x="192" y="136">&gt;</text><text class="cell" x="206" y="136">r</text><text class="cell" x="220" y="136">X</text><text class="cell" x="234" y="136">v</text><text class="cell" x="262" y="136">@</text><text class="cell" x="276" y="136">r</text><text class="cell" x="290" y="136">b</text><text class="cell" x="304" y="136">0</text><text class="cell" x="318" y="136">M</text><text class="cell" x="332" y="136">d</text><text class="cell" x="346" y="136">v</text><text class="cell" x="360" y="136">|</text><text class="cell" x="38" y="150">|</text><text class="cell" x="108" y="150">]</text><text class="cell" x="122" y="150">N</text><text class="cell" x="150" y="150">|</text><text class="cell" x="178" y="150">|</text><text class="cell" x="220" y="150">&gt;</text><text class="cell" x="234" y="150">&gt;</text><text class="cell" x="248" y="150">1</text><text class="cell" x="262" y="150">+</text><text class="cell" x="276" y="150">M</text><text class="cell" x="290" y="150">m</text><text class="cell" x="304" y="150">d</text><text class="cell" x="318" y="150">v</text><text class="cell" x="332" y="150">v</text><text class="cell" x="360" y="150">|</text><text class="cell" x="38" y="164">|</text><text class="cell" x="52" y="164">^</text><text class="cell" x="94" y="164">s</text><text class="cell" x="108" y="164">x</text><text class="cell" x="122" y="164">^</text><text class="cell" x="150" y="164">|</text><text class="cell" x="178" y="164">|</text><text class="cell" x="192" y="164">^</text><text class="cell" x="304" y="164">&lt;</text><text class="cell" x="332" y="164">&lt;</text><text class="cell" x="360" y="164">|</text><text class="cell" x="38" y="178">|</text><text class="cell" x="52" y="178">@</text><text class="cell" x="66" y="178">r</text><text class="cell" x="80" y="178">s</text><text class="cell" x="94" y="178">5</text><text class="cell" x="108" y="178">M</text><text class="cell" x="136" y="178">^</text><text class="cell" x="150" y="178">|</text><text class="cell" x="178" y="178">|</text><text class="cell" x="192" y="178">^</text><text class="cell" x="206" y="178">s</text><text class="cell" x="220" y="178">0</text><text class="cell" x="318" y="178">&lt;</text><text class="cell" x="346" y="178">&lt;</text><text class="cell" x="360" y="178">|</text><text class="cell" x="38" y="192">+</text><text class="cell" x="52" y="192">-</text><text class="cell" x="66" y="192">-</text><text class="cell" x="80" y="192">-</text><text class="cell" x="94" y="192">-</text><text class="cell" x="108" y="192">-</text><text class="cell" x="122" y="192">-</text><text class="cell" x="136" y="192">-</text><text class="cell" x="150" y="192">+</text><text class="cell" x="178" y="192">+</text><text class="cell" x="192" y="192">-</text><text class="cell" x="206" y="192">-</text><text class="cell" x="220" y="192">-</text><text class="cell" x="234" y="192">-</text><text class="cell" x="248" y="192">-</text><text class="cell" x="262" y="192">-</text><text class="cell" x="276" y="192">-</text><text class="cell" x="290" y="192">-</text><text class="cell" x="304" y="192">-</text><text class="cell" x="318" y="192">-</text><text class="cell" x="332" y="192">-</text><text class="cell" x="346" y="192">-</text><text class="cell" x="360" y="192">+</text><text class="cell" x="52" y="206">v</text><text class="cell" x="66" y="206">-</text><text class="cell" x="80" y="206">-</text><text class="cell" x="94" y="206">&lt;</text><text class="cell" x="136" y="206">v</text><text class="cell" x="150" y="206">v</text><text class="cell" x="164" y="206">&lt;</text><text class="cell" x="192" y="206">v</text><text class="cell" x="248" y="206">&gt;</text><text class="cell" x="262" y="206">v</text><text class="cell" x="276" y="206">^</text><text class="cell" x="346" y="206">v</text><text class="cell" x="52" y="220">v</text><text class="cell" x="94" y="220">^</text><text class="cell" x="108" y="220">-</text><text class="cell" x="122" y="220">-</text><text class="cell" x="136" y="220">&lt;</text><text class="cell" x="150" y="220">v</text><text class="cell" x="164" y="220">^</text><text class="cell" x="178" y="220">-</text><text class="cell" x="192" y="220">&lt;</text><text class="cell" x="248" y="220">^</text><text class="cell" x="262" y="220">&gt;</text><text class="cell" x="276" y="220">^</text><text class="cell" x="346" y="220">|</text><text class="cell" x="38" y="234">+</text><text class="cell" x="52" y="234">-</text><text class="cell" x="66" y="234">-</text><text class="cell" x="80" y="234">-</text><text class="cell" x="94" y="234">-</text><text class="cell" x="108" y="234">-</text><text class="cell" x="122" y="234">-</text><text class="cell" x="136" y="234">-</text><text class="cell" x="150" y="234">-</text><text class="cell" x="164" y="234">-</text><text class="cell" x="178" y="234">-</text><text class="cell" x="192" y="234">-</text><text class="cell" x="206" y="234">-</text><text class="cell" x="220" y="234">-</text><text class="cell" x="234" y="234">-</text><text class="cell" x="248" y="234">-</text><text class="cell" x="262" y="234">+</text><text class="cell" x="346" y="234">&gt;</text><text class="cell" x="360" y="234">v</text><text class="cell" x="38" y="248">|</text><text class="cell" x="52" y="248">v</text><text class="cell" x="136" y="248">&lt;</text><text class="cell" x="248" y="248">&lt;</text><text class="cell" x="262" y="248">|</text><text class="cell" x="360" y="248">v</text><text class="cell" x="38" y="262">|</text><text class="cell" x="94" y="262">&gt;</text><text class="cell" x="108" y="262">1</text><text class="cell" x="122" y="262">N</text><text class="cell" x="150" y="262">s</text><text class="cell" x="164" y="262">H</text><text class="cell" x="262" y="262">|</text><text class="cell" x="346" y="262">+</text><text class="cell" x="360" y="262">-</text><text class="cell" x="374" y="262">+</text><text class="cell" x="38" y="276">|</text><text class="cell" x="80" y="276">&gt;</text><text class="cell" x="94" y="276">X</text><text class="cell" x="108" y="276">s</text><text class="cell" x="122" y="276">M</text><text class="cell" x="136" y="276">^</text><text class="cell" x="178" y="276">&gt;</text><text class="cell" x="192" y="276">1</text><text class="cell" x="206" y="276">N</text><text class="cell" x="220" y="276">s</text><text class="cell" x="234" y="276">H</text><text class="cell" x="262" y="276">|</text><text class="cell" x="346" y="276">|</text><text class="cell" x="360" y="276">O</text><text class="cell" x="374" y="276">|</text><text class="cell" x="38" y="290">|</text><text class="cell" x="80" y="290">+</text><text class="cell" x="94" y="290">&gt;</text><text class="cell" x="108" y="290">M</text><text class="cell" x="122" y="290">3</text><text class="cell" x="136" y="290">W</text><text class="cell" x="150" y="290">/</text><text class="cell" x="164" y="290">W</text><text class="cell" x="178" y="290">X</text><text class="cell" x="192" y="290">W</text><text class="cell" x="206" y="290">s</text><text class="cell" x="220" y="290">M</text><text class="cell" x="248" y="290">^</text><text class="cell" x="262" y="290">|</text><text class="cell" x="346" y="290">+</text><text class="cell" x="360" y="290">-</text><text class="cell" x="374" y="290">+</text><text class="cell" x="38" y="304">|</text><text class="cell" x="52" y="304">&gt;</text><text class="cell" x="66" y="304">R</text><text class="cell" x="80" y="304">X</text><text class="cell" x="94" y="304">v</text><text class="cell" x="178" y="304">&gt;</text><text class="cell" x="192" y="304">1</text><text class="cell" x="206" y="304">N</text><text class="cell" x="220" y="304">s</text><text class="cell" x="234" y="304">H</text><text class="cell" x="262" y="304">|</text><text class="cell" x="38" y="318">|</text><text class="cell" x="80" y="318">+</text><text class="cell" x="122" y="318">&gt;</text><text class="cell" x="136" y="318">1</text><text class="cell" x="150" y="318">N</text><text class="cell" x="164" y="318">s</text><text class="cell" x="178" y="318">H</text><text class="cell" x="262" y="318">|</text><text class="cell" x="38" y="332">|</text><text class="cell" x="80" y="332">+</text><text class="cell" x="94" y="332">&gt;</text><text class="cell" x="108" y="332">W</text><text class="cell" x="122" y="332">X</text><text class="cell" x="136" y="332">2</text><text class="cell" x="150" y="332">N</text><text class="cell" x="164" y="332">s</text><text class="cell" x="178" y="332">H</text><text class="cell" x="262" y="332">|</text><text class="cell" x="38" y="346">|</text><text class="cell" x="52" y="346">M</text><text class="cell" x="80" y="346">+</text><text class="cell" x="122" y="346">&gt;</text><text class="cell" x="136" y="346">1</text><text class="cell" x="150" y="346">N</text><text class="cell" x="164" y="346">s</text><text class="cell" x="178" y="346">H</text><text class="cell" x="262" y="346">|</text><text class="cell" x="38" y="360">|</text><text class="cell" x="52" y="360">^</text><text class="cell" x="66" y="360">s</text><text class="cell" x="80" y="360">&lt;</text><text class="cell" x="94" y="360">@</text><text class="cell" x="108" y="360">R</text><text class="cell" x="122" y="360">s</text><text class="cell" x="136" y="360">0</text><text class="cell" x="150" y="360">M</text><text class="cell" x="248" y="360">^</text><text class="cell" x="262" y="360">|</text><text class="cell" x="38" y="374">+</text><text class="cell" x="52" y="374">-</text><text class="cell" x="66" y="374">-</text><text class="cell" x="80" y="374">-</text><text class="cell" x="94" y="374">-</text><text class="cell" x="108" y="374">-</text><text class="cell" x="122" y="374">-</text><text class="cell" x="136" y="374">-</text><text class="cell" x="150" y="374">-</text><text class="cell" x="164" y="374">-</text><text class="cell" x="178" y="374">-</text><text class="cell" x="192" y="374">-</text><text class="cell" x="206" y="374">-</text><text class="cell" x="220" y="374">-</text><text class="cell" x="234" y="374">-</text><text class="cell" x="248" y="374">-</text><text class="cell" x="262" y="374">+</text>
+</svg>
+</div>
+</div>
+<aside>
+<h1>brackets — three men over a one-register base-3 stack</h1>
+<p>26 x 26</p>
+<ul><li class="debug-target" data-name="room:CLASS" data-kind="region" data-detail="c &gt;&gt; 5 is the type; closer iff (bit0, bit1) = (1, 0)"><span style="background:#f59e0b"></span><b>room:CLASS</b> c &gt;&gt; 5 is the type; closer iff (bit0, bit1) = (1, 0)</li>
+<li class="debug-target" data-name="room:WORK" data-kind="region" data-detail="B is the stack, v = 3v + d; pop is one sign test and one remainder"><span style="background:#f59e0b"></span><b>room:WORK</b> B is the stack, v = 3v + d; pop is one sign test and one remainder</li>
+<li class="debug-target" data-name="room:COUNT" data-kind="region" data-detail="remaining in BP, position in B; the countdown sends the sentinel"><span style="background:#f59e0b"></span><b>room:COUNT</b> remaining in BP, position in B; the countdown sends the sentinel</li>
+<li class="debug-target" data-name="I" data-kind="region" data-detail=""><span style="background:#64748b"></span><b>I</b> </li>
+<li class="debug-target" data-name="O" data-kind="region" data-detail=""><span style="background:#64748b"></span><b>O</b> </li>
+<li class="debug-target" data-name="pipe:in" data-kind="pipe lane" data-detail="2 cells of capacity"><span style="background:#f97316"></span><b>pipe:in</b> 2 cells of capacity</li>
+<li class="debug-target" data-name="pipe:tok" data-kind="pipe lane" data-detail="10 cells of capacity"><span style="background:#f97316"></span><b>pipe:tok</b> 10 cells of capacity</li>
+<li class="debug-target" data-name="pipe:ack" data-kind="pipe lane" data-detail="6 cells of capacity"><span style="background:#f97316"></span><b>pipe:ack</b> 6 cells of capacity</li>
+<li class="debug-target" data-name="pipe:term" data-kind="pipe lane" data-detail="7 cells of capacity"><span style="background:#f97316"></span><b>pipe:term</b> 7 cells of capacity</li>
+<li class="debug-target" data-name="pipe:out" data-kind="pipe lane" data-detail="5 cells of capacity"><span style="background:#f97316"></span><b>pipe:out</b> 5 cells of capacity</li></ul>
+</aside>
+</div>
+<div id="tooltip" role="tooltip"><strong></strong><small></small><p></p></div>
+<script>
+const targets = [...document.querySelectorAll('.debug-target')];
+const tooltip = document.querySelector('#tooltip');
+const title = tooltip.querySelector('strong');
+const kind = tooltip.querySelector('small');
+const detail = tooltip.querySelector('p');
+let pinned = null;
+const canvas = document.querySelector('.canvas');
+const stage = document.querySelector('#zoom-stage');
+const diagram = document.querySelector('#diagram');
+const zoomValue = document.querySelector('#zoom-value');
+const baseWidth = 412;
+const baseHeight = 412;
+let zoom = 1;
+let pan = null;
+
+function setZoom(next) {
+  zoom = Math.min(3, Math.max(.35, next));
+  diagram.style.transform = `scale(${zoom})`;
+  stage.style.width = `${baseWidth * zoom}px`;
+  stage.style.height = `${baseHeight * zoom}px`;
+  zoomValue.value = `${Math.round(zoom * 100)}%`;
+  zoomValue.textContent = zoomValue.value;
+}
+document.querySelector('#zoom-in').addEventListener('click', () => setZoom(zoom * 1.25));
+document.querySelector('#zoom-out').addEventListener('click', () => setZoom(zoom / 1.25));
+document.querySelector('#zoom-reset').addEventListener('click', () => setZoom(1));
+canvas.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  setZoom(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+}, { passive: false });
+stage.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.target.closest('.debug-target')) return;
+  pan = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop };
+  stage.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+stage.addEventListener('pointermove', (event) => {
+  if (!pan) return;
+  canvas.scrollLeft = pan.left - (event.clientX - pan.x);
+  canvas.scrollTop = pan.top - (event.clientY - pan.y);
+});
+stage.addEventListener('pointerup', () => { pan = null; });
+stage.addEventListener('pointercancel', () => { pan = null; });
+setZoom(1);
+
+function setActive(name) {
+  for (const target of targets) target.classList.toggle('is-active', target.dataset.name === name);
+}
+function clearActive() {
+  if (!pinned) {
+    for (const target of targets) target.classList.remove('is-active');
+    tooltip.classList.remove('visible');
+  }
+}
+function show(target, event) {
+  title.textContent = target.dataset.name;
+  kind.textContent = target.dataset.kind;
+  detail.textContent = target.dataset.detail || 'No additional note.';
+  tooltip.style.left = event.clientX + 'px';
+  tooltip.style.top = event.clientY + 'px';
+  tooltip.classList.add('visible');
+  setActive(target.dataset.name);
+}
+for (const target of targets) {
+  target.addEventListener('pointerenter', (event) => show(target, event));
+  target.addEventListener('pointermove', (event) => show(target, event));
+  target.addEventListener('pointerleave', clearActive);
+  target.addEventListener('click', (event) => {
+    event.preventDefault();
+    pinned = pinned === target.dataset.name ? null : target.dataset.name;
+    if (pinned) show(target, event); else clearActive();
+  });
+}
+</script>
+</html>

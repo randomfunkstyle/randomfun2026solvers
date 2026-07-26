@@ -1,0 +1,369 @@
+{
+  "title": "brackets \u2014 three men over a one-register base-3 stack",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "room:CLASS",
+      "x": 1,
+      "y": 5,
+      "w": 9,
+      "h": 8,
+      "note": "c >> 5 is the type; closer iff (bit0, bit1) = (1, 0)",
+      "color": "#f59e0b",
+      "tags": [
+        "compute"
+      ]
+    },
+    {
+      "name": "room:WORK",
+      "x": 1,
+      "y": 15,
+      "w": 17,
+      "h": 11,
+      "note": "B is the stack, v = 3v + d; pop is one sign test and one remainder",
+      "color": "#f59e0b",
+      "tags": [
+        "compute"
+      ]
+    },
+    {
+      "name": "room:COUNT",
+      "x": 11,
+      "y": 4,
+      "w": 14,
+      "h": 9,
+      "note": "remaining in BP, position in B; the countdown sends the sentinel",
+      "color": "#f59e0b",
+      "tags": [
+        "compute"
+      ]
+    },
+    {
+      "name": "I",
+      "x": 1,
+      "y": 0,
+      "w": 3,
+      "h": 3,
+      "note": "",
+      "color": "#64748b",
+      "tags": []
+    },
+    {
+      "name": "O",
+      "x": 23,
+      "y": 17,
+      "w": 3,
+      "h": 3,
+      "note": "",
+      "color": "#64748b",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [],
+  "lanes": [
+    {
+      "name": "pipe:in",
+      "points": [
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          4
+        ]
+      ],
+      "note": "2 cells of capacity",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          4
+        ]
+      ]
+    },
+    {
+      "name": "pipe:tok",
+      "points": [
+        [
+          8,
+          13
+        ],
+        [
+          8,
+          14
+        ],
+        [
+          7,
+          14
+        ],
+        [
+          6,
+          14
+        ],
+        [
+          5,
+          14
+        ],
+        [
+          5,
+          13
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          3,
+          13
+        ],
+        [
+          2,
+          13
+        ],
+        [
+          2,
+          14
+        ]
+      ],
+      "note": "10 cells of capacity",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          8,
+          13
+        ],
+        [
+          8,
+          14
+        ],
+        [
+          7,
+          14
+        ],
+        [
+          6,
+          14
+        ],
+        [
+          5,
+          14
+        ],
+        [
+          5,
+          13
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          3,
+          13
+        ],
+        [
+          2,
+          13
+        ],
+        [
+          2,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "pipe:ack",
+      "points": [
+        [
+          16,
+          14
+        ],
+        [
+          16,
+          13
+        ],
+        [
+          17,
+          13
+        ],
+        [
+          17,
+          14
+        ],
+        [
+          18,
+          14
+        ],
+        [
+          18,
+          13
+        ]
+      ],
+      "note": "6 cells of capacity",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          14
+        ],
+        [
+          16,
+          13
+        ],
+        [
+          17,
+          13
+        ],
+        [
+          17,
+          14
+        ],
+        [
+          18,
+          14
+        ],
+        [
+          18,
+          13
+        ]
+      ]
+    },
+    {
+      "name": "pipe:term",
+      "points": [
+        [
+          12,
+          13
+        ],
+        [
+          12,
+          14
+        ],
+        [
+          11,
+          14
+        ],
+        [
+          10,
+          14
+        ],
+        [
+          10,
+          13
+        ],
+        [
+          9,
+          13
+        ],
+        [
+          9,
+          14
+        ]
+      ],
+      "note": "7 cells of capacity",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          12,
+          13
+        ],
+        [
+          12,
+          14
+        ],
+        [
+          11,
+          14
+        ],
+        [
+          10,
+          14
+        ],
+        [
+          10,
+          13
+        ],
+        [
+          9,
+          13
+        ],
+        [
+          9,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "pipe:out",
+      "points": [
+        [
+          23,
+          13
+        ],
+        [
+          23,
+          14
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          24,
+          15
+        ],
+        [
+          24,
+          16
+        ]
+      ],
+      "note": "5 cells of capacity",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          23,
+          13
+        ],
+        [
+          23,
+          14
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          24,
+          15
+        ],
+        [
+          24,
+          16
+        ]
+      ]
+    }
+  ]
+}
