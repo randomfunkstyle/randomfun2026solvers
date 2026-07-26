@@ -75,6 +75,13 @@ class Field:
         self.w, self.h = w, h
         self.glyph: dict[tuple[int, int], str] = {}
         self.ins: dict[tuple[int, int], set[tuple[int, int]]] = {}
+        #: Cells a *block's* man walks over that hold no op — the gaps a `seek`
+        #: jumped, the padding inside a literal, the run from an entry to the
+        #: first glyph.  A corridor may cross one, because crossing leaves a
+        #: blank a blank; it may never turn on one.  A `>` dropped between the
+        #: backticks of a literal changes the number the block loads, and a `>`
+        #: dropped in a `seek` gap feeds the corridor's man into the block.
+        self.walked: set[tuple[int, int]] = set()
 
     # -- queries -------------------------------------------------------------
     def inside(self, x: int, y: int) -> bool:
@@ -121,11 +128,13 @@ class Field:
         self.ins.setdefault((x, y), set()).add(d)
 
     def walk(self, x: int, y: int, n: int, d=E) -> None:
-        """Mark `n` cells the man walks over without an op on them."""
+        """Mark `n` cells a block's man walks over without an op on them."""
         for _ in range(n):
-            if self.glyph.get((x, y)) not in (None, GLYPH.get(d)):
-                raise Collision(f"({x},{y}) holds {self.get(x, y)!r} on a walked run")
+            if not self.inside(x, y):
+                raise Collision(f"({x},{y}) walked outside the room")
             self.ins.setdefault((x, y), set()).add(d)
+            if (x, y) not in self.glyph:
+                self.walked.add((x, y))
             x, y = x + d[0], y + d[1]
 
     def rows(self) -> list[str]:
@@ -154,10 +163,14 @@ TURN_COST = 0.25
 #: corridor that piles onto the same channel column cuts that column into more
 #: pieces, and the edge that finds none left is rarely the one that caused it.
 BUSY_COST = 0.2
+#: And a turn dropped in the middle of somebody else's reserved lane: legal, but
+#: it steers that lane's man, so it is left as a last resort rather than banned —
+#: banning it walls the eastern banks off from the western ones entirely.
+LANE_COST = 6.0
 
 
 def shortest(fld: Field, start: tuple[int, int], din, goal: tuple[int, int],
-             *, forbid=()) -> Route | None:
+             *, forbid=(), no_turn=frozenset()) -> Route | None:
     """Cheapest corridor from `start` (entered heading `din`) onto `goal`.
 
     `start` is the first cell outside the block — the man is already standing on
@@ -169,7 +182,7 @@ def shortest(fld: Field, start: tuple[int, int], din, goal: tuple[int, int],
     dist: dict[tuple[tuple[int, int], tuple[int, int]], float] = {}
     prev: dict[tuple[tuple[int, int], tuple[int, int]], tuple] = {}
     pq: list[tuple[float, tuple[int, int], tuple[int, int]]] = []
-    for dout in (din, *TURNS[din]):
+    for dout in (din, *(() if start in fld.walked else TURNS[din])):
         if start == goal:
             continue
         if not fld.can_step(start, din, dout):
@@ -199,10 +212,12 @@ def shortest(fld: Field, start: tuple[int, int], din, goal: tuple[int, int],
                     best = cand
             continue
         busy = BUSY_COST if nxt in fld.ins else 0.0
-        for dout in (d, *TURNS[d]):
+        squat = LANE_COST if nxt in no_turn else 0.0
+        turns = () if nxt in fld.walked else TURNS[d]
+        for dout in (d, *turns):
             if not fld.can_step(nxt, d, dout):
                 continue
-            c = cost + 1.0 + busy + (TURN_COST if dout != d else 0.0)
+            c = cost + 1.0 + busy + ((TURN_COST + squat) if dout != d else 0.0)
             key = (nxt, dout)
             if c < dist.get(key, float("inf")):
                 dist[key] = c
@@ -347,8 +362,8 @@ class Placed:
 
 def _row_span(plan, i: int) -> tuple[int, int]:
     """The columns row `i` of a plan occupies, wrap link included."""
-    cols = [c for c, _ in plan.rows[i].cells]
-    lo, hi = min(cols + [plan.rows[i].start]), max(cols + [plan.rows[i].start])
+    cols = [c for c, _ in plan.rows[i].cells] + [plan.rows[i].start]
+    lo, hi = min(cols), max(cols)
     if i + 1 < len(plan.rows):
         lo, hi = min(lo, plan.rows[i].end), max(hi, plan.rows[i].end)
     return lo, hi
@@ -515,18 +530,18 @@ def stamp(fld: Field, placed: dict[str, Placed], entry: str) -> None:
         fld.walk(bank.entry + 1, ys[0], first - bank.entry - 1, E)
         for i, row in enumerate(plan.rows):
             d = E if row.east else W
-            cols = [c for c, _ in row.cells]
             for c, glyph in row.cells:
                 fld.op(c, ys[i], glyph, d)
-            # the gaps a `seek` jumped over are walked, not free
+            # Every cell from the turn he arrives on to his last op is walked,
+            # gaps included: a `seek` jumps the pen but the man still crosses
+            # what it jumped, and a corridor that turns there steals him.
+            cols = [c for c, _ in row.cells] + [row.start]
             lo, hi = min(cols), max(cols)
-            for x in range(lo, hi + 1):
-                fld.ins.setdefault((x, ys[i]), set()).add(d)
+            fld.walk(lo if row.east else hi, ys[i], hi - lo + 1, d)
             if i + 1 < len(plan.rows):
                 col = row.end
                 fld.op(col, ys[i], "v", d)
-                for y in range(ys[i] + 1, ys[i + 1]):
-                    fld.ins.setdefault((col, y), set()).add(S)
+                fld.walk(col, ys[i] + 1, ys[i + 1] - ys[i] - 1, S)
                 fld.op(col, ys[i + 1], ">" if plan.rows[i + 1].east else "<", S)
 
 
@@ -554,10 +569,8 @@ def route_edges(fld: Field, worker, placed: dict[str, Placed], order: list[str],
         (n, k): {(x, y) for y, lo, hi in run for x in range(lo, hi + 1)}
         for n, p in placed.items() for k, run in p.lanes.items()
     }
-    owned: dict[tuple[int, int], tuple[str, str]] = {}
-    for key, cells in lane_cells.items():
-        for c in cells:
-            owned[c] = key
+    lanes_all = {c for cells in lane_cells.values() for c in cells}
+    heads = {e[3] for e in todo}
 
     def span(e):
         return abs(e[5][0] - e[3][0]) + abs(e[5][1] - e[3][1])
@@ -577,8 +590,13 @@ def route_edges(fld: Field, worker, placed: dict[str, Placed], order: list[str],
         done: list[tuple[str, str, str, Route]] = []
         for src, dst, kind, cell, d, goal in order_:
             mine = lane_cells[(src, kind)]
-            block = {c for c in owned if c not in mine and c != goal}
-            r = shortest(fld, cell, d, goal, forbid=block)
+            # somebody else's lane may be *crossed* — a man walking straight over
+            # a blank leaves it a blank — but not turned on, which would rebind
+            # the lane's own man, and not entered at its first cell, which would
+            # pin the heading he is still free to choose
+            r = shortest(fld, cell, d, goal,
+                         forbid=heads - mine - {goal},
+                         no_turn=lanes_all - mine)
             if r is None:
                 last = f"{src} -{kind}-> {dst}: no corridor from {cell} to {goal}"
                 urgency[(src, kind)] = urgency.get((src, kind), 0) + 1
@@ -590,6 +608,37 @@ def route_edges(fld: Field, worker, placed: dict[str, Placed], order: list[str],
     raise Collision(f"routing never fit after {attempts} attempts: {last}")
 
 
+def walk_edges(fld: Field, worker, placed: dict[str, Placed]) -> None:
+    """Follow every lane through the *finished* field and check where it lands.
+
+    Routing one corridor at a time is not enough on its own: a later corridor
+    that drops a turn glyph onto an earlier one re-steers it, the grid still
+    loads, and the machine quietly computes something else.  So this ignores the
+    routes and re-walks the field a man would actually see.
+    """
+    entries = {p.entry_cell: n for n, p in placed.items()}
+    for name, p in placed.items():
+        for kind, target in lanes_of(worker, name, p.plan):
+            cell, d = exit_of(worker, name, p.plan, p.ys, kind)
+            for _ in range(4 * fld.w * fld.h):
+                if not fld.inside(*cell):
+                    raise Collision(f"{name} -{kind}-> {target} walks out of the room")
+                g = fld.glyph.get(cell)
+                if g is not None and g in Field.TURN:
+                    d = HEADING[g]
+                if cell in entries:
+                    if entries[cell] != target:
+                        raise Collision(f"{name} -{kind}-> {target} arrives at "
+                                        f"{entries[cell]} instead")
+                    break
+                if g is not None and g not in Field.TURN:
+                    raise Collision(f"{name} -{kind}-> {target} runs onto {g!r} "
+                                    f"at {cell}")
+                cell = (cell[0] + d[0], cell[1] + d[1])
+            else:
+                raise Collision(f"{name} -{kind}-> {target} never arrives")
+
+
 def build(worker, entry: str, banks: dict[str, Bank], base_geo, *,
           order: list[str] | None = None, hints: dict[str, str] | None = None,
           attempts: int = 24, seed: int = 0) -> Room:
@@ -597,23 +646,39 @@ def build(worker, entry: str, banks: dict[str, Bank], base_geo, *,
     from randomfun2026solvers.lllm_layout import block_order, plan_blocks
 
     order = order or block_order(worker, entry)
-    for name in order:
-        want = block_zones(worker, name, base_geo.token_zone)
-        if not want <= set(banks[name].zones):
-            raise Collision(f"{name} needs {sorted(want)}, bank "
-                            f"{banks[name].name} binds {sorted(banks[name].zones)}")
+    # `banks[name]` may name several candidates: a block whose literals or long
+    # straight runs will not fit the narrow bank it was assigned falls through to
+    # the next one rather than failing the whole layout.
+    cands = {n: (b,) if isinstance(b, Bank) else tuple(b) for n, b in banks.items()}
     # backtick columns pair down the grid as well as along a row, so the set is
     # shared across every bank rather than restarted for each
     backticks: set[int] = set()
-    plans = {}
+    plans, chosen = {}, {}
     for name in order:
-        geo = bank_geometry(banks[name], base_geo)
-        plans.update(plan_blocks([name], worker, geo, backticks))
-    placed, height = pack(worker, order, plans, banks, hints=hints)
-    width = max(b.iw for b in banks.values())
+        want = block_zones(worker, name, base_geo.token_zone)
+        why: Exception | None = None
+        for bank in cands[name]:
+            if not want <= set(bank.zones):
+                why = Collision(f"{name} needs {sorted(want)}, {bank.name} "
+                                f"binds {sorted(bank.zones)}")
+                continue
+            spent = set(backticks)
+            try:
+                plans.update(plan_blocks([name], worker,
+                                         bank_geometry(bank, base_geo), backticks))
+            except Exception as exc:                        # noqa: BLE001 - retried
+                why, backticks = exc, spent
+                continue
+            chosen[name] = bank
+            break
+        else:
+            raise Collision(f"{name} fits no bank: {why}")
+    placed, height = pack(worker, order, plans, chosen, hints=hints)
+    width = max(b.iw for bs in cands.values() for b in bs)
     fld = Field(width, height)
     stamp(fld, placed, entry)
     edges = route_edges(fld, worker, placed, order, attempts=attempts, seed=seed)
+    walk_edges(fld, worker, placed)
     used = max(y for (_x, y) in fld.glyph) + 1
     if used < height:                       # trim the slack the router did not need
         fld.h = used
