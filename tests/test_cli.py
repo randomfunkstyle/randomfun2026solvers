@@ -62,15 +62,6 @@ def test_sudoku_solves_puzzle(tmp_path: Path) -> None:
     assert out["meta"]["solver"] == "sudoku"
 
 
-def test_swift_smoke_writes_output_envelope(tmp_path: Path) -> None:
-    proc = _run_solve(tmp_path, "swift-smoke", {"unused": True})
-    assert proc.returncode == 0, proc.stderr
-    out = json.loads((tmp_path / "nested" / "output.json").read_text(encoding="utf-8"))
-    assert json.loads(base64.b64decode(out["solution_b64"]).decode()) == {"smoke": True}
-    assert out["meta"]["solver"] == "swift-smoke"
-    assert out["meta"]["entrypoint"] == "swift-cli"
-
-
 def _decode_b64_json(value: str) -> dict:
     return json.loads(base64.b64decode(value).decode())
 

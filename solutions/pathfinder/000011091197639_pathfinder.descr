@@ -1,0 +1,16 @@
+# pathfinder — submission 1add03bd-4496-4a77-bbc4-48fb2cacc466
+
+verdict      done: 18/18 cases, area2 30625, avgTicks 362,162, score 11,091,197,639
+submitted    2026-07-26T15:42:02+0300
+grid         84x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  de975686fdea6abff7c04152dae4623ebe6178859bb6f2860973d01acf33651b
+commit       34c1511
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 1/10: widen the ring relay from 14 to 16 interior columns. Box stays 84x175; independent local validators agree on 7/7 and score 8,490,864,375 versus 8,494,408,125 baseline.
