@@ -276,3 +276,41 @@ synthetic programs of the right size, not on LLLM's code, and the tick figures a
 the engine-measured cost model applied to a budgeted instruction mix rather than a
 running interpreter. What the numbers do settle is the *ordering* — pack the ring
 first, and only revisit the CPU if code banks land.
+
+### Wrap elimination: measured, and it does not pay
+
+After the lane-row slice the room is 181 interior rows — 80 glyph rows and 101 of
+overhead. The glyph rows carry 17 rows of *wrapping* (63 blocks, 80 rows), so
+removing wraps looked like the next 17 rows. It is not, and the reason is worth
+recording because the number that suggested it was mine.
+
+Attributing every wrap to the `_Pen` call that caused it:
+
+    seek   14     the block revisits a pipe band it has already passed
+    ensure  1     the row genuinely ran out of columns
+
+Only the `ensure` wrap is a width problem, so **widening buys one row, not 17**.
+The other 14 are the zone-order rule doing its job: a block whose tokens need
+`ST` after `IO` must wrap, and that is a property of the token sequence in
+`lllm_ring.WORKER`, not of the column geometry.
+
+The zone *order* is a free parameter though, so all six permutations were swept,
+moving `ZONE_COLS` and `PIPE_COL` together (moving either alone fails
+`check_binding` — `'sq' at column 93 binds IO, wanted FI`) and sweeping the gap
+between bands, since width is free while the machine is charged from its height:
+
+| order | gap | glyph rows | interior h | `IW` |
+|---|---|---|---|---|
+| `FI->ST->IO` | 22 | **76** | **177** | 216 |
+| `ST->FI->IO` (shipped) | 6 | 80 | 181 | 168 |
+
+`FI->ST->IO` really does cut four rows. It also needs `IW` 216, which makes the
+machine ~217x209 and `area2` **47,089 against the shipped 45,369** — spending
+width past the height loses, and no smaller gap binds for that order. The other
+four permutations do not bind at any gap.
+
+Two further reasons not to force it: the shipped order puts `ST` first
+deliberately, because `SEEK`/`REST` are the only hot loops and want to be one
+column from the entry, so reordering is a tick risk on top of a footprint loss;
+and the remaining 101 overhead rows are the one-block-per-row-band scheme itself,
+which is the redesign this document already declines.
