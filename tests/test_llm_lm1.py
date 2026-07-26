@@ -123,19 +123,22 @@ def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     """``ROM_ROWS`` is a swept constant, not a default; this is what it bought.
 
     Score is ``max(w, h)^2``, so only the larger side is charged and the fold's
-    optimum is where width and height cross.  Re-swept after ``HOT`` dropped
-    104 -> 53: a smaller store narrows the machine, which left the old fold
-    *height*-bound at 191x194 — charged for a height nothing needed.  88 gives
-    194x192 (37,636) and 91 gives 188x195 (38,025), against this build's square
-    193x193 (37,249).
+    optimum is where width and height cross.
+
+    Re-swept after the sixteen-opcode fold, which took the lane band from 63 rows to
+    31 and the whole machine from 192x194 to 184x183.  That is a large enough shift
+    to expect the crossing to move, and it did **not**: 88 gives 185x182 (34,225),
+    90 ties at 181x184 (33,856), and 89 stays the pick.  Worth pinning as a measured
+    non-move rather than an assumption, since the obvious guess was that 32 rows off
+    the height would push the fold wider.
 
     Pinned because the sweep is invalidated by *any* geometry change anywhere in
     the generator — the CPU, the ROM and the tape all move the crossing — and a
     silently drifted fold costs footprint without failing anything else.
     """
     machine, _program = built
-    assert (machine.width, machine.height) == (193, 193)
-    assert max(machine.width, machine.height) ** 2 == 37_249
+    assert (machine.width, machine.height) == (184, 183)
+    assert max(machine.width, machine.height) ** 2 == 33_856
 
 
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:

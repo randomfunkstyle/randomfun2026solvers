@@ -110,6 +110,7 @@ __all__ = [
     "hw_micro",
     "image_program",
     "DSP_BANDS",
+    "DSP_LANE_BANDS",
     "DSP_SEM_BAND",
     "MEMORY_SEMS",
     "ROM_ROWS",
@@ -125,14 +126,20 @@ class Band:
     IN = "in"  # CPU north wall: the input room
     OUT = "out"  # CPU west wall, below the ROM pipe: the output room
     MEM = "mem"  # CPU east wall: request out to the adapter, response in from the tape
-    # CPU south wall: the three LM-75 ports. `DSP p` cannot be built — it picks a
-    # pipe from its *operand*, and which pipe an `s` talks to is a static property
-    # of where the glyph sits (§7.1) — so each port gets its own opcode, its own
-    # lane and its own pipe. Which *side of the display* a pipe lands on is what
-    # makes it ADDR / DATA / SWAP (``SPEC.md`` § The LM-75 display).
+    # CPU south wall: the LM-75 ports. A *lane* cannot pick a pipe from its operand —
+    # which pipe an `s` talks to is a static property of where the glyph sits (§7.1)
+    # — so the three-opcode form gives each port its own opcode, lane and pipe.
+    # Which *side of the display* a pipe lands on is what makes it ADDR / DATA /
+    # SWAP (``SPEC.md`` § The LM-75 display).
     DSP_ADDR = "dsp_addr"  # display top wall
     DSP_DATA = "dsp_data"  # display left wall
     DSP_SWAP = "dsp_swap"  # display bottom wall
+    # `DSP p`'s single pipe. The lane sends two words down it — the port selector,
+    # then ACC — and `dsprelay.py`'s room does the choosing *behind* the seam, where
+    # its three `s` glyphs each sit statically beside their own port. One band here
+    # instead of three is what takes a 19-opcode program to 16, `k` from 5 to 4, and
+    # the lane band from 63 rows to 31.
+    DSP = "dsp"
     # CPU south wall: the STREAM block's command and response pipes (stream.py).
     # South rather than east because the memory lanes own the east wall, and a
     # southern pipe is ~15 rows below the lane band — far enough that a memory `r`
@@ -146,6 +153,13 @@ class Band:
 #: the display, ADDR drops straight into its top, SWAP turns east and runs under it,
 #: so a westward leg never has to cross a column belonging to a lane further west.
 DSP_BANDS: tuple[str, ...] = (Band.DSP_DATA, Band.DSP_ADDR, Band.DSP_SWAP)
+
+#: Bands that can occupy a display *lane* and so need a column on the CPU's south
+#: wall. The three ports are one arrangement; ``Band.DSP`` is the other, where a
+#: single lane feeds `dsprelay`'s room and the ports hang off *its* wall instead.
+#: Kept apart from ``DSP_BANDS`` because that tuple means the panel's three sides
+#: and their west-to-east routing order, which the relay does not change.
+DSP_LANE_BANDS: tuple[str, ...] = (*DSP_BANDS, Band.DSP)
 
 #: Columns between one display lane's ``s`` and the next. It must exceed the row
 #: gap between neighbouring lanes (2), or an ``s`` binds its neighbour's pipe:
@@ -290,6 +304,16 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
     Sem.DISPLAY_ADDR: (("W", None), ("s", Band.DSP_ADDR), ("W", None)),
     Sem.DISPLAY_DATA: (("W", None), ("s", Band.DSP_DATA), ("W", None)),
     Sem.DISPLAY_SWAP: (("W", None), ("s", Band.DSP_SWAP), ("W", None)),
+    # `DSP p`: A holds the operand when the lane starts (§5.2) and B holds ACC, so
+    # `s` sends the selector, `W` brings ACC over, `s` sends it, and the second `W`
+    # puts ACC back. Two words down one pipe; the relay reads the first and forwards
+    # the second to the port it names.
+    Sem.DISPLAY: (
+        ("s", Band.DSP),
+        ("W", None),
+        ("s", Band.DSP),
+        ("W", None),
+    ),
     Sem.HALT: (("H", None),),
 }
 
@@ -298,6 +322,7 @@ DSP_SEM_BAND: dict[Sem, str] = {
     Sem.DISPLAY_ADDR: Band.DSP_ADDR,
     Sem.DISPLAY_DATA: Band.DSP_DATA,
     Sem.DISPLAY_SWAP: Band.DSP_SWAP,
+    Sem.DISPLAY: Band.DSP,
 }
 
 #: Tags that talk to the STREAM block, keyed to the pipe each needs.
@@ -498,7 +523,7 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
         if s in DSP_SEM_BAND:
             # Not by width (all three are `W s W`): by band, so the westmost pipe
             # belongs to the lane placed furthest from the wall. See DSP_BANDS.
-            return (2, DSP_BANDS.index(DSP_SEM_BAND[s]), m)
+            return (2, DSP_LANE_BANDS.index(DSP_SEM_BAND[s]), m)
         if s in STREAM_SEM_BAND:
             return (2, STREAM_BANDS.index(STREAM_SEM_BAND[s]), m)
         return (group(m), -width(m), m)
@@ -710,7 +735,7 @@ def build_cpu(
 
     # Display lanes: one `s` per port, spread ``_DSP_PITCH`` columns apart so each
     # binds the pipe that leaves the south wall directly beneath it.
-    dsp_used = [b for b in DSP_BANDS if any(b == bb for mc in flat.values() for _, bb in mc)]
+    dsp_used = [b for b in DSP_LANE_BANDS if any(b == bb for mc in flat.values() for _, bb in mc)]
     dsp_cols = {b: lane_x0 + 1 + i * _DSP_PITCH for i, b in enumerate(dsp_used)}
     band_x.update(dsp_cols)
 
@@ -2085,9 +2110,7 @@ def build(
             f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
         )
     if tape_skip_batch not in (None, 1, 2, 4):
-        raise MachineError(
-            f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}"
-        )
+        raise MachineError(f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}")
     if tape_jump_threshold < 1:
         raise MachineError(f"tape_jump_threshold must be positive, got {tape_jump_threshold}")
     if store != "tape" and tape_skip_batch != 1:
@@ -2583,9 +2606,18 @@ def _assemble(
             )
 
     # ── the LM-75, below the CPU ─────────────────────────────────────────────
-    dsp_touches = (
-        _display(g, cpu, CX, CY + H + 1, AX, display) if (display and cpu.dsp_cols) else {}
-    )
+    # With `DSP p` the CPU owns one display pipe instead of three, so the fan-out
+    # room goes in first and the panel hangs off *its* south wall. `_display` is
+    # unchanged: the relay hands it the same three columns the CPU used to.
+    dsp_touches: dict[str, tuple[int, int]] = {}
+    relay_cols: dict[str, int] | None = None
+    relay_wall = CY + H + 1
+    if display and cpu.dsp_cols:
+        if Band.DSP in cpu.dsp_cols:
+            in_col = CX + cpu.dsp_cols[Band.DSP]
+            relay_cols, relay_wall = _dsp_relay(g, CX, CY + H + 1, in_col)
+            dsp_touches[Band.DSP] = (in_col, CY + H + 2)
+        dsp_touches |= _display(g, cpu, CX, relay_wall, AX, display, cols=relay_cols)
 
     # ── the STREAM block, below the CPU ──────────────────────────────────────
     stream_touches: dict[str, tuple[int, int]] = {}
@@ -3281,6 +3313,87 @@ def _stream(
     return blk, touches, (bx, by)
 
 
+#: Columns between one relay outlet and the next. Every outlet leaves the *same*
+#: wall, so the row term in §7.1's Manhattan distance is identical for all three and
+#: cancels: binding here is decided by column alone, and any pitch clear of the arm
+#: rows is safe. 12 is far more than needed and costs nothing but relay width.
+_RELAY_PITCH = 12
+
+#: The relay's interior, and where its inlet meets the north wall.
+_RELAY_W, _RELAY_H = 14 + 2 * _RELAY_PITCH, 13
+
+
+def _dsp_relay(g: _Grid, cx: int, wall_y: int, in_col: int) -> tuple[dict[str, int], int]:
+    """Place `DSP p`'s fan-out room. Returns its three outlet columns and south wall.
+
+    The lane sends two words down one pipe — the selector, then ACC. This room reads
+    the selector, subtracts one so the three cases are -1/0/+1 (ROM words are
+    non-negative, so the selector cannot carry a sign of its own), branches on it
+    three ways, and forwards ACC to the port the selector named.
+
+    Its three ``s`` glyphs sit statically beside their own outlets, which is what
+    makes the choice legal at all: a *lane* cannot pick a pipe from an operand
+    (§7.1), but a room downstream of the seam can, because the pipe each ``s`` binds
+    is still a property of where that glyph sits. Every outlet leaves the *same*
+    wall, so the row term in the Manhattan distance is identical for all three and
+    cancels — binding here is column-only, and the pitch decides it outright.
+
+    **It is a closed circuit, not a one-shot.** The probe in ``dsprelay.py`` ends
+    each arm on ``H`` because it serves a single request; a room that serves every
+    display op the program executes must return its man to the read. Built as a
+    probe first, this passed every binding check, built clean, and drew nothing —
+    the man halted on the first paint and the machine then stalled to the tick cap
+    on all fourteen cases. Each arm therefore runs east to a shared riser, down to a
+    return corridor, west, and back up into the ``>`` that re-enters the read; the
+    spawn joins that same ``>``, so there is exactly one path through the read.
+
+    Outlets run **west to east as DATA, ADDR, SWAP** — ``DSP_BANDS`` order — because
+    :func:`_display` routes DATA west round the panel, ADDR straight down into it and
+    SWAP east and under, and a westward leg must never cross a column belonging to a
+    port further west.
+    """
+    x0, y0 = cx, wall_y + 4  # three corridor rows, as the panel takes below the CPU
+    g.room(x0, y0, x0 + _RELAY_W + 1, y0 + _RELAY_H + 1)
+    g.draw_pipe([(in_col, wall_y + 1), (in_col, y0 - 1)])
+
+    ix = x0 + 1
+    main, addr_row, swap_row, ret = y0 + 6, y0 + 3, y0 + 9, y0 + 11
+    # `@` and the return both enter the `>` at ix+1, so there is one path through the
+    # read. A = selector, B = 1, then A = selector - 1 and `X` branches on its sign;
+    # the man walks east, so counter-clockwise is north, straight on is east, and
+    # clockwise is south.
+    g.text(ix, main, "@>rM`1`W-X")
+    bx = ix + 9
+
+    ports = {
+        Band.DSP_DATA: (main, ix + 12),
+        Band.DSP_ADDR: (addr_row, ix + 12 + _RELAY_PITCH),
+        Band.DSP_SWAP: (swap_row, ix + 12 + 2 * _RELAY_PITCH),
+    }
+    east = ix + 13 + 2 * _RELAY_PITCH
+
+    for row, col in ports.values():
+        if row != main:  # turn the branch arm out to its own row, then run east
+            step = 1 if row > main else -1
+            for y in range(main + step, row, step):
+                g.put(bx, y, "v" if step == 1 else "^")
+            g.put(bx, row, ">")
+        g.text(col - 1, row, "rs")  # read the value, send it to this port
+
+    # The return: east to a shared riser, south to the corridor, west, north into the
+    # `>`. All three arms share every cell of it, which is why it costs one lane.
+    for y in range(addr_row, ret):
+        g.put(east, y, "v")
+    g.put(east, ret, "<")
+    for x in range(ix + 2, east):
+        g.put(x, ret, "<")
+    g.put(ix + 1, ret, "^")
+    for y in range(main + 1, ret):
+        g.put(ix + 1, y, "^")
+
+    return {b: c for b, (_r, c) in ports.items()}, y0 + _RELAY_H + 1
+
+
 def _display(
     g: _Grid,
     cpu: _Cpu,
@@ -3288,6 +3401,7 @@ def _display(
     wall_y: int,
     east_limit: int,
     size: tuple[int, int],
+    cols: dict[str, int] | None = None,
 ) -> dict[str, tuple[int, int]]:
     """Draw the LM-75 below the CPU and wire its three ports. Returns pipe touches.
 
@@ -3316,7 +3430,11 @@ def _display(
     dw, dh = size
     if dw < 3:
         raise MachineError(f"a {dw}-wide panel has no room between its corners for SWAP")
-    cols = {band: cx + col for band, col in cpu.dsp_cols.items()}
+    # Absolute columns of the three ports. Normally the CPU's own lane `s` columns;
+    # with `DSP p` folded to one lane they are the *relay's* south-wall outlets, and
+    # `wall_y` is the relay's south wall. Everything below is unchanged either way —
+    # the relay presents exactly the interface the CPU used to.
+    cols = cols if cols is not None else {band: cx + col for band, col in cpu.dsp_cols.items()}
     dx = _panel_x(dw, cols)
     dy = wall_y + 4  # three corridor rows between the CPU's south wall and the panel
     right, bottom = dx + dw + 1, dy + dh + 1

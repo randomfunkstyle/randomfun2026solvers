@@ -1,9 +1,16 @@
 # `little-little-man` — machine design
 
-**Status: judged, 28/28 cases.** `tasks/solutions/little-little-man_cpu.man`
+**Status: 14/14 public on the engine, unsubmitted.** `tasks/solutions/little-little-man_cpu.man`
 
-    w x h = 203 x 204     area2 = 41,616     avgTicks = 22,258,080
-    score = 926,292,239,445        14 public + 14 private cases, all passing
+    w x h = 184 x 183     area2 = 33,856     avgTicks = 6,389,522
+    local score = 216,323,661,669       judged estimate ~237.1e9 (x1.096)
+
+The last *judged* machine was 192x194 / 37,636 / 6,890,324 = **285,146,989,930**
+(28/28). This build folds the program to 16 opcodes, which takes the decode trie
+from depth 5 to 4 and the lane band from 63 rows to 31: **-16.6% on local score**,
+with ticks improving 7.3% as well because a shallower trie makes every instruction
+cheaper to issue. 10 live men against a 12 bound; `men x ticks` 63.9M against the
+700M floor.
 
 | piece | where | state |
 |---|---|---|
@@ -503,6 +510,49 @@ alongside the existing opcodes, `llm_lm1.py` alone stops emitting the three it
 replaces, and every other generator keeps the ops it always had with its machine
 byte-identical. The blast radius is one file, and the ISA grows rather than
 shrinks — which is the opposite of how the entry has read since it was written.
+
+### Built, and what it actually measured
+
+The forecast above is a geometry-only stand-in; this is the machine:
+
+| | opcodes | k | band | box | `area2` | avg ticks |
+|---|---|---|---|---|---|---|
+| judged | 19 | 5 | 63 rows | 192x194 | 37,636 | 6,890,324 |
+| **built** | **16** | **4** | **31 rows** | **184x183** | **33,856** | **6,389,522** |
+
+**-16.6% on local score**, not the -26% the stand-in predicted, and the gap is the
+relay's own footprint: it is a 38x13 room in the corridor under the CPU, and the
+panel hangs below *it*, so ~15 rows come back. The stand-in had no relay to place.
+Ticks fell 7.3% for free — a depth-4 trie is a shorter walk on every instruction.
+
+**The ROM fold did not move.** The obvious expectation was that 32 rows off the
+height would push the crossing wider; swept 78..99, it did not — 89 and 90 tie at
+33,856 and 89 stays the pick. Pinned in `test_footprint_is_what_the_fold_sweep_found`
+as a measured non-move, because the next person will guess the same thing.
+
+`MULI` was chosen over `DIVMOD` for the third removal on risk, not on cost: it is
+assembler-only, needing no ISA or emulator change. It executes **31 times a case,
+0.31% of instructions**, so eight-for-one costs ~0.4% of ticks. Its doubling
+scratch is `hot=True` deliberately — four reads an execution is 124 a case, and on
+the cold tape at ~3,400 ticks each that alone would have cost ~6% of ticks.
+
+**`DSP p` did not need adding.** It has been in the v1 table at code 14 since the
+beginning, with a working emulator handler. What made it "impossible" was its
+*micro*, which sent one word and so left a relay no way to learn the port; it now
+sends two. The ISA did not grow at all.
+
+### The failure that a build cannot catch
+
+The first placed relay was `dsprelay.py`'s probe, arms ending on `H`. Every pipe
+bound, `check_bindings` passed, the machine built at exactly the right size — and
+drew **0/14**, stalling to the tick cap on every case. A probe serves one request;
+a room serving every display op the program executes must return its man to the
+read. The relay is a closed circuit for that reason, spawn and return converging on
+the same `>` so there is one path through it.
+
+That is the third time in this file's history that a clean build has meant nothing
+about correctness, and it is why the arms are verified on the engine rather than
+inspected.
 
 ### The relay is built and proven
 
