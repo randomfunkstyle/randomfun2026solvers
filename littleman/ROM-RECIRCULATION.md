@@ -197,6 +197,74 @@ so a round-based program exhausts its input and then profiles its own stall — 
 run of it here attributed 56% to the `IN` lane, which is that artefact and not a
 finding.
 
+## The repeater: what it can reach, measured (2026-07-26)
+
+The producer is ~56% of `little-little-man` (above), so this is the piece worth
+building. Three facts, each measured rather than argued, fix its design.
+
+**1. A relay is 2.00 ticks a word.** A man re-emitting a stream does `r` then
+`s`; there is no cheaper cycle. Measured on the reference interpreter with a
+corridor of alternating `r`/`s` — 12 words out in 26 steps, the extra 2 being
+spawn and halt:
+
+```
++-+  +--------------------------+
+|I|>>| @rsrsrsrsrsrsrsrsrsrsrsrsH|
++-+  +--------------------------+
+```
+
+That alone is **5.00 -> 2.00** on the producer. Against today's counted discard
+loop `max(4.0, 2.0) = 4.0`, so a repeater on its own is worth 20% of the
+producer's share; with the drain behind it (`unit_bits=2`, 2.51) it is 50%.
+
+**2. One room cannot beat 2.00 — it is grid parity, not effort.** The obvious
+answer is two men on the corridor in opposite phases, one reading while the other
+sends. A room may hold at most one `@`, so the second man comes from `Y`, and
+`Y`'s two children are born at `(x, y-1)` and `(x, y+1)`. Any path from a birth
+cell to row `y` column `c` has length parity `|c - x| + 1`, so two children
+standing on row `y` at the same tick are **always an even number of cells apart**
+— always the same phase on a period-2 `rsrs` corridor. They would read on the
+same tick, the input pipe delivers one value a tick, one blocks, the other steps
+onto him and both stop. No arrangement of detours escapes it.
+
+**3. Two banks reach 1.00 a word, and the ROM image already provides the split.**
+`r` binds to the *nearest incoming* pipe (`SPEC.md`), so two `r` cells in one room
+can read two different rings purely by where they stand. Verified with
+`lm.route` on a probe — a cell at (16,2) binds the 3-cell pipe, a cell at (17,6)
+the 14-cell one, same room:
+
+    r r          <- one word from bank A, one from bank B: 2 words in 2 ticks
+    ^ ^
+    |  \____ nearest the south pipe
+     \______ nearest the west pipe
+
+Each bank sustains one word per two ticks, and the consumer takes one from each
+per two ticks, so the pair sustains **1 word a tick with no merger man** — the
+merger is exactly what would have put a 2-tick cycle back in the path. The image
+is already fixed-width `(opcode, operand)` pairs (`rom_words`), so bank A holds
+the even words and bank B the odd ones; the CPU's `>rbr` fetch reads one of each,
+and every discard count is even (§`even` in `drain.py`), so a drain lap consuming
+one from each bank is exactly correct with no remainder arm.
+
+### Seeding, which is the part that is actually hard
+
+A ring's pipes start empty, so something must fill them once, and a ring room that
+takes both the ROM's pipe and its own return has no way to order the two — `r`
+picks the nearest and would deadlock on an empty ring, `R` picks either and
+corrupts the order the moment both are ready.
+
+The way out is that the choice is not per-word, it is once: the relay man runs a
+**counted seeding phase** first — `b` from a literal, then `r` from the cell
+nearest the ROM, `s` into the ring, `m`, loop — and falls into the steady loop
+(`r` from the cell nearest the return, `S` to the ring *and* the CPU) when `BP`
+hits zero. Same nearest-pipe positioning trick as (3). One-time cost is 3 ticks a
+word for one program length; after that the ROM man simply blocks on a full ring
+forever and is never heard from again.
+
+Ring capacity must be an exact multiple of the program length, or the window that
+recirculates is not a whole image and the CPU sees a rotation that never
+resynchronises.
+
 ## Still open
 
 **1. Unroll the discard loop two words to a lap.** Every discard count is even —

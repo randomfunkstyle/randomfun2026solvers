@@ -1,8 +1,8 @@
 """The PATH unit's **geometry** — the room, the panel, the pipes, and the box.
 
-This file deliberately proves nothing about what a command *does*: the arms are
-PART 3's, and ``test_path_unit_model.py`` owns the protocol. What is checked here is
-everything that would make a correct micro-program paint the wrong pixel anyway:
+``test_path_unit_model.py`` owns the protocol at the emulator level. This file checks
+the hardware arms as well as everything that could make a correct arm paint the wrong
+pixel:
 
 * **which pipe each glyph binds**, asserted by the generator's own arithmetic *and*
   by the engine's ``route`` on the placed grid (ARCH §7.1 — binding is declared, and
@@ -36,12 +36,13 @@ node_required = pytest.mark.skipif(
     reason="node and littleman/lm.mjs required",
 )
 
-#: One command per arm, in an order the unit can actually execute: ``ROBOT`` first,
-#: because it is the only arm besides ``MOVE`` that writes the register and ``MOVE``
-#: blocks on an empty one. Argument values are just legal cells (0..255).
+#: One command per arm, in an order the unit can actually execute: ``CELL`` while
+#: the panel cursor is at zero, then ``ROBOT`` before ``MOVE`` because those are the
+#: register's writer and reader. ``CELL`` is the binary board value; the other
+#: arguments are legal panel cells (0..255).
 PROBE_COMMANDS = [
+    pu.word(pu.arm_codes()["CELL"], 1),
     pu.word(pu.arm_codes()["ROBOT"], 34),
-    pu.word(pu.arm_codes()["CELL"], 17),
     pu.word(pu.arm_codes()["FLAG"], 50),
     pu.word(pu.arm_codes()["MOVE"], 35),
 ]
@@ -84,8 +85,8 @@ def test_the_command_word_survives_a_negative_argument() -> None:
             assert w >> 3 == arg
 
 
-def test_every_arm_is_a_placed_column_with_a_documented_stub() -> None:
-    """PART 3 writes inside these columns; PART 2 only promises where they are."""
+def test_every_arm_is_a_placed_column_with_a_documented_protocol() -> None:
+    """The decode leaves and their implemented commands cannot drift apart."""
     assert set(pu.ARM_STUBS) == set(pu.ARMS)
     cells = pu.unit_interior().cells
     for arm, x in pu.arm_columns().items():
@@ -236,17 +237,22 @@ def test_the_probe_is_the_block_plus_one_driver_room() -> None:
     assert {"unit", "unit:main", "unit:trie", "relay", "panel"} <= named, sorted(named)
     for arm in pu.ARMS:
         assert f"unit:{arm}" in named, f"the {arm} arm is unnamed in the overlay"
-    # The ladder holds one literal per command, so the *driver room* grows with the
-    # list — six rows a command, flat 4 of frame. The whole grid does not: the block is
-    # 33 rows and the driver only reaches 28 at four commands, so the probe stays 45x37
-    # however many commands it is given. Asserting `len(short) < len(rows)` therefore
-    # compared 37 against 37; measure the room that moves, not the page it sits on.
+    # The ladder holds one literal per command, so the *driver room* grows by the
+    # rendered literal (`digits` plus two backticks and `s`), with four rows of frame.
+    # The whole grid does not: the block is taller than this four-command driver.
+    # Asserting `len(short) < len(rows)` therefore compares the block against itself;
+    # measure the room that moves, not the page it sits on.
     def driver_h(n: int) -> int:
         _rows, d, _blk = pu.build_probe(PROBE_COMMANDS[:n])
         return next(r for r in d.regions if r.name == "driver").h
 
     heights = [driver_h(n) for n in range(1, len(PROBE_COMMANDS) + 1)]
-    assert heights == [4 + 6 * n for n in range(1, len(PROBE_COMMANDS) + 1)], heights
+    expected = []
+    height = 4
+    for command in PROBE_COMMANDS:
+        height += len(str(command)) + 3
+        expected.append(height)
+    assert heights == expected, heights
     assert all(h < blk.height for h in heights), "the driver outgrew the block it drives"
 
 
@@ -266,6 +272,39 @@ def test_the_probe_loads_and_runs_without_a_fatal(probe: tuple[Path, pu.PathBloc
     assert snap.fatal is None, snap.fatal
     assert snap.reason is None, snap.reason
     assert not snap.halted, "the unit is a servant: it waits for the next command"
+
+
+@node_required
+@pytest.mark.slow
+def test_the_hardware_arms_commit_exactly_the_modelled_frames(
+    probe: tuple[Path, pu.PathBlock],
+) -> None:
+    """The real glyph programs, not :class:`store.PathUnit`'s Python model.
+
+    CELL streams a wall at cursor 0; ROBOT commits at 34; FLAG paints 50 without
+    committing; MOVE erases 34, moves to 35, and commits once.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    def frame(values: dict[int, str]) -> list[str]:
+        cells = ["0"] * (pu.PANEL * pu.PANEL)
+        for cell, colour in values.items():
+            cells[cell] = colour
+        return ["".join(cells[y * pu.PANEL : (y + 1) * pu.PANEL]) for y in range(pu.PANEL)]
+
+    want = [
+        frame({0: "7", 34: "a"}),
+        frame({0: "7", 35: "a", 50: "9"}),
+    ]
+    path, _blk = probe
+    (res,) = Littleman().display_frames(
+        path,
+        [{"name": "path-unit", "rounds": [{"in": [], "frames": want}]}],
+        max_ticks=20_000,
+    )
+    assert res.fatal is None, res.fatal
+    assert res.output == []
+    assert res.frames == want
 
 
 @node_required
@@ -314,7 +353,9 @@ def test_route_check_agrees_with_the_generator(probe: tuple[Path, pu.PathBlock])
     # the block's five pipes plus the probe's command pipe, and nothing else: an
     # extra pipe means a leg ran alongside a room corner and the engine split it.
     assert len(pu.build_path().lengths) + 1 == sum(
-        1 for line in out.splitlines() if line.strip().startswith(("0:", "1:", "2:", "3:", "4:", "5:"))
+        1
+        for line in out.splitlines()
+        if line.strip().startswith(("0:", "1:", "2:", "3:", "4:", "5:"))
     )
     # every pipe glyph in the grid: the unit's own, the relay's `r`/`s` pair, and one
     # `s` per command word in the driver's ladder.
