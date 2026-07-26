@@ -1,0 +1,16 @@
+# pathfinder — submission a1bc069e-02b0-47b9-8074-cadd29a4f1da
+
+verdict      done: 18/18 cases, area2 30625, avgTicks 356,383, score 10,914,234,479
+submitted    2026-07-26T15:53:44+0300
+grid         82x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  32270b9fec3ca451c9aa5792df6d19b67f0d8ec31658191598fd0c1f0bb813bf
+commit       30ac182
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 6/10: replace the one-backtick-per-column restriction with exact loader-safe reuse whenever the vertical interval contains only digits/blanks. Same 82x175 box; 61 focused tests and both validators pass; local score 8,363,293,750 versus 8,474,401,250.
