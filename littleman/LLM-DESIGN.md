@@ -415,9 +415,81 @@ to bind by nearest column.
   recirculates ~1,900 ROM words. Two ROMs — one for setup, one for the tick loop —
   would roughly halve that (~9.2M ticks of the 22.2M), and `two-roms.man` already
   proves the hardware. It needs a second fetch site in `build_cpu`.
-* **Sixteen opcodes.** At 19 the decode trie is depth 5, which costs 32 CPU rows
-  and ~43% on every instruction's issue cost. Folding `DSPA`/`DSPD`/`DSPS` into
-  one `SND` to a paint-only coprocessor, and dropping `MULI`, would land exactly
-  on 16.
+* **Sixteen opcodes — measured at −26% of `area2`, not ~6% of ticks.** See
+  "The sixteen-opcode cliff" below. This entry used to price the fold by its
+  effect on instruction issue, which is why it was never done; issue is now a
+  fifth of the machine and that framing undersells it by a factor of four.
 * **Setup is ~1,500 of the 3,395 ROM words**, and every one of them is paid by
   every taken branch in the tick loop.
+
+## The sixteen-opcode cliff
+
+The CPU's lane band is `2 * (1 << k) - 1` rows, and `machine.py` sizes it from the
+opcode *count* alone:
+
+    k = max(1, (len(used) - 1).bit_length())
+
+At 19 opcodes `k = 5`: the trie has **32 leaf slots and 13 stand empty**, and the
+band is 63 rows for 19 lanes. The emptiness is not spread out — `plan()` pins the
+LM-75 lanes to the bottom of the band, so it collects into one visible 28-row gap
+between `cpu:lane:JMPF` at row 124 and `cpu:lane:DSPD` at row 152.
+
+**The empty leaves cannot be reclaimed without changing `k`.** The trie is drawn
+by a recursive `trie(level, row)` whose fan-out is `1 << (k - level)`, so leaf
+spacing is a property of the depth. Reclaiming them means an unbalanced trie,
+which is a different decoder, not a tighter one.
+
+**There is no partial credit.** `(len(used) - 1).bit_length()` steps at powers of
+two, so 19, 18 and 17 opcodes all give `k = 5` and the identical 63-row band. Only
+**16 or fewer** reaches `k = 4` and 31 rows. Any route to the fold pays its whole
+cost before a single row appears — which is the main reason to price it before
+starting.
+
+Measured on a geometry-only stand-in (three mnemonics rewritten onto others so the
+*count* is 16; the machine computes nonsense, its dimensions are exact):
+
+| | opcodes | k | box | `area2` |
+|---|---|---|---|---|
+| shipped | 19 | 5 | 193x193 | 37,249 |
+| 16-opcode geometry, same fold | 16 | 4 | 163x168 | 28,224 |
+| 16-opcode geometry, re-folded `rom_rows=88` | 16 | 4 | **166x166** | **27,556** |
+
+The band goes 63 → 31 rows, and that is 25 rows off the *height*. The machine then
+flips width-bound, so the ROM fold — which trades width into height — has room to
+work again, and the crossing point moves from 89 to **88**. Total **−26.0%**, and
+score is `area2 x avgTicks`, so it carries straight through if ticks hold.
+
+### Which three opcodes, and what each costs
+
+Every `MULI`/`DIVI`/`MODI` site in the program is a power of two (`MULI 16`;
+`DIVI 32/16/256`; `MODI 32/16/4/256`), which makes them the natural candidates.
+
+* **`MULI` (8 sites, all `x16`) — removable in the assembler alone.** `ST tmp;
+  ADD tmp` doubles ACC (`ST` leaves B intact, `ADD` reads the slot back and adds),
+  so four pairs give `x16`: 8 instructions where there was 1. About **+112 ROM
+  words**, which a taken branch then recirculates — price that against the rows.
+* **`DIVI` + `MODI` → one `DIVMOD`, −1 opcode.** `DIVI`'s micro is `(RING_READ,
+  SWAP, DIV, MOV)` and SPEC's `/` already leaves **quotient in A and remainder in
+  B** — the trailing `MOV` is what destroys the remainder. An opcode without it
+  serves every `MODI` site unchanged (ACC is B, so ACC = remainder, exactly what
+  `MODI` yields) and every `DIVI` site with one extra instruction to move the
+  quotient into ACC.
+* **`DSPA`/`DSPD`/`DSPS` → one `DSP`, −2 opcodes.** The doc's original route, and
+  still the only one that removes two at once. Needs a routing relay downstream:
+  the three ports are three physical pipes and an `s` binds to one of them
+  statically, so a single opcode can only reach them through a room that fans out
+  — `U` receive, three-way `X` on the word's sign, one arm per port, exactly the
+  shape of `_ADAPTER`. It adds a live man and must respect the rule that the `O`
+  room, the LM-75 ports and the STREAM block own the south corridor one at a time.
+
+Minimum viable pair is therefore **`DSP` fold (−2) plus `MULI` (−1)**, or
+**`MULI` + `DIVMOD` + the `DSP` fold** (−4, landing on 15, which is still `k = 4`).
+
+### One route that looks free and is not
+
+`SUBI n` is arithmetically `ADDI (2**64 - n)` — `wrap` is signed 64-bit two's
+complement, so the identity holds. It would remove an opcode with no extra
+instructions at all. **It cannot be used.** `rom.digit_width` takes the maximum
+over *every* word and `group_cells` pads them all to it, so a single 20-digit
+literal widens all ~3,400 ROM words from 4 digits to 20 and roughly triples the
+ROM's cells. The ROM already sets the machine's width.
