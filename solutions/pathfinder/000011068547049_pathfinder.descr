@@ -1,0 +1,16 @@
+# pathfinder — submission 1a902dd1-b369-4688-b405-b2d5916e7232
+
+verdict      done: 18/18 cases, area2 30625, avgTicks 361,422, score 11,068,547,049
+submitted    2026-07-26T15:49:26+0300
+grid         83x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  034ff8f3b792f799a1957600041c60eeaef9b04436e93b719f2cb08ab7c3ce94
+commit       e991552
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 4/10: compact the west control channel from 13 to 12 columns. Grid narrows 84x175 to 83x175; scored area stays height-bound; both validators pass 7/7; every public case is one tick faster.
