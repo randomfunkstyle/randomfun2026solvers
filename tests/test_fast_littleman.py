@@ -60,7 +60,11 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-    assert result.step == 105_580
+    # 105,580 until ``ADAPTER_TAPE_GAP`` went 6 → 1. A read is strictly serial and pays
+    # the whole response pipe, so five columns off the adapter-to-STORE corridor is 310
+    # ticks off this case — the tick half of that change, measured, on top of the 95 → 90
+    # columns it takes off `palette`'s box.
+    assert result.step == 105_270
     assert result.output == []
 
 

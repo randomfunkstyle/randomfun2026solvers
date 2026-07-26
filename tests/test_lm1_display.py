@@ -67,8 +67,12 @@ DISPLAY_TARGETS = ("palette", "plotter")
 
 #: ``max(width, height)²`` and the shape it comes from, pinned per slug so a
 #: regression in either dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = {"plotter": (109, 104), "palette": (95, 89)}
-EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 9_025}
+#: ``ADAPTER_TAPE_GAP`` 6 → 1 narrows the adapter-to-STORE corridor by five columns, and
+#: the two display programs answer it differently: ``palette`` is bound by that corridor
+#: and goes 95 → 90 (9,025 → 8,100), while ``plotter``'s 109 is set by its folded ROM
+#: sitting west of the corridor, so it keeps every column and banks only the ticks.
+EXPECTED_SHAPE = {"plotter": (109, 104), "palette": (90, 89)}
+EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 8_100}
 
 MAX_INSTRUCTIONS = 400_000
 TICK_CAP = 3_000_000
@@ -354,11 +358,16 @@ def test_folding_the_rom_is_what_buys_plotters_footprint(slug: str) -> None:
     if slug in machine.ROM_ROWS:
         assert tuned.rom_rows == machine.ROM_ROWS[slug]
         assert tuned.footprint < default.footprint
-        # The tuned fold used to only trade height, the width being the tape's. It can
-        # now also come out *narrower*: the fold changes the ROM's height, the CPU sits
-        # below it, and which memory pad binds depends on those rows — so a different,
-        # tighter pad becomes available.
-        assert tuned.width <= default.width
+        # What the fold actually buys is *height*, and it is allowed to pay a column for
+        # it. `plotter` folds 20 ROM rows down to 8 and goes 108x116 -> 109x104: one
+        # column wider, twelve rows shorter, and 13,456 -> 11,881 because the binding
+        # dimension was the height. An earlier version of this test asserted
+        # `tuned.width <= default.width`, which held only while the corridor
+        # (`ADAPTER_TAPE_GAP`, then 6) made the default the wider of the two; narrowing
+        # it to 1 took five columns off the default and left the tuned fold's 109
+        # standing, so the assertion was pinning a coincidence.
+        assert tuned.height < default.height
+        assert max(tuned.width, tuned.height) < max(default.width, default.height)
     else:
         assert tuned.rows == default.rows
 

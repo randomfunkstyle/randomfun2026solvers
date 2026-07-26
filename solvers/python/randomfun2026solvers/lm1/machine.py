@@ -98,6 +98,7 @@ from .isa import TARGET_SEMS, Isa, Micro, Sem
 __all__ = [
     "Band",
     "Machine",
+    "adapter_tape_gap",
     "build",
     "build_for",
     "display_for",
@@ -1144,6 +1145,74 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 #: footprint despite an access cost that ignores ``n``.
 STORE_TIERS = ("tape", "grid", "men", "men-y")
 
+#: Blank columns between the CPU's east wall and the adapter room, and between the
+#: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
+#: which is squared in the score, and once in the memory *response* pipe, whose whole
+#: length is charged on every read because a read is strictly serial (§7.4b) — and a
+#: read is where 45% of `gradebook`'s CPU time goes. So these are not cosmetic spacing;
+#: they are two of the cheapest numbers in the generator to be wrong about.
+#:
+#: ``CPU_ADAPTER_GAP`` is a hard floor: every program fails to place its pipes at 3 or
+#: less, so 4 is the real minimum and not a guess.
+#:
+#: ``ADAPTER_TAPE_GAP`` was 6 and wanted to be **1**, which is worth ~9-10% of
+#: footprint on every width-bound machine, plus five cells off every read:
+#:
+#: | | 6 | 1 |
+#: |---|---|---|
+#: | `brackets` | 95x70, 9,025 | **90x70, 8,100** |
+#: | `gradebook` | 113x101, 12,769 | **108x101, 11,664** |
+#: | `palette` | 95x89, 9,025 | **90x89, 8,100** |
+#: | `sudoku-validity` | 83x80, 6,889 | **80x80, 6,400** |
+#: | `tcp` | 109x74, 11,881 | **104x74, 10,816** |
+#:
+#: Height-bound machines (`matmul`, `snake`, `snake-ring`, `plotter`) keep their
+#: footprint and still gain the ticks. `palette` was in that list on the strength of
+#: being a display problem like `plotter`; it is not, it is 95 wide against 89 tall and
+#: the five columns come straight off its score.
+CPU_ADAPTER_GAP = 4
+ADAPTER_TAPE_GAP = 1
+
+#: Programs that need a wider adapter-to-STORE gap than the default.
+#:
+#: ``matmul`` is the only one, and it does not merely fail to *place* at 1 — it places,
+#: loads, and then **hangs**, every case at the tick cap. The STREAM block's rings sit
+#: in that corridor, so a gap the request pipe fits through is not necessarily one the
+#: rings survive, and the binding checks cannot see the difference. It is verified
+#: working at 3, 4, 5 and 6 (and 3 is even slightly faster), but `matmul` is
+#: height-bound at 90 rows so *no* gap changes its footprint and the tick win is ~1%.
+#: Not worth re-validating a STREAM machine for, so it stays on the exact geometry that
+#: scored 1,446,608,970.
+ADAPTER_TAPE_GAP_FOR: dict[str, int] = {"matmul": 6}
+
+#: The floor the *store tier* imposes on that gap, which is a separate thing from the
+#: per-program override above: it is the block east of the corridor, not the CPU west of
+#: it, that fails to bind. Only ``tape`` — the shipped tier — reaches 1. Measured, by
+#: building `snake-ring` on each tier at every gap from 1 to 7:
+#:
+#: | tier | binds from | note |
+#: |---|---|---|
+#: | `tape` | **1** | the default; footprint flat across all seven |
+#: | `men-y` | 3 | flat too, so the floor costs it nothing |
+#: | `men` | 5 | and it *grows* per column: 21,025 at 5, 21,609 at 7 |
+#: | `grid` | 6 | |
+#:
+#: All three non-``tape`` tiers are measured negatives (ARCH.md §4.1) whose numbers are
+#: quoted in tests as comparisons, so they are pinned at the 6 they were measured on
+#: rather than dropped to their true floors — re-measuring a losing tier buys nothing,
+#: and moving `men` off 6 would silently restate a recorded result.
+ADAPTER_TAPE_GAP_BY_STORE: dict[str, int] = {"grid": 6, "men": 6, "men-y": 6}
+
+
+def adapter_tape_gap(program_name: str, store: str) -> int:
+    """Blank columns between the adapter and the STORE block, for one build.
+
+    The wider of the two constraints wins: a program's own override (``matmul``'s
+    STREAM rings) and the floor its store tier needs to bind at all.
+    """
+    gap = ADAPTER_TAPE_GAP_FOR.get(program_name, ADAPTER_TAPE_GAP)
+    return max(gap, ADAPTER_TAPE_GAP_BY_STORE.get(store, 0))
+
 
 @dataclass
 class _Tape:
@@ -1620,7 +1689,7 @@ def _assemble(
         g.put(CX + cpu.out_col, oy + 3, "O")
 
     # ── adapter, east of the CPU ─────────────────────────────────────────────
-    AX = CX + W + 4
+    AX = CX + W + CPU_ADAPTER_GAP
     # Aligned so the request pipe leaves the CPU beside the memory lanes, but never
     # so high that the response pipe's westward leg grazes the adapter's top corner.
     # A small machine (few lanes, no memory) is the case that needs the clamp.
@@ -1654,7 +1723,7 @@ def _assemble(
         raise MachineError(
             f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
         )
-    TX = AX + ADAPTER_W + 6
+    TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store)
     TY = CY
     g.blit(TX, TY, tape.cells)
 
