@@ -100,7 +100,7 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
 def test_footprint_is_what_was_measured(built) -> None:
     rows, _dbg, _info = built
     w, h = max(len(r) for r in rows), len(rows)
-    assert (w, h) == (159, 222)
+    assert (w, h) == (159, 202)
 
 
 def test_rings_are_sized_to_the_stated_constraints_not_the_public_cases(built) -> None:
@@ -143,3 +143,35 @@ def test_grid_passes_every_public_case() -> None:
     failed = [(c.name, c.detail) for c in result.cases if not c.passed]
     assert not failed, failed
     assert len(result.cases) == 10
+
+
+def test_a_fall_through_that_lands_east_costs_no_lane_row() -> None:
+    """The straight-lane row exists only to walk the man back west to ``NC``.
+
+    When the successor is the next block *and* its first glyph stands east of where
+    the predecessor stopped, he does not need the entry: he drops one row at his own
+    column and keeps walking east. Those rows were 57 of the room's 101 overhead
+    rows, and a row is the charged dimension here.
+
+    Guarding the mechanism rather than the count: every dropped block must have no
+    straight row allocated, and its drop column must really be west of the target's
+    first glyph, or the man would walk backwards over glyphs he has already run.
+    """
+    from randomfun2026solvers.lllm_layout import (
+        _droppable,
+        _first_col,
+        block_order,
+        plan_blocks,
+    )
+
+    order = block_order(lllm_ring.WORKER)
+    plans = plan_blocks(order, lllm_ring.WORKER)
+    drop = _droppable(order, plans, lllm_ring.WORKER)
+    assert drop, "no fall-through drops: the packing has regressed"
+
+    room = lllm_layout.build_room()
+    for src, dst in drop.items():
+        assert src not in room.straight_y, f"{src} kept a lane row it cannot need"
+        assert plans[src].rows[-1].end < _first_col(plans[dst])
+        # and the target really is adjacent, which is what makes the drop reachable
+        assert room.glyph_ys[dst][0] > room.glyph_ys[src][-1]

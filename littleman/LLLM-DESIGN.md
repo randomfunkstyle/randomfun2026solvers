@@ -2,8 +2,8 @@
 
 **Status: shipped and passing.** `tasks/solutions/little-little-little-man_ring.man`
 
-    w x h = 159 x 222     area2 = 49,284     avg_ticks = 1,460,882.10
-    score = 7.20e10       10 / 10 public cases, both validators, identical ticks
+    w x h = 159 x 202     area2 = 40,804     avg_ticks = 1,373,035.30
+    score = 5.60e10       10 / 10 public cases on the engine, worst 4,869,930 ticks
 
 | piece | where | state |
 |---|---|---|
@@ -184,3 +184,226 @@ Bytes accumulate `word = word*256 + class` in raster order in the packed variant
 so cell `i` of a word sits at bits `8*(7-i)`; a short final word is left-shifted
 by the shortfall, which is a single `{`. Kept here only because the packed store
 is the obvious footprint optimisation once the layout exists.
+
+## CPU or ring? — measured, and it is a wash
+
+The ring is charged from its **height**: 159x222, and `max(w,h)^2` bills only the
+larger side, so the 63 columns of slack to the west are free and narrowing the
+machine is worth exactly zero. All of the score is in rows.
+
+Where the rows go, measured on `lllm_layout.build_room`:
+
+    63 blocks -> 189 interior rows =  80 glyph rows + 109 lane-overhead rows
+    53 of the 63 blocks have exactly ONE glyph row, and still cost 2 (non-branching)
+    or 4 (branching) rows apiece
+
+58% of the charged dimension is lane plumbing. It is structural, not sloppy: the
+module docstring says it "lays one block to a row band and spends rows freely",
+which was right when correctness was the risk.
+
+`LLM-DESIGN.md` ran this comparison the other way and rejected the ring for the
+sibling task, because **a CPU pays for control flow in ROM words, which are dense
+data, not in rows**. So the question was worth asking here. It was answered with
+`lm1.machine.build`, which synthesises a machine from a `Program` and reports its
+dimensions — a CPU can therefore be priced against a synthetic program of the
+right size and opcode mix *without writing the interpreter*.
+
+**Footprint says yes.** Sweeping the ROM fold for the square optimum (ARCH 7.3b),
+`tape_n=280`, `display=(16,16)`:
+
+| interpreter | best `rom_rows` | w x h | `area2` |
+|---|---|---|---|
+| 300 instrs | 20 | 95x91 | 9,025 |
+| 400 | 26 | 98x97 | 9,604 |
+| 600 | 36 | 104x107 | 11,449 |
+| 900 | 48 | 117x119 | 14,161 |
+
+The fold matters as much as the program: 600 instructions is 19,600 at the default
+fold and 11,449 swept, because the sweep lands the machine square at 104x107.
+
+**Ticks say no, and ticks decide it.** The first pass of this estimate omitted ROM
+recirculation and put a CPU at ~2.5M ticks. That was wrong. `LLM-DESIGN.md` prices
+a taken branch at **12 ticks per ROM word it recirculates**, and at `P = 1,022`
+words that term dominates everything else. Applying the full engine-measured model
+against the *measured* workload — 58.5 interpreted ticks and 11.6 rounds a case,
+not the 182 the round budgets suggest:
+
+    setup, 256 program cells    4,017,664     <- 3.08M of it is recirculation alone
+    the interpreted ticks        1,458,639     (24,934 a tick)
+    rounds and frames              443,677
+    TOTAL                        5,919,980     (cap 15,000,000)
+
+| | `area2` | ticks | score |
+|---|---|---|---|
+| **the ring, measured** | 49,284 | 1,460,882 | **7.20e10** |
+| CPU, 300 instrs | 9,025 | 5.92M | 5.34e10 |
+| CPU, 600 instrs | 11,449 | 5.92M | **6.78e10** |
+| CPU, 900 instrs | 14,161 | 5.92M | 8.38e10 — *worse* |
+
+Break-even at `area2` 11,449 is 6.29M ticks against an estimated 5.92M, which is
+inside the model's error bars. **A 4.3x smaller box buys 6%**, because the CPU is
+4.1x slower, and it goes negative if the interpreter passes ~700 instructions.
+
+The two machines cost almost exactly the same per interpreted tick — **24,934 for
+the CPU against the ring's measured 24,972** — which is the cross-task finding in
+miniature: the fetch-decode-return tax gives back what dense control flow wins.
+A block machine avoids that tax by construction, and the ring already is one.
+
+**Where the CPU's cost actually sits**, and why this is not a closed door: 68% of
+it is the setup loop that loads 256 program cells, and 3.08M of that 4.02M is a
+loop closure recirculating `P - body` words 256 times. This is exactly the
+pathology `LLM-DESIGN.md` records costing the sibling 4.4M ticks a case doing
+nothing. Code banks (ARCH 5.5, one looping ROM per subprogram) make a closure
+nearly free and would take the CPU to ~2.9M ticks and **~3.3e10** — a real 2.2x.
+But code banks are unbuilt (`ROM-RECIRCULATION.md` lists them still-open), so that
+number prices a machine that does not exist.
+
+### The branch that trades nothing away
+
+Packing the ring is the only option that attacks the charged side without giving
+up the block machine's tick profile. The overhead is 109 of 189 rows and 53 blocks
+carry a single glyph row, so the headroom is large; halving it is 222 -> 168 rows,
+`area2` 28,224 and **4.12e10 at unchanged ticks — 1.75x, and no new hardware.**
+
+Cheapest slice of that, already located: 9 lane rows are *provably* dead. A `d`
+branch declares only `pos`/`zero`, so its north free row can never be taken (3
+blocks), and an `x` branch has no straight lane at all (`_straight_key` returns
+`None`, 6 blocks) — yet `build_room` allocates all three overhead rows for every
+branching block. Reclaiming them is 222 -> 213, `area2` 45,369, **-7.9%**.
+
+Not done here: none of the three is built. The CPU bracket is measured on
+synthetic programs of the right size, not on LLLM's code, and the tick figures are
+the engine-measured cost model applied to a budgeted instruction mix rather than a
+running interpreter. What the numbers do settle is the *ordering* — pack the ring
+first, and only revisit the CPU if code banks land.
+
+### Wrap elimination: measured, and it does not pay
+
+After the lane-row slice the room is 181 interior rows — 80 glyph rows and 101 of
+overhead. The glyph rows carry 17 rows of *wrapping* (63 blocks, 80 rows), so
+removing wraps looked like the next 17 rows. It is not, and the reason is worth
+recording because the number that suggested it was mine.
+
+Attributing every wrap to the `_Pen` call that caused it:
+
+    seek   14     the block revisits a pipe band it has already passed
+    ensure  1     the row genuinely ran out of columns
+
+Only the `ensure` wrap is a width problem, so **widening buys one row, not 17**.
+The other 14 are the zone-order rule doing its job: a block whose tokens need
+`ST` after `IO` must wrap, and that is a property of the token sequence in
+`lllm_ring.WORKER`, not of the column geometry.
+
+The zone *order* is a free parameter though, so all six permutations were swept,
+moving `ZONE_COLS` and `PIPE_COL` together (moving either alone fails
+`check_binding` — `'sq' at column 93 binds IO, wanted FI`) and sweeping the gap
+between bands, since width is free while the machine is charged from its height:
+
+| order | gap | glyph rows | interior h | `IW` |
+|---|---|---|---|---|
+| `FI->ST->IO` | 22 | **76** | **177** | 216 |
+| `ST->FI->IO` (shipped) | 6 | 80 | 181 | 168 |
+
+`FI->ST->IO` really does cut four rows. It also needs `IW` 216, which makes the
+machine ~217x209 and `area2` **47,089 against the shipped 45,369** — spending
+width past the height loses, and no smaller gap binds for that order. The other
+four permutations do not bind at any gap.
+
+Two further reasons not to force it: the shipped order puts `ST` first
+deliberately, because `SEEK`/`REST` are the only hot loops and want to be one
+column from the entry, so reordering is a tick risk on top of a footprint loss;
+and the remaining 101 overhead rows are the one-block-per-row-band scheme itself,
+which is the redesign this document already declines.
+
+### And a wrap removed is not a row saved
+
+The 14 `seek` wraps are program-shaped, so the next attempt was in
+`lllm_ring.WORKER` rather than the layout: reorder a block's pipe ops so it stops
+revisiting a band it has passed.
+
+Which ops may move is not a free choice. `sq`/`rq` ride the **register file** and
+`sr` the **store**, and both are rotating rings — the ring advances per operation,
+so the order of those ops *is* which slot they touch, and they are pinned. Only
+`sp` (painter) and `ri` (input) are separate channels that can be re-interleaved,
+and then only when no value flows between them.
+
+`WALL_CELL` is the clean case: `["ri", "L4", "sp", "L10", "sr", "m"]`, zones
+IO, IO, ST — the worst possible order under `ST -> FI -> IO`. Both payloads are
+constants loaded immediately before their send, so nothing flows from the input
+read to either, and hoisting the store op to the front preserves every
+per-channel sequence. Reordered to `["L10", "sr", "ri", "L4", "sp", "m"]` it is
+**semantically clean — all 10 public cases still reproduce frame for frame at
+token level.**
+
+It also makes the machine *bigger*: interior 181 -> **182 rows**, 159x214,
+`area2` 45,796 against the shipped 45,369. Reverted.
+
+The reason is the finding worth keeping: **the row budget is coupled through
+fall-through.** A block chains into its successor for free only when the
+successor's first glyph row lands immediately below its straight lane, which
+depends on its own glyph-row count. Removing a wrap changes that count, and a
+chain that stops being adjacent becomes a routed lane — which costs a channel and
+can cost more rows than the wrap saved.
+
+So the 14 wraps are **not worth 14 rows**. Each has to be evaluated end to end on
+the built room, not counted, and the first one tried came out negative. That does
+not prove the other 13 all do, but it does mean the lead is worth much less than
+its row count suggests, and each candidate costs a build to price.
+
+## A fall-through that lands east costs nothing
+
+The straight-lane row was 57 of the room's 101 overhead rows, and it exists for one
+reason: to walk the man back **west** to the target's entry at `NC`. A west leg
+reserves the row from the channel bank out to wherever he stopped, which is why
+those rows can never be shared — every horizontal run in this room touches the west
+bank, so one row carries one leg.
+
+But the detour is only needed to *reach* the entry. When the straight successor is
+the next block in order **and** its first glyph stands east of where the predecessor
+stopped, the man does not need the entry at all: he drops one row at his own column
+and keeps walking east into the glyphs. The row is never claimed, so the successor
+moves up into it.
+
+Both conditions carry weight. "Next in order" is what makes the target adjacent once
+the row is skipped; "east of" is what lets him arrive by continuing rather than
+doubling back over glyphs he has already run. 12 of the 40 unconditional edges
+qualify, and 9 of those target `MOVE`, so adjacency decides which ones actually pay.
+
+    159x213, 45,369, 1,425,943.50   ->   159x204, 41,616, 1,387,994.30
+    6.47e10 -> 5.78e10, -10.7%
+
+Ticks improved 2.7%, the same way the dead-lane slice did: a row that is not
+allocated is also a row the returning man does not walk. Live-man count is
+unchanged, so `men x ticks` stays out of play; worst case 4,932,048 against the 15M
+cap. Cumulatively against the shipped 159x222 the two slices are **-19.8%**.
+
+`_droppable` is deliberately a separate pass over `(order, plans)` rather than a
+condition inside the allocator: whether a drop is possible depends on the *target's*
+column, which the allocator does not know while it is still deciding rows.
+
+## A block may start at its own band — but it may not be *entered* there
+
+Starting every block at `CODE0` costs twice: the man walks dead columns to reach
+his first band, and the block's first glyph sits at the far west, which is what
+decides whether an incoming fall-through can drop east into it.
+
+The zones run `ST -> FI -> IO` west to east, so a block may begin at its own first
+band provided it never needs a band further west later — i.e. provided it holds no
+`ST` op. 52 of 63 blocks qualify (27 begin at `FI`, 2 at `IO`, 23 have no pipe op
+at all and keep `CODE0` because they are short enough that moving them buys no drop
+their own length would not already allow).
+
+    159x204, 41,616, 1,387,994.30   ->   159x202, 40,804, 1,373,035.30
+    5.78e10 -> 5.60e10, -3.0%
+
+**What does not work, measured:** moving each block's *entry* east to match its
+start. It looks like the natural other half of the change and it fails, because the
+channel bank is west: an arriving man turns east at his channel and runs to the
+entry, so pushing the entry east lengthens that run across the very region the
+lanes occupy — `entry run to L_DIGIT blocked at (35,41)`. Entries cannot move east
+while channels stay west, and moving the channel bank east is a different machine.
+
+That is the same wall the earlier attempts hit, stated in its general form: **every
+horizontal run in this room touches the west bank, so one row carries one run.**
+Rows are shareable only for traffic that never goes west, which is exactly what the
+east-falling drop is and nothing else in the current scheme is.
