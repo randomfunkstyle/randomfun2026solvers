@@ -1,0 +1,16 @@
+# sudoku-validity — submission dc3e0995-2e58-436a-9bbb-24898ae356e6
+
+verdict      done: 20/20 cases, area2 6889, avgTicks 439,095, score 3,024,924,077
+submitted    2026-07-26T05:36:27+0300
+grid         83x80
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  3f42c338811c0c20818254f2bac040b31f55e94a1abf6418bc799c8705849c02
+commit       0ac03c6
+local        sudoku-validity: 6/6 public cases, avg 431,651 ticks
+source       tasks/solutions/sudoku-validity_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+LANE_ORDER: lanes ordered by measured opcode frequency, not micro-program length; 83x80 unchanged, public ticks 434,263 -> 431,651
