@@ -28,6 +28,48 @@ ring's two pipes are two independent nearest-sets, so `sx` can attach beside
 `io` -- where ``LOADA_GO`` writes it -- while `rx` attaches beside `s`, where
 ``TBODY`` reads it.  The ring is then a long pipe between the two, which is
 exactly what a ring wants: pipe cells *are* its storage.
+
+## Four things that were measured and do not work, so they are not re-tried
+
+**The three changes above only pay together.**  A rectangle is worth nothing in
+`matmul_grid`'s geometry: there `s`, `b`, `c` span columns 26..44, so ``MAC``'s
+twelve glyphs already occupy fifteen cells on one row and the rectangle would be
+2x17 = 34 ticks against the 33 it costs today.  16 comes from the *tight*
+anchors here -- six pipes in six columns -- and those in turn break
+``matmul_grid``'s self-loop machinery, which requires a self-loop to lay on a
+single row (``CFILL_GO`` raises "cannot be laid on one row" the moment the bands
+tighten).  Neither half ships alone.
+
+**Splitting the anchors cannot be retrofitted either.**  ``Bands`` already keeps
+two independent orders, and an anneal over both orders and both width vectors
+(2,500 steps) moved the score from 3.030e8 to 2.897e8 -- 1.05x, all of it one
+row of height.  It never found the `sx`-beside-`io` placement because
+``build_grid`` requires a stacked ring's two columns to be *adjacent* (it
+straddles one turnaround room across both) and coils the rest in the east strip.
+The split needs the ring geometry rebuilt, not the band order re-sorted.
+
+**Two blocks cannot share a row, so the room's emptiness is not spendable.**  A
+block entered by a man walking east from the left has an entry run that travels
+*through* anything already on that row.  The shipped grid measures 10.4% dense
+(543 glyphs in 5,234 interior cells) and yet every row is occupied: an anneal
+over band widths 14..52 bottoms out at a 34x91 room, because height counts
+direction changes -- 55 pen rows plus 28 lane rows -- not glyphs.  `max(w, h)`
+charges the row, so packing boxes side by side buys nothing while entry runs are
+row-shaped.  The escape is to make them column-shaped, which is what the
+vertical strip below is: a column in ``recv ∩ send`` (q owns 1..3, k 11..13, s
+19..20) hosts an unbounded ``r s r s ...`` run and collides with no eastward
+entry.  ``Weave`` does not implement it yet; it is the next thing to build.
+
+**A relay room cannot be smaller than 4x2 interior.**  A 3x2 has six cells, all
+of them perimeter, and the man arrives back at the north-west corner heading
+north -- so that corner has to turn him east and cannot also hold the ``@``.
+Six rings at 6x4 outside is 144 cells, which does not fit beside a 24x28 room
+inside side 32.  Sharing one relay across rings with plain `r`/`s` **deadlocks**:
+the worker blocked on `rk` with every k-word still in the forward pipe, and the
+relay blocked on `r_q` with every q-word already in the return pipe, is reachable
+straight out of ``ROW``.  ``R``/``U`` cannot deadlock -- it takes from whichever
+pipe has a value -- at the cost of coupling the rings' fairness, which is the
+trade to take.
 """
 
 from __future__ import annotations
