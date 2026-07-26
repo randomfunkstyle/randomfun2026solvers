@@ -28,12 +28,21 @@ Three facts shape every room here:
 
 ## The rooms
 
-`CLASS` is 7x6: `(` costs 12 ticks a lap, `[` and `{` 12, the closers 18.
-`WORK` is 15x9, and its push lap is a 12-cell rectangle — `R X + + + s M` with
-four corners.  `COUNT` is 12x7.  Only `COUNT` has a pipe-binding question to
-answer, because it alone sends on two pipes; its `sw` and `so` attach cells sit
-at the two ends of the same wall, so the split is the column midpoint, and every
-`s` is checked against it.
+`CLASS` is 7x6, `WORK` 15x8 and `COUNT` 12x7, and the whole machine is 24x25 —
+the same footprint as the hand-built single-room parser it replaces, at a fifth
+of its ticks: 214 average against 1,096, so 1.44e5 against 6.85e5.
+
+Only `COUNT` has a pipe-binding question to answer, because it alone sends on
+two pipes; its `sw` and `so` attach cells sit at the two ends of the same wall,
+so the split is the column midpoint and every `s` is checked against it.
+
+## What stops it going smaller
+
+The three rooms need 63 + 170 + 126 = 359 cells of walled rectangle between
+them, so a side of 18 (324 cells) cannot hold the rooms at all, never mind the
+band, and side 15 is out by more than a factor of two.  The register pressure
+that forces three men is therefore also what fixes the footprint: 68 glyph cells
+is a small machine, but three sets of walls and five pipe attachments are not.
 """
 
 from __future__ import annotations
@@ -89,13 +98,17 @@ CLASS = {
 #   QQUOT  W s M                falls straight through from QDIV's `X`
 #   QEOS   W X                  falls straight through from QLOOP's `X`
 #
-# The push lap is the rectangle (1,4)-(2,4)-(2,8)-(0,8)-(0,4): twelve cells for
-# seven ops and four corners, which is as tight as a loop holding them can be.
-# The pop path is linear — eleven ops — so it pays a return along row 0.
-WORK_W, WORK_H = 15, 9
+# The push lap is a ten-cell ring — `R X` on row 4, two `+` down column 2, the
+# third `+` on row 7 after the corner, then `s M` back up column 0.  Putting the
+# third `+` on the horizontal leg rather than the vertical one is what makes it
+# ten cells and not twelve, and it is why the room is eight rows and not nine.
+# The pop path is linear — eleven ops — so it alone pays a return along row 0.
+WORK_W, WORK_H = 15, 8
 WORK = {
     (0, 0): "v", (6, 0): "<", (14, 0): "<",
     (3, 1): ">", (4, 1): "1", (5, 1): "N", (7, 1): "s", (8, 1): "H",
+    (9, 1): "@", (10, 1): "R", (11, 1): "s", (12, 1): "0", (13, 1): "M",
+    (14, 1): "^",
     (2, 2): ">", (3, 2): "X", (4, 2): "s", (5, 2): "M", (6, 2): "^",
     (9, 2): ">", (10, 2): "1", (11, 2): "N", (12, 2): "s", (13, 2): "H",
     (2, 3): "+", (3, 3): ">", (4, 3): "M", (5, 3): "3", (6, 3): "W", (7, 3): "/",
@@ -103,13 +116,12 @@ WORK = {
     (14, 3): "^",
     (0, 4): ">", (1, 4): "R", (2, 4): "X", (3, 4): "v",
     (9, 4): ">", (10, 4): "1", (11, 4): "N", (12, 4): "s", (13, 4): "H",
-    (2, 5): "+", (5, 5): ">", (6, 5): "1", (7, 5): "N", (8, 5): "s", (9, 5): "H",
-    (2, 6): "+", (3, 6): ">", (4, 6): "W", (5, 6): "X", (6, 6): "2", (7, 6): "N",
-    (8, 6): "s", (9, 6): "H",
-    (0, 7): "M", (2, 7): "+", (5, 7): ">", (6, 7): "1", (7, 7): "N", (8, 7): "s",
-    (9, 7): "H",
-    (0, 8): "^", (1, 8): "s", (2, 8): "<", (3, 8): "@", (4, 8): "R", (5, 8): "s",
-    (6, 8): "0", (7, 8): "M", (14, 8): "^",
+    (0, 5): "M", (2, 5): "+", (5, 5): ">", (6, 5): "1", (7, 5): "N",
+    (8, 5): "s", (9, 5): "H",
+    (0, 6): "s", (2, 6): "+", (3, 6): ">", (4, 6): "W", (5, 6): "X", (6, 6): "2",
+    (7, 6): "N", (8, 6): "s", (9, 6): "H",
+    (0, 7): "^", (1, 7): "+", (2, 7): "<", (5, 7): ">", (6, 7): "1", (7, 7): "N",
+    (8, 7): "s", (9, 7): "H",
 }
 
 # ── COUNT: `remaining` in BP, the 1-based position in B ───────────────────────
@@ -201,7 +213,7 @@ def check_bindings() -> None:
 # whole of the plan: a pipe that has to reach round a room is a pipe that does
 # not fit.  `CLASS` and `COUNT` are **bottom**-aligned so the band below them is
 # one rectangle, and the taller of the two decides where the band starts.
-TOP, MID, MARGIN, GAPX = 5, 2, 1, 1
+TOP, MID, MARGIN, GAPX, IX = 5, 2, 0, 1, 0
 
 
 def _origins():
@@ -225,7 +237,11 @@ def build_grid(seed: int = 0):
     at, width, height, sb = _origins()
     # The output room stands east of `WORK`, entered from the north, which is
     # the only free rectangle big enough that no pipe has to reach round a room.
-    io = {"I": (at["CLASS"][0], 1), "O": (width - 2, at["WORK"][1] + 2)}
+    # The input room stands over `CLASS`'s east end, not over the column its pipe
+    # attaches to: the pipe then runs west along the one free row above the room
+    # and turns south into the wall, which costs a row of band instead of the
+    # three a room standing directly over the attach column would need.
+    io = {"I": (at["CLASS"][0] + IX, 1), "O": (width - 2, at["WORK"][1] + 2)}
     boxes = {n: (at[n][0] - 1, at[n][1] - 1, ROOMS[n][0] + 2, ROOMS[n][1] + 2)
              for n in ROOMS}
     boxes.update({n: (x - 1, y - 1, 3, 3) for n, (x, y) in io.items()})
