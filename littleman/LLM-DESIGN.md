@@ -2,15 +2,15 @@
 
 **Status: judged, 28/28 cases.** `tasks/solutions/little-little-man_cpu.man`
 
-    w x h = 204 x 204     area2 = 41,616     avgTicks = 22,258,080
+    w x h = 203 x 204     area2 = 41,616     avgTicks = 22,258,080
     score = 926,292,239,445        14 public + 14 private cases, all passing
 
 | piece | where | state |
 |---|---|---|
 | LLM reference interpreter | `llm_sim.py`, `tests/test_llm_sim.py` | all 14 public cases byte-exact |
-| the interpreter program | `llm_lm1.py` -> `lm1/programs/little-little-man.asm` | 1,760 instructions, 3,395 ROM words |
+| the interpreter program | `llm_lm1.py` -> `lm1/programs/little-little-man.asm` | 1,757 instructions, 3,377 ROM words |
 | the assembler front end | `llm_asm.py` | slots, labels, indexed load/store |
-| the machine | `lm1/machine.py` (`build`, `tape_n=427`, `display=(16,16)`) | 204x204, ROM folded to 84 rows |
+| the machine | `lm1/machine.py` (`build`, `tape_n=427`, `display=(16,16)`) | 203x204, ROM folded to 84 rows |
 
 ## Why a CPU and not a dataflow ring
 
@@ -115,6 +115,27 @@ its cells 4, the pipe walk repaints its cells 6 — which is exactly the set of
 cells whose colour pass 1 could not know, so there is no raster sweep at all.
 
 ## The profile, and what it bought
+
+Sampled with ``tools/heatmap.mjs`` and attributed by ``lm1/profile.py`` to the
+machine's own named regions — ``littleman/examples/llm-machine.heat.html`` is the
+overlay, ``llm-machine.debug.html`` the same map with every region named.
+
+``critical_runner()`` had to be overridden: it takes the *least-stalled* man, and
+on a machine whose tape ring never stops walking that is the tape's own man, which
+reports "tape 100%" with an all-zero CPU rollup (ARCH.md §4.1 warns about exactly
+this). Pinned to the CPU's man, on ``hello neighbor``:
+
+| region | share | what it is |
+|---|---|---|
+| ``cpu:lane:LD`` | 46.0% | one cell — the memory-response ``r``, waiting for the store |
+| ``cpu:slab:JMPF`` | 21.4% | the jump slab's discard loop, i.e. recirculating ROM |
+| ``cpu:lane:SUB`` | 7.4% | another store round trip |
+| ``cpu:lane:IN`` | 7.3% | |
+| ``cpu:lane:MOVA`` | 4.3% | |
+| ``cpu:lane:LDA`` | 3.4% | |
+
+**~61% store round trips, ~23% ROM recirculation** — the two terms the tick model
+predicts, confirmed by where the man physically stands.
 
 Costs, all measured on the engine rather than modelled (`ARCH.md` §4.1 is explicit
 that the emulator's flat store cost is useless here):

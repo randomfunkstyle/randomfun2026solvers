@@ -1152,26 +1152,17 @@ setup:
         ST    H
         LDI   0
         ST    NMEN
-        LDI   0
         ST    NP
-        LDI   0
         ST    NROOM
-        LDI   0
         ST    NRUN
-        LDI   0
         ST    NSRC
-        LDI   0
         ST    STOP
-        LDI   0
         ST    NHALT
+        ST    CZ
+        ST    CA
+        ST    CY
         LDI   148
         ST    C20
-        LDI   0
-        ST    CZ
-        LDI   0
-        ST    CA
-        LDI   0
-        ST    CY
         LD    H               ; LIMIT = 16 * H: one past the last live display address
         MULI  16
         ST    LIMIT

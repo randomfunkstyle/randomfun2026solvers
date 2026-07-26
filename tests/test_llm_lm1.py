@@ -113,7 +113,7 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
 
 def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     machine, _program = built
-    assert (machine.width, machine.height) == (204, 204)
+    assert (machine.width, machine.height) == (203, 204)
 
 
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(built) -> None:
