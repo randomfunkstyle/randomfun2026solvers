@@ -394,7 +394,8 @@ BAND_H = 8
 #:
 #: 5 rather than 6, even though 6 would hold 19, because the relay is
 #: ``2*REACH + 3`` wide and its width is what sets how close two bands may stand:
-#: 6 forces every bank out to 17 columns, which measured 1.02e8 against 9.03e7.
+#: 6 forces every bank out to 17 columns; swept over its own orders and shapes it
+#: bottomed out at 1.012e8 against this one's 9.033e7.
 #: That is not a margin worth 13% -- ``N <= 16`` is a rule of the problem, not a
 #: distribution, so 17 words is the true worst case and not a typical one.
 REACH = 5
