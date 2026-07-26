@@ -1045,10 +1045,25 @@ def walk_blocks(room: Room) -> dict[str, tuple[list[str], dict[str, str]]]:
     heading_at = room.heading
 
     def follow(pos: tuple[int, int], d: tuple[int, int]) -> str:
-        """Walk turns and blanks until the man stands on some block's first cell."""
+        """Walk turns and blanks until the man stands on some block's first cell.
+
+        Landing on the cell is half of arriving.  A block is a run of glyphs
+        read in *one* direction, so a man delivered onto its first cell facing
+        any other way executes that single glyph and then walks straight out of
+        the block, through the blanks beyond it and into somebody else's row.
+        Every other check still passes -- the glyphs are all there, in order,
+        walked from the block's own heading -- which is exactly how ``BL2
+        -pos-> BL2_R`` shipped in :mod:`matmul_dense` and hung every case with
+        ``K >= 3``.  So the heading is checked here, where every lane goes.
+        """
         for _ in range(4 * (room.iw + room.ih)):
             if pos in start:
-                return start[pos]
+                name = start[pos]
+                want = heading_at(name)[1]
+                if d != want:
+                    raise Collision(f"lane reaches {name} at {pos} heading {d}, "
+                                    f"but its glyphs are written {want}")
+                return name
             ch = c.get(*pos)
             if ch in _TURN:
                 d = _TURN[ch]

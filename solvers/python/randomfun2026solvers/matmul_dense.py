@@ -29,53 +29,83 @@ ring's two pipes are two independent nearest-sets, so `sx` can attach beside
 ``TBODY`` reads it.  The ring is then a long pipe between the two, which is
 exactly what a ring wants: pipe cells *are* its storage.
 
-## The open problem: `k`'s constants come out wrong on a case bigger than 2x2x2
+## Landing on a block is not arriving at it
 
-Public case 0 (2x2x2) emits `19 22 43 50`, which is right.  Case 2 (4x4x4)
-emits nothing: from about tick 20,000 the worker stands on ``MAC``'s `rb` and
-never moves, its `A` holding **2^21** where an entry of `A` belongs.
+For three sessions this module emitted `19 22 43 50` on 2x2x2 and **nothing at
+all** on every larger case: from about tick 20,000 the worker stood on ``MAC``'s
+`rb` forever, `A` holding 2^21 where an entry of `A` belongs, the `k` ring
+holding `D LANE LANE 1` instead of `LANE D LANE D D BIAS3` and two spare words
+stranded in the one-word spill.  Six diagnoses were wrong before this one, so
+the fault is worth naming precisely:
 
-Read out of the pipes at that moment (`lm.mjs tick --json` carries every pipe's
-`values`), the rings say where to look:
+    ``BL2``'s `pos` lane landed on ``BL2_R``'s first cell **heading south**,
+    and ``BL2_R`` is written to be read east.
 
-    x   15 words: 16, 15, 14, 13, ...        the entries of `A`, correct
-    s    2 words: 2^21, 1                    should hold exactly one
-    k    4 words: 2^19, 2^21, 2^21, 1        should be LANE D LANE D D BIAS3
+The man executed the one glyph under him -- `rk`, which is why `LANE` ended up
+loose in the rings -- and then walked *out of the block* through the blanks
+below it and into ``HEAD``'s box, where he ran a fragment of the load-phase
+preamble on live data.  Only `K >= 3` ever takes that lane (`BGRP_GO` peels one
+entry, `BL1` a second, and `BL2`'s `d` sees `BP = 0` at `K = 2`), which is
+exactly why the two public cases with `K = 2` passed and the other five hung.
 
-So `x` is right and the **constants are wrong** -- three `LANE`s where there are
-two, two `1`s where there are none, and `BIAS3` missing altogether.  A `1` where
-`D` belongs is `{` running with `B = 0`.  The two spare words sit in `s`, which
-is why ``MAC`` reads `LANE` for `a`: the spill ring is one word behind for good.
+``_route_edges`` skips drawing a corridor when the man already falls through to
+the block he is meant to reach, and ``_follows_to`` answered *which block* while
+saying nothing about **which way he was facing when he got there**.  Both now
+return the heading, and the skip requires it to match.
 
-This is *not* a plumbing fault, and that is worth stating because four separate
-plumbing faults were ruled out to get here:
+Nothing else could see it.  The glyph run was complete and in order; the walk
+from the block's own heading found every one of it; the pipes bound; the relays
+turned.  Four plumbing faults were ruled out chasing it, and all four were
+genuinely fine:
 
 * **not a binding error** -- all 66 pipe ops put to the runtime's own
   ``lm.mjs route`` one cell at a time: 0 mismatches.  (Read the *last* cell of a
   receive's route and the *first* of a send's; both ends touch the north wall,
   and taking the wrong one makes every receive look unbound.)
 * **not a misplaced op** -- every op walked from its block's first glyph and
-  checked against *its own token's* band, not merely against the band model:
-  0 misplaced.  The route audit alone proves the model, not the placement.
-* **not a phantom pipe** -- 14 sources and 14 destinations, one in and one out
-  of every relay.  There *were* two phantom sources (see below); fixing them did
-  not move the stall.
+  checked against *its own token's* band: 0 misplaced.
+* **not a phantom pipe** -- 14 sources and 14 destinations.  There *were* two
+  phantom sources (below); fixing them did not move the stall.
 * **not a dead relay, and not the shared-relay deadlock** -- seven runners, none
   halted, and every ring has a turnaround room to itself.
 
-What was real, and is fixed: the coil's serpentine turned at row `deep` while
-the relay was stamped at `deep + 1`, so the upward leg's `^` had a room wall
-behind it and **was** a second pipe out of that relay.  An arrowhead with a wall
-behind it is a pipe mouth whether or not the layout meant one; the relay's `s`
-would send to whichever of the two was nearer and inject values into the middle
-of the coil.  One blank row between the coil and the relay is the whole fix, and
-``brackets_men.pipe_mouths`` counts them the way the runtime does, which neither
-``lm.mjs analyze`` nor ``route-check.mjs`` will.
+The general lesson, and the reason the check went into ``matmul_grid`` where
+every layout in the family goes through it: **a checker that walks each block in
+isolation cannot see how the man got there.**  A block is a run of glyphs read
+in one direction; an entry from any other direction is a different program, and
+one that still passes every structural test.  ``walk_blocks`` now refuses a lane
+whose arrival heading disagrees with its target's, and ``test_matmul_dense``
+*executes* the finished `.man` against ``matmul_reference`` over seven shapes
+rather than inspecting it -- including `K >= 3`, the family that was broken.
 
-The remaining suspect is therefore the constant-building run in ``BLOAD_DONE``
-itself -- `L19` rewrites to `2 M 9 * M 1 +` and the `{` after it reads `B` --
-and the reason 2x2x2 survives it is that `G = 1` there, so the emit path touches
-only the first `KONST` slot.
+The two phantom pipe mouths, also real and also fixed: the coil's serpentine
+turned at row `deep` while the relay was stamped at `deep + 1`, so the upward
+leg's `^` had a room wall behind it and **was** a second pipe out of that relay.
+An arrowhead with a wall behind it is a pipe mouth whether or not the layout
+meant one; the relay's `s` would send to whichever of the two was nearer and
+inject values into the middle of the coil.  One blank row between the coil and
+the relay is the whole fix, and ``brackets_men.pipe_mouths`` counts them the way
+the runtime does, which neither ``lm.mjs analyze`` nor ``route-check.mjs`` will.
+
+## Where it stands, and what it costs
+
+All seven public cases pass on the reference engine.  105x169, 76,354 ticks a
+case, **2.18e9** -- against `matmul_grid`'s shipped 354,244,608, so the dense
+layout is 6.2x *worse* than the grid it was meant to replace, and both of its
+two numbers say why:
+
+* **the side is 169 and only 53 of it is the room.**  The relay strip sits ~50
+  columns east of the anchors, so the ring pipes are 668 (`b`) and 754 (`x`)
+  cells long.  Rendered, the eastern half of the image is strip.
+* **the ticks are 76,354 against a 27,593-cell model.**  The gap is ring
+  *latency*, not layout: ``MAC`` re-reads the one-word spill every lap, and that
+  word has to travel the whole 130-cell `s` ring between the `ss` that writes it
+  and the `rs` that reads it back.  A ring the man re-reads every lap costs its
+  whole length per lap, so the strip is charged twice -- once in the side and
+  once in every tick.
+
+Both are the same decision.  Relays adjacent to the room, with a clear window
+per ring, removes the strip and shortens every ring at once.
 
 ## The old open problem: the rectangle's anchors make the north band unroutable
 
@@ -834,21 +864,32 @@ def lane_origins(room: DenseRoom) -> dict[tuple[str, str], tuple[tuple[int, int]
     return out
 
 
-def _follows_to(room: DenseRoom, pos: tuple[int, int], d: tuple[int, int]) -> str | None:
-    """Walk turns and blanks from `pos`; name the block reached, if any."""
+def _follows_to(room: DenseRoom, pos: tuple[int, int],
+                d: tuple[int, int]) -> tuple[str | None, tuple[int, int]]:
+    """Walk turns and blanks from `pos`; name the block reached *and the heading*.
+
+    The heading is half the answer, and leaving it out cost six sessions.  A
+    block is a run of glyphs read in one direction, so arriving on its first
+    cell facing the wrong way executes that one glyph and then walks the man out
+    of the block sideways -- through whatever blanks lie that way and into some
+    other box's row.  Nothing else sees it: the grid loads, the pipes bind, the
+    checker walks the block from its own heading and finds every glyph in place.
+    ``BL2 -pos-> BL2_R`` was drawn exactly so, and only a case with ``K >= 3``
+    ever takes that lane, which is why 2x2x2 passed and everything else hung.
+    """
     starts = room.starts
     for _ in range(4 * (room.iw + room.ih)):
         if pos in starts:
-            return starts[pos]
+            return starts[pos], d
         ch = room.circuit.get(*pos)
         if ch in _TURN_OF:
             d = _TURN_OF[ch]
         elif ch != " ":
-            return None
+            return None, d
         pos = (pos[0] + d[0], pos[1] + d[1])
         if not (0 <= pos[0] < room.iw and 0 <= pos[1] < room.ih):
-            return None
-    return None
+            return None, d
+    return None, d
 
 
 def _route_edges(room: DenseRoom, walked: dict[tuple[int, int], set[int]]) -> int:
@@ -865,9 +906,12 @@ def _route_edges(room: DenseRoom, walked: dict[tuple[int, int], set[int]]) -> in
                 continue
             pos, d = origins[(name, lane)]
             step = (pos[0] + d[0], pos[1] + d[1])
-            if _follows_to(room, step, d) == target:
-                continue
             dst, dd = room.heading(target)
+            reached, arrive = _follows_to(room, step, d)
+            # Reaching the block is not enough: the man has to arrive *facing*
+            # the way its glyphs are written, or he reads one and walks out.
+            if reached == target and arrive == dd:
+                continue
             if dd == E:
                 # A box's entry run -- the blanks between the west channels and
                 # its first glyph -- belongs to nobody until a corridor delivers

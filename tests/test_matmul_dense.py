@@ -4,13 +4,50 @@ None of it is checkable by eye.  A band that ties binds a pipe op to whichever
 pipe reading order happens to pick; a loop rectangle one cell too short silently
 drops a glyph; a room with no `@` loads, turns its relay men, and emits nothing.
 All three produce a grid that runs and computes something else.
+
+A fourth was found the expensive way and is pinned below.  **Landing on a
+block's first cell is only half of arriving at it**: a block is a run of glyphs
+read in one direction, so a lane that delivers the man onto that cell facing any
+other way executes the one glyph and then walks him straight out of the block.
+Every structural check still passes -- the glyphs are all there, in order, and
+the walk from the block's *own* heading finds them -- so the only symptom is a
+machine that computes something else.  ``BL2 -pos-> BL2_R`` shipped that way for
+three sessions; only ``K >= 3`` ever takes that lane, so 2x2x2 passed and every
+larger case hung with its rings scrambled.
+
+The lesson generalises past the one lane: a checker that walks each block in
+isolation cannot see how the man *got there*, so the arrival heading is now
+checked in ``matmul_grid.walk_blocks`` where every lane goes, and the drawn grid
+is executed against ``matmul_reference`` here rather than merely inspected.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import random
+from pathlib import Path
+
 import pytest
+from randomfun2026solvers import matmul_cfg as cfg
 from randomfun2026solvers import matmul_dense as D
 from randomfun2026solvers.matmul_grid import LAID, band_of, chains_of
+
+REPO = Path(__file__).resolve().parents[1]
+GRID = REPO / "tasks" / "solutions" / "matmul_dense.man"
+PROBLEM = REPO / "tasks" / "problems" / "matmul.json"
+
+
+def _case(n: int, m: int, k: int, seed: int) -> list[int]:
+    rng = random.Random(seed)
+    return [n, m, k] + [rng.randint(-99, 99) for _ in range(n * m + m * k)]
+
+
+def _cases() -> list[tuple[str, list[int], list[int]]]:
+    prob = json.loads(PROBLEM.read_text())
+    return [(case["name"], [int(v) for v in case["rounds"][0]["in"]],
+             [int(v) for v in case["rounds"][0]["out"]])
+            for case in prob["publicTestData"]]
 
 
 @pytest.fixture(scope="module")
@@ -123,6 +160,87 @@ def test_the_room_has_exactly_one_spawn(b: D.Bands) -> None:
     (sx, sy), = spawns
     (ex, ey), _ = room.heading("HEAD")
     assert (sx + 1, sy) == (ex, ey)
+
+
+def test_every_lane_arrives_facing_the_way_its_target_is_written(b: D.Bands) -> None:
+    """The bug that hung every case with `K >= 3`, pinned at the room level.
+
+    ``_route_edges`` skips drawing a corridor when the man already falls through
+    to the block he is meant to reach -- and "reaches" used to mean *lands on
+    the cell*, with no word about which way he was facing when he got there.
+    ``BL2``'s `pos` lane dropped onto ``BL2_R``'s first glyph heading **south**
+    against the eastward run it is written as, so the man read `rk` and then
+    walked out of the block through the blanks below it and into ``HEAD``.
+    """
+    from randomfun2026solvers import matmul_grid as G
+
+    room = D.build_room(b)
+    starts, circuit = room.starts, room.circuit
+
+    def follow(pos, d):
+        for _ in range(4 * (room.iw + room.ih)):
+            if pos in starts:
+                return starts[pos], d
+            ch = circuit.get(*pos)
+            if ch in G._TURN:
+                d = G._TURN[ch]
+            elif ch != " ":
+                return None, d
+            pos = (pos[0] + d[0], pos[1] + d[1])
+        return None, d
+
+    for (name, lane), (pos, d) in D.lane_origins(room).items():
+        if (name, lane) in G.DEAD_LANES:
+            continue
+        target, arrive = follow((pos[0] + d[0], pos[1] + d[1]), d)
+        if target is None:
+            continue
+        assert arrive == room.heading(target)[1], (name, lane, target, arrive)
+
+
+@pytest.mark.parametrize(("n", "m", "k"), [
+    (2, 2, 2),      # one group: the shape that passed while the rest hung
+    (2, 2, 3),      # two groups -- the first shape that takes `BL2 -> BL2_R`
+    (4, 4, 4),
+    (7, 5, 9),
+    (16, 16, 1),    # `K = 1`: the `c` ring at its shortest
+    (16, 1, 16),    # `M = 1`: the `t` loop turns over exactly once
+    (3, 16, 16),
+])
+def test_the_drawn_grid_multiplies_matrices(n: int, m: int, k: int) -> None:
+    """The whole artefact, executed -- not inspected.
+
+    Every other check in this file reads the layout the pen produced and asks
+    whether it looks like the plan.  This one runs the finished `.man` and asks
+    whether it *is* matrix multiplication, which is the only question a silent
+    layout fault cannot answer for itself.
+    """
+    from randomfun2026solvers.fast_littleman import FastLittleman
+
+    case = _case(n, m, k, seed=n * 1000 + m * 10 + k)
+    exp = cfg.matmul_reference(case)
+    res = FastLittleman(GRID).run(input=case, expected=exp, max_ticks=5_000_000)
+    assert list(res.output) == exp, (n, m, k, res.reason)
+
+
+def test_the_committed_grid_is_what_the_generator_emits() -> None:
+    """Otherwise a fix to the pen never reaches the file that gets submitted."""
+    art, _dbg, _meta = D.build_grid()
+    assert GRID.read_text() == "\n".join(art) + "\n"
+
+
+@pytest.mark.slow
+def test_every_public_case_passes_on_the_reference_engine() -> None:
+    if os.environ.get("LM_VALIDATOR", "").lower() != "reference":
+        pytest.skip("set LM_VALIDATOR=reference to cross-check the wasm engine")
+    from randomfun2026solvers.littleman import Littleman
+
+    lm = Littleman()
+    for name, inp, exp in _cases():
+        snap = lm.judge(GRID, input=" ".join(map(str, inp)),
+                        expected=" ".join(map(str, exp)), max_ticks=2_000_000)
+        assert snap.fatal is None, (name, snap.fatal)
+        assert list(snap.output) == exp, name
 
 
 def test_every_chain_lays_in_its_own_box(b: D.Bands) -> None:
