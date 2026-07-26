@@ -1450,13 +1450,15 @@ def build_asm(*, packed_cells: bool = False) -> tuple[str, int]:
     return a.text(header), a.slots
 
 
-#: The ROM fold, from a full sweep at this program's size (see the docstring): the
-#: box is square at 84 rows and grows either way from there.
+#: The ROM fold, re-swept after the structures band was packed (stacked slab entry
+#: rows took the CPU from 203 to 193 tall).  Rows the CPU gives up are worth having
+#: only if the ROM takes them: the box is square-ish, so height alone changes
+#: nothing until the fold converts it into width.
 #:
-#:      rows   78        82        84        88        92
-#:      box    214x198   204x202   204x204   196x207   189x212
-#:      area2  45,796    41,616    41,616    42,849    44,944
-ROM_ROWS = 84
+#:      rows   84        88        92        96        100
+#:      box    203x193   195x197   187x201   179x205   172x209
+#:      area2  41,209    38,809    40,401    42,025    43,681
+ROM_ROWS = 88
 
 
 def build_machine(*, packed_cells: bool = False, rom_rows: int = ROM_ROWS):

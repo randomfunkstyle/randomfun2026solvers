@@ -824,12 +824,22 @@ def build_cpu(
     # (`tools/heatmap.mjs` + `lm1.profile`) put the return path at 25 % of the CPU's
     # time before this.
     collector = span + 1
-    y = collector + 1
+    # Entry rows are stacked directly — slab *i* enters on ``collector + 1 + i`` —
+    # rather than each slab getting a private row band. Only the entry row is an
+    # exclusive resource: it is the westbound run slab *i*'s drop lands on, and it
+    # spans ``[base_i, drop_x_i]``, which crosses every *shallower* body band but
+    # stops east of every deeper one (``base_j > base_i + _SLAB_PITCH - 1`` for
+    # ``j > i``). So slab *i*'s body, hanging directly below its own entry row
+    # inside its own column band, is crossed by no other slab's entry run, and the
+    # bands overlap in rows for free: ``n`` entry rows plus the tallest body,
+    # against the old staircase's sum of all the bodies. Risers and drops that
+    # must pass *through* an entry row leave `.` holes in its `<` run (they are
+    # drawn first; the `<`s are ``soft``), and a westbound man keeps his heading
+    # over a `.` — the same mechanism the drop columns have always used.
     for i, m in enumerate(order):
-        slab_at[m] = y
+        slab_at[m] = collector + 1 + i
         slab_base[m] = _STRUCT_X0 + i * _SLAB_PITCH
-        y += slab_rows[m]
-    bottom = y
+    bottom = max((slab_at[m] + slab_rows[m] for m in order), default=collector + 1)
 
     g = _Grid()
     pipe_glyphs: list[tuple[int, int, str, str]] = []
@@ -1014,16 +1024,22 @@ def _slab(
     """
     sem = p.sem[mnemonic]
 
+    # BP==0 (or a not-taken arm) leaves a man westbound out of the discard loop's
+    # `a`. He rises at ``base - 1`` — the first column west of the loop, still
+    # clear of the shallower band, whose bodies stop at ``base - 4`` (arms reach
+    # ``base' + 9``, pitch 13). Entry rows are stacked now, so running him west
+    # to x=1 at this depth would walk him straight through every shallower slab's
+    # loop; the riser instead crosses only shallower *entry rows*, as `.` holes
+    # in their soft `<` runs. For slab 0 (``base == _STRUCT_X0``) this is the
+    # x=1 shared riser, exactly as before.
+    exit_x = base - 1
+
     if sem in _JUMP_SEMS:
         _discard_loop(g, base, s0, pipe_glyphs)
-        # BP==0 leaves the `a` westbound. Join the CPU's existing x=1 return
-        # riser, which stays west of every slab and cannot cross live code.
-        for xx in range(2, base):
-            g.soft(xx, s0, "<")
-        g.put(1, s0, "^")
+        g.put(exit_x, s0, "^")
         for yy in range(collector + 1, s0):
-            g.soft(1, yy, ".")
-        return {1}
+            g.soft(exit_x, yy, ".")
+        return {exit_x}
 
     g.soft(base, s0 + 1, ".")
     g.put(base, s0 + 2, ">")
@@ -1069,12 +1085,10 @@ def _slab(
     for c in range(base + 2, cols[taken]):
         g.soft(c, turn_row, ".")
     _discard_loop(g, base, turn_row, pipe_glyphs)
-    for c in range(2, base):
-        g.soft(c, turn_row, "<")
-    g.put(1, turn_row, "^")
+    g.put(exit_x, turn_row, "^")
     for y in range(collector + 1, turn_row):
-        g.soft(1, y, ".")
-    drops.add(1)
+        g.soft(exit_x, y, ".")
+    drops.add(exit_x)
     return drops
 
 

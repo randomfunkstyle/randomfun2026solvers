@@ -67,17 +67,15 @@ DISPLAY_TARGETS = ("palette", "plotter")
 
 #: ``max(width, height)²`` and the shape it comes from, pinned per slug so a
 #: regression in either dimension is a failing test rather than a quietly worse score.
-<<<<<<< HEAD
 #: ``ADAPTER_TAPE_GAP`` 6 → 1 narrows the adapter-to-STORE corridor by five columns, and
 #: the two display programs answer it differently: ``palette`` is bound by that corridor
 #: and goes 95 → 90 (9,025 → 8,100), while ``plotter``'s 109 is set by its folded ROM
 #: sitting west of the corridor, so it keeps every column and banks only the ticks.
-EXPECTED_SHAPE = {"plotter": (109, 103), "palette": (90, 88)}
+#: Slab packing (stacked entry rows in the structures band) then takes rows off both —
+#: palette 88 → 85, plotter 103 → 93 — without moving either width, so the footprints
+#: hold and only the shapes change.
+EXPECTED_SHAPE = {"plotter": (109, 93), "palette": (90, 85)}
 EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 8_100}
-=======
-EXPECTED_SHAPE = {"plotter": (109, 103), "palette": (95, 88)}
-EXPECTED_FOOTPRINT = {"plotter": 11_881, "palette": 9_025}
->>>>>>> b016681 (Compact LM-1 jump read loops)
 
 MAX_INSTRUCTIONS = 400_000
 TICK_CAP = 3_000_000
