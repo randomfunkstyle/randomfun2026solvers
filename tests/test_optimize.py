@@ -22,9 +22,12 @@ from randomfun2026solvers.optimize import (  # noqa: E402
     CapacityRouter,
     OptimizeError,
     optimize,
+    semantic_passes,
     trim_margins,
     verify,
 )
+
+FIXTURE = REPO / "tests" / "fixtures" / "loop_unroll_counted.man"
 
 node_required = pytest.mark.skipif(
     shutil.which("node") is None or not LM_MJS.exists(),
@@ -92,6 +95,39 @@ def test_optimize_atoi_improves_and_verifies() -> None:
     assert res.score < res.base_score
     # The returned grid independently verifies.
     assert verify(res.render(), "atoi").passed
+
+
+def test_semantic_passes_are_opt_in() -> None:
+    # Pure model test (no Node): the content-rewrite passes exist and cover every
+    # rule family, but are NOT in the default pipeline — existing callers of
+    # optimize() see the geometric-only behaviour unchanged.
+    from randomfun2026solvers.optimize import PASSES
+
+    passes = semantic_passes()
+    assert len(passes) == 6  # arith, const, steer, io, pipe, loop
+    assert all(callable(p) for p in passes)
+    # None of the semantic passes leak into the default PASSES list.
+    assert not any(p in PASSES for p in passes)
+
+
+@pytest.mark.slow  # drives S1's fixture through the real engine via the public entrypoint
+@node_required
+def test_optimize_semantic_wires_loop_unroll_win() -> None:
+    # End-to-end proof that the wired semantic path works: enabling `semantic=True`
+    # on the public optimize() entrypoint recognises the counted loop over a literal
+    # constant and accepts the unroll (a real footprint↔ticks win), verified.
+    problem = {
+        "slug": "loop-fixture",
+        "scoring": "footprint-tick",
+        "publicTestData": [
+            {"name": "even4", "rounds": [{"in": ["10", "20", "30", "40"],
+                                          "out": ["10", "20", "30", "40"]}]},
+        ],
+    }
+    grid = FIXTURE.read_text(encoding="utf-8")
+    res = optimize(grid, problem, semantic=True, max_sweeps=1)
+    assert res.passed and res.improved
+    assert res.score is not None and res.base_score is not None and res.score < res.base_score
 
 
 @pytest.mark.slow  # optimiser search: ~30-80s

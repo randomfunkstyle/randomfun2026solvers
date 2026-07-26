@@ -88,6 +88,7 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -101,6 +102,7 @@ if TYPE_CHECKING:  # the tape block's own canvas; imported lazily at run time
 __all__ = [
     "Band",
     "Machine",
+    "adapter_tape_gap",
     "build",
     "build_for",
     "display_for",
@@ -436,7 +438,7 @@ class _Plan:
     sem: dict[str, Sem] = field(default_factory=dict)
 
 
-def plan(program: Program) -> _Plan:
+def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Plan:
     """Assign lane rows by pipe need, then derive opcode numbers from the trie.
 
     The trie sorts its leaves in **bit-reversed** order (``ARCH.md`` §2.4), so
@@ -445,6 +447,14 @@ def plan(program: Program) -> _Plan:
     south wall their pipes leave from, and everything else in between — longest
     micro-program first, so the drop columns form a descending staircase and short
     lanes can turn south early instead of all walking out to a shared column.
+
+    ``middle_order`` overrides that last rule — the order of the *unpinned* lanes,
+    north to south. Length-descending is a good guess in the dark, but the row a
+    lane sits on is a **tick** cost and the weight on it is how often the opcode
+    runs, which length knows nothing about: a lane's return walk is
+    ``2 * drop_x - row`` (east to the drop column, south to the collector, west
+    along it), so a hot lane wants to be *low* on both terms at once. See
+    ``LANE_ORDER`` for the per-program orders this bought and §7.6 for the method.
     """
     used = [op.mnemonic for op in program.ops_used]
     sems = {op.mnemonic: op.sem for op in program.ops_used}
@@ -494,7 +504,16 @@ def plan(program: Program) -> _Plan:
     for g in (3, 2):
         for m in reversed([n for n in order if group(n) == g]):
             placed[m] = slots.pop()
-    for m in [n for n in order if group(n) == 1]:
+    middle = [n for n in order if group(n) == 1]
+    if middle_order is not None:
+        want = list(middle_order)
+        if sorted(want) != sorted(middle):
+            raise MachineError(
+                f"middle_order must be a permutation of the unpinned lanes "
+                f"{sorted(middle)}; got {sorted(want)}"
+            )
+        middle = want
+    for m in middle:
         placed[m] = slots.pop(0)
 
     return _Plan(
@@ -764,8 +783,11 @@ def build_cpu(
                 c = floor
                 if c > struct_east:
                     # A micro-program long enough to reach the slabs has to join the
-                    # structured lanes' discipline rather than risk their columns.
-                    c = struct_east + 1
+                    # structured lanes' uniqueness discipline rather than risk
+                    # their columns.  Never reset it to ``struct_east + 1``:
+                    # ``floor`` is the suffix maximum that proves this column clears
+                    # the current lane and every lane below it. Moving west from that
+                    # floor can put the drop directly on a live lane glyph.
                     while c in assigned:
                         c += 1
             drop_x[r] = c
@@ -1125,6 +1147,80 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 
 
 # ── the tape, as a STORE block ───────────────────────────────────────────────
+#: Every memory tier ``build`` will accept, in the order they are worth trying.
+#: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
+#: footprint despite an access cost that ignores ``n``.
+STORE_TIERS = ("tape", "grid", "men", "men-y")
+
+#: Blank columns between the CPU's east wall and the adapter room, and between the
+#: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
+#: which is squared in the score, and once in the memory *response* pipe, whose whole
+#: length is charged on every read because a read is strictly serial (§7.4b) — and a
+#: read is where 45% of `gradebook`'s CPU time goes. So these are not cosmetic spacing;
+#: they are two of the cheapest numbers in the generator to be wrong about.
+#:
+#: ``CPU_ADAPTER_GAP`` is a hard floor: every program fails to place its pipes at 3 or
+#: less, so 4 is the real minimum and not a guess.
+#:
+#: ``ADAPTER_TAPE_GAP`` was 6 and wanted to be **1**, which is worth ~9-10% of
+#: footprint on every width-bound machine, plus five cells off every read:
+#:
+#: | | 6 | 1 |
+#: |---|---|---|
+#: | `brackets` | 95x70, 9,025 | **90x70, 8,100** |
+#: | `gradebook` | 113x101, 12,769 | **108x101, 11,664** |
+#: | `palette` | 95x89, 9,025 | **90x89, 8,100** |
+#: | `sudoku-validity` | 83x80, 6,889 | **80x80, 6,400** |
+#: | `tcp` | 109x74, 11,881 | **104x74, 10,816** |
+#:
+#: Height-bound machines (`matmul`, `snake`, `snake-ring`, `plotter`) keep their
+#: footprint and still gain the ticks. `palette` was in that list on the strength of
+#: being a display problem like `plotter`; it is not, it is 95 wide against 89 tall and
+#: the five columns come straight off its score.
+CPU_ADAPTER_GAP = 4
+ADAPTER_TAPE_GAP = 1
+
+#: Programs that need a wider adapter-to-STORE gap than the default.
+#:
+#: ``matmul`` is the only one, and it does not merely fail to *place* at 1 — it places,
+#: loads, and then **hangs**, every case at the tick cap. The STREAM block's rings sit
+#: in that corridor, so a gap the request pipe fits through is not necessarily one the
+#: rings survive, and the binding checks cannot see the difference. It is verified
+#: working at 3, 4, 5 and 6 (and 3 is even slightly faster), but `matmul` is
+#: height-bound at 90 rows so *no* gap changes its footprint and the tick win is ~1%.
+#: Not worth re-validating a STREAM machine for, so it stays on the exact geometry that
+#: scored 1,446,608,970.
+ADAPTER_TAPE_GAP_FOR: dict[str, int] = {"matmul": 6}
+
+#: The floor the *store tier* imposes on that gap, which is a separate thing from the
+#: per-program override above: it is the block east of the corridor, not the CPU west of
+#: it, that fails to bind. Only ``tape`` — the shipped tier — reaches 1. Measured, by
+#: building `snake-ring` on each tier at every gap from 1 to 7:
+#:
+#: | tier | binds from | note |
+#: |---|---|---|
+#: | `tape` | **1** | the default; footprint flat across all seven |
+#: | `men-y` | 3 | flat too, so the floor costs it nothing |
+#: | `men` | 5 | and it *grows* per column: 21,025 at 5, 21,609 at 7 |
+#: | `grid` | 6 | |
+#:
+#: All three non-``tape`` tiers are measured negatives (ARCH.md §4.1) whose numbers are
+#: quoted in tests as comparisons, so they are pinned at the 6 they were measured on
+#: rather than dropped to their true floors — re-measuring a losing tier buys nothing,
+#: and moving `men` off 6 would silently restate a recorded result.
+ADAPTER_TAPE_GAP_BY_STORE: dict[str, int] = {"grid": 6, "men": 6, "men-y": 6}
+
+
+def adapter_tape_gap(program_name: str, store: str) -> int:
+    """Blank columns between the adapter and the STORE block, for one build.
+
+    The wider of the two constraints wins: a program's own override (``matmul``'s
+    STREAM rings) and the floor its store tier needs to bind at all.
+    """
+    gap = ADAPTER_TAPE_GAP_FOR.get(program_name, ADAPTER_TAPE_GAP)
+    return max(gap, ADAPTER_TAPE_GAP_BY_STORE.get(store, 0))
+
+
 @dataclass
 class _Tape:
     cells: dict[tuple[int, int], str]
@@ -1189,6 +1285,43 @@ def _tape_of(g: Circuit, in_cell: tuple[int, int], out_cell: tuple[int, int], sl
         in_cell=in_cell,
         out_cell=out_cell,
         slots=slots,
+    )
+
+
+def grid_block(n: int) -> _Tape:
+    """``memory_men_addr``'s address-carrying man-memory, wired as STORE.
+
+    One little man per slot, all ``n`` of them holding their own address in B, so
+    the router *broadcasts* rather than walks: **an access costs ~31 ticks and the
+    cost does not depend on ``n``**, against the rotating tape's ~316 + 8.06·n. On
+    a machine whose reads dominate — and §4.1 measured a tape read at 523 ticks
+    versus 19 for a write — that is the difference between a memory that sets the
+    tick count and one that does not.
+
+    What it costs instead is *shape*. The block is 36 columns wide whatever ``n``
+    is, and ``~3n`` rows tall, where the tape is 32x32 flat. So this is a good
+    trade exactly when the machine's bounding box is already set by its **height**
+    and has slack in width — the block then hides underneath a dimension already
+    being paid for, and the swap is free on footprint. It is a bad trade on a
+    short, wide machine, where every one of those rows is a new longest side.
+
+    There is also a one-off ``~5n`` ticks of **ignition** while the spawner walks
+    south handing each band its address. It is charged once per case, not per
+    access, so it disappears against any program doing real work.
+    """
+    from ..memory_men_addr import build_addr
+
+    a = build_addr(n, io=False)
+    assert a.in_cell is not None and a.out_cell is not None, "io=False must report stubs"
+    cells = {
+        (x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "
+    }
+    return _Tape(
+        cells=cells,
+        width=a.width,
+        height=a.height,
+        in_cell=a.in_cell,
+        out_cell=a.out_cell,
     )
 
 
@@ -1419,6 +1552,10 @@ class Machine:
     dsp_glyphs: dict[str, tuple[int, int]] = field(default_factory=dict)
     #: The placed STREAM block, when the program uses one (see ``stream.py``).
     stream: object | None = None
+    #: Cells in the ROM -> CPU corridor, which by ``SPEC.md`` is also its capacity in
+    #: words. The straight corridor is incidental (~30); anything more is ROM-PLUS
+    #: buffering bought on purpose (see :data:`ROM_BUFFER`).
+    rom_capacity: int = 0
     #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
     #: the only thing that knows what any cell *means* — the grid carries no
     #: comments — so it records that here for ``man_debug`` overlays and for
@@ -1447,6 +1584,10 @@ class Machine:
         }
         notes = {
             "rom": f"looping ROM: {self.program.P} words, {self.rom_rows} rows, re-emitted forever",
+            "rom:corridor": (
+                f"ROM-PLUS: the fetch pipe snaked to {self.rom_capacity} cells, i.e. "
+                f"{self.rom_capacity} words of buffer (a pipe's capacity is its length)"
+            ),
             "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
             "tape": f"rotating pipe tape, N={self.tape_n} (~105+8.3N ticks/access)",
             "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
@@ -1509,10 +1650,16 @@ def build(
     packed_rom: bool = True,
     short_return: bool | None = None,
     store: str = "tape",
+    middle_order: Sequence[str] | None = None,
+    rom_buffer: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
-    ``store`` picks the memory tier: ``"tape"`` is the rotating ring (§4.1,
+    ``store`` picks the memory tier. ``"grid"`` is the address-carrying man-memory
+    (:func:`grid_block`) and is the one to reach for first: its access cost is ~31
+    ticks *independent of ``n``*, so it wins on ticks at every size, and it pays for
+    that in rows rather than ticks — free on footprint whenever the machine's
+    bounding box is already set by height. ``"tape"`` is the rotating ring (§4.1,
     ``105 + 8.3n`` ticks per access at 33 columns whatever ``n`` is), ``"men"`` is
     ``memory_men_store.men_block`` — one little man per value, a measured
     ``22 + 14 * addr`` per access. The man-memory is faster per access at every
@@ -1542,9 +1689,16 @@ def build(
     for the original fixed-width fold; the word stream is identical either way, so it
     is purely a size/speed choice.
     """
+    # Checked here rather than in ``_assemble``, which the pad search calls up to 40
+    # times while *catching* MachineError — so a typo'd tier came back as whichever
+    # unrelated collision the last pad happened to hit.
+    if store not in STORE_TIERS:
+        raise MachineError(
+            f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
+        )
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
-    p = plan(program)
+    p = plan(program, middle_order=middle_order)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
     top = _highest_address(program)
@@ -1581,6 +1735,7 @@ def build(
                     packed_rom,
                     short_return,
                     store,
+                    rom_buffer,
                 )
             except MachineError as exc:
                 last = exc
@@ -1630,6 +1785,7 @@ def _assemble(
     packed_rom: bool = True,
     short_return: bool = True,
     store: str = "tape",
+    rom_buffer: int | None = None,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
@@ -1662,7 +1818,17 @@ def _assemble(
     # The west margin carries two pipes that must not cross: the ROM corridor runs
     # down column 1, west of the I room, and only turns east on the fetch row —
     # which is far below the I room, so the two never meet.
-    CX, CY = 9, rom_bottom + 6
+    #
+    # ROM-PLUS (``ROM_BUFFER``) buys its queue in the band between the ROM's bottom
+    # wall and the CPU's top, which is otherwise five dead rows. Those rows are above
+    # everything except the ROM, so the snake collides with nothing; it is held inside
+    # the CPU's own columns so it can never be what sets the machine's width, and the
+    # rows it adds push the CPU *down* — free on any machine whose box is set by width.
+    CX = 9
+    band_rows = 0
+    if rom_buffer:
+        band_rows = rom_corridor_rows(rom_buffer, (CX + W + 1) - 1)
+    CY = rom_bottom + 6 + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
     g.blit(CX, CY, cpu.cells)
 
@@ -1670,7 +1836,17 @@ def _assemble(
     # Down the corridor west of the CPU, then east into the wall. The ROM has a
     # single outgoing pipe, so which of its `s` glyphs is nearest does not matter.
     fetch_y = CY + cpu.centre
-    g.draw_pipe([(1, rom_bottom + 1), (1, fetch_y), (CX - 1, fetch_y)])
+    rom_capacity = g.draw_pipe(
+        rom_corridor(
+            want=rom_buffer or 0,
+            x_lo=1,
+            x_hi=CX + W + 1,
+            y_top=rom_bottom + 1,
+            rows=band_rows,
+            fetch_y=fetch_y,
+            wall_x=CX - 1,
+        )
+    )
 
     # ── I room -> CPU west wall at the IN lane's row ─────────────────────────
     # The input pipe goes on the *west* wall too, far from every memory glyph: that
@@ -1697,7 +1873,7 @@ def _assemble(
         g.put(CX + cpu.out_col, oy + 3, "O")
 
     # ── adapter, east of the CPU ─────────────────────────────────────────────
-    AX = CX + W + 4
+    AX = CX + W + CPU_ADAPTER_GAP
     # Aligned so the request pipe leaves the CPU beside the memory lanes, but never
     # so high that the response pipe's westward leg grazes the adapter's top corner.
     # A small machine (few lanes, no memory) is the case that needs the clamp.
@@ -1723,11 +1899,15 @@ def _assemble(
         from ..memory_men_y import y_men_block
 
         tape = y_men_block(tape_n)
+    elif store == "grid":
+        tape = grid_block(tape_n)
     elif store == "tape":
         tape = tape_block(tape_n)
     else:
-        raise MachineError(f"unknown store tier {store!r}; expected 'tape', 'men', or 'men-y'")
-    TX = AX + ADAPTER_W + 6
+        raise MachineError(
+            f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
+        )
+    TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store)
     TY = CY
     g.blit(TX, TY, tape.cells)
 
@@ -1795,6 +1975,11 @@ def _assemble(
     regions["rom"] = (RX, RY, romlay.width + 1, romlay.height + 2)
     regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
     regions["tape"] = (TX, TY, tape.width, tape.height)
+    # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
+    # the only place the ROM-PLUS snake would show up at all. Its cell count *is* its
+    # capacity in words (``SPEC.md``), so the note is the number that matters.
+    if band_rows:
+        regions["rom:corridor"] = (1, rom_bottom + 1, (CX + W + 1), band_rows + 1)
     if cpu.has_in:
         regions["io:I"] = (3, iy - 1, 3, 3)
     if cpu.has_out:
@@ -1844,7 +2029,11 @@ def _assemble(
     # The memory tier's own internal pipes: the tape's two ring legs, or the
     # man-memory's command and answer pipe per cell. Everything the machine itself
     # drew is already in ``touches``, plus the one response pipe drawn half here.
-    store_pipes = tape.pipes if store == "men-y" else (2 * tape_n if store == "men" else 2)
+    # ``grid`` bands three pipes per slot — router->decoder, decoder->cell,
+    # cell->collector — and every one of them is a two-cell stub between facing
+    # walls, which is exactly why the extra decoder hop is nearly free.
+    _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
+    store_pipes = tape.pipes if store == "men-y" else _STORE_PIPES[store]
     _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -1860,6 +2049,7 @@ def _assemble(
             band: (CX + x, CY + y) for x, y, _glyph, band in cpu.pipe_glyphs if band in DSP_BANDS
         },
         stream=blk,
+        rom_capacity=rom_capacity,
     )
 
 
@@ -2129,6 +2319,60 @@ TAPE_SIZE = {
 #: because a ring is briefly holding one more than it stores.
 STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 
+#: Lane orders that beat ``plan``'s length-descending default, north to south.
+#:
+#: A lane's row is a **tick** cost: the return walk is ``2 * drop_x - row`` (east to
+#: the drop column, south to the collector, west along it), and ``drop_x`` is the
+#: running suffix maximum of the lane extents at or below that row. So a hot opcode
+#: wants to sit *low* — both terms improve at once — while a *long* one wants to sit
+#: high, because everything above it pays for its extent. Length-descending gets the
+#: second half right and knows nothing about the first, which is where these come
+#: from: weight each lane by how often the opcode actually runs (measured on the
+#: emulator over the public cases) and minimise the weighted walk.
+#:
+#: Every entry was found by search and then **verified on the engine**, keeping only
+#: candidates whose footprint did not grow — that filter is not optional, because the
+#: order picks ``mem_pad``, which sets the memory lanes' length, which sets the CPU's
+#: width, which is squared in the score. Measured, against the same build with the
+#: default order:
+#:
+#: | program | footprint | ticks | score |
+#: |---|---|---|---|
+#: | `brackets` | 9,025 → 9,025 | 26,000 → 25,111 | **0.966x** |
+#: | `gradebook` | 12,996 → **12,769** | 301,571 → 298,571 | **0.973x** |
+#: | `matmul` | 8,100 → 8,100 | 120,714 → 118,638 | **0.988x** |
+#: | `sudoku-validity` | 6,889 → 6,889 | 434,667 → 432,167 | **0.994x** |
+#:
+#: `gradebook` also *loses* a column, which is the tell that the default was not on
+#: the frontier at all: 114 → 113 is a footprint win the length rule left behind.
+#: `tcp` and `snake-ring` were searched the same way and kept their default order —
+#: see §7.6. Re-run `scratch/lane_order_search.py` when a program's `.asm` changes,
+#: since the weights come from its own execution profile.
+#:
+#: One trap, because it cost an hour and a wrong conclusion:
+#: ``test_lm1_matmul`` pins each case's **exact** settle tick ("the recorded tick is
+#: enough, and one tick fewer is not"), so a *faster* grid fails it and the failure
+#: reads exactly like a wrong answer. `matmul` was dropped from this table on that
+#: evidence and put back after checking the outputs directly — they were correct on
+#: all seven public cases, on the reference engine, at every case's new lower tick.
+#: When a pinned-tick test fails here, confirm which half of the assertion broke
+#: before concluding anything about correctness.
+LANE_ORDER: dict[str, tuple[str, ...]] = {
+    "brackets": (
+        "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
+        "ST", "MULI", "SUBI", "DIVI", "MODI", "BRZ",
+    ),
+    "gradebook": (
+        "MUL", "DIV", "MOVA", "SUB", "ADD", "JMPF", "BRN",
+        "AND", "BRZ", "ST", "LD", "LDI", "SUBI", "MULI",
+    ),
+    "matmul": ("MUL", "BRN", "SUB", "ADDI", "ST", "LD"),
+    "sudoku-validity": (
+        "HALT", "STP", "ADD", "LDP", "MULI", "ST",
+        "MODI", "DIVI", "SUBI", "ADDI", "BRZ",
+    ),
+}
+
 #: ROM fold overrides, where the default heuristic is not the footprint optimum.
 #: The default folds the ROM toward the *CPU's own* width, which is right only while
 #: the CPU and the tape are the sole things setting the bounding box.
@@ -2185,6 +2429,71 @@ ROM_ROWS = {
 }
 
 
+#: **ROM-PLUS**: programs whose ROM corridor is widened into a buffer, and how many
+#: words of it to ask for. Opt-in per slug — an ordinary ROM keeps the straight
+#: corridor, which is two turns and costs nothing.
+#:
+#: The reasoning, which is `rom.py`'s and `ARCH.md` §5.3's: a jump discards
+#: ``2 * ((t - k - 1) mod n)`` words (:func:`rom_words`) — **mod n**, always forward —
+#: so a backward edge makes the CPU wait out the rest of the ROM man's lap, and that
+#: wait is 20-53% of these programs' ticks. Halving the ROM's cells halved it once
+#: already; the man walks 3.46 cells per word on `gradebook` and 2.67 on `tcp`, so a
+#: word arrives roughly every three ticks.
+#:
+#: A pipe is "a FIFO whose capacity equals its length" (``SPEC.md``), so a *long*
+#: corridor is a queue of words already in flight. The CPU spends ~47% of its time in
+#: the memory lanes, and the ROM man refills that queue throughout — so when a backward
+#: jump lands, the discard loop drains a pre-filled buffer at its own speed instead of
+#: pacing the man. Nothing else changes: the corridor still attaches to the CPU's west
+#: wall on the fetch row, and :func:`check_bindings` measures the *attachment point*,
+#: not the route, so a snake binds exactly as the straight run did.
+#:
+#: This is a buffer, not a ring. A true code ring (the ``LOOP`` room of ``ARCH.md``
+#: §3's diagram) would make the CPU re-send every word it reads or the ring drains,
+#: which costs an ``s`` per discarded word and gives back much of the win.
+ROM_BUFFER: dict[str, int] = {}
+
+
+def rom_corridor(
+    *, want: int, x_lo: int, x_hi: int, y_top: int, rows: int, fetch_y: int, wall_x: int
+) -> list[tuple[int, int]]:
+    """Waypoints for a ROM->CPU corridor that buffers ``want`` words.
+
+    ``rows`` boustrophedon rows across ``[x_lo, x_hi]``, then a descent in ``x_lo`` to
+    ``fetch_y`` and one leg east into the CPU wall at ``wall_x``. ``rows`` is even so
+    the snake ends back in ``x_lo`` with the descent column already under it; an odd
+    count would strand it at ``x_hi``, which is over the CPU room.
+
+    **The first cell is always a southward stub at** ``(x_lo, y_top)``, and the snake
+    starts on the row below it. A pipe attaches to the room its first arrow points
+    *away* from, so a corridor that opened by running east would leave that cell
+    pointing along the ROM's bottom wall instead of out of it — the ROM's ``s`` then
+    binds nothing and the machine dies ``no-pipe`` in its first few dozen ticks. With
+    ``rows=0`` this degenerates to exactly the straight corridor.
+    """
+    if rows % 2:
+        raise MachineError(f"rom corridor needs an even row count, got {rows}")
+    pts: list[tuple[int, int]] = [(x_lo, y_top)]
+    for i in range(rows):
+        y = y_top + 1 + i
+        pts += [(x_lo, y), (x_hi, y)] if i % 2 == 0 else [(x_hi, y), (x_lo, y)]
+    pts += [(x_lo, fetch_y), (wall_x, fetch_y)]
+    return pts
+
+
+def rom_corridor_rows(want: int, span: int) -> int:
+    """Even row count whose boustrophedon holds ``want`` words across ``span`` columns.
+
+    Sized from the snake alone and not from the descent it shares with the plain
+    corridor, so the corridor comes out at least ``want`` and usually a little over.
+    Over-provisioning is the safe direction: the buffer is only ever as useful as it
+    is full.
+    """
+    if span < 2:
+        raise MachineError(f"a ROM corridor needs at least 2 columns, got {span}")
+    return 2 * -(-want // (2 * span))
+
+
 #: Slugs that must keep the old, long return path. Letting a simple lane drop early
 #: narrows the CPU, and ``matmul``'s STREAM wiring does not survive that: every one of
 #: 3,600 (fold, mem_pad, stream_pad) combinations fails to place its pipes, all of them
@@ -2226,6 +2535,8 @@ def build_for(slug: str, *, store: str = "tape") -> Machine:
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
+        middle_order=LANE_ORDER.get(slug),
+        rom_buffer=ROM_BUFFER.get(slug),
     )
 
 

@@ -75,13 +75,13 @@ slow = pytest.mark.skipif(
 #: are the deliverable, so they are pinned exactly (with 5 % of slack in the
 #: assertion below, to allow an improvement without a test edit).
 REAL_TICKS = {
-    "2x2 warm up": 14_126,
-    "non-square 2x3x2": 18_386,
-    "identity": 39_382,
-    "negative heavy": 69_040,
-    "skinny 16x2x16": 71_638,
-    "max magnitude 7x5x9": 79_416,
-    "16x16x16 full size": 548_758,
+    "2x2 warm up": 13_959,
+    "non-square 2x3x2": 18_171,
+    "identity": 38_891,
+    "negative heavy": 68_195,
+    "skinny 16x2x16": 70_547,
+    "max magnitude 7x5x9": 78_415,
+    "16x16x16 full size": 542_291,
 }
 
 #: ``(instructions, multiply-accumulates)`` per case, from the emulator. The ratio
@@ -372,7 +372,12 @@ def test_the_score_is_real() -> None:
     from randomfun2026solvers.scoring import score_program
 
     got = score_program(GRID, SLUG)
-    assert got.area2 == 9216
+    # 8100, not the 9216 this pinned for a while: 96² was the shape before the ROM
+    # packing landed, and because the assertion is gated behind LM1_SLOW it went stale
+    # unnoticed. `matmul` is 88x90 and is the one program `ADAPTER_TAPE_GAP` did *not*
+    # move (it is pinned to 6 by `ADAPTER_TAPE_GAP_FOR`), so this is the same number it
+    # has been for some time — it agrees with the shape pinned at the top of this file.
+    assert got.area2 == 8100
     assert abs(got.avg_ticks - sum(REAL_TICKS.values()) / 7) < 500
     assert 0.9e9 < got.score < 1.25e9
     assert max(c.ticks for c in got.cases) < TICK_CAP
