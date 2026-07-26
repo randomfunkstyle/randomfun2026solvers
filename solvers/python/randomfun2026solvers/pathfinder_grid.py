@@ -146,7 +146,7 @@ __all__ = [
 BAND_W = 12
 #: West-channel columns.  Every wire runs here; the widest row of the block
 #: graph has ten live wires crossing it, plus the shared entry column.
-NCHW = 12
+NCHW = 11
 CODEW = 4 * BAND_W
 IW = NCHW + CODEW
 #: First code column, and the last one.
