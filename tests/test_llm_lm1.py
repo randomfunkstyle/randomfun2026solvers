@@ -67,11 +67,17 @@ def test_program_assembles_and_stays_inside_its_budgets(program) -> None:
     assert prog.P > 0
     assert slots <= 512, f"{slots} store slots"
     used = {op.mnemonic for op in prog.ops_used}
-    assert {"DSPA", "DSPD", "DSPS", "IN"} <= used, used
-    # The decode trie is full: 17 opcodes costs a whole extra 32-lane band, which
-    # measured at +32 rows and +43% on every instruction's issue cost.  This is a
-    # standing reminder of the cliff, not a claim that we are under it yet.
-    assert len(used) <= 20, sorted(used)
+    # One `DSP p` where there were three port opcodes: the lane sends the selector
+    # and ACC down one pipe and `dsprelay.py`'s room fans them out. Folding them is
+    # two of the three removals that take this program to 16 opcodes.
+    assert {"DSP", "IN"} <= used, used
+    assert not {"DSPA", "DSPD", "DSPS"} & used, "the port opcodes are folded into DSP"
+    # The lane band is `2 * (1 << k) - 1` rows and `k = (len(used) - 1).bit_length()`,
+    # so the band is a step function of this number, not a slope: 17, 18 and 19 all
+    # cost the same 63 rows and 16 costs 31. We are *on* the 16 step, and one more
+    # opcode costs 32 rows of the charged dimension. Tighten this, never relax it.
+    assert len(used) <= 16, sorted(used)
+    assert "MULI" not in used, "`MULI` is folded to four doublings; see `_times16`"
 
 
 @pytest.mark.parametrize("case", _cases())
@@ -209,7 +215,10 @@ def test_the_hot_bank_is_sized_to_what_it_uses() -> None:
 
     a = Asm(hot_slots=llm_lm1.HOT_SLOTS)
     llm_lm1._declare(a, packed_cells=False)
-    assert a.hot_used == 52
+    # 53, not the 52 this was swept at: folding `MULI` out to reach 16 opcodes needs
+    # a doubling scratch, and it has to be hot (four reads an execution on the cold
+    # tape would cost ~6% of ticks and swallow the win). See `_times16`.
+    assert a.hot_used == 53
     # One spare, and no more: the sweep is monotonic above the used count.
     assert llm_lm1.HOT_SLOTS == a.hot_used + 1
 
@@ -222,4 +231,4 @@ def test_a_bank_with_no_spare_slot_is_refused() -> None:
     interpreter when the cause is this one number.
     """
     with pytest.raises(ValueError, match="at least one spare"):
-        llm_lm1.build_asm(hot_slots=52)
+        llm_lm1.build_asm(hot_slots=llm_lm1.HOT_SLOTS - 1)

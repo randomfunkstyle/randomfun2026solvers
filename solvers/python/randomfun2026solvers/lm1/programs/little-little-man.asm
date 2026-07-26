@@ -10,80 +10,81 @@
 .equ NRUN   6    ; candidate horizontal wall runs
 .equ NSRC   7    ; pipe source arrowheads found
 .equ STOP   8    ; a wall freeze or the last H: nothing runs after this
-.equ NHALT  54   ; men halted on an H
+.equ NHALT  55   ; men halted on an H
 .equ K      9    ; interpreted ticks left this round
 .equ CA     10   ; cell cursor: display address
 .equ CX     11   ; cell cursor: column
 .equ CY     12   ; cell cursor: row
 .equ BY     13   ; the input byte
 .equ CLS    14   ; the class being computed / dispatched
-.equ COL    55   ; the colour being painted
+.equ COL    56   ; the colour being painted
 .equ PLUSX  15   ; column of the last '+' in this row, or -1
-.equ CLEAN  56   ; every cell since that '+' was a '-'
+.equ CLEAN  57   ; every cell since that '+' was a '-'
 .equ LIMIT  16   ; 16 * H — one past the last live display address
-.equ RET    57   ; return site for the room_kind subroutine
+.equ RET    58   ; return site for the room_kind subroutine
 .equ RKX    17   ; room_kind argument: column
 .equ RKY    18   ; room_kind argument: row
-.equ KIND   58   ; room_kind result: 0 outside, 1 inside, 2 wall
-.equ RIDX   59   ; room_kind result: which room, or -1
+.equ KIND   59   ; room_kind result: 0 outside, 1 inside, 2 wall
+.equ RIDX   60   ; room_kind result: which room, or -1
 .equ RI     19   ; room_kind's loop cursor
 .equ T0     20   
 .equ T1     21   
 .equ T2     22   
-.equ T3     60   
+.equ T3     61   
 .equ T4     23   
-.equ JDX    61   ; second array cursor, for the run pairing's inner loop
+.equ JDX    62   ; second array cursor, for the run pairing's inner loop
 .equ PKEY   24   ; the (x0, x1) key of the run being paired
-.equ PY0    62   ; the row of the run being paired
+.equ PY0    63   ; the row of the run being paired
 .equ PX0    25   ; unpacked x0 of a candidate room
-.equ PX1    63   ; unpacked x1 of a candidate room
-.equ FCLS   64   ; the final class the pipe walk writes for the cell it is on
-.equ CP0    65   ; packed cell access scratch — never touched by callers
-.equ CP1    66   
-.equ CP2    67   
-.equ C20    26   ; the encoded wall class, for stamping with MOVA
-.equ CZ     27   ; the constant 0, for clearing with MOVA
-.equ IDX    28   ; generic array cursor
-.equ VAL    29   ; generic value staged for an indexed write
-.equ NEWHI  30   ; pipe shift: highest occupied cell after the pass
-.equ NEWLO  68   ; pipe shift: lowest occupied cell after the pass
-.equ BEST   31   ; s/r: the pipe chosen, or -1
-.equ BESTD  69   ; s/r: its Manhattan distance
-.equ BESTA  70   ; s/r: its arrowhead address, for the reading-order tie
-.equ PICKM  71   ; pick(): 0 = outgoing pipes for an s, 1 = incoming for an r
-.equ PICKR  72   ; pick(): the room the man is in
-.equ PICKA  73   ; pick(): the man's cell
-.equ RET2   32   ; return site for pick()
-.equ RUN    74   ; packed wall run: (y*16 + x0)*16 + x1 [8]
-.equ RX0    82   ; room rectangles, inclusive [3]
-.equ RY0    85   ;  [3]
-.equ RX1    88   ;  [3]
-.equ RY1    91   ;  [3]
-.equ SRCA   94   ; pipe source arrowhead: display address [3]
-.equ SRCD   97   ; its flow direction [3]
-.equ SRCR   100  ; the room it leaves [3]
-.equ MPOS   33   ; man: display address [3]
-.equ MDIR   36   ; man: heading 0..3 [3]
-.equ MA     103  ; man: register A [3]
-.equ MB     106  ; man: register B [3]
-.equ MHALT  39   ; man: halted on an H [3]
-.equ MROOM  109  ; man: which room he lives in [3]
-.equ MCLS   42   ; man: the class under him, read when he moved [3]
-.equ MPIPE  112  ; man: the pipe his s/r bound to, cached [3]
-.equ MPIPEA 115  ; man: the cell that cache is valid for, or -1 [3]
-.equ PLEN   45   ; pipe: cells, so index len-1 is the destination [2]
-.equ PBASE  47   ; pipe: its first slot in PCA/OCC [2]
-.equ PSRC   118  ; pipe: source arrowhead address [2]
-.equ PDST   120  ; pipe: destination arrowhead address [2]
-.equ PSROOM 122  ; pipe: the room it leaves [2]
-.equ PDROOM 124  ; pipe: the room it enters [2]
-.equ PLO    49   ; pipe: lowest maybe-occupied cell [2]
-.equ PHI    126  ; pipe: highest maybe-occupied cell [2]
-.equ PCNT   51   ; pipe: values in flight [2]
-.equ DTAB   128  ; address delta per heading: -16, +1, +16, -1 [4]
-.equ PCA    132  ; pipe cell display addresses, flow order [20]
-.equ OCC    152  ; 0 empty, else value + 10 [20]
-.equ CELL   172  ; the program grid, one class a cell [256]
+.equ PX1    64   ; unpacked x1 of a candidate room
+.equ FCLS   65   ; the final class the pipe walk writes for the cell it is on
+.equ MUL16  26   ; x16 scratch — `MULI` is folded out to reach 16 opcodes
+.equ CP0    66   ; packed cell access scratch — never touched by callers
+.equ CP1    67   
+.equ CP2    68   
+.equ C20    27   ; the encoded wall class, for stamping with MOVA
+.equ CZ     28   ; the constant 0, for clearing with MOVA
+.equ IDX    29   ; generic array cursor
+.equ VAL    30   ; generic value staged for an indexed write
+.equ NEWHI  31   ; pipe shift: highest occupied cell after the pass
+.equ NEWLO  69   ; pipe shift: lowest occupied cell after the pass
+.equ BEST   32   ; s/r: the pipe chosen, or -1
+.equ BESTD  70   ; s/r: its Manhattan distance
+.equ BESTA  71   ; s/r: its arrowhead address, for the reading-order tie
+.equ PICKM  72   ; pick(): 0 = outgoing pipes for an s, 1 = incoming for an r
+.equ PICKR  73   ; pick(): the room the man is in
+.equ PICKA  74   ; pick(): the man's cell
+.equ RET2   33   ; return site for pick()
+.equ RUN    75   ; packed wall run: (y*16 + x0)*16 + x1 [8]
+.equ RX0    83   ; room rectangles, inclusive [3]
+.equ RY0    86   ;  [3]
+.equ RX1    89   ;  [3]
+.equ RY1    92   ;  [3]
+.equ SRCA   95   ; pipe source arrowhead: display address [3]
+.equ SRCD   98   ; its flow direction [3]
+.equ SRCR   101  ; the room it leaves [3]
+.equ MPOS   34   ; man: display address [3]
+.equ MDIR   37   ; man: heading 0..3 [3]
+.equ MA     104  ; man: register A [3]
+.equ MB     107  ; man: register B [3]
+.equ MHALT  40   ; man: halted on an H [3]
+.equ MROOM  110  ; man: which room he lives in [3]
+.equ MCLS   43   ; man: the class under him, read when he moved [3]
+.equ MPIPE  113  ; man: the pipe his s/r bound to, cached [3]
+.equ MPIPEA 116  ; man: the cell that cache is valid for, or -1 [3]
+.equ PLEN   46   ; pipe: cells, so index len-1 is the destination [2]
+.equ PBASE  48   ; pipe: its first slot in PCA/OCC [2]
+.equ PSRC   119  ; pipe: source arrowhead address [2]
+.equ PDST   121  ; pipe: destination arrowhead address [2]
+.equ PSROOM 123  ; pipe: the room it leaves [2]
+.equ PDROOM 125  ; pipe: the room it enters [2]
+.equ PLO    50   ; pipe: lowest maybe-occupied cell [2]
+.equ PHI    127  ; pipe: highest maybe-occupied cell [2]
+.equ PCNT   52   ; pipe: values in flight [2]
+.equ DTAB   129  ; address delta per heading: -16, +1, +16, -1 [4]
+.equ PCA    133  ; pipe cell display addresses, flow order [20]
+.equ OCC    153  ; 0 empty, else value + 10 [20]
+.equ CELL   173  ; the program grid, one class a cell [256]
 
         JMP   setup           ; the ROM starts here; setup runs once and falls into round
 
@@ -105,23 +106,23 @@ tk_go:
         BRN   sh_go0
         JMP   sh_done0
 sh_go0:
-        LD    51
+        LD    52
         BRZ   sh_done0        ; nothing in flight
-        LD    126
+        LD    127
         ST    IDX
         LDI   0
         SUBI  1
         ST    NEWHI
         LDI   0
         ST    NEWLO
-        LD    45              ; T2 = the destination cell's local index
+        LD    46              ; T2 = the destination cell's local index
         SUBI  1
         ST    T2
 sh_loop0:
         LD    IDX
-        SUB   49
+        SUB   50
         BRN   sh_end0
-        LD    47              ; T4 = the slot this cell lives in
+        LD    48              ; T4 = the slot this cell lives in
         ADD   IDX
         ST    T4
         LD    T4
@@ -150,15 +151,15 @@ sh_move0:
         LD    T4              ; the vacated cell goes back to plain pipe
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   6
-        DSPD 
+        DSP   1
         LD    VAL
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   14
-        DSPD 
+        DSP   1
         LD    IDX
         ADDI  1
         ST    T1
@@ -185,15 +186,15 @@ sh_end0:
         LD    NEWHI
         BRN   sh_heal0
         LD    NEWHI
-        ST    126
+        ST    127
         LD    NEWLO
-        ST    49
+        ST    50
         JMP   sh_done0
 sh_heal0:
         LD    T2              ; the window was stale: widen it and let the next pass tighten
-        ST    126
+        ST    127
         LDI   0
-        ST    49
+        ST    50
 sh_done0:
 
 ; ── pipe 1: shift the occupied window down from its head ──────────────
@@ -202,23 +203,23 @@ sh_done0:
         BRN   sh_go1
         JMP   sh_done1
 sh_go1:
-        LD    52
+        LD    53
         BRZ   sh_done1        ; nothing in flight
-        LD    127
+        LD    128
         ST    IDX
         LDI   0
         SUBI  1
         ST    NEWHI
         LDI   0
         ST    NEWLO
-        LD    46              ; T2 = the destination cell's local index
+        LD    47              ; T2 = the destination cell's local index
         SUBI  1
         ST    T2
 sh_loop1:
         LD    IDX
-        SUB   50
+        SUB   51
         BRN   sh_end1
-        LD    48              ; T4 = the slot this cell lives in
+        LD    49              ; T4 = the slot this cell lives in
         ADD   IDX
         ST    T4
         LD    T4
@@ -247,15 +248,15 @@ sh_move1:
         LD    T4              ; the vacated cell goes back to plain pipe
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   6
-        DSPD 
+        DSP   1
         LD    VAL
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   14
-        DSPD 
+        DSP   1
         LD    IDX
         ADDI  1
         ST    T1
@@ -282,15 +283,15 @@ sh_end1:
         LD    NEWHI
         BRN   sh_heal1
         LD    NEWHI
-        ST    127
+        ST    128
         LD    NEWLO
-        ST    50
+        ST    51
         JMP   sh_done1
 sh_heal1:
         LD    T2              ; the window was stale: widen it and let the next pass tighten
-        ST    127
+        ST    128
         LDI   0
-        ST    50
+        ST    51
 sh_done1:
 
 ; ── man 0 ─────────────────────────────────────────────────────────────
@@ -299,11 +300,11 @@ sh_done1:
         BRN   m_go0
         JMP   m_done0
 m_go0:
-        LD    39
+        LD    40
         BRZ   m_live0
         JMP   m_done0
 m_live0:
-        LD    42
+        LD    43
         MODI  32
         ST    CLS
         SUBI  10
@@ -328,45 +329,45 @@ m_live0:
         JMP   m_move0         ; a wall or a pipe cell cannot be under a live man
 m_digit0:
         LD    CLS
-        ST    103
+        ST    104
         JMP   m_move0
 m_mov0:
-        LD    103
-        ST    106
+        LD    104
+        ST    107
         JMP   m_move0
 m_add0:
-        LD    103
-        ADD   106
-        ST    103
+        LD    104
+        ADD   107
+        ST    104
         JMP   m_move0
 m_sub0:
-        LD    103
-        SUB   106
-        ST    103
+        LD    104
+        SUB   107
+        ST    104
         JMP   m_move0
 m_dir0:
         LD    CLS
         SUBI  16
-        ST    36
+        ST    37
         JMP   m_move0
 m_turn0:
-        LD    103             ; X turns by sign(A)
+        LD    104             ; X turns by sign(A)
         BRZ   m_move0
         BRN   m_ccw0
-        LD    36
+        LD    37
         ADDI  1
         MODI  4
-        ST    36
+        ST    37
         JMP   m_move0
 m_ccw0:
-        LD    36
+        LD    37
         SUBI  1
         MODI  4
-        ST    36
+        ST    37
         JMP   m_move0
 m_halt0:
         LDI   1               ; H: he stays here forever
-        ST    39
+        ST    40
         LD    NHALT
         ADDI  1
         ST    NHALT
@@ -378,26 +379,26 @@ m_last0:
         ST    STOP
         JMP   m_done0
 m_send0:
-        LD    115             ; which pipe this cell binds to never changes, so cache it
-        SUB   33
+        LD    116             ; which pipe this cell binds to never changes, so cache it
+        SUB   34
         BRZ   m_send_hit0
         LDI   0
         ST    PICKM
-        LD    109
+        LD    110
         ST    PICKR
-        LD    33
+        LD    34
         ST    PICKA
         LDI   0
         ST    RET2
         JMP   pick
 pk_ret0:
         LD    BEST
-        ST    112
-        LD    33
-        ST    115
+        ST    113
+        LD    34
+        ST    116
         JMP   m_send_go0
 m_send_hit0:
-        LD    112
+        LD    113
         ST    BEST
 m_send_go0:
         LD    BEST
@@ -412,7 +413,7 @@ m_send_go0:
         BRZ   m_send_ok0
         JMP   m_done0         ; the pipe's first cell is full: he blocks on the s
 m_send_ok0:
-        LD    103
+        LD    104
         ADDI  10
         ST    VAL
         LD    T4
@@ -421,9 +422,9 @@ m_send_ok0:
         LD    T4
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   14
-        DSPD 
+        DSP   1
         LD    BEST
         ADDI  PCNT
         LDA  
@@ -445,26 +446,26 @@ m_send_hi0:
         MOVA  CZ
         JMP   m_move0
 m_recv0:
-        LD    115             ; which pipe this cell binds to never changes, so cache it
-        SUB   33
+        LD    116             ; which pipe this cell binds to never changes, so cache it
+        SUB   34
         BRZ   m_recv_hit0
         LDI   1
         ST    PICKM
-        LD    109
+        LD    110
         ST    PICKR
-        LD    33
+        LD    34
         ST    PICKA
         LDI   1
         ST    RET2
         JMP   pick
 pk_ret1:
         LD    BEST
-        ST    112
-        LD    33
-        ST    115
+        ST    113
+        LD    34
+        ST    116
         JMP   m_recv_go0
 m_recv_hit0:
-        LD    112
+        LD    113
         ST    BEST
 m_recv_go0:
         LD    BEST
@@ -485,16 +486,16 @@ m_recv_go0:
         ST    T0
         BRZ   m_done0         ; nothing has arrived: he blocks on the r
         SUBI  10
-        ST    103
+        ST    104
         LD    T4
         ADDI  OCC
         MOVA  CZ
         LD    T4
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   6
-        DSPD 
+        DSP   1
         LD    BEST
         ADDI  PCNT
         LDA  
@@ -505,27 +506,27 @@ m_recv_go0:
         MOVA  T1
         JMP   m_move0
 m_move0:
-        LD    33              ; repaint the cell he leaves with the colour of the class under it
-        DSPA 
-        LD    42
+        LD    34              ; repaint the cell he leaves with the colour of the class under it
+        DSP   0
+        LD    43
         DIVI  32
-        DSPD 
-        LD    36
+        DSP   1
+        LD    37
         ADDI  DTAB
         LDA  
         ST    T0
-        LD    33
+        LD    34
         ADD   T0
-        ST    33
-        DSPA 
+        ST    34
+        DSP   0
         LDI   9
-        DSPD 
-        LD    33
+        DSP   1
+        LD    34
         ADDI  CELL
         LDA  
         ST    CLS
         LD    CLS             ; keep it for the next tick's dispatch, and test it for a wall
-        ST    42
+        ST    43
         SUBI  148
         BRZ   m_wall0
         JMP   m_done0
@@ -540,11 +541,11 @@ m_done0:
         BRN   m_go1
         JMP   m_done1
 m_go1:
-        LD    40
+        LD    41
         BRZ   m_live1
         JMP   m_done1
 m_live1:
-        LD    43
+        LD    44
         MODI  32
         ST    CLS
         SUBI  10
@@ -569,45 +570,45 @@ m_live1:
         JMP   m_move1         ; a wall or a pipe cell cannot be under a live man
 m_digit1:
         LD    CLS
-        ST    104
+        ST    105
         JMP   m_move1
 m_mov1:
-        LD    104
-        ST    107
+        LD    105
+        ST    108
         JMP   m_move1
 m_add1:
-        LD    104
-        ADD   107
-        ST    104
+        LD    105
+        ADD   108
+        ST    105
         JMP   m_move1
 m_sub1:
-        LD    104
-        SUB   107
-        ST    104
+        LD    105
+        SUB   108
+        ST    105
         JMP   m_move1
 m_dir1:
         LD    CLS
         SUBI  16
-        ST    37
+        ST    38
         JMP   m_move1
 m_turn1:
-        LD    104             ; X turns by sign(A)
+        LD    105             ; X turns by sign(A)
         BRZ   m_move1
         BRN   m_ccw1
-        LD    37
+        LD    38
         ADDI  1
         MODI  4
-        ST    37
+        ST    38
         JMP   m_move1
 m_ccw1:
-        LD    37
+        LD    38
         SUBI  1
         MODI  4
-        ST    37
+        ST    38
         JMP   m_move1
 m_halt1:
         LDI   1               ; H: he stays here forever
-        ST    40
+        ST    41
         LD    NHALT
         ADDI  1
         ST    NHALT
@@ -619,26 +620,26 @@ m_last1:
         ST    STOP
         JMP   m_done1
 m_send1:
-        LD    116             ; which pipe this cell binds to never changes, so cache it
-        SUB   34
+        LD    117             ; which pipe this cell binds to never changes, so cache it
+        SUB   35
         BRZ   m_send_hit1
         LDI   0
         ST    PICKM
-        LD    110
+        LD    111
         ST    PICKR
-        LD    34
+        LD    35
         ST    PICKA
         LDI   2
         ST    RET2
         JMP   pick
 pk_ret2:
         LD    BEST
-        ST    113
-        LD    34
-        ST    116
+        ST    114
+        LD    35
+        ST    117
         JMP   m_send_go1
 m_send_hit1:
-        LD    113
+        LD    114
         ST    BEST
 m_send_go1:
         LD    BEST
@@ -653,7 +654,7 @@ m_send_go1:
         BRZ   m_send_ok1
         JMP   m_done1         ; the pipe's first cell is full: he blocks on the s
 m_send_ok1:
-        LD    104
+        LD    105
         ADDI  10
         ST    VAL
         LD    T4
@@ -662,9 +663,9 @@ m_send_ok1:
         LD    T4
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   14
-        DSPD 
+        DSP   1
         LD    BEST
         ADDI  PCNT
         LDA  
@@ -686,26 +687,26 @@ m_send_hi1:
         MOVA  CZ
         JMP   m_move1
 m_recv1:
-        LD    116             ; which pipe this cell binds to never changes, so cache it
-        SUB   34
+        LD    117             ; which pipe this cell binds to never changes, so cache it
+        SUB   35
         BRZ   m_recv_hit1
         LDI   1
         ST    PICKM
-        LD    110
+        LD    111
         ST    PICKR
-        LD    34
+        LD    35
         ST    PICKA
         LDI   3
         ST    RET2
         JMP   pick
 pk_ret3:
         LD    BEST
-        ST    113
-        LD    34
-        ST    116
+        ST    114
+        LD    35
+        ST    117
         JMP   m_recv_go1
 m_recv_hit1:
-        LD    113
+        LD    114
         ST    BEST
 m_recv_go1:
         LD    BEST
@@ -726,16 +727,16 @@ m_recv_go1:
         ST    T0
         BRZ   m_done1         ; nothing has arrived: he blocks on the r
         SUBI  10
-        ST    104
+        ST    105
         LD    T4
         ADDI  OCC
         MOVA  CZ
         LD    T4
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   6
-        DSPD 
+        DSP   1
         LD    BEST
         ADDI  PCNT
         LDA  
@@ -746,27 +747,27 @@ m_recv_go1:
         MOVA  T1
         JMP   m_move1
 m_move1:
-        LD    34              ; repaint the cell he leaves with the colour of the class under it
-        DSPA 
-        LD    43
+        LD    35              ; repaint the cell he leaves with the colour of the class under it
+        DSP   0
+        LD    44
         DIVI  32
-        DSPD 
-        LD    37
+        DSP   1
+        LD    38
         ADDI  DTAB
         LDA  
         ST    T0
-        LD    34
+        LD    35
         ADD   T0
-        ST    34
-        DSPA 
+        ST    35
+        DSP   0
         LDI   9
-        DSPD 
-        LD    34
+        DSP   1
+        LD    35
         ADDI  CELL
         LDA  
         ST    CLS
         LD    CLS             ; keep it for the next tick's dispatch, and test it for a wall
-        ST    43
+        ST    44
         SUBI  148
         BRZ   m_wall1
         JMP   m_done1
@@ -781,11 +782,11 @@ m_done1:
         BRN   m_go2
         JMP   m_done2
 m_go2:
-        LD    41
+        LD    42
         BRZ   m_live2
         JMP   m_done2
 m_live2:
-        LD    44
+        LD    45
         MODI  32
         ST    CLS
         SUBI  10
@@ -810,45 +811,45 @@ m_live2:
         JMP   m_move2         ; a wall or a pipe cell cannot be under a live man
 m_digit2:
         LD    CLS
-        ST    105
+        ST    106
         JMP   m_move2
 m_mov2:
-        LD    105
-        ST    108
+        LD    106
+        ST    109
         JMP   m_move2
 m_add2:
-        LD    105
-        ADD   108
-        ST    105
+        LD    106
+        ADD   109
+        ST    106
         JMP   m_move2
 m_sub2:
-        LD    105
-        SUB   108
-        ST    105
+        LD    106
+        SUB   109
+        ST    106
         JMP   m_move2
 m_dir2:
         LD    CLS
         SUBI  16
-        ST    38
+        ST    39
         JMP   m_move2
 m_turn2:
-        LD    105             ; X turns by sign(A)
+        LD    106             ; X turns by sign(A)
         BRZ   m_move2
         BRN   m_ccw2
-        LD    38
+        LD    39
         ADDI  1
         MODI  4
-        ST    38
+        ST    39
         JMP   m_move2
 m_ccw2:
-        LD    38
+        LD    39
         SUBI  1
         MODI  4
-        ST    38
+        ST    39
         JMP   m_move2
 m_halt2:
         LDI   1               ; H: he stays here forever
-        ST    41
+        ST    42
         LD    NHALT
         ADDI  1
         ST    NHALT
@@ -860,26 +861,26 @@ m_last2:
         ST    STOP
         JMP   m_done2
 m_send2:
-        LD    117             ; which pipe this cell binds to never changes, so cache it
-        SUB   35
+        LD    118             ; which pipe this cell binds to never changes, so cache it
+        SUB   36
         BRZ   m_send_hit2
         LDI   0
         ST    PICKM
-        LD    111
+        LD    112
         ST    PICKR
-        LD    35
+        LD    36
         ST    PICKA
         LDI   4
         ST    RET2
         JMP   pick
 pk_ret4:
         LD    BEST
-        ST    114
-        LD    35
-        ST    117
+        ST    115
+        LD    36
+        ST    118
         JMP   m_send_go2
 m_send_hit2:
-        LD    114
+        LD    115
         ST    BEST
 m_send_go2:
         LD    BEST
@@ -894,7 +895,7 @@ m_send_go2:
         BRZ   m_send_ok2
         JMP   m_done2         ; the pipe's first cell is full: he blocks on the s
 m_send_ok2:
-        LD    105
+        LD    106
         ADDI  10
         ST    VAL
         LD    T4
@@ -903,9 +904,9 @@ m_send_ok2:
         LD    T4
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   14
-        DSPD 
+        DSP   1
         LD    BEST
         ADDI  PCNT
         LDA  
@@ -927,26 +928,26 @@ m_send_hi2:
         MOVA  CZ
         JMP   m_move2
 m_recv2:
-        LD    117             ; which pipe this cell binds to never changes, so cache it
-        SUB   35
+        LD    118             ; which pipe this cell binds to never changes, so cache it
+        SUB   36
         BRZ   m_recv_hit2
         LDI   1
         ST    PICKM
-        LD    111
+        LD    112
         ST    PICKR
-        LD    35
+        LD    36
         ST    PICKA
         LDI   5
         ST    RET2
         JMP   pick
 pk_ret5:
         LD    BEST
-        ST    114
-        LD    35
-        ST    117
+        ST    115
+        LD    36
+        ST    118
         JMP   m_recv_go2
 m_recv_hit2:
-        LD    114
+        LD    115
         ST    BEST
 m_recv_go2:
         LD    BEST
@@ -967,16 +968,16 @@ m_recv_go2:
         ST    T0
         BRZ   m_done2         ; nothing has arrived: he blocks on the r
         SUBI  10
-        ST    105
+        ST    106
         LD    T4
         ADDI  OCC
         MOVA  CZ
         LD    T4
         ADDI  PCA
         LDA  
-        DSPA 
+        DSP   0
         LDI   6
-        DSPD 
+        DSP   1
         LD    BEST
         ADDI  PCNT
         LDA  
@@ -987,27 +988,27 @@ m_recv_go2:
         MOVA  T1
         JMP   m_move2
 m_move2:
-        LD    35              ; repaint the cell he leaves with the colour of the class under it
-        DSPA 
-        LD    44
+        LD    36              ; repaint the cell he leaves with the colour of the class under it
+        DSP   0
+        LD    45
         DIVI  32
-        DSPD 
-        LD    38
+        DSP   1
+        LD    39
         ADDI  DTAB
         LDA  
         ST    T0
-        LD    35
+        LD    36
         ADD   T0
-        ST    35
-        DSPA 
+        ST    36
+        DSP   0
         LDI   9
-        DSPD 
-        LD    35
+        DSP   1
+        LD    36
         ADDI  CELL
         LDA  
         ST    CLS
         LD    CLS             ; keep it for the next tick's dispatch, and test it for a wall
-        ST    44
+        ST    45
         SUBI  148
         BRZ   m_wall2
         JMP   m_done2
@@ -1021,7 +1022,7 @@ m_done2:
         JMP   tick
 commit:
         LDI   1               ; SWAP 1: commit, keep both buffers, so the next frame is a delta
-        DSPS 
+        DSP   2
         JMP   round
 
 ; ── pick(PICKM, PICKR, PICKA) -> BEST: the pipe an s or an r talks to ───
@@ -1164,20 +1165,27 @@ setup:
         LDI   148
         ST    C20
         LD    H               ; LIMIT = 16 * H: one past the last live display address
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ST    LIMIT
         LDI   0               ; DTAB[0]
         SUBI  16
-        ST    128
-        LDI   1
         ST    129
-        LDI   16
+        LDI   1
         ST    130
+        LDI   16
+        ST    131
         LDI   0
         SUBI  1
-        ST    131
+        ST    132
         LDI   0               ; home the cursor: pass 1 paints in address order, so DATA advances it
-        DSPA 
+        DSP   0
 p1_row:
         LDI   0
         ST    CX
@@ -1328,9 +1336,23 @@ cl_plus14:
         SUBI  8
         BRZ   run_skip19      ; run table full
         LD    CY              ; RUN = (y * 16 + x0) * 16 + x1
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ADD   PLUSX
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ADD   CX
         ST    T0
         LD    NRUN
@@ -1351,7 +1373,7 @@ p1_dirty:
 p1_keep:
         LD    CLS             ; the glyph's own colour; walls and pipe cells are repainted later
         DIVI  32
-        DSPD 
+        DSP   1
         LD    CA
         ADDI  CELL
         MOVA  CLS
@@ -1369,7 +1391,14 @@ p1_row_end:
         ADDI  1
         ST    CY
         LD    CY              ; the next row starts at 16y, whatever W is
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ST    CA
         LD    CY
         SUB   H
@@ -1377,7 +1406,7 @@ p1_row_end:
         JMP   p1_done
 p1_next_row:
         LD    CA
-        DSPA 
+        DSP   0
         JMP   p1_row
 
 ; ── pair wall runs into rooms; a pair is only a room if its columns are '|' ───
@@ -1438,7 +1467,14 @@ pr_val:
         JMP   pr_accept
 pr_val_go:
         LD    T3              ; left column of the candidate
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ST    T4
         ADD   PX0
         ST    VAL
@@ -1534,11 +1570,25 @@ st_room_go:
         LDA  
         ST    T3
         LD    T1              ; VAL walks the top wall, T4 the bottom
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ADD   T0
         ST    VAL
         LD    T3
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ADD   T0
         ST    T4
         LD    T0
@@ -1557,13 +1607,13 @@ st_top_go:
         ADDI  CELL
         MOVA  C20
         LD    VAL
-        DSPA 
+        DSP   0
         LDI   4
-        DSPD 
+        DSP   1
         LD    T4
-        DSPA 
+        DSP   0
         LDI   4
-        DSPD 
+        DSP   1
         LD    VAL             ; probe -16 for an arrowhead heading 0
         SUBI  16
         ST    PKEY
@@ -1646,7 +1696,14 @@ sp_skip22:
         JMP   st_top
 st_side_init:
         LD    T1              ; VAL walks the left wall, T4 the right
-        MULI  16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
+        ST    MUL16
+        ADD   MUL16
         ST    VAL
         ADD   T2
         ST    T4
@@ -1672,13 +1729,13 @@ st_side_go:
         ADDI  CELL
         MOVA  C20
         LD    VAL
-        DSPA 
+        DSP   0
         LDI   4
-        DSPD 
+        DSP   1
         LD    T4
-        DSPA 
+        DSP   0
         LDI   4
-        DSPD 
+        DSP   1
         LD    VAL             ; probe -1 for an arrowhead heading 3
         SUBI  1
         ST    PKEY
@@ -1868,9 +1925,9 @@ pw_step_go:
         ADDI  CELL
         MOVA  FCLS
         LD    T0
-        DSPA 
+        DSP   0
         LDI   6
-        DSPD 
+        DSP   1
         LD    T1
         ADDI  DTAB
         LDA  
@@ -1975,16 +2032,16 @@ pm_go:
         LD    IDX
         ADDI  MPOS
         LDA  
-        DSPA 
+        DSP   0
         LDI   9
-        DSPD 
+        DSP   1
         LD    IDX
         ADDI  1
         ST    IDX
         JMP   pm_loop
 pm_done:
         LDI   1               ; commit the opening frame; SWAP 1 keeps both buffers, so it is a base
-        DSPS 
+        DSP   2
         JMP   round
 
 ; ── room_kind(RKX, RKY) -> KIND 0 outside / 1 inside / 2 wall, RIDX ───

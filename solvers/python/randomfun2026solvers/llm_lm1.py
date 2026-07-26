@@ -249,6 +249,7 @@ def _declare(a: Asm, *, packed_cells: bool) -> None:
     a.slot("PX0", "unpacked x0 of a candidate room", hot=True)
     a.slot("PX1", "unpacked x1 of a candidate room")
     a.slot("FCLS", "the final class the pipe walk writes for the cell it is on")
+    a.slot("MUL16", "x16 scratch — `MULI` is folded out to reach 16 opcodes", hot=True)
     a.slot("CP0", "packed cell access scratch — never touched by callers")
     a.slot("CP1")
     a.slot("CP2")
@@ -305,6 +306,24 @@ def _declare(a: Asm, *, packed_cells: bool) -> None:
         )
     else:
         a.array("CELL", PANEL * PANEL, "the program grid, one class a cell")
+
+
+def _times16(a: Asm) -> None:
+    """``ACC *= 16`` without ``MULI`` — the third opcode removed to reach 16.
+
+    ``ST`` preserves ACC and ``ADD`` adds a slot to it, so ``ST t; ADD t`` doubles
+    ACC and four pairs give x16. Eight instructions where one stood, but ``MULI``
+    executes **31 times a case, 0.31% of instructions**, so this costs ~0.4% of
+    ticks and ~112 ROM words — against a decode trie one level shallower, which is
+    32 rows off the charged dimension.
+
+    The scratch is ``hot=True`` deliberately: four reads per execution is 124 reads
+    a case, and on the cold tape at ~3,400 ticks each that would cost ~6% of ticks
+    and swallow the win whole.
+    """
+    for _ in range(4):
+        a.st("MUL16")
+        a.op("ADD", "MUL16")
 
 
 # ── leaf helpers ──────────────────────────────────────────────────────────────
@@ -368,12 +387,12 @@ def _cell_write(a: Asm, addr: str, val: str, note: str = "", *, packed: bool) ->
 def _paint(a: Asm, addr: str, colour: str | int) -> None:
     """One pixel: ADDR then DATA.  The panel is 16x16, so an address *is* a cell."""
     a.ld(addr)
-    a.op("DSPA")
+    a.op("DSP", 0)
     if isinstance(colour, int):
         a.ldi(colour)
     else:
         a.ld(colour)
-    a.op("DSPD")
+    a.op("DSP", 1)
 
 
 def _emit_colour_of(a: Asm, cls: str, out: str) -> None:
@@ -431,7 +450,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.zero(["NMEN", "NP", "NROOM", "NRUN", "NSRC", "STOP", "NHALT", "CZ", "CA", "CY"])
     a.set_slot("C20", enc(CLS_WALL))
     a.ld("H", "LIMIT = 16 * H: one past the last live display address")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("LIMIT")
     for d, delta in enumerate((-PANEL, 1, PANEL, -1)):
         a.set_slot(a.at("DTAB", d), delta, f"DTAB[{d}]" if d == 0 else "")
@@ -446,7 +465,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
         )
 
     a.ldi(0, "home the cursor: pass 1 paints in address order, so DATA advances it")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.label("p1_row")
     a.set_slot("CX", 0)
     a.set_slot("PLUSX", -1, "no '+' seen in this row yet")
@@ -465,7 +484,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.label("p1_keep")
     a.ld("CLS", "the glyph's own colour; walls and pipe cells are repainted later")
     a.op("DIVI", CELL_SHIFT)
-    a.op("DSPD")
+    a.op("DSP", 1)
     _cell_write(a, "CA", "CLS", packed=packed)
     a.inc("CA")
     a.inc("CX")
@@ -475,7 +494,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.label("p1_row_end")
     a.inc("CY")
     a.ld("CY", "the next row starts at 16y, whatever W is")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("CA")
     a.ld("CY")
     a.op("SUB", "H")
@@ -483,7 +502,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.jmp("p1_done")
     a.label("p1_next_row")
     a.ld("CA")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.jmp("p1_row")
 
 
@@ -583,9 +602,9 @@ def _emit_classify(a: Asm) -> None:
     a.op("SUBI", MAX_RUNS)
     a.brz(skip, "run table full")
     a.ld("CY", "RUN = (y * 16 + x0) * 16 + x1")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "PLUSX")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "CX")
     a.st("T0")
     a.store_at("RUN", "NRUN", "T0")
@@ -680,7 +699,7 @@ def _emit_rooms(a: Asm, *, packed: bool) -> None:
     a.jmp("pr_accept")
     a.label("pr_val_go")
     a.ld("T3", "left column of the candidate")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("T4")
     a.op("ADD", "PX0")
     a.st("VAL")
@@ -739,11 +758,11 @@ def _emit_rooms(a: Asm, *, packed: bool) -> None:
     a.load_at("RY1", "IDX")
     a.st("T3")
     a.ld("T1", "VAL walks the top wall, T4 the bottom")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "T0")
     a.st("VAL")
     a.ld("T3")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "T0")
     a.st("T4")
     a.copy("JDX", "T0")
@@ -767,7 +786,7 @@ def _emit_rooms(a: Asm, *, packed: bool) -> None:
 
     a.label("st_side_init")
     a.ld("T1", "VAL walks the left wall, T4 the right")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("VAL")
     a.op("ADD", "T2")
     a.st("T4")
@@ -834,14 +853,14 @@ def _emit_men_paint(a: Asm) -> None:
     a.jmp("pm_done")
     a.label("pm_go")
     a.load_at("MPOS", "IDX")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_MAN)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.inc("IDX")
     a.jmp("pm_loop")
     a.label("pm_done")
     a.ldi(1, "commit the opening frame; SWAP 1 keeps both buffers, so it is a base")
-    a.op("DSPS")
+    a.op("DSP", 2)
     a.jmp("round")
 
 
@@ -1037,7 +1056,7 @@ def _emit_round(a: Asm, *, packed: bool) -> None:
 
     a.label("commit")
     a.ldi(1, "SWAP 1: commit, keep both buffers, so the next frame is a delta")
-    a.op("DSPS")
+    a.op("DSP", 2)
     a.jmp("round")
 
 
@@ -1084,13 +1103,13 @@ def _emit_shift(a: Asm, p: int) -> None:
     a.store_at("OCC", "VAL", "T0")
     a.store_at("OCC", "T4", "CZ")
     a.load_at("PCA", "T4", "the vacated cell goes back to plain pipe")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_PIPE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("PCA", "VAL")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_VALUE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.ld("IDX")
     a.op("ADDI", 1)
     a.st("T1")
@@ -1247,9 +1266,9 @@ def _emit_man(a: Asm, i: int, *, packed: bool) -> None:
     a.st("VAL")
     a.store_at("OCC", "T4", "VAL")
     a.load_at("PCA", "T4")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_VALUE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("PCNT", "BEST")
     a.st("T0")
     a.op("ADDI", 1)
@@ -1297,9 +1316,9 @@ def _emit_man(a: Asm, i: int, *, packed: bool) -> None:
     a.st(ra)
     a.store_at("OCC", "T4", "CZ")
     a.load_at("PCA", "T4")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_PIPE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("PCNT", "BEST")
     a.op("SUBI", 1)
     a.st("T1")
@@ -1308,18 +1327,18 @@ def _emit_man(a: Asm, i: int, *, packed: bool) -> None:
 
     a.label(move)
     a.ld(pos, "repaint the cell he leaves with the colour of the class under it")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ld(cls)
     a.op("DIVI", CELL_SHIFT)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("DTAB", dr)
     a.st("T0")
     a.ld(pos)
     a.op("ADD", "T0")
     a.st(pos)
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_MAN)
-    a.op("DSPD")
+    a.op("DSP", 1)
     _cell_read(a, pos, "CLS", packed=packed)
     a.ld("CLS", "keep it for the next tick's dispatch, and test it for a wall")
     a.st(cls)
@@ -1483,7 +1502,7 @@ TAPE_SKIP_BATCH = 2
 #: Monotonic in the bank size once every hot slot fits, so 53 — one spare above the
 #: 52 used — is the optimum. 52 exactly is a *fault*, not merely a tight fit; see
 #: the guard in :func:`build_asm`.
-HOT = (1, 53)
+HOT = (1, 54)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 

@@ -410,8 +410,13 @@ _V1_OPS: tuple[Op, ...] = (
         code=14,
         mnemonic="DSP",
         operands=1,
-        description="send ACC to LM-75 port p (0=ADDR, 1=DATA, 2=SWAP)",
-        micro=(Micro.RING_READ, Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
+        description="send ACC to LM-75 port p (0=ADDR, 1=DATA, 2=SWAP), via the fan-out relay",
+        # Two words down one pipe: the selector, then ACC. `r↺` fetches the selector
+        # into A while B still holds ACC, so `s` sends the selector, `W` brings ACC
+        # over, `s` sends it, and the second `W` puts ACC back — OUT's sandwich with
+        # the selector send in front. `dsprelay.py`'s room reads the first word and
+        # forwards the second to the port it names.
+        micro=(Micro.RING_READ, Micro.SEND_DSP, Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
         sem=Sem.DISPLAY,
     ),
     Op(
@@ -557,10 +562,6 @@ _EXT_OPS: tuple[Op, ...] = (
         ext=True,
     ),
     # ── LM-75 ports, one opcode each ────────────────────────────────────────
-    # `DSP p` cannot be built: it picks a pipe from its *operand*, and which pipe an
-    # `s` talks to is decided by where the glyph sits (ARCH.md §7.1) — a static
-    # property of the grid. Three opcodes, three lanes, three `s` glyphs each beside
-    # its own port. ACC survives via the W/s/W sandwich, as with OUT.
     Op(
         code=26,
         mnemonic="DSPA",
