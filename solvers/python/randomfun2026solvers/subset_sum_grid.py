@@ -43,19 +43,34 @@ outside the band it was asked for.  ``tests/test_subset_sum_grid.py`` re-derives
 the binding independently from ``route-check.mjs``, which reports the pipe each
 op actually resolves to — a mis-bound `s` is otherwise completely silent.
 
-## What is built, and what is not
+## What it costs, and why the cost is a measurement
 
-Built and **verified on the reference engine for all seven public cases**:
-`INIT`, `LEFTVALS`, `RIGHTVALS` with its ring-B doubling pass, and `TAIL` — the
-`load` stage spills ring V and the `loadb` stage spills ring B, and both match
-the Python oracle word for word.
+The search examines every candidate pair at most once, so it costs
+`2^hL * (2^hR + 1) = 1,052,672` element comparisons at `n = 20` **whatever the
+input**.  Engine-measured on the finished grid, the ceiling is **6,329,884
+ticks** — twenty values, all even, an odd target, so nothing is satisfiable and
+every left mask is tried against all 257 words of ring B.  That is 42% of the
+15,000,000 cap.  The seven public cases run 5,342 to 1,105,941.
 
-Built but not yet wired to a stage: `PHASE2`'s prologue, guarded bit reversal,
-peel and rotate-to-`MT`.  **Not built:** phase 2's `MT`/`RR` test and scan
-station, `PHASE3`, `EMIT` and the no-solution lane.  `worker("full")` therefore
-raises rather than returning half a machine.
+Two facts hold the cost model up, and both were re-measured here rather than
+inherited:
 
-## No backticks
+* **A scanned word costs 5.000 ticks, and a nearly full ring costs no more than
+  an empty one.**  The probe measures the slope with 101 words in a 109-cell
+  ring — 93% full — and gets exactly 5.000 at every spacing.  The engine shifts a
+  pipe as one train, not one gap per tick, so ring B can be sized to its contents
+  plus slack instead of to a throughput argument.
+* **`r + 1 <= 0` must never reach the scan.**  The sentinel separates "keep
+  going" from "not present" by the sign of `b ^ q`, and for `q < -1` the value
+  `-1 ^ q` is *positive* — the pass would circle ring B forever.  One `X` on the
+  residual is therefore load-bearing, not economy.  (The `totalR` bound the
+  earlier design carried *was* pure economy and is gone: the `2^hL * (2^hR + 1)`
+  ceiling already assumes every lap scans.)
+
+`ONE` is gone from ring V for the same reason — `B = 1` comes from a digit glyph
+— which is why the ring is `n + 7` words and not `n + 9`.
+
+## No backticks## No backticks
 
 The only constants the machine needs are `1`, `8`, `256 = 1 << 8` and `2^hL`,
 and every one is reachable from a single digit glyph, so the grid holds no
