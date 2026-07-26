@@ -141,25 +141,61 @@ discard, and making it faster cannot move a number it does not set. The earlier
 `little-little-man`'s operands run to 3,470, so its tokens average 4.29 cells
 against `gradebook`'s 3.46, and the fold's connectors add the rest.
 
-What that repricing implies is worth more than the drain was:
+### How big the producer is: two methods, agreeing
 
-    642,113 words a case x 5.0 = 3.21M of 7.59M ticks -- 42% of the machine
+**Method 1 — engine A/B on the ROM lap.** Rebuild the same machine with the
+unpacked ROM and re-verify all 14 public cases. Only the lap changes, so the
+slope is the number of laps the program waits out per case:
 
-**So the producer is the whole problem, and it is bigger than anyone had it.**
-A ring repeater is 1 cell per word of storage against the ROM's 5, and re-emits
-at 2 ticks a word (`r`,`s` in a relay), so it is smaller *and* faster:
-
-| ROM | drain | discard t/word | ticks saved |
+| ROM | lap | cells/word | avg ticks |
 |---|---|---|---|
-| 5.0 walking (today) | 4.0 counted | 5.0 | — |
-| 2.0 repeater | 4.0 counted | 4.0 | 8.5% |
-| 2.0 repeater | 2.51 `unit_bits=2` | 2.51 | **21%** |
+| packed (shipped) | 17,480 | 5.00 | 7,594,099 |
+| unpacked | 28,800 | 8.23 | 10,322,651 |
+
+    (10,322,651 - 7,594,099) / (28,800 - 17,480) = 241 laps a case
+    241 x 17,480 = 4.21M of 7.59M ticks -- 55.5% ROM-paced
+
+**Method 2 — count the words.** Every discarding instruction's operand, summed
+on the emulator over `image_program`, across **all 14** cases: a mean of 908,850
+words a case, at 5.00 cells a word = 4.54M ticks, **59.8%**.
+
+The two agree to 8% (241 laps is 842,900 words against 908,850 counted), from
+completely different instruments. **So a little over half of `little-little-man`
+is the CPU standing on an `r` waiting for the ROM man to walk round.**
+
+A ring repeater stores one cell per word against the ROM's five and re-emits at
+~2 ticks a word (`r`,`s` in a relay), so it is smaller *and* faster. At 241 laps
+a case:
+
+| ROM lap | ROM-paced ticks | total | vs today |
+|---|---|---|---|
+| 17,480 (today) | 4.21M | 7.59M | — |
+| 7,000 (repeater at 2 cells/word) | 1.69M | 5.07M | **-33%** |
+| 3,498 (ring at 1 cell/word) | 0.84M | 4.22M | **-44%** |
 
 The drain is therefore *second*, and it is already built and tested: turn it on
-by naming the program in `DRAIN_UNIT_BITS` once the producer is under 4.0. Note
-its footprint bill on this machine is +6 rows (+6.28% area²), because the CPU
-room sits **above** the display and a deeper slab pushes the display down — the
-slab band's own 5-row gap at rows 169..174 is the room's south wall, not slack.
+by naming the program in `DRAIN_UNIT_BITS` once the producer is under 4.0 cells a
+word, which is where `max(drain, ROM)` starts selecting the drain again. Note its
+footprint bill on this machine is +6 rows (+6.28% area²), because the CPU room
+sits **above** the display and a deeper slab pushes the display down — the slab
+band's own 5-row gap at rows 169..174 is the room's south wall, not slack.
+
+### A correction, and the mistake worth not repeating
+
+An earlier version of this section put the producer at 42% and the repeater at
+21%. Both were too low, from two errors made together: the word count averaged
+**three** cases (642,113) and was then compared against a **fourteen**-case tick
+average; and the unpacked lap was read off `rom.build_rom(words)` without the
+`rows=` argument `machine.build` actually passes, giving 55,980 cells instead of
+the real 28,800. The two errors pulled in opposite directions and the wrongness
+did not show up as an inconsistency until both methods were run over the same
+case set.
+
+`heatmap.mjs` cannot referee this: its wasm OOMs above a few million ticks and a
+case needs ~12M, and the `--rounds` flag in its usage banner is not implemented,
+so a round-based program exhausts its input and then profiles its own stall — a
+run of it here attributed 56% to the `IN` lane, which is that artefact and not a
+finding.
 
 ## Still open
 
