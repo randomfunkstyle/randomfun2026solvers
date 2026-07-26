@@ -1,0 +1,33 @@
+# subset-sum — submission df958624-fe00-4acd-b057-644b64a42c6b
+
+verdict      done: 20/20 cases, area2 64009, avgTicks 798,378.45, score 51,103,406,206
+submitted    2026-07-26
+grid         81x253
+problem id   b5e48adc-317d-480d-88a4-e2edc659453a
+local        subset-sum: 7/7 public cases, avg 292,147 ticks, local score 18,700,046,467
+source       tasks/solutions/subset-sum_mitm.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Was 13/20. The failures were STEP-CAP, not wrong answers: plain lex-DFS hits
+811,418 iterations worst case against 112,018 on the worst public case, and no
+per-iteration cost fits 15M ticks.
+
+Fixed by replacing the search, not the machine. Meet-in-the-middle with the right
+half fixed at 8 indices, so hL = n-8 is the only geometry derived from n. Cost is
+2^hL * (2^hR + 1) = 1,052,672 comparisons at n=20 REGARDLESS of input. Lex order
+is free: left masks walked by a counter counting down, so the peeled mask is
+bitrev(counter), which visits index sets in exactly lexicographic order.
+
+True ceiling MEASURED, not sampled: 20 even values with an odd target (nothing
+satisfiable, every one of 4096 left masks tried against all 257 words of ring B)
+= 6,329,954 ticks, 42% of the cap. Cost is flat in the input beyond n, so that
+bounds any private case.
+
+Server ticks ran 2.73x local (798,378 vs 292,147) — the largest inflation we have
+measured; pathfinder was 1.31x, matmul 1.49x, reverse-a-list 1.56x.
+
+Routing rule that unblocked the layout: two corridors may cross freely at a BLANK,
+but never at a turn glyph. Recorded in _scan's docstring.
