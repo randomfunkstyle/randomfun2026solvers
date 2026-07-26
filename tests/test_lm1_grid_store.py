@@ -87,11 +87,11 @@ def test_snake_ring_is_the_one_program_the_swap_is_free_for() -> None:
     def area2(m: machine.Machine) -> int:
         return max(max(len(r) for r in m.rows), len(m.rows)) ** 2
 
-    # 18,225 while the machine was 121x135 and height-bound; 15,376 now that the
-    # structures band packs its slab entry rows and ``build_cpu`` no longer counts the
-    # past-the-end ``bottom`` as interior height. What this test asserts — that the
-    # grid store costs snake-ring *nothing* — is unchanged: both builds are equal.
-    assert area2(grid) == area2(tape) == 15376
+    # 18,225 while the machine was 121x135 and height-bound; 14,641 once the packed
+    # structures band and main's route compaction took it to 121x120. What this test
+    # asserts — that the grid store costs snake-ring *nothing* — is unchanged: the two
+    # builds are still equal, which is the whole claim.
+    assert area2(grid) == area2(tape) == 14641
 
 
 @pytest.mark.slow
