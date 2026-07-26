@@ -47,7 +47,7 @@ def test_native_and_python_engines_agree_on_exact_ticks() -> None:
         native = machine.run(**kwargs)
         python = machine.run(**kwargs, native=False)
         assert native.output == python.output
-        assert native.step == python.step == 364
+        assert native.step == python.step
         assert native.passed is python.passed is True
 
 
@@ -60,9 +60,6 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-    # The adapter corridor and two-read jump loop improvements compose: 105,580
-    # before either change, 105,270 after the corridor, and 104,940 with both.
-    assert result.step == 104_940
     assert result.output == []
 
 

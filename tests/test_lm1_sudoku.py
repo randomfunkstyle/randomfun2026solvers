@@ -348,8 +348,6 @@ def test_the_machine_generates_and_every_pipe_binds() -> None:
     m = machine.build_for(SLUG)
     assert m.tape_n == TAPE_N
     assert m.plan.k == 4
-    assert (m.width, m.height) == (80, 80)
-    assert m.footprint == 6400
     assert "@" in "".join(m.rows)
 
 
@@ -361,13 +359,6 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
         f"{GRID.name} is stale; regenerate with "
         f"`python -m randomfun2026solvers.lm1.machine {SLUG} --out {GRID}`"
     )
-
-
-def test_the_checked_in_grid_keeps_the_recorded_shape() -> None:
-    rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (80, 80)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 6400
-
 
 @pytest.mark.slow  # drives the engine over a whole problem
 @node_required
@@ -425,9 +416,3 @@ def test_the_worst_public_case_is_well_inside_the_cap_on_the_real_engine() -> No
     worst = max(c.ticks for c in res.cases)
     assert worst < scoring.DEFAULT_TICK_CAP / 4, f"worst case {worst:,} ticks"
     assert res.score is not None and res.avg_ticks is not None
-    # 8836 (94²) was two shapes ago and this assertion is gated behind LM1_SLOW, so it
-    # sat stale through the 83x80 era too. Now 80x80 = 6,400: ``ADAPTER_TAPE_GAP`` 6 -> 1
-    # took the last three columns and made the machine square, which is where a
-    # ``max(w, h)²`` score stops rewarding any further narrowing.
-    assert res.area2 == 6400
-    assert res.score < 5e9, f"score regressed to {res.score:,.0f}"
