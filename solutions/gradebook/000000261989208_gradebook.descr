@@ -1,0 +1,64 @@
+# gradebook — submission eb28576f-26f1-4a71-b869-bdada120be5a
+
+verdict      done: 20/20 cases, area2 6084, avgTicks 43,062, score 261,989,208
+submitted    2026-07-26
+grid         69x78
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+local        7/7 public cases, avg 15,646 ticks, local score 95,191,133
+source       tasks/solutions/gradebook_ring.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+6,386,700,098 -> 261,989,208, a 24.4x, and the LAST LM-1 CPU build we shipped on
+a scoring problem. Only 1.42x of the win is area (8,649 -> 6,084); 18.3x is ticks
+(286,287 -> 15,646 local). Judge/local ran 2.75x, close to the CPU's own 2.58x.
+
+DATAFLOW-SURVEY.md section 5 said "do NOT start with gradebook — parser-shaped,
+footprint risk" and projected ~20x at medium confidence. The CFG model tested that
+and it was wrong: the machine is 37 blocks, between sudoku_ring's 11 and
+subset_sum_grid's 81, both of which laid out fine. The survey's instinct about
+footprint was right; its conclusion that the parser would sprawl was not.
+
+DESIGN. One word per student, base 2^18 (not the CPU's 2^14): sixteen id
+complements sum to 246,024, which needs 18 bits, so at 2^14 AVG's column sum
+carries into subject 4 and needs a load-time IDSUM correction. At 2^18 it does
+not, and 18 + 4*11 = 62 still fits signed 64. Grade fields stay 11 bits because
+AVG sums 16 packed cells at once and 16*100 = 1,600 < 2,048.
+
+Phase MUST be restored, unlike sudoku_cfg: a sentinel lap only covers
+head-to-sentinel, so a search that stops mid-ring hides the cells behind it from
+the next AVG. The REST pass (~45 ticks on GET/SET) is the fix; a test fails
+without it.
+
+The transpose that won sudoku was tested here and LOSES. Indexing by subject makes
+TOP cheaper (6 ticks/student vs 9) but a subject column is 16 grades = 112 bits,
+so "a round touches one word" is unavailable; you get 64 ring slots instead of 16
+and GET/SET must still find a student inside a block. 201 ticks/op against 177.
+Maintained SUM[s]/BEST[s] is 128 ticks/op but needs ~13 more blocks, ~1.65x area
+— and area is squared.
+
+LAYOUT. Joint sweep of block order x bank widths was 22% of ticks: bolted onto
+DFS-tuned widths the anneal measured 6,084 vs 5,625 and looked like a regression;
+swept jointly it cost 3 rows and cut corridor 2,946 -> 2,432, ticks 20,018 ->
+15,646, score 1.13e8 -> 9.52e7.
+
+The matmul fall-through trap was checked, not assumed: 23 of 37 blocks fall
+through but NOT ONE target has a single predecessor — every loop head and return
+point is re-entered 2-3 ways. Nothing to merge. Pinned as a test.
+
+A turnaround room stores ONE word, not relay_words of them: N=16 deadlocked at 14
+pipe cells a ring and passed at 16. A staircase inside the cone buys the missing
+cells out of the width instead of three rows of north band, and keeps "nearest
+pipe = nearest column" provable.
+
+audit_bindings caught an `st` equidistant from two rings on a wide IO bank — it
+parses, loads, and reads the WRONG ring. bands_of now excludes tie columns.
+
+area2 x corridor is NOT a universal proxy: it tracks to ~2% on tcp but ran 6.2-6.8
+ticks/corridor-cell here and picked the wrong winner twice. It shortlists; the
+engine chooses.
+
+man_png.py (dependency-free PNG renderer) landed with this: looking at the layout
+is how the left third was found to be pure corridor.

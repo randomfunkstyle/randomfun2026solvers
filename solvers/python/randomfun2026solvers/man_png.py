@@ -29,7 +29,8 @@ import struct
 import zlib
 from pathlib import Path
 
-__all__ = ["Png", "classify", "density", "render", "write_png"]
+__all__ = ["CLASSES", "Png", "classify", "density", "draw", "png_bytes",
+           "render", "rooms_of", "write_png"]
 
 # ── the palette ───────────────────────────────────────────────────────────────
 BG = (14, 16, 22)
@@ -249,7 +250,7 @@ def _rgb(s: str) -> tuple[int, int, int]:
     return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
 
 
-def render(
+def draw(
     rows: list[str],
     *,
     scale: int = 8,
@@ -308,9 +309,76 @@ def render(
 
 def write_png(rows: list[str], path: str | Path, **kw: object) -> tuple[int, int, float]:
     """Render and write; return the density triple so a caller can assert on it."""
-    render(rows, **kw).write(path)          # type: ignore[arg-type]
+    draw(rows, **kw).write(path)            # type: ignore[arg-type]
     return density(rows)
 
+
+
+# ── the flat five-class view, kept for callers that only want a thumbnail ──────
+#: Cell class -> RGB.  Walls and pipes are the skeleton, glyphs are the program,
+#: and corridors are the cost -- so corridors get the colour that stands out.
+CLASSES: dict[str, tuple[int, int, int]] = {
+    "blank": (24, 24, 27),
+    "wall": (82, 82, 91),
+    "pipe": (14, 165, 233),
+    "corridor": (245, 158, 11),
+    "glyph": (250, 250, 250),
+}
+
+
+def _class_of(ch: str) -> str:
+    if ch == " ":
+        return "blank"
+    if ch in "+-|":
+        return "wall"
+    if ch in "<>^v":
+        # A turn glyph is a corridor cell in the room and a pipe cell outside it;
+        # they are told apart by the caller, which knows where the walls are.
+        return "corridor"
+    return "glyph"
+
+
+def png_bytes(pixels: list[list[tuple[int, int, int]]]) -> bytes:
+    """Pack rows of RGB triples into a PNG byte string."""
+    h, w = len(pixels), len(pixels[0])
+    raw = b"".join(b"\x00" + bytes(v for px in row for v in px) for row in pixels)
+
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return (struct.pack(">I", len(body)) + tag + body
+                + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF))
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9))
+            + chunk(b"IEND", b""))
+
+
+def render(grid: list[str] | Path | str, out: Path, scale: int = 3,
+           pipe_rows: int = 0) -> tuple[int, int]:
+    """Write `grid` to `out` as a flat-class PNG; returns the image size.
+
+    `pipe_rows` names how many rows at the top are north band, where an arrow is
+    a pipe rather than a corridor.  :func:`draw` is the richer view -- it parses
+    the rooms and separates pipe ops, branches and arithmetic -- but this one
+    needs nothing but the rows.
+    """
+    if isinstance(grid, (str, Path)) and Path(grid).exists():
+        grid = Path(grid).read_text(encoding="utf-8").splitlines()
+    elif isinstance(grid, str):
+        grid = grid.splitlines()
+    w = max(len(r) for r in grid)
+    pixels: list[list[tuple[int, int, int]]] = []
+    for y, line in enumerate(grid):
+        row: list[tuple[int, int, int]] = []
+        for x in range(w):
+            ch = line[x] if x < len(line) else " "
+            kind = _class_of(ch)
+            if kind == "corridor" and y < pipe_rows:
+                kind = "pipe"
+            row += [CLASSES[kind]] * scale
+        pixels += [row] * scale
+    out.write_bytes(png_bytes(pixels))
+    return len(pixels[0]), len(pixels)
 
 if __name__ == "__main__":  # pragma: no cover - a CLI over a saved grid
     import argparse

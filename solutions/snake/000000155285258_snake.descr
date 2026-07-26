@@ -1,0 +1,50 @@
+# snake — submission 260a42bd-41f3-4452-b160-14c80ed5c8e9
+
+verdict      done: 17/17 cases, area2 6241, avgTicks 24,881.5, score 155,285,258
+submitted    2026-07-26
+grid         79x76
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+local        5/5 public cases, avg 16,293.8 ticks, local score 101,689,606
+source       tasks/solutions/snake_banked.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+381,618,264 -> 155,285,258 (2.46x) from side-by-side block BANKS replacing the
+one-block-per-row band policy. Room 44x118 -> 53x62, area2 16,641 -> 6,241.
+
+THE FINDING: the band policy's premise was right and its conclusion wrong.
+`r` binds whichever of ring_in/input is the nearer COLUMN, so there is one split
+column — but NEITHER PIPE HAS TO STAND OVER THE CODE IT SERVES. Push the ring
+pair as far east as it can go while staying west of the split, put `input` on the
+east wall, and the split moves from the middle of the room to a few columns from
+its east edge. RING then gets 3/4 of the width, which is the ratio snake's blocks
+actually want (26 RING-only vs 7 IO-only). Spreading each pair symmetrically
+(SPREAD=3) keeps both midpoints on the same column and leaves the painter's riser
+a column of its own. snake_place.layout is 20 lines.
+
+THE THREE LEVERS, measured independently in the band layout so area2 is pinned:
+    DFS block_order                     20,311 ticks
+    shipped tuned_order                 15,147
+    MinLA anneal, unweighted            14,395   <- order: 1.05x over shipped
+    loop-weighted x2 / x3 / x4 / x16    14,955 / 14,830 / 15,350 / 16,502
+    hot/cold partition raw              21,621
+    hot/cold partition + MinLA          14,403
+  packing: 2.67x on area2. That is essentially the entire win.
+
+Two negative results worth keeping:
+ * STRUCTURAL LOOP WEIGHTING IS MONOTONICALLY WORSE — the same trap the
+   public-case profile fell into earlier, for the same reason.
+ * HOT/COLD PARTITION ADDS NOTHING (14,403 vs 14,395); MinLA already pushes the
+   six depth-0 blocks to the margins. Raw partition without MinLA is worse than DFS.
+ * AGAINST Z3: raising the anneal budget to 250k steps found a LOWER modelled
+   MinLA cost that measured WORSE on the engine (14,820 vs 14,395). The objective
+   is not a faithful proxy past a point, so an exact optimum buys nothing.
+
+Two silent placer bugs, now tested: a corridor may cross a walked blank but never
+TURN on one, and two holes let a corridor hijack a block's own man while the grid
+still loaded — the padding a literal's backtick-skip leaves between digits, and
+the run from a wrapped row's turn glyph to its first op that `seek` jumps but the
+man still crosses. The second hijacked INIT on its second row: 2/13 frames wrong,
+no error. Field.walked + blockplace.walk_edges catch both.

@@ -1,0 +1,16 @@
+# gradebook — submission f7f41445-8415-4b3f-a5a2-100f6c158883
+
+verdict      done: 20/20 cases, area2 5476, avgTicks 45,205, score 247,544,223
+submitted    2026-07-26T23:35:52+0200
+grid         70x74
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  4e382244eeae32620562ca990d3c498b9b2bf0c77c658482e4f1fc54bf0cef53
+commit       7f2cba5
+local        gradebook: 7/7 public cases, avg 16,496 ticks
+source       tasks/solutions/gradebook_ring.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Banked CFG ring, risers folded: north band 11 rows -> 8. 70x74, 16,496 local ticks (prev 69x78 / 15,646 -> area 6084 to 5476).
