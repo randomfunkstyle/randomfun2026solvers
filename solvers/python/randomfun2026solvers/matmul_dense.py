@@ -72,10 +72,30 @@ of the coil.  One blank row between the coil and the relay is the whole fix, and
 ``brackets_men.pipe_mouths`` counts them the way the runtime does, which neither
 ``lm.mjs analyze`` nor ``route-check.mjs`` will.
 
-The remaining suspect is therefore the constant-building run in ``BLOAD_DONE``
-itself -- `L19` rewrites to `2 M 9 * M 1 +` and the `{` after it reads `B` --
-and the reason 2x2x2 survives it is that `G = 1` there, so the emit path touches
-only the first `KONST` slot.
+Traced to the cell.  Watching `A` and `B` every time the worker stands on a `{`
+(`api.stepN` one tick at a time, reading the runner off the snapshot):
+
+    t=378  {  at (29,124)  A=1 B=21  -> 2^21   LANE, correct
+    t=388  {  at (28,125)  A=1 B=42  -> 2^42   LANE^2 -- the *sixth* constant
+
+Ten ticks apart, and the drawn rows say the same thing:
+
+    row 124  >*b3M7*M1{s6Mv
+    row 125         v{1M*7<
+
+Walked east then west that is ``3 M 7 * M 1 { s   6 M 7 * M 1 {`` -- a 21-shift,
+one `sk`, then a 42-shift.  The CFG has ``L19 M L1 { sk`` between them, and three
+more constants after that.  **Four constants are missing from the drawn room.**
+
+And ``check_room`` passes on it, which is the part that matters: it compares the
+walk against ``_glyphs(name)``, which expands the tokens by the same
+:func:`~randomfun2026solvers.matmul_grid.expand` the pen used.  Both sides agree
+because both come from the same expansion, so a run the *pen* dropped is
+invisible to it.  The checker needs to compare against
+:data:`~randomfun2026solvers.matmul_cfg.WORKER` -- the CFG as written -- not
+against the expansion the layout was built from.  That is the next change, and
+it is worth having regardless of this bug: a checker that cannot see a dropped
+run is not checking the thing it claims to.
 
 ## The old open problem: the rectangle's anchors make the north band unroutable
 
