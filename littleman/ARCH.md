@@ -727,9 +727,11 @@ Further variants, in rough order of payoff:
   batch-2 block is 45 rather than 33 columns wide. On a 200-slot six-write,
   six-read boundary/parity probe it measured 16,392 versus 22,211 ticks
   (**26.2% fewer**) with identical output.
-- **A still larger pass-through ring** could amortise more of the fixed
-  corner/test/decrement cost, but every word still needs its own BP test to
-  preserve exact odd tails.
+- **A still larger pass-through ring** can amortise more of the fixed
+  corner/test/decrement cost, but it needs an exact cleanup path for arbitrary
+  tails. The measured batch-4 design, its power-of-two remainder path, relay
+  choices, binding hazard, and implementation checklist are in
+  [`TAPE-SKIP-ROADMAP.md`](TAPE-SKIP-ROADMAP.md).
 - **Banking** — k rings, address = (bank, offset), ~N/k per access at k× the
   pipe area. Superseded for `matmul` by its sequential-access STREAM block, but
   still relevant to random-access workloads.
