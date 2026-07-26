@@ -6,6 +6,11 @@ in a pipe ring* (worker room -> forward pipe -> relay room -> return pipe ->
 worker), and the worker walks counted loops over it. Only the inner operation
 differs.
 
+The canonical reverse machine is authored structurally in
+:mod:`randomfun2026solvers.reverse_list_ast`; :func:`build_reverse` remains the
+shared public entry point.  The direct ``Circuit`` reverse worker below is kept
+as the previous-layout reference.  Sort still uses the direct generator here.
+
     reverse-a-list   rotate k-1 values, then read the head and emit it without
                      recirculating.  Ring order v1..vk emits vk..v1.  The count
                      k lives in **B**, which survives every `r`/`s`.
@@ -23,20 +28,11 @@ differs.
                      header of k-1, and a header of 0 both ends the round and
                      leaves the ring empty -- no drain pass, no outer counter.
 
-Pipe binding (SPEC "nearest, not nearest-ready") is what dictates the layout.
+Pipe binding (SPEC "nearest, not nearest-ready") dictates both layouts.
 Incoming pipes are {input, ring-return}, outgoing are {output, ring-forward}, so
-an `r` only ever competes with the other *incoming* pipe and an `s` with the
-other *outgoing* one.  That is what lets the anchors be packed this tightly:
-
-    input  -> NORTH wall (one column)   ring-forward -> EAST wall
-    output -> NORTH wall (another)      ring-return  -> EAST wall
-
-Input reads sit high near the input pipe's column and ring reads sit low and
-east; ring sends sit east and the lone output send sits far west.  Both I/O rooms
-therefore share the 5-row band above the worker and the whole ring coils into the
-strip east of it -- no rows below the worker, no columns west of it, which is
-where the compact bounding box comes from.  `littleman/tools/route-check.mjs`
-verifies every binding against the engine.
+an `r` only competes with the other incoming pipe and an `s` with the other
+outgoing pipe.  The AST reverse machine states those affinities as vertical
+zones; the sort machine uses the north/east anchors documented below.
 """
 
 from __future__ import annotations
@@ -116,7 +112,7 @@ def walls(g: Circuit, ox: int, oy: int, iw: int, ih: int) -> None:
         g.set(ox + iw, oy + y, "|")
 
 
-# ══════════════════════════════════════════════════════ reverse-a-list ════════
+# ═══════════════════════════════ legacy direct reverse-a-list reference ════════
 #
 #   MAIN     r(in)->n ; b ; M                      BP = n, B = n
 #   LOAD     x n { r(in) ; s(ring) }               ring = v1..vn
@@ -176,38 +172,10 @@ def reverse_worker() -> Circuit:
 
 
 def build_reverse() -> list[str]:
-    """The whole `reverse-a-list` machine: worker + I/O rooms + relay + ring.
+    """Render the canonical compact AST implementation."""
+    from randomfun2026solvers.reverse_list_ast import build
 
-    21x21.  The I and O rooms sit side by side in the 5-row band above the worker
-    (both pipes enter its NORTH wall, discriminated by column), and the ring
-    coils into the 7-column strip east of it with both pipes on the EAST wall --
-    so no row is spent below the worker and no column west of it.
-    """
-    g = Circuit(24, 24)
-    wx, wy = 1, 6
-    stamp(g, wx, wy, reverse_worker().rows())
-    walls(g, wx, wy, REV_IW, REV_IH)
-
-    # I and O rooms, side by side in the north band; both pipes hit the N wall
-    icol = wx + REV_IN_COL
-    stamp(g, icol - 1, 0, ["+-+", "|I|", "+-+"])
-    draw_pipe(g, [(icol, 3), (icol, 4)])
-    ocol = wx + REV_OUT_COL
-    stamp(g, ocol - 1, 0, ["+-+", "|O|", "+-+"])
-    draw_pipe(g, [(ocol, 4), (ocol, 3)])
-
-    # the ring, coiled in the east strip: out at the worker's top-right corner,
-    # down through the relay, back in at its bottom-right.
-    east = wx + REV_IW + 1  # first free column east of the wall
-    stamp(g, east + 2, 10, RELAY_NORTH)
-    n_fwd = draw_pipe(g, [(east, wy + REV_FWD_ROW), (east + 4, wy + REV_FWD_ROW), (east + 4, 9)])
-    n_ret = draw_pipe(
-        g,
-        [(east + 4, 15), (east + 4, 16), (east + 6, 16), (east + 6, 19), (east, wy + REV_RET_ROW)],
-    )
-    if n_fwd + n_ret + 2 < 16 + 2:
-        raise Collision(f"ring holds {n_fwd + n_ret + 2} values, need >= 18")
-    return [r.rstrip() for r in g.rows() if r.strip()]
+    return build()
 
 
 # ══════════════════════════════════════════════════════════ sort-numbers ══════

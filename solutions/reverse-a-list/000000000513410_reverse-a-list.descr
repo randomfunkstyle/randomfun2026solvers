@@ -1,0 +1,16 @@
+# reverse-a-list — submission 825935bd-2475-4fc8-ba4b-31d23c5146f4
+
+verdict      done: 20/20 cases, area2 324, avgTicks 1,585, score 513,410
+submitted    2026-07-26T11:02:42+0300
+grid         18x18
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  394788d97a9a357319b89162f7c8e2aa2e12b0f86623fa5069e5b4260e2883f6
+commit       b4df783
+local        reverse-a-list: 8/8 public cases, avg 1,013 ticks
+source       tasks/solutions/reverse-a-list_ring.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+18x18 AST value ring; relay narrowed to 2x4 interior; bottom-entry forward pipe; straight outer return; exact 17-cell capacity

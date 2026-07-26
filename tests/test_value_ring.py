@@ -10,13 +10,21 @@ import json
 from pathlib import Path
 
 import pytest
+from randomfun2026solvers.fast_littleman import FastLittleman
 from randomfun2026solvers.littleman import Littleman
+from randomfun2026solvers.manast import render
+from randomfun2026solvers.reverse_list_ast import (
+    RING_CAPACITY_NEEDED,
+)
+from randomfun2026solvers.reverse_list_ast import (
+    build_ast as build_reverse_ast,
+)
 from randomfun2026solvers.value_ring import build_reverse, build_sort
 
 ROOT = Path(__file__).resolve().parents[1]
 
 MACHINES = {
-    "reverse-a-list": (build_reverse, 21),
+    "reverse-a-list": (build_reverse, 18),
     "sort-numbers": (build_sort, 25),
 }
 
@@ -74,7 +82,24 @@ def test_public_cases(slug: str, case: dict) -> None:
 
 def test_reverses_a_single_full_length_list() -> None:
     """n = 16 is the constraint limit, and the worst case for the O(n^2) rotation."""
-    vals = list(range(100, 116))
+    vals = [
+        -1_000_000,
+        1_000_000,
+        0,
+        -1,
+        1,
+        999_999,
+        -999_999,
+        7,
+        7,
+        42,
+        -42,
+        3,
+        2,
+        1,
+        0,
+        -1_000_000,
+    ]
     snap = Littleman().judge(
         solution("reverse-a-list").read_text(),
         input="16 " + " ".join(map(str, vals)),
@@ -82,6 +107,33 @@ def test_reverses_a_single_full_length_list() -> None:
         max_ticks=200_000,
     )
     assert list(snap.output) == list(reversed(vals))
+
+
+def test_reverse_handles_every_legal_length_and_value_bounds() -> None:
+    """Exercise both loop bounds for every n, not only the public distribution."""
+    machine = FastLittleman(solution("reverse-a-list"))
+    basis = [-1_000_000, 1_000_000, 0, -1, 1, 999_999, -999_999]
+    for n in range(1, 17):
+        vals = [basis[i % len(basis)] for i in range(n)]
+        result = machine.run([n, *vals], expected=list(reversed(vals)))
+        assert result.passed, (n, result)
+
+
+def test_reverse_is_authored_as_a_tight_ast_with_enough_ring_capacity() -> None:
+    """The canonical generator is structural and has no clipped border slack."""
+    ast = build_reverse_ast()
+    rows = render(ast)
+    assert ast.bbox == (18, 18)
+    assert rows == build_reverse()
+    width = max(map(len, rows))
+    padded = [row.ljust(width) for row in rows]
+    assert all(row.strip() for row in padded), "an entirely empty row can be clipped"
+    assert all(
+        any(row[x] != " " for row in padded) for x in range(width)
+    ), "an entirely empty column can be clipped"
+
+    ring = [pipe for pipe in ast.pipes if pipe.id in (2, 3)]
+    assert sum(pipe.capacity for pipe in ring) >= RING_CAPACITY_NEEDED
 
 
 def test_sorts_a_full_length_list_with_duplicates_and_extremes() -> None:
@@ -104,17 +156,32 @@ def test_every_pipe_op_binds_to_the_intended_pipe(slug: str) -> None:
     and ring-return on its east wall. Reads compete only with the other
     *incoming* pipe and sends only with the other *outgoing* one, so the
     invariant that pins the whole layout down is a census: exactly one `s`
-    reaches the (2-cell) output pipe and exactly two `r`s the input pipe --
-    everything else talks to the ring.
+    reaches the output pipe and exactly two `r`s the input pipe -- everything
+    else talks to the ring.
     """
     lm = Littleman()
     path = solution(slug)
     rows = path.read_text().rstrip("\n").split("\n")
+    analysis = lm.analyze(path)
     pipes = {
-        tuple(seg.pos.as_tuple() for seg in p.path): len(p.path) for p in lm.analyze(path).pipes
+        tuple(seg.pos.as_tuple() for seg in pipe.path): pipe
+        for pipe in analysis.pipes
     }
-    io_pipes = {cells for cells, n in pipes.items() if n == 2}
-    assert len(io_pipes) == 2, "input and output pipes are the 2-cell ones"
+    io_rooms = {
+        room_id
+        for room_id, room in enumerate(analysis.rooms)
+        if any(
+            rows[y][x] in "IO"
+            for y in range(room.min_.y, room.max_.y + 1)
+            for x in range(room.min_.x, room.max_.x + 1)
+        )
+    }
+    io_pipes = {
+        cells
+        for cells, pipe in pipes.items()
+        if pipe.src in io_rooms or pipe.dst in io_rooms
+    }
+    assert len(io_pipes) == 2, "exactly one pipe must attach to each I/O room"
 
     io_sends, io_reads = 0, 0
     for y, row in enumerate(rows):

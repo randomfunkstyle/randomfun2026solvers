@@ -43,7 +43,7 @@ MAX_INSTRUCTIONS = 3_000_000
 #: programs, and beating every machine in this file by two to four orders of
 #: magnitude (`littleman/DATAFLOW-SURVEY.md`; pinned in `tests/test_dataflow_grids.py`):
 #: `memory` 32x32 / 19.7M (`memory_tape.build_v2(100)`, which emits
-#: `littleman/programs/memory.man` byte for byte), `reverse-a-list` 21x21 / 483k and
+#: `littleman/programs/memory.man` byte for byte), `reverse-a-list` 18x18 / 329k and
 #: `sort-numbers` 25x25 / 2.08M (both `value_ring.py`, pinned in
 #: `tests/test_value_ring.py`). `subset-sum` is the only genuinely unsolved problem
 #: in the set — a CPU build answers 6 of 7 public cases and is ~34x over the cap on
