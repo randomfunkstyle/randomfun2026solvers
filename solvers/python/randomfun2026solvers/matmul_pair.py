@@ -54,9 +54,57 @@ that costs at full size are free, because man C is packing `B` throughout.
 
 ## What it costs
 
-Cells a case (the tick floor a layout starts from), against the one-man ring:
+Cells a case (the tick floor a layout starts from), against the one-man ring
+-- run this module for the table:
 
-    see `report()` -- run this module.
+    2x2x2       422 / 471      16x16x16   19,033 / 29,976
+    2x3x2       480 / 563      16x2x16     6,377 /  7,716
+    4x4x4     1,113 / 1,452    5x6x4       1,582 /  2,238
+    7x5x9     2,618 / 3,564    mean        4,518 /  6,569   (1.45x)
+
+At full size that is 4.65 cells a MAC all-in against 7.32, and **2.63 in the
+hot loop against 4.50** -- seven glyphs a group where the one man spends twelve.
+(The familiar 2.33-against-4.00 is the same ratio with `K` a multiple of three,
+where every group carries all three lanes.)
+
+## What a *layout* costs, and the one thing that decides it
+
+Both men compile through :mod:`matmul_grid`'s room builder -- see
+``tests/test_matmul_pair.py``, which walks every block of both rooms.  Annealed
+against the contest objective, man C lays into **50x78** and man M into
+**26x15**, against the one-man build's 64x81.  Priced with
+:func:`matmul_grid.estimate_ticks`, which agrees with the engine to 0.02%
+(132,360 modelled against 132,330 measured at 16x16x16):
+
+    man C   20,041 cells a case      the clock
+    man M    7,946                   never near it
+    one man 31,553 (measured)
+
+So the ticks are there: **1.57x**, better than the op-level 1.45x, because the
+`t` boundary man M absorbed was 16% of the one-man build's walk and not 11% of
+its glyphs.  What is *not* there is the area.  Two rooms plus the two coiled
+rings come to roughly ``1 + 50 + 3 + 26 + 3 + 9 + 7 = 99`` columns by
+``20 + 2 + 78 = 100`` rows, so ``area^2`` goes 9,604 -> 10,000 and the score
+lands near **2.0e8 against 3.03e8 -- 1.51x**, not the 2.4x the hot loop alone
+suggests.
+
+### Two cross-room channels do not route; one does
+
+The north band is planar and every pipe attaches to a north wall, so a pipe's
+horizontal run must never pass over a riser that climbs higher than it.  The
+one-man build satisfies this trivially: every run leaves the single room going
+*east*, so sorting the runs by column orders them safely.  With two rooms and
+the two channels above, one channel is always westward, and its riser sits
+inside the other's span whichever way the rooms are ordered -- the two spans
+cannot be made to nest, because a ring's receive column is fixed one east of
+its send column.  Man M's coil runs then cross whichever riser is left.
+
+The fix is not a routing trick, it is a re-split: **give man M the input pipe
+and the `B` packing** and the `x` channel disappears, leaving `p` as the only
+wire between the rooms and every run eastward again.  That also moves man C's
+two remaining bulk loops -- forwarding `A` (9,708 cells at 16x16x16) and packing
+`B` (~11,000) -- onto the man who is idle for both, which is where the next
+factor lives.
 
 The packing, the biasing and the base-2^21 argument are unchanged; see
 :mod:`randomfun2026solvers.matmul_cfg`.
