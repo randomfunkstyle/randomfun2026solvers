@@ -62,31 +62,62 @@ entry every machine is byte-identical to before). **It does not work.**
 
 | build | corridor | avg ticks | Δ |
 |---|---|---|---|
-| `brackets` packed (3.46 cells/word) | 29 | 24,221 | — |
 | `brackets` + buffer | 357 — 4.7× the whole program | 24,549 | **+1.4%** |
-| `brackets` **unpacked** (7.00 cells/word) | 29 | 24,233 | — |
-| `brackets` unpacked + buffer | 357 | 24,561 | **+1.4%** |
 | `tcp` + buffer | 139 | 88,168 | **0.0%** |
 | `gradebook` + buffer | 265 | 295,933 | **0.0%** |
 
-The control is the third row. Doubling the ROM man's walk from 3.46 to 7.00 cells
-a word leaves ticks unchanged, so **the ROM man is not the bottleneck at either
-density** and there is no starvation for a buffer to absorb. The consumer is: the
-discard loop walks `d → r → < → ^ → m → >`, six cells for one word, while the man
-produces one every ~3.5. Enlarging the queue in front of a slower consumer buys
-nothing and costs first-word latency, which is the +1.4%.
+### The control, and the cost model it gives
 
-Caveat on the evidence: `brackets` and `tcp` are 4% and 5% discard, so those rows
-prove very little. `gradebook` at ~15% is the only honest test, and it is flat.
+The first attempt at a control ran packed-vs-unpacked ROM on `brackets`, which is
+4% discard and could not have shown anything. Re-run where discarding actually
+costs — every row `optimize.verify` on the real public cases, all passing:
 
-**Pros of keeping it:** free when off (byte-identical), ~40 lines, and the band it
-snakes through is dead space above the CPU — so on a width-bound machine it costs
-zero footprint (`brackets`, `tcp` absorb a whole-program buffer at +0.0% area;
-`gradebook` a quarter-program one). If a future change ever makes the ROM man the
-bottleneck again, the mechanism is already there.
+| program | ROM density | avg ticks | Δ |
+|---|---|---|---|
+| `sudoku-validity` | packed, 3.36 cells/word | 429,673 | — |
+| `sudoku-validity` | unpacked, 7.00 | 444,882 | **+3.5%** |
+| `gradebook` | packed, 3.41 | 295,803 | — |
+| `gradebook` | unpacked, 7.00 | 301,801 | **+2.0%** |
 
-**Cons:** it is dead code with no caller, and it encodes an assumption that has
-been measured false.
+Halving the ROM man's speed costs 2–3.5%, and the numbers fit one model:
+
+```
+discard cost per word = max( 6 ticks CPU loop , ROM emission ticks/word )
+
+packed   : max(6, 3.36) = 6.00   CPU-bound
+unpacked : max(6, 7.00) = 7.00   ROM-bound, +16.7% on the discard
+                                 x 26% of sudoku's ticks = +4.3% predicted
+                                 measured +3.5%
+```
+
+So the ROM man is genuinely hidden behind the loop **at today's loop speed**, and
+that is why the buffer is flat. It is also why a *repeater* — a cycled ring
+re-emitting the program at ~2 ticks a word instead of the man's 3.4 — would be
+equally flat: `max(6, 2)` is still 6. Both ideas are blocked by the same nozzle.
+
+**The ordering that falls out of this.** The repeater is not wrong, it is
+*second*:
+
+| loop | ticks/word | vs ROM at 3.36 | binding constraint |
+|---|---|---|---|
+| today, 1 read a lap | 6.0 | | the CPU loop |
+| k=2 unroll | 4.0 | | the CPU loop, only just |
+| k=4 | 3.0 | 3.36 | **the ROM man** |
+| several men (`Y`) | →2.0 | 3.36 | **the ROM man** |
+
+Below ~3.4 ticks a word the ROM man becomes the bottleneck and a repeater is what
+unblocks it. Anything faster than k=2 needs the producer fixed first.
+
+**Pros of keeping the corridor:** free when off (`ROM_BUFFER` empty, all machines
+byte-identical), ~40 lines, and on a **width**-bound machine the band it snakes
+through is dead space — `brackets` takes a 357-word buffer at 90x70 -> 90x78 with
+the footprint unchanged at 8,100.
+
+**Cons:** dead code with no caller; it encodes an assumption measured false; and
+on a **height**-bound machine it is not free at all. `little-little-man` is
+203x204, so every corridor row goes straight into the box: **+6.0%** at 400 words,
+**+16.3%** at 1,069, **+55%** at a full program. On the one machine where
+recirculation is worth 21.4% of ticks, this feature is pure loss.
 
 ## Still open
 

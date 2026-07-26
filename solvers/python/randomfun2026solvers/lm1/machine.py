@@ -1584,6 +1584,10 @@ class Machine:
         }
         notes = {
             "rom": f"looping ROM: {self.program.P} words, {self.rom_rows} rows, re-emitted forever",
+            "rom:corridor": (
+                f"ROM-PLUS: the fetch pipe snaked to {self.rom_capacity} cells, i.e. "
+                f"{self.rom_capacity} words of buffer (a pipe's capacity is its length)"
+            ),
             "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
             "tape": f"rotating pipe tape, N={self.tape_n} (~105+8.3N ticks/access)",
             "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
@@ -1971,6 +1975,11 @@ def _assemble(
     regions["rom"] = (RX, RY, romlay.width + 1, romlay.height + 2)
     regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
     regions["tape"] = (TX, TY, tape.width, tape.height)
+    # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
+    # the only place the ROM-PLUS snake would show up at all. Its cell count *is* its
+    # capacity in words (``SPEC.md``), so the note is the number that matters.
+    if band_rows:
+        regions["rom:corridor"] = (1, rom_bottom + 1, (CX + W + 1), band_rows + 1)
     if cpu.has_in:
         regions["io:I"] = (3, iy - 1, 3, 3)
     if cpu.has_out:
