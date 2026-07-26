@@ -1,0 +1,16 @@
+# little-little-man — submission 8e38f654-1e98-47ad-833f-dfaa75c68d31
+
+verdict      done: 28/28 cases, area2 38416, avgTicks 21,292,392, score 817,968,537,932
+submitted    2026-07-26T15:03:45+0300
+grid         195x196
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  0748e03447c9c284cea9de3f3d439e2292e82f77b3a328fc060be6daf689b631
+commit       2e1fa11
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+Drop the blank interior row above the CPU's south wall: 195x197 -> 195x196, footprint 38,809 -> 38,416. Ticks identical to the tick on all 14 public cases (avg 19,426,309.36, worst 30,337,343); 5 live men.
