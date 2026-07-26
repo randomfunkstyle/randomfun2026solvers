@@ -141,25 +141,129 @@ discard, and making it faster cannot move a number it does not set. The earlier
 `little-little-man`'s operands run to 3,470, so its tokens average 4.29 cells
 against `gradebook`'s 3.46, and the fold's connectors add the rest.
 
-What that repricing implies is worth more than the drain was:
+### How big the producer is: two methods, agreeing
 
-    642,113 words a case x 5.0 = 3.21M of 7.59M ticks -- 42% of the machine
+**Method 1 — engine A/B on the ROM lap.** Rebuild the same machine with the
+unpacked ROM and re-verify all 14 public cases. Only the lap changes, so the
+slope is the number of laps the program waits out per case:
 
-**So the producer is the whole problem, and it is bigger than anyone had it.**
-A ring repeater is 1 cell per word of storage against the ROM's 5, and re-emits
-at 2 ticks a word (`r`,`s` in a relay), so it is smaller *and* faster:
-
-| ROM | drain | discard t/word | ticks saved |
+| ROM | lap | cells/word | avg ticks |
 |---|---|---|---|
-| 5.0 walking (today) | 4.0 counted | 5.0 | — |
-| 2.0 repeater | 4.0 counted | 4.0 | 8.5% |
-| 2.0 repeater | 2.51 `unit_bits=2` | 2.51 | **21%** |
+| packed (shipped) | 17,480 | 5.00 | 7,594,099 |
+| unpacked | 28,800 | 8.23 | 10,322,651 |
+
+    (10,322,651 - 7,594,099) / (28,800 - 17,480) = 241 laps a case
+    241 x 17,480 = 4.21M of 7.59M ticks -- 55.5% ROM-paced
+
+**Method 2 — count the words.** Every discarding instruction's operand, summed
+on the emulator over `image_program`, across **all 14** cases: a mean of 908,850
+words a case, at 5.00 cells a word = 4.54M ticks, **59.8%**.
+
+The two agree to 8% (241 laps is 842,900 words against 908,850 counted), from
+completely different instruments. **So a little over half of `little-little-man`
+is the CPU standing on an `r` waiting for the ROM man to walk round.**
+
+A ring repeater stores one cell per word against the ROM's five and re-emits at
+~2 ticks a word (`r`,`s` in a relay), so it is smaller *and* faster. At 241 laps
+a case:
+
+| ROM lap | ROM-paced ticks | total | vs today |
+|---|---|---|---|
+| 17,480 (today) | 4.21M | 7.59M | — |
+| 7,000 (repeater at 2 cells/word) | 1.69M | 5.07M | **-33%** |
+| 3,498 (ring at 1 cell/word) | 0.84M | 4.22M | **-44%** |
 
 The drain is therefore *second*, and it is already built and tested: turn it on
-by naming the program in `DRAIN_UNIT_BITS` once the producer is under 4.0. Note
-its footprint bill on this machine is +6 rows (+6.28% area²), because the CPU
-room sits **above** the display and a deeper slab pushes the display down — the
-slab band's own 5-row gap at rows 169..174 is the room's south wall, not slack.
+by naming the program in `DRAIN_UNIT_BITS` once the producer is under 4.0 cells a
+word, which is where `max(drain, ROM)` starts selecting the drain again. Note its
+footprint bill on this machine is +6 rows (+6.28% area²), because the CPU room
+sits **above** the display and a deeper slab pushes the display down — the slab
+band's own 5-row gap at rows 169..174 is the room's south wall, not slack.
+
+### A correction, and the mistake worth not repeating
+
+An earlier version of this section put the producer at 42% and the repeater at
+21%. Both were too low, from two errors made together: the word count averaged
+**three** cases (642,113) and was then compared against a **fourteen**-case tick
+average; and the unpacked lap was read off `rom.build_rom(words)` without the
+`rows=` argument `machine.build` actually passes, giving 55,980 cells instead of
+the real 28,800. The two errors pulled in opposite directions and the wrongness
+did not show up as an inconsistency until both methods were run over the same
+case set.
+
+`heatmap.mjs` cannot referee this: its wasm OOMs above a few million ticks and a
+case needs ~12M, and the `--rounds` flag in its usage banner is not implemented,
+so a round-based program exhausts its input and then profiles its own stall — a
+run of it here attributed 56% to the `IN` lane, which is that artefact and not a
+finding.
+
+## The repeater: what it can reach, measured (2026-07-26)
+
+The producer is ~56% of `little-little-man` (above), so this is the piece worth
+building. Three facts, each measured rather than argued, fix its design.
+
+**1. A relay is 2.00 ticks a word.** A man re-emitting a stream does `r` then
+`s`; there is no cheaper cycle. Measured on the reference interpreter with a
+corridor of alternating `r`/`s` — 12 words out in 26 steps, the extra 2 being
+spawn and halt:
+
+```
++-+  +--------------------------+
+|I|>>| @rsrsrsrsrsrsrsrsrsrsrsrsH|
++-+  +--------------------------+
+```
+
+That alone is **5.00 -> 2.00** on the producer. Against today's counted discard
+loop `max(4.0, 2.0) = 4.0`, so a repeater on its own is worth 20% of the
+producer's share; with the drain behind it (`unit_bits=2`, 2.51) it is 50%.
+
+**2. One room cannot beat 2.00 — it is grid parity, not effort.** The obvious
+answer is two men on the corridor in opposite phases, one reading while the other
+sends. A room may hold at most one `@`, so the second man comes from `Y`, and
+`Y`'s two children are born at `(x, y-1)` and `(x, y+1)`. Any path from a birth
+cell to row `y` column `c` has length parity `|c - x| + 1`, so two children
+standing on row `y` at the same tick are **always an even number of cells apart**
+— always the same phase on a period-2 `rsrs` corridor. They would read on the
+same tick, the input pipe delivers one value a tick, one blocks, the other steps
+onto him and both stop. No arrangement of detours escapes it.
+
+**3. Two banks reach 1.00 a word, and the ROM image already provides the split.**
+`r` binds to the *nearest incoming* pipe (`SPEC.md`), so two `r` cells in one room
+can read two different rings purely by where they stand. Verified with
+`lm.route` on a probe — a cell at (16,2) binds the 3-cell pipe, a cell at (17,6)
+the 14-cell one, same room:
+
+    r r          <- one word from bank A, one from bank B: 2 words in 2 ticks
+    ^ ^
+    |  \____ nearest the south pipe
+     \______ nearest the west pipe
+
+Each bank sustains one word per two ticks, and the consumer takes one from each
+per two ticks, so the pair sustains **1 word a tick with no merger man** — the
+merger is exactly what would have put a 2-tick cycle back in the path. The image
+is already fixed-width `(opcode, operand)` pairs (`rom_words`), so bank A holds
+the even words and bank B the odd ones; the CPU's `>rbr` fetch reads one of each,
+and every discard count is even (§`even` in `drain.py`), so a drain lap consuming
+one from each bank is exactly correct with no remainder arm.
+
+### Seeding, which is the part that is actually hard
+
+A ring's pipes start empty, so something must fill them once, and a ring room that
+takes both the ROM's pipe and its own return has no way to order the two — `r`
+picks the nearest and would deadlock on an empty ring, `R` picks either and
+corrupts the order the moment both are ready.
+
+The way out is that the choice is not per-word, it is once: the relay man runs a
+**counted seeding phase** first — `b` from a literal, then `r` from the cell
+nearest the ROM, `s` into the ring, `m`, loop — and falls into the steady loop
+(`r` from the cell nearest the return, `S` to the ring *and* the CPU) when `BP`
+hits zero. Same nearest-pipe positioning trick as (3). One-time cost is 3 ticks a
+word for one program length; after that the ROM man simply blocks on a full ring
+forever and is never heard from again.
+
+Ring capacity must be an exact multiple of the program length, or the window that
+recirculates is not a whole image and the CPU sees a rotation that never
+resynchronises.
 
 ## Still open
 

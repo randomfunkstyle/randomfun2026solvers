@@ -84,7 +84,12 @@ slow = pytest.mark.skipif(
 #: Values parked in the probe's ring.  Small enough that every ring below has the
 #: mandatory ``payload + 1`` capacity (SURVEY §6) with slack.
 PROBE_L = 12
-IN_COL, OUT_COL, FWD_ROW = 8, 2, 0
+# Keep the request pipe west of the counted ring.  At IN_COL=8 the topmost
+# receive in an m=4 ring is one cell nearer to the request than to the return
+# pipe, so nearest-pipe binding silently consumes request data and the probe
+# deadlocks.  IN_COL=6 keeps LOAD nearest to the request and m=1..4 ROT nearest
+# to the return.  It changes only the fixed intercept, not the measured slope.
+IN_COL, OUT_COL, FWD_ROW = 6, 2, 0
 
 
 # ── the probe ─────────────────────────────────────────────────────────────────
@@ -219,6 +224,7 @@ def test_the_cost_model_is_the_worse_of_the_two_laps() -> None:
     assert ticks_per_rotation(9, 4, 3) == pytest.approx(5.0)  # relay-bound
     assert ticks_per_rotation(3, 6, 4) == pytest.approx(3.2)  # relay-bound
     assert ticks_per_rotation(3, 8, 6) == pytest.approx(3.0)  # worker-bound
+    assert ticks_per_rotation(4, 8, 6) == pytest.approx(2.75)  # worker-bound
 
 
 # ── engine-measured, the reason any of the above is quotable ──────────────────
