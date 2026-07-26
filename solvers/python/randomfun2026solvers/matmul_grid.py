@@ -76,11 +76,12 @@ class Geometry:
 #: block runs).  The two orders differ, which is the whole point of splitting
 #: them: `MAC` reads `s`, `b`, `c` in that order and sends them back in the same
 #: order, so its receive columns and its send columns interleave.
+_W = {"q": 9, "s": 11, "k": 8, "b": 10, "c": 7, "io": 7, "x": 8}
 GEOMETRY = Geometry(
-    recv_order=("io", "x", "k", "s", "b", "c", "q"),
-    send_order=("io", "x", "k", "s", "b", "c", "q"),
-    recv_w={"io": 5, "x": 4, "k": 7, "s": 5, "b": 4, "c": 6, "q": 9},
-    send_w={"io": 5, "x": 4, "k": 7, "s": 5, "b": 4, "c": 6, "q": 9},
+    recv_order=("q", "s", "k", "b", "c", "io", "x"),
+    send_order=("q", "s", "k", "b", "c", "io", "x"),
+    recv_w=_W,
+    send_w=dict(_W),
 )
 
 #: Blocks whose only remaining successor is themselves; laid as a tight loop
@@ -159,7 +160,7 @@ def straight_key(glyph: str) -> str | None:
 
 
 # ── band geometry ─────────────────────────────────────────────────────────────
-def _voronoi(order: tuple[str, ...], widths: dict[str, int], x0: int
+def _voronoi(order: tuple[str, ...], widths: dict[str, int], x0: int, shift: int = 0
              ) -> tuple[dict[str, int], dict[str, tuple[int, int]], int]:
     """Attach columns for one direction, and the columns each of them owns.
 
@@ -168,7 +169,7 @@ def _voronoi(order: tuple[str, ...], widths: dict[str, int], x0: int
     """
     col, x = {}, x0
     for name in order:
-        col[name] = x + (widths[name] - 1) // 2
+        col[name] = x + (widths[name] - 1) // 2 + shift
         x += widths[name]
     x1 = x - 1
 
@@ -215,7 +216,10 @@ def layout_bands(recv_order: tuple[str, ...], send_order: tuple[str, ...],
     """Place the fourteen north-wall attach columns and derive their cells."""
     if sum(recv_w.values()) != sum(send_w.values()):
         raise Collision("the two partitions must cover the same columns")
-    rcol, rspan, x1 = _voronoi(recv_order, recv_w, x0)
+    # The receive columns sit one east of the send columns: a ring's two pipes
+    # have to be distinct cells, and keeping them adjacent lets one turnaround
+    # room straddle both -- which is what makes the rings short.
+    rcol, rspan, x1 = _voronoi(recv_order, recv_w, x0, shift=1)
     scol, sspan, _ = _voronoi(send_order, send_w, x0)
     return Bands(x0, x1, recv_order, send_order, rcol, scol, rspan, sspan)
 
@@ -775,6 +779,148 @@ def check_room(room: Room) -> None:
                                 f"wanted {target}")
         if name in SELF_LOOPS and lanes.get("pos") != name:
             raise Collision(f"{name} does not loop back to itself")
+
+
+# ── the whole machine ─────────────────────────────────────────────────────────
+#: Words each ring has to hold, measured over every shape in 2..16 by
+#: ``tests/test_matmul_grid.py``.  A pipe's capacity is its cell count, and a
+#: ring that cannot hold its contents deadlocks *silently*.
+RING_WORDS = {"x": 256, "b": 96, "c": 8, "k": 6, "q": 4, "s": 1}
+
+#: Rings whose turnaround room stacks straight above its own band, innermost
+#: first.  A level costs two rows and buys two cells of ring, so the order is by
+#: how little each ring has to hold -- and `s`, the one-word spill the MAC
+#: re-reads every lap, sits closest to the wall where its latency is least.
+LEVELS = {"s": 0, "q": 1, "k": 2, "c": 3}
+
+#: Rings too long to stack: their pipes leave north, run east over the worker
+#: and coil in the strip beside it, where the height is already paid for.
+COILED = ("x", "b")
+
+#: The smallest turnaround room there is: an eight-cell walk carrying one word.
+#: A ring must have two rooms -- a pipe may not loop back into its own -- and for
+#: the one-word spill ring the room's *latency* is what the MAC pays, so the
+#: shortest perimeter wins even though a bigger room would carry more per lap.
+RELAY = [
+    "+----+",
+    "|>@rv|",
+    "|^ s<|",
+    "+----+",
+]
+RELAY_W, RELAY_H = 6, 4                      # outside, walls included
+STRIP_W = 7                                  # columns each strip block owns
+NB = 16                                      # rows of north band above the wall
+WX = 1
+
+
+def _north_rows(bands: Bands, off: int) -> tuple[dict[tuple[str, bool], int], list[str]]:
+    """A north-band row and a strip order for every pipe that runs out east.
+
+    Two crossing rules have to hold at once, and they point opposite ways.  A
+    pipe climbs from its column on the worker's wall to its own row and then runs
+    east, so a run must never pass over a riser that reaches higher than it: rows
+    go **west to east** on the worker side.  In the strip the same pipe drops
+    from its row to its room, so a run must never pass over a drop that starts
+    higher: strip columns go **east to west**.  A ring's send column is one west
+    of its receive column, so the two orders agree ring by ring and the strip
+    blocks come out in reverse order of the bands.
+    """
+    pipes = sorted([(bands.send_col[r] + off, (r, True)) for r in (*COILED, "io")]
+                   + [(bands.recv_col[r] + off, (r, False)) for r in (*COILED, "io")])
+    rows = {key: row for row, (_, key) in enumerate(pipes)}
+    order = [r for (r, send) in (k for _, k in pipes) if send]
+    return rows, order[::-1]
+
+
+def build_grid() -> tuple[list[str], object, dict[str, object]]:
+    """Worker room, six rings, and the input and output rooms."""
+    from randomfun2026solvers.man_debug import DebugMap
+    from randomfun2026solvers.value_ring import draw_pipe, stamp, walls
+
+    room = build_room()
+    iw, ih, margin = room.iw, room.ih, room.margin
+    wy = NB + 1
+    off = WX + margin
+    es = WX + iw + 3                          # first column of the east strip
+    rows, blocks = _north_rows(room.bands, off)
+    g = Circuit(es + STRIP_W * len(blocks), wy + ih + 1)
+
+    stamp(g, WX, wy, room.circuit.rows())
+    walls(g, WX, wy, iw, ih)
+    wall = wy - 1
+    top, deep = wy + 1, wy + ih - 5
+
+    def col(ring: str, send: bool) -> int:
+        return (room.bands.send_col if send else room.bands.recv_col)[ring] + off
+
+    lengths: dict[str, int] = {}
+
+    # -- the four stacked rings -----------------------------------------------
+    for ring, lev in LEVELS.items():
+        sc, rc = col(ring, True), col(ring, False)
+        if sc + 1 != rc:
+            raise Collision(f"{ring}: pipes at {sc} and {rc} are not adjacent")
+        box_y = wall - 6 - lev                # top wall of the turnaround room
+        stamp(g, sc - 2, box_y, RELAY)
+        fwd = draw_pipe(g, [(sc, wall - 1), (sc, box_y + RELAY_H)])
+        ret = draw_pipe(g, [(rc, box_y + RELAY_H), (rc, wall - 1)])
+        lengths[ring] = fwd + ret
+        if fwd + ret < RING_WORDS[ring] + 1:
+            raise Collision(f"ring {ring} holds {fwd + ret}, "
+                            f"needs {RING_WORDS[ring] + 1}")
+
+    # -- input, output and the two coiled rings, out in the strip -------------
+    for i, ring in enumerate(blocks):
+        gx = es + i * STRIP_W
+        sc, rc = col(ring, True), col(ring, False)
+        r_out, r_in = rows[(ring, True)], rows[(ring, False)]
+        if ring == "io":
+            stamp(g, gx, top, ["+-+", "|I|", "+-+"])
+            stamp(g, gx + 3, top, ["+-+", "|O|", "+-+"])
+            draw_pipe(g, [(sc, wall - 1), (sc, r_out), (gx + 4, r_out),
+                          (gx + 4, top - 1)])
+            draw_pipe(g, [(gx + 1, top - 1), (gx + 1, r_in), (rc, r_in),
+                          (rc, wall - 1)])
+            continue
+        # The coil is three columns of the height already paid for beside the
+        # worker; the turnaround room sits under it, so both ends of the ring
+        # reach the same room without either pipe crossing the other's drop.
+        legs = [(sc, wall - 1), (sc, r_out), (gx + 4, r_out)]
+        y = top
+        for c_off in (4, 3, 2):
+            legs += [(gx + c_off, y), (gx + c_off, deep if y == top else top)]
+            y = deep if y == top else top
+        fwd = draw_pipe(g, [q for j, q in enumerate(legs) if j == 0 or q != legs[j - 1]])
+        stamp(g, gx, deep + 1, RELAY)
+        ret = draw_pipe(g, [(gx + 1, deep), (gx + 1, r_in), (rc, r_in),
+                            (rc, wall - 1)])
+        lengths[ring] = fwd + ret
+        if fwd + ret < RING_WORDS[ring] + 1:
+            raise Collision(f"ring {ring} holds {fwd + ret}, "
+                            f"needs {RING_WORDS[ring] + 1}")
+
+    art = [r.rstrip() for r in g.rows()]
+    while art and not art[-1]:
+        art.pop()
+
+    d = DebugMap("matmul -- a dataflow ring machine")
+    d.region("worker", WX, wy, iw, ih, color="#f59e0b",
+             note=f"{len(LAID)} blocks in {len(room.chains)} fall-through chains")
+    d.region("channels", WX, wy, margin, ih, color="#94a3b8",
+             note=f"{margin - 1} corridors carrying {len(room.lanes)} routed lanes")
+    for ring, n in lengths.items():
+        d.region(f"ring:{ring}", col(ring, True) - 2, 0, 6, wy, color="#0ea5e9",
+                 note=f"{n} cells, holds {RING_WORDS[ring]} words")
+    for chain in room.chains:
+        y0 = room.entry_y[chain.blocks[0]]
+        d.region(f"chain:{chain.blocks[0]}", WX + margin, wy + y0,
+                 iw - margin, chain.rows[-1].y - y0 + 1, tags=["block"],
+                 color="#22c55e", note=" ".join(chain.blocks))
+    info = {"worker": (iw, ih), "rings": lengths, "channels": margin - 1,
+            "blocks": len(LAID), "chains": len(room.chains),
+            "lanes": len(room.lanes),
+            "size": (max(len(r) for r in art), len(art))}
+    return art, d, info
 
 
 if __name__ == "__main__":  # pragma: no cover - a development probe
