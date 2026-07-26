@@ -1,5 +1,5 @@
 {
-  "title": "LM-1 tape STORE \u2014 cells=200, skip_batch=2, relay=(4, 3), jump_threshold=128, capacity=222",
+  "title": "LM-1 tape STORE \u2014 cells=200, skip_batch=4, relay=(6, 4), jump_threshold=128, capacity=202",
   "offset": [
     0,
     0
@@ -9,28 +9,28 @@
       "name": "worker",
       "x": 8,
       "y": 8,
-      "w": 34,
-      "h": 18,
-      "note": "34\u00d718 interior; request protocol is op, addr, optional write value",
+      "w": 49,
+      "h": 24,
+      "note": "49\u00d724 interior; request protocol is op, addr, optional write value",
       "color": "#38bdf8",
       "tags": []
     },
     {
       "name": "value-ring",
       "x": 1,
-      "y": 27,
-      "w": 44,
-      "h": 9,
-      "note": "222-value pipe capacity; 201 required because a WRITE briefly holds replacement and displaced values",
+      "y": 33,
+      "w": 59,
+      "h": 8,
+      "note": "202-value pipe capacity; 201 required because a WRITE briefly holds replacement and displaced values",
       "color": "#10b981",
       "tags": []
     },
     {
       "name": "init",
-      "x": 37,
+      "x": 53,
       "y": 8,
-      "w": 5,
-      "h": 6,
+      "w": 4,
+      "h": 5,
       "note": "one-time fill of 200 zero values",
       "color": "#64748b",
       "tags": []
@@ -46,43 +46,53 @@
       "tags": []
     },
     {
-      "name": "P1-two-value-skip",
-      "x": 27,
+      "name": "P1-bit-tail",
+      "x": 32,
+      "y": 12,
+      "w": 12,
+      "h": 3,
+      "note": "x/] peels BP bits 0 and 1; conditionally advances 1 then 2 words",
+      "color": "#84cc16",
+      "tags": []
+    },
+    {
+      "name": "P1-four-value-skip",
+      "x": 44,
       "y": 14,
-      "w": 5,
+      "w": 11,
       "h": 2,
-      "note": "advance addr words; two BP tests and two rs,m bodies per lap",
+      "note": "bulk floor(addr/4) loop; four rs pairs per BP unit",
       "color": "#22c55e",
       "tags": []
     },
     {
       "name": "target-access",
-      "x": 24,
+      "x": 39,
       "y": 17,
-      "w": 17,
-      "h": 5,
+      "w": 16,
+      "h": 6,
       "note": "READ sends target to output+tape; WRITE replaces target",
       "color": "#f59e0b",
       "tags": []
     },
     {
-      "name": "P2-two-value-skip",
-      "x": 27,
+      "name": "P2-bit-tail",
+      "x": 30,
       "y": 22,
-      "w": 5,
-      "h": 2,
-      "note": "advance N\u22121\u2212addr words and restore original tape alignment",
-      "color": "#14b8a6",
+      "w": 14,
+      "h": 4,
+      "note": "exact cleanup for (N\u22121\u2212addr) mod 4",
+      "color": "#06b6d4",
       "tags": []
     },
     {
-      "name": "main-return",
-      "x": 31,
-      "y": 24,
+      "name": "P2-four-value-skip",
+      "x": 44,
+      "y": 25,
       "w": 11,
       "h": 2,
-      "note": "single P2 exit returns through the east gutter to MAIN",
-      "color": "#ec4899",
+      "note": "bulk floor((N\u22121\u2212addr)/4) loop; restores tape alignment",
+      "color": "#14b8a6",
       "tags": []
     }
   ],
@@ -154,98 +164,118 @@
       ]
     },
     {
-      "name": "P1-odd-tail",
+      "name": "main-return",
       "points": [
         [
-          27,
-          13
+          54,
+          27
         ],
         [
-          31,
-          13
+          54,
+          29
         ],
         [
-          31,
-          14
+          56,
+          29
+        ],
+        [
+          56,
+          12
         ]
       ],
       "note": "",
-      "color": "#84cc16",
+      "color": "#ec4899",
       "kind": "control",
-      "expect": "odd final word re-enters with BP=0, then takes the common exit",
+      "expect": "P2 and initializer share the proven return path to MAIN",
       "tags": [],
       "cells": [
         [
-          27,
-          13
+          54,
+          27
         ],
         [
-          28,
-          13
+          54,
+          28
         ],
         [
-          29,
-          13
+          54,
+          29
         ],
         [
-          30,
-          13
+          55,
+          29
         ],
         [
-          31,
-          13
+          56,
+          29
         ],
         [
-          31,
+          56,
+          28
+        ],
+        [
+          56,
+          27
+        ],
+        [
+          56,
+          26
+        ],
+        [
+          56,
+          25
+        ],
+        [
+          56,
+          24
+        ],
+        [
+          56,
+          23
+        ],
+        [
+          56,
+          22
+        ],
+        [
+          56,
+          21
+        ],
+        [
+          56,
+          20
+        ],
+        [
+          56,
+          19
+        ],
+        [
+          56,
+          18
+        ],
+        [
+          56,
+          17
+        ],
+        [
+          56,
+          16
+        ],
+        [
+          56,
+          15
+        ],
+        [
+          56,
           14
-        ]
-      ]
-    },
-    {
-      "name": "P2-odd-tail-and-merge",
-      "points": [
-        [
-          27,
-          21
         ],
         [
-          31,
-          21
+          56,
+          13
         ],
         [
-          31,
-          22
-        ]
-      ],
-      "note": "",
-      "color": "#06b6d4",
-      "kind": "control",
-      "expect": "READ, WRITE, and odd tail converge on the same P2 entry",
-      "tags": [],
-      "cells": [
-        [
-          27,
-          21
-        ],
-        [
-          28,
-          21
-        ],
-        [
-          29,
-          21
-        ],
-        [
-          30,
-          21
-        ],
-        [
-          31,
-          21
-        ],
-        [
-          31,
-          22
+          56,
+          12
         ]
       ]
     }
