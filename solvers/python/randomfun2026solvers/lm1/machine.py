@@ -680,6 +680,7 @@ def build_cpu(
     mem_pad: int = 0,
     stream_pad: int = 0,
     short_return: bool = True,
+    drain_unit_bits: int = 0,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -728,9 +729,19 @@ def build_cpu(
 
     # Each slab gets its own column band, so an exit dropping to the collector
     # never crosses a slab below it.
-    slab_rows = {
-        m: (_JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS) for m in structured
-    }
+    # A drain hangs *below* the entry row rather than beside it, so it sets the
+    # slab's depth: a jump is its entry row plus the block, a branch is its four
+    # rows of `X` fan-out and turn row plus the block.
+    if drain_unit_bits:
+        from .drain import build_drain
+
+        _drain_h = build_drain(0, unit_bits=drain_unit_bits, even=True).height
+        slab_rows = {m: (1 if p.sem[m] in _JUMP_SEMS else 5) + _drain_h for m in structured}
+    else:
+        slab_rows = {
+            m: (_JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS)
+            for m in structured
+        }
     struct_east = _STRUCT_X0 + max(1, len(structured)) * _SLAB_PITCH
 
     # ── lane extents ─────────────────────────────────────────────────────────
@@ -900,7 +911,9 @@ def build_cpu(
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
     for m in order:
-        struct_drops |= _slab(g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs)
+        struct_drops |= _slab(
+            g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
+        )
 
     # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place and
     # only fills the genuinely free cells with `<`.
@@ -1027,6 +1040,7 @@ def _slab(
     base: int,
     collector: int,
     pipe_glyphs: list[tuple[int, int, str, str]],
+    drain_unit_bits: int = 0,
 ) -> set[int]:
     """Draw one structures-band slab below its entry row. Returns its drop columns.
 
@@ -1056,9 +1070,13 @@ def _slab(
     exit_x = base - 1
 
     if sem in _JUMP_SEMS:
-        _discard_loop(g, base, s0, pipe_glyphs)
-        g.put(exit_x, s0, "^")
-        for yy in range(collector + 1, s0):
+        if drain_unit_bits:
+            ey = _drain_block(g, base, s0, pipe_glyphs, drain_unit_bits)
+        else:
+            _discard_loop(g, base, s0, pipe_glyphs)
+            ey = s0
+        g.put(exit_x, ey, "^")
+        for yy in range(collector + 1, ey):
             g.soft(exit_x, yy, ".")
         return {exit_x}
 
@@ -1105,12 +1123,70 @@ def _slab(
     g.put(cols[taken], turn_row, "<")
     for c in range(base + 2, cols[taken]):
         g.soft(c, turn_row, ".")
-    _discard_loop(g, base, turn_row, pipe_glyphs)
-    g.put(exit_x, turn_row, "^")
-    for y in range(collector + 1, turn_row):
+    if drain_unit_bits:
+        end_row = _drain_block(g, base, turn_row, pipe_glyphs, drain_unit_bits)
+    else:
+        _discard_loop(g, base, turn_row, pipe_glyphs)
+        end_row = turn_row
+    g.put(exit_x, end_row, "^")
+    for y in range(collector + 1, end_row):
         g.soft(exit_x, y, ".")
     drops.add(exit_x)
     return drops
+
+
+#: Per-program opt-in for :mod:`.drain`'s ladder+loop in place of the counted
+#: discard loop below. Empty by default, so every machine that does not name
+#: itself here is byte-identical.
+#:
+#: ``little-little-man`` discards a *mean 642,113 ROM words a case* — measured on
+#: the ROM image, 30.8% of its ~8.33M ticks at the counted loop's 4 ticks a word.
+#: That is now the largest line in its profile, and the counted loop cannot go
+#: below 2 (``drain``'s module docstring). A ladder+loop at ``unit_bits`` costs
+#: ``1 + 6/2**unit_bits`` ticks a word instead.
+#:
+#: The block is deeper and wider than the 2x4 it replaces, and that is free here
+#: for a reason worth writing down: the machine's height is set by the **display**
+#: (south edge 192), not by the slab band, whose deepest slab ends at 169 — and
+#: its width by the **ROM** at 192, not by the slabs. Read the regions before
+#: assuming a slab is on either critical path.
+DRAIN_UNIT_BITS: dict[str, int] = {}
+
+
+def _drain_block(
+    g: _Grid,
+    base: int,
+    y: int,
+    pipe_glyphs: list[tuple[int, int, str, str]],
+    unit_bits: int,
+) -> int:
+    """Place a :mod:`.drain` ladder+loop in a slab. Returns the row it leaves on.
+
+    Same contract as :func:`_discard_loop`: the man arrives heading **west** along
+    ``y`` and leaves heading **west** with ``BP == 0``, on the caller's riser
+    column ``base - 1``. He just leaves further down, because the block hangs
+    below the entry row instead of beside it.
+    """
+    from .drain import build_drain
+
+    block = build_drain(0, unit_bits=unit_bits, even=True)
+    ox, oy = base - 1, y + 1  # local column 0 is the reserved exit column
+
+    # Turn the westbound man south into the block. On a branch's ``turn_row`` the
+    # arm's westward run is already drawn, and on a jump's entry row it is drawn
+    # afterwards — so this cell is `.` or `<` or empty, all three meaning "the man
+    # is walking west here", which is precisely who we want to divert. Anything
+    # else is a real collision and must not be papered over.
+    turn = (ox + block.spine, y)
+    if g.c.get(turn) not in (None, ".", "<"):
+        raise MachineError(f"drain entry at {turn} would overwrite {g.c[turn]!r}")
+    g.c[turn] = "v"
+    for (bx, by), ch in block.cells.items():
+        g.put(ox + bx, oy + by, ch)
+        if ch == "r":
+            pipe_glyphs.append((ox + bx, oy + by, "r", "rom"))
+    assert ox + block.exit[0] == base - 1, "the block must leave on the riser column"
+    return oy + block.exit[1]
 
 
 def _discard_loop(
@@ -1274,6 +1350,7 @@ def _keepout(g: _Grid, spare: Iterable[tuple[int, int]] = ()) -> frozenset[tuple
         out |= {(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)}
     return frozenset(out - set(spare))
 
+
 #: Programs that need a wider adapter-to-STORE gap than the default.
 #:
 #: ``matmul`` is the only one, and it does not merely fail to *place* at 1 — it places,
@@ -1404,6 +1481,7 @@ def _tape_shell(
     Returns the canvas plus the request and response stub cells.
     """
     from ..circuit import Circuit
+
     (
         worker,
         worker_width,
@@ -1478,9 +1556,7 @@ def grid_block(n: int) -> _Tape:
 
     a = build_addr(n, io=False)
     assert a.in_cell is not None and a.out_cell is not None, "io=False must report stubs"
-    cells = {
-        (x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "
-    }
+    cells = {(x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "}
     return _Tape(
         cells=cells,
         width=a.width,
@@ -1800,10 +1876,7 @@ class Machine:
                 f"{self.rom_capacity} words of buffer (a pipe's capacity is its length)"
             ),
             "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
-            "tape": (
-                f"rotating pipe tape, N={self.tape_n}, "
-                f"skip_batch={self.tape_skip_batch}"
-            ),
+            "tape": (f"rotating pipe tape, N={self.tape_n}, skip_batch={self.tape_skip_batch}"),
             "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
             "display": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
             "cpu:fetch": ">rbr — opcode into BP, then the operand into A (fixed-width 2 words)",
@@ -1840,9 +1913,7 @@ class Machine:
         placement = f", compact store_dy={self.store_offset[1]}" if self.compact else ""
         routes = (
             ", routes "
-            + " ".join(
-                f"{name}={length}" for name, length in sorted(self.route_lengths.items())
-            )
+            + " ".join(f"{name}={length}" for name, length in sorted(self.route_lengths.items()))
             if self.route_lengths
             else ""
         )
@@ -1937,13 +2008,9 @@ def build(
             f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
         )
     if tape_skip_batch not in (None, 1, 2):
-        raise MachineError(
-            f"tape_skip_batch must be 1, 2, or None, got {tape_skip_batch}"
-        )
+        raise MachineError(f"tape_skip_batch must be 1, 2, or None, got {tape_skip_batch}")
     if tape_jump_threshold < 1:
-        raise MachineError(
-            f"tape_jump_threshold must be positive, got {tape_jump_threshold}"
-        )
+        raise MachineError(f"tape_jump_threshold must be positive, got {tape_jump_threshold}")
     if store != "tape" and tape_skip_batch != 1:
         raise MachineError("tape_skip_batch applies only to store='tape'")
     if short_return is None:
@@ -2113,7 +2180,14 @@ def _assemble(
     hot: tuple[int, int] | None = None,
     tape_skip_batch: int = 1,
 ) -> Machine:
-    cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
+    cpu = build_cpu(
+        program,
+        p,
+        mem_pad=mem_pad,
+        stream_pad=stream_pad,
+        short_return=short_return,
+        drain_unit_bits=DRAIN_UNIT_BITS.get(program.name, 0),
+    )
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
@@ -2165,18 +2239,16 @@ def _assemble(
     # the CPU wall. The ordinary straight corridor uses adjacent room walls when
     # an input room keeps the CPU at x=8; the input-free x=3 layout needs one blank
     # row for reference-engine compatibility.
-    CX = (
-        CPU_X_WITH_STREAM
-        if stream
-        else CPU_X_WITH_INPUT if cpu.has_in else CPU_X_WITHOUT_INPUT
-    )
+    CX = CPU_X_WITH_STREAM if stream else CPU_X_WITH_INPUT if cpu.has_in else CPU_X_WITHOUT_INPUT
     band_rows = 0
     if rom_buffer:
         band_rows = rom_corridor_rows(rom_buffer, (CX + W + 1) - 1)
     cpu_gap = (
         ROM_BUFFER_CPU_GAP
         if band_rows
-        else ROM_CPU_GAP if cpu.has_in else ROM_CPU_GAP_WITHOUT_INPUT
+        else ROM_CPU_GAP
+        if cpu.has_in
+        else ROM_CPU_GAP_WITHOUT_INPUT
     )
     CY = rom_bottom + cpu_gap + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
@@ -2421,7 +2493,6 @@ def _assemble(
                 ]
             )
 
-
     # ── the LM-75, below the CPU ─────────────────────────────────────────────
     dsp_touches = (
         _display(g, cpu, CX, CY + H + 1, AX, display) if (display and cpu.dsp_cols) else {}
@@ -2550,6 +2621,7 @@ ADAPTER2_H = 12
 ADAPTER2_HOT_ROW = 1
 
 ADAPTER2_COLD_ROW = 11
+
 
 @dataclass(frozen=True)
 class _Adapter2:
@@ -2758,7 +2830,6 @@ ADAPTER_TAPE_GAP_FOR: dict[str, int] = {"matmul": 6}
 #: rather than dropped to their true floors — re-measuring a losing tier buys nothing,
 #: and moving `men` off 6 would silently restate a recorded result.
 ADAPTER_TAPE_GAP_BY_STORE: dict[str, int] = {"grid": 6, "men": 6, "men-y": 6}
-
 
 
 @dataclass
@@ -3364,13 +3435,33 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: the weights are unchanged but the width constraint it filters on is not.
 LANE_ORDER: dict[str, tuple[str, ...]] = {
     "brackets": (
-        "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
-        "ST", "MULI", "SUBI", "DIVI", "MODI", "BRZ",
+        "HALT",
+        "LDI",
+        "DECM",
+        "SUB",
+        "ADD",
+        "JMPF",
+        "LD",
+        "ST",
+        "MULI",
+        "SUBI",
+        "DIVI",
+        "MODI",
+        "BRZ",
     ),
     "matmul": ("MUL", "BRN", "SUB", "ADDI", "ST", "LD"),
     "sudoku-validity": (
-        "HALT", "STP", "ADD", "LDP", "MULI", "ST",
-        "MODI", "DIVI", "SUBI", "ADDI", "BRZ",
+        "HALT",
+        "STP",
+        "ADD",
+        "LDP",
+        "MULI",
+        "ST",
+        "MODI",
+        "DIVI",
+        "SUBI",
+        "ADDI",
+        "BRZ",
     ),
 }
 

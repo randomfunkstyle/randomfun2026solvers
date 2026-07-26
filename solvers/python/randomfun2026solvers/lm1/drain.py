@@ -171,9 +171,10 @@ class DrainBlock:
     bits: int
     spine: int  # the column every stage enters and leaves on
     entry: tuple[int, int]  # arrive here heading south, BP = words to discard
-    exit: tuple[int, int]  # first cell *below* the block; heading south, BP = 0
+    exit: tuple[int, int]  # where the man leaves, BP = 0; see `exit_heading`
     reads: list[tuple[int, int]]  # every `r`, for a pipe-binding check
     even: bool = False  # no bit-0 stage: counts must be multiples of two
+    exit_heading: str = "south"  # 'west' for a looped block, matching `_slab`
     unit: int = 0  # words a lap of the coarse loop discards; 0 = no loop
     stage_rows: list[tuple[int, int, int]] = field(default_factory=list)  # (bit, top, rows)
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
@@ -267,7 +268,12 @@ def build_drain(
     shape = {j: _legs(1 << j, max_width) for j in range(first, bits)}
     # The spine sits one column east of the widest fold's turn column, and never
     # closer than 2 — the 1-word stage reaches two columns west of the spine.
-    spine = max(max(w for _, w in shape.values()) + 1, 2)
+    w_max = max(w for _, w in shape.values()) if shape else 1
+    # A looped block leaves heading *west*, and the caller's riser stands on the
+    # cell it leaves from. That column has to be clear of every stage, or the man
+    # rising to the collector walks into a hairpin's turn glyph and is steered
+    # back into the fold — so reserve one column west of the widest fold.
+    spine = max(w_max + 1, 2) if unit_bits is None else max(w_max + 2, 3)
 
     cells: dict[tuple[int, int], str] = {}
     reads: list[tuple[int, int]] = []
@@ -335,7 +341,7 @@ def build_drain(
         regions[f"drain:bit{j}"] = (spine - w - 1, top, w + 3, body + 1)
         y = top + body + 1
 
-    exit_at = (spine, y)
+    exit_at, heading = (spine, y), "south"
     unit = 0
     if unit_bits is not None:
         # ── the coarse loop ──────────────────────────────────────────────────
@@ -359,9 +365,13 @@ def build_drain(
         put(spine, y + 1, "m")  # decrement immediately before the test
         regions["drain:loop"] = (spine - 1, y, 2, body + 2)
 
-        # BP == 0 walks straight west out of the `a`, clear of the loop.
-        put(spine - 2, y, "v")
-        exit_at = (spine - 2, y + 1)
+        # BP == 0 walks straight west out of the `a` along a clear row to the
+        # reserved column — which is the contract `machine._slab` already has for
+        # its riser, so a looped block drops into a jump slab without an adaptor.
+        # The exit cell itself is left empty: it belongs to the caller's `^`.
+        for x in range(1, spine - 1):
+            put(x, y, ".")
+        exit_at, heading = (0, y), "west"
         y += body + 2
 
     width = spine + 2
@@ -373,6 +383,7 @@ def build_drain(
         spine=spine,
         entry=(spine, 0),
         exit=exit_at,
+        exit_heading=heading,
         reads=reads,
         even=even,
         unit=unit,
@@ -487,6 +498,12 @@ def build_probe(block: DrainBlock) -> tuple[list[str], dict[tuple[int, int], tup
     # leaves on a different column from the one it entered — the coarse loop
     # occupies the spine — so this follows `exit`, not the spine.
     out_x, tail = ox + block.exit[0], oy + block.exit[1]
+    if block.exit_heading == "west":
+        # A looped block leaves westward onto the cell its caller owns; in the
+        # real machine that cell is the slab's riser `^`, and here it is the turn
+        # that drops the man onto the witness read.
+        g.put(out_x, tail, "v")
+        tail += 1
     g.put(out_x, tail, "r")
     g.put(out_x, tail + 1, "s")
     g.put(out_x, tail + 2, "H")
@@ -545,7 +562,7 @@ def debug_map(block: DrainBlock, *, counts: tuple[int, ...] = ()) -> tuple[list[
         f"{block.width}x{block.height}, {len(block.reads)} reads drawn",
         offset=(ox - bx, oy - by),
     )
-    for bit, top, rows_used in block.stage_rows:
+    for bit, _top, _rows_used in block.stage_rows:
         run = 1 << bit
         x, y, w, h = block.regions[f"drain:bit{bit}"]
         dbg.region(
@@ -605,9 +622,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--trace", default="", help="comma-separated counts to draw as lanes")
     args = ap.parse_args(argv)
 
-    blk = build_drain(
-        args.bits, max_width=args.max_width, even=args.even, unit_bits=args.unit_bits
-    )
+    blk = build_drain(args.bits, max_width=args.max_width, even=args.even, unit_bits=args.unit_bits)
     if args.html:
         counts = tuple(int(v) for v in args.trace.split(",") if v.strip())
         rows, dbg = debug_map(blk, counts=counts)

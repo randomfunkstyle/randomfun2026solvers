@@ -119,6 +119,48 @@ on a **height**-bound machine it is not free at all. `little-little-man` is
 **+16.3%** at 1,069, **+55%** at a full program. On the one machine where
 recirculation is worth 21.4% of ticks, this feature is pure loss.
 
+## The measurement that settles the ordering (2026-07-26)
+
+The drain was built (`lm1/drain.py`), wired into `_slab` behind
+`machine.DRAIN_UNIT_BITS`, and measured on `little-little-man`. **It is a net
+loss, and the reason is the number this document guessed at.**
+
+| build | box | area² | avg ticks | score |
+|---|---|---|---|---|
+| today, counted loop | 192x194 | 37,636 | 7,594,099 | 285,811,507,276 |
+| `unit_bits=2` drain | 192x200 | 40,000 | 7,580,362 | 303,214,497,143 |
+
+14/14 public cases pass either way. The drain went from 4.0 to 2.51 ticks a word
+and bought **0.18% of ticks** — so the discard was never paying 4.0.
+
+Measured directly instead of assumed: this program's ROM is 3,498 words in a
+17,480-cell packed lap, which is **5.0 ticks a word**. Against the loop's 4.0,
+`max(4.0, 5.0) = 5.0` — the CPU loop has been *idle* on `r` for a fifth of every
+discard, and making it faster cannot move a number it does not set. The earlier
+"6 ticks CPU loop vs 3.36 ROM" model had both figures from other programs;
+`little-little-man`'s operands run to 3,470, so its tokens average 4.29 cells
+against `gradebook`'s 3.46, and the fold's connectors add the rest.
+
+What that repricing implies is worth more than the drain was:
+
+    642,113 words a case x 5.0 = 3.21M of 7.59M ticks -- 42% of the machine
+
+**So the producer is the whole problem, and it is bigger than anyone had it.**
+A ring repeater is 1 cell per word of storage against the ROM's 5, and re-emits
+at 2 ticks a word (`r`,`s` in a relay), so it is smaller *and* faster:
+
+| ROM | drain | discard t/word | ticks saved |
+|---|---|---|---|
+| 5.0 walking (today) | 4.0 counted | 5.0 | — |
+| 2.0 repeater | 4.0 counted | 4.0 | 8.5% |
+| 2.0 repeater | 2.51 `unit_bits=2` | 2.51 | **21%** |
+
+The drain is therefore *second*, and it is already built and tested: turn it on
+by naming the program in `DRAIN_UNIT_BITS` once the producer is under 4.0. Note
+its footprint bill on this machine is +6 rows (+6.28% area²), because the CPU
+room sits **above** the display and a deeper slab pushes the display down — the
+slab band's own 5-row gap at rows 169..174 is the room's south wall, not slack.
+
 ## Still open
 
 **1. Unroll the discard loop two words to a lap.** Every discard count is even —
