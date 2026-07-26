@@ -330,7 +330,14 @@ def block_zones(worker, name: str, token_zone: dict[str, str]) -> set[str]:
 
 # ── one block's rows and exits ────────────────────────────────────────────────
 def lanes_of(worker, name: str, plan):
-    """(lane kind, target) for every edge leaving a block, in glyph order."""
+    """(lane kind, target) for every edge leaving a block, in glyph order.
+
+    A branch lane the CFG omits is not routed.  `matmul` proves by simulation
+    that three of its lanes can never be taken -- each tests a counter that is
+    stepped down to zero and stops there -- and drops them from the successor
+    dict.  Routing one costs corridor cells and, worse, the row a turning lane
+    reserves under the branch glyph, for an edge no man ever walks.
+    """
     from randomfun2026solvers.lllm_layout import _straight_key, _turn_keys
 
     succ = worker[name][1]
@@ -338,10 +345,11 @@ def lanes_of(worker, name: str, plan):
         return [("straight", succ)]
     out = []
     key = _straight_key(plan.branch)
-    if key is not None:
+    if key is not None and succ.get(key) is not None:
         out.append(("straight", succ[key]))
     for lane, turn in _turn_keys(plan.branch).items():
-        out.append((turn, succ[lane]))
+        if succ.get(lane) is not None:
+            out.append((turn, succ[lane]))
     return out
 
 

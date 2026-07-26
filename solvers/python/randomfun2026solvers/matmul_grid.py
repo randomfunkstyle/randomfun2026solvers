@@ -735,6 +735,14 @@ class Room:
                 return (col + self.margin, row.y), (E if row.east else W)
         raise KeyError(name)                      # pragma: no cover
 
+    def regions(self):
+        """(label, x, y, w, h, note) for the debug overlay, one per chain."""
+        for chain in self.chains:
+            y0 = self.entry_y[chain.blocks[0]]
+            yield (f"chain:{chain.blocks[0]}", self.margin, y0,
+                   self.iw - self.margin, chain.rows[-1].y - y0 + 1,
+                   " ".join(chain.blocks))
+
 
 def _walk(c: Circuit, y: int, x_from: int, x_to: int, glyph: str) -> None:
     """Reserve a straight horizontal run, exclusive of both ends."""
@@ -1190,12 +1198,17 @@ def _north_rows(bands: Bands, off: int) -> tuple[dict[tuple[str, bool], int], li
     return rows, order[::-1]
 
 
-def build_grid() -> tuple[list[str], object, dict[str, object]]:
-    """Worker room, six rings, and the input and output rooms."""
+def build_grid(room=None) -> tuple[list[str], object, dict[str, object]]:
+    """Worker room, six rings, and the input and output rooms.
+
+    `room` is any layout answering the walker's questions -- the chain layout
+    here, or :class:`matmul_place.PlacedRoom`.  Everything north and east of the
+    worker depends only on where the bands attach, which both agree on.
+    """
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.value_ring import draw_pipe, stamp, walls
 
-    room = build_room()
+    room = room if room is not None else build_room()
     iw, ih, margin = room.iw, room.ih, room.margin
     wy = NB + 1
     off = WX + margin
@@ -1263,20 +1276,22 @@ def build_grid() -> tuple[list[str], object, dict[str, object]]:
 
     d = DebugMap("matmul -- a dataflow ring machine")
     d.region("worker", WX, wy, iw, ih, color="#f59e0b",
-             note=f"{len(LAID)} blocks in {len(room.chains)} fall-through chains")
-    d.region("channels", WX, wy, margin, ih, color="#94a3b8",
-             note=f"{margin - 1} corridors carrying {len(room.lanes)} routed lanes")
+             note=f"{len(LAID)} blocks laid by {type(room).__name__}")
+    for band in BANDS:
+        lo = min(room.bands.recv_span[band][0], room.bands.send_span[band][0])
+        hi = max(room.bands.recv_span[band][1], room.bands.send_span[band][1])
+        d.region(f"band:{band}", WX + margin + lo, wy, hi - lo + 1, ih,
+                 color="#1f2937",
+                 note=f"{band}: r binds col {room.pipe_col(band, False) + WX}, "
+                      f"s binds col {room.pipe_col(band, True) + WX}")
     for ring, n in lengths.items():
         d.region(f"ring:{ring}", col(ring, True) - 2, 0, 6, wy, color="#0ea5e9",
                  note=f"{n} cells, holds {RING_WORDS[ring]} words")
-    for chain in room.chains:
-        y0 = room.entry_y[chain.blocks[0]]
-        d.region(f"chain:{chain.blocks[0]}", WX + margin, wy + y0,
-                 iw - margin, chain.rows[-1].y - y0 + 1, tags=["block"],
-                 color="#22c55e", note=" ".join(chain.blocks))
-    info = {"worker": (iw, ih), "rings": lengths, "channels": margin - 1,
-            "blocks": len(LAID), "chains": len(room.chains),
-            "lanes": len(room.lanes),
+    for label, x, y, w, h, note in room.regions():
+        d.region(label, WX + x, wy + y, w, h, tags=["block"],
+                 color="#22c55e", note=note)
+    info = {"worker": (iw, ih), "rings": lengths,
+            "blocks": len(LAID),
             "size": (max(len(r) for r in art), len(art))}
     return art, d, info
 
