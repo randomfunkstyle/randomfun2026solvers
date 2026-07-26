@@ -8,6 +8,8 @@ not sufficient*.  The engine sweep lives in the slow tier.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from randomfun2026solvers import llm_lm1, llm_sim
 from randomfun2026solvers.lm1 import programs
@@ -92,3 +94,45 @@ def test_the_reference_interpreter_agrees_with_the_problem(case: str) -> None:
     want = [f for rf in dict(programs.frames_for_problem(SLUG))[case] for f in rf]
     got = llm_sim.run_rounds_from_inputs([[str(v) for v in r.input] for r in rounds])
     assert got == want
+
+
+# ── the grid ──────────────────────────────────────────────────────────────────
+GRID = Path(__file__).resolve().parents[1] / "tasks" / "solutions" / "little-little-man_cpu.man"
+
+
+@pytest.fixture(scope="module")
+def built():
+    machine, program, _text = llm_lm1.build_machine()
+    return machine, program
+
+
+def test_checked_in_grid_still_matches_the_generator(built) -> None:
+    machine, _program = built
+    assert GRID.read_text() == "\n".join(machine.rows) + "\n"
+
+
+def test_footprint_is_what_the_fold_sweep_found(built) -> None:
+    machine, _program = built
+    assert (machine.width, machine.height) == (204, 204)
+
+
+def test_the_tape_is_sized_to_the_program_not_the_public_cases(built) -> None:
+    _machine, program = built
+    _text, slots = llm_lm1.build_asm()
+    # 4 <= W, H <= 16, so the grid is 256 cells whatever the case holds.
+    assert slots > llm_lm1.PANEL * llm_lm1.PANEL
+    assert program.P > 0
+
+
+@pytest.mark.slow
+def test_the_grid_passes_every_public_case_on_the_engine() -> None:
+    from randomfun2026solvers import optimize
+
+    result = optimize.verify(GRID, SLUG, tick_cap=50_000_000)
+    failed = [(c.name, c.detail) for c in result.cases if not c.passed]
+    assert not failed, failed
+    assert len(result.cases) == 14
+    # Measured 22,200,966 average / 35,011,205 worst against a 50M cap.  The margin
+    # is the point of the assertion: a change that doubles the worst case fails a
+    # private test rather than scoring badly.
+    assert max(c.ticks for c in result.cases) < 40_000_000
