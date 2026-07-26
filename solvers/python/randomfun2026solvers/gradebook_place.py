@@ -183,42 +183,75 @@ def build_room(banks=BANKS, zones=ZONES, order=None, home=None,
 #: :func:`dataflow_relay.relay_words`, and 13+2 fits inside one band's 17 columns.
 RELAY_W, RELAY_H = 13, 3
 
-#: Rows above the worker room.  The relays take the top ``RELAY_H + 2`` and the
-#: eight risers run straight down what is left.
-#:
-#: **Straight is what makes the binding provable.**  A riser coiled sideways buys
-#: ring capacity out of the width, which is already spent, and the first version
-#: of this module did exactly that -- until :func:`audit_bindings` found an `st`
-#: whose nearest *cell* was a neighbouring band's coil.  With every riser
-#: straight, the only cell of any pipe within reach of the room is the one
-#: against the north wall, all eight of those sit on one row, and "nearest pipe"
-#: is therefore "nearest column" exactly, which is the rule the planner enforces.
-#: :func:`anchors_are_the_nearest_cells` states that as a check rather than as a
-#: paragraph.
+#: Rows above the worker room: the relays take the top ``RELAY_H + 2`` and the
+#: eight risers have what is left.
 BAND_H = 11
 
-#: Words each ring must hold at rest -- ``N`` cells and a sentinel at ``N = 16``,
-#: plus slack.  An under-capacity ring deadlocks in *silence*, so this is checked
-#: against what ``route-check.mjs`` measures, not against what was drawn.
-RING_MIN = 17 + 3
+#: Words a ring must hold at rest: ``N`` cells and a sentinel, at the largest
+#: roster the rules allow.  An under-capacity ring deadlocks in *silence* -- the
+#: grid loads, the roster goes in, and nothing ever comes out.
+RING_WORDS = 17
+
+#: **A turnaround room stores one word, not** :func:`~dataflow_relay.relay_words`
+#: **of them.**  ``relay_words`` is throughput per lap; the room has a single
+#: spawn, so one man walks it and can hold exactly one word between his ``r`` and
+#: his ``s``.  Measured, not reasoned: with 13x3 relays and straight risers the
+#: N=16 case deadlocked at 14 pipe cells a ring and passed at 16, which places
+#: the true capacity at ``pipe cells + 1`` and nowhere near ``+ 11``.
+RELAY_HOLDS = 1
+
+
+def _riser(anchor: int, top: int, bot: int, east: bool) -> list[tuple[int, int]]:
+    """One ring riser, as a staircase that fans out from its anchor going up.
+
+    A straight riser needs ``RING_WORDS`` rows of north band and the band is
+    charged against the room's height.  This buys the cells out of the width
+    instead -- which is already spent -- without giving up the property that
+    makes the whole band discipline sound.
+
+    That property is that **the anchor is the nearest cell of its own pipe to
+    every cell of the room**.  A cell one row further from the room may stand one
+    column off the anchor and still lose to it, two rows two columns, and so on:
+    the legal region is a cone, and a staircase is the longest rectilinear path
+    that stays on its boundary.  A riser coiled *flat* -- the first version of
+    this module -- leaves the cone at once, and :func:`audit_bindings` duly found
+    an `st` whose nearest cell was the neighbouring band's coil.
+
+    The first step is along the wall the pipe leaves, because a pipe whose first
+    cell does not point away from its room fails to parse in silence; that costs
+    the widest rank of the cone and is why the staircase is ``2(bot-top)`` cells
+    rather than ``2(bot-top)+1``.
+    """
+    d, m = (1 if east else -1), bot - top
+    if east:                                    # room -> relay, leaving northward
+        pts = [(anchor, bot), (anchor, bot - 1)]
+        for k in range(1, m):
+            pts += [(anchor + d * k, bot - k), (anchor + d * k, bot - k - 1)]
+    else:                                       # relay -> room, leaving southward
+        pts = [(anchor + d * (m - 1), top), (anchor + d * (m - 1), top + 1)]
+        for k in range(m - 2, -1, -1):
+            pts += [(anchor + d * k, top + m - 1 - k), (anchor + d * k, top + m - k)]
+    return pts
 
 
 def _ring_legs(cin: int, cout: int):
-    """The two straight risers of one ring, as `plotter_block.pipe` leg lists.
+    """Both risers of one ring, as `plotter_block.pipe` leg lists.
 
-    Each begins by stepping straight away from the room it leaves -- down out of
-    the relay, up out of the worker -- which is what makes the pipe parse at all
-    rather than silently not.
+    The incoming one fans west of its anchor and the outgoing one east, so the
+    two cones stand on opposite sides of the bank centre with the free column
+    between them -- pipe glyphs join by 4-adjacency, and two touching risers
+    would parse as one pipe.
     """
     top, bot = RELAY_H + 2, BAND_H - 1
-    return {"in": [(cin, top), (cin, bot)], "out": [(cout, bot), (cout, top)]}
+    return {"in": _riser(cin, top, bot, east=False),
+            "out": _riser(cout, top, bot, east=True)}
 
 
 def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0
                ) -> tuple[list[str], DebugMap, dict[str, object]]:
     """The worker room, three turnaround rooms, both I/O rooms and eight pipes."""
     from randomfun2026solvers.circuit import Circuit
-    from randomfun2026solvers.dataflow_relay import relay, relay_words
+    from randomfun2026solvers.dataflow_relay import relay
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.plotter_block import pipe
     from randomfun2026solvers.value_ring import stamp, walls
@@ -262,16 +295,18 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0
             draw("out_IO", [(cout, north - 1), (cout, 3), (cout + 2, 3)],
                  into=(cout + 2, 2))
             continue
-        rx = (cin + cout) // 2 - RELAY_W // 2 - 1
-        if not (rx < cin and cout < rx + RELAY_W + 1):
-            raise Collision(f"relay {z} at {rx} does not span ports {cin},{cout}")
-        stamp(g, rx, 0, relay(RELAY_W, RELAY_H))
         legs = _ring_legs(cin, cout)
-        held = relay_words(RELAY_W, RELAY_H)
-        cap[z] = held + draw(f"in_{z}", legs["in"], into=(cin, north)) \
-                      + draw(f"out_{z}", legs["out"], into=(cout, RELAY_H + 1))
-        if cap[z] < RING_MIN:
-            raise Collision(f"ring {z} holds {cap[z]} words, wanted {RING_MIN}")
+        rx = (cin + cout) // 2 - RELAY_W // 2 - 1
+        ports = (legs["in"][0][0], legs["out"][-1][0])
+        if not all(rx < p < rx + RELAY_W + 1 for p in ports):
+            raise Collision(f"relay {z} spans {rx}..{rx + RELAY_W + 1}, "
+                            f"the risers want ports at {ports}")
+        stamp(g, rx, 0, relay(RELAY_W, RELAY_H))
+        cap[z] = RELAY_HOLDS \
+            + draw(f"in_{z}", legs["in"], into=(cin, north)) \
+            + draw(f"out_{z}", legs["out"], into=(legs["out"][-1][0], RELAY_H + 1))
+        if cap[z] < RING_WORDS:
+            raise Collision(f"ring {z} holds {cap[z]} words, wanted {RING_WORDS}")
 
     rows = [r.rstrip() for r in g.rows()]
     while rows and not rows[-1]:
