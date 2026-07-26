@@ -19,7 +19,12 @@ from randomfun2026solvers.fast_littleman import (  # noqa: E402
     FastLittlemanError,
 )
 from randomfun2026solvers.littleman import Littleman  # noqa: E402
-from randomfun2026solvers.optimize import _expected_frames, _expected_string, verify  # noqa: E402
+from randomfun2026solvers.optimize import (  # noqa: E402
+    _expected_flat,
+    _expected_frames,
+    _expected_string,
+    verify,
+)
 
 
 def test_class_runs_repeated_cases_without_files_or_node() -> None:
@@ -86,6 +91,33 @@ def test_aligned_literals_in_separate_rooms_do_not_pair_through_walls() -> None:
     # through their `-` walls and report a spurious non-digit load error.
     assert Littleman().analyze(source).rooms
     FastLittleman(source)
+
+
+def test_pipe_attaches_at_a_room_corner() -> None:
+    # A pipe may leave a room from a corner cell, not only a wall interior
+    # (SPEC: the arrow's backward cell must be on the source room's *border*).
+    # This reverse-a-list solution routes its output pipe out of the last
+    # compute room's corner and snakes another pipe out of a second corner;
+    # an interior-only scan misses both, leaving the output room with no
+    # incoming pipe and a `no-pipe` fatal the moment the man tries to send.
+    machine = FastLittleman(REPO / "tests" / "fixtures" / "corner_attached_pipe.man")
+
+    output_room = next(r for r in machine.rooms if r.kind == "output")
+    assert len(output_room.incoming) == 1  # the corner-attached pipe was found
+
+    # No send/recv binds to a phantom -1 pipe.
+    assert all(binding != -1 for binding in machine._bindings.values())
+
+    # And it computes: reverse each list, in order, exactly like the reference.
+    problem = scoring.load_problem("reverse-a-list")
+    case = problem["publicTestData"][0]
+    result = machine.run(
+        scoring._case_input(case),
+        expected=_expected_string(case),
+    )
+    assert result.passed
+    assert result.fatal is None
+    assert result.output == _expected_flat(case)
 
 
 def test_optimize_verify_uses_fast_backend_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -278,23 +278,49 @@ class FastLittleman:
     def _room_at_border(self, pos: Cell) -> int | None:
         return self._border_owner.get(pos)
 
-    def _parse_pipes(self) -> list[_Pipe]:
-        starts: list[tuple[int, Cell, Dir, Cell]] = []
-        for room in self.rooms:
-            if room.kind == "display":
+    def _flowed_into(self, cell: Cell, backward: Cell) -> bool:
+        """True if another pipe arrowhead points *into* ``cell``.
+
+        Such a cell is a mid-pipe continuation (typically a bend that happens to
+        sit next to a wall), not a fresh start. ``backward`` is skipped because a
+        start's backward cell is the source-room border, never a feeding pipe.
+        Arrowheads inside a room are steer instructions, so neighbours on/in a
+        room are ignored.
+        """
+        x, y = cell
+        for dx, dy in DIRS:
+            neighbor = (x + dx, y + dy)
+            if neighbor == backward:
                 continue
-            x1, y1 = room.min
-            x2, y2 = room.max
-            for x in range(x1 + 1, x2):
-                for attach, direction in (((x, y1), NORTH), ((x, y2), SOUTH)):
-                    outside = _add(attach, direction)
-                    if ARROW_DIR.get(self._char(*outside)) == direction:
-                        starts.append((room.id, outside, direction, attach))
-            for y in range(y1 + 1, y2):
-                for attach, direction in (((x1, y), WEST), ((x2, y), EAST)):
-                    outside = _add(attach, direction)
-                    if ARROW_DIR.get(self._char(*outside)) == direction:
-                        starts.append((room.id, outside, direction, attach))
+            if neighbor in self._border_owner or neighbor in self._interior_owner:
+                continue
+            ndir = ARROW_DIR.get(self._char(*neighbor))
+            if ndir is not None and _add(neighbor, ndir) == cell:
+                return True
+        return False
+
+    def _parse_pipes(self) -> list[_Pipe]:
+        # A pipe starts at an arrowhead whose backward cell (opposite the arrow)
+        # lies on a room's border — corners included — with the arrow pointing
+        # away from the room, and which no other pipe arrowhead flows into. Arrow
+        # glyphs inside a room are steer instructions, so a pipe cell must lie
+        # strictly outside every room.
+        starts: list[tuple[int, Cell, Dir, Cell]] = []
+        for y in range(self.height):
+            for x in range(self.width):
+                cell = (x, y)
+                direction = ARROW_DIR.get(self._char(x, y))
+                if direction is None:
+                    continue
+                if cell in self._border_owner or cell in self._interior_owner:
+                    continue
+                backward = (x - direction[0], y - direction[1])
+                src = self._border_owner.get(backward)
+                if src is None or self.rooms[src].kind == "display":
+                    continue
+                if self._flowed_into(cell, backward):
+                    continue
+                starts.append((src, cell, direction, backward))
 
         pipes: list[_Pipe] = []
         occupied: dict[Cell, int] = {}
