@@ -69,10 +69,17 @@ def test_the_router_finds_a_way_round_a_wall_of_ops() -> None:
     assert (4, 4) in r.cells                  # under the wall, not through it
 
 
-def test_a_corridor_that_would_have_to_reverse_into_its_target_is_refused() -> None:
+def test_a_corridor_never_arrives_head_on_at_an_entry() -> None:
+    """The entry glyph is a `>`; a man who reached it heading west would be sent
+    straight back the way he came, so the router has to come round."""
     f = B.Field(6, 3)
     f.op(2, 1, ">")
-    assert B.shortest(f, (5, 1), W, (2, 1)) is None
+    r = B.shortest(f, (5, 1), W, (2, 1))
+    assert r is not None
+    assert r.steps[-2][2] != W          # the heading he holds one cell short
+    f2 = B.Field(6, 1)                  # ... and with no room to come round
+    f2.op(2, 0, ">")
+    assert B.shortest(f2, (5, 0), W, (2, 0)) is None
 
 
 # ── one whole room ────────────────────────────────────────────────────────────
