@@ -114,20 +114,45 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
 
 @pytest.mark.slow
 def test_footprint_is_what_the_fold_sweep_found(built) -> None:
-    """``ROM_ROWS`` is a swept constant, not a default; this is what it bought.
+    """``ROM_ROWS`` and ``ROM_BUFFER`` are swept *together*; this is what they bought.
 
-    Score is ``max(w, h)^2``, so only the larger side is charged and the fold's
-    optimum is where width and height cross.  ``rom_rows=90`` is the last fold at
-    which width still exceeds height: 89 gives 196x193 (38,416) and 91 gives
-    190x195 (38,025), against this build's 192x194 (37,636).
+    Score is ``max(w, h)^2``, so only the larger side is charged, and these two
+    constants push opposite sides: a deeper fold narrows the ROM and lengthens the
+    machine, while a longer corridor only lengthens it. The optimum is therefore a
+    joint one, and it is not where either constant's own sweep would put it —
+    measured, ``(83, 2400)`` gives 205x207 and a 14.2% better score than the
+    baseline, against ``(84, 2000)``'s 203x206 at 13.5% and ``(82, 3600)``'s
+    212x212, which is worse than both.
 
     Pinned because the sweep is invalidated by *any* geometry change anywhere in
-    the generator — the CPU, the ROM and the tape all move the crossing — and a
-    silently drifted fold costs footprint without failing anything else.
+    the generator — the CPU, the ROM, the corridor and the tape all move the
+    crossing — and a silently drifted fold costs footprint without failing
+    anything else. It has now come out 88, 89, 90 and 83 against four different
+    geometries.
     """
     machine, _program = built
-    assert (machine.width, machine.height) == (192, 194)
-    assert max(machine.width, machine.height) ** 2 == 37_636
+    assert (machine.width, machine.height) == (205, 207)
+    assert max(machine.width, machine.height) ** 2 == 42_849
+
+
+@pytest.mark.slow
+def test_the_corridor_is_a_buffer_and_is_actually_full_length(built) -> None:
+    """The corridor is the optimisation, so its *capacity* is the thing to pin.
+
+    A pipe's capacity is its length (``SPEC.md``), so the ROM->CPU corridor is a
+    FIFO the ROM man fills whenever the CPU is not draining it. That is what makes
+    it work here: the ROM makes 0.20 words a tick and this CPU averages 0.12, so
+    the producer always had headroom and only the *burst* — a backward jump
+    wanting ~3,470 words at once — ever stalled the machine.
+
+    Two ways this silently reverts to the old straight corridor: ``ROM_BUFFER``
+    unset, or the slug dropping out of ``machine.ROM_CORRIDOR_WIDE``, which would
+    confine the snake to the CPU's ~53 columns and cost 3.6x the rows for the same
+    words. Either shows up here as a short pipe and nowhere else.
+    """
+    machine_, _program = built
+    assert machine_.rom_capacity >= llm_lm1.ROM_BUFFER, machine_.rom_capacity
+    assert machine_.rom_capacity < llm_lm1.ROM_BUFFER * 1.2, "corridor wildly over-provisioned"
 
 
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:

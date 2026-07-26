@@ -1531,7 +1531,20 @@ def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tupl
 #: was reverted, 90 under the banked store).  Treat any change to the CPU, the ROM, the
 #: store or the tape as invalidating it, and re-sweep: the fold is worth ~3% of the score
 #: and nothing else in the suite fails when it drifts.
-ROM_ROWS = 90
+ROM_ROWS = 83
+
+#: Cells of ROM->CPU corridor, which is a FIFO and therefore a *buffer*
+#: (``SPEC.md``: capacity equals length). The ROM man makes 0.20 words a tick and
+#: this CPU averages 0.12, so the producer always had 40% of headroom and it was
+#: only the **burst** -- a backward jump wanting ~3,470 words at once -- that ever
+#: stalled it. A corridor deep enough to absorb one burst is served at the drain's
+#: rate and refills in the gaps: **-23% of ticks**.
+#:
+#: Swept jointly with :data:`ROM_ROWS`, because corridor rows and the ROM's fold
+#: trade against each other and the score charges only the larger side:
+#: (83, 2400) -> 205x207 and -14.2%; (84, 2000) -> 203x206, -13.5%; (82, 3600) ->
+#: 212x212, worse. Past ~2,400 the rows cost more than the ticks return.
+ROM_BUFFER = 2400
 
 
 def build_machine(
@@ -1541,6 +1554,7 @@ def build_machine(
     hot: tuple[int, int] | None = HOT,
     tape_skip_batch: int = TAPE_SKIP_BATCH,
     tape_relay_size: tuple[int, int] | None = TAPE_RELAY_SIZE,
+    rom_buffer: int | None = ROM_BUFFER,
 ):
     """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel.
 
@@ -1565,6 +1579,7 @@ def build_machine(
         hot=hot,
         tape_skip_batch=tape_skip_batch,
         tape_relay_size=tape_relay_size,
+        rom_buffer=rom_buffer,
     )
     return built, program, text
 

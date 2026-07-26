@@ -1150,7 +1150,13 @@ def _slab(
 #: (south edge 192), not by the slab band, whose deepest slab ends at 169 — and
 #: its width by the **ROM** at 192, not by the slabs. Read the regions before
 #: assuming a slab is on either critical path.
-DRAIN_UNIT_BITS: dict[str, int] = {}
+DRAIN_UNIT_BITS: dict[str, int] = {
+    # Only worth switching on once the producer is no longer the binding stage:
+    # with the buffered corridor below, `max(drain, ROM)` selects the drain again.
+    # Measured on this machine, buffer alone was -8.2% of ticks and buffer+drain
+    # -12.7%, so the drain is worth ~4.5 points of that and 6 rows of slab depth.
+    "little-little-man": 2,
+}
 
 
 def _drain_block(
@@ -2085,9 +2091,7 @@ def build(
             f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
         )
     if tape_skip_batch not in (None, 1, 2, 4):
-        raise MachineError(
-            f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}"
-        )
+        raise MachineError(f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}")
     if tape_jump_threshold < 1:
         raise MachineError(f"tape_jump_threshold must be positive, got {tape_jump_threshold}")
     if store != "tape" and tape_skip_batch != 1:
@@ -2327,9 +2331,7 @@ def _assemble(
     band_rows = 0
     if rom_buffer:
         corridor_x_hi = (
-            max(CX + W + 1, romlay.width - 1)
-            if program.name in ROM_CORRIDOR_WIDE
-            else CX + W + 1
+            max(CX + W + 1, romlay.width - 1) if program.name in ROM_CORRIDOR_WIDE else CX + W + 1
         )
         band_rows = rom_corridor_rows(rom_buffer, corridor_x_hi - 1)
     cpu_gap = (
@@ -3688,7 +3690,7 @@ def rom_corridor(
 #: it, so the band is machine-wide and empty. Confining the snake to the CPU's
 #: ~53 columns costs rows in direct proportion: ``little-little-man`` buffers
 #: 3,500 words in 68 rows against 20 at full width, and rows are footprint.
-ROM_CORRIDOR_WIDE: set[str] = set()
+ROM_CORRIDOR_WIDE: set[str] = {"little-little-man"}
 
 
 def rom_corridor_rows(want: int, span: int) -> int:
