@@ -43,6 +43,18 @@ outside the band it was asked for.  ``tests/test_subset_sum_grid.py`` re-derives
 the binding independently from ``route-check.mjs``, which reports the pipe each
 op actually resolves to — a mis-bound `s` is otherwise completely silent.
 
+## What is built, and what is not
+
+Built and **verified on the reference engine for all seven public cases**:
+`INIT`, `LEFTVALS`, `RIGHTVALS` with its ring-B doubling pass, and `TAIL` — the
+`load` stage spills ring V and the `loadb` stage spills ring B, and both match
+the Python oracle word for word.
+
+Built but not yet wired to a stage: `PHASE2`'s prologue, guarded bit reversal,
+peel and rotate-to-`MT`.  **Not built:** phase 2's `MT`/`RR` test and scan
+station, `PHASE3`, `EMIT` and the no-solution lane.  `worker("full")` therefore
+raises rather than returning half a machine.
+
 ## No backticks
 
 The only constants the machine needs are `1`, `8`, `256 = 1 << 8` and `2^hL`,
@@ -535,3 +547,64 @@ def _spill_b(c: Circuit, y: int) -> None:
     c.set(WEST_COL, y + 3, "^")
     c.vertical(WEST_COL, y + 3, y)
     c.set(31, y + 1, "H")                   # sentinel -> stop
+
+
+#: Where phase 2's four "try the next mask" lanes all end up: a single column the
+#: man climbs back to the prologue on.  Every lane turns west onto its own row
+#: and then north on this column, so the merge is two `^` cells and not a
+#: junction that has to be reasoned about.
+LOOP_COL = 11
+
+#: Phase 2's rows.  Named because six blocks and nine lanes have to agree about
+#: them and an off-by-one row is a silently re-steered man, not a crash.
+P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 24, 31, 37, 42, 46
+P2_SCAN, P2_SKIP, P2_MISS, P2_HIT = 50, 45, 44, 57
+
+
+def _phase2(c: Circuit) -> None:
+    """One lap per left-half mask, in lexicographic order, first hit wins.
+
+    The lap reads `C`, subtracts one and sends the difference back — so the ring
+    holds the winning counter when the search stops — guards it with `G`, reverses
+    its bits into the backpack, peels the left values against it, rotates on to
+    `MT` to turn the sum into `r + 1`, writes that into `RR` and scans ring B for
+    it.  `A`, `B` and `BP` carry the ring word, the running sum and the mask, in
+    that order, and nothing else is ever live.
+    """
+    y = P2_HEAD
+    c.set(LOOP_COL, y, ">")                 # the loop-back lanes rejoin here
+    c.set(LOOP_COL + 1, y, " ")
+    c.set(WEST_COL, y, ">")
+    c.run(14, y, "1M")                      # A = 1, B = 1
+    vr(c, 16, y)                            # A = C
+    c.set(17, y, "X")                       # C == 0 -> east, exhausted; C > 0 -> south
+    c.set(17, y + 1, "<")
+    c.set(16, y + 1, "-")                   # A = C - 1 = this lap's counter
+    c.set(15, y + 1, "v")
+    c.set(15, y + 2, ">")
+    vs(c, 16, y + 2)                        # send the counter back: C = c
+    c.set(17, y + 2, "M")                   # B = c
+    vr(c, 18, y + 2)                        # A = G
+    vs(c, 19, y + 2)                        # G goes straight back
+    c.run(20, y + 2, "+b")                  # BP = c + 2^hL, the guarded counter
+    c.set(22, y + 2, "v")
+    c.set(22, y + 3, "<")
+    c.horizontal(y + 3, 22, WEST_COL + 1)
+    c.set(WEST_COL + 1, y + 3, "v")
+    c.set(WEST_COL + 1, y + 4, ">")
+    vr(c, 16, y + 4)                        # CR and GR are not this phase's
+    vs(c, 17, y + 4)
+    vr(c, 18, y + 4)
+    vs(c, 19, y + 4)
+    c.run(20, y + 4, "1M0")                 # A = 0, B = 1: the reversal's state
+    _link(c, (23, y + 4), E, P2_MASK - 1, (17, P2_MASK))
+
+    _bits(c, 20, P2_MASK, shift=True)
+    c.run(21, P2_MASK, "}b0M")              # BP = the mask, A = 0, B = 0
+    _link(c, (25, P2_MASK), E, P2_PEEL - 2, (18, P2_PEEL))
+
+    _peel_sum(c, VRET_COL, P2_PEEL)         # B = the left half's sum, A = MB
+    _link(c, (22, P2_PEEL - 1), N, P2_ROT - 2, (19, P2_ROT))
+
+    _rot(c, VRET_COL, P2_ROT)               # skip the right values, stop on MT
+    _link(c, (22, P2_ROT - 1), N, P2_TEST - 2, (14, P2_TEST))
