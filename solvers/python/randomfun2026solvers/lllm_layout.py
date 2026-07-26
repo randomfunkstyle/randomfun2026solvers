@@ -62,13 +62,16 @@ from randomfun2026solvers.lllm_ring import WORKER
 if TYPE_CHECKING:  # pragma: no cover
     from randomfun2026solvers.man_debug import DebugMap
 
-__all__ = ["Plan", "Room", "build_room", "plan_blocks"]
+__all__ = ["Geometry", "Plan", "Room", "build_room", "plan_blocks"]
 
 #: Which pipe band each pipe op has to stand in.
 TOKEN_ZONE: dict[str, str] = {
-    "rr": "ST", "sr": "ST",
-    "rq": "FI", "sq": "FI",
-    "ri": "IO", "sp": "IO",
+    "rr": "ST",
+    "sr": "ST",
+    "rq": "FI",
+    "sq": "FI",
+    "ri": "IO",
+    "sp": "IO",
 }
 ZONE_ORDER = ("ST", "FI", "IO")
 
@@ -85,6 +88,18 @@ BRANCH_GLYPHS = ("X", "x", "d")
 def _straight_key(glyph: str) -> str | None:
     """Which lane of a branch continues straight ahead, if any."""
     return {"X": "zero", "d": "zero", "x": None}[glyph]
+
+
+def _straight_target(plan: Plan, succ: object) -> str | None:
+    """The block this one continues straight into, or ``None`` if it never does.
+
+    An `x` branch has no straight lane, so it needs no straight-lane row — and a
+    row is the charged dimension on this machine.
+    """
+    if isinstance(succ, str):
+        return succ
+    key = _straight_key(plan.branch)
+    return None if key is None else succ[key]  # type: ignore[index]
 
 
 def _turn_keys(glyph: str) -> dict[str, str]:
@@ -125,9 +140,12 @@ CODE0 = NC + 1
 #: its ring is the long one and its two pipes have to pass each other in the
 #: band above the room, which they cannot do if they start next to each other.
 PIPE_COL = {
-    "store_out": CODE0, "store_in": CODE0 + 13,
-    "file_in": CODE0 + 28, "file_out": CODE0 + 29,
-    "input": CODE0 + 64, "painter": CODE0 + 65,
+    "store_out": CODE0,
+    "store_in": CODE0 + 13,
+    "file_in": CODE0 + 28,
+    "file_out": CODE0 + 29,
+    "input": CODE0 + 64,
+    "painter": CODE0 + 65,
 }
 #: Usable column range per band, kept clear of the midpoints so that the
 #: incoming and outgoing nearest-column rules agree everywhere inside it.
@@ -139,26 +157,59 @@ ZONE_COLS = {
 IW = CODE0 + 130
 
 
-def _nearest(cols: dict[str, int], x: int) -> str:
-    """Which pipe an op at column `x` binds to: nearest column, ties westward."""
-    return min(cols, key=lambda k: (abs(x - cols[k]), cols[k]))
+@dataclass(frozen=True)
+class Geometry:
+    """Everything about a room that `plan_blocks` needs to be told.
+
+    Splitting this out is what makes the planner reusable: `lllm_ring` and
+    `snake_ring` are both token CFGs of the same type, but their pipe *counts*
+    differ (three rings versus one), and with them the bands and the room width.
+    """
+
+    token_zone: dict[str, str]  # token -> band name
+    zone_cols: dict[str, tuple[int, int]]  # band -> inclusive column range
+    pipe_in: dict[str, int]  # band -> column of its incoming pipe
+    pipe_out: dict[str, int]  # band -> column of its outgoing pipe
+    code0: int  # first code column, east of the channels
+    iw: int  # room interior width
+    #: Whether a block may begin at its own first band instead of ``code0``.
+    #: Off by default: it assumes the zones are ordered west to east *and* that
+    #: skipping the dead columns west of a block's first band cannot strand its
+    #: entry. Both hold for `lllm_ring` and neither is guaranteed for an arbitrary
+    #: geometry — `snake_ring` names its zones differently and lays its first row
+    #: at ``code0``, so starting east empties that row and the entry has nothing
+    #: to point at.
+    start_at_first_zone: bool = False
+
+    def binds(self, x: int, token: str) -> str:
+        """Which band's pipe an op at column `x` reaches: nearest, ties westward."""
+        cols = self.pipe_in if token[0] == "r" else self.pipe_out
+        return min(cols, key=lambda k: (abs(x - cols[k]), cols[k]))
+
+    def check_binding(self, x: int, token: str) -> None:
+        want = self.token_zone[token]
+        got = self.binds(x, token)
+        if got != want:
+            raise Collision(f"{token!r} at column {x} binds {got}, wanted {want}")
+
+
+LLLM = Geometry(
+    token_zone=TOKEN_ZONE,
+    zone_cols=ZONE_COLS,
+    pipe_in={"ST": PIPE_COL["store_in"], "FI": PIPE_COL["file_in"], "IO": PIPE_COL["input"]},
+    pipe_out={"ST": PIPE_COL["store_out"], "FI": PIPE_COL["file_out"], "IO": PIPE_COL["painter"]},
+    code0=CODE0,
+    iw=IW,
+    start_at_first_zone=True,
+)
 
 
 def check_binding(x: int, token: str) -> None:
-    want = TOKEN_ZONE[token]
-    if token in ("rr", "rq", "ri"):
-        cols = {"ST": PIPE_COL["store_in"], "FI": PIPE_COL["file_in"],
-                "IO": PIPE_COL["input"]}
-    else:
-        cols = {"ST": PIPE_COL["store_out"], "FI": PIPE_COL["file_out"],
-                "IO": PIPE_COL["painter"]}
-    got = _nearest(cols, x)
-    if got != want:
-        raise Collision(f"{token!r} at column {x} binds {got}, wanted {want}")
+    LLLM.check_binding(x, token)
 
 
 # ── planning one block ────────────────────────────────────────────────────────
-def _items(tok: str) -> list[tuple[str, object]]:
+def _items(tok: str, geo: Geometry) -> list[tuple[str, object]]:
     """A token as placeable items: ('g', glyph) or ('lit', digits).
 
     The pipe tokens name *which* pipe, which is a column discipline rather than
@@ -167,7 +218,7 @@ def _items(tok: str) -> list[tuple[str, object]]:
     if tok.startswith("L"):
         v = int(tok[1:])
         return [("g", str(v))] if 0 <= v <= 9 else [("lit", str(v))]
-    if tok in TOKEN_ZONE:
+    if tok in geo.token_zone:
         return [("g", "r" if tok[0] == "r" else "s")]
     return [("g", tok)]
 
@@ -175,10 +226,13 @@ def _items(tok: str) -> list[tuple[str, object]]:
 class _Pen:
     """Pours glyphs along a row, wrapping when a band lies behind the pen."""
 
-    def __init__(self, backticks: set[int]) -> None:
+    def __init__(self, backticks: set[int], geo: Geometry, start: int | None = None) -> None:
+        self.geo = geo
         self.backticks = backticks
-        self.rows: list[Row] = [Row(east=True, start=CODE0)]
-        self.x = CODE0
+        if start is None:
+            start = geo.code0
+        self.rows: list[Row] = [Row(east=True, start=start)]
+        self.x = start
 
     @property
     def row(self) -> Row:
@@ -193,7 +247,7 @@ class _Pen:
         self.x += 1 if self.rows[-1].east else -1
 
     def put(self, glyph: str) -> int:
-        if not (CODE0 <= self.x < IW - 1):
+        if not (self.geo.code0 <= self.x < self.geo.iw - 1):
             raise Collision(f"row ran off the room at column {self.x}")
         at = self.x
         self.row.cells.append((at, glyph))
@@ -203,9 +257,9 @@ class _Pen:
     def ensure(self, need: int) -> None:
         """Wrap if `need` cells do not fit ahead of the pen on this row."""
         if self.row.east:
-            if self.x + need > IW - 2:
+            if self.x + need > self.geo.iw - 2:
                 self.wrap()
-        elif self.x - need < CODE0:
+        elif self.x - need < self.geo.code0:
             self.wrap()
 
     def seek(self, lo: int, hi: int) -> None:
@@ -236,24 +290,48 @@ class _Pen:
         self.backticks.update((open_col, close_col))
 
 
-def plan_blocks(order: list[str], worker=WORKER) -> dict[str, Plan]:
+def _start_col(toks: list[str], geo: Geometry) -> int:
+    """The column a block's first glyph may stand in.
+
+    Starting every block at ``CODE0`` costs twice. The man walks dead columns to
+    reach his first band, and — the expensive one — the block's entry sits at the
+    far west, so every edge into it has to come back west, and a west leg reserves
+    a whole row.
+
+    A block may start at its own first band instead, provided it never needs a band
+    further west later: the zones run ``ST -> FI -> IO`` west to east, so any block
+    holding an ``ST`` op must still begin at ``CODE0``. Blocks with no pipe ops keep
+    ``CODE0`` too — they are short, and moving them east buys no drop their length
+    would not already allow.
+    """
+    if not geo.start_at_first_zone:
+        return geo.code0
+    zones = [geo.token_zone[t] for t in toks if t in geo.token_zone]
+    if not zones:
+        return geo.code0
+    # The westernmost band this block ever needs. Starting east of it would put a
+    # required pipe behind the pen, which `seek` can only answer with a wrap.
+    return max(geo.code0, min(geo.zone_cols[z][0] for z in zones))
+
+
+def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM) -> dict[str, Plan]:
     backticks: set[int] = set()
     plans: dict[str, Plan] = {}
     for name in order:
         toks, succ = worker[name]
         branch = toks[-1] if isinstance(succ, dict) else None
-        pen = _Pen(backticks)
+        pen = _Pen(backticks, geo, _start_col(toks, geo))
         for i, tok in enumerate(toks):
-            zone = TOKEN_ZONE.get(tok)
+            zone = geo.token_zone.get(tok)
             if zone is not None:
-                pen.seek(*ZONE_COLS[zone])
+                pen.seek(*geo.zone_cols[zone])
             if branch is not None and i == len(toks) - 1:
                 # the branch glyph must not be the row's first cell: its lanes
                 # leave from the cells above and below it, and the entry walk
                 # has to have room to reach it.
                 if not pen.row.cells:
                     pen.put(" ")
-            for kind, payload in _items(tok):
+            for kind, payload in _items(tok, geo):
                 if kind == "lit":
                     # +8 of slack: the backtick columns are globally unique, so
                     # both ends may have to step past columns already spent.
@@ -263,10 +341,9 @@ def plan_blocks(order: list[str], worker=WORKER) -> dict[str, Plan]:
                     pen.ensure(2)
                     col = pen.put(str(payload))
                     if zone is not None:
-                        check_binding(col, tok)
+                        geo.check_binding(col, tok)
         pen.row.end = pen.x
-        plans[name] = Plan(name, pen.rows, branch,
-                           pen.rows[-1].cells[-1][0] if branch else 0)
+        plans[name] = Plan(name, pen.rows, branch, pen.rows[-1].cells[-1][0] if branch else 0)
     return plans
 
 
@@ -312,9 +389,40 @@ class Room:
     channels: int
 
 
+def _first_col(plan: Plan) -> int:
+    """The column a block's entry walk has to reach before it does anything."""
+    return plan.rows[0].cells[0][0] if plan.rows[0].cells else plan.rows[0].start
+
+
+def _droppable(order: list[str], plans: dict[str, Plan], worker) -> dict[str, str]:
+    """Fall-throughs that need no straight-lane row, because they fall *east*.
+
+    A straight edge normally costs a whole row: the man walks west from the end of
+    the block to the channel bank, and a west leg reserves the row from the bank
+    out to wherever he started. That is 57 of this room's 101 overhead rows.
+
+    But the detour only exists to get him back to the target's entry at ``NC``. When
+    the target is the very next block *and* its first glyph stands east of where he
+    stopped, he does not need the entry at all — he drops one row at his own column
+    and keeps walking east into it. The row is never claimed, so the successor moves
+    up into it.
+
+    Both conditions matter. "Next in order" is what makes the target's first glyph
+    row adjacent once the row is skipped; "east of" is what lets him reach the
+    glyphs by continuing rather than doubling back.
+    """
+    drop: dict[str, str] = {}
+    for i, name in enumerate(order[:-1]):
+        target = _straight_target(plans[name], worker[name][1])
+        if target == order[i + 1] and plans[name].rows[-1].end < _first_col(plans[target]):
+            drop[name] = target
+    return drop
+
+
 def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, read top to bottom
     order = block_order(worker)
     plans = plan_blocks(order, worker)
+    dropped = _droppable(order, plans, worker)
 
     glyph_ys: dict[str, list[int]] = {}
     south_y: dict[str, int] = {}
@@ -323,29 +431,48 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
     for name in order:
         p = plans[name]
         n = len(p.rows)
+        # Only allocate a lane row some edge can actually leave on. A branch's
+        # three lanes are not all reachable: `d` declares `pos`/`zero` only and `x`
+        # has no straight lane at all (`_straight_key` -> None), so allocating all
+        # three for every branch buries rows no man can ever stand on — and rows
+        # are the charged dimension. Which of the north/south pair a turn uses
+        # depends on the walk direction of the last glyph row, so decide both here
+        # exactly as the edge loop below will.
+        needs_n = needs_s = False
+        needs_st = _straight_target(p, worker[name][1]) is not None and name not in dropped
         if p.branch:
+            turns = set(_turn_keys(p.branch).values())
+            east = p.rows[-1].east
+            has_cw, has_ccw = "cw" in turns, "ccw" in turns
+            # `cw` leaves south when the last row walks east and north when it walks
+            # west; `ccw` is the mirror. Same rule the edge loop applies below.
+            needs_n = (has_ccw and east) or (has_cw and not east)
+            needs_s = (has_cw and east) or (has_ccw and not east)
+        if p.branch and needs_n:
             if n == 1:
-                y += 1                       # free row: the north lane
+                y += 1  # free row: the north lane
                 ys = [y]
                 y += 1
             else:
                 ys = list(range(y, y + n - 1))
                 y += n - 1
-                y += 1                       # free row: the north lane
+                y += 1  # free row: the north lane
                 ys.append(y)
                 y += 1
-            south_y[name] = y
-            y += 1
         else:
             ys = list(range(y, y + n))
             y += n
-        straight_y[name] = y
-        y += 1
+        if needs_s:
+            south_y[name] = y
+            y += 1
+        if needs_st:
+            straight_y[name] = y
+            y += 1
         glyph_ys[name] = ys
     ih = y + 1
 
     # ── edges, and the channel column each routed one gets ────────────────────
-    routed: list[tuple[str, str, int, str]] = []   # (src, dst, lane row, kind)
+    routed: list[tuple[str, str, int, str]] = []  # (src, dst, lane row, kind)
     chained: dict[str, str] = {}
     for name in order:
         toks, succ = worker[name]
@@ -362,6 +489,8 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
                 lanes.append((turn, succ[lane]))
         for kind, target in lanes:
             if kind == "straight":
+                if dropped.get(name) == target:
+                    continue  # falls east into the next block; no lane, no channel
                 row = straight_y[name]
                 if glyph_ys[target][0] == row + 1 and target not in chained.values():
                     chained[name] = target
@@ -395,7 +524,7 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
         for i, row in enumerate(p.rows):
             for col, glyph in row.cells:
                 c.set(col, ys[i], glyph)
-            if i + 1 < len(p.rows):          # wrap link, straight down
+            if i + 1 < len(p.rows):  # wrap link, straight down
                 c.set(row.end, ys[i], "v")
                 c.set(row.end, ys[i + 1], ">" if p.rows[i + 1].east else "<")
 
@@ -408,7 +537,17 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
     for name in order:
         p, ys = plans[name], glyph_ys[name]
         last_y, last_row = ys[-1], p.rows[-1]
-        if name in has_straight:  # drop out of the row onto the straight lane
+        if name in dropped:  # falls east: straight down its own column, then on
+            target_y = glyph_ys[dropped[name]][0]
+            c.set(last_row.end, last_y, "v")
+            for yy in range(last_y + 1, target_y):
+                if not c.free(last_row.end, yy):
+                    raise Collision(
+                        f"{name}: drop to {dropped[name]} blocked at "
+                        f"({last_row.end},{yy}) by {c.get(last_row.end, yy)!r}"
+                    )
+            c.set(last_row.end, target_y, ">")
+        elif name in has_straight:  # drop out of the row onto the straight lane
             c.set(last_row.end, last_y, "v")
             if last_y + 1 != straight_y[name] and not c.free(last_row.end, last_y + 1):
                 raise Collision(f"{name}: straight lane blocked below the run")
@@ -449,7 +588,7 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
 RELAY = ["+----+", "|>@rv|", "|^.s<|", "+----+"]
 RELAY_IW, RELAY_IH = 4, 2
 
-BAND_H = 30          # rows above the worker, for the panel, rings and I/O
+BAND_H = 30  # rows above the worker, for the panel, rings and I/O
 WX, WY = 1, BAND_H + 1
 
 
@@ -482,7 +621,7 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
             if ch != " ":
                 g.set(WX + x, WY + y, ch)
     walls(g, WX, WY, iw, ih)
-    north = WY - 1                      # the worker's north wall row
+    north = WY - 1  # the worker's north wall row
     col = {k: WX + v for k, v in PIPE_COL.items()}
 
     # ── the panel, top right ─────────────────────────────────────────────────
@@ -492,35 +631,63 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
     lens = panel.attach_panel(g, px, py, px + 1, py + 6)
     # painter feed: straight up its own column, then east into the painter's
     # west wall, one column clear of the input pipe's riser.
-    pipe(g, [(col["painter"], north - 1), (col["painter"], py + 1),
-             (px - 2, py + 1)], into=(px - 1, py + 1))
+    pipe(
+        g,
+        [(col["painter"], north - 1), (col["painter"], py + 1), (px - 2, py + 1)],
+        into=(px - 1, py + 1),
+    )
 
     # ── input room ───────────────────────────────────────────────────────────
     ix, iy = 80, 22
     stamp(g, ix, iy, ["+-+", "|I|", "+-+"])
-    pipe(g, [(ix + 1, iy + 3), (ix + 1, iy + 4), (col["input"], iy + 4),
-             (col["input"], north - 1)], into=(col["input"], north))
+    pipe(
+        g,
+        [(ix + 1, iy + 3), (ix + 1, iy + 4), (col["input"], iy + 4), (col["input"], north - 1)],
+        into=(col["input"], north),
+    )
 
     # ── the store ring ───────────────────────────────────────────────────────
     # 257 words have to be resident, so the forward pipe snakes the whole
     # north-west quarter; the return takes the free column east of the snake.
     stamp(g, 2, 6, RELAY)
-    fwd = pipe(g, [(col["store_out"], north - 1), (col["store_out"], north - 2),
-                   *_serpentine(2, 38, north - 2, 10), (5, 10)], into=(5, 9))
+    fwd = pipe(
+        g,
+        [
+            (col["store_out"], north - 1),
+            (col["store_out"], north - 2),
+            *_serpentine(2, 38, north - 2, 10),
+            (5, 10),
+        ],
+        into=(5, 9),
+    )
     # A pipe's first cell must point *away* from its room, so both returns leave
     # their relay heading north before they may bend.
-    ret = pipe(g, [(4, 5), (4, 4), (col["store_in"], 4),
-                   (col["store_in"], north - 1)], into=(col["store_in"], north))
+    ret = pipe(
+        g,
+        [(4, 5), (4, 4), (col["store_in"], 4), (col["store_in"], north - 1)],
+        into=(col["store_in"], north),
+    )
     if fwd + ret < STORE_WORDS + 2:
         raise Collision(f"store ring holds {fwd + ret}, needs {STORE_WORDS + 2}")
 
     # ── the register file: six slots, and a *short* loop, because its latency
     # is paid on every rotation and there are about thirty a tick.
     stamp(g, 58, north - 6, RELAY)
-    ffwd = pipe(g, [(col["file_out"], north - 1), (col["file_out"], north - 2),
-                    (59, north - 2)], into=(59, north - 3))
-    fret = pipe(g, [(60, north - 7), (60, north - 8), (col["file_in"], north - 8),
-                    (col["file_in"], north - 1)], into=(col["file_in"], north))
+    ffwd = pipe(
+        g,
+        [(col["file_out"], north - 1), (col["file_out"], north - 2), (59, north - 2)],
+        into=(59, north - 3),
+    )
+    fret = pipe(
+        g,
+        [
+            (60, north - 7),
+            (60, north - 8),
+            (col["file_in"], north - 8),
+            (col["file_in"], north - 1),
+        ],
+        into=(col["file_in"], north),
+    )
     if ffwd + fret < FILE_WORDS + 2:
         raise Collision(f"file ring holds {ffwd + fret}, needs {FILE_WORDS + 2}")
 
@@ -530,24 +697,57 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
 
     # ── the sidecar ──────────────────────────────────────────────────────────
     d = DebugMap("little-little-little-man — ring machine")
-    d.region("panel", px - 1, 0, 21, 26, note="painter + LM-75, from lllm_panel",
-             color="#a855f7")
-    d.region("input", ix, iy, 3, 3, note="ASCII program, then one k a round",
-             color="#64748b")
-    d.region("store-relay", 2, 6, 6, 4, color="#0ea5e9",
-             note=f"turnaround of the {fwd + ret}-cell store ring")
-    d.region("file-relay", 58, north - 6, 6, 4, color="#0ea5e9",
-             note=f"turnaround of the {ffwd + fret}-cell register file")
-    d.region("channels", WX, WY, NC, ih, color="#94a3b8",
-             note=f"{room.channels} vertical corridors carrying every routed edge")
+    d.region("panel", px - 1, 0, 21, 26, note="painter + LM-75, from lllm_panel", color="#a855f7")
+    d.region("input", ix, iy, 3, 3, note="ASCII program, then one k a round", color="#64748b")
+    d.region(
+        "store-relay",
+        2,
+        6,
+        6,
+        4,
+        color="#0ea5e9",
+        note=f"turnaround of the {fwd + ret}-cell store ring",
+    )
+    d.region(
+        "file-relay",
+        58,
+        north - 6,
+        6,
+        4,
+        color="#0ea5e9",
+        note=f"turnaround of the {ffwd + fret}-cell register file",
+    )
+    d.region(
+        "channels",
+        WX,
+        WY,
+        NC,
+        ih,
+        color="#94a3b8",
+        note=f"{room.channels} vertical corridors carrying every routed edge",
+    )
     for band, (lo, hi) in ZONE_COLS.items():
-        d.region(f"band:{band}", WX + lo, WY, hi - lo + 1, ih, color="#1f2937",
-                 note=f"{band} pipe ops must stand here; nearest column binds")
+        d.region(
+            f"band:{band}",
+            WX + lo,
+            WY,
+            hi - lo + 1,
+            ih,
+            color="#1f2937",
+            note=f"{band} pipe ops must stand here; nearest column binds",
+        )
     for name in room.order:
         ys = room.glyph_ys[name]
-        d.region(f"block:{name}", WX + CODE0, WY + ys[0], iw - CODE0,
-                 ys[-1] - ys[0] + 1, note=" ".join(WORKER[name][0]),
-                 color="#f59e0b", tags=["block"])
+        d.region(
+            f"block:{name}",
+            WX + CODE0,
+            WY + ys[0],
+            iw - CODE0,
+            ys[-1] - ys[0] + 1,
+            note=" ".join(WORKER[name][0]),
+            color="#f59e0b",
+            tags=["block"],
+        )
 
     info = {
         "worker": (iw, ih),

@@ -22,31 +22,55 @@ why, and the ideas that are still open.
 Words discarded per public case, counted on the emulator over the ROM image
 (`image_program`), against each machine's measured average ticks:
 
-| program | words/case | ≈ share of ticks | note |
-|---|---|---|---|
-| `sudoku-validity` | 18,817 | ~26% | **zero jumps** — all 44 branches |
-| `snake` | 5,258 | ~26% | |
-| `little-little-man` | 541,753 | **21.4%, measured** | `cpu:slab:JMPF` in the heat map |
-| `gradebook` | 7,571 | ~15% | 29 jumps, 45 branches |
-| `tcp` | 754 | ~5% | one jump in the whole program |
-| `brackets` | 149 | ~4% | three jumps |
-| `palette` | 31 | ~0.5% | |
-| `snake-ring` | 0 | — | never takes a branch on the public cases |
+**Re-measured over *every* public case, at a measured tick rate.** The table below
+replaces an earlier one that sampled three cases a problem and multiplied by an
+assumed 6–9 ticks a word. Both of those inputs were wrong, in opposite directions,
+and the conclusion got stronger rather than weaker.
 
-Only `little-little-man`'s number is a real profile — it is `LLM-DESIGN.md:131`,
-sampled with `tools/heatmap.mjs`. The rest are word counts times an assumed 6–9
-ticks a word and should be read as an ordering, not as percentages. The emulator
-ran the first three cases of each problem, which is not necessarily
-representative.
+The rate is **4.8 ticks a recirculated word**, not 6–9. `_discard_loop` retires two
+words per lap of an eight-cell cycle — 4.0 in the steady state — and the profile
+implies 4.8 once each branch's entry and exit are amortised in: `switchboard`
+discards 1,305,966 words and spends ~6,268,661 ticks in `cpu:slab:JMPF`.
+
+| program | words/case | discard ticks | total ticks | share |
+|---|---|---|---|---|
+| `little-little-man` | 764,936 | 3,671,693 | 7,009,707 | **52.4%** (engine) |
+| `pathfinder` | 148,058 | 710,680 | 1,575,791 | 45.1% |
+| `snake` | 15,180 | 72,865 | 169,651 | 42.9% |
+| `gradebook` | 9,905 | 47,545 | 118,795 | 40.0% |
+| `matmul` | 4,868 | 23,366 | 62,796 | 37.2% |
+| `sudoku-validity` | 16,304 | 78,260 | 218,224 | 35.9% |
+| `plotter` | 2,429 | 11,658 | 66,998 | 17.4% |
+| `brackets` | 445 | 2,135 | 13,694 | 15.6% |
+| `tcp` | 638 | 3,062 | 24,035 | 12.7% |
+| `palette` | 77 | 370 | 59,102 | 0.6% |
+
+`little-little-man`'s row is engine-measured (`optimize.verify` for the total,
+`tools/heatmap.mjs` for the split). The rest are emulator totals with the
+emulator's own `skip_word = 8` backed out and 4.8 substituted, so they are
+comparable to each other and to the engine row on the discard term.
+
+**Recirculation is 36–52% of six different machines.** It is not an
+`little-little-man` peculiarity; it is what a CPU-generated machine spends its time
+on, and anything that moves the rate moves all of them at once.
 
 Two things worth keeping in mind before optimising for this:
 
 - **`sudoku-validity` has no jumps at all.** A taken *branch* discards through the
   same loop, so "does this program jump" is the wrong question; "does it loop" is
   the right one.
-- **`little-little-man` is where the money is.** 21.4% of a 926,292,239,445 score
-  is larger than the entire score of most other tasks. `tcp` and `brackets`, by
-  contrast, are rounding error — measuring anything on them proves nothing.
+- **This is not one problem's tax.** The first version of this note read as though
+  `little-little-man` were the only machine worth the trouble. Measured across every
+  public case, six machines spend 36–52% of their ticks recirculating, so the rate
+  is a *generator-wide* constant and a change to `_discard_loop` is worth ~11% on
+  `little-little-man` and 7–10% on `pathfinder`, `snake`, `gradebook`, `matmul` and
+  `sudoku-validity` simultaneously. `tcp`, `brackets` and `palette` remain rounding
+  error — measuring anything on them still proves nothing.
+- **The share rose as the rest of the machine got faster.** `little-little-man` was
+  21.4% when a store read cost 3,416 ticks; the banked store cut the store term to
+  ~14% and recirculation became 52% of what is left, without a single extra word
+  being discarded. Shares move when *other* terms move, so re-measure before
+  choosing a target rather than trusting a share recorded against an older machine.
 
 ## The negative: buffering the ROM corridor ("ROM-PLUS")
 
@@ -119,13 +143,182 @@ on a **height**-bound machine it is not free at all. `little-little-man` is
 **+16.3%** at 1,069, **+55%** at a full program. On the one machine where
 recirculation is worth 21.4% of ticks, this feature is pure loss.
 
+## The measurement that settles the ordering (2026-07-26)
+
+The drain was built (`lm1/drain.py`), wired into `_slab` behind
+`machine.DRAIN_UNIT_BITS`, and measured on `little-little-man`. **It is a net
+loss, and the reason is the number this document guessed at.**
+
+| build | box | area² | avg ticks | score |
+|---|---|---|---|---|
+| today, counted loop | 192x194 | 37,636 | 7,594,099 | 285,811,507,276 |
+| `unit_bits=2` drain | 192x200 | 40,000 | 7,580,362 | 303,214,497,143 |
+
+14/14 public cases pass either way. The drain went from 4.0 to 2.51 ticks a word
+and bought **0.18% of ticks** — so the discard was never paying 4.0.
+
+Measured directly instead of assumed: this program's ROM is 3,498 words in a
+17,480-cell packed lap, which is **5.0 ticks a word**. Against the loop's 4.0,
+`max(4.0, 5.0) = 5.0` — the CPU loop has been *idle* on `r` for a fifth of every
+discard, and making it faster cannot move a number it does not set. The earlier
+"6 ticks CPU loop vs 3.36 ROM" model had both figures from other programs;
+`little-little-man`'s operands run to 3,470, so its tokens average 4.29 cells
+against `gradebook`'s 3.46, and the fold's connectors add the rest.
+
+### How big the producer is: two methods, agreeing
+
+**Method 1 — engine A/B on the ROM lap.** Rebuild the same machine with the
+unpacked ROM and re-verify all 14 public cases. Only the lap changes, so the
+slope is the number of laps the program waits out per case:
+
+| ROM | lap | cells/word | avg ticks |
+|---|---|---|---|
+| packed (shipped) | 17,480 | 5.00 | 7,594,099 |
+| unpacked | 28,800 | 8.23 | 10,322,651 |
+
+    (10,322,651 - 7,594,099) / (28,800 - 17,480) = 241 laps a case
+    241 x 17,480 = 4.21M of 7.59M ticks -- 55.5% ROM-paced
+
+**Method 2 — count the words.** Every discarding instruction's operand, summed
+on the emulator over `image_program`, across **all 14** cases: a mean of 908,850
+words a case, at 5.00 cells a word = 4.54M ticks, **59.8%**.
+
+The two agree to 8% (241 laps is 842,900 words against 908,850 counted), from
+completely different instruments. **So a little over half of `little-little-man`
+is the CPU standing on an `r` waiting for the ROM man to walk round.**
+
+A ring repeater stores one cell per word against the ROM's five and re-emits at
+~2 ticks a word (`r`,`s` in a relay), so it is smaller *and* faster. At 241 laps
+a case:
+
+| ROM lap | ROM-paced ticks | total | vs today |
+|---|---|---|---|
+| 17,480 (today) | 4.21M | 7.59M | — |
+| 7,000 (repeater at 2 cells/word) | 1.69M | 5.07M | **-33%** |
+| 3,498 (ring at 1 cell/word) | 0.84M | 4.22M | **-44%** |
+
+The drain is therefore *second*, and it is already built and tested: turn it on
+by naming the program in `DRAIN_UNIT_BITS` once the producer is under 4.0 cells a
+word, which is where `max(drain, ROM)` starts selecting the drain again. Note its
+footprint bill on this machine is +6 rows (+6.28% area²), because the CPU room
+sits **above** the display and a deeper slab pushes the display down — the slab
+band's own 5-row gap at rows 169..174 is the room's south wall, not slack.
+
+### A correction, and the mistake worth not repeating
+
+An earlier version of this section put the producer at 42% and the repeater at
+21%. Both were too low, from two errors made together: the word count averaged
+**three** cases (642,113) and was then compared against a **fourteen**-case tick
+average; and the unpacked lap was read off `rom.build_rom(words)` without the
+`rows=` argument `machine.build` actually passes, giving 55,980 cells instead of
+the real 28,800. The two errors pulled in opposite directions and the wrongness
+did not show up as an inconsistency until both methods were run over the same
+case set.
+
+`heatmap.mjs` cannot referee this: its wasm OOMs above a few million ticks and a
+case needs ~12M, and the `--rounds` flag in its usage banner is not implemented,
+so a round-based program exhausts its input and then profiles its own stall — a
+run of it here attributed 56% to the `IN` lane, which is that artefact and not a
+finding.
+
+## The repeater: what it can reach, measured (2026-07-26)
+
+The producer is ~56% of `little-little-man` (above), so this is the piece worth
+building. Three facts, each measured rather than argued, fix its design.
+
+**1. A relay is 2.00 ticks a word.** A man re-emitting a stream does `r` then
+`s`; there is no cheaper cycle. Measured on the reference interpreter with a
+corridor of alternating `r`/`s` — 12 words out in 26 steps, the extra 2 being
+spawn and halt:
+
+```
++-+  +--------------------------+
+|I|>>| @rsrsrsrsrsrsrsrsrsrsrsrsH|
++-+  +--------------------------+
+```
+
+That alone is **5.00 -> 2.00** on the producer. Against today's counted discard
+loop `max(4.0, 2.0) = 4.0`, so a repeater on its own is worth 20% of the
+producer's share; with the drain behind it (`unit_bits=2`, 2.51) it is 50%.
+
+**2. One room cannot beat 2.00 — it is grid parity, not effort.** The obvious
+answer is two men on the corridor in opposite phases, one reading while the other
+sends. A room may hold at most one `@`, so the second man comes from `Y`, and
+`Y`'s two children are born at `(x, y-1)` and `(x, y+1)`. Any path from a birth
+cell to row `y` column `c` has length parity `|c - x| + 1`, so two children
+standing on row `y` at the same tick are **always an even number of cells apart**
+— always the same phase on a period-2 `rsrs` corridor. They would read on the
+same tick, the input pipe delivers one value a tick, one blocks, the other steps
+onto him and both stop. No arrangement of detours escapes it.
+
+**3. Two banks reach 1.00 a word, and the ROM image already provides the split.**
+`r` binds to the *nearest incoming* pipe (`SPEC.md`), so two `r` cells in one room
+can read two different rings purely by where they stand. Verified with
+`lm.route` on a probe — a cell at (16,2) binds the 3-cell pipe, a cell at (17,6)
+the 14-cell one, same room:
+
+    r r          <- one word from bank A, one from bank B: 2 words in 2 ticks
+    ^ ^
+    |  \____ nearest the south pipe
+     \______ nearest the west pipe
+
+Each bank sustains one word per two ticks, and the consumer takes one from each
+per two ticks, so the pair sustains **1 word a tick with no merger man** — the
+merger is exactly what would have put a 2-tick cycle back in the path. The image
+is already fixed-width `(opcode, operand)` pairs (`rom_words`), so bank A holds
+the even words and bank B the odd ones; the CPU's `>rbr` fetch reads one of each,
+and every discard count is even (§`even` in `drain.py`), so a drain lap consuming
+one from each bank is exactly correct with no remainder arm.
+
+### Seeding, which is the part that is actually hard
+
+A ring's pipes start empty, so something must fill them once, and a ring room that
+takes both the ROM's pipe and its own return has no way to order the two — `r`
+picks the nearest and would deadlock on an empty ring, `R` picks either and
+corrupts the order the moment both are ready.
+
+The way out is that the choice is not per-word, it is once: the relay man runs a
+**counted seeding phase** first — `b` from a literal, then `r` from the cell
+nearest the ROM, `s` into the ring, `m`, loop — and falls into the steady loop
+(`r` from the cell nearest the return, `S` to the ring *and* the CPU) when `BP`
+hits zero. Same nearest-pipe positioning trick as (3). One-time cost is 3 ticks a
+word for one program length; after that the ROM man simply blocks on a full ring
+forever and is never heard from again.
+
+Ring capacity must be an exact multiple of the program length, or the window that
+recirculates is not a whole image and the CPU sees a rotation that never
+resynchronises.
+
 ## Still open
 
-**1. Unroll the discard loop two words to a lap.** Every discard count is even —
-`rom_words` emits `2 * (...)` because instructions are two words wide — so a loop
-that discards two words a lap with `BP` counting *instructions* is exactly correct
-for every jump, with no remainder arm. `d, r, r, <, ^, m, >` is 7 ticks for 2
-words against the present 6 for 1: **~1.7×** on 21% of `little-little-man`.
+**1. Unroll the discard loop two words to a lap. — DONE, and the residual idea is
+impossible.** `b016681` built it: `_discard_loop` is now a 2x4 burst retiring two
+words per lap, which took the rate from 6 ticks a word to 4.
+
+The `d, r, r, <, ^, m, >` variant proposed here — 7 ticks for 2 words, by having
+`BP` count *instructions* so the lap decrements once instead of twice — **cannot be
+built, and would buy nothing if it could.** A grid graph is bipartite, so every
+closed walk on it has even length: there is no 7-cell cycle. What the loop costs is
+the number of cells the man *walks*, not the number of glyphs that do work, so
+dropping one `m` to a plain corridor cell leaves the 2x4 cycle eight cells long and
+eight ticks a lap. Counting instructions rather than words is free of benefit here.
+
+The rate only improves by making the cycle *deeper*: a 2x(k+2) block retires `k`
+words in `2k + 4` cells, so k=2 is 4.0 ticks a word, k=3 is 3.33 and k=4 is 3.0,
+tending to 2.0. The obstacle is exactness. `rom_words` guarantees every count is
+*even*, which is what makes k=2 total; k=4 needs every count divisible by four, and
+k=3 needs a remainder arm for counts that are not multiples of three. Two ways
+round it, neither built:
+
+* **Align the targets.** Pad the image so every branch target sits at an even
+  instruction index, and every count becomes a multiple of four. Costs a few `NOP`s
+  of `P` — which lengthens every discard — against 4.8 -> ~3.8 ticks a word.
+* **Two exits in one lap.** Let `BP` count pairs and give the 12-cell cycle two `a`
+  tests, one per pair, so an odd remainder leaves through the first. No padding, but
+  two escape corridors out of one slab.
+
+At 4.8 -> 3.8 that is ~21% of the discard term: **~11% of `little-little-man`'s
+ticks, and 7-10% of five other machines'** — see the table above.
 *Pro:* exact, small, no new glyph, no new room. *Con:* one more cell of slab
 width, and `_SLAB_PITCH`/binding has to still hold.
 

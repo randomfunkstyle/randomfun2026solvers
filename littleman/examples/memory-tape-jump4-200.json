@@ -1,0 +1,283 @@
+{
+  "title": "LM-1 tape STORE \u2014 cells=200, skip_batch=4, relay=(6, 4), jump_threshold=128, capacity=202",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "worker",
+      "x": 8,
+      "y": 8,
+      "w": 49,
+      "h": 24,
+      "note": "49\u00d724 interior; request protocol is op, addr, optional write value",
+      "color": "#38bdf8",
+      "tags": []
+    },
+    {
+      "name": "value-ring",
+      "x": 1,
+      "y": 33,
+      "w": 59,
+      "h": 8,
+      "note": "202-value pipe capacity; 201 required because a WRITE briefly holds replacement and displaced values",
+      "color": "#10b981",
+      "tags": []
+    },
+    {
+      "name": "init",
+      "x": 53,
+      "y": 8,
+      "w": 4,
+      "h": 5,
+      "note": "one-time fill of 200 zero values",
+      "color": "#64748b",
+      "tags": []
+    },
+    {
+      "name": "request-decode",
+      "x": 8,
+      "y": 10,
+      "w": 16,
+      "h": 4,
+      "note": "READ/WRITE setup; B preserves \u00b1(N\u2212addr)",
+      "color": "#60a5fa",
+      "tags": []
+    },
+    {
+      "name": "P1-bit-tail",
+      "x": 32,
+      "y": 12,
+      "w": 12,
+      "h": 3,
+      "note": "x/] peels BP bits 0 and 1; conditionally advances 1 then 2 words",
+      "color": "#84cc16",
+      "tags": []
+    },
+    {
+      "name": "P1-four-value-skip",
+      "x": 44,
+      "y": 14,
+      "w": 11,
+      "h": 2,
+      "note": "bulk floor(addr/4) loop; four rs pairs per BP unit",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "target-access",
+      "x": 39,
+      "y": 17,
+      "w": 16,
+      "h": 6,
+      "note": "READ sends target to output+tape; WRITE replaces target",
+      "color": "#f59e0b",
+      "tags": []
+    },
+    {
+      "name": "P2-bit-tail",
+      "x": 30,
+      "y": 22,
+      "w": 14,
+      "h": 4,
+      "note": "exact cleanup for (N\u22121\u2212addr) mod 4",
+      "color": "#06b6d4",
+      "tags": []
+    },
+    {
+      "name": "P2-four-value-skip",
+      "x": 44,
+      "y": 25,
+      "w": 11,
+      "h": 2,
+      "note": "bulk floor((N\u22121\u2212addr)/4) loop; restores tape alignment",
+      "color": "#14b8a6",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [],
+  "lanes": [
+    {
+      "name": "request",
+      "points": [
+        [
+          5,
+          10
+        ],
+        [
+          7,
+          10
+        ]
+      ],
+      "note": "",
+      "color": "#22c55e",
+      "kind": "pipe",
+      "expect": "op, addr, optional value",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          10
+        ],
+        [
+          6,
+          10
+        ],
+        [
+          7,
+          10
+        ]
+      ]
+    },
+    {
+      "name": "read-response",
+      "points": [
+        [
+          10,
+          7
+        ],
+        [
+          10,
+          5
+        ]
+      ],
+      "note": "",
+      "color": "#a78bfa",
+      "kind": "pipe",
+      "expect": "READ value",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          7
+        ],
+        [
+          10,
+          6
+        ],
+        [
+          10,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "main-return",
+      "points": [
+        [
+          54,
+          27
+        ],
+        [
+          54,
+          29
+        ],
+        [
+          56,
+          29
+        ],
+        [
+          56,
+          12
+        ]
+      ],
+      "note": "",
+      "color": "#ec4899",
+      "kind": "control",
+      "expect": "P2 and initializer share the proven return path to MAIN",
+      "tags": [],
+      "cells": [
+        [
+          54,
+          27
+        ],
+        [
+          54,
+          28
+        ],
+        [
+          54,
+          29
+        ],
+        [
+          55,
+          29
+        ],
+        [
+          56,
+          29
+        ],
+        [
+          56,
+          28
+        ],
+        [
+          56,
+          27
+        ],
+        [
+          56,
+          26
+        ],
+        [
+          56,
+          25
+        ],
+        [
+          56,
+          24
+        ],
+        [
+          56,
+          23
+        ],
+        [
+          56,
+          22
+        ],
+        [
+          56,
+          21
+        ],
+        [
+          56,
+          20
+        ],
+        [
+          56,
+          19
+        ],
+        [
+          56,
+          18
+        ],
+        [
+          56,
+          17
+        ],
+        [
+          56,
+          16
+        ],
+        [
+          56,
+          15
+        ],
+        [
+          56,
+          14
+        ],
+        [
+          56,
+          13
+        ],
+        [
+          56,
+          12
+        ]
+      ]
+    }
+  ]
+}

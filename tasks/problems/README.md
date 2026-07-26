@@ -104,3 +104,11 @@ seven public cases match frame for frame on the reference engine.
 Two things worth keeping. The per-move figure is the whole target — it needs to come down
 ~2x for headroom, not a few percent. And `privateTestCount: 0` has now lied on three
 problems (`gradebook`, `snake`, `pathfinder`); here it cost a score rather than a scare.
+
+The later completed **CPU+PATH** variant keeps the bit-parallel BFS on LM-1 and moves
+only painting into a write-only unit. It replaces three display opcodes with `SND`,
+reducing decode from depth 5 to depth 4, and uses the four-word tape worker. The
+checked-in `pathfinder-unit_cpu.man` is 153×157 and passes all seven public cases at
+3,407,945 average / 4,854,477 worst ticks, for a local score of **84,002,439,826**.
+This is a 34.3% score improvement over the current direct-panel CPU, but it has not
+been submitted and does not supersede the 10.6bn bespoke solution.

@@ -722,14 +722,16 @@ Further variants, in rough order of payoff:
   BP test and one `rs,m` body on each side, so it advances two words per lap at
   ~5 ticks/value instead of 8. Its odd exit re-enters with BP=0 and converges on
   the normal exit, so it never speculatively consumes another word. The LM-1
-  STORE API exposes `tape_skip_batch=1|2`, or `None` plus a configurable
+  STORE API exposes `tape_skip_batch=1|2|4`, or `None` plus a configurable
   `tape_jump_threshold`; batch 1 remains the byte-identical default because the
   batch-2 block is 45 rather than 33 columns wide. On a 200-slot six-write,
   six-read boundary/parity probe it measured 16,392 versus 22,211 ticks
   (**26.2% fewer**) with identical output.
-- **A still larger pass-through ring** could amortise more of the fixed
-  corner/test/decrement cost, but every word still needs its own BP test to
-  preserve exact odd tails.
+- **A still larger pass-through ring** can amortise more of the fixed
+  corner/test/decrement cost, but it needs an exact cleanup path for arbitrary
+  tails. The measured batch-4 design, its power-of-two remainder path, relay
+  choices, binding hazard, implementation, and whole-task results are in
+  [`TAPE-SKIP-ROADMAP.md`](TAPE-SKIP-ROADMAP.md).
 - **Banking** — k rings, address = (bank, offset), ~N/k per access at k× the
   pipe area. Superseded for `matmul` by its sequential-access STREAM block, but
   still relevant to random-access workloads.
@@ -1780,6 +1782,26 @@ ships per round and `pathfinder_sim` reproduces byte for byte on all seven publi
 The spec bounds each path at 64 moves but places **no bound on the number of rounds**, so
 ~10 long rounds exceed the cap. The 18th case is a *ticks* failure, not a wrong answer.
 
+The completed follow-up keeps the BFS on the CPU but gives painting to the write-only
+PATH unit:
+
+| | direct-panel CPU, current | CPU + PATH unit | bespoke |
+|---|---:|---:|---:|
+| decode | 18 opcodes, depth 5 | **16 opcodes, depth 4** | none |
+| tape skip | batch 4, 6×4 relay | batch 4, 6×4 relay | no CPU tape |
+| grid | 177×176 | **153×157** | 82×173 |
+| public avg ticks | 4,079,714 | **3,407,945** | ~355,000 |
+| public worst ticks | 5,824,728 | **4,854,477** | — |
+| local public score | 127,813,359,906 | **84,002,439,826** | ~10.6bn |
+| public frames | 7/7 | **7/7** | 7/7 |
+
+The PATH unit's `CELL` arm is the crucial implementation detail: it sends
+`DATA = 7 * bit` and relies on DATA's automatic cursor advance during the 256-cell
+setup stream. Treating the bit as an address was the unfinished prototype's bug.
+The unit is now checked both as a standalone glyph program and through the complete
+generated machine. It has not been submitted, so the old 17/18 hidden-case result
+still belongs only to the earlier direct-panel grid.
+
 Where the ticks go (gated to the scored tick, CPU runner pinned by hand — `critical_runner`
 picks the tape's man on this machine, §4.1's first profiler trap, and reports `tape 100%`):
 
@@ -1798,13 +1820,11 @@ Three things that follow, and the third is the one that matters:
   (2,4) to (4,8) to (8,16) copies moves that from ~1,174 to ~807 to ~638 words, i.e.
   ~5 % of the per-move cost for a P that nearly triples. The 23.5 % slab share is mostly
   the *setup* loop, which is fixed cost and does not touch the slope.
-- **Sixteen opcodes was the obvious next move, and it was abandoned as pointless.** The
-  three display opcodes force depth 5; a write-only coprocessor spends one `SND` instead,
-  and `pathfinder-unit.asm` is that program at exactly 16, verified in the emulator against
-  the model on all seven cases (`PathUnit`, `tests/test_path_unit_model.py`). Its *hardware
-  block is unfinished* and will stay that way: `snake`'s identical 17->16 step measured
-  -19 % ticks and -41 % footprint, which here would give ~1.4e11 against the bespoke
-  machine's 1.1e10. The variant is kept as the measured comparison, not as a candidate.
+- **Sixteen opcodes is a real but insufficient win.** The three display opcodes force
+  depth 5; a write-only coprocessor spends one `SND` instead. `pathfinder-unit.asm`
+  and its completed hardware block run at exactly 16 opcodes, cut public CPU score
+  34.3%, and pass every public frame. That still leaves an ~8x score gap to the
+  bespoke machine and does not prove the previously failing hidden case is under cap.
 - **The slope is tape reads and nothing else.** ~89 reads a move at ~415 ticks is ~58 % of
   the 61,159. Shrinking the tape helps at ~1.9 ticks per slot per access (§8.1), i.e. a few
   percent. Halving the *count* needs the level step itself in hardware — `snake` measured

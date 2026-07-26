@@ -280,7 +280,8 @@ def build_display(
 ) -> None:
     """Stamp the LM-75: '+' corners, '=' horizontal walls, ':' vertical walls.
 
-    Defaults to `plotter`'s own 32x24 panel; the 16x16 problems pass 16x16.
+    Defaults to `plotter`'s own 32x24 panel; the 16x16 problems (incl. `snake_ring`)
+    pass 16x16.
     """
     w, h = panel_w + 2, panel_h + 2
     for x in range(dx, dx + w):

@@ -110,6 +110,7 @@ __all__ = [
     "hw_micro",
     "image_program",
     "DSP_BANDS",
+    "DSP_LANE_BANDS",
     "DSP_SEM_BAND",
     "MEMORY_SEMS",
     "ROM_ROWS",
@@ -125,14 +126,20 @@ class Band:
     IN = "in"  # CPU north wall: the input room
     OUT = "out"  # CPU west wall, below the ROM pipe: the output room
     MEM = "mem"  # CPU east wall: request out to the adapter, response in from the tape
-    # CPU south wall: the three LM-75 ports. `DSP p` cannot be built — it picks a
-    # pipe from its *operand*, and which pipe an `s` talks to is a static property
-    # of where the glyph sits (§7.1) — so each port gets its own opcode, its own
-    # lane and its own pipe. Which *side of the display* a pipe lands on is what
-    # makes it ADDR / DATA / SWAP (``SPEC.md`` § The LM-75 display).
+    # CPU south wall: the LM-75 ports. A *lane* cannot pick a pipe from its operand —
+    # which pipe an `s` talks to is a static property of where the glyph sits (§7.1)
+    # — so the three-opcode form gives each port its own opcode, lane and pipe.
+    # Which *side of the display* a pipe lands on is what makes it ADDR / DATA /
+    # SWAP (``SPEC.md`` § The LM-75 display).
     DSP_ADDR = "dsp_addr"  # display top wall
     DSP_DATA = "dsp_data"  # display left wall
     DSP_SWAP = "dsp_swap"  # display bottom wall
+    # `DSP p`'s single pipe. The lane sends two words down it — the port selector,
+    # then ACC — and `dsprelay.py`'s room does the choosing *behind* the seam, where
+    # its three `s` glyphs each sit statically beside their own port. One band here
+    # instead of three is what takes a 19-opcode program to 16, `k` from 5 to 4, and
+    # the lane band from 63 rows to 31.
+    DSP = "dsp"
     # CPU south wall: the STREAM block's command and response pipes (stream.py).
     # South rather than east because the memory lanes own the east wall, and a
     # southern pipe is ~15 rows below the lane band — far enough that a memory `r`
@@ -146,6 +153,13 @@ class Band:
 #: the display, ADDR drops straight into its top, SWAP turns east and runs under it,
 #: so a westward leg never has to cross a column belonging to a lane further west.
 DSP_BANDS: tuple[str, ...] = (Band.DSP_DATA, Band.DSP_ADDR, Band.DSP_SWAP)
+
+#: Bands that can occupy a display *lane* and so need a column on the CPU's south
+#: wall. The three ports are one arrangement; ``Band.DSP`` is the other, where a
+#: single lane feeds `dsprelay`'s room and the ports hang off *its* wall instead.
+#: Kept apart from ``DSP_BANDS`` because that tuple means the panel's three sides
+#: and their west-to-east routing order, which the relay does not change.
+DSP_LANE_BANDS: tuple[str, ...] = (*DSP_BANDS, Band.DSP)
 
 #: Columns between one display lane's ``s`` and the next. It must exceed the row
 #: gap between neighbouring lanes (2), or an ``s`` binds its neighbour's pipe:
@@ -290,6 +304,16 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
     Sem.DISPLAY_ADDR: (("W", None), ("s", Band.DSP_ADDR), ("W", None)),
     Sem.DISPLAY_DATA: (("W", None), ("s", Band.DSP_DATA), ("W", None)),
     Sem.DISPLAY_SWAP: (("W", None), ("s", Band.DSP_SWAP), ("W", None)),
+    # `DSP p`: A holds the operand when the lane starts (§5.2) and B holds ACC, so
+    # `s` sends the selector, `W` brings ACC over, `s` sends it, and the second `W`
+    # puts ACC back. Two words down one pipe; the relay reads the first and forwards
+    # the second to the port it names.
+    Sem.DISPLAY: (
+        ("s", Band.DSP),
+        ("W", None),
+        ("s", Band.DSP),
+        ("W", None),
+    ),
     Sem.HALT: (("H", None),),
 }
 
@@ -298,6 +322,7 @@ DSP_SEM_BAND: dict[Sem, str] = {
     Sem.DISPLAY_ADDR: Band.DSP_ADDR,
     Sem.DISPLAY_DATA: Band.DSP_DATA,
     Sem.DISPLAY_SWAP: Band.DSP_SWAP,
+    Sem.DISPLAY: Band.DSP,
 }
 
 #: Tags that talk to the STREAM block, keyed to the pipe each needs.
@@ -498,7 +523,7 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
         if s in DSP_SEM_BAND:
             # Not by width (all three are `W s W`): by band, so the westmost pipe
             # belongs to the lane placed furthest from the wall. See DSP_BANDS.
-            return (2, DSP_BANDS.index(DSP_SEM_BAND[s]), m)
+            return (2, DSP_LANE_BANDS.index(DSP_SEM_BAND[s]), m)
         if s in STREAM_SEM_BAND:
             return (2, STREAM_BANDS.index(STREAM_SEM_BAND[s]), m)
         return (group(m), -width(m), m)
@@ -680,6 +705,7 @@ def build_cpu(
     mem_pad: int = 0,
     stream_pad: int = 0,
     short_return: bool = True,
+    drain_unit_bits: int = 0,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -709,7 +735,7 @@ def build_cpu(
 
     # Display lanes: one `s` per port, spread ``_DSP_PITCH`` columns apart so each
     # binds the pipe that leaves the south wall directly beneath it.
-    dsp_used = [b for b in DSP_BANDS if any(b == bb for mc in flat.values() for _, bb in mc)]
+    dsp_used = [b for b in DSP_LANE_BANDS if any(b == bb for mc in flat.values() for _, bb in mc)]
     dsp_cols = {b: lane_x0 + 1 + i * _DSP_PITCH for i, b in enumerate(dsp_used)}
     band_x.update(dsp_cols)
 
@@ -728,9 +754,19 @@ def build_cpu(
 
     # Each slab gets its own column band, so an exit dropping to the collector
     # never crosses a slab below it.
-    slab_rows = {
-        m: (_JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS) for m in structured
-    }
+    # A drain hangs *below* the entry row rather than beside it, so it sets the
+    # slab's depth: a jump is its entry row plus the block, a branch is its four
+    # rows of `X` fan-out and turn row plus the block.
+    if drain_unit_bits:
+        from .drain import build_drain
+
+        _drain_h = build_drain(0, unit_bits=drain_unit_bits, even=True).height
+        slab_rows = {m: (1 if p.sem[m] in _JUMP_SEMS else 5) + _drain_h for m in structured}
+    else:
+        slab_rows = {
+            m: (_JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS)
+            for m in structured
+        }
     struct_east = _STRUCT_X0 + max(1, len(structured)) * _SLAB_PITCH
 
     # ── lane extents ─────────────────────────────────────────────────────────
@@ -900,7 +936,9 @@ def build_cpu(
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
     for m in order:
-        struct_drops |= _slab(g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs)
+        struct_drops |= _slab(
+            g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
+        )
 
     # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place and
     # only fills the genuinely free cells with `<`.
@@ -1027,6 +1065,7 @@ def _slab(
     base: int,
     collector: int,
     pipe_glyphs: list[tuple[int, int, str, str]],
+    drain_unit_bits: int = 0,
 ) -> set[int]:
     """Draw one structures-band slab below its entry row. Returns its drop columns.
 
@@ -1056,9 +1095,13 @@ def _slab(
     exit_x = base - 1
 
     if sem in _JUMP_SEMS:
-        _discard_loop(g, base, s0, pipe_glyphs)
-        g.put(exit_x, s0, "^")
-        for yy in range(collector + 1, s0):
+        if drain_unit_bits:
+            ey = _drain_block(g, base, s0, pipe_glyphs, drain_unit_bits)
+        else:
+            _discard_loop(g, base, s0, pipe_glyphs)
+            ey = s0
+        g.put(exit_x, ey, "^")
+        for yy in range(collector + 1, ey):
             g.soft(exit_x, yy, ".")
         return {exit_x}
 
@@ -1105,12 +1148,76 @@ def _slab(
     g.put(cols[taken], turn_row, "<")
     for c in range(base + 2, cols[taken]):
         g.soft(c, turn_row, ".")
-    _discard_loop(g, base, turn_row, pipe_glyphs)
-    g.put(exit_x, turn_row, "^")
-    for y in range(collector + 1, turn_row):
+    if drain_unit_bits:
+        end_row = _drain_block(g, base, turn_row, pipe_glyphs, drain_unit_bits)
+    else:
+        _discard_loop(g, base, turn_row, pipe_glyphs)
+        end_row = turn_row
+    g.put(exit_x, end_row, "^")
+    for y in range(collector + 1, end_row):
         g.soft(exit_x, y, ".")
     drops.add(exit_x)
     return drops
+
+
+#: Per-program opt-in for :mod:`.drain`'s ladder+loop in place of the counted
+#: discard loop below. Empty by default, so every machine that does not name
+#: itself here is byte-identical.
+#:
+#: ``little-little-man`` discards a *mean 642,113 ROM words a case* — measured on
+#: the ROM image, 30.8% of its ~8.33M ticks at the counted loop's 4 ticks a word.
+#: That is now the largest line in its profile, and the counted loop cannot go
+#: below 2 (``drain``'s module docstring). A ladder+loop at ``unit_bits`` costs
+#: ``1 + 6/2**unit_bits`` ticks a word instead.
+#:
+#: The block is deeper and wider than the 2x4 it replaces, and that is free here
+#: for a reason worth writing down: the machine's height is set by the **display**
+#: (south edge 192), not by the slab band, whose deepest slab ends at 169 — and
+#: its width by the **ROM** at 192, not by the slabs. Read the regions before
+#: assuming a slab is on either critical path.
+DRAIN_UNIT_BITS: dict[str, int] = {
+    # Only worth switching on once the producer is no longer the binding stage:
+    # with the buffered corridor below, `max(drain, ROM)` selects the drain again.
+    # Measured on this machine, buffer alone was -8.2% of ticks and buffer+drain
+    # -12.7%, so the drain is worth ~4.5 points of that and 6 rows of slab depth.
+    "little-little-man": 2,
+}
+
+
+def _drain_block(
+    g: _Grid,
+    base: int,
+    y: int,
+    pipe_glyphs: list[tuple[int, int, str, str]],
+    unit_bits: int,
+) -> int:
+    """Place a :mod:`.drain` ladder+loop in a slab. Returns the row it leaves on.
+
+    Same contract as :func:`_discard_loop`: the man arrives heading **west** along
+    ``y`` and leaves heading **west** with ``BP == 0``, on the caller's riser
+    column ``base - 1``. He just leaves further down, because the block hangs
+    below the entry row instead of beside it.
+    """
+    from .drain import build_drain
+
+    block = build_drain(0, unit_bits=unit_bits, even=True)
+    ox, oy = base - 1, y + 1  # local column 0 is the reserved exit column
+
+    # Turn the westbound man south into the block. On a branch's ``turn_row`` the
+    # arm's westward run is already drawn, and on a jump's entry row it is drawn
+    # afterwards — so this cell is `.` or `<` or empty, all three meaning "the man
+    # is walking west here", which is precisely who we want to divert. Anything
+    # else is a real collision and must not be papered over.
+    turn = (ox + block.spine, y)
+    if g.c.get(turn) not in (None, ".", "<"):
+        raise MachineError(f"drain entry at {turn} would overwrite {g.c[turn]!r}")
+    g.c[turn] = "v"
+    for (bx, by), ch in block.cells.items():
+        g.put(ox + bx, oy + by, ch)
+        if ch == "r":
+            pipe_glyphs.append((ox + bx, oy + by, "r", "rom"))
+    assert ox + block.exit[0] == base - 1, "the block must leave on the riser column"
+    return oy + block.exit[1]
 
 
 def _discard_loop(
@@ -1274,6 +1381,7 @@ def _keepout(g: _Grid, spare: Iterable[tuple[int, int]] = ()) -> frozenset[tuple
         out |= {(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)}
     return frozenset(out - set(spare))
 
+
 #: Programs that need a wider adapter-to-STORE gap than the default.
 #:
 #: ``matmul`` is the only one, and it does not merely fail to *place* at 1 — it places,
@@ -1338,13 +1446,13 @@ def _resolve_tape_skip_batch(
     skip_batch: int | None,
     jump_threshold: int,
 ) -> int:
-    """Resolve explicit batch 1/2 or auto-select by STORE size."""
+    """Resolve explicit batch 1/2/4 or auto-select by STORE size."""
     if jump_threshold < 1:
         raise ValueError(f"jump_threshold must be positive, got {jump_threshold}")
     if skip_batch is None:
         return 2 if n >= jump_threshold else 1
-    if skip_batch not in (1, 2):
-        raise ValueError(f"skip_batch must be 1, 2, or None, got {skip_batch}")
+    if skip_batch not in (1, 2, 4):
+        raise ValueError(f"skip_batch must be 1, 2, 4, or None, got {skip_batch}")
     return skip_batch
 
 
@@ -1355,6 +1463,10 @@ def _tape_worker_spec(skip_batch: int):
         V2_IH,
         V2_IN_ROW,
         V2_IW,
+        V2_JUMP4_FWD_ROW,
+        V2_JUMP4_IH,
+        V2_JUMP4_IW,
+        V2_JUMP4_RET_COL,
         V2_JUMP_FWD_ROW,
         V2_JUMP_IH,
         V2_JUMP_IW,
@@ -1363,6 +1475,7 @@ def _tape_worker_spec(skip_batch: int):
         V2_RET_COL,
         worker_v2,
         worker_v2_jump,
+        worker_v2_jump4,
     )
 
     if skip_batch == 1:
@@ -1385,7 +1498,38 @@ def _tape_worker_spec(skip_batch: int):
             V2_JUMP_FWD_ROW,
             V2_JUMP_RET_COL,
         )
-    raise ValueError(f"skip_batch must be 1 or 2, got {skip_batch}")
+    if skip_batch == 4:
+        return (
+            worker_v2_jump4,
+            V2_JUMP4_IW,
+            V2_JUMP4_IH,
+            V2_IN_ROW,
+            V2_OUT_COL,
+            V2_JUMP4_FWD_ROW,
+            V2_JUMP4_RET_COL,
+        )
+    raise ValueError(f"skip_batch must be 1, 2, or 4, got {skip_batch}")
+
+
+def _resolve_tape_relay(
+    skip_batch: int,
+    relay_size: tuple[int, int] | None,
+) -> tuple[list[str], tuple[int, int] | None]:
+    """Return relay art and its reported interior dimensions.
+
+    Batch 1 retains the byte-identical legacy relay unless explicitly tuned.
+    Batch 2 gets the two-word relay with the same 4x3 interior/exterior size;
+    batch 4 defaults to the engine-pinned 8x6 relay.
+    """
+    from ..dataflow_relay import relay
+    from ..memory_tape import RELAY
+
+    if relay_size is None:
+        if skip_batch == 1:
+            return RELAY, None
+        relay_size = (4, 3) if skip_batch == 2 else (8, 6)
+    w, h = relay_size
+    return relay(w, h), (w, h)
 
 
 def _tape_shell(
@@ -1404,6 +1548,7 @@ def _tape_shell(
     Returns the canvas plus the request and response stub cells.
     """
     from ..circuit import Circuit
+
     (
         worker,
         worker_width,
@@ -1478,9 +1623,7 @@ def grid_block(n: int) -> _Tape:
 
     a = build_addr(n, io=False)
     assert a.in_cell is not None and a.out_cell is not None, "io=False must report stubs"
-    cells = {
-        (x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "
-    }
+    cells = {(x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "}
     return _Tape(
         cells=cells,
         width=a.width,
@@ -1495,6 +1638,7 @@ def tape_block(
     *,
     skip_batch: int | None = 1,
     jump_threshold: int = 128,
+    relay_size: tuple[int, int] | None = None,
 ) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
 
@@ -1534,9 +1678,10 @@ def tape_block(
     it never consumes a speculative extra word.  Excess ring capacity only delays
     the first value of a lap; in both modes the worker remains the bottleneck.
     """
-    from ..memory_tape import RELAY, _draw_pipe
+    from ..memory_tape import _draw_pipe
 
     skip_batch = _resolve_tape_skip_batch(n, skip_batch, jump_threshold)
+    relay_art, _resolved_relay_size = _resolve_tape_relay(skip_batch, relay_size)
 
     (
         _worker,
@@ -1559,11 +1704,13 @@ def tape_block(
         b_fwd = bottom_y + 6
         r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
         relay_y = bottom_y + 3
-        for i, row in enumerate(RELAY):
+        relay_h = len(relay_art) - 2
+        for i, row in enumerate(relay_art):
             for j, ch in enumerate(row):
                 g.set(1 + j, relay_y + i, ch)
-        relay_wall = len(RELAY[0])
+        relay_wall = len(relay_art[0])
         adj = relay_wall + 1
+        b_fwd = relay_y + relay_h
 
         n_fwd = _draw_pipe(
             g,
@@ -1589,7 +1736,7 @@ def tape_block(
         if n_fwd + n_ret < n + 1:
             continue
         return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
-    return _serpentine_tape(n, skip_batch=skip_batch)
+    return _serpentine_tape(n, skip_batch=skip_batch, relay_art=relay_art)
 
 
 #: Columns the big ring reserves under the worker, in block coordinates.
@@ -1606,7 +1753,12 @@ _SNAKE_WEST = 10
 _SNAKE_TOP = 4
 
 
-def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
+def _serpentine_tape(
+    n: int,
+    *,
+    skip_batch: int = 1,
+    relay_art: list[str] | None = None,
+) -> _Tape:
     """The same ring, with the forward pipe snaked so capacity scales with area.
 
     Two L-shaped pipes give a *perimeter* of capacity and the band under the worker
@@ -1641,6 +1793,9 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
     """
     from ..memory_tape import RELAY, _draw_pipe
 
+    relay_art = relay_art or RELAY
+    relay_h = len(relay_art) - 2
+
     (
         _worker,
         worker_width,
@@ -1663,11 +1818,13 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
     for rows in range(5, 82, 2):
         g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch)
         last = top + rows - 1  # the final, relay-bound westbound leg
-        relay_y = last - 3  # so `last` is the relay's bottom interior row
-        for i, row in enumerate(RELAY):
+        relay_y = last - relay_h  # so `last` is the relay's bottom interior row
+        for i, row in enumerate(relay_art):
             for j, ch in enumerate(row):
                 g.set(1 + j, relay_y + i, ch)
-        adj = len(RELAY[0]) + 1  # first column east of the relay's wall
+        adj = len(relay_art[0]) + 1  # first column east of the relay's wall
+        snake_climb = max(_SNAKE_CLIMB, adj + 1)
+        snake_west = max(_SNAKE_WEST, snake_climb + 2)
 
         snake: list[tuple[int, int]] = [
             (WX + worker_width + 1, fy),
@@ -1679,7 +1836,7 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
             if i == rows - 1:
                 snake.append((adj, y))  # into the relay
             elif i % 2 == 0:
-                snake += [(_SNAKE_WEST, y), (_SNAKE_WEST, y + 1)]
+                snake += [(snake_west, y), (snake_west, y + 1)]
             else:
                 snake += [(east, y), (east, y + 1)]
         n_fwd = _draw_pipe(g, snake)
@@ -1687,8 +1844,8 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
             g,
             [
                 (adj, relay_y + 1),
-                (_SNAKE_CLIMB, relay_y + 1),
-                (_SNAKE_CLIMB, bottom_y + 2),
+                (snake_climb, relay_y + 1),
+                (snake_climb, bottom_y + 2),
                 (ret_col, bottom_y + 2),
                 (ret_col, bottom_y + 1),
             ],
@@ -1744,6 +1901,7 @@ class Machine:
     rom_rows: int
     mem_pad: int
     tape_skip_batch: int = 1
+    tape_relay_size: tuple[int, int] | None = None
     stream_pad: int = 0
     display: tuple[int, int] | None = None
     #: Where each display band's ``s`` glyph ended up, in *grid* coordinates — the
@@ -1802,7 +1960,7 @@ class Machine:
             "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
             "tape": (
                 f"rotating pipe tape, N={self.tape_n}, "
-                f"skip_batch={self.tape_skip_batch}"
+                f"skip_batch={self.tape_skip_batch}, relay={self.tape_relay_size}"
             ),
             "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
             "display": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -1840,9 +1998,7 @@ class Machine:
         placement = f", compact store_dy={self.store_offset[1]}" if self.compact else ""
         routes = (
             ", routes "
-            + " ".join(
-                f"{name}={length}" for name, length in sorted(self.route_lengths.items())
-            )
+            + " ".join(f"{name}={length}" for name, length in sorted(self.route_lengths.items()))
             if self.route_lengths
             else ""
         )
@@ -1851,6 +2007,7 @@ class Machine:
             f"footprint {self.footprint}, {len(self.plan.number)} opcodes "
             f"(depth {self.plan.k}), P={self.program.P} words on {self.rom_rows} ROM rows, "
             f"tape N={self.tape_n}, skip_batch={self.tape_skip_batch}, "
+            f"relay={self.tape_relay_size}, "
             f"mem_pad={self.mem_pad}{stream}{panel}{routes}"
             f"{placement}"
         )
@@ -1876,6 +2033,7 @@ def build(
     short_return: bool | None = None,
     store: str = "tape",
     tape_skip_batch: int | None = 1,
+    tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     middle_order: Sequence[str] | None = None,
     rom_buffer: int | None = None,
@@ -1908,9 +2066,30 @@ def build(
     LM-75's interior ``(width, height)`` and is required by any program using a
     ``DSP*`` opcode — the panel resolution is the problem's, not the program's.
 
-    ``tape_skip_batch`` selects the tape worker: ``1`` is the compact legacy loop
-    and ``2`` is the wider two-word counted ring. Pass ``None`` to choose batch 2
-    when ``tape_n >= tape_jump_threshold`` and batch 1 below it.
+    ``tape_skip_batch`` selects the tape worker: ``1`` is the compact legacy loop,
+    ``2`` the wider two-word counted ring, and ``4`` the exact power-of-two worker
+    with a configurable fat relay. Pass ``None`` to choose batch 2 when
+    ``tape_n >= tape_jump_threshold`` and batch 1 below it.
+
+    **Batch 2 buys ~12% of ticks and costs 12 columns, so it pays only on a machine
+    wide enough not to notice them.** Swept across every program with a tape, sb1 vs
+    sb2 footprint:
+
+    | free (+0.0%) | costly |
+    |---|---|
+    | `pathfinder`, `snake`, `snake-ring`, `pathfinder-unit` | 7 width-bound targets |
+
+    The costly ones are width-bound, and **re-sweeping the ROM fold does not rescue
+    them** — it makes them worse, because a narrower fold is a taller machine: at its
+    own best fold `gradebook` is 117x84 = 13,689 (+58.3% against 8,649) and
+    `sudoku-validity` 89x74 = 7,921 (+33.6%). That is the opposite of what the fold
+    re-sweep did for `little-little-man`, where the ROM already set the width at 192
+    and the tape sat well inside it.
+
+    So among *shipped* solutions this is a `little-little-man`-only win. The two
+    problems above it in score do not have a tape at all: `subset-sum` ships
+    `subset_sum_mitm` and `pathfinder` ships `pathfinder_grid`, both bespoke ring
+    machines. Measured, so it need not be tried again.
 
     ``tape_n`` is a **slot count**, so the usable addresses are ``1 .. tape_n - 1``:
     slot 0 is sign-ambiguous (see the module docstring) and slot ``tape_n`` does not
@@ -1936,16 +2115,14 @@ def build(
         raise MachineError(
             f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
         )
-    if tape_skip_batch not in (None, 1, 2):
-        raise MachineError(
-            f"tape_skip_batch must be 1, 2, or None, got {tape_skip_batch}"
-        )
+    if tape_skip_batch not in (None, 1, 2, 4):
+        raise MachineError(f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}")
     if tape_jump_threshold < 1:
-        raise MachineError(
-            f"tape_jump_threshold must be positive, got {tape_jump_threshold}"
-        )
+        raise MachineError(f"tape_jump_threshold must be positive, got {tape_jump_threshold}")
     if store != "tape" and tape_skip_batch != 1:
         raise MachineError("tape_skip_batch applies only to store='tape'")
+    if store != "tape" and tape_relay_size is not None:
+        raise MachineError("tape_relay_size applies only to store='tape'")
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
     p = plan(program, middle_order=middle_order)
@@ -1998,6 +2175,7 @@ def build(
                     mem_offset[1],
                     hot,
                     tape_skip_batch=effective_skip_batch,
+                    tape_relay_size=tape_relay_size,
                 )
             except MachineError as exc:
                 last = exc
@@ -2044,6 +2222,7 @@ def build(
                     0,
                     hot,
                     tape_skip_batch=effective_skip_batch,
+                    tape_relay_size=tape_relay_size,
                 )
             except MachineError:
                 continue
@@ -2112,8 +2291,16 @@ def _assemble(
     mem_dy: int = 0,
     hot: tuple[int, int] | None = None,
     tape_skip_batch: int = 1,
+    tape_relay_size: tuple[int, int] | None = None,
 ) -> Machine:
-    cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
+    cpu = build_cpu(
+        program,
+        p,
+        mem_pad=mem_pad,
+        stream_pad=stream_pad,
+        short_return=short_return,
+        drain_unit_bits=DRAIN_UNIT_BITS.get(program.name, 0),
+    )
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
@@ -2165,18 +2352,19 @@ def _assemble(
     # the CPU wall. The ordinary straight corridor uses adjacent room walls when
     # an input room keeps the CPU at x=8; the input-free x=3 layout needs one blank
     # row for reference-engine compatibility.
-    CX = (
-        CPU_X_WITH_STREAM
-        if stream
-        else CPU_X_WITH_INPUT if cpu.has_in else CPU_X_WITHOUT_INPUT
-    )
+    CX = CPU_X_WITH_STREAM if stream else CPU_X_WITH_INPUT if cpu.has_in else CPU_X_WITHOUT_INPUT
     band_rows = 0
     if rom_buffer:
-        band_rows = rom_corridor_rows(rom_buffer, (CX + W + 1) - 1)
+        corridor_x_hi = (
+            max(CX + W + 1, romlay.width - 1) if program.name in ROM_CORRIDOR_WIDE else CX + W + 1
+        )
+        band_rows = rom_corridor_rows(rom_buffer, corridor_x_hi - 1)
     cpu_gap = (
         ROM_BUFFER_CPU_GAP
         if band_rows
-        else ROM_CPU_GAP if cpu.has_in else ROM_CPU_GAP_WITHOUT_INPUT
+        else ROM_CPU_GAP
+        if cpu.has_in
+        else ROM_CPU_GAP_WITHOUT_INPUT
     )
     CY = rom_bottom + cpu_gap + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
@@ -2190,7 +2378,7 @@ def _assemble(
         rom_corridor(
             want=rom_buffer or 0,
             x_lo=1,
-            x_hi=CX + W + 1,
+            x_hi=corridor_x_hi if rom_buffer else CX + W + 1,
             y_top=rom_bottom + 1,
             rows=band_rows,
             fetch_y=fetch_y,
@@ -2241,6 +2429,7 @@ def _assemble(
             tape_n,
             hot,
             tape_skip_batch=tape_skip_batch,
+            tape_relay_size=tape_relay_size,
         )
         extra_regions = seam.regions
         req_row, resp_row = seam.req_row, seam.resp_row
@@ -2305,7 +2494,11 @@ def _assemble(
         elif store == "grid":
             tape = grid_block(tape_n)
         elif store == "tape":
-            tape = tape_block(tape_n, skip_batch=tape_skip_batch)
+            tape = tape_block(
+                tape_n,
+                skip_batch=tape_skip_batch,
+                relay_size=tape_relay_size,
+            )
         else:
             raise MachineError(
                 f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
@@ -2421,11 +2614,19 @@ def _assemble(
                 ]
             )
 
-
     # ── the LM-75, below the CPU ─────────────────────────────────────────────
-    dsp_touches = (
-        _display(g, cpu, CX, CY + H + 1, AX, display) if (display and cpu.dsp_cols) else {}
-    )
+    # With `DSP p` the CPU owns one display pipe instead of three, so the fan-out
+    # room goes in first and the panel hangs off *its* south wall. `_display` is
+    # unchanged: the relay hands it the same three columns the CPU used to.
+    dsp_touches: dict[str, tuple[int, int]] = {}
+    relay_cols: dict[str, int] | None = None
+    relay_wall = CY + H + 1
+    if display and cpu.dsp_cols:
+        if Band.DSP in cpu.dsp_cols:
+            in_col = CX + cpu.dsp_cols[Band.DSP]
+            relay_cols, relay_wall = _dsp_relay(g, CX, CY + H + 1, in_col)
+            dsp_touches[Band.DSP] = (in_col, CY + H + 2)
+        dsp_touches |= _display(g, cpu, CX, relay_wall, AX, display, cols=relay_cols)
 
     # ── the STREAM block, below the CPU ──────────────────────────────────────
     stream_touches: dict[str, tuple[int, int]] = {}
@@ -2522,6 +2723,7 @@ def _assemble(
         rom_rows=romlay.rows_used,
         mem_pad=mem_pad,
         tape_skip_batch=tape_skip_batch,
+        tape_relay_size=_resolve_tape_relay(tape_skip_batch, tape_relay_size)[1],
         stream_pad=stream_pad,
         display=display if dsp_touches else None,
         dsp_glyphs={
@@ -2550,6 +2752,7 @@ ADAPTER2_H = 12
 ADAPTER2_HOT_ROW = 1
 
 ADAPTER2_COLD_ROW = 11
+
 
 @dataclass(frozen=True)
 class _Adapter2:
@@ -2760,7 +2963,6 @@ ADAPTER_TAPE_GAP_FOR: dict[str, int] = {"matmul": 6}
 ADAPTER_TAPE_GAP_BY_STORE: dict[str, int] = {"grid": 6, "men": 6, "men-y": 6}
 
 
-
 @dataclass
 class _Seam:
     """What the two-tier store section hands back to :func:`_assemble`."""
@@ -2825,6 +3027,9 @@ TIER_SIDE_PORTS = False
 #: cold one therefore buys most of the latency win at almost none of the wall clock.
 TIER_PIPE_BANK = True
 
+#: Skip-batch for the *hot* bank only; ``None`` means share the cold bank's.
+HOT_SKIP_BATCH: int | None = None
+
 
 @dataclass
 class _PipeBank:
@@ -2875,6 +3080,7 @@ def _two_tier(
     hot: tuple[int, int],
     *,
     tape_skip_batch: int = 1,
+    tape_relay_size: tuple[int, int] | None = None,
 ) -> _Seam:
     """Place a range-routing adapter, a hot man-memory tier, the tape, and a merger.
 
@@ -2913,8 +3119,17 @@ def _two_tier(
         # still 8x better than the 427-slot cold bank — and the men are what the
         # grader's wall clock is spent on, not the ticks.
         hot_top = cols * rows_
+        # The two banks need not share a worker. They are very different: the hot one
+        # is small and answers ~90% of reads, the cold one is 4x larger and answers the
+        # rest, so the lap-length/width trade lands differently on each.
+        # ``HOT_SKIP_BATCH`` overrides the hot bank alone; ``None`` means "same as the
+        # cold bank".
         tier = _PipeBank(
-            tape_block(hot_top, skip_batch=tape_skip_batch),
+            tape_block(
+                hot_top,
+                skip_batch=tape_skip_batch if HOT_SKIP_BATCH is None else HOT_SKIP_BATCH,
+                relay_size=tape_relay_size,
+            ),
             hot_top,
         )
     else:
@@ -2931,7 +3146,11 @@ def _two_tier(
             f"{tape_n}-slot store; drop the tier or grow the program"
         )
     adapter = two_tier_adapter(hot_top)
-    tape = tape_block(tape_n, skip_batch=tape_skip_batch)
+    tape = tape_block(
+        tape_n,
+        skip_batch=tape_skip_batch,
+        relay_size=tape_relay_size,
+    )
     # One column further east than the one-tier adapter: the request pipe drops
     # down a corridor column and has to turn east *before* the west wall, so it
     # needs a cell between its descent and the room.
@@ -3111,6 +3330,87 @@ def _stream(
     return blk, touches, (bx, by)
 
 
+#: Columns between one relay outlet and the next. Every outlet leaves the *same*
+#: wall, so the row term in §7.1's Manhattan distance is identical for all three and
+#: cancels: binding here is decided by column alone, and any pitch clear of the arm
+#: rows is safe. 12 is far more than needed and costs nothing but relay width.
+_RELAY_PITCH = 12
+
+#: The relay's interior, and where its inlet meets the north wall.
+_RELAY_W, _RELAY_H = 14 + 2 * _RELAY_PITCH, 13
+
+
+def _dsp_relay(g: _Grid, cx: int, wall_y: int, in_col: int) -> tuple[dict[str, int], int]:
+    """Place `DSP p`'s fan-out room. Returns its three outlet columns and south wall.
+
+    The lane sends two words down one pipe — the selector, then ACC. This room reads
+    the selector, subtracts one so the three cases are -1/0/+1 (ROM words are
+    non-negative, so the selector cannot carry a sign of its own), branches on it
+    three ways, and forwards ACC to the port the selector named.
+
+    Its three ``s`` glyphs sit statically beside their own outlets, which is what
+    makes the choice legal at all: a *lane* cannot pick a pipe from an operand
+    (§7.1), but a room downstream of the seam can, because the pipe each ``s`` binds
+    is still a property of where that glyph sits. Every outlet leaves the *same*
+    wall, so the row term in the Manhattan distance is identical for all three and
+    cancels — binding here is column-only, and the pitch decides it outright.
+
+    **It is a closed circuit, not a one-shot.** The probe in ``dsprelay.py`` ends
+    each arm on ``H`` because it serves a single request; a room that serves every
+    display op the program executes must return its man to the read. Built as a
+    probe first, this passed every binding check, built clean, and drew nothing —
+    the man halted on the first paint and the machine then stalled to the tick cap
+    on all fourteen cases. Each arm therefore runs east to a shared riser, down to a
+    return corridor, west, and back up into the ``>`` that re-enters the read; the
+    spawn joins that same ``>``, so there is exactly one path through the read.
+
+    Outlets run **west to east as DATA, ADDR, SWAP** — ``DSP_BANDS`` order — because
+    :func:`_display` routes DATA west round the panel, ADDR straight down into it and
+    SWAP east and under, and a westward leg must never cross a column belonging to a
+    port further west.
+    """
+    x0, y0 = cx, wall_y + 4  # three corridor rows, as the panel takes below the CPU
+    g.room(x0, y0, x0 + _RELAY_W + 1, y0 + _RELAY_H + 1)
+    g.draw_pipe([(in_col, wall_y + 1), (in_col, y0 - 1)])
+
+    ix = x0 + 1
+    main, addr_row, swap_row, ret = y0 + 6, y0 + 3, y0 + 9, y0 + 11
+    # `@` and the return both enter the `>` at ix+1, so there is one path through the
+    # read. A = selector, B = 1, then A = selector - 1 and `X` branches on its sign;
+    # the man walks east, so counter-clockwise is north, straight on is east, and
+    # clockwise is south.
+    g.text(ix, main, "@>rM`1`W-X")
+    bx = ix + 9
+
+    ports = {
+        Band.DSP_DATA: (main, ix + 12),
+        Band.DSP_ADDR: (addr_row, ix + 12 + _RELAY_PITCH),
+        Band.DSP_SWAP: (swap_row, ix + 12 + 2 * _RELAY_PITCH),
+    }
+    east = ix + 13 + 2 * _RELAY_PITCH
+
+    for row, col in ports.values():
+        if row != main:  # turn the branch arm out to its own row, then run east
+            step = 1 if row > main else -1
+            for y in range(main + step, row, step):
+                g.put(bx, y, "v" if step == 1 else "^")
+            g.put(bx, row, ">")
+        g.text(col - 1, row, "rs")  # read the value, send it to this port
+
+    # The return: east to a shared riser, south to the corridor, west, north into the
+    # `>`. All three arms share every cell of it, which is why it costs one lane.
+    for y in range(addr_row, ret):
+        g.put(east, y, "v")
+    g.put(east, ret, "<")
+    for x in range(ix + 2, east):
+        g.put(x, ret, "<")
+    g.put(ix + 1, ret, "^")
+    for y in range(main + 1, ret):
+        g.put(ix + 1, y, "^")
+
+    return {b: c for b, (_r, c) in ports.items()}, y0 + _RELAY_H + 1
+
+
 def _display(
     g: _Grid,
     cpu: _Cpu,
@@ -3118,6 +3418,7 @@ def _display(
     wall_y: int,
     east_limit: int,
     size: tuple[int, int],
+    cols: dict[str, int] | None = None,
 ) -> dict[str, tuple[int, int]]:
     """Draw the LM-75 below the CPU and wire its three ports. Returns pipe touches.
 
@@ -3146,7 +3447,11 @@ def _display(
     dw, dh = size
     if dw < 3:
         raise MachineError(f"a {dw}-wide panel has no room between its corners for SWAP")
-    cols = {band: cx + col for band, col in cpu.dsp_cols.items()}
+    # Absolute columns of the three ports. Normally the CPU's own lane `s` columns;
+    # with `DSP p` folded to one lane they are the *relay's* south-wall outlets, and
+    # `wall_y` is the relay's south wall. Everything below is unchanged either way —
+    # the relay presents exactly the interface the CPU used to.
+    cols = cols if cols is not None else {band: cx + col for band, col in cpu.dsp_cols.items()}
     dx = _panel_x(dw, cols)
     dy = wall_y + 4  # three corridor rows between the CPU's south wall and the panel
     right, bottom = dx + dw + 1, dy + dh + 1
@@ -3301,6 +3606,19 @@ TAPE_SIZE = {
     "pathfinder-unit": 52,
 }
 
+#: Task-level tape choices that beat the compact default on full public-case score.
+#: They are deliberately per task: the batch-4 worker saves ticks everywhere but its
+#: wider room loses on a width-bound machine. Pathfinder's 177x176 ROM/CPU box hides
+#: the whole STORE, and its smaller 6x4 relay ties 8x6 on ticks. Snake's batch-2
+#: worker also remains inside the existing 123x113 box; this tunes the tape reference
+#: machine, while the submitted ``snake-ring`` coprocessor remains a separate build.
+#: Pathfinder-unit hides the same batch-4 worker inside its 153x157 CPU/PATH box.
+TASK_TAPE_CONFIG: dict[str, tuple[int, tuple[int, int] | None]] = {
+    "pathfinder": (4, (6, 4)),
+    "pathfinder-unit": (4, (6, 4)),
+    "snake": (2, None),
+}
+
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
 #: constraint box rather than the public cases. ``matmul`` allows N, M, K <= 16, so
 #: A and B hold 256 entries each and a row of C holds 16; one spare value each,
@@ -3364,13 +3682,33 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: the weights are unchanged but the width constraint it filters on is not.
 LANE_ORDER: dict[str, tuple[str, ...]] = {
     "brackets": (
-        "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
-        "ST", "MULI", "SUBI", "DIVI", "MODI", "BRZ",
+        "HALT",
+        "LDI",
+        "DECM",
+        "SUB",
+        "ADD",
+        "JMPF",
+        "LD",
+        "ST",
+        "MULI",
+        "SUBI",
+        "DIVI",
+        "MODI",
+        "BRZ",
     ),
     "matmul": ("MUL", "BRN", "SUB", "ADDI", "ST", "LD"),
     "sudoku-validity": (
-        "HALT", "STP", "ADD", "LDP", "MULI", "ST",
-        "MODI", "DIVI", "SUBI", "ADDI", "BRZ",
+        "HALT",
+        "STP",
+        "ADD",
+        "LDP",
+        "MULI",
+        "ST",
+        "MODI",
+        "DIVI",
+        "SUBI",
+        "ADDI",
+        "BRZ",
     ),
 }
 
@@ -3465,6 +3803,16 @@ def rom_corridor(
     return pts
 
 
+#: Slugs whose ROM corridor may snake across the **whole grid** rather than
+#: stopping at the CPU's east wall. The band it lives in runs from the ROM's
+#: bottom wall to the CPU's top, and everything that is not the ROM — CPU, tier,
+#: adapter, tape, teleports — is placed at or below that top and moves down with
+#: it, so the band is machine-wide and empty. Confining the snake to the CPU's
+#: ~53 columns costs rows in direct proportion: ``little-little-man`` buffers
+#: 3,500 words in 68 rows against 20 at full width, and rows are footprint.
+ROM_CORRIDOR_WIDE: set[str] = {"little-little-man"}
+
+
 def rom_corridor_rows(want: int, span: int) -> int:
     """Even row count whose boustrophedon holds ``want`` words across ``span`` columns.
 
@@ -3544,7 +3892,8 @@ def build_for(
     slug: str,
     *,
     store: str = "tape",
-    tape_skip_batch: int | None = 1,
+    tape_skip_batch: int | None | str = "task",
+    tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     compact: bool = False,
 ) -> Machine:
@@ -3560,6 +3909,14 @@ def build_for(
 
     if slug not in TAPE_SIZE:
         raise MachineError(f"no tape size recorded for {slug!r}; have {sorted(TAPE_SIZE)}")
+    if tape_skip_batch == "task":
+        tape_skip_batch, task_relay = TASK_TAPE_CONFIG.get(slug, (1, None))
+        if tape_relay_size is None:
+            tape_relay_size = task_relay
+    elif not isinstance(tape_skip_batch, (int, type(None))):
+        raise MachineError(
+            f"tape_skip_batch must be 1, 2, 4, None, or 'task', got {tape_skip_batch!r}"
+        )
     return build(
         programs.load(slug),
         tape_n=TAPE_SIZE[slug],
@@ -3568,6 +3925,7 @@ def build_for(
         stream=STREAM_SIZE.get(slug),
         store=store,
         tape_skip_batch=tape_skip_batch,
+        tape_relay_size=tape_relay_size,
         tape_jump_threshold=tape_jump_threshold,
         middle_order=LANE_ORDER.get(slug),
         rom_buffer=ROM_BUFFER.get(slug),
@@ -3597,9 +3955,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--tape-skip-batch",
-        choices=("1", "2", "auto"),
-        default="1",
-        help="tape values advanced per counted skip lap, or auto by size (default: 1)",
+        choices=("1", "2", "4", "auto", "task"),
+        default="task",
+        help="tape skip strategy; task uses the measured per-task choice (default: task)",
+    )
+    ap.add_argument(
+        "--tape-relay",
+        metavar="WxH",
+        help="fat relay interior, for example 6x4 or 8x6 (default by skip batch)",
     )
     ap.add_argument(
         "--tape-jump-threshold",
@@ -3609,9 +3972,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
+    relay_size = None
+    if args.tape_relay:
+        try:
+            rw, rh = args.tape_relay.lower().split("x", 1)
+            relay_size = (int(rw), int(rh))
+        except (TypeError, ValueError) as exc:
+            ap.error(f"--tape-relay must be WxH, got {args.tape_relay!r}: {exc}")
+    if args.tape_skip_batch == "task":
+        skip_batch: int | None | str = "task"
+    elif args.tape_skip_batch == "auto":
+        skip_batch = None
+    else:
+        skip_batch = int(args.tape_skip_batch)
     m = build_for(
         args.slug,
-        tape_skip_batch=None if args.tape_skip_batch == "auto" else int(args.tape_skip_batch),
+        tape_skip_batch=skip_batch,
+        tape_relay_size=relay_size,
         tape_jump_threshold=args.tape_jump_threshold,
         compact=args.compact,
     )

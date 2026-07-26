@@ -1,5 +1,5 @@
 {
-  "title": "LM-1 tape STORE \u2014 cells=200, skip_batch=2, jump_threshold=128, capacity=222",
+  "title": "LM-1 tape STORE \u2014 cells=200, skip_batch=2, relay=(4, 3), jump_threshold=128, capacity=222",
   "offset": [
     0,
     0

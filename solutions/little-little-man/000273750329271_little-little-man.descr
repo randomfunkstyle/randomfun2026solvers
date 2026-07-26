@@ -1,0 +1,16 @@
+# little-little-man — submission a1d30572-0057-4138-94ac-1975258fd15c
+
+verdict      done: 28/28 cases, area2 37636, avgTicks 7,273,630, score 273,750,329,271
+submitted    2026-07-26T20:44:23+0300
+grid         190x194
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  60a3e5d25fe3dd0b702e9ea83b4c3f87c3519273bdc5c2e8ab5e32e15305960c
+commit       0936d06
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+hot bank 60 -> 56 slots: the floor of a flat basin (54..60 all within 0.3%), just above the cliff at 52 where there are too few hot slots to hold the working set.

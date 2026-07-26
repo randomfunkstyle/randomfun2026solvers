@@ -24,7 +24,14 @@ GRID = REPO / "tasks" / "solutions" / "subset-sum_mitm.man"
 #: works and every one of the 4096 left masks is tried against all 257 words of
 #: ring B.  The cost of the search does not depend on the input beyond `n`, so
 #: this is the number the cap has to accommodate.
-WORST_CASE_TICKS = 6_329_954
+#:
+#: Was 6,329,954 when the room was 230 rows.  Two cuts shortened it: `NOSOL_ROW`
+#: 220 -> 178, and `P3_HEAD` 90 -> 72 with every block below it moving up.  Both
+#: shortened corridors the exhausted lane walks, and this is that walk — 51 rows
+#: removed from the floorplan, 42 ticks saved.  A row deleted is also a row
+#: nobody walks, so the footprint win came with a tick win rather than a trade,
+#: the same effect the ring-machine packing work measured on a different machine.
+WORST_CASE_TICKS = 6_329_912
 
 
 def _ring_v(values: list[int], target: int) -> list[int]:
