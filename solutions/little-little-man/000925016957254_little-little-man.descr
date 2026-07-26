@@ -1,0 +1,16 @@
+# little-little-man — submission 049940be-e8f6-4501-b994-8ad6c0feed59
+
+verdict      done: 28/28 cases, area2 41616, avgTicks 22,227,436, score 925,016,957,254
+submitted    2026-07-26T09:48:05+0300
+grid         203x204
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  d30560c22b93ee2ad4134fe5dc4b70ec23fac33f4f39f8f946220771cf77815c
+commit       86d4c10
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+init-block compaction: P 3395->3377, 203x204

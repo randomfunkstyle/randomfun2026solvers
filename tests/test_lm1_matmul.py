@@ -374,6 +374,11 @@ def test_the_score_is_real() -> None:
     from randomfun2026solvers.scoring import score_program
 
     got = score_program(GRID, SLUG)
+    # 8100, not the 9216 this pinned for a while: 96² was the shape before the ROM
+    # packing landed, and because the assertion is gated behind LM1_SLOW it went stale
+    # unnoticed. `matmul` is 86x90 and is the one program `ADAPTER_TAPE_GAP` did *not*
+    # move (it is pinned to 6 by `ADAPTER_TAPE_GAP_FOR`), so this is the same number it
+    # has been for some time — it agrees with the shape pinned at the top of this file.
     assert got.area2 == 8100
     assert abs(got.avg_ticks - sum(REAL_TICKS.values()) / 7) < 500
     assert 0.75e9 < got.score < 1.0e9

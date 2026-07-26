@@ -356,18 +356,18 @@ def test_the_program_stays_on_the_depth_four_trie() -> None:
 def test_checked_in_grid_matches_the_generator() -> None:
     """``build_for`` runs the engine's structural analysis: every pipe must bind."""
     m = machine.build_for(SLUG)
-    assert (m.width, m.height) == (113, 100)
+    assert (m.width, m.height) == (108, 100)
     # Width-bound: the unrolled scans make the ROM image 836 words, but packed tokens
     # halve its cells, so 31 rows is the first fold that gets it under the machine's
-    # own 113 columns (see ROM_ROWS) and every fold below that is flat. Trading 20%
-    # more area for 5x fewer ticks is what fits the step cap at all.
+    # columns (see ROM_ROWS) and every fold below that is flat. Trading 20% more area
+    # for 5x fewer ticks is what fits the step cap at all.
     #
-    # 113 and not 114 because of `LANE_ORDER`: the lane order picks `mem_pad`, and the
-    # order found by weighting each lane by how often its opcode runs happens to need
-    # one column less of it than length-descending did. `ROM_ROWS[gradebook]`'s comment
-    # was already written against 113 — the fold was chosen for the width the machine
-    # *should* have had, and the lane order is what finally got it there.
-    assert m.footprint == 113**2
+    # Two things took this off 114. `LANE_ORDER` picks `mem_pad`, and weighting each
+    # lane by how often its opcode runs needs one column less of it than
+    # length-descending did (114 → 113); then `ADAPTER_TAPE_GAP` 6 → 1 took five more
+    # off the adapter-to-STORE corridor (113 → 108). Both are west of the ROM, so the
+    # fold is still the one `ROM_ROWS[gradebook]` documents and still clears the width.
+    assert m.footprint == 108**2
     assert m.rom_rows == machine.ROM_ROWS[SLUG]
     assert m.tape_n == TAPE_N
     expected = "\n".join(m.rows) + "\n"
@@ -379,8 +379,8 @@ def test_checked_in_grid_matches_the_generator() -> None:
 
 def test_checked_in_grid_keeps_the_recorded_shape() -> None:
     rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (113, 100)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 12_769
+    assert (max(map(len, rows)), len(rows)) == (108, 100)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 11_664
 
 
 @node_required

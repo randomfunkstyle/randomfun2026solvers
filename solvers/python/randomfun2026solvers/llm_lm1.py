@@ -428,20 +428,8 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.st("W")
     a.op("IN", note="H")
     a.st("H")
-    for name, value in (
-        ("NMEN", 0),
-        ("NP", 0),
-        ("NROOM", 0),
-        ("NRUN", 0),
-        ("NSRC", 0),
-        ("STOP", 0),
-        ("NHALT", 0),
-        ("C20", enc(CLS_WALL)),
-        ("CZ", 0),
-        ("CA", 0),
-        ("CY", 0),
-    ):
-        a.set_slot(name, value)
+    a.zero(["NMEN", "NP", "NROOM", "NRUN", "NSRC", "STOP", "NHALT", "CZ", "CA", "CY"])
+    a.set_slot("C20", enc(CLS_WALL))
     a.ld("H", "LIMIT = 16 * H: one past the last live display address")
     a.op("MULI", PANEL)
     a.st("LIMIT")
@@ -452,8 +440,10 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
         for k in range(CELLS_PER_WORD):
             a.set_slot(a.at("POWTAB", k), pow_, "POWTAB = 65536^k" if k == 0 else "")
             pow_ *= CELL_FIELD
-        for w in range(PANEL * PANEL // CELLS_PER_WORD):
-            a.set_slot(a.at("CELL", w), 0, "the packed grid starts empty" if w == 0 else "")
+        a.zero(
+            [a.at("CELL", w) for w in range(PANEL * PANEL // CELLS_PER_WORD)],
+            "the packed grid starts empty",
+        )
 
     a.ldi(0, "home the cursor: pass 1 paints in address order, so DATA advances it")
     a.op("DSPA")

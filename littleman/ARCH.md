@@ -468,6 +468,43 @@ no longer a stub. Both blocks below are measured on the reference interpreter:
 |---|---|---|---|
 | `memory.man` — rotating pipe tape, 100 cells | 32×32 | **~750 ticks, constant** | `0 addr` / `1 addr value` |
 | `register-cell.man` — one value | 6×7 | **~20 ticks** round trip, non-destructive read | `1 v` store · `-1` fetch |
+| `memory_men_grid` — M columns of N man-cells | `27M × (32 + 3N)` | **`~45 + 8N`**, independent of M | `0 addr` / `1 addr value` |
+| `memory_men_grid_side` — the same, both ports on one wall | `(27M + 2) × (31 + 3N)` | **`53 + 8N`** | `0 addr` / `1 addr value` |
+
+#### Choosing between the tape and the man-memory: density against latency
+
+All three speak the *same wire protocol*, so they are interchangeable at the seam
+and the adapter (§ "Sign-biased memory addressing") does not change when you swap
+one for another. What differs is a single trade, and it decides the tier:
+
+| | cells of `.man` per stored word | ticks per read |
+|---|---|---|
+| rotating pipe tape | **3.7** | `8.0 × N` — 3,416 at N=427 |
+| man-memory (side variant) | **81** (27 wide × 3 tall) | **`53 + 8 × rows`** — 164 at 3×14 |
+
+A tape is a *pipe*: one cell a word, folded, so it is 22x denser — but a request
+waits for its slot to come round, so every word in it taxes every access. A
+man-memory answers in one broadcast (`S` out, one decoder matches, `R` back — the
+teleport pair, `memory_men_bcast.py`), so **its latency depends only on the column
+depth `N`, never on the column count `M` or the total size**. Width is therefore
+free and depth is what you pay for.
+
+The rule that falls out, measured on `little-little-man` (`LLM-DESIGN.md`): put
+the **big cold** structure in the tape and the **small hot** working set in a
+man-memory. That machine had 427 words in one tape, of which the 256-word program
+grid was 60% of the slots and **2% of the reads** — so every scalar read paid
+`8 × 256 = 2,048` ticks for data nobody was touching. Its top 40 slots are 89% of
+all reads, and a 3×14 tier holding them costs 164 ticks against 3,416.
+
+Two facts worth not rediscovering:
+
+* **A column carries a *global* base literal**, so a tier built with `base=T`
+  decodes the client's own slot numbers — an address range needs no translation
+  anywhere, only a routing decision.
+* **`M` and `N` are free** (no bit alignment, no stride, no power-of-two), but a
+  column base of 100 or more needs a third digit and therefore a ninth column in
+  the decoder room. That was hard-coded to two digits until 2026-07-26, which
+  capped the whole family near 110 cells — `10x11` built and `6x20` did not.
 
 The tape is a **drop-in `STORE`**: its wire protocol is the `memory` problem's,
 which is exactly the contract this document specified, so no translation is

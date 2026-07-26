@@ -348,8 +348,8 @@ def test_the_machine_generates_and_every_pipe_binds() -> None:
     m = machine.build_for(SLUG)
     assert m.tape_n == TAPE_N
     assert m.plan.k == 4
-    assert (m.width, m.height) == (83, 80)
-    assert m.footprint == 6889
+    assert (m.width, m.height) == (80, 80)
+    assert m.footprint == 6400
     assert "@" in "".join(m.rows)
 
 
@@ -365,8 +365,8 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
 
 def test_the_checked_in_grid_keeps_the_recorded_shape() -> None:
     rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (83, 80)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 6889
+    assert (max(map(len, rows)), len(rows)) == (80, 80)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 6400
 
 
 @pytest.mark.slow  # drives the engine over a whole problem
@@ -377,13 +377,31 @@ def test_the_rom_fold_is_the_footprint_minimum() -> None:
     Once the tape and adapter push the machine past 80 columns, folding to the CPU
     makes the ROM needlessly tall and *height* becomes binding. ``ROM_ROWS`` is the
     swept minimum, so no other fold may beat it.
+
+    Swept in the configuration ``build_for`` actually ships — display, stream and above
+    all ``middle_order``. Sweeping bare ``build(prog, tape_n=...)`` instead measures a
+    machine nobody generates: without the lane order `sudoku-validity` comes out 83x80
+    against the shipped 80x80, and once ``ADAPTER_TAPE_GAP`` went 6 -> 1 that phantom
+    build's optimum moved to 24 rows while the real one stayed at 23. The old range
+    (25..49) also skipped the recorded fold entirely, so "no other fold may beat it"
+    was never actually asked about the folds nearest it.
     """
     prog = programs.load(SLUG)
-    chosen = machine.build(prog, tape_n=TAPE_N, rom_rows=machine.ROM_ROWS[SLUG]).footprint
-    for rows in range(25, 50):
-        other = machine.build(prog, tape_n=TAPE_N, rom_rows=rows)
+    shipped = dict(
+        tape_n=TAPE_N,
+        display=machine.display_for(SLUG),
+        stream=machine.STREAM_SIZE.get(SLUG),
+        middle_order=machine.LANE_ORDER.get(SLUG),
+    )
+    chosen = machine.build(prog, rom_rows=machine.ROM_ROWS[SLUG], **shipped).footprint
+    assert chosen == machine.build_for(SLUG).footprint, "the sweep is not the shipped build"
+    for rows in range(18, 50):
+        try:
+            other = machine.build(prog, rom_rows=rows, **shipped)
+        except machine.MachineError:
+            continue  # a fold whose pipes do not bind is not a rival
         assert other.footprint >= chosen, f"{rows} rows beats the recorded fold"
-    default = machine.build(prog, tape_n=TAPE_N).footprint
+    default = machine.build(prog, **shipped).footprint
     assert chosen < default, "the default fold is already optimal; drop the override"
 
 
@@ -407,5 +425,9 @@ def test_the_worst_public_case_is_well_inside_the_cap_on_the_real_engine() -> No
     worst = max(c.ticks for c in res.cases)
     assert worst < scoring.DEFAULT_TICK_CAP / 4, f"worst case {worst:,} ticks"
     assert res.score is not None and res.avg_ticks is not None
-    assert res.area2 == 8836
+    # 8836 (94²) was two shapes ago and this assertion is gated behind LM1_SLOW, so it
+    # sat stale through the 83x80 era too. Now 80x80 = 6,400: ``ADAPTER_TAPE_GAP`` 6 -> 1
+    # took the last three columns and made the machine square, which is where a
+    # ``max(w, h)²`` score stops rewarding any further narrowing.
+    assert res.area2 == 6400
     assert res.score < 5e9, f"score regressed to {res.score:,.0f}"

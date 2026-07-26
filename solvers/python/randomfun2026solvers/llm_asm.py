@@ -103,6 +103,14 @@ class Asm:
         self.ldi(v, note)
         self.st(s)
 
+    def zero(self, slots: list[str], note: str = "") -> None:
+        """Clear many slots with one ``LDI``: ``ST`` preserves ACC, so the load is
+        paid once rather than once a slot.  Worth doing — every ROM word is 12
+        ticks on every taken branch in the program."""
+        self.op("LDI", 0, note)
+        for s in slots:
+            self.op("ST", s)
+
     def copy(self, dst: str, src: str, note: str = "") -> None:
         self.ld(src, note)
         self.st(dst)
