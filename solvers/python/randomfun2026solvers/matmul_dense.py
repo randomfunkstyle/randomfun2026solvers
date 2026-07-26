@@ -129,6 +129,7 @@ from dataclasses import dataclass, field
 from randomfun2026solvers.circuit import CCW, CW, Circuit, Collision, E, N, S, W
 from randomfun2026solvers.matmul_grid import (
     DEAD_LANES,
+    ENTRY,
     LAID,
     SELF_LOOPS,
     band_of,
@@ -160,21 +161,18 @@ __all__ = [
 # The six columns 13..18 are `MAC`'s own: with `sb` at 13, `rc` at 14, `rb` at
 # 16, `sc` at 17 and `s` straddling 18/19, the twelve-glyph body closes as an
 # 8x2 rectangle whose every pipe op lands in its own band with nothing skipped.
-IW = 24
+IW = 25
 ANCHORS: dict[tuple[str, bool], int] = {
     #  (ring, sending) -> north-wall column
-    ("q", True): 1,   ("q", False): 3,
-    ("x", True): 6,   ("x", False): 21,      # split: `sx` by `io`, `rx` by `s`
-    ("io", True): 9,  ("io", False): 8,
-    ("k", True): 12,  ("k", False): 13,
-    ("b", True): 15,  ("b", False): 17,
-    ("c", True): 18,  ("c", False): 16,
-    ("s", True): 19,  ("s", False): 20,
+    ("q", True): 1,   ("q", False): 2,
+    ("io", True): 4,  ("io", False): 5,
+    ("x", True): 8,   ("x", False): 7,
+    ("k", True): 10,  ("k", False): 11,
+    ("s", False): 14, ("s", True): 15,
+    ("b", False): 17, ("b", True): 18,
+    ("c", True): 21,  ("c", False): 22,
 }
 
-#: The two columns kept clear of glyphs.  A row that ends on the band at the
-#: very edge of a box has nowhere to turn, so the outermost column each side is
-#: reserved for turns and for the corridors between boxes.
 MARGIN_COLS = (0, IW - 1)
 
 
@@ -570,92 +568,6 @@ def lay_chain(blocks: list[str], b: Bands) -> Box:
     return box
 
 
-# ── the hot chain, placed by hand ─────────────────────────────────────────────
-#
-# ``TBODY -> MAC -> TTAIL`` and ``TNEXT`` are 60% of every tick the machine
-# spends, and none of the three fits the pen's shape: ``MAC`` needs the
-# east-entry rectangle (it reads `s` then `b` then `c`, and those bands run east
-# to west in that order), ``TBODY`` is two cells walked *north* up a column that
-# lies in `recv-x` and `send-s` at once, and ``TTAIL`` has to turn round in the
-# middle because `sc` is east of `rc`.  Laid out by hand the four of them close
-# in nine rows of ten columns with no corridor between any two.
-HOT = ("TBODY", "MAC", "TTAIL")
-
-
-def hot_box(b: Bands) -> Box:
-    """The `t` loop: ten columns, nine rows, one corridor in and one out."""
-    cells, x0, w, first, form = rect_loop("MAC", b, 1, b.iw - 2)
-    if (w, form) != (8, "east"):
-        raise Collision(f"MAC laid as a {w}x2 {form} rectangle, not 8x2 east")
-    e, ee = x0 + w, x0 + w + 1          # the two columns east of the rectangle
-    box = Box(list(HOT) + ["TNEXT"], x0, ee)
-    g: dict[tuple[int, int], str] = dict(cells)
-
-    def blanks(pts: list[tuple[int, int]]) -> None:
-        for p in pts:
-            g.setdefault(p, " ")
-
-    # MAC's straight exit leaves east along row 0 and drops down the far column;
-    # its entry comes back up the near one, so the two never meet.
-    blanks([(e, 0)])
-    g[(ee, 0)] = "v"
-    blanks([(ee, 1), (ee, 2), (ee, 3)])
-    g[(e, 1)] = "<"                      # steers TBODY's man into the rectangle
-    g[(e, 2)] = "s"                      # TBODY: `ss`
-    g[(e, 3)] = "r"                      # TBODY: `rx`
-    g[(ee, 4)] = "<"
-    blanks([(e, 4), (x0 + 7, 4)])
-    g[(x0 + 6, 4)] = "r"                 # TTAIL: `rs`
-    blanks([(x0 + 5, 4), (x0 + 4, 4), (x0 + 3, 4)])
-    g[(x0 + 2, 4)] = "r"                 # TTAIL: `rc`
-    g[(x0 + 1, 4)] = "M"
-    g[(x0, 4)] = "v"
-    g[(x0, 5)] = ">"
-    g[(x0 + 1, 5)] = "1"
-    g[(x0 + 2, 5)] = "W"
-    g[(x0 + 3, 5)] = "-"
-    g[(x0 + 4, 5)] = "s"                 # TTAIL: `sc`
-    g[(x0 + 5, 5)] = "X"
-    # X's clockwise lane turns south into TNEXT; its straight lane runs on east.
-    g[(x0 + 5, 6)] = "<"
-    blanks([(x0 + 4, 6), (x0 + 3, 6), (x0 + 2, 6), (x0 + 1, 6)])
-    g[(x0, 6)] = "v"
-    g[(x0, 7)] = ">"
-    g[(x0 + 1, 7)] = "r"                 # TNEXT: `rc`
-    g[(x0 + 2, 7)] = "b"
-    g[(x0 + 3, 7)] = "s"                 # TNEXT: `sc`
-    blanks([(x0 + 4, 7), (x0 + 5, 7), (x0 + 6, 7), (x0 + 7, 7)])
-    g[(e, 7)] = "^"
-    blanks([(e, 6), (e, 5)])
-    g[(e, 8)] = "^"                      # where ROW_GO's lane merges in
-
-    box.cells = g
-    box.h = 9
-    box.start = {"MAC": first, "TBODY": (e, 3), "TTAIL": (x0 + 6, 4),
-                 "TNEXT": (x0 + 1, 7)}
-    box.facing = {"MAC": W, "TBODY": N, "TTAIL": W, "TNEXT": E}
-    box.branch = {"MAC": (x0 + w - 1, 0, E), "TTAIL": (x0 + 5, 5, E)}
-    box.entry, box.entry_dir = (e, 8), N
-    box.exits = {"TTAIL": ((x0 + 6, 5), E)}
-    _assert_hot_binds(b, x0, w)
-    return box
-
-
-def _assert_hot_binds(b: Bands, x0: int, w: int) -> None:
-    """Every hand-placed pipe op stands in a column that binds its own ring."""
-    want = {
-        (x0 + w, 2): ("s", True), (x0 + w, 3): ("x", False),      # TBODY
-        (x0 + 6, 4): ("s", False), (x0 + 2, 4): ("c", False),     # TTAIL rs, rc
-        (x0 + 4, 5): ("c", True),                                 # TTAIL sc
-        (x0 + 1, 7): ("c", False), (x0 + 3, 7): ("c", True),      # TNEXT
-    }
-    for cell, (ring, send) in want.items():
-        got = b.ring_at(cell[0], send)
-        if got != ring:
-            raise Collision(f"{cell} binds {got!r}, wanted {ring!r} "
-                            f"({'send' if send else 'recv'})")
-
-
 # ── the room: boxes stacked, edges routed ─────────────────────────────────────
 #: Blank rows between two boxes.  One is enough for a corridor to *run* along;
 #: two is what it takes for a corridor to reliably get *out* of a box, because
@@ -785,7 +697,7 @@ class DenseRoom:
 #: load phases.  Only routing distance depends on it -- every edge between two
 #: boxes is a corridor either way -- but a corridor is ticks, and `GEND`,
 #: `GRP_GO` and `TNEXT` are on the emit path 34 times a case.
-BOX_ORDER = ["TBODY", "EMIT_SET", "GRP_GO", "E1", "GG2", "E2", "GEND", "ROW", "ROW_GO",
+BOX_ORDER = ["TBODY", "TNEXT", "GRP_GO", "E1", "GG2", "E2", "GEND", "ROW", "ROW_GO",
              "BGRP_END", "BGRP_GO", "BL1_R", "BL2", "BL2_R", "BROW_GO",
              "HEAD", "BROW"]
 
@@ -793,17 +705,8 @@ BOX_ORDER = ["TBODY", "EMIT_SET", "GRP_GO", "E1", "GG2", "E2", "GEND", "ROW", "R
 def build_room(b: Bands | None = None) -> DenseRoom:
     """Stack the boxes, draw them, and route every edge that is not internal."""
     b = b or bands()
-    made: dict[str, Box] = {"TBODY": hot_box(b)}
-    for chain in chains_of():
-        # `TNEXT` is a chain of its own to the CFG, but geometrically it is the
-        # `t` loop's return leg and lives in the hot box with the other three.
-        if chain.blocks[0] in ("TBODY", "TNEXT"):
-            continue
-        made[chain.blocks[0]] = lay_chain(chain.blocks, b)
-    #  falls through from  in the CFG, but the hot box has no
-    # room for its nine glyphs (they reach the  band, twelve columns west of
-    # anything else in there), so it becomes a box of its own and one corridor.
-    made["EMIT_SET"] = lay_chain(["EMIT_SET"], b)
+    made: dict[str, Box] = {c.blocks[0]: lay_chain(c.blocks, b)
+                            for c in chains_of()}
     boxes = [made[n] for n in BOX_ORDER]
     if len(boxes) != len(made):
         raise Collision(f"box order lists {len(boxes)} of {len(made)} chains")
@@ -827,6 +730,14 @@ def build_room(b: Bands | None = None) -> DenseRoom:
             facing[name] = box.facing[name]
 
     room = DenseRoom(c, b, boxes, iw, ih, MARGIN, starts, facing)
+    # The man spawns at `@` facing east and walks the blanks of the entry block's
+    # own entry run into its first glyph.  Without this the grid loads, the six
+    # relay men circulate, and nothing at all comes out.
+    (ex, ey), ed = room.heading(ENTRY)
+    if ed != E:
+        raise Collision(f"{ENTRY} is entered heading {ed}, not east")
+    c.set(ex - 1, ey, "@")
+    walked.setdefault((ex - 1, ey), set()).update({0, 1})
     _route_edges(room, walked)
     return room
 
@@ -952,15 +863,20 @@ def _route_edges(room: DenseRoom, walked: dict[tuple[int, int], set[int]]) -> in
 #: deadlocks *silently*.
 RING_WORDS = {"x": 256, "b": 96, "c": 8, "k": 6, "q": 4, "s": 1}
 
-#: Rings whose turnaround room stacks straight above its own two columns,
-#: innermost first.  A level costs one row and buys two cells of ring, so the
-#: order is by how little each has to hold -- and `s`, the one-word spill the
-#: MAC re-reads every lap, sits closest to the wall, where its *latency* is what
-#: the hot loop pays.
-LEVELS = {"s": 0, "q": 1, "k": 2, "c": 3}
+#: No ring stacks.  A turnaround room is six columns wide and every ring's pipe
+#: climbs straight up its own attach column, so a relay may span no column but
+#: its ring's own two -- and `MAC`'s six anchors sit in seven consecutive
+#: columns, which is exactly what makes the 8x2 rectangle close.  Enumerated,
+#: every window for every ring holds somebody else's riser.  So all seven pairs
+#: get the treatment the coiled ones already had: a north-band row apiece,
+#: ordered west to east so no run ever passes over a riser that reaches higher.
+LEVELS: dict[str, int] = {}
 
-#: Rings too long to stack: their pipes leave north, run east over the worker
-#: and coil in the strip beside it, where the height is already paid for.
+#: Rings long enough to need a serpentine in the strip rather than a straight
+#: drop.  `x` holds 256 words and `b` 96; the rest are eight or fewer, and for
+#: those the *depth* of the relay is chosen to make the ring only just long
+#: enough -- a ring the man re-reads every lap costs its whole length in
+#: latency, and `s` is read twice per MAC lap.
 COILED = ("x", "b")
 
 #: The smallest turnaround room there is: an eight-cell walk carrying one word.
@@ -986,7 +902,7 @@ def _north_rows(off: int) -> tuple[dict[tuple[str, bool], int], list[str]]:
     higher: strip columns go **east to west**.
     """
     pipes = sorted((ANCHORS[(r, s)] + off, (r, s))
-                   for r in (*COILED, "io") for s in (True, False))
+                   for r in (*RING_WORDS, "io") for s in (True, False))
     rows = {key: row for row, (_, key) in enumerate(pipes)}
     order = [r for (r, s) in (k for _, k in pipes) if s]
     return rows, order[::-1]
@@ -1052,23 +968,7 @@ def build_grid(room: DenseRoom | None = None):
 
     lengths: dict[str, int] = {}
 
-    # -- the four stacked rings -----------------------------------------------
-    for ring, lev in LEVELS.items():
-        sc, rc = col(ring, True), col(ring, False)
-        if abs(sc - rc) > 3:
-            raise Collision(f"{ring}: columns {sc} and {rc} straddle no relay")
-        box_x = min(sc, rc) - 1
-        box_y = wall - 6 - lev
-        _relay_clear(box_x, ring, off)
-        stamp(g, box_x, box_y, RELAY)
-        fwd = draw_pipe(g, [(sc, wall - 1), (sc, box_y + RELAY_H)])
-        ret = draw_pipe(g, [(rc, box_y + RELAY_H), (rc, wall - 1)])
-        lengths[ring] = fwd + ret
-        if fwd + ret < RING_WORDS[ring] + 1:
-            raise Collision(f"ring {ring} holds {fwd + ret}, "
-                            f"needs {RING_WORDS[ring] + 1}")
-
-    # -- input, output and the two coiled rings, out in the strip -------------
+    # -- every ring, and the two I/O rooms, out in the strip -------------------
     for i, ring in enumerate(blocks):
         gx = es + i * STRIP_W
         sc, rc = col(ring, True), col(ring, False)
@@ -1081,20 +981,40 @@ def build_grid(room: DenseRoom | None = None):
             draw_pipe(g, [(gx + 1, top - 1), (gx + 1, r_in), (rc, r_in),
                           (rc, wall - 1)])
             continue
-        legs = [(sc, wall - 1), (sc, r_out), (gx + 4, r_out)]
-        y = top
-        for c_off in (4, 3, 2):
-            legs += [(gx + c_off, y), (gx + c_off, deep if y == top else top)]
-            y = deep if y == top else top
-        fwd = draw_pipe(g, [q for j, q in enumerate(legs)
-                            if j == 0 or q != legs[j - 1]])
-        stamp(g, gx, deep + 1, RELAY)
-        ret = draw_pipe(g, [(gx + 1, deep), (gx + 1, r_in), (rc, r_in),
-                            (rc, wall - 1)])
+        need = RING_WORDS[ring] + 1
+        if ring in COILED:
+            # Same rule as the straight drop: the pipe whose row is higher has
+            # to take the eastern column, or its own run cuts the other's riser.
+            coil = (4, 3, 2) if r_out < r_in else (1, 2, 3)
+            back = gx + (1 if r_out < r_in else 4)
+            legs = [(sc, wall - 1), (sc, r_out), (gx + coil[0], r_out)]
+            y = top
+            for c_off in coil:
+                legs += [(gx + c_off, y), (gx + c_off, deep if y == top else top)]
+                y = deep if y == top else top
+            fwd = draw_pipe(g, [q for j, q in enumerate(legs)
+                                if j == 0 or q != legs[j - 1]])
+            stamp(g, gx, deep + 1, RELAY)
+            ret = draw_pipe(g, [(back, deep), (back, r_in), (rc, r_in),
+                                (rc, wall - 1)])
+        else:
+            # Straight down into a relay whose depth is chosen so the ring is
+            # only just long enough: every extra cell is a tick the man waits.
+            # Inside one block the two pipes cross unless the *higher* row
+            # takes the *eastern* column: a run reaches its own column across
+            # everything west of it, so the other riser has to start below it.
+            cf, cr = (gx + 4, gx + 1) if r_out < r_in else (gx + 1, gx + 4)
+            flat = ((wall - 1 - r_out) + abs(cf - sc)
+                    + (wall - 1 - r_in) + abs(cr - rc) + 2)
+            by = top + max(1, (need - flat + 1) // 2)
+            stamp(g, gx, by, RELAY)
+            fwd = draw_pipe(g, [(sc, wall - 1), (sc, r_out), (cf, r_out),
+                                (cf, by - 1)])
+            ret = draw_pipe(g, [(cr, by - 1), (cr, r_in), (rc, r_in),
+                                (rc, wall - 1)])
         lengths[ring] = fwd + ret
-        if fwd + ret < RING_WORDS[ring] + 1:
-            raise Collision(f"ring {ring} holds {fwd + ret}, "
-                            f"needs {RING_WORDS[ring] + 1}")
+        if fwd + ret < need:
+            raise Collision(f"ring {ring} holds {fwd + ret}, needs {need}")
 
     art = [r.rstrip() for r in g.rows()]
     while art and not art[-1]:
