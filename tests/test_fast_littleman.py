@@ -47,8 +47,6 @@ def test_native_and_python_engines_agree_on_exact_ticks() -> None:
         native = machine.run(**kwargs)
         python = machine.run(**kwargs, native=False)
         assert native.output == python.output
-        # The two engines agreeing is the claim; *which* tick they agree on is not, so it
-        # is not pinned — a faster `triangle_cpu.man` must not fail an engine-parity test.
         assert native.step == python.step
         assert native.passed is python.passed is True
 
@@ -62,11 +60,6 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-    # ~105k ticks: 105,580 before ``ADAPTER_TAPE_GAP`` went 6 → 1, 105,270 after. A read
-    # is strictly serial and pays the whole response pipe, so five columns off the
-    # adapter-to-STORE corridor is 310 ticks off this case. Recorded, not asserted — this
-    # test is about frames being judged in memory, and `palette_cpu.man` is generated, so
-    # pinning its tick here means every generator win fails an unrelated test.
     assert result.output == []
 
 

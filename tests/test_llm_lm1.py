@@ -106,14 +106,14 @@ def built():
     return machine, program
 
 
+@pytest.mark.slow
 def test_checked_in_grid_still_matches_the_generator(built) -> None:
     machine, _program = built
     assert GRID.read_text() == "\n".join(machine.rows) + "\n"
 
 
-def test_the_tape_is_sized_to_the_program_not_the_public_cases(built) -> None:
-    _machine, program = built
-    _text, slots = llm_lm1.build_asm()
+def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:
+    program, slots = program
     # 4 <= W, H <= 16, so the grid is 256 cells whatever the case holds.
     assert slots > llm_lm1.PANEL * llm_lm1.PANEL
     assert program.P > 0
@@ -127,9 +127,14 @@ def test_the_grid_passes_every_public_case_on_the_engine() -> None:
     failed = [(c.name, c.detail) for c in result.cases if not c.passed]
     assert not failed, failed
     assert len(result.cases) == 14
-    # Measured 22,200,966 average / 35,011,205 worst against a 50M cap.  The margin
+    # Measured 19,354,082 average / 30,213,928 worst against a 50M cap.  The margin
     # is the point of the assertion: a change that doubles the worst case fails a
-    # private test rather than scoring badly.
+    # private test rather than merely scoring badly.
+    #
+    # The two-tier build (``hot=HOT``) measures 8,605,207 / 13,676,774 here and on
+    # the native validator, and was **rejected by the judge at 4/28** — see
+    # ``LLM-DESIGN.md``.  Until that divergence is explained, the shipped machine is
+    # the single-tape one, and this assertion guards *it*.
     assert max(c.ticks for c in result.cases) < 40_000_000
 
 
@@ -139,3 +144,17 @@ def test_the_registered_asm_still_matches_the_generator() -> None:
 
     text, _slots = llm_lm1.build_asm()
     assert lm1_programs.available()[SLUG].read_text() == text
+
+
+def test_the_shipped_machine_is_inside_the_judge_s_time_cap() -> None:
+    """Ticks are the score; ``runners x ticks`` is what the judge actually spends.
+
+    The two-tier build was 2.36x faster in ticks and was rejected ``4/28`` with
+    ``10 time-cap`` — 114 live men against this machine's 5.  This asserts the
+    axis that failure exposed, on the machine we ship.
+    """
+    from randomfun2026solvers import simcost
+
+    men = simcost.live_runners(GRID)
+    assert men <= 8, f"{men} live men — a man-memory crept in"
+    assert men * 20_275_186 < simcost.JUDGE_TIMEOUT_FLOOR

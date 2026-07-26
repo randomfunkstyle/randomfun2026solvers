@@ -1,0 +1,20 @@
+# little-little-man — submission 42f85a97-98f4-4c7d-b1a3-dd39267eb020
+
+verdict      done: 4/28 cases, no score (a full pass is required)
+submitted    2026-07-26T12:20:43+0300
+grid         203x204
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  511890bc3ebfd566c570069aad400318471b5c6501519def64de64f867299428
+commit       95426ae
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 4/28 test cases
+
+Failed 10 of 14 public tests (10 time-cap)
+Failed 14 of 14 private tests (14 time-cap)
+Run your program in the editor to view public test cases
+
+notes:
+two-tier store: 52 hot slots in a man-memory, 8.6M avg ticks, 203x204

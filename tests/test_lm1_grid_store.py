@@ -74,6 +74,7 @@ def test_an_unknown_tier_names_the_ones_that_exist() -> None:
         machine.build_for("brackets", store="nonesuch")
 
 
+@pytest.mark.slow
 def test_snake_ring_is_the_one_program_the_swap_is_free_for() -> None:
     """``n=9`` is small enough that ``3n + 9`` fits inside the CPU's own height, so
     the block hides under a dimension already being paid for. This is the *only*
@@ -86,7 +87,7 @@ def test_snake_ring_is_the_one_program_the_swap_is_free_for() -> None:
     def area2(m: machine.Machine) -> int:
         return max(max(len(r) for r in m.rows), len(m.rows)) ** 2
 
-    assert area2(grid) == area2(tape) == 18496
+    assert area2(grid) == area2(tape) == 18225
 
 
 @pytest.mark.slow

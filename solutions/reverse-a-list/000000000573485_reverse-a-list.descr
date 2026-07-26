@@ -1,0 +1,16 @@
+# reverse-a-list — submission 65eac402-cee9-4b0a-b6cb-e612f739ff45
+
+verdict      done: 20/20 cases, area2 361, avgTicks 1,589, score 573,485
+submitted    2026-07-26T10:13:09+0300
+grid         19x18
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  b8aeacc67c36d849f1581a626b3fce233bfb5d92be7d65b6b0c013c04e4fa455
+commit       b4df783
+local        reverse-a-list: 8/8 public cases, avg 1,017 ticks
+source       tasks/solutions/reverse-a-list_ring.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+19x18 AST value ring; worker moved down again; output raised to lower right; two-cell corner-to-corner output pipe; ticks unchanged

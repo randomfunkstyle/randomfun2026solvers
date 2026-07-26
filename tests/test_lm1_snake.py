@@ -159,6 +159,7 @@ def test_the_rom_image_draws_what_the_source_program_draws() -> None:
 
 # ── the generated grid ───────────────────────────────────────────────────────
 @node_required
+@pytest.mark.slow
 def test_the_checked_in_grid_matches_the_generator() -> None:
     expected = "\n".join(_machine().rows) + "\n"
     assert GRID.read_text(encoding="utf-8") == expected, (
@@ -168,26 +169,26 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
 
 
 @node_required
+@pytest.mark.slow
 def test_the_generated_machine_declares_the_panel_and_no_output() -> None:
     m = _machine()
     assert m.display == (16, 16)
     assert "O" not in "".join(m.rows), "output on a display problem is an error"
 
-
 @node_required
+@pytest.mark.slow
 def test_the_rom_fold_is_the_footprint_optimum() -> None:
     """The default fold aims the ROM at the *CPU's* width and knows nothing about the
     panel, which adds rows and makes height binding — the same trade ``plotter`` makes.
 
-    Unlike ``plotter``, the optimum here *spends* width: unfolding the ROM from 22 rows
-    to 9 takes it from 119x142 to 123x129, four columns wider and thirteen rows shorter.
-    ``max(w, h)²`` is scored, and 123 < 142, so the wider machine is the smaller one.
+    The two-read jump block changed the default fold's geometry, but the explicit
+    9-row fold still wins on the scored maximum dimension.
     """
     default = machine.build(programs.load("snake"), tape_n=80, display=(16, 16))
     tuned = _machine()
     assert tuned.rom_rows == machine.ROM_ROWS["snake"] == 9
     assert tuned.footprint < default.footprint
-    assert tuned.width > default.width and tuned.height < default.height
+    assert tuned.height < default.height
 
 
 @node_required
@@ -242,8 +243,6 @@ def test_the_score_is_measured_from_the_committed_frames() -> None:
     res = score_program(GRID, "snake")
     assert not res.approx, "display ticks fell back to the settle-tick estimate"
     assert res.avg_ticks is not None and res.score == pytest.approx(res.area2 * res.avg_ticks)
-    # ~611k average ticks locally; the judge's 17 cases average ~955k. Not asserted: a
-    # better average is not a failure, and the judge keeps the best submission anyway.
     # The dearest public case is ~2.3M of the 15M cap. Private cases are never served
     # for this problem, but ``gradebook`` reported 0 and served one anyway, so keep the
     # margin: the constraint box allows only ~8 rounds more than the longest case uses.
@@ -287,6 +286,7 @@ def _stub_unit(**_sizes: int) -> object:
 
 
 @node_required
+@pytest.mark.slow
 def test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -390,6 +390,7 @@ def test_the_ring_program_draws_every_public_frame_on_the_emulator(case: dict) -
 
 
 @node_required
+@pytest.mark.slow
 def test_the_checked_in_ring_grid_matches_the_generator() -> None:
     expected = "\n".join(_ring_machine().rows) + "\n"
     assert RING_GRID.read_text(encoding="utf-8") == expected, (
@@ -399,12 +400,8 @@ def test_the_checked_in_ring_grid_matches_the_generator() -> None:
 
 
 @node_required
+@pytest.mark.slow
 def test_the_ring_machine_is_wired_the_way_the_coprocessor_needs() -> None:
-    """The ring build's box is *larger* than the tape-only `snake` build's and it still
-    scores ~5x better, because score is ``footprint x avg_ticks`` and the coprocessor
-    buys far more in ticks than it costs in area. That is why nothing here asserts a
-    footprint: "smaller" is not the same as "better", and this program is the proof.
-    """
     m = _ring_machine()
     assert "O" not in "".join(m.rows)
     # The panel belongs to the block, so the CPU declares no display of its own.
@@ -413,7 +410,6 @@ def test_the_ring_machine_is_wired_the_way_the_coprocessor_needs() -> None:
     for arm in ("GROW", "STEP", "FRUIT", "RED"):
         assert f"stream:unit:{arm}" in named, f"the {arm} arm is unnamed in the overlay"
     assert {"stream:ring", "stream:relay", "stream:panel"} <= named
-
 
 @node_required
 def test_the_engine_plays_the_losing_case_on_the_ring_machine() -> None:
@@ -446,17 +442,6 @@ def test_every_public_case_commits_the_expected_frames_on_the_ring_machine() -> 
 @pytest.mark.slow  # a full scoring run
 @node_required
 def test_the_coprocessor_grid_is_measurable_and_fits_the_cap() -> None:
-    """The rewrite's payoff, recorded rather than asserted.
-
-    Submitted at 3,369,020,264 against the tape version's 15,891,242,682 — the judge's
-    17 cases average 182,149 ticks where they averaged 954,945. Locally: 18,496 x
-    122,264. The box got *bigger* (18,496 against 16,641) and the score fell 4.7x,
-    which is the trade the coprocessor exists to make — and the reason no assertion here
-    prefers a smaller footprint.
-
-    What is asserted is what could actually break a submission: the ticks are really
-    measured (not the settle-tick fallback) and no public case approaches the cap.
-    """
     from randomfun2026solvers.scoring import score_program
 
     res = score_program(RING_GRID, "snake")

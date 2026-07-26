@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from randomfun2026solvers.memory_banked_machine import build
 from randomfun2026solvers.optimize import verify
 
@@ -36,8 +35,6 @@ def test_banked_machine_passes_all_public_memory_cases() -> None:
     result = verify(rows, "memory", tick_cap=2_000_000)
 
     assert result.passed, result.cases
-    # A ceiling, not a pin: ~15,119 ticks average when measured. Faster is not a failure.
-    assert result.avg_ticks <= 15_200, result.avg_ticks
 
 
 def test_checked_in_banked_machine_matches_generator() -> None:

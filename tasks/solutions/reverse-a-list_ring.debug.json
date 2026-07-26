@@ -1,0 +1,453 @@
+{
+  "title": "reverse-a-list \u2014 compact AST value ring",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "worker",
+      "x": 0,
+      "y": 3,
+      "w": 12,
+      "h": 13,
+      "note": "INIT, LOAD, one-time k-1 setup, ROTATE, EMIT, and NEXT.",
+      "color": "#3b82f6",
+      "tags": [
+        "compute",
+        "ast"
+      ]
+    },
+    {
+      "name": "U relay",
+      "x": 12,
+      "y": 4,
+      "w": 4,
+      "h": 6,
+      "note": "Two-wide bottom-entry U loop; the return leaves from its east wall.",
+      "color": "#3b82f6",
+      "tags": [
+        "stack",
+        "ring",
+        "r-to-U"
+      ]
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "full length with extremes",
+      "input": "16 -1000000 1000000 0 1 -1 999999 -999999 7 7 42 -42 3 2 1 0 -1000000",
+      "from_tick": 0,
+      "to_tick": 8000,
+      "watch": [
+        "worker",
+        "U relay",
+        "ring return"
+      ],
+      "note": "Worst legal list length, duplicates, and both value bounds."
+    }
+  ],
+  "lanes": [
+    {
+      "name": "input pipe",
+      "points": [
+        [
+          13,
+          2
+        ],
+        [
+          12,
+          2
+        ],
+        [
+          12,
+          3
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          13,
+          2
+        ],
+        [
+          12,
+          2
+        ],
+        [
+          12,
+          3
+        ]
+      ]
+    },
+    {
+      "name": "output pipe",
+      "points": [
+        [
+          12,
+          14
+        ],
+        [
+          13,
+          14
+        ]
+      ],
+      "note": "Two-cell minimum from worker east wall into the output top wall.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          12,
+          14
+        ],
+        [
+          13,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "ring forward",
+      "points": [
+        [
+          12,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          10
+        ]
+      ],
+      "note": "One alignment step, then straight north into the relay bottom.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          12,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          10
+        ]
+      ]
+    },
+    {
+      "name": "ring return",
+      "points": [
+        [
+          16,
+          6
+        ],
+        [
+          17,
+          6
+        ],
+        [
+          17,
+          13
+        ],
+        [
+          16,
+          13
+        ],
+        [
+          14,
+          13
+        ],
+        [
+          12,
+          13
+        ]
+      ],
+      "note": "Fourteen cells; with the three-cell forward leg, exactly the 17-cell bound.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          6
+        ],
+        [
+          17,
+          6
+        ],
+        [
+          17,
+          7
+        ],
+        [
+          17,
+          8
+        ],
+        [
+          17,
+          9
+        ],
+        [
+          17,
+          10
+        ],
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          12
+        ],
+        [
+          17,
+          13
+        ],
+        [
+          16,
+          13
+        ],
+        [
+          15,
+          13
+        ],
+        [
+          14,
+          13
+        ],
+        [
+          13,
+          13
+        ],
+        [
+          12,
+          13
+        ]
+      ]
+    },
+    {
+      "name": "first k-1 setup",
+      "points": [
+        [
+          10,
+          7
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          4,
+          10
+        ],
+        [
+          10,
+          10
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          7
+        ],
+        [
+          9,
+          7
+        ],
+        [
+          8,
+          7
+        ],
+        [
+          7,
+          7
+        ],
+        [
+          6,
+          7
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          4,
+          8
+        ],
+        [
+          4,
+          9
+        ],
+        [
+          4,
+          10
+        ],
+        [
+          5,
+          10
+        ],
+        [
+          6,
+          10
+        ],
+        [
+          7,
+          10
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          9,
+          10
+        ],
+        [
+          10,
+          10
+        ]
+      ]
+    },
+    {
+      "name": "next-value feedback",
+      "points": [
+        [
+          2,
+          12
+        ],
+        [
+          2,
+          7
+        ],
+        [
+          1,
+          7
+        ],
+        [
+          1,
+          10
+        ],
+        [
+          10,
+          10
+        ],
+        [
+          10,
+          11
+        ]
+      ],
+      "note": "Positive count is decremented and returns to ROTATE.",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          2,
+          12
+        ],
+        [
+          2,
+          11
+        ],
+        [
+          2,
+          10
+        ],
+        [
+          2,
+          9
+        ],
+        [
+          2,
+          8
+        ],
+        [
+          2,
+          7
+        ],
+        [
+          1,
+          7
+        ],
+        [
+          1,
+          8
+        ],
+        [
+          1,
+          9
+        ],
+        [
+          1,
+          10
+        ],
+        [
+          2,
+          10
+        ],
+        [
+          3,
+          10
+        ],
+        [
+          4,
+          10
+        ],
+        [
+          5,
+          10
+        ],
+        [
+          6,
+          10
+        ],
+        [
+          7,
+          10
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          9,
+          10
+        ],
+        [
+          10,
+          10
+        ],
+        [
+          10,
+          11
+        ]
+      ]
+    }
+  ]
+}

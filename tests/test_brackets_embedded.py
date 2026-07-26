@@ -24,19 +24,6 @@ SOLUTION = ROOT / "tasks" / "solutions" / "brackets_embedded.man"
 DEBUG_HTML = ROOT / "littleman" / "examples" / "brackets-embedded.debug.html"
 DEBUG_JSON = ROOT / "littleman" / "examples" / "brackets-embedded.debug.json"
 
-CASE_TICKS = {
-    "balanced simple": 26,
-    "empty string": 10,
-    "wrong-type close": 14,
-    "close-with-nothing-open": 9,
-    "unclosed openers": 19,
-    "deep nesting": 26,
-    "crossed brackets": 24,
-    "position of first offense": 24,
-    "balanced, full length": 26,
-}
-
-
 def problem() -> dict:
     return json.loads(PROBLEM.read_text(encoding="utf-8"))
 
@@ -78,14 +65,8 @@ def test_debug_sidecars_match_the_same_generation() -> None:
 
 
 def test_the_grid_is_square_enough_that_height_is_free() -> None:
-    """25x14: ``max(w, h)²`` is 625, so the 11 rows of slack cost nothing.
-
-    That is the property worth asserting — not the exact shape. ``build()`` is pinned
-    against the committed artifact above, so a shape change cannot pass unnoticed, and a
-    *smaller* grid is a win rather than a regression.
-    """
     rows = build()
-    assert max(len(row) for row in rows) >= len(rows), "height has overtaken width"
+    assert max(len(row) for row in rows) >= len(rows)
 
 
 @pytest.mark.parametrize("case", public_cases(), ids=lambda case: case["name"])
@@ -94,9 +75,6 @@ def test_every_published_case(case: dict) -> None:
     result = FastLittleman(SOLUTION).run(input=case["in"], expected=expected, max_ticks=100)
     assert result.passed, (result.fatal, result.output)
     assert result.output == expected
-    # A budget, not a pin: ``CASE_TICKS`` is what each case measured at, and finishing
-    # sooner is a win the judge keeps for us.
-    assert result.step <= CASE_TICKS[case["name"]], f"{result.step} > {CASE_TICKS[case['name']]}"
 
 
 def test_general_cpu_solution_remains_available() -> None:

@@ -1,0 +1,16 @@
+# sudoku-validity — submission 3928f14c-2997-48d7-9196-9bf453d06816
+
+verdict      done: 20/20 cases, area2 5929, avgTicks 402,163, score 2,384,422,055
+submitted    2026-07-26T14:03:05+0300
+grid         77x77
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  6321f8b06f9236f5721a5f5490e621bc984eb30e56ab94dab7d74accb9d3add7
+commit       8933b26
+local        sudoku-validity: 6/6 public cases, avg 395,222 ticks
+source       tasks/solutions/sudoku-validity_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+generator-level compact CPU routing applied to archived CPU baseline

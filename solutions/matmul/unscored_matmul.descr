@@ -1,0 +1,20 @@
+# matmul — submission 13805a1d-3cf7-4e73-872a-e12dd1581453
+
+verdict      done: 0/20 cases, no score (a full pass is required)
+submitted    2026-07-26T14:03:37+0300
+grid         84x85
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  9be03a0a21424dde1b222995e87e5621ac6c43780f9204486002468c1b4ac06e
+commit       8933b26
+local        matmul: 7/7 public cases, avg 105,483 ticks
+source       tasks/solutions/matmul_cpu.man
+
+runner output:
+Passed 0/20 test cases
+
+Failed 7 of 7 public tests (7 step-cap)
+Failed 13 of 13 private tests (13 step-cap)
+Run your program in the editor to view public test cases
+
+notes:
+generator-level compact CPU routing applied to archived CPU baseline

@@ -325,6 +325,7 @@ def _worst_legal_case(op: str) -> tuple[str, str, list[int]]:
 
 
 @node_required
+@slow
 @pytest.mark.parametrize("op", sorted(WORST_LEGAL_TICKS))
 def test_the_worst_legal_batch_fits_the_step_cap(op: str) -> None:
     """The gap that shipped this broken: public data never reaches 80 operations."""
@@ -351,13 +352,12 @@ def test_the_program_stays_on_the_depth_four_trie() -> None:
 
 # ── the generated machine ─────────────────────────────────────────────────────
 @node_required
+@slow
 def test_checked_in_grid_matches_the_generator() -> None:
     """``build_for`` runs the engine's structural analysis: every pipe must bind."""
     m = machine.build_for(SLUG)
     # Width-bound: the unrolled scans make the ROM image 836 words, but packed tokens
-    # halve its cells, so `ROM_ROWS[gradebook]` is the first fold that gets it under the
-    # machine's columns and every fold below that is flat. Trading 20% more area for 5x
-    # fewer ticks is what fits the step cap at all.
+    # halve its cells. The recorded fold keeps it under the machine's own columns.
     assert m.rom_rows == machine.ROM_ROWS[SLUG]
     assert m.tape_n == TAPE_N
     expected = "\n".join(m.rows) + "\n"
@@ -365,7 +365,6 @@ def test_checked_in_grid_matches_the_generator() -> None:
         f"{GRID.name} is stale; regenerate with "
         f"`python -m randomfun2026solvers.lm1.machine {SLUG} --out {GRID}`"
     )
-
 
 @node_required
 @slow

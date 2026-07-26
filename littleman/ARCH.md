@@ -11,7 +11,7 @@ from 15.9bn to **3.37bn**.
 |---|---|---|---|---|
 | 1 | `triangle` | 8×8 | **960** | bespoke |
 | 1 | `memory` | 31×31 | 55,105,622 server | bespoke (pipe tape) |
-| 1 | `reverse-a-list` | 21×21 | 482,564 | bespoke (value ring) |
+| 1 | `reverse-a-list` | 18×18 | 328,131 | bespoke (AST value ring) |
 | 1 | `sort-numbers` | 25×25 | 2,083,304 | bespoke (value ring) |
 | 2 | `history-lesson` | 97×90 | **9,409** | bespoke (base-128 ROM) |
 | 2 | `brackets` | 98×75 | 308,880,647 | LM-1 |
@@ -488,6 +488,36 @@ man-memory answers in one broadcast (`S` out, one decoder matches, `R` back — 
 teleport pair, `memory_men_bcast.py`), so **its latency depends only on the column
 depth `N`, never on the column count `M` or the total size**. Width is therefore
 free and depth is what you pay for.
+
+#### The third axis: a stored word is a *live man*, and the judge charges wall clock
+
+**Measured the hard way — a submission rejected `4/28` with `10 time-cap` /
+`14 time-cap`, on a machine that was 2.36x *faster in ticks* and passed all 14
+public cases on both local validators.** `little-little-man` with 52 of its slots
+moved into a man-memory:
+
+| | live men | ticks a case | runner-ticks |
+|---|---:|---:|---:|
+| one 427-slot tape | **5** | 20,275,186 | **0.10bn** |
+| + 52-slot man tier | **114** | 8,605,207 | **0.98bn** |
+
+Score counts *ticks*; the grader spends *wall clock*, and wall clock goes as
+**runners x ticks**. Every stored word in a man-memory is a little man the
+simulator steps on every tick for the whole run, whether or not anyone reads him —
+52 cells plus their decoders, repeaters, router, collector and relay came to 109
+extra men. Ticks fell 2.36x, simulator work rose 9.7x, and the run died on time.
+
+A pipe tape has the opposite shape: values move *without* a man, so 427 slots cost
+**zero** runners. That is why `memory.man` itself is fine — it is small and short —
+and why a man-memory is the wrong tier for anything long-running.
+
+**So the rule above needs its second half:** small and hot goes in a man-memory
+*only if the run is short*. Before adopting one, compute `runners x ticks` against
+the machine it replaces; if it rises by an order of magnitude, the grader will
+reject it however good the score looks. This also qualifies `machine.build`'s
+`store="grid"` docstring ("the one to reach for first"): true on ticks and
+footprint, dangerous on wall clock at any size where `n` men run for millions of
+ticks.
 
 The rule that falls out, measured on `little-little-man` (`LLM-DESIGN.md`): put
 the **big cold** structure in the tape and the **small hot** working set in a

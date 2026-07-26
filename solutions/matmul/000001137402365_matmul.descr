@@ -1,0 +1,16 @@
+# matmul — submission 8b2b71c8-635d-464d-bb93-c88290b4e78f
+
+verdict      done: 20/20 cases, area2 7396, avgTicks 153,786, score 1,137,402,365
+submitted    2026-07-26T14:31:25+0300
+grid         85x86
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  95eff31546aac269f333a40699c0cf32e8b6b8a98c1ac3a6c652ffc7dc500196
+commit       f880436
+local        matmul: 7/7 public cases, avg 102,865 ticks
+source       tasks/solutions/matmul_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+reference-safe compact CPU routing; STREAM west clearance minimized on Node/WASM
