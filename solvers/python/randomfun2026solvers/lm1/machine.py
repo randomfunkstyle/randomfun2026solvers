@@ -2326,7 +2326,12 @@ def _assemble(
     CX = CPU_X_WITH_STREAM if stream else CPU_X_WITH_INPUT if cpu.has_in else CPU_X_WITHOUT_INPUT
     band_rows = 0
     if rom_buffer:
-        band_rows = rom_corridor_rows(rom_buffer, (CX + W + 1) - 1)
+        corridor_x_hi = (
+            max(CX + W + 1, romlay.width - 1)
+            if program.name in ROM_CORRIDOR_WIDE
+            else CX + W + 1
+        )
+        band_rows = rom_corridor_rows(rom_buffer, corridor_x_hi - 1)
     cpu_gap = (
         ROM_BUFFER_CPU_GAP
         if band_rows
@@ -2346,7 +2351,7 @@ def _assemble(
         rom_corridor(
             want=rom_buffer or 0,
             x_lo=1,
-            x_hi=CX + W + 1,
+            x_hi=corridor_x_hi if rom_buffer else CX + W + 1,
             y_top=rom_bottom + 1,
             rows=band_rows,
             fetch_y=fetch_y,
@@ -3664,6 +3669,16 @@ def rom_corridor(
         pts += [(x_lo, y), (x_hi, y)] if i % 2 == 0 else [(x_hi, y), (x_lo, y)]
     pts += [(x_lo, fetch_y), (wall_x, fetch_y)]
     return pts
+
+
+#: Slugs whose ROM corridor may snake across the **whole grid** rather than
+#: stopping at the CPU's east wall. The band it lives in runs from the ROM's
+#: bottom wall to the CPU's top, and everything that is not the ROM — CPU, tier,
+#: adapter, tape, teleports — is placed at or below that top and moves down with
+#: it, so the band is machine-wide and empty. Confining the snake to the CPU's
+#: ~53 columns costs rows in direct proportion: ``little-little-man`` buffers
+#: 3,500 words in 68 rows against 20 at full width, and rows are footprint.
+ROM_CORRIDOR_WIDE: set[str] = set()
 
 
 def rom_corridor_rows(want: int, span: int) -> int:
