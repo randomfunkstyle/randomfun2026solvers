@@ -1,0 +1,16 @@
+# tcp — submission 963e6438-6127-4586-abd0-b3de8c6cd6b7
+
+verdict      done: 20/20 cases, area2 6400, avgTicks 141,988, score 908,720,960
+submitted    2026-07-26T17:30:32+0300
+grid         80x80
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  9cf25b068cefd3fb682dc51dedeac30d6f8ba6992270f51468ef6fb61b731791
+commit       d394db2
+local        tcp: 6/6 public cases, avg 88,889 ticks
+source       tasks/solutions/tcp_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+80x80: memory relocated off the east column, tape no longer sets width (was 103x57)

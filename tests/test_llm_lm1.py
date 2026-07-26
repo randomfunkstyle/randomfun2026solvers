@@ -171,14 +171,24 @@ def test_the_registered_asm_still_matches_the_generator() -> None:
 def test_the_shipped_machine_is_inside_the_judge_s_time_cap() -> None:
     """Ticks are the score; ``runners x ticks`` is what the judge actually spends.
 
-    The two-tier build was 2.36x faster in ticks and was rejected ``4/28`` with
-    ``10 time-cap`` — 114 live men against this machine's 5.  This asserts the
-    axis that failure exposed, on the machine we ship.
+    This is the axis two refusals exposed, and it is the *only* reason the store is
+    banked pipe tapes rather than a man-memory. A man-memory pays ~2 live men per slot
+    plus a fixed staff: at 10 slots it was 30 men and judged ``11/28`` on time-cap, at
+    52 slots 114 men and ``4/28`` — both while scoring *better* in ticks. A pipe tape
+    pays four men at n=52 and four at n=427, constant in size, because a stored word is
+    a value in a rotating ring rather than a man.
+
+    So the bound discriminates by kind, not by a recorded count: two banks plus the two
+    answer teleports are single digits, while any man-memory large enough to be worth
+    building lands at 30+. ``teleport``'s cost is likewise one man regardless of the
+    room's length, which is what lets the answer path cross the machine for free.
     """
     from randomfun2026solvers import simcost
 
     men = simcost.live_runners(GRID)
-    assert men <= 8, f"{men} live men — a man-memory crept in"
+    assert men <= 12, f"{men} live men — a man-memory crept in (a tape is 4 at any size)"
+    # 20.3M was this machine's per-case cost before the store was banked; it is now
+    # ~8.3M, so this stays a conservative ceiling rather than a pin on today's speed.
     assert men * 20_275_186 < simcost.JUDGE_TIMEOUT_FLOOR
 
 
