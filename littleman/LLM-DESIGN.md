@@ -204,9 +204,30 @@ same on six other programs (`OPTIMIZATION.md`): `tcp` was the only one whose tic
 improved at all, by 7.4%, and its 253-column layout still lost 399% on the
 objective.
 
-`memory_men_grid` — the newest man-memory, `cols x rows` — is not a candidate yet
-either: `build_grid` only accepts 4x25 (any other shape raises `IndexError`) and
-nothing in `lm1/` registers it as a store tier.
+`memory_men_grid` — the newest man-memory — is a different geometry, and the one
+where **the shape is a free parameter**: `M` columns of `N` cells, no bit
+alignment and no stride, so `M` and `N` are independent.  Measured on the builder:
+
+    width  = 27 * M   exactly   (2 cols -> 54, 4 -> 108, 8 -> 216)
+    height = 32 + 3 * N         (10 cells -> 62, 25 -> 107, 27 -> 113)
+
+That still cannot hold this program's store, and the reason is per-word area
+rather than aspect ratio.  Best shape for 427 words is 7x61 -> 189x215, `area2`
+**46,225** — larger than the entire machine the tape sits inside (41,616) — because
+a grid spends **81 cells a word** where a folded pipe tape spends **3.7**.
+
+What it is actually for is the *second tier* `ARCH.md` §4.1 calls not-optional: a
+man cell answers in `22 + 14 * depth` ticks against `8.0 * N` for the whole tape,
+so a **small, hot** working set belongs in one.  This program's hot scalars — the
+three men, the two pipes, the loop cursors — are ~40 words and ~2,000 of the 3,350
+reads a case.  A 3x14 tier is 81x74 and fits the dead space east of the CPU band;
+moving those reads off a 3,416-tick tape onto a ~220-tick tier is ~6M ticks, i.e.
+~30% of the machine, and the biggest single number left anywhere in this document.
+
+Two things block it, both known and neither architectural: `build_grid` raises
+`IndexError` for most shapes (`memory_men_addr.py:214`, a width assumption in the
+band room), and the CPU has exactly one store seam — a second tier needs the
+adapter to route on an address *range* rather than only on the sign.
 
 The version of the idea that *would* pay is `snake-ring`'s: not swapping the
 store, but taking the big structure *out* of it.  The 256-cell grid in a
