@@ -205,6 +205,22 @@ def test_the_grid_holds_every_glyph_the_program_compiles_to(built) -> None:
     assert ops >= 322
 
 
+def test_the_grid_renders_to_a_png_that_a_viewer_would_accept(tmp_path) -> None:
+    """The layout is easier to judge by eye than by coordinate, so it renders.
+
+    Only the header and the size are asserted -- the point of the picture is to
+    be looked at, and a test that pinned its pixels would just make it hard to
+    change the palette.
+    """
+    from randomfun2026solvers import man_png
+
+    out = tmp_path / "grid.png"
+    w, h = man_png.render(GRID, out, scale=2, pipe_rows=gp.BAND_H)
+    rows = GRID.read_text(encoding="utf-8").splitlines()
+    assert (w, h) == (2 * max(len(r) for r in rows), 2 * len(rows))
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def test_the_footprint_beats_the_cpu_build_it_replaces(built) -> None:
     rows, _dbg, info = built
     w, h = info["grid"]

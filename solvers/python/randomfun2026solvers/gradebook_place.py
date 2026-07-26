@@ -53,6 +53,27 @@ Two things this machine is *not* vulnerable to, both checked rather than assumed
   single predecessor: every loop head and every operation's return point is
   re-entered from two or three places.  There is nothing to merge.
 * **No op stands on a tie.**  See :func:`bands_of`.
+
+## What it scores, measured rather than projected
+
+On the seven public cases, against the LM-1 CPU build in ``gradebook_cpu.man``
+run on the same data::
+
+                     side     area^2      avg ticks        score
+    CPU            93x92       8,649        286,287     2.476e9
+    this           69x78       6,084         15,646     9.519e7    26.0x
+
+The area is only 1.42x; the 18.3x is ticks, which is what moving every variable
+out of a tape and into a pipe buys.  The submitted CPU score was 6.39e9 on the
+judge's data against 2.476e9 here, a factor of 2.58; at the same factor this
+grid lands near **2.5e8**, which is the *pessimistic* end of ``gradebook_cfg``'s
+own projection table and not the middle of it.
+
+The reason to state that plainly is that the op model is not a forecast of grid
+ticks and should not be read as one: it charges 1,726 ticks for the average
+public case and the grid measures 15,646, a factor of nine, because the model
+charges glyph cells and the grid also walks 2,432 cells of corridor between
+them.  A layout is chosen on measured ticks here for exactly that reason.
 """
 
 from __future__ import annotations
@@ -258,6 +279,12 @@ ATTEMPTS = 150
 #: and was thrown away.  Swept together it is the largest single lever on the
 #: machine: three rows of room, 2,946 corridor cells down to 2,432, and **22% off
 #: the ticks** -- 20,018 to 15,646, which is 1.13e8 down to 9.52e7.
+#:
+#: It is written out rather than recomputed because it cannot be recomputed:
+#: `anneal` prices a move in rows, the rows come from a room built under some
+#: bank shape, and this order was found under a shape the sweep no longer starts
+#: from.  ``--sweep`` therefore measures it against fresh candidates instead of
+#: reproducing it, which is the useful question anyway.
 ORDER = [
     "INIT", "A_END", "ROUND", "OP", "REST_E", "OP_GO", "GET", "SET",
     "S_SKIP", "S_L", "S_TEST", "FOUND", "G_HIT", "REST_B", "REST", "S_HIT",
@@ -554,7 +581,12 @@ if __name__ == "__main__":  # pragma: no cover - the generator's CLI
         base = block_order(WORKER, "INIT")
         rows = block_rows(build_room(BANKS, order=base))
         weight = dict.fromkeys(edges_of(WORKER), 1)
-        orders = {"dfs": base}
+        # The pinned order rides along so the sweep can be asked whether it is
+        # still the best rather than only asked for a fresh one.  It will not be
+        # re-derived exactly: `anneal` prices a move in rows, the rows come from a
+        # room built under some shape, and a different shape gives a different
+        # cost surface -- which is the same reason the two are swept together.
+        orders = {"pinned": ORDER, "dfs": base}
         for i, seeds in enumerate([(1, 5, 11), (23, 42, 99), (7,), (13,)]):
             orders[f"anneal{i}"] = anneal(base, rows, weight, steps=20_000,
                                           seeds=seeds)
