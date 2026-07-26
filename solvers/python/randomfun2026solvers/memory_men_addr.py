@@ -302,6 +302,12 @@ class Addr:
     height: int
     #: names for a grid that cannot carry comments, built from the same coordinates
     debug: DebugMap | None = field(default=None, compare=False, repr=False)
+    #: Where a *host* machine must meet this block when it was built with
+    #: ``io=False``: the request arrives pointing east at ``in_cell`` and the answer
+    #: leaves pointing north from ``out_cell``. Both are ``None`` for the standalone
+    #: program, which owns its own ``I`` and ``O`` rooms and needs no wiring.
+    in_cell: tuple[int, int] | None = field(default=None, compare=False)
+    out_cell: tuple[int, int] | None = field(default=None, compare=False)
 
     @property
     def footprint(self) -> int:
@@ -311,12 +317,24 @@ class Addr:
         return "\n".join(self.rows)
 
 
-def build_addr(n: int) -> Addr:
+def build_addr(n: int, *, io: bool = True) -> Addr:
     """Router, decoder room, cell room, collector — four rooms, ``3n`` pipes.
 
     Every room spans the same rows, so all ``3n`` pipes are two-cell stubs on
     facing walls. That is what makes the extra decoder hop cheap: a pipe's cost is
     its length, and none of these is longer than the wall gap.
+
+    ``io=False`` builds the same hardware as a **STORE block** for a host machine
+    instead of a standalone program: the ``I`` and ``O`` rooms become pipe stubs,
+    reported as ``in_cell`` / ``out_cell``. A program may hold at most one of each
+    room and the CPU owns both, so this is the only way the block can be embedded.
+    Nothing else changes — the router, the tiles and all ``3n`` pipes are the
+    measured hardware, and the point is that this must not perturb them.
+
+    The request stub deliberately still enters the router's **north** wall, turning
+    south inside the block: the router reads its op with ``U``, which is a receive
+    *and* a turn in one glyph, so it is the arrival heading and not just the
+    position that the program depends on.
     """
     dec_body, main_rows = band_room(n, DECODER_TILE, increment=True)
     cell_body, cell_mains = band_room(n, CELL_TILE, increment=False)
@@ -356,10 +374,23 @@ def build_addr(n: int) -> Addr:
     # collector's. Both rooms own exactly one pipe that way, so neither needs a
     # binding argument — only `S` and `R` are ambiguous, and neither is here.
     in_x, out_x = rox + 1, cox + 2
-    _io_room(grid, in_x, roy - 5, "I")
-    draw_pipe(grid, [(in_x, roy - 3), (in_x, roy - 2), (in_x, roy - 1)])
-    _io_room(grid, out_x, roy - 5, "O")
-    draw_pipe(grid, [(out_x, roy - 2), (out_x, roy - 3), (out_x, roy - 4)])
+    if io:
+        _io_room(grid, in_x, roy - 5, "I")
+        draw_pipe(grid, [(in_x, roy - 3), (in_x, roy - 2), (in_x, roy - 1)])
+        _io_room(grid, out_x, roy - 5, "O")
+        draw_pipe(grid, [(out_x, roy - 2), (out_x, roy - 3), (out_x, roy - 4)])
+        stubs: tuple[tuple[int, int] | None, tuple[int, int] | None] = (None, None)
+    else:
+        # Request: in from the west along a clear row above the rooms, then the same
+        # southward drop into the router's north wall the `I` room used.
+        draw_pipe(
+            grid,
+            [(x, roy - 3) for x in range(in_x + 1)] + [(in_x, roy - 2), (in_x, roy - 1)],
+        )
+        # Answer: the collector's north wall as before, carried on to the block's top
+        # row so the host's corridor picks it up without a bend inside the block.
+        draw_pipe(grid, [(out_x, y) for y in range(roy - 2, -1, -1)])
+        stubs = ((0, roy - 3), (out_x, 1))
     for main in main_rows:
         y = roy + main
         # Every hop binds by row: `r` competes only with incoming pipes and `s`
@@ -541,6 +572,8 @@ def build_addr(n: int) -> Addr:
         width=max(len(r) for r in out),
         height=len(out),
         debug=dbg,
+        in_cell=stubs[0],
+        out_cell=stubs[1],
     )
 
 

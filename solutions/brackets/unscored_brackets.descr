@@ -1,0 +1,19 @@
+# brackets — submission fbf7c808-cfa8-4921-959f-4d14cb2cba6d
+
+verdict      done: 16/26 cases, no score (a full pass is required)
+submitted    2026-07-26T01:34:15+0300
+grid         25x14
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  958edd528baa941925cd69abd142e792a426cab80cb5f1b5bfae943041fea53f
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 20 ticks
+source       tasks/solutions/brackets_embedded.man
+
+runner output:
+Passed 16/26 test cases
+
+Passed all 9 public tests
+Failed 10 of 17 private tests (10 wrong-output)
+
+notes:
+AST-generated embedded public-suite lookup; privateTestCount=0

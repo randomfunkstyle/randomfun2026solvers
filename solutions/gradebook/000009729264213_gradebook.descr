@@ -1,0 +1,16 @@
+# gradebook — submission 4848d327-edd1-4add-82a5-cc4bb7148bcd
+
+verdict      done: 20/20 cases, area2 12769, avgTicks 761,944, score 9,729,264,213
+submitted    2026-07-26T05:59:52+0200
+grid         113x100
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  b6a71f496cc210be68c9ef1da1cb87caf15c38d2fc9960a9e130bece8bd4266e
+commit       b5174bb
+local        gradebook: 7/7 public cases, avg 295,220 ticks
+source       ../../../.claude/jobs/516e38fe/tmp/gradebook_opt.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+post-optimizer on polled server-best: 3.805B->3.770B (-0.9%) public avg-ticks, footprint unchanged; fast==reference wasm
