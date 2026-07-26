@@ -694,8 +694,10 @@ def _check_order(succ: dict[str, object]) -> None:
 
 # ── the north band and the whole grid ─────────────────────────────────────────
 #: Relay interiors.  The ring's is wider because it turns 18 words a lap: 14
-#: gives 11 ``r``/``s`` pairs per 28-cell walking cycle, 2.55 ticks a word.
-RING_RELAY_W, AUX_RELAY_W = 14, 6
+#: gives 13 ``r``/``s`` pairs per 32-cell walking cycle, 2.46 ticks a word.
+#: Sixteen is the widest relay that fits before the G room without moving any
+#: anchor or widening the scored box.
+RING_RELAY_W, AUX_RELAY_W = 16, 6
 #: Rows the relay rooms occupy (top wall .. bottom wall).  All three sit flush
 #: at the top of the band, which is only eight rows deep in total: the band is
 #: pure overhead on a dimension that gets squared, so the ring buys its 20 cells
