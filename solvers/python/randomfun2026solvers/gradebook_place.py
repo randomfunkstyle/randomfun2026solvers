@@ -61,13 +61,20 @@ run on the same data::
 
                      side     area^2      avg ticks        score
     CPU            93x92       8,649        286,287     2.476e9
-    this           69x78       6,084         15,646     9.519e7    26.0x
+    this           70x74       5,476         16,496     9.033e7    27.4x
 
-The area is only 1.42x; the 18.3x is ticks, which is what moving every variable
+The area is only 1.58x; the 17.4x is ticks, which is what moving every variable
 out of a tape and into a pipe buys.  The submitted CPU score was 6.39e9 on the
 judge's data against 2.476e9 here, a factor of 2.58; at the same factor this
-grid lands near **2.5e8**, which is the *pessimistic* end of ``gradebook_cfg``'s
+grid lands near **2.3e8**, which is the *pessimistic* end of ``gradebook_cfg``'s
 own projection table and not the middle of it.
+
+**Rows are the only thing that costs.**  The grid is taller than it is wide, so
+every row is ~2.7% of the score and a column is free until the room turns
+square.  That is the rule the north band is built around and the reason
+:data:`REACH` exists at all -- and it cuts the other way too, which is why a
+narrower relay beat a safer one and why ``--sweep`` will not take a smaller room
+that walks further to get around itself.
 
 The reason to state that plainly is that the op model is not a forecast of grid
 ticks and should not be read as one: it charges 1,726 ticks for the average
@@ -103,44 +110,89 @@ TOKEN_ZONE = {
 ZONES = ("RING", "IDS", "FILE", "IO")
 
 
-def bands_of(pipe_in: dict[str, int], pipe_out: dict[str, int],
+def cells_of(legs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Every cell a `plotter_block.pipe` leg list passes through, in flow order."""
+    pts = [legs[0]]
+    for (x0, y0), (x1, y1) in zip(legs, legs[1:], strict=False):
+        sx, sy = (x1 > x0) - (x1 < x0), (y1 > y0) - (y1 < y0)
+        x, y = x0, y0
+        while (x, y) != (x1, y1):
+            x, y = x + sx, y + sy
+            pts.append((x, y))
+    return pts
+
+
+def bands_of(cells_in: dict[str, list[tuple[int, int]]],
+             cells_out: dict[str, list[tuple[int, int]]],
              lo: int, hi: int) -> dict[str, tuple[int, int]]:
-    """The columns in ``[lo, hi]`` where an `r` and an `s` bind the same band.
+    """The columns in ``[lo, hi]`` where an `r` and an `s` reach the same band.
 
-    `Geometry.binds` is the authority on where a pipe op may stand, so the bands
-    are read *out of it* rather than derived from the midpoints by hand.  A column
-    where the incoming and outgoing rules disagree belongs to no band and is left
-    out -- it is the dead gap the channel columns stand in.
+    Measured over the pipes' **actual cells**, which is exact, and exact is
+    cheaper than it sounds:
 
-    So is a column **equidistant from two pipes**, even though `binds` will
-    happily name one: its rule breaks the tie westward, and nothing says the
-    engine breaks it the same way.  With eight pipes in four pairs there are ties
-    to be had -- an ``IO`` band whose bank is wide enough reaches a column exactly
-    between its own riser and ``IDS``'s -- and the op that stands there reads a
-    plausible number from the wrong ring.  `audit_bindings` found one; excluding
-    them here is what stops it being found again.
+        A room cell ``(x, y)`` is ``|x-px| + (y-py)`` from a pipe cell, and every
+        pipe cell is above every room cell, so ``y`` appears in that sum once per
+        pipe and cancels out of the comparison.  **Which pipe is nearest depends
+        on the column and not on the row.**
+
+    That is what lets a band be a column range at all, and it holds *however the
+    risers are bent*.  The first version of this module did not use it: it kept
+    the risers inside a cone one column wide per row so that each anchor would
+    provably beat its own pipe's other cells, and so paid a row of north band for
+    every column of riser.  The band is charged against the room's height and the
+    height is the side being squared -- so that was the expensive axis buying the
+    free one.  Reading the bands off the cells instead frees the riser to be
+    folded for capacity, and the bands simply move; :func:`layout` then checks
+    they still cover their banks.
+
+    A column **equidistant from two pipes** is left out even though a rule could
+    name one: the tie-break is not something the engine promises, and the op that
+    stands there reads a plausible number off the wrong ring.
     """
-    def tied(x: int, cols: dict[str, int]) -> bool:
-        near = sorted(abs(x - c) for c in cols.values())
-        return near[0] == near[1]
+    def reach(cells: list[tuple[int, int]], x: int) -> int:
+        # `- py` rather than `BAND_H - py`: the constant is common to every pipe.
+        return min(abs(x - px) - py for px, py in cells)
 
-    probe = Geometry(TOKEN_ZONE, {}, pipe_in, pipe_out, lo, hi + 1)
     runs: dict[str, tuple[int, int]] = {}
     for x in range(lo, hi + 1):
-        z = probe.binds(x, "rr")
-        if z != probe.binds(x, "sr") or tied(x, pipe_in) or tied(x, pipe_out):
+        near_in = sorted((reach(c, x), z) for z, c in cells_in.items())
+        near_out = sorted((reach(c, x), z) for z, c in cells_out.items())
+        if near_in[0][1] != near_out[0][1]:
             continue
+        if near_in[0][0] == near_in[1][0] or near_out[0][0] == near_out[1][0]:
+            continue
+        z = near_in[0][1]
         a, b = runs.get(z, (x, x))
         runs[z] = (min(a, x), max(b, x))
     return runs
 
 
-#: Columns between a band's incoming and outgoing pipe.  Two, not one: the two
-#: risers run side by side for most of the north band, and pipe glyphs are joined
-#: by 4-adjacency, so touching risers would parse as **one** pipe — a failure the
-#: grid still loads through.  Spreading them symmetrically about the bank centre
-#: leaves both midpoints on the same column, so the bands do not move.
+#: Columns between a band's incoming and outgoing pipe.  Two, not one: pipe
+#: glyphs are joined by 4-adjacency, so two touching risers parse as **one** pipe
+#: -- a failure the grid still loads through.
 SPREAD = 2
+
+
+def pipes_never_touch(cells: dict[str, dict[str, list[tuple[int, int]]]]) -> None:
+    """No cell of one pipe may be 4-adjacent to a cell of another.
+
+    Pipe glyphs join by adjacency, so two risers that brush past each other parse
+    as a **single** pipe -- and a grid whose eight pipes are seven still loads,
+    still runs, and reads the wrong ring.  Folding the risers sideways is exactly
+    what makes this reachable, so it is checked on the cells rather than argued
+    from the column spacing.
+    """
+    owned: dict[tuple[int, int], str] = {}
+    for d, per_zone in cells.items():
+        for z, cs in per_zone.items():
+            for c in cs:
+                owned[c] = f"{d}_{z}"
+    for (x, y), who in owned.items():
+        for nb in ((x + 1, y), (x, y + 1)):
+            other = owned.get(nb)
+            if other is not None and other != who:
+                raise Collision(f"pipes {who} and {other} touch at "
+                                f"{(x, y)}/{nb}; they would parse as one")
 
 
 def _rooms_span(zone: str) -> tuple[int, int]:
@@ -158,13 +210,13 @@ def layout(banks: tuple[tuple[int, int], ...], zones: tuple[str, ...] = ZONES):
     """Bank columns, the eight pipe columns and the four bands, from bank widths.
 
     `banks` is ``(channel columns, code columns)`` per band, west to east.  Band
-    *k*'s pipe pair straddles the centre of bank *k*'s code window, which puts
-    every split inside the channel columns of the next bank along: the gap
-    between two code windows is ``nch + 1`` wide and a split lands in its middle
-    whenever the two banks are within a gap's width of each other.  Both halves
-    of that -- that the bands land where they should, and that the room's fixtures
-    still fit above them -- are then *checked* rather than assumed, so a bank
-    sweep can propose any shape it likes and be told no.
+    *k*'s pipe pair straddles the centre of bank *k*'s code window, and the bands
+    are then read back off the pipes' **actual cells** by :func:`bands_of` -- the
+    risers are folded sideways for capacity, so where a band ends is a property
+    of the shape they took, not of the two anchor columns.  Both halves of that
+    -- that the bands still cover their banks, and that the room's fixtures fit
+    above them -- are *checked* rather than assumed, so a bank sweep can propose
+    any shape it likes and be told no.
     """
     if len(banks) != len(zones):
         raise ValueError(f"{len(banks)} banks for {len(zones)} bands")
@@ -177,7 +229,10 @@ def layout(banks: tuple[tuple[int, int], ...], zones: tuple[str, ...] = ZONES):
     centre = {z: (bk.code0 + bk.code_hi) // 2 for bk, z in zip(made, zones, strict=True)}
     pipe_in = {z: c - SPREAD // 2 for z, c in centre.items()}
     pipe_out = {z: c + SPREAD // 2 for z, c in centre.items()}
-    cols = bands_of(pipe_in, pipe_out, made[0].code0, iw - 2)
+    legs = legs_for(centre)
+    cells = {d: {z: cells_of(legs[z][d]) for z in zones} for d in ("in", "out")}
+    cols = bands_of(cells["in"], cells["out"], made[0].code0, iw - 2)
+    pipes_never_touch(cells)
     for bk, z in zip(made, zones, strict=True):
         if z not in cols:
             raise Collision(f"band {z} binds no column at all")
@@ -257,8 +312,10 @@ def assign(banks: dict[str, B.Bank], zones: tuple[str, ...],
 #: row usually spends it on ticks and the choice cannot be made on either number
 #: alone.  ``--sweep`` prices candidates on ``area2 x corridor``, which is close
 #: enough to shortlist and *not* close enough to decide -- ticks a corridor cell
-#: ran 6.2 to 6.8 across the shortlist -- so the engine picks the winner.
-BANKS = ((6, 8), (5, 8), (6, 10), (6, 13))
+#: ran 6.2 to 6.8 across the shortlist -- so the engine picks the winner, on
+#: ``LM_VALIDATOR=reference``: the fast engine is a re-implementation and is known
+#: to disagree with the reference on at least one grid in this repo.
+BANKS = ((6, 8), (6, 8), (6, 10), (6, 13))
 
 
 #: Rip-up-and-retry budget for the router.  Not a knob to leave low: the router
@@ -277,8 +334,8 @@ ATTEMPTS = 150
 #: DFS order it reads as a regression -- that shape has absorbed the rows
 #: already, and the first attempt here duly measured 6,084 against DFS's 5,625
 #: and was thrown away.  Swept together it is the largest single lever on the
-#: machine: three rows of room, 2,946 corridor cells down to 2,432, and **22% off
-#: the ticks** -- 20,018 to 15,646, which is 1.13e8 down to 9.52e7.
+#: machine: against the DFS order at the same shape it is 2,789 corridor cells
+#: down to 2,446 and 18,303 ticks down to 16,496 -- 1.00e8 down to 9.03e7.
 #:
 #: It is written out rather than recomputed because it cannot be recomputed:
 #: `anneal` prices a move in rows, the rows come from a room built under some
@@ -286,11 +343,11 @@ ATTEMPTS = 150
 #: from.  ``--sweep`` therefore measures it against fresh candidates instead of
 #: reproducing it, which is the useful question anyway.
 ORDER = [
-    "INIT", "A_END", "ROUND", "OP", "REST_E", "OP_GO", "GET", "SET",
+    "INIT", "A_END", "ROUND", "OP", "REST_E", "OP_GO", "SET", "GET",
     "S_SKIP", "S_L", "S_TEST", "FOUND", "G_HIT", "REST_B", "REST", "S_HIT",
-    "A_ADD", "A_L", "AVG", "D34", "T_END", "TOP", "T_MSK", "T_L", "T_MID",
-    "T_X", "T_SET", "T_CMP", "PHASE", "ROSTER", "STU", "HORN_B", "HORN",
-    "CELL", "PADSET", "PAD_B", "PAD",
+    "A_ADD", "A_L", "AVG", "D34", "TOP", "T_END", "T_MSK", "T_L", "T_MID",
+    "T_X", "T_SET", "T_CMP", "PHASE", "ROSTER", "CELL", "STU", "HORN_B",
+    "HORN", "PAD_B", "PAD", "PADSET",
 ]
 
 
@@ -313,22 +370,38 @@ def build_room(banks=BANKS, zones=ZONES, order=None, home=None,
 #: every row of the north band is charged against the room's height.
 RELAY_H = 3
 
-#: Rows above the worker room: the relays take the top ``RELAY_H + 2`` and the
-#: eight risers have what is left.
-#:
-#: 11 is the floor.  A riser is a staircase (:func:`_riser`), so it gathers
-#: ``2(BAND_H - RELAY_H - 3)`` cells, and a ring needs :data:`RING_WORDS` across
-#: both of them plus the one its turnaround room holds -- which makes
-#: ``4(BAND_H - 6) + 1 >= 17``, and 10 misses by a word.
-BAND_H = 11
+#: First row a riser may use: the relays occupy ``0 .. RELAY_H + 1``.
+RISER_TOP = RELAY_H + 2
 
-#: How far a riser's port stands from its band's centre: half the pipe spread,
-#: plus one column for every row of staircase after the first.
-_REACH = SPREAD // 2 + (BAND_H - RELAY_H - 4)
+#: Rows above the worker room.
+#:
+#: **8 is the floor, and the floor is where to sit**, because the grid is 69 wide
+#: and 78 tall: the side being squared is the *height*, so a row of north band
+#: costs ~2.6% of the score and a column costs nothing at all until the room is
+#: wider than it is tall.  The first version of this module had ``BAND_H = 11``
+#: -- six rows of one-column-per-row staircase -- because its risers had to stay
+#: inside a cone (see :func:`bands_of`).  Reading the bands off the pipe cells
+#: instead lets a riser cross :data:`REACH` columns in a single row, and then the
+#: only floors left are the relay's five rows and the three a riser needs to
+#: leave the relay, turn along a row, and drop to its anchor.
+BAND_H = 8
+
+#: How far a riser reaches sideways from its band's centre.  Columns are free and
+#: rows are not, so the capacity a ring needs is bought here rather than in
+#: :data:`BAND_H`: the pair holds ``2(BAND_H - RISER_TOP - 1) + 2*REACH + 2``
+#: cells, so ``REACH = 5`` puts exactly the **16 pipe cells that were measured to
+#: pass** the N=16 case into each ring, and the turnaround room's one word on top.
+#:
+#: 5 rather than 6, even though 6 would hold 19, because the relay is
+#: ``2*REACH + 3`` wide and its width is what sets how close two bands may stand:
+#: 6 forces every bank out to 17 columns, which measured 1.02e8 against 9.03e7.
+#: That is not a margin worth 13% -- ``N <= 16`` is a rule of the problem, not a
+#: distribution, so 17 words is the true worst case and not a typical one.
+REACH = 5
 
 #: Turnaround interior width -- exactly what the two ports need and no more,
 #: because the relay's width is what sets how close two bands may stand.
-RELAY_W = 2 * _REACH + 1
+RELAY_W = 2 * REACH + 3
 
 #: Words a ring must hold at rest: ``N`` cells and a sentinel, at the largest
 #: roster the rules allow.  An under-capacity ring deadlocks in *silence* -- the
@@ -338,56 +411,52 @@ RING_WORDS = 17
 #: **A turnaround room stores one word, not** :func:`~dataflow_relay.relay_words`
 #: **of them.**  ``relay_words`` is throughput per lap; the room has a single
 #: spawn, so one man walks it and can hold exactly one word between his ``r`` and
-#: his ``s``.  Measured, not reasoned: with 13x3 relays and straight risers the
-#: N=16 case deadlocked at 14 pipe cells a ring and passed at 16, which places
-#: the true capacity at ``pipe cells + 1`` and nowhere near ``+ 11``.
+#: his ``s``.  Measured, not reasoned: with straight risers the N=16 case
+#: deadlocked at 14 pipe cells a ring and passed at 16, which places the true
+#: capacity at ``pipe cells + 1`` and nowhere near ``+ relay_words``.
 RELAY_HOLDS = 1
 
 
-def _riser(anchor: int, top: int, bot: int, east: bool) -> list[tuple[int, int]]:
-    """One ring riser, as a staircase that fans out from its anchor going up.
+def ring_legs(centre: int) -> dict[str, list[tuple[int, int]]]:
+    """One ring's two risers, as `plotter_block.pipe` leg lists.
 
-    A straight riser needs ``RING_WORDS`` rows of north band and the band is
-    charged against the room's height.  This buys the cells out of the width
-    instead -- which is already spent -- without giving up the property that
-    makes the whole band discipline sound.
+    Each is an L: out from the wall it leaves, along a row, then to its port.  The
+    row is where the capacity comes from -- ``REACH`` cells for one row of band,
+    against the single cell a row of staircase used to buy.
 
-    That property is that **the anchor is the nearest cell of its own pipe to
-    every cell of the room**.  A cell one row further from the room may stand one
-    column off the anchor and still lose to it, two rows two columns, and so on:
-    the legal region is a cone, and a staircase is the longest rectilinear path
-    that stays on its boundary.  A riser coiled *flat* -- the first version of
-    this module -- leaves the cone at once, and :func:`audit_bindings` duly found
-    an `st` whose nearest cell was the neighbouring band's coil.
-
-    The first step is along the wall the pipe leaves, because a pipe whose first
-    cell does not point away from its room fails to parse in silence; that costs
-    the widest rank of the cone and is why the staircase is ``2(bot-top)`` cells
-    rather than ``2(bot-top)+1``.
+    The incoming riser turns on ``bot - 1`` and the outgoing one on ``top``, and
+    they sit on opposite sides of the centre, so no cell of one is ever
+    4-adjacent to a cell of the other -- which would make the two parse as a
+    single pipe, silently.
     """
-    d, m = (1 if east else -1), bot - top
-    if east:                                    # room -> relay, leaving northward
-        pts = [(anchor, bot), (anchor, bot - 1)]
-        for k in range(1, m):
-            pts += [(anchor + d * k, bot - k), (anchor + d * k, bot - k - 1)]
-    else:                                       # relay -> room, leaving southward
-        pts = [(anchor + d * (m - 1), top), (anchor + d * (m - 1), top + 1)]
-        for k in range(m - 2, -1, -1):
-            pts += [(anchor + d * k, top + m - 1 - k), (anchor + d * k, top + m - k)]
-    return pts
+    top, bot, c = RISER_TOP, BAND_H - 1, centre
+    cin, cout = c - SPREAD // 2, c + SPREAD // 2
+    return {
+        # relay -> room: south off the relay's wall, east along `bot - 1`, down
+        "in": [(cin - REACH, top), (cin - REACH, bot - 1), (cin, bot - 1),
+               (cin, bot)],
+        # room -> relay: north off the worker's wall, east along `top`
+        "out": [(cout, bot), (cout, top), (cout + REACH, top)],
+    }
 
 
-def _ring_legs(cin: int, cout: int):
-    """Both risers of one ring, as `plotter_block.pipe` leg lists.
+def io_legs(centre: int) -> dict[str, list[tuple[int, int]]]:
+    """``IO``'s two pipes.
 
-    The incoming one fans west of its anchor and the outgoing one east, so the
-    two cones stand on opposite sides of the bank centre with the free column
-    between them -- pipe glyphs join by 4-adjacency, and two touching risers
-    would parse as one pipe.
+    No turnaround room, so no capacity to find: the input room feeds ``ri`` and
+    ``so`` fills the output room, and the two rooms cannot both stand over the
+    pair, so the outgoing pipe doglegs east to one of its own.
     """
-    top, bot = RELAY_H + 2, BAND_H - 1
-    return {"in": _riser(cin, top, bot, east=False),
-            "out": _riser(cout, top, bot, east=True)}
+    bot, c = BAND_H - 1, centre
+    cin, cout = c - SPREAD // 2, c + SPREAD // 2
+    return {"in": [(cin, 3), (cin, bot)],
+            "out": [(cout, bot), (cout, 3), (cout + 2, 3)]}
+
+
+def legs_for(centre: dict[str, int]) -> dict[str, dict[str, list]]:
+    """Every pipe in the room, keyed by band and then by direction."""
+    return {z: (io_legs(c) if z == "IO" else ring_legs(c))
+            for z, c in centre.items()}
 
 
 def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0,
@@ -413,33 +482,29 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0,
     walls(g, wx, wy, iw, ih)
     north, cap = wy - 1, {}
     pipes: dict[str, list[tuple[int, int]]] = {}
+    # The very legs `layout` derived the bands from, shifted into grid columns:
+    # drawing anything else would make the bands a description of a different
+    # room than the one that gets stamped.
+    centre = {z: wx + (geo.pipe_in[z] + geo.pipe_out[z]) // 2 for z in zones}
+    plan = legs_for(centre)
 
     def draw(key: str, legs, into) -> int:
-        pts = [legs[0]]
-        for a, b in zip(legs, legs[1:], strict=False):
-            sx = (b[0] > a[0]) - (b[0] < a[0])
-            sy = (b[1] > a[1]) - (b[1] < a[1])
-            x, y = a
-            while (x, y) != b:
-                x, y = x + sx, y + sy
-                pts.append((x, y))
-        pipes[key] = pts
+        pipes[key] = cells_of(legs)
         return pipe(g, legs, into=into)
 
     for z in zones:
         cin, cout = wx + geo.pipe_in[z], wx + geo.pipe_out[z]
+        legs = plan[z]
         if z == "IO":
             # No turnaround: `ri` drains the input room and `so` fills the output
             # room, and the two rooms cannot both stand over the pipe pair, so the
-            # outgoing riser doglegs east to a room of its own.
+            # outgoing pipe doglegs east to a room of its own.
             stamp(g, cin - 1, 0, ["+-+", "|I|", "+-+"])
             stamp(g, cout + 1, 0, ["+-+", "|O|", "+-+"])
-            draw("in_IO", [(cin, 3), (cin, north - 1)], into=(cin, north))
-            draw("out_IO", [(cout, north - 1), (cout, 3), (cout + 2, 3)],
-                 into=(cout + 2, 2))
+            draw("in_IO", legs["in"], into=(cin, north))
+            draw("out_IO", legs["out"], into=(legs["out"][-1][0], 2))
             continue
-        legs = _ring_legs(cin, cout)
-        rx = (cin + cout) // 2 - RELAY_W // 2 - 1
+        rx = centre[z] - RELAY_W // 2 - 1
         ports = (legs["in"][0][0], legs["out"][-1][0])
         if not all(rx < p < rx + RELAY_W + 1 for p in ports):
             raise Collision(f"relay {z} spans {rx}..{rx + RELAY_W + 1}, "
@@ -454,7 +519,7 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0,
     rows = [r.rstrip() for r in g.rows()]
     while rows and not rows[-1]:
         rows.pop()
-    anchors_are_the_nearest_cells(pipes, iw, north)
+    every_pipe_cell_is_above_the_room(pipes, north)
     audit_bindings(room, wx, wy, pipes)
 
     d = DebugMap("gradebook - a three-ring machine, banked")
@@ -487,32 +552,25 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0,
 
 
 # ── the three static checks a wrong grid still loads through ─────────────────
-def anchors_are_the_nearest_cells(pipes, iw: int, north: int) -> None:
-    """No cell of any pipe may beat its own anchor for any cell of the room.
+def every_pipe_cell_is_above_the_room(pipes, north: int) -> None:
+    """Every pipe cell must lie strictly north of the worker room's wall.
 
-    This is the premise the whole band discipline rests on: if every pipe's only
-    cell within reach is the one on the north wall, then "nearest pipe" reduces
-    to "nearest column" and `Geometry.binds` -- which the planner consults, one
-    block at a time, before any of this is drawn -- is exactly right.  It is what
-    :func:`_riser`'s cone is built to preserve, and it is cheap enough to check
-    outright: every pipe cell against every column of the room's top row, which
-    bounds every row below it because they all lie further south.
+    This one line is what the whole band discipline rests on.  A room cell
+    ``(x, y)`` is ``|x-px| + (y-py)`` from a pipe cell; if every ``py < y`` then
+    the ``y`` cancels out of the comparison between pipes, "nearest pipe" is a
+    function of the column alone, and a band can be a column range at all.  Let a
+    single pipe cell down beside the room and the bands become row-dependent
+    without anything failing to load.
+
+    It replaces the cone check the staircase risers needed.  The cone was a
+    *sufficient* condition for the same conclusion and a far more expensive one --
+    it cost a row of north band per column of riser, on the axis being squared.
     """
     for key, cells in pipes.items():
-        # An incoming pipe flows relay -> room, so the room end is its *last*
-        # cell; an outgoing one flows room -> relay and the room end is its first.
-        ax, ay = cells[-1] if key.startswith("in") else cells[0]
-        if ay != north - 1:
-            raise Collision(f"pipe {key} anchors at row {ay}, not {north - 1}")
-        rest = [c for c in cells if c != (ax, ay)]
-        for x in range(iw + 2):
-            here = abs(x - ax) + 1                      # to the anchor, one row down
-            far = min((abs(x - px) + abs(north - py) for px, py in rest),
-                      default=here + 1)
-            if far < here:
-                raise Collision(f"pipe {key}: column {x} is nearer a bend than "
-                                f"the anchor ({far} < {here})")
-
+        for px, py in cells:
+            if py >= north:
+                raise Collision(f"pipe {key} has a cell at ({px},{py}), on or "
+                                f"below the room's north wall at row {north}")
 
 
 def audit_bindings(room: B.Room, wx: int, wy: int,

@@ -61,37 +61,66 @@ def test_every_band_covers_its_own_bank_and_nothing_else() -> None:
         assert geo.zone_cols[a][1] < geo.zone_cols[b][0]
 
 
-def test_every_column_of_every_band_binds_the_band_it_is_in() -> None:
-    """`Geometry.binds` is the authority; ask it about every column, not a sample."""
+def _pipe_cells() -> dict[str, dict[str, list[tuple[int, int]]]]:
     geo, _ = gp.layout(gp.BANKS)
+    centre = {z: (geo.pipe_in[z] + geo.pipe_out[z]) // 2 for z in gp.ZONES}
+    legs = gp.legs_for(centre)
+    return {d: {z: gp.cells_of(legs[z][d]) for z in gp.ZONES} for d in ("in", "out")}
+
+
+def test_every_column_of_every_band_reaches_the_band_it_is_in() -> None:
+    """Asked of the pipes' actual cells, for every column -- not of a sample, and
+    not of the two anchor columns the risers no longer reduce to."""
+    geo, _ = gp.layout(gp.BANKS)
+    cells = _pipe_cells()
     for z, (lo, hi) in geo.zone_cols.items():
         for x in range(lo, hi + 1):
-            assert geo.binds(x, "rr") == z, (z, x, "incoming")
-            assert geo.binds(x, "sr") == z, (z, x, "outgoing")
-
-
-def test_the_eight_pipe_columns_are_distinct_and_never_touch() -> None:
-    """Pipe glyphs join by 4-adjacency: two touching risers parse as **one** pipe.
-
-    That failure lets the grid load and leaves the machine reading a ring it
-    never wrote, so the spacing is a property of the layout, not of the drawing.
-    """
-    geo, _ = gp.layout(gp.BANKS)
-    cols = sorted(list(geo.pipe_in.values()) + list(geo.pipe_out.values()))
-    assert len(set(cols)) == 8
-    assert all(b - a >= 2 for a, b in zip(cols, cols[1:], strict=False)), cols
+            for d in ("in", "out"):
+                near = sorted((min(abs(x - px) - py for px, py in cs), k)
+                              for k, cs in cells[d].items())
+                assert near[0][1] == z, (z, x, d, near[:2])
 
 
 def test_no_column_of_any_band_is_equidistant_from_two_pipes() -> None:
-    """A tie is not a binding.  `Geometry.binds` breaks one westward; nothing
-    says the engine does, and the op that stands on one reads a plausible number
-    off the wrong ring.  `audit_bindings` caught one on a wide `IO` bank."""
+    """A tie is not a binding.  A rule can name one; the engine promises nothing,
+    and the op that stands there reads a plausible number off the wrong ring.
+    `audit_bindings` caught one on a wide `IO` bank."""
     geo, _ = gp.layout(gp.BANKS)
-    for z, (lo, hi) in geo.zone_cols.items():
+    cells = _pipe_cells()
+    for _z, (lo, hi) in geo.zone_cols.items():
         for x in range(lo, hi + 1):
-            for cols in (geo.pipe_in, geo.pipe_out):
-                near = sorted(abs(x - c) for c in cols.values())
-                assert near[0] != near[1], (z, x, near)
+            for d in ("in", "out"):
+                near = sorted(min(abs(x - px) - py for px, py in cs)
+                              for cs in cells[d].values())
+                assert near[0] != near[1], (x, d, near[:2])
+
+
+def test_no_two_pipes_ever_touch() -> None:
+    """Pipe glyphs join by 4-adjacency, so two risers that brush past each other
+    parse as **one** pipe -- and a grid whose eight pipes are seven still loads.
+
+    Folding the risers sideways for capacity is exactly what makes this
+    reachable, so it is checked on the cells and not argued from column spacing.
+    """
+    cells = _pipe_cells()
+    gp.pipes_never_touch(cells)
+    owned = {c: f"{d}_{z}" for d, per in cells.items()
+             for z, cs in per.items() for c in cs}
+    assert len({v for v in owned.values()}) == 8
+
+
+def test_every_pipe_cell_lies_above_the_worker_room() -> None:
+    """The premise the band discipline rests on, in one line.
+
+    A room cell is ``|x-px| + (y-py)`` from a pipe cell; with every ``py`` above
+    every ``y`` the row cancels out of the comparison and "nearest pipe" becomes a
+    function of the column alone.  One pipe cell beside the room instead of above
+    it and bands become row-dependent, silently.
+    """
+    cells = _pipe_cells()
+    for d, per in cells.items():
+        for z, cs in per.items():
+            assert all(py < gp.BAND_H for _px, py in cs), (d, z)
 
 
 def test_no_edge_of_the_cfg_could_have_been_a_free_fall_through() -> None:
@@ -125,22 +154,20 @@ def test_a_bank_exists_for_every_run_of_bands_a_block_could_need() -> None:
 
 
 # ── the north band ────────────────────────────────────────────────────────────
-def test_a_riser_never_leaves_the_cone_its_anchor_owns() -> None:
-    """The premise of the whole column discipline, stated on the bare geometry.
+def test_the_north_band_is_as_short_as_its_two_floors_allow() -> None:
+    """Rows are the only thing that costs.
 
-    A cell one row further from the room may stand one column off the anchor and
-    still lose to it.  A staircase sits exactly on that boundary; anything flatter
-    -- the first version of this module -- does not, and then an op near a split
-    binds its neighbour's ring.
+    ``score = max(w,h)^2 x ticks`` and this grid is taller than it is wide, so a
+    row of north band is ~2.6% of the score and a column is free until the room
+    turns square.  Two floors set the height: the relay's own five rows, and the
+    three a riser needs to leave the relay, turn along a row, and drop to the
+    room.  The first version of this module ran to eleven because its risers had
+    to stay inside a cone one column wide per row -- rows spent buying columns,
+    on the wrong axis.
     """
-    top, bot = gp.RELAY_H + 2, gp.BAND_H - 1
-    for east in (True, False):
-        anchor = 40
-        cells = gp._riser(anchor, top, bot, east)
-        room_end = cells[0] if east else cells[-1]
-        assert room_end == (anchor, bot)
-        for px, py in cells:
-            assert abs(px - anchor) <= bot - py, (east, px, py)
+    assert gp.RISER_TOP == gp.RELAY_H + 2
+    assert gp.BAND_H == gp.RISER_TOP + 3
+    assert gp.RELAY_H == 3, "a perimeter walk needs a 3x3 interior"
 
 
 def test_both_risers_of_a_ring_together_hold_a_full_roster() -> None:
@@ -148,13 +175,28 @@ def test_both_risers_of_a_ring_together_hold_a_full_roster() -> None:
 
     ``dataflow_relay.relay_words`` counts words carried *per lap*; the room has a
     single spawn, so one man walks it and holds one word between his `r` and his
-    `s`.  Measured: the N=16 case deadlocked at 14 pipe cells a ring and passed
-    at 16.
+    `s`.  Measured, and this is the floor the reach is set against: the N=16 case
+    deadlocked at 14 pipe cells a ring and passed at 16.
     """
-    top, bot = gp.RELAY_H + 2, gp.BAND_H - 1
-    cells = sum(len(gp._riser(40, top, bot, e)) for e in (True, False))
-    assert cells + gp.RELAY_HOLDS >= gp.RING_WORDS
+    legs = gp.ring_legs(40)
+    cells = sum(len(gp.cells_of(v)) for v in legs.values())
     assert gp.RELAY_HOLDS == 1
+    assert cells >= 16, "16 pipe cells is the measured floor, not an estimate"
+    assert cells + gp.RELAY_HOLDS >= gp.RING_WORDS
+
+
+def test_the_ring_capacity_is_bought_in_columns_not_rows() -> None:
+    """A riser crosses ``REACH`` columns in one row; the cone version crossed one.
+
+    That is the whole reason the band fits in eight rows instead of eleven, so it
+    is worth stating as an invariant rather than leaving in a commit message.
+    """
+    legs = gp.ring_legs(40)
+    for direction, v in legs.items():
+        cells = gp.cells_of(v)
+        rows = {py for _px, py in cells}
+        assert len(cells) > len(rows) + 1, (direction, "riser is not folded")
+        assert len(rows) <= gp.BAND_H - gp.RISER_TOP
 
 
 def test_the_relay_is_wide_enough_for_both_ports_and_narrow_enough_to_fit() -> None:
@@ -162,7 +204,8 @@ def test_the_relay_is_wide_enough_for_both_ports_and_narrow_enough_to_fit() -> N
     pitch = min(banks[f"{b}:{b}"].code_hi - banks[f"{a}:{a}"].code_hi
                 for a, b in zip(gp.ZONES, gp.ZONES[1:], strict=False))
     assert gp.RELAY_W + 2 <= pitch, "adjacent relays would overlap"
-    assert gp.RELAY_H >= 3, "a perimeter walk needs a 3x3 interior"
+    ports = [gp.ring_legs(40)[d][i] for d, i in (("in", 0), ("out", -1))]
+    assert all(abs(px - 40) <= gp.RELAY_W // 2 for px, _py in ports)
 
 
 # ── the built grid ────────────────────────────────────────────────────────────
@@ -247,9 +290,28 @@ def test_all_eight_pipes_parse_and_no_send_reaches_nothing() -> None:
     listed = [ln for ln in out.splitlines() if re.match(r"  \d+: \d+ cells", ln)]
     assert len(listed) == 8, listed
     assert '"cells":[]' not in out, "an r/s that reaches no pipe"
-    lens = sorted(int(re.search(r": (\d+) cells", ln).group(1)) for ln in listed)
-    # The six ring risers are the long ones; each pair must hold a full roster.
-    assert lens[0] + lens[1] + gp.RELAY_HOLDS >= gp.RING_WORDS, lens
+
+    # Capacity is per *ring*, so the eight have to be sorted back into their
+    # bands before they are added up -- taking the two shortest would measure the
+    # I/O pair, which is not a ring and has no roster to hold.
+    geo, _banks = gp.layout(gp.BANKS)
+    wx = 1
+    owner = {}
+    for z in gp.ZONES:
+        legs = gp.legs_for({z: wx + (geo.pipe_in[z] + geo.pipe_out[z]) // 2})[z]
+        for v in legs.values():
+            cells = gp.cells_of(v)
+            owner[cells[0]] = owner[cells[-1]] = z
+    held: dict[str, int] = {}
+    for ln in listed:
+        n = int(re.search(r": (\d+) cells", ln).group(1))
+        ends = [tuple(int(v) for v in m) for m in re.findall(r"\[(\d+),(\d+)\]", ln)]
+        bands = {owner[e] for e in ends if e in owner}
+        assert len(bands) == 1, f"{ln!r} does not belong to one band: {bands}"
+        z = bands.pop()
+        held[z] = held.get(z, 0) + n
+    for z in ("RING", "IDS", "FILE"):
+        assert held[z] + gp.RELAY_HOLDS >= gp.RING_WORDS, (z, held)
 
 
 @pytest.mark.slow
