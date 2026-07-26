@@ -278,34 +278,37 @@ class FastLittleman:
     def _room_at_border(self, pos: Cell) -> int | None:
         return self._border_owner.get(pos)
 
-    def _flowed_into(self, cell: Cell, backward: Cell) -> bool:
-        """True if another pipe arrowhead points *into* ``cell``.
+    def _trace_cells(self, start: Cell, initial_dir: Dir) -> tuple[list[Cell], bool]:
+        """The cells a pipe from ``start`` would occupy and whether it reaches a
+        room border (a valid destination).
 
-        Such a cell is a mid-pipe continuation (typically a bend that happens to
-        sit next to a wall), not a fresh start. ``backward`` is skipped because a
-        start's backward cell is the source-room border, never a feeding pipe.
-        Arrowheads inside a room are steer instructions, so neighbours on/in a
-        room are ignored.
+        No validation — used only to decide which candidate starts are actually
+        mid-pipe continuations of some other pipe. Stops at the first border it
+        flows into, off the grid, or on a loop.
         """
-        x, y = cell
-        for dx, dy in DIRS:
-            neighbor = (x + dx, y + dy)
-            if neighbor == backward:
-                continue
-            if neighbor in self._border_owner or neighbor in self._interior_owner:
-                continue
-            ndir = ARROW_DIR.get(self._char(*neighbor))
-            if ndir is not None and _add(neighbor, ndir) == cell:
-                return True
-        return False
+        path: list[Cell] = []
+        pos, direction = start, initial_dir
+        seen: set[Cell] = set()
+        while pos not in seen:
+            seen.add(pos)
+            arrow = ARROW_DIR.get(self._char(*pos))
+            if arrow is not None:
+                direction = arrow
+            path.append(pos)
+            forward = _add(pos, direction)
+            if self._room_at_border(forward) is not None:
+                return path, True
+            if not (0 <= forward[0] < self.width and 0 <= forward[1] < self.height):
+                break
+            pos = forward
+        return path, False
 
     def _parse_pipes(self) -> list[_Pipe]:
         # A pipe starts at an arrowhead whose backward cell (opposite the arrow)
         # lies on a room's border — corners included — with the arrow pointing
-        # away from the room, and which no other pipe arrowhead flows into. Arrow
-        # glyphs inside a room are steer instructions, so a pipe cell must lie
-        # strictly outside every room.
-        starts: list[tuple[int, Cell, Dir, Cell]] = []
+        # away from the room. Arrow glyphs inside a room are steer instructions,
+        # so a pipe cell must lie strictly outside every room.
+        candidates: list[tuple[int, Cell, Dir, Cell]] = []
         for y in range(self.height):
             for x in range(self.width):
                 cell = (x, y)
@@ -318,9 +321,19 @@ class FastLittleman:
                 src = self._border_owner.get(backward)
                 if src is None or self.rooms[src].kind == "display":
                     continue
-                if self._flowed_into(cell, backward):
-                    continue
-                starts.append((src, cell, direction, backward))
+                candidates.append((src, cell, direction, backward))
+
+        # A candidate is a real start unless another candidate's pipe flows
+        # through it — i.e. it is a mid-pipe cell (typically a bend sitting next
+        # to a wall). Only pipes that reach a destination claim their interior,
+        # so a stray arrowhead that merely points at a genuine start cannot
+        # suppress it (that arrowhead is not itself a room-attached pipe).
+        claimed: set[Cell] = set()
+        for _src, cell, direction, _backward in candidates:
+            cells, reached = self._trace_cells(cell, direction)
+            if reached:
+                claimed.update(cells[1:])
+        starts = [c for c in candidates if c[1] not in claimed]
 
         pipes: list[_Pipe] = []
         occupied: dict[Cell, int] = {}

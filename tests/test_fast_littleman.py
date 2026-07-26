@@ -120,6 +120,24 @@ def test_pipe_attaches_at_a_room_corner() -> None:
     assert result.output == _expected_flat(case)
 
 
+def test_display_data_pipe_started_beside_a_wall_is_found() -> None:
+    # A display's DATA pipe can start at an arrowhead whose backward cell is
+    # empty but whose side neighbour is the source room's wall; another stray
+    # arrowhead points into that start. A naive "any arrow pointing in = a
+    # continuation" test drops the real start, the display loses its DATA pipe,
+    # and a DATA send rebinds to the SWAP pipe -> a spurious `display-swap`.
+    machine = FastLittleman(REPO / "tests" / "fixtures" / "display_corner_data_pipe.man")
+
+    display = next(r for r in machine.rooms if r.kind == "display")
+    assert len(display.incoming) == 3  # ADDR, DATA and SWAP all present
+
+    problem = scoring.load_problem("snake")
+    case = problem["publicTestData"][0]
+    result = machine.run(scoring._case_input(case), frames=_expected_frames(case))
+    assert result.passed
+    assert result.fatal is None
+
+
 def test_optimize_verify_uses_fast_backend_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LM_VALIDATOR", raising=False)
     result = verify(REPO / "tasks" / "solutions" / "triangle_cpu.man", "triangle")
