@@ -400,7 +400,9 @@ RELAY_X, RELAY_Y = 4, 0
 RING_MIN = 14        # the ring holds 12 words at rest; leave real slack
 
 
-def build_grid(code_w: int = 34, order: list[str] | None = None) -> tuple[list[str], DebugMap, dict[str, object]]:
+def build_grid(
+    code_w: int = 34, order: list[str] | None = None
+) -> tuple[list[str], DebugMap, dict[str, object]]:
     """Worker + ring + input + the proven painter/LM-75 harness, as one grid."""
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.plotter_block import pipe
@@ -408,7 +410,6 @@ def build_grid(code_w: int = 34, order: list[str] | None = None) -> tuple[list[s
         FLAT_RELAY,
         HARNESS_H,
         HARNESS_W,
-        PAINTER_IW,
         PROBE_PAINTER,
         stamp_harness,
     )
