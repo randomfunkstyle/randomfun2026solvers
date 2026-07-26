@@ -29,6 +29,40 @@ ring's two pipes are two independent nearest-sets, so `sx` can attach beside
 ``TBODY`` reads it.  The ring is then a long pipe between the two, which is
 exactly what a ring wants: pipe cells *are* its storage.
 
+## The open problem: the rectangle's anchors make the north band unroutable
+
+A ring's two pipes leave the worker's north wall, climb to a row of their own in
+the north band, run east to the strip and drop into a turnaround room.  That is
+crossing-free under exactly one rule, and it is the rule `matmul_grid` relies
+on: **a pipe's row is its rank by column**, so a run east at row `r` only ever
+passes columns whose risers stop at rows below `r`.  The rule needs a ring's two
+rows to be *adjacent*, because a block in the strip owns one column range for
+both of them.
+
+Three of the seven rings here break it, and each for a reason the design chose
+on purpose:
+
+    q  rows  0/1   adjacent
+    x  rows  2/13  split anchors: `sx` sits by `io`, `rx` by `s`
+    io rows  4/3   adjacent
+    k  rows  5/6   adjacent
+    b  rows  7/9   interleaved with `c` by MAC's rectangle
+    c  rows 10/8   interleaved with `b` by MAC's rectangle
+    s  rows 11/12  adjacent
+
+`MAC`'s 8x2 rectangle reads `s`, then `b`, then `c`, so its six anchors have to
+run `S_b R_c R_b S_c S_s R_s` -- **`b` and `c` interleave, and that is precisely
+what the band ordering forbids**.  Measured: with the strip ordered by earliest
+row, `b`'s receive run at row 9 crosses `c`'s riser, which starts at row 8; with
+the split `x`, its receive run at row 13 crosses every block west of it.  The
+build stops at ``(64,10) holds '-', cannot place '|'``.
+
+So the 16-tick MAC and a one-row-per-pipe north band are mutually exclusive.
+The way out is a real two-dimensional channel router for the band -- rows *and*
+columns allocated together, the way `Router` already does inside the room --
+rather than a rank ordering.  That is the next thing to build, and it is the
+only thing between this module and a `.man`.
+
 ## Five things that were measured and do not work, so they are not re-tried
 
 **The box stack cannot be folded into two columns.**  The drawn room is 52x148
