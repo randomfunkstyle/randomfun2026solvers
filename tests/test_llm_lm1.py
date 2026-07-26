@@ -116,7 +116,7 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
 def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     machine, _program = built
 <<<<<<< HEAD
-    assert (machine.width, machine.height) == (203, 204)
+    assert (machine.width, machine.height) == (203, 203)
 =======
     assert (machine.width, machine.height) == (204, 203)
 >>>>>>> b016681 (Compact LM-1 jump read loops)
@@ -137,7 +137,7 @@ def test_the_grid_passes_every_public_case_on_the_engine() -> None:
     failed = [(c.name, c.detail) for c in result.cases if not c.passed]
     assert not failed, failed
     assert len(result.cases) == 14
-    # Measured 20,275,186 average / 31,809,643 worst against a 50M cap.  The margin
+    # Measured 19,412,663 average / 30,317,092 worst against a 50M cap.  The margin
     # is the point of the assertion: a change that doubles the worst case fails a
     # private test rather than merely scoring badly.
     #
