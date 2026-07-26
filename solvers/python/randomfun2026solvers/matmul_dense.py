@@ -76,11 +76,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from randomfun2026solvers.circuit import Collision, E, N, S, W
+from randomfun2026solvers.circuit import CCW, CW, Circuit, Collision, E, N, S, W
 from randomfun2026solvers.matmul_grid import (
+    DEAD_LANES,
     LAID,
     SELF_LOOPS,
     band_of,
+    chains_of,
     items,
 )
 
@@ -175,6 +177,7 @@ class Box:
     start: dict[str, tuple[int, int]] = field(default_factory=dict)
     facing: dict[str, tuple[int, int]] = field(default_factory=dict)
     branch: dict[str, tuple[int, int, tuple[int, int]]] = field(default_factory=dict)
+    axes: dict[tuple[int, int], set[int]] = field(default_factory=dict)
     entry: tuple[int, int] = (0, 0)            # cell the man must be steered onto
     entry_dir: tuple[int, int] = E
     exits: dict[str, tuple[tuple[int, int], tuple[int, int]]] = field(default_factory=dict)
@@ -205,7 +208,10 @@ def chain_span(blocks: list[str], b: Bands) -> tuple[int, int]:
         return 0, 3
     lo = min(a for a, _ in spans)
     hi = max(z for _, z in spans)
-    return lo, max(hi, lo + 3)
+    # Two columns of slack east of the last band: a branch has to stand on an
+    # east row with a cell to spare for its straight lane, and a block whose
+    # last pipe op sits on the eastmost column of its span would have none.
+    return lo, min(b.iw - 1, max(hi + 2, lo + 3))
 
 
 # ── laying one chain ──────────────────────────────────────────────────────────
@@ -229,15 +235,42 @@ class Weave:
         self.cells: dict[tuple[int, int], str] = {}
         self.x, self.y, self.d = lo, 0, E
         self.h = 1
-        self.walked: set[tuple[int, int]] = set()
+        # Cell -> the axes a man walks it on (0 = east/west, 1 = north/south).
+        # A cell the pen *skips* is still walked, and holds no glyph to say so:
+        # a corridor that later turned there would silently re-steer the man.
+        # Crossing one at right angles is safe, which is why the axis is kept
+        # rather than a plain "used" flag.
+        self.axes: dict[tuple[int, int], set[int]] = {}
+        # A branch's clockwise lane leaves the cell *below* the branch glyph, so
+        # the row under one has to stay clear: the pen steps two rows when it
+        # wraps off a row that branched, and the connector runs through the gap.
+        self.row_branch = False
 
     # -- primitives --------------------------------------------------------
+    def _touch(self, x: int, y: int, axis: int | None = None) -> None:
+        got = self.axes.setdefault((x, y), set())
+        got.update({0, 1} if axis is None else {axis})
+        self.h = max(self.h, y + 1)
+
     def _set(self, x: int, y: int, ch: str) -> None:
         if (x, y) in self.cells and self.cells[(x, y)] != ch:
             raise Collision(f"box cell ({x},{y}) holds {self.cells[(x,y)]!r}, not {ch!r}")
         self.cells[(x, y)] = ch
-        self.walked.add((x, y))
+        self._touch(x, y)
         self.h = max(self.h, y + 1)
+
+    def _skip_to(self, x: int) -> None:
+        """Walk the pen east or west over cells it leaves blank, marking them.
+
+        Nothing is marked before the box's first glyph: those cells are its
+        *entry* run, which no man walks until a corridor delivers one along it,
+        and reserving them would leave the box with no way in.
+        """
+        step = 1 if x > self.x else -1
+        while self.x != x:
+            if self.cells:
+                self._touch(self.x, self.y, 0)
+            self.x += step
 
     def put(self, ch: str) -> tuple[int, int]:
         at = (self.x, self.y)
@@ -250,10 +283,15 @@ class Weave:
         """Turn down onto the next row and reverse direction."""
         x = min(max(self.x, self.tlo), self.thi)
         self._set(x, self.y, "v")
+        step = 2 if self.row_branch else 1
+        for k in range(1, step):
+            self.cells.setdefault((x, self.y + k), " ")
+            self._touch(x, self.y + k, 1)
         self.d = W if self.d == E else E
-        self.y += 1
+        self.y += step
         self._set(x, self.y, _TURN_GLYPH[self.d])
         self.x = x + self.d[0]
+        self.row_branch = False
 
     def room_ahead(self, need: int) -> bool:
         end = self.x + self.d[0] * (need - 1)
@@ -268,7 +306,7 @@ class Weave:
         for _ in range(3):
             ahead = [x for x in cols if (x >= self.x if self.d == E else x <= self.x)]
             if ahead:
-                self.x = min(ahead) if self.d == E else max(ahead)
+                self._skip_to(min(ahead) if self.d == E else max(ahead))
                 return
             self.wrap()
         raise Collision(f"cannot reach {ring} from column {self.x}")
@@ -289,11 +327,11 @@ class Weave:
         if self.d == E:
             want = min(cols) - lead
             if self.lo <= want and self.x < want:
-                self.x = want
+                self._skip_to(want)
         else:
             want = max(cols) + lead
             if want <= self.hi and self.x > want:
-                self.x = want
+                self._skip_to(want)
 
     def reaches(self, ring: str, sending: bool, lead: int) -> bool:
         """Would a band column still lie ahead after `lead` filler cells?"""
@@ -404,13 +442,17 @@ def lay_chain(blocks: list[str], b: Bands) -> Box:
             if form != "west":
                 raise Collision(f"{name} needs an east-entry rectangle; "
                                 "its chain has to be placed by hand")
-            # the pen must stand one west of the rectangle, heading east
-            if w.d != E:
-                w.wrap()
-            if w.x > x0 - 1:
+            # The pen has to arrive at the rectangle's west entry *heading east*,
+            # and a wrap flips the direction -- so if it is on the wrong side it
+            # takes two of them: one down onto a west row, walked back past the
+            # entry column, and one down again onto an east row in front of it.
+            if not (w.d == E and w.x <= x0 - 1):
+                if w.d == E:
+                    w.wrap()
+                w.x = max(w.tlo, min(w.x, x0 - 2))
                 w.wrap()
             top = w.y
-            w.x = x0 - 1
+            w._skip_to(x0 - 1)
             for (cx, cy), ch in cells.items():
                 w._set(cx, top + cy, ch)
             for yy in (top, top + 1):
@@ -442,9 +484,21 @@ def lay_chain(blocks: list[str], b: Bands) -> Box:
                     for ch in payload:
                         w.put(ch)
                     at = w.put("`")
+                elif i == branch_i:
+                    # A branch has to stand on an **east** row with a cell to
+                    # spare: its clockwise lane leaves south, which only exists
+                    # below an east-walked row, and its straight lane runs on
+                    # east past it.  Running out of row here is not a wrap --
+                    # one wrap would turn the row west and put the lane above
+                    # the block's own glyphs -- so it takes two.
+                    for _ in range(4):
+                        if w.d == E and w.room_ahead(2):
+                            break
+                        w.wrap()
+                    else:
+                        raise Collision(f"{name}: no east row for its branch")
+                    at = w.put(payload)
                 else:
-                    if i == branch_i:
-                        w.go_east()
                     if ring is not None:
                         w.seek(ring, tok[0] == "s")
                     elif not w.room_ahead(2):
@@ -455,10 +509,570 @@ def lay_chain(blocks: list[str], b: Bands) -> Box:
                     box.facing[name] = w.d
             if i == branch_i:
                 box.branch[name] = (at[0], at[1], w.d)
+                w.row_branch = True
     box.cells = w.cells
-    box.h = w.h
+    box.axes = w.axes
+    box.h = w.h + (1 if w.row_branch else 0)
     box.entry = box.start[blocks[0]]
     box.entry_dir = box.facing[blocks[0]]
     box.exits["_pen"] = ((w.x, w.y), w.d)
     del pending
     return box
+
+
+# ── the hot chain, placed by hand ─────────────────────────────────────────────
+#
+# ``TBODY -> MAC -> TTAIL`` and ``TNEXT`` are 60% of every tick the machine
+# spends, and none of the three fits the pen's shape: ``MAC`` needs the
+# east-entry rectangle (it reads `s` then `b` then `c`, and those bands run east
+# to west in that order), ``TBODY`` is two cells walked *north* up a column that
+# lies in `recv-x` and `send-s` at once, and ``TTAIL`` has to turn round in the
+# middle because `sc` is east of `rc`.  Laid out by hand the four of them close
+# in nine rows of ten columns with no corridor between any two.
+HOT = ("TBODY", "MAC", "TTAIL")
+
+
+def hot_box(b: Bands) -> Box:
+    """The `t` loop: ten columns, nine rows, one corridor in and one out."""
+    cells, x0, w, first, form = rect_loop("MAC", b, 1, b.iw - 2)
+    if (w, form) != (8, "east"):
+        raise Collision(f"MAC laid as a {w}x2 {form} rectangle, not 8x2 east")
+    e, ee = x0 + w, x0 + w + 1          # the two columns east of the rectangle
+    box = Box(list(HOT) + ["TNEXT"], x0, ee)
+    g: dict[tuple[int, int], str] = dict(cells)
+
+    def blanks(pts: list[tuple[int, int]]) -> None:
+        for p in pts:
+            g.setdefault(p, " ")
+
+    # MAC's straight exit leaves east along row 0 and drops down the far column;
+    # its entry comes back up the near one, so the two never meet.
+    blanks([(e, 0)])
+    g[(ee, 0)] = "v"
+    blanks([(ee, 1), (ee, 2), (ee, 3)])
+    g[(e, 1)] = "<"                      # steers TBODY's man into the rectangle
+    g[(e, 2)] = "s"                      # TBODY: `ss`
+    g[(e, 3)] = "r"                      # TBODY: `rx`
+    g[(ee, 4)] = "<"
+    blanks([(e, 4), (x0 + 7, 4)])
+    g[(x0 + 6, 4)] = "r"                 # TTAIL: `rs`
+    blanks([(x0 + 5, 4), (x0 + 4, 4), (x0 + 3, 4)])
+    g[(x0 + 2, 4)] = "r"                 # TTAIL: `rc`
+    g[(x0 + 1, 4)] = "M"
+    g[(x0, 4)] = "v"
+    g[(x0, 5)] = ">"
+    g[(x0 + 1, 5)] = "1"
+    g[(x0 + 2, 5)] = "W"
+    g[(x0 + 3, 5)] = "-"
+    g[(x0 + 4, 5)] = "s"                 # TTAIL: `sc`
+    g[(x0 + 5, 5)] = "X"
+    # X's clockwise lane turns south into TNEXT; its straight lane runs on east.
+    g[(x0 + 5, 6)] = "<"
+    blanks([(x0 + 4, 6), (x0 + 3, 6), (x0 + 2, 6), (x0 + 1, 6)])
+    g[(x0, 6)] = "v"
+    g[(x0, 7)] = ">"
+    g[(x0 + 1, 7)] = "r"                 # TNEXT: `rc`
+    g[(x0 + 2, 7)] = "b"
+    g[(x0 + 3, 7)] = "s"                 # TNEXT: `sc`
+    blanks([(x0 + 4, 7), (x0 + 5, 7), (x0 + 6, 7), (x0 + 7, 7)])
+    g[(e, 7)] = "^"
+    blanks([(e, 6), (e, 5)])
+    g[(e, 8)] = "^"                      # where ROW_GO's lane merges in
+
+    box.cells = g
+    box.h = 9
+    box.start = {"MAC": first, "TBODY": (e, 3), "TTAIL": (x0 + 6, 4),
+                 "TNEXT": (x0 + 1, 7)}
+    box.facing = {"MAC": W, "TBODY": N, "TTAIL": W, "TNEXT": E}
+    box.branch = {"MAC": (x0 + w - 1, 0, E), "TTAIL": (x0 + 5, 5, E)}
+    box.entry, box.entry_dir = (e, 8), N
+    box.exits = {"TTAIL": ((x0 + 6, 5), E)}
+    _assert_hot_binds(b, x0, w)
+    return box
+
+
+def _assert_hot_binds(b: Bands, x0: int, w: int) -> None:
+    """Every hand-placed pipe op stands in a column that binds its own ring."""
+    want = {
+        (x0 + w, 2): ("s", True), (x0 + w, 3): ("x", False),      # TBODY
+        (x0 + 6, 4): ("s", False), (x0 + 2, 4): ("c", False),     # TTAIL rs, rc
+        (x0 + 4, 5): ("c", True),                                 # TTAIL sc
+        (x0 + 1, 7): ("c", False), (x0 + 3, 7): ("c", True),      # TNEXT
+    }
+    for cell, (ring, send) in want.items():
+        got = b.ring_at(cell[0], send)
+        if got != ring:
+            raise Collision(f"{cell} binds {got!r}, wanted {ring!r} "
+                            f"({'send' if send else 'recv'})")
+
+
+# ── the room: boxes stacked, edges routed ─────────────────────────────────────
+#: Blank rows between two boxes.  One is enough for a corridor to *run* along;
+#: two is what it takes for a corridor to reliably get *out* of a box, because
+#: it may only turn on a cell no man already walks, and a box's own rows are
+#: nearly all walked.  Measured: at one row the router strands
+#: ``BL2_Z -> BGRP_END`` once the shorter edges have taken the gap.
+GAP = 3
+
+#: Channel columns west of the code.  A corridor prefers a free column inside
+#: the room -- two walks cross at a blank without noticing each other -- but a
+#: long span over a busy room may have none, and then it needs a fallback.
+MARGIN = 18
+
+#: Channel columns *east* of the code.  The room comes out far taller than it is
+#: wide -- boxes stack, and `max(w, h)` is charged on the height -- so columns
+#: are the one resource that is free here, and a corridor that cannot get out of
+#: a box eastward is the commonest way the router strands an edge.
+EAST = 10
+
+_TURN_GLYPH_OF = {E: ">", W: "<", N: "^", S: "v"}
+
+
+class Router:
+    """Breadth-first corridors over the cells no man is already using.
+
+    Two walks may **cross** at a blank -- one going north, one going east -- but
+    they may not share it lengthwise, and neither may turn where the other
+    passes.  A cell that is walked and holds no glyph is invisible to every
+    other check, so both sets are tracked explicitly rather than inferred from
+    what the grid looks like.
+
+    A state is "the man stands on this cell with this heading, already
+    resolved", so a turn is a property of the cell he arrives at and the search
+    can turn on the last cell of a corridor as freely as on the first.
+    """
+
+    def __init__(self, c: Circuit, walked: dict[tuple[int, int], set[int]]) -> None:
+        self.c = c
+        self.walked = walked            # cell -> axes in use (0 = E/W, 1 = N/S)
+
+    def _free(self, x: int, y: int, nd: tuple[int, int], turning: bool) -> bool:
+        if not (0 <= x < self.c.w and 0 <= y < self.c.h):
+            return False
+        here = self.c.get(x, y)
+        if here != " ":
+            # a turn glyph already pointing the way we walk is a merge, not a
+            # collision: two lanes into one entry share the last stretch of it
+            return not turning and here == _TURN_GLYPH_OF[nd]
+        used = self.walked.get((x, y))
+        if not used:
+            return True
+        return not turning and (0 if nd[0] else 1) not in used
+
+    def route(self, src: tuple[int, int], sd: tuple[int, int],
+              dst: tuple[int, int], dd: tuple[int, int]) -> list[tuple[int, int]]:
+        """Corridor from the glyph at `src` (leaving `sd`) onto `dst` (facing `dd`)."""
+        from collections import deque
+
+        start = (src[0], src[1], sd)
+        goal = (dst[0] - dd[0], dst[1] - dd[1], dd)
+        seen: dict[tuple, tuple | None] = {start: None}
+        q = deque([start])
+        while q and goal not in seen:
+            x, y, d = q.popleft()
+            nx, ny = x + d[0], y + d[1]
+            if (nx, ny) == dst or (nx, ny) == src:
+                continue
+            for nd in (d, CW[d], CCW[d]):
+                if not self._free(nx, ny, nd, nd != d):
+                    continue
+                st = (nx, ny, nd)
+                if st not in seen:
+                    seen[st] = (x, y, d)
+                    q.append(st)
+        if goal not in seen:
+            raise Collision(f"no corridor {src} -> {dst}")
+        path: list[tuple] = []
+        st = goal
+        while st is not None:
+            path.append(st)
+            st = seen[st]
+        path.reverse()
+        for i, (x, y, d) in enumerate(path):
+            if not i:
+                continue
+            if path[i - 1][2] != d:
+                self.c.set(x, y, _TURN_GLYPH_OF[d])
+                self.walked.setdefault((x, y), set()).update({0, 1})
+            else:
+                self.walked.setdefault((x, y), set()).add(0 if d[0] else 1)
+        return [(x, y) for x, y, _ in path[1:]]
+
+
+@dataclass
+class DenseRoom:
+    """A drawn worker, in the shape `matmul_grid`'s checker already knows."""
+
+    circuit: Circuit
+    bands: Bands
+    boxes: list[Box]
+    iw: int
+    ih: int
+    margin: int = MARGIN
+    _starts: dict[tuple[int, int], str] = field(default_factory=dict)
+    _facing: dict[str, tuple[int, int]] = field(default_factory=dict)
+
+    @property
+    def starts(self) -> dict[tuple[int, int], str]:
+        return dict(self._starts)
+
+    def heading(self, name: str) -> tuple[tuple[int, int], tuple[int, int]]:
+        for cell, who in self._starts.items():
+            if who == name:
+                return cell, self._facing[name]
+        raise KeyError(name)
+
+    def pipe_col(self, ring: str, sending: bool) -> int:
+        return ANCHORS[(ring, sending)] + self.margin
+
+    def regions(self):
+        for box in self.boxes:
+            yield (f"box:{box.blocks[0]}", self.margin + box.lo, box.y,
+                   box.hi - box.lo + 1, box.h, " ".join(box.blocks))
+
+
+#: Box order: the hot chain first, then the chains that talk to it, then the
+#: load phases.  Only routing distance depends on it -- every edge between two
+#: boxes is a corridor either way -- but a corridor is ticks, and `GEND`,
+#: `GRP_GO` and `TNEXT` are on the emit path 34 times a case.
+BOX_ORDER = ["TBODY", "EMIT_SET", "GRP_GO", "E1", "GG2", "E2", "GEND", "ROW", "ROW_GO",
+             "BGRP_END", "BGRP_GO", "BL1_R", "BL2", "BL2_R", "BROW_GO",
+             "HEAD", "BROW"]
+
+
+def build_room(b: Bands | None = None) -> DenseRoom:
+    """Stack the boxes, draw them, and route every edge that is not internal."""
+    b = b or bands()
+    made: dict[str, Box] = {"TBODY": hot_box(b)}
+    for chain in chains_of():
+        # `TNEXT` is a chain of its own to the CFG, but geometrically it is the
+        # `t` loop's return leg and lives in the hot box with the other three.
+        if chain.blocks[0] in ("TBODY", "TNEXT"):
+            continue
+        made[chain.blocks[0]] = lay_chain(chain.blocks, b)
+    #  falls through from  in the CFG, but the hot box has no
+    # room for its nine glyphs (they reach the  band, twelve columns west of
+    # anything else in there), so it becomes a box of its own and one corridor.
+    made["EMIT_SET"] = lay_chain(["EMIT_SET"], b)
+    boxes = [made[n] for n in BOX_ORDER]
+    if len(boxes) != len(made):
+        raise Collision(f"box order lists {len(boxes)} of {len(made)} chains")
+
+    y = 0
+    for box in boxes:
+        box.y = y
+        y += box.h + GAP
+    ih, iw = y, MARGIN + b.iw + EAST
+    c = Circuit(iw, ih)
+    walked: dict[tuple[int, int], set[int]] = {}
+    starts: dict[tuple[int, int], str] = {}
+    facing: dict[str, tuple[int, int]] = {}
+    for box in boxes:
+        for (x, yy), ch in box.cells.items():
+            c.set(x + MARGIN, yy + box.y, ch)
+        for (x, yy), ax in box.axes.items():
+            walked.setdefault((x + MARGIN, yy + box.y), set()).update(ax)
+        for name, (sx, sy) in box.start.items():
+            starts[(sx + MARGIN, sy + box.y)] = name
+            facing[name] = box.facing[name]
+
+    room = DenseRoom(c, b, boxes, iw, ih, MARGIN, starts, facing)
+    _route_edges(room, walked)
+    return room
+
+
+# ── which edges are already drawn, and where the rest have to go ──────────────
+_TURN_OF = {">": E, "<": W, "^": N, "v": S}
+_LANE_TURN = {
+    "X": {"pos": CW, "neg": CCW, "zero": None},
+    "d": {"pos": CW, "zero": None},
+    "x": {"one": CW, "zero": CCW},
+}
+
+
+def _glyph_run(name: str) -> list[str]:
+    return [g for tok in LAID[name][0] for _, g in items(tok)]
+
+
+def lane_origins(room: DenseRoom) -> dict[tuple[str, str], tuple[tuple[int, int],
+                                                                tuple[int, int]]]:
+    """For every live lane, the glyph the man stands on and the way he leaves."""
+    c = room.circuit
+    out: dict[tuple[str, str], tuple[tuple[int, int], tuple[int, int]]] = {}
+    for name in LAID:
+        pos, d = room.heading(name)
+        want, ops = len(_glyph_run(name)), 0
+        for _ in range(4 * (room.iw + room.ih)):
+            ch = c.get(*pos)
+            if ch in _TURN_OF:
+                d = _TURN_OF[ch]
+            elif ch in _LANE_TURN:
+                for lane, turn in _LANE_TURN[ch].items():
+                    if (name, lane) in DEAD_LANES:
+                        continue
+                    out[(name, lane)] = (pos, turn[d] if turn else d)
+                break
+            elif ch == "H":
+                break
+            elif ch != " ":
+                ops += 1
+                if ops == want:
+                    out[(name, "straight")] = (pos, d)
+                    break
+            pos = (pos[0] + d[0], pos[1] + d[1])
+        else:                                       # pragma: no cover
+            raise Collision(f"{name} never ends")
+    return out
+
+
+def _follows_to(room: DenseRoom, pos: tuple[int, int], d: tuple[int, int]) -> str | None:
+    """Walk turns and blanks from `pos`; name the block reached, if any."""
+    starts = room.starts
+    for _ in range(4 * (room.iw + room.ih)):
+        if pos in starts:
+            return starts[pos]
+        ch = room.circuit.get(*pos)
+        if ch in _TURN_OF:
+            d = _TURN_OF[ch]
+        elif ch != " ":
+            return None
+        pos = (pos[0] + d[0], pos[1] + d[1])
+        if not (0 <= pos[0] < room.iw and 0 <= pos[1] < room.ih):
+            return None
+    return None
+
+
+def _route_edges(room: DenseRoom, walked: dict[tuple[int, int], set[int]]) -> int:
+    """Draw every control edge the boxes did not already close.  Returns the count."""
+    r = Router(room.circuit, walked)
+    origins = lane_origins(room)
+    todo = []
+    for name in LAID:
+        toks, succ = LAID[name]
+        lanes = ({"straight": succ} if isinstance(succ, str)
+                 else {k: v for k, v in succ.items() if (name, k) not in DEAD_LANES})
+        for lane, target in lanes.items():
+            if (name, lane) not in origins:
+                continue
+            pos, d = origins[(name, lane)]
+            step = (pos[0] + d[0], pos[1] + d[1])
+            if _follows_to(room, step, d) == target:
+                continue
+            dst, dd = room.heading(target)
+            if dd == E:
+                # A box's entry run -- the blanks between the west channels and
+                # its first glyph -- belongs to nobody until a corridor delivers
+                # a man along it, and boxes are stacked, so no two share a row.
+                # Aiming every eastward entry at the channel end of that run,
+                # instead of at the glyph, is what stops one corridor taking the
+                # last cell another one had to turn on.
+                for x in range(MARGIN, dst[0]):
+                    if room.circuit.get(x, dst[1]) != " ":
+                        raise Collision(f"{target}: entry run blocked at "
+                                        f"({x},{dst[1]})")
+                dst = (MARGIN, dst[1])
+            todo.append((abs(pos[0] - dst[0]) + abs(pos[1] - dst[1]),
+                         name, lane, pos, d, dst, dd))
+    # Shortest first, then sweep again over whatever would not fit: a corridor
+    # that fails is nearly always one whose only column a shorter edge has just
+    # taken, and the shorter edge would have gone round.  Deferring is cheaper
+    # than ripping up, and it terminates -- each pass either places one or stops.
+    todo.sort()
+    n = len(todo)
+    while todo:
+        rest, placed = [], False
+        for job in todo:
+            _, name, lane, pos, d, dst, dd = job
+            try:
+                cells = r.route(pos, d, dst, dd)
+                del cells
+                placed = True
+            except Collision:
+                rest.append(job)
+        if not placed:
+            _, name, lane, pos, d, dst, dd = rest[0]
+            raise Collision(f"{name} -{lane}-> {dst}: no corridor from {pos}")
+        todo = rest
+    return n
+
+
+# ── the whole machine: worker, six rings, and the two I/O rooms ───────────────
+#: Words each ring has to hold, measured over every shape in 2..16.  A pipe's
+#: capacity is its cell count, and a ring that cannot hold its contents
+#: deadlocks *silently*.
+RING_WORDS = {"x": 256, "b": 96, "c": 8, "k": 6, "q": 4, "s": 1}
+
+#: Rings whose turnaround room stacks straight above its own two columns,
+#: innermost first.  A level costs one row and buys two cells of ring, so the
+#: order is by how little each has to hold -- and `s`, the one-word spill the
+#: MAC re-reads every lap, sits closest to the wall, where its *latency* is what
+#: the hot loop pays.
+LEVELS = {"s": 0, "q": 1, "k": 2, "c": 3}
+
+#: Rings too long to stack: their pipes leave north, run east over the worker
+#: and coil in the strip beside it, where the height is already paid for.
+COILED = ("x", "b")
+
+#: The smallest turnaround room there is: an eight-cell walk carrying one word.
+#: A ring must have two rooms -- a pipe may not loop back into its own -- and
+#: the man passes over `@` as a nop every lap, which is why a 3x2 interior
+#: cannot do it: he would arrive back at the north-west corner heading north and
+#: that corner has to turn him east.
+RELAY = ["+----+", "|>@rv|", "|^ s<|", "+----+"]
+RELAY_H = 4
+STRIP_W = 7
+NB = 20                                      # rows of north band above the wall
+WX = 1
+
+
+def _north_rows(off: int) -> tuple[dict[tuple[str, bool], int], list[str]]:
+    """A north-band row and a strip order for every pipe that runs out east.
+
+    Two crossing rules have to hold at once and they point opposite ways.  A
+    pipe climbs from its column on the worker's wall to its own row and then
+    runs east, so a run must never pass over a riser that reaches higher: rows
+    go **west to east** on the worker side.  In the strip the same pipe drops
+    from its row to its room, so a run must never pass over a drop that starts
+    higher: strip columns go **east to west**.
+    """
+    pipes = sorted((ANCHORS[(r, s)] + off, (r, s))
+                   for r in (*COILED, "io") for s in (True, False))
+    rows = {key: row for row, (_, key) in enumerate(pipes)}
+    order = [r for (r, s) in (k for _, k in pipes) if s]
+    return rows, order[::-1]
+
+
+def _relay_clear(box_x: int, ring: str, off: int) -> None:
+    """Refuse a turnaround room that another ring's riser has to pass through.
+
+    This is the wall the tight anchors run into, and it is worth stating
+    exactly.  A relay is six columns wide and every other ring's pipe rises
+    *vertically* from its own attach column to the north band, so a relay may
+    not span any column but its own ring's two.  With eight anchors in eight
+    consecutive columns -- which is precisely what makes ``MAC`` close as an 8x2
+    rectangle -- no six-column window around `s`'s pair at 19/20 avoids `b`'s
+    receive at 17, `c`'s send at 18 or `x`'s receive at 21.  Rotating the relay
+    to a 2x4 interior narrows it to four columns and still does not fit.
+
+    So the rings force the anchors apart and the rectangle forces them together,
+    and the way out is to move `x`'s receive anchor west, away from the `s`/`b`/`c`
+    cluster -- which makes ``TBODY`` a horizontal two-glyph walk instead of the
+    vertical one the hot box is built around.  That is the next change.
+    """
+    mine = {ANCHORS[(ring, True)] + off, ANCHORS[(ring, False)] + off}
+    for (other, send), c in ANCHORS.items():
+        col = c + off
+        if col in mine or other == "io" and False:
+            continue
+        if box_x <= col <= box_x + 5:
+            raise Collision(
+                f"{ring}'s relay spans columns {box_x}..{box_x + 5}, which "
+                f"{other}'s {'send' if send else 'recv'} riser climbs at {col}")
+
+
+def build_grid(room: DenseRoom | None = None):
+    """Worker room, six rings, and the input and output rooms."""
+    from randomfun2026solvers.man_debug import DebugMap
+    from randomfun2026solvers.value_ring import draw_pipe, stamp, walls
+
+    room = room or build_room()
+    iw, ih = room.iw, room.ih
+    wy = NB + 1
+    off = WX + room.margin
+    es = WX + iw + 3                          # first column of the east strip
+    rows, blocks = _north_rows(off)
+    g = Circuit(es + STRIP_W * len(blocks), wy + ih + 1)
+
+    stamp(g, WX, wy, room.circuit.rows())
+    walls(g, WX, wy, iw, ih)
+    wall = wy - 1
+    top, deep = wy + 1, wy + ih - 5
+
+    def col(ring: str, send: bool) -> int:
+        return ANCHORS[(ring, send)] + off
+
+    lengths: dict[str, int] = {}
+
+    # -- the four stacked rings -----------------------------------------------
+    for ring, lev in LEVELS.items():
+        sc, rc = col(ring, True), col(ring, False)
+        if abs(sc - rc) > 3:
+            raise Collision(f"{ring}: columns {sc} and {rc} straddle no relay")
+        box_x = min(sc, rc) - 1
+        box_y = wall - 6 - lev
+        _relay_clear(box_x, ring, off)
+        stamp(g, box_x, box_y, RELAY)
+        fwd = draw_pipe(g, [(sc, wall - 1), (sc, box_y + RELAY_H)])
+        ret = draw_pipe(g, [(rc, box_y + RELAY_H), (rc, wall - 1)])
+        lengths[ring] = fwd + ret
+        if fwd + ret < RING_WORDS[ring] + 1:
+            raise Collision(f"ring {ring} holds {fwd + ret}, "
+                            f"needs {RING_WORDS[ring] + 1}")
+
+    # -- input, output and the two coiled rings, out in the strip -------------
+    for i, ring in enumerate(blocks):
+        gx = es + i * STRIP_W
+        sc, rc = col(ring, True), col(ring, False)
+        r_out, r_in = rows[(ring, True)], rows[(ring, False)]
+        if ring == "io":
+            stamp(g, gx, top, ["+-+", "|I|", "+-+"])
+            stamp(g, gx + 3, top, ["+-+", "|O|", "+-+"])
+            draw_pipe(g, [(sc, wall - 1), (sc, r_out), (gx + 4, r_out),
+                          (gx + 4, top - 1)])
+            draw_pipe(g, [(gx + 1, top - 1), (gx + 1, r_in), (rc, r_in),
+                          (rc, wall - 1)])
+            continue
+        legs = [(sc, wall - 1), (sc, r_out), (gx + 4, r_out)]
+        y = top
+        for c_off in (4, 3, 2):
+            legs += [(gx + c_off, y), (gx + c_off, deep if y == top else top)]
+            y = deep if y == top else top
+        fwd = draw_pipe(g, [q for j, q in enumerate(legs)
+                            if j == 0 or q != legs[j - 1]])
+        stamp(g, gx, deep + 1, RELAY)
+        ret = draw_pipe(g, [(gx + 1, deep), (gx + 1, r_in), (rc, r_in),
+                            (rc, wall - 1)])
+        lengths[ring] = fwd + ret
+        if fwd + ret < RING_WORDS[ring] + 1:
+            raise Collision(f"ring {ring} holds {fwd + ret}, "
+                            f"needs {RING_WORDS[ring] + 1}")
+
+    art = [r.rstrip() for r in g.rows()]
+    while art and not art[-1]:
+        art.pop()
+
+    d = DebugMap("matmul -- dense worker, rectangle loops")
+    d.region("worker", WX, wy, iw, ih, color="#f59e0b",
+             note=f"{len(room.boxes)} boxes")
+    for label, x, y, w, h, note in room.regions():
+        d.region(label, WX + x, wy + y, w, h, tags=["block"],
+                 color="#22c55e", note=note)
+    for ring, n in lengths.items():
+        d.region(f"ring:{ring}", col(ring, True) - 2, 0, 6, wy, color="#0ea5e9",
+                 note=f"{n} cells, holds {RING_WORDS[ring]} words")
+    info = {"worker": (iw, ih), "rings": lengths, "boxes": len(room.boxes),
+            "size": (max(len(r) for r in art), len(art))}
+    return art, d, info
+
+
+if __name__ == "__main__":  # pragma: no cover - the generator's CLI
+    import argparse
+    from pathlib import Path
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--man", "--out", dest="man", type=Path)
+    ap.add_argument("--html", type=Path)
+    ap.add_argument("--json", type=Path)
+    ap.add_argument("--png", type=Path)
+    args = ap.parse_args()
+    grid, dbg, meta = build_grid()
+    if args.man:
+        args.man.write_text("\n".join(grid) + "\n")
+    if args.html:
+        dbg.write_html(grid, args.html)
+    if args.json:
+        dbg.write_json(args.json)
+    if args.png:
+        from randomfun2026solvers.man_png import write_png
+        meta["density"] = write_png(grid, args.png, scale=4, debug=dbg)
+    print(meta)

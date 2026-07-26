@@ -88,6 +88,45 @@ def test_mac_pipe_ops_bind_to_their_own_rings(b: D.Bands) -> None:
         assert b.ring_at(cell[0], tok[0] == "s") == band_of(tok), (cell, tok)
 
 
+def test_the_drawn_room_executes_the_cfg(b: D.Bands) -> None:
+    """The whole worker, walked block by block against the CFG it compiles.
+
+    Cells that are *walked* but hold no glyph are invisible to every other kind
+    of check -- the grid loads, the pipes bind, and the machine computes
+    something else -- so the layout is only believable once someone has followed
+    the man's feet from every block's first cell.  This is `matmul_grid`'s own
+    checker, pointed at the dense room.
+    """
+    from randomfun2026solvers import matmul_grid as G
+
+    room = D.build_room(b)
+    G.check_room(room)
+    assert (room.iw, room.ih) == (52, 148)
+
+
+def test_the_dense_room_is_a_third_faster_than_the_shipped_one(b: D.Bands) -> None:
+    from randomfun2026solvers import matmul_grid as G
+
+    room = D.build_room(b)
+    traces = G.public_traces()
+    ticks = sum(G.estimate_ticks(room, r, ln) for r, ln in traces) / len(traces)
+    assert ticks < 25_000                       # matmul_grid measures 31,553
+
+
+def test_the_relay_and_the_rectangle_want_the_anchors_apart_and_together(
+    b: D.Bands,
+) -> None:
+    """The open conflict, pinned so the next change is aimed at the right thing.
+
+    A turnaround room is six columns wide and every ring's pipe climbs straight
+    up from its own attach column, so a relay may span no column but its own
+    ring's two.  Eight anchors in eight consecutive columns is exactly what
+    makes ``MAC`` an 8x2 rectangle, and it leaves no six-column window for `s`.
+    """
+    with pytest.raises(Collision, match="relay spans columns"):
+        D.build_grid()
+
+
 def test_the_cold_chains_all_lay_in_their_own_boxes(b: D.Bands) -> None:
     """Every chain but the hot one pours into a box no wider than its bands."""
     laid = 0
