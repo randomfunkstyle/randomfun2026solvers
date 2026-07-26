@@ -1,20 +1,20 @@
-# little-little-man — submission 42f85a97-98f4-4c7d-b1a3-dd39267eb020
+# little-little-man — submission e2ccf989-00ec-4f2e-bd21-3c0eaf64e3e9
 
-verdict      done: 4/28 cases, no score (a full pass is required)
-submitted    2026-07-26T12:20:43+0300
-grid         203x204
+verdict      done: 11/28 cases, no score (a full pass is required)
+submitted    2026-07-26T15:42:58+0300
+grid         200x199
 problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
-fingerprint  511890bc3ebfd566c570069aad400318471b5c6501519def64de64f867299428
-commit       95426ae
+fingerprint  4d92cfd69803a6dc648e36b4121e8311ffb5ae8a442af91b2ee6f9e2362d9278
+commit       b40b177
 local        little-little-man: all public frame cases match (emulator)
-source       tasks/solutions/little-little-man_cpu.man
+source       tasks/solutions/little-little-man_tier2x5.man
 
 runner output:
-Passed 4/28 test cases
+Passed 11/28 test cases
 
-Failed 10 of 14 public tests (10 time-cap)
+Failed 3 of 14 public tests (3 time-cap)
 Failed 14 of 14 private tests (14 time-cap)
 Run your program in the editor to view public test cases
 
 notes:
-two-tier store: 52 hot slots in a man-memory, 8.6M avg ticks, 203x204
+hot 10-slot man-memory tier on the compacted CPU: 40,000 fp (the tier is now free in area), local avg 16.74M vs 19.35M, 30 live men / 0.768bn worst runner-ticks -- probing the wall-clock ceiling between the observed 0.73bn pass and 0.87bn refusal

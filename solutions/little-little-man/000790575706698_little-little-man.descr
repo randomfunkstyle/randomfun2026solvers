@@ -1,0 +1,16 @@
+# little-little-man — submission 2b62ce7b-cfba-419f-a4e4-1929cbade335
+
+verdict      done: 28/28 cases, area2 37249, avgTicks 21,224,079, score 790,575,706,698
+submitted    2026-07-26T16:21:49+0300
+grid         192x193
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  5edf34d9f3094a31f2a473381b5cf9f36181a3a3ca4717146f6070905510df33
+commit       b1d8ba5
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+ROM fold re-swept to rom_rows=89: 195x192 (38,025) -> 192x193 (37,249). Score is max(w,h)^2, so the fold's optimum is where width and height cross — 89 is the last fold at which width still exceeds height (88 -> 195x192 = 38,025, 90 -> 190x194 = 37,636). Engine-verified 14/14 public cases: avg 19,364,600 ticks, worst 30,231,975, marginally faster than the 195x192 build. 5 live men, 0.15bn runner-ticks, well under the 0.7bn time-cap floor that rejected the two-tier build 4/28.
