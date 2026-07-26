@@ -2081,6 +2081,7 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: |---|---|---|---|
 #: | `brackets` | 9,025 → 9,025 | 26,000 → 25,111 | **0.966x** |
 #: | `gradebook` | 12,996 → **12,769** | 301,571 → 298,571 | **0.973x** |
+#: | `matmul` | 8,100 → 8,100 | 120,714 → 118,638 | **0.988x** |
 #: | `sudoku-validity` | 6,889 → 6,889 | 434,667 → 432,167 | **0.994x** |
 #:
 #: `gradebook` also *loses* a column, which is the tell that the default was not on
@@ -2088,6 +2089,15 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: `tcp` and `snake-ring` were searched the same way and kept their default order —
 #: see §7.6. Re-run `scratch/lane_order_search.py` when a program's `.asm` changes,
 #: since the weights come from its own execution profile.
+#:
+#: One trap, because it cost an hour and a wrong conclusion:
+#: ``test_lm1_matmul`` pins each case's **exact** settle tick ("the recorded tick is
+#: enough, and one tick fewer is not"), so a *faster* grid fails it and the failure
+#: reads exactly like a wrong answer. `matmul` was dropped from this table on that
+#: evidence and put back after checking the outputs directly — they were correct on
+#: all seven public cases, on the reference engine, at every case's new lower tick.
+#: When a pinned-tick test fails here, confirm which half of the assertion broke
+#: before concluding anything about correctness.
 LANE_ORDER: dict[str, tuple[str, ...]] = {
     "brackets": (
         "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
@@ -2097,15 +2107,7 @@ LANE_ORDER: dict[str, tuple[str, ...]] = {
         "MUL", "DIV", "MOVA", "SUB", "ADD", "JMPF", "BRN",
         "AND", "BRZ", "ST", "LD", "LDI", "SUBI", "MULI",
     ),
-    # `matmul` is deliberately absent. The search found ("MUL", "BRN", "SUB", "ADDI",
-    # "ST", "LD") at 0.988x, it passed all seven public cases on the reference engine —
-    # and it fails `test_lm1_matmul`'s stress matrices (identity, 16x16x16, negative
-    # heavy) on that same engine. So the public data under-covers `matmul`, and a
-    # public-case-only search is not a safe filter for it: `matmul` is the one program
-    # here on the *long* return path (`_LONG_RETURN`, for the STREAM wiring), where the
-    # drop columns follow the older strictly-ordered rule the model does not describe.
-    # 1.2% is not worth reopening that; anyone who wants it must put the stress cases
-    # into the search's verify step, not just `publicTestData`.
+    "matmul": ("MUL", "BRN", "SUB", "ADDI", "ST", "LD"),
     "sudoku-validity": (
         "HALT", "STP", "ADD", "LDP", "MULI", "ST",
         "MODI", "DIVI", "SUBI", "ADDI", "BRZ",

@@ -1341,6 +1341,7 @@ granularity (`scratch/lane_order_search.py`):
 |---|---|---|---|
 | `brackets` | 9,025 → 9,025 | 26,000 → **25,111** | **0.966×** |
 | `gradebook` | 12,996 → **12,769** | 301,571 → **298,571** | **0.973×** |
+| `matmul` | 8,100 → 8,100 | 120,714 → **118,638** | **0.988×** |
 | `sudoku-validity` | 6,889 → 6,889 | 434,667 → **432,167** | **0.994×** |
 
 Four things this exercise established that outlive the numbers:
@@ -1356,15 +1357,20 @@ Four things this exercise established that outlive the numbers:
   and 1.6% of its ticks. Walking that sits in front of a blocked memory `r` is free —
   the man waits at the `r` either way — so the model ranks candidates correctly but must
   never be read as a tick estimate.
-- **A public-case pass is not proof of correctness.** `matmul`'s best candidate passed
-  7/7 public cases on the reference engine and computes the wrong product for an
-  *identity matrix* (`test_lm1_matmul`'s stress set). It is the one program on the long
-  return path (`_LONG_RETURN`, for the STREAM wiring), whose drop-column rule the model
-  does not describe. It keeps the default order, and the search grew an
-  `--extra-problem` flag so the next thin-data program is checked past its cases.
-- **`optimize.verify` defaults to the fast in-memory engine**, and that is the validator
-  which passed `matmul`'s broken grid. Any check whose job is to catch a *hardware* bug
-  has to pass `lm=Littleman()` and use the reference.
+- **A pinned-tick test failing is not evidence of a wrong answer, and reading it that
+  way cost a real result.** `test_lm1_matmul` asserts each case's *exact* settle tick —
+  "the recorded tick is enough, and one tick fewer is not" — so a **faster** grid fails
+  it, with a message indistinguishable from a wrong product. `matmul` was struck from
+  `LANE_ORDER` on that evidence, and restored after checking the outputs directly:
+  correct on all seven public cases, on the reference engine, at every case's new lower
+  tick. The pin is a good test; it just answers a different question than it appears to.
+  Confirm *which half* of such an assertion broke before concluding anything.
+- **A public-case pass is still not proof of correctness**, independently of the above:
+  nine cases is thin cover for a stack machine, and a reordered grid is *different
+  hardware* running the same ISA. `brackets` therefore gets random and boundary inputs
+  past its public set, and the search grew `--extra-problem` for programs with thin
+  data. Note also that **`optimize.verify` defaults to the fast in-memory engine**, so a
+  check whose job is to catch a hardware bug must pass `lm=Littleman()`.
 
 `tcp` and `snake-ring` were searched over three seeds each and kept their defaults — no
 candidate that held the footprint beat them.

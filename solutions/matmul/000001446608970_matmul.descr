@@ -1,0 +1,16 @@
+# matmul — submission d9d7a3ed-5a05-4784-a9bb-d47bddd6613d
+
+verdict      done: 20/20 cases, area2 8100, avgTicks 178,594, score 1,446,608,970
+submitted    2026-07-26T05:47:09+0300
+grid         88x90
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  26f66692874c07a267a90ebc031f9af494b874fafc73a8a7fc37612bdb0269cc
+commit       cda0eae
+local        matmul: 7/7 public cases, avg 118,638 ticks
+source       tasks/solutions/matmul_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+LANE_ORDER: lanes ordered by measured opcode frequency; 88x90 unchanged, public ticks 120,714 -> 118,638

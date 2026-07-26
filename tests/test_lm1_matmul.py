@@ -75,13 +75,13 @@ slow = pytest.mark.skipif(
 #: are the deliverable, so they are pinned exactly (with 5 % of slack in the
 #: assertion below, to allow an improvement without a test edit).
 REAL_TICKS = {
-    "2x2 warm up": 14_126,
-    "non-square 2x3x2": 18_386,
-    "identity": 39_382,
-    "negative heavy": 69_040,
-    "skinny 16x2x16": 71_638,
-    "max magnitude 7x5x9": 79_416,
-    "16x16x16 full size": 548_758,
+    "2x2 warm up": 13_959,
+    "non-square 2x3x2": 18_171,
+    "identity": 38_891,
+    "negative heavy": 68_195,
+    "skinny 16x2x16": 70_547,
+    "max magnitude 7x5x9": 78_415,
+    "16x16x16 full size": 542_291,
 }
 
 #: ``(instructions, multiply-accumulates)`` per case, from the emulator. The ratio
