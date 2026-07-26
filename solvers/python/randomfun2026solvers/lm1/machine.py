@@ -1912,6 +1912,26 @@ def build(
     and ``2`` is the wider two-word counted ring. Pass ``None`` to choose batch 2
     when ``tape_n >= tape_jump_threshold`` and batch 1 below it.
 
+    **Batch 2 buys ~12% of ticks and costs 12 columns, so it pays only on a machine
+    wide enough not to notice them.** Swept across every program with a tape, sb1 vs
+    sb2 footprint:
+
+    | free (+0.0%) | costly |
+    |---|---|
+    | `pathfinder` 31,329, `snake` 15,129, `snake-ring` 14,641, `pathfinder-unit` 24,649 | `sudoku-validity` +33.6%, `tcp` +32.2%, `palette` +30.6%, `brackets` +28.8%, `gradebook` +27.5%, `matmul` +27.2%, `plotter` +24.7% |
+
+    The costly ones are width-bound, and **re-sweeping the ROM fold does not rescue
+    them** — it makes them worse, because a narrower fold is a taller machine: at its
+    own best fold `gradebook` is 117x84 = 13,689 (+58.3% against 8,649) and
+    `sudoku-validity` 89x74 = 7,921 (+33.6%). That is the opposite of what the fold
+    re-sweep did for `little-little-man`, where the ROM already set the width at 192
+    and the tape sat well inside it.
+
+    So among *shipped* solutions this is a `little-little-man`-only win. The two
+    problems above it in score do not have a tape at all: `subset-sum` ships
+    `subset_sum_mitm` and `pathfinder` ships `pathfinder_grid`, both bespoke ring
+    machines. Measured, so it need not be tried again.
+
     ``tape_n`` is a **slot count**, so the usable addresses are ``1 .. tape_n - 1``:
     slot 0 is sign-ambiguous (see the module docstring) and slot ``tape_n`` does not
     exist. Addressing it does not fault — the tape's worker walks past the end of its
