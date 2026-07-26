@@ -70,12 +70,14 @@ BLOCKED = {
 }
 
 #: Problems graded on committed frames rather than on program output.
-DISPLAY_PROBLEMS = {"plotter", "palette", "snake", "pathfinder"}
+DISPLAY_PROBLEMS = {"plotter", "palette", "snake", "pathfinder", "little-little-man"}
 
-#: Programs whose *emulated* tick estimate exceeds ``TICK_CAP`` on the largest
-#: public case. Empty since ``matmul`` moved onto the STREAM block: every program
-#: here fits now, on the estimate *and* on the real engine.
-OVER_TICK_CAP: set[str] = set()
+#: Programs whose *emulated* tick estimate exceeds the default ``TICK_CAP`` on the
+#: largest public case. A problem may state its own cap, and the two here do:
+#: ``little-little-man``'s is 50,000,000 (``tickCap`` in its JSON), against which
+#: the shipped machine measures 22.3M average and 35.0M worst *on the engine* —
+#: see ``tests/test_llm_lm1.py`` for the assertion that holds it there.
+OVER_TICK_CAP: set[str] = {"little-little-man"}
 
 PROGRAMS = sorted(available())
 CASES = [
@@ -101,6 +103,7 @@ def test_the_expected_programs_exist() -> None:
         "matmul",
         "snake",
         "pathfinder",
+        "little-little-man",
     }
 
 
@@ -169,6 +172,13 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # whole trie level to every instruction plus ~32 lane rows.
         "plotter": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
+        # little-little-man interprets a 2D language, so its extensions are what an
+        # interpreter needs: the three ports, `LDA`/`MOVA` to reach the program grid at
+        # the address a man happens to stand on, and `DIVI`/`MODI` to split a cell word
+        # into the colour a repaint wants and the class a dispatch wants. Nineteen
+        # opcodes, so a depth-5 trie — see `littleman/LLM-DESIGN.md` on what folding
+        # the three ports into one `SND` would buy.
+        "little-little-man": {"DIVI", "MODI", "LDA", "MOVA", "DSPA", "DSPD", "DSPS"},
         "triangle-closed": {"MUL", "DIVI"},
         # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
         # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
