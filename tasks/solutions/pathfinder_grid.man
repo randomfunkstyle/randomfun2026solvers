@@ -90,16 +90,14 @@
 |          v     msrsrsr                     <              |
 |         >>v                                               |
 |       vd  <                                               |
-|     >    >            r           rsrM1       sWsM0sWMv   |
-|                                             v1M+N`61` <   |
-|                                             > sWsM `10`sWv|
-|                                            v0s           <|
+|    >     >            r           rsrM1       sWsM0sWM1+Mv|
+|                                            v0sWs`01`MsWs1<|
 |                                            >  sv          |
 |         v                                      <          |
-|    >     >            r           rsrM1       sWsM0sWM1+Mv|
-|                                             v`01`   MsWs1<|
-|                                             > sWv         |
-|                                            v0s  <         |
+|     >    >            r           rsrM1       sWsM0sWMv   |
+|                                             v1M+N`61` <   |
+|                                             > sWsM  `10`sv|
+|                                            v0s          W<|
 |                                            >  sv          |
 |        v                                       <          |
 |   >      >            r           rsrM1       sWsM0sWMv   |
@@ -109,8 +107,8 @@
 |                                            >  sv          |
 |      v                                         <          |
 |  >       >            r           rsrM1       sWsM0sWM1N+v|
-|                                         v`01`      MsWs1M<|
-|                                         >     sWv         |
+|                                          v`01`     MsWs1M<|
+|                                          >    sWv         |
 |                                            v0s  <         |
 |                                            >  sv          |
 |          v                                     <          |
