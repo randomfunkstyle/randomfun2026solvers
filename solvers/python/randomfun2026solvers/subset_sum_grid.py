@@ -87,10 +87,10 @@ BRET_COL, BFWD_COL = 30, 31
 #: *forbidden*, not merely undocumented: the midpoints between anchors are
 #: 11.5/13.5 (io|v) and 25/26 (v|b), and a tie is resolved by reading order,
 #: which is not something a block should be allowed to depend on.
-BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 39)}
+BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)}
 
 #: Worker interior.
-IW, IH = 40, 78
+IW, IH = 46, 160
 
 
 def _op(c: Circuit, x: int, y: int, glyph: str, band: str) -> None:
@@ -258,7 +258,7 @@ def _peel_emit(c: Circuit, xr: int, y: int, xout: int) -> tuple[int, int]:
 # west column into the next block's entry row.  Nothing ever walks west across a
 # block's own row, which is the mistake that silently re-steers a man.
 
-EAST_COL, WEST_COL = 34, 13
+EAST_COL, WEST_COL = 38, 13
 
 
 def _link(
@@ -478,6 +478,12 @@ def worker(stage: str = "full") -> Circuit:
         out(c, OUT_COL, 39)
         c.set(OUT_COL - 1, 39, "H")
         return c
+    if stage == "p2":
+        _link(c, exit_, E, 22, (14, P2_HEAD))
+        _phase2(c)
+        _nosol(c)
+        _hit_probe(c)
+        return c
     if stage == "loadb":
         _link(c, exit_, E, 22, (14, 24))
         _spill_b(c, 24)
@@ -557,8 +563,12 @@ LOOP_COL = 11
 
 #: Phase 2's rows.  Named because six blocks and nine lanes have to agree about
 #: them and an off-by-one row is a silently re-steered man, not a crash.
-P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 24, 31, 37, 42, 46
-P2_SCAN, P2_SKIP, P2_MISS, P2_HIT = 50, 45, 44, 57
+P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 24, 32, 39, 45, 50
+#: The scan gets a band of its own, forty rows clear of everything else.  The
+#: four lanes it fans out into were what defeated the first attempt at a tight
+#: layout; there is no area pressure on this problem, so they get room.
+SCAN_TOP, SCAN_SOUTH, SCAN_NORTH = 60, 35, 34
+MISS_ROW, HIT_ROW, HIT_COL, P3_HEAD = 53, 70, 12, 90
 
 
 def _phase2(c: Circuit) -> None:
@@ -608,3 +618,127 @@ def _phase2(c: Circuit) -> None:
 
     _rot(c, VRET_COL, P2_ROT)               # skip the right values, stop on MT
     _link(c, (22, P2_ROT - 1), N, P2_TEST - 2, (14, P2_TEST))
+
+    # ── the residual, and the only test that has to happen before the scan ───
+    y = P2_TEST
+    c.run(14, y, "+N")                      # A = -(t+1) + s, negated: r + 1
+    c.set(16, y, "M")                       # B = r + 1, the scan's query
+    vr(c, 17, y)                            # the old RR, discarded
+    c.set(18, y, "W")                       # A = r + 1 again, B = the old RR
+    vs(c, 19, y)                            # RR = r + 1
+    c.set(20, y, "M")                       # B = r + 1
+    c.set(21, y, "X")                       # r+1 > 0 -> scan; otherwise next lap
+    # `q <= 0` must never reach the scan: `-1 ^ q` goes *positive* for q < -1, so
+    # the sentinel would stop separating "keep going" from "not present" and the
+    # pass would circle ring B forever.
+    c.set(21, y - 1, "<")                   # r + 1 < 0
+    c.set(22, y, "^")                       # r + 1 == 0
+    c.set(22, y - 1, "<")
+    c.horizontal(y - 1, 21, LOOP_COL)
+    c.set(LOOP_COL, y - 1, "^")
+
+    _scan(c)
+
+
+def _scan(c: Circuit) -> None:
+    """The probe's gadget, and the four lanes it fans out into.
+
+    Ten cells, two words a lap, five ticks a word — measured, not modelled, and
+    re-measured here at 101 words in a 109-cell ring, which is what says a nearly
+    full ring costs no more than an empty one: the engine shifts a pipe as one
+    train, not one gap per tick.  `~` leaves `B` alone and both operands are
+    non-negative, so one `X` separates all three outcomes at once::
+
+        A == 0   straight   the residual is a right-half sum
+        A  > 0   turn       keep scanning
+        A  < 0   turn back  that was the sentinel: not present
+
+    Every lane leaves the band before turning, and the only cells two lanes ever
+    share are blanks, which a man walks straight through.
+    """
+    south, north, top = SCAN_SOUTH, SCAN_NORTH, SCAN_TOP
+    # Entry comes down a column east of every lane and turns in at the top of the
+    # south side; the north side's `X` turns into the same cell, so the loop and
+    # the way in share one glyph instead of needing a junction.
+    c.set(21, P2_TEST + 1, ">")
+    c.horizontal(P2_TEST + 1, 21, south + 2)
+    c.set(south + 2, P2_TEST + 1, "v")
+    c.vertical(south + 2, P2_TEST + 1, top - 1)
+    c.set(south + 2, top - 1, "<")
+    c.set(south + 1, top - 1, " ")
+    c.set(south, top - 1, "v")
+
+    br(c, south, top)
+    bs(c, south, top + 1)
+    c.set(south, top + 2, "~")              # A = b ^ q; B untouched, so q survives
+    c.set(south, top + 3, "X")
+    c.set(north, top + 3, "^")
+    br(c, north, top + 2)
+    bs(c, north, top + 1)
+    c.set(north, top, "~")
+    c.set(north, top - 1, "X")
+
+    # ── not found: both lanes climb clear of the band before turning west ────
+    # They have to: a westbound run at ring level would be crossed by the found
+    # lanes' descent, and a corridor crossing a *turn* glyph re-steers the man.
+    # Above the band the only cells they share with anything are blanks.
+    c.set(north - 1, top - 1, "^")
+    c.vertical(north - 1, top - 1, MISS_ROW)
+    c.set(north - 1, MISS_ROW, "<")
+    c.horizontal(MISS_ROW, north - 1, LOOP_COL)
+    c.set(LOOP_COL, MISS_ROW, "^")
+    c.set(south + 1, top + 3, "^")
+    c.vertical(south + 1, top + 3, MISS_ROW + 1)
+    c.set(south + 1, MISS_ROW + 1, "<")
+    c.horizontal(MISS_ROW + 1, south + 1, LOOP_COL)
+    c.set(LOOP_COL, MISS_ROW + 1, "^")
+    for row in range(P2_HEAD + 1, MISS_ROW + 2):
+        c.set(LOOP_COL, row, "^")
+
+    # ── found: west below the not-found rows, then down the hit column ───────
+    c.set(north, top - 2, "<")
+    c.horizontal(top - 2, north, HIT_COL)
+    c.set(HIT_COL, top - 2, "v")
+    c.set(south, top + 4, "v")
+    c.vertical(south, top + 4, HIT_ROW)
+    c.set(south, HIT_ROW, "<")
+    c.horizontal(HIT_ROW, south, HIT_COL)
+    c.set(HIT_COL, HIT_ROW, "v")
+    for row in range(top - 1, P3_HEAD):     # blanks, not `v`: the not-found rows
+        if c.free(HIT_COL, row):            # cross this column and must not turn
+            c.set(HIT_COL, row, " ")
+    c.set(HIT_COL, P3_HEAD, ">")
+
+
+#: Where the exhausted lane and the no-solution answer live: far east of every
+#: lane, far south of every block.  Nothing else is within ten columns of it.
+NOSOL_COL, NOSOL_ROW = 44, 150
+
+
+def _nosol(c: Circuit) -> None:
+    """`C` reached zero with no hit: every left mask has been tried.  Emit `0`."""
+    c.horizontal(P2_HEAD, 17, NOSOL_COL)
+    c.set(NOSOL_COL, P2_HEAD, "v")
+    c.vertical(NOSOL_COL, P2_HEAD, NOSOL_ROW)
+    c.set(NOSOL_COL, NOSOL_ROW, "<")
+    c.horizontal(NOSOL_ROW, NOSOL_COL, 8)
+    c.set(8, NOSOL_ROW, "0")
+    c.set(7, NOSOL_ROW, " ")
+    out(c, OUT_COL, NOSOL_ROW)
+    c.set(OUT_COL - 1, NOSOL_ROW, "H")
+
+
+def _hit_probe(c: Circuit) -> None:
+    """Stage `p2`: answer `1` if phase 2 found a residual and `0` if it did not.
+
+    Phase 2 is the block that decides whether the machine answers at all, and
+    "does a subset exist" is exactly the question it settles.  Checking it on its
+    own separates a broken search from a broken read-out, which is the pair the
+    earlier builds could never tell apart.
+    """
+    c.set(WEST_COL, P3_HEAD, "1")
+    c.set(WEST_COL + 1, P3_HEAD, "v")
+    c.set(WEST_COL + 1, P3_HEAD + 1, "<")
+    c.horizontal(P3_HEAD + 1, WEST_COL + 1, OUT_COL)
+    out(c, OUT_COL, P3_HEAD + 1)
+    c.set(OUT_COL - 1, P3_HEAD + 1, "H")
