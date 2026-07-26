@@ -1542,7 +1542,18 @@ def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tupl
 #: was reverted, 90 under the banked store).  Treat any change to the CPU, the ROM, the
 #: store or the tape as invalidating it, and re-sweep: the fold is worth ~3% of the score
 #: and nothing else in the suite fails when it drifts.
-ROM_ROWS = 90
+#: Re-swept a fourth time after :data:`HOT` dropped 104 -> 53. Shrinking the store
+#: narrows the machine, which moved the crossing again and made it *height*-bound at
+#: the old fold — 191x194 charged for a height nothing else needed. 89 is the square
+#: machine and wins on both terms at once:
+#:
+#:     fold   w x h     area2    avg ticks   score
+#:      87    197x191   38,809   7,000,182   297,750,380,194
+#:      88    194x192   37,636   7,029,945   289,978,606,767
+#:      89    193x193   37,249   7,009,707   286,170,612,427
+#:      90    191x194   37,636   7,051,740   290,877,635,836
+#:      91    188x195   38,025   6,990,009   291,311,432,986
+ROM_ROWS = 89
 
 
 def build_machine(

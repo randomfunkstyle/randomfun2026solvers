@@ -117,17 +117,19 @@ def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     """``ROM_ROWS`` is a swept constant, not a default; this is what it bought.
 
     Score is ``max(w, h)^2``, so only the larger side is charged and the fold's
-    optimum is where width and height cross.  ``rom_rows=90`` is the last fold at
-    which width still exceeds height: 89 gives 196x193 (38,416) and 91 gives
-    190x195 (38,025), against this build's 192x194 (37,636).
+    optimum is where width and height cross.  Re-swept after ``HOT`` dropped
+    104 -> 53: a smaller store narrows the machine, which left the old fold
+    *height*-bound at 191x194 — charged for a height nothing needed.  88 gives
+    194x192 (37,636) and 91 gives 188x195 (38,025), against this build's square
+    193x193 (37,249).
 
     Pinned because the sweep is invalidated by *any* geometry change anywhere in
     the generator — the CPU, the ROM and the tape all move the crossing — and a
     silently drifted fold costs footprint without failing anything else.
     """
     machine, _program = built
-    assert (machine.width, machine.height) == (192, 194)
-    assert max(machine.width, machine.height) ** 2 == 37_636
+    assert (machine.width, machine.height) == (193, 193)
+    assert max(machine.width, machine.height) ** 2 == 37_249
 
 
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:
