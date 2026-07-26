@@ -213,58 +213,58 @@ PANEL = 16
 def _declare(a: Asm, *, packed_cells: bool) -> None:
     """Allocate every slot.  Order is deliberate: hot scalars first is free here
     (a tape read costs the same at any address), so the grouping is by phase."""
-    a.slot("W", "program width")
-    a.slot("H", "program height")
-    a.slot("NMEN", "men found, 1..3")
-    a.slot("NP", "pipes found, 0..2")
-    a.slot("NROOM", "rooms found, 1..3")
-    a.slot("NRUN", "candidate horizontal wall runs")
-    a.slot("NSRC", "pipe source arrowheads found")
-    a.slot("STOP", "a wall freeze or the last H: nothing runs after this")
+    a.slot("W", "program width", hot=True)
+    a.slot("H", "program height", hot=True)
+    a.slot("NMEN", "men found, 1..3", hot=True)
+    a.slot("NP", "pipes found, 0..2", hot=True)
+    a.slot("NROOM", "rooms found, 1..3", hot=True)
+    a.slot("NRUN", "candidate horizontal wall runs", hot=True)
+    a.slot("NSRC", "pipe source arrowheads found", hot=True)
+    a.slot("STOP", "a wall freeze or the last H: nothing runs after this", hot=True)
     a.slot("NHALT", "men halted on an H")
-    a.slot("K", "interpreted ticks left this round")
-    a.slot("CA", "cell cursor: display address")
-    a.slot("CX", "cell cursor: column")
-    a.slot("CY", "cell cursor: row")
-    a.slot("BY", "the input byte")
-    a.slot("CLS", "the class being computed / dispatched")
+    a.slot("K", "interpreted ticks left this round", hot=True)
+    a.slot("CA", "cell cursor: display address", hot=True)
+    a.slot("CX", "cell cursor: column", hot=True)
+    a.slot("CY", "cell cursor: row", hot=True)
+    a.slot("BY", "the input byte", hot=True)
+    a.slot("CLS", "the class being computed / dispatched", hot=True)
     a.slot("COL", "the colour being painted")
-    a.slot("PLUSX", "column of the last '+' in this row, or -1")
+    a.slot("PLUSX", "column of the last '+' in this row, or -1", hot=True)
     a.slot("CLEAN", "every cell since that '+' was a '-'")
-    a.slot("LIMIT", "16 * H — one past the last live display address")
+    a.slot("LIMIT", "16 * H — one past the last live display address", hot=True)
     a.slot("RET", "return site for the room_kind subroutine")
-    a.slot("RKX", "room_kind argument: column")
-    a.slot("RKY", "room_kind argument: row")
+    a.slot("RKX", "room_kind argument: column", hot=True)
+    a.slot("RKY", "room_kind argument: row", hot=True)
     a.slot("KIND", "room_kind result: 0 outside, 1 inside, 2 wall")
     a.slot("RIDX", "room_kind result: which room, or -1")
-    a.slot("RI", "room_kind's loop cursor")
-    a.slot("T0")
-    a.slot("T1")
-    a.slot("T2")
+    a.slot("RI", "room_kind's loop cursor", hot=True)
+    a.slot("T0", hot=True)
+    a.slot("T1", hot=True)
+    a.slot("T2", hot=True)
     a.slot("T3")
-    a.slot("T4")
+    a.slot("T4", hot=True)
     a.slot("JDX", "second array cursor, for the run pairing's inner loop")
-    a.slot("PKEY", "the (x0, x1) key of the run being paired")
+    a.slot("PKEY", "the (x0, x1) key of the run being paired", hot=True)
     a.slot("PY0", "the row of the run being paired")
-    a.slot("PX0", "unpacked x0 of a candidate room")
+    a.slot("PX0", "unpacked x0 of a candidate room", hot=True)
     a.slot("PX1", "unpacked x1 of a candidate room")
     a.slot("FCLS", "the final class the pipe walk writes for the cell it is on")
     a.slot("CP0", "packed cell access scratch — never touched by callers")
     a.slot("CP1")
     a.slot("CP2")
-    a.slot("C20", "the encoded wall class, for stamping with MOVA")
-    a.slot("CZ", "the constant 0, for clearing with MOVA")
-    a.slot("IDX", "generic array cursor")
-    a.slot("VAL", "generic value staged for an indexed write")
-    a.slot("NEWHI", "pipe shift: highest occupied cell after the pass")
+    a.slot("C20", "the encoded wall class, for stamping with MOVA", hot=True)
+    a.slot("CZ", "the constant 0, for clearing with MOVA", hot=True)
+    a.slot("IDX", "generic array cursor", hot=True)
+    a.slot("VAL", "generic value staged for an indexed write", hot=True)
+    a.slot("NEWHI", "pipe shift: highest occupied cell after the pass", hot=True)
     a.slot("NEWLO", "pipe shift: lowest occupied cell after the pass")
-    a.slot("BEST", "s/r: the pipe chosen, or -1")
+    a.slot("BEST", "s/r: the pipe chosen, or -1", hot=True)
     a.slot("BESTD", "s/r: its Manhattan distance")
     a.slot("BESTA", "s/r: its arrowhead address, for the reading-order tie")
     a.slot("PICKM", "pick(): 0 = outgoing pipes for an s, 1 = incoming for an r")
     a.slot("PICKR", "pick(): the room the man is in")
     a.slot("PICKA", "pick(): the man's cell")
-    a.slot("RET2", "return site for pick()")
+    a.slot("RET2", "return site for pick()", hot=True)
 
     a.array("RUN", MAX_RUNS, "packed wall run: (y*16 + x0)*16 + x1")
     a.array("RX0", MAX_ROOMS, "room rectangles, inclusive")
@@ -275,25 +275,25 @@ def _declare(a: Asm, *, packed_cells: bool) -> None:
     a.array("SRCD", MAX_PIPES + 1, "its flow direction")
     a.array("SRCR", MAX_PIPES + 1, "the room it leaves")
 
-    a.array("MPOS", MAX_MEN, "man: display address")
-    a.array("MDIR", MAX_MEN, "man: heading 0..3")
+    a.array("MPOS", MAX_MEN, "man: display address", hot=True)
+    a.array("MDIR", MAX_MEN, "man: heading 0..3", hot=True)
     a.array("MA", MAX_MEN, "man: register A")
     a.array("MB", MAX_MEN, "man: register B")
-    a.array("MHALT", MAX_MEN, "man: halted on an H")
+    a.array("MHALT", MAX_MEN, "man: halted on an H", hot=True)
     a.array("MROOM", MAX_MEN, "man: which room he lives in")
-    a.array("MCLS", MAX_MEN, "man: the class under him, read when he moved")
+    a.array("MCLS", MAX_MEN, "man: the class under him, read when he moved", hot=True)
     a.array("MPIPE", MAX_MEN, "man: the pipe his s/r bound to, cached")
     a.array("MPIPEA", MAX_MEN, "man: the cell that cache is valid for, or -1")
 
-    a.array("PLEN", MAX_PIPES, "pipe: cells, so index len-1 is the destination")
-    a.array("PBASE", MAX_PIPES, "pipe: its first slot in PCA/OCC")
+    a.array("PLEN", MAX_PIPES, "pipe: cells, so index len-1 is the destination", hot=True)
+    a.array("PBASE", MAX_PIPES, "pipe: its first slot in PCA/OCC", hot=True)
     a.array("PSRC", MAX_PIPES, "pipe: source arrowhead address")
     a.array("PDST", MAX_PIPES, "pipe: destination arrowhead address")
     a.array("PSROOM", MAX_PIPES, "pipe: the room it leaves")
     a.array("PDROOM", MAX_PIPES, "pipe: the room it enters")
-    a.array("PLO", MAX_PIPES, "pipe: lowest maybe-occupied cell")
+    a.array("PLO", MAX_PIPES, "pipe: lowest maybe-occupied cell", hot=True)
     a.array("PHI", MAX_PIPES, "pipe: highest maybe-occupied cell")
-    a.array("PCNT", MAX_PIPES, "pipe: values in flight")
+    a.array("PCNT", MAX_PIPES, "pipe: values in flight", hot=True)
 
     a.array("DTAB", 4, "address delta per heading: -16, +1, +16, -1")
     a.array("PCA", MAX_PIPE_CELLS, "pipe cell display addresses, flow order")
@@ -1430,9 +1430,39 @@ def _emit_pick(a: Asm, sites: int) -> None:
 
 
 # ── the whole program ─────────────────────────────────────────────────────────
-def build_asm(*, packed_cells: bool = False) -> tuple[str, int]:
-    """Return the ``.asm`` text and the tape slot count it needs."""
-    a = Asm()
+#: The hot tier's shape, and both numbers are pinned by the machine's own box.
+#: ``memory_men_grid`` is ``27 * cols`` wide and ``32 + 3 * rows`` tall, and the
+#: free space east of the CPU band is 93 x 111 — so two columns is the widest that
+#: still leaves room for the tape beside it inside the ROM's 203, and 26 rows the
+#: tallest that fits under the panel. 52 cells is what falls out, and 52 slots is
+#: 90.6 % of the 3,185 reads a case (``lm1.emulator`` with a counting store).
+#: Measured on the engine over all 14 public cases, 50M tick cap:
+#:
+#:     |                | footprint | avg ticks  | max ticks  | score   |
+#:     | tape only      |    41,616 | 20,275,186 | 31,809,643 | 8.44e11 |
+#:     | + 52-slot tier |    41,616 |  8,605,207 | 13,676,774 | 3.58e11 |
+#:
+#: **This is now the default, and the hot bank is a pipe tape, not a man-memory.**
+#: The man-memory version of this tier was judged ``11/28`` at 10 slots and ``4/28``
+#: at 52 — refused on wall clock, because every slot of it is a live little man and
+#: the grader's cost is ``runners x ticks``. A pipe tape has four men at *any* size,
+#: so ``(4, 26)`` = 104 slots costs three extra men and was judged **28/28 at
+#: 400,740,741,396** — 2.12x the single-tape machine, at a *lower* runner-tick
+#: product (0.110bn against 0.151bn). See ``machine.TIER_PIPE_BANK`` and LLM-DESIGN.
+HOT = (4, 26)
+HOT_SLOTS = HOT[0] * HOT[1]
+
+
+def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tuple[str, int]:
+    """Return the ``.asm`` text and the tape slot count it needs.
+
+    ``hot_slots`` reserves the lowest addresses for ``machine.build(hot=...)``'s
+    man-memory tier; the slots marked ``hot=True`` in :func:`_declare` are the ones
+    that land there, chosen by measuring reads per slot across all 14 public cases
+    (``lm1.emulator`` with a counting ``DictStore``) and taking whole declarations
+    greedily by reads-per-slot. At 52 they are 90.6 % of the 3,185 reads a case.
+    """
+    a = Asm(hot_slots=hot_slots)
     _declare(a, packed_cells=packed_cells)
     a.jmp("setup", "the ROM starts here; setup runs once and falls into round")
     _emit_round(a, packed=packed_cells)
@@ -1454,17 +1484,43 @@ def build_asm(*, packed_cells: bool = False) -> tuple[str, int]:
 #: packed structures band (stacked slab entry rows, 20 rows -> 10) and main's
 #: compact whole-machine routing.  Rows the CPU gives up only pay once the fold
 #: converts them into width, so the sweep has to be redone whenever either moves.
-ROM_ROWS = 88
+#:
+#: The sweep's minimum is not a coincidence and is worth stating as a rule: score is
+#: ``max(w, h)^2``, so only the *larger* side is charged and every unit the smaller
+#: side falls short is free area we are not using.  The fold trades width for height
+#: monotonically, so the optimum is wherever the two cross — the **square** machine.
+#: Re-swept under the **banked store**, which moved the crossing by one row:
+#: 88 -> 197x192 (38,809, the fold that shipped at 375,276,399,205), 89 -> 196x193
+#: (38,416), **90 -> 192x194 (37,636)**, 91 -> 190x195 (38,025).  90 is the crossing —
+#: the last fold at which width still exceeds height.
+#:
+#: This constant has now been swept three times against three different geometries and
+#: landed on a different value each time (88 single-tape, 89 after ``height = bottom - 1``
+#: was reverted, 90 under the banked store).  Treat any change to the CPU, the ROM, the
+#: store or the tape as invalidating it, and re-sweep: the fold is worth ~3% of the score
+#: and nothing else in the suite fails when it drifts.
+ROM_ROWS = 90
 
 
-def build_machine(*, packed_cells: bool = False, rom_rows: int = ROM_ROWS):
-    """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel."""
+def build_machine(
+    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = HOT
+):
+    """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel.
+
+    ``hot=(cols, rows)`` adds the second store tier: a man-memory grid holding the
+    lowest ``cols * rows`` slots, which answers in ~200 ticks against the tape's
+    ``8 * 427`` = 3,416.  :data:`HOT` is the measured shape and the default;
+    ``hot=None`` builds the single-tape machine this replaced, for comparison —
+    engine-measured, the tier is **2.36x**: 20,275,186 ticks a case against
+    8,605,207, at an unchanged 203x204.
+    """
     from randomfun2026solvers.lm1 import machine
     from randomfun2026solvers.lm1.asm import assemble
 
-    text, slots = build_asm(packed_cells=packed_cells)
+    hot_slots = hot[0] * hot[1] if hot else 0
+    text, slots = build_asm(packed_cells=packed_cells, hot_slots=hot_slots)
     program = assemble(text, name="little-little-man")
-    built = machine.build(program, tape_n=slots, display=(PANEL, PANEL), rom_rows=rom_rows)
+    built = machine.build(program, tape_n=slots, display=(PANEL, PANEL), rom_rows=rom_rows, hot=hot)
     return built, program, text
 
 

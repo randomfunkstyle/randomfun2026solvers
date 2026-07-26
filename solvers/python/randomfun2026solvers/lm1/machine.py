@@ -949,6 +949,20 @@ def build_cpu(
         )
 
     width = ret_x + 1
+    # ``bottom`` is one *past* the deepest slab's last glyph row, so on most layouts
+    # this row is blank — it holds nothing but the two side walls, and `height =
+    # bottom - 1` renders and binds on every registered machine.  It was worth a row
+    # on `little-little-man` (195x197 -> 195x196, area2 38,809 -> 38,416, judged at
+    # 817,968,537,932) while that machine was height-bound.
+    #
+    # It is not blank everywhere, and it is not worth taking now.  Measured against
+    # this generator, with the whole-machine route compaction in: the row is free on
+    # ten of the eleven machines and changes *no* footprint, because compaction
+    # already put every one of them under its width — including the LLM, which is
+    # 195x192 either way.  On `matmul` it is load-bearing: the memory-response pipe
+    # routes through it, `mem_pad` 0..4 stop binding without it ("'r' at (22, 11)
+    # must bind 'mem_resp'"), and the pad search escapes two columns east to
+    # 87x85 — area2 7,396 -> 7,569, a 2.3% loss and the only footprint it moves.
     height = bottom
     mem_rows = sorted(
         r
@@ -1638,6 +1652,8 @@ class Machine:
     #: Pipe lengths for the serial routes whose latency is paid on every
     #: instruction or STORE access.
     route_lengths: dict[str, int] = field(default_factory=dict)
+    #: The placed hot bank, when ``build(hot=...)`` asked for one (see _two_tier).
+    tier: object | None = None
     #: Opt-in constraint placement metadata. The first compactable block is STORE;
     #: fixed blocks remain at their normal coordinates.
     compact: bool = False
@@ -1752,6 +1768,7 @@ def build(
     middle_order: Sequence[str] | None = None,
     rom_buffer: int | None = None,
     compact: bool = False,
+    hot: tuple[int, int] | None = None,
     mem_offset: tuple[int, int] = (0, 0),
     store_offset: tuple[int, int] = (0, 0),
 ) -> Machine:
@@ -1848,6 +1865,7 @@ def build(
                     store_offset[0],
                     mem_offset[0],
                     mem_offset[1],
+                    hot,
                 )
             except MachineError as exc:
                 last = exc
@@ -1889,6 +1907,10 @@ def build(
                     rom_buffer,
                     True,
                     store_dy,
+                    0,
+                    0,
+                    0,
+                    hot,
                 )
             except MachineError:
                 continue
@@ -1955,6 +1977,7 @@ def _assemble(
     store_dx: int = 0,
     mem_dx: int = 0,
     mem_dy: int = 0,
+    hot: tuple[int, int] | None = None,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
@@ -1974,6 +1997,18 @@ def _assemble(
             else rommod.rows_for_budget(len(words), rommod.digit_width(words), max(40, W))
         )
         romlay = rommod.build_rom(words, rows=nrows)
+
+    if hot is not None and (mem_dx or mem_dy or store_dx or store_dy):
+        # Two independent rearrangements of the same block. The banked seam builds its
+        # own adapter, tier and tape at coordinates ``_two_tier`` owns, so an offset
+        # meant for the single-store path would move nothing and silently claim to.
+        # Nothing wants both yet — `hot` is the LLM interpreter, the offsets are `tcp`
+        # and `gradebook` — so say so rather than pick one.
+        raise MachineError(
+            "a banked store and a relocated memory block cannot be combined: `hot` "
+            "places the adapter, tier and tape itself, so mem/store offsets would be "
+            "ignored"
+        )
 
     g = _Grid()
     route_lengths: dict[str, int] = {}
@@ -2057,177 +2092,191 @@ def _assemble(
         g.put(CX + cpu.out_col, oy + 3, "O")
 
     # ── adapter, east of the CPU ─────────────────────────────────────────────
-    AX0 = CX + W + CPU_ADAPTER_GAP
-    # Aligned so the request pipe leaves the CPU beside the memory lanes, but never
-    # so high that the response pipe's westward leg grazes the adapter's top corner.
-    # A small machine (few lanes, no memory) is the case that needs the clamp.
-    AY0 = max(CY + cpu.mem_out_row - ADAPTER_IN_ROW, CY + cpu.mem_in_row + 3)
-    resp_row_check = CY + cpu.mem_in_row
-    if resp_row_check >= AY0 - 1:
-        raise MachineError(
-            f"response row {resp_row_check} is not clear of the adapter's top wall "
-            f"at {AY0}: its westward leg would touch the adapter's corner and the "
-            "engine would read a second, spurious pipe into the CPU"
-        )
-    # ``req_row`` is where the request pipe meets the *CPU*, so it is a property of
-    # the CPU's memory lanes and stays put however far the memory moves. Only the
-    # far end of that pipe travels with the adapter.
-    req_row = AY0 + ADAPTER_IN_ROW
-    AX, AY = AX0 + mem_dx, AY0 + mem_dy
-    if AX < 1 or AY < 1:
-        raise MachineError(f"the memory block leaves the grid: adapter at ({AX}, {AY})")
-    g.room(AX, AY, AX + ADAPTER_W + 1, AY + ADAPTER_H + 1)
-    g.blit(AX, AY, adapter_cells(address_first=store == "men-y"))
-    cpu_out = (CX + W + 2, req_row)
-    adapter_in = (AX - 1, AY + ADAPTER_IN_ROW)
-    if mem_dx or mem_dy:
-        try:
-            request = constrained_route(
-                cpu_out,
-                adapter_in,
-                box=RouteBox(
-                    left=max(0, min(cpu_out[0], adapter_in[0]) - _ROUTE_MARGIN),
-                    top=max(0, min(cpu_out[1], adapter_in[1]) - _ROUTE_MARGIN),
-                    right=max(cpu_out[0], adapter_in[0]) + _ROUTE_MARGIN,
-                    bottom=max(cpu_out[1], adapter_in[1]) + _ROUTE_MARGIN,
-                ),
-                blocked=_keepout(g, (cpu_out, adapter_in)),
-                start_direction=(1, 0),
-                end_direction=(1, 0),
-            )
-        except RouteError as exc:
-            raise MachineError(f"cannot route the CPU's request to the adapter: {exc}") from exc
-        route_lengths["cpu->adapter"] = g.draw_pipe(request)
+    AX = CX + W + CPU_ADAPTER_GAP
+    if hot is not None:
+        # A second store seam. The hot bank is a small pipe tape and the cold one the
+        # full store; the adapter routes by address range and the merger's ``R`` takes
+        # whichever answers. See :func:`_two_tier` and ``TIER_PIPE_BANK``.
+        seam = _two_tier(g, cpu, CX, CY, W, AX, tape_n, hot)
+        extra_regions = seam.regions
+        req_row, resp_row = seam.req_row, seam.resp_row
+        store_pipes = seam.pipes
+        tape = seam.tape
+        tier = seam.tier
     else:
-        route_lengths["cpu->adapter"] = g.draw_pipe([cpu_out, adapter_in])
-
-    # ── tape, east of the adapter ────────────────────────────────────────────
-    if store == "men":
-        from ..memory_men_store import men_block
-
-        tape = men_block(tape_n)
-    elif store == "men-y":
-        from ..memory_men_y import y_men_block
-
-        tape = y_men_block(tape_n)
-    elif store == "grid":
-        tape = grid_block(tape_n)
-    elif store == "tape":
-        tape = tape_block(tape_n)
-    else:
-        raise MachineError(
-            f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
-        )
-    TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
-    TY = CY + mem_dy + store_dy
-    if TY < 0 or TX < 0:
-        raise MachineError(f"STORE placement leaves the grid: ({TX}, {TY})")
-    g.blit(TX, TY, tape.cells)
-
-    # adapter east wall -> the tape's request stub
-    tin_x, tin_y = TX + tape.in_cell[0], TY + tape.in_cell[1]
-    ax_out = AX + ADAPTER_W + 2
-    mid = ax_out + 2
-    adapter_out = (ax_out, AY + ADAPTER_OUT_ROW)
-    store_in = (tin_x - 1, tin_y)
-    moved = bool(mem_dx or mem_dy or store_dx)
-    if compact or moved:
-        try:
-            # The box is the endpoints' bounding rectangle plus a two-cell margin.
-            # A STORE placed *west* of the adapter needs that margin: the pipe leaves
-            # the adapter eastward and must arrive eastward, so it has to overshoot
-            # west of its own target and come back — a detour the tight box forbids.
-            store_request = constrained_route(
-                adapter_out,
-                store_in,
-                box=RouteBox(
-                    # ``TX`` is the block's own empty column 0 — the one lane that
-                    # runs the full height of the STORE block without meeting the
-                    # relay. An adapter parked *below* the block has to use it to
-                    # climb back up to the request stub, so the box must reach it.
-                    left=max(0, min(adapter_out[0], store_in[0], TX) - _ROUTE_MARGIN),
-                    top=max(0, min(adapter_out[1], store_in[1]) - _ROUTE_MARGIN),
-                    right=max(adapter_out[0], store_in[0]) + _ROUTE_MARGIN,
-                    bottom=max(adapter_out[1], store_in[1]) + _ROUTE_MARGIN,
-                ),
-                blocked=_keepout(g, (adapter_out, store_in)) if moved else g.c,
-                start_direction=(1, 0),
-                end_direction=(1, 0),
+        extra_regions, tier = {}, None
+        AX0 = AX
+        # Aligned so the request pipe leaves the CPU beside the memory lanes, but never
+        # so high that the response pipe's westward leg grazes the adapter's top corner.
+        # A small machine (few lanes, no memory) is the case that needs the clamp.
+        AY0 = max(CY + cpu.mem_out_row - ADAPTER_IN_ROW, CY + cpu.mem_in_row + 3)
+        resp_row_check = CY + cpu.mem_in_row
+        if resp_row_check >= AY0 - 1:
+            raise MachineError(
+                f"response row {resp_row_check} is not clear of the adapter's top wall "
+                f"at {AY0}: its westward leg would touch the adapter's corner and the "
+                "engine would read a second, spurious pipe into the CPU"
             )
-        except RouteError as exc:
-            raise MachineError(f"cannot compact STORE request route: {exc}") from exc
-        route_lengths["adapter->store"] = g.draw_pipe(store_request)
-    else:
-        route_lengths["adapter->store"] = g.draw_pipe(
-            [
-                adapter_out,
-                (mid, AY + ADAPTER_OUT_ROW),
-                (mid, tin_y),
-                store_in,
-            ]
-        )
+        # ``req_row`` is where the request pipe meets the *CPU*, so it is a property of
+        # the CPU's memory lanes and stays put however far the memory moves. Only the
+        # far end of that pipe travels with the adapter.
+        req_row = AY0 + ADAPTER_IN_ROW
+        AX, AY = AX0 + mem_dx, AY0 + mem_dy
+        if AX < 1 or AY < 1:
+            raise MachineError(f"the memory block leaves the grid: adapter at ({AX}, {AY})")
+        g.room(AX, AY, AX + ADAPTER_W + 1, AY + ADAPTER_H + 1)
+        g.blit(AX, AY, adapter_cells(address_first=store == "men-y"))
+        cpu_out = (CX + W + 2, req_row)
+        adapter_in = (AX - 1, AY + ADAPTER_IN_ROW)
+        if mem_dx or mem_dy:
+            try:
+                request = constrained_route(
+                    cpu_out,
+                    adapter_in,
+                    box=RouteBox(
+                        left=max(0, min(cpu_out[0], adapter_in[0]) - _ROUTE_MARGIN),
+                        top=max(0, min(cpu_out[1], adapter_in[1]) - _ROUTE_MARGIN),
+                        right=max(cpu_out[0], adapter_in[0]) + _ROUTE_MARGIN,
+                        bottom=max(cpu_out[1], adapter_in[1]) + _ROUTE_MARGIN,
+                    ),
+                    blocked=_keepout(g, (cpu_out, adapter_in)),
+                    start_direction=(1, 0),
+                    end_direction=(1, 0),
+                )
+            except RouteError as exc:
+                raise MachineError(f"cannot route the request to the adapter: {exc}") from exc
+            route_lengths["cpu->adapter"] = g.draw_pipe(request)
+        else:
+            route_lengths["cpu->adapter"] = g.draw_pipe([cpu_out, adapter_in])
 
-    # The tape's response stub -> CPU east wall. The default preserves the shipped
-    # waypoint route byte-for-byte. ``compact`` instead states the real geometry:
-    # stay in the corridor above the three attachments, avoid every occupied cell,
-    # enter the CPU from the east, and use the fewest cells. That distinction is
-    # what lets placement become constraint-driven later without baking another
-    # set of coordinates into this connection.
-    tout_x, tout_y = TX + tape.out_cell[0], TY + tape.out_cell[1]
-    resp_row = CY + cpu.mem_in_row
-    top = min(AY, tout_y, resp_row) - MEM_RESPONSE_CLEARANCE
-    # ``resp_pad`` inserts a there-and-back jog in the corridor above the machine,
-    # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
-    # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
-    # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
-    if compact or moved:
-        start = (tout_x, tout_y - 1)
-        end = (CX + W + 2, resp_row)
-        # The corridor between the CPU and the adapter is spoken for: the request
-        # pipe crosses it on ``req_row``. A STORE that no longer sits north-east of
-        # everything therefore has to climb *east of the adapter*, so the box has to
-        # reach past the adapter's east wall or no route exists at all.
-        box = RouteBox(
-            left=max(0, min(start[0], end[0]) - _ROUTE_MARGIN),
-            top=max(0, top - (1 if resp_pad else 0)),
-            right=max(start[0], end[0] + 1, ax_out) + _ROUTE_MARGIN,
-            bottom=max(start[1], end[1]) + _ROUTE_MARGIN,
-        )
-        blocked = _keepout(g, (start, end)) if moved else g.c
-        try:
-            shortest = constrained_route(
-                start,
-                end,
-                box=box,
-                blocked=blocked,
-                end_direction=(-1, 0),
+        # ── tape, east of the adapter ────────────────────────────────────────
+        if store == "men":
+            from ..memory_men_store import men_block
+
+            tape = men_block(tape_n)
+        elif store == "men-y":
+            from ..memory_men_y import y_men_block
+
+            tape = y_men_block(tape_n)
+        elif store == "grid":
+            tape = grid_block(tape_n)
+        elif store == "tape":
+            tape = tape_block(tape_n)
+        else:
+            raise MachineError(
+                f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
             )
-            response_route = constrained_route(
-                start,
-                end,
-                box=box,
-                blocked=blocked,
-                min_cells=len(shortest) + 2 * resp_pad,
-                end_direction=(-1, 0),
+        TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
+        TY = CY + mem_dy + store_dy
+        if TY < 0 or TX < 0:
+            raise MachineError(f"STORE placement leaves the grid: ({TX}, {TY})")
+        g.blit(TX, TY, tape.cells)
+
+        # adapter east wall -> the tape's request stub
+        tin_x, tin_y = TX + tape.in_cell[0], TY + tape.in_cell[1]
+        ax_out = AX + ADAPTER_W + 2
+        mid = ax_out + 2
+        adapter_out = (ax_out, AY + ADAPTER_OUT_ROW)
+        store_in = (tin_x - 1, tin_y)
+        moved = bool(mem_dx or mem_dy or store_dx)
+        if compact or moved:
+            try:
+                # The box is the endpoints' bounding rectangle plus a two-cell margin.
+                # A STORE placed *west* of the adapter needs that margin: the pipe leaves
+                # the adapter eastward and must arrive eastward, so it has to overshoot
+                # west of its own target and come back — a detour the tight box forbids.
+                store_request = constrained_route(
+                    adapter_out,
+                    store_in,
+                    box=RouteBox(
+                        # ``TX`` is the block's own empty column 0 — the one lane that
+                        # runs the full height of the STORE block without meeting the
+                        # relay. An adapter parked *below* the block has to use it to
+                        # climb back up to the request stub, so the box must reach it.
+                        left=max(0, min(adapter_out[0], store_in[0], TX) - _ROUTE_MARGIN),
+                        top=max(0, min(adapter_out[1], store_in[1]) - _ROUTE_MARGIN),
+                        right=max(adapter_out[0], store_in[0]) + _ROUTE_MARGIN,
+                        bottom=max(adapter_out[1], store_in[1]) + _ROUTE_MARGIN,
+                    ),
+                    blocked=_keepout(g, (adapter_out, store_in)) if moved else g.c,
+                    start_direction=(1, 0),
+                    end_direction=(1, 0),
+                )
+            except RouteError as exc:
+                raise MachineError(f"cannot compact STORE request route: {exc}") from exc
+            route_lengths["adapter->store"] = g.draw_pipe(store_request)
+        else:
+            route_lengths["adapter->store"] = g.draw_pipe(
+                [
+                    adapter_out,
+                    (mid, AY + ADAPTER_OUT_ROW),
+                    (mid, tin_y),
+                    store_in,
+                ]
             )
-        except RouteError as exc:
-            raise MachineError(f"cannot compact STORE response route: {exc}") from exc
-        route_lengths["store->cpu"] = g.draw_pipe(response_route)
-    else:
-        jog = (
-            [(tout_x, top), (tout_x + resp_pad, top), (tout_x + resp_pad, top - 1)]
-            if resp_pad
-            else [(tout_x, top)]
-        )
-        route_lengths["store->cpu"] = g.draw_pipe(
-            [
-                (tout_x, tout_y - 1),
-                *jog,
-                (CX + W + 3, top - (1 if resp_pad else 0)),
-                (CX + W + 3, resp_row),
-                (CX + W + 2, resp_row),
-            ]
-        )
+
+        # The tape's response stub -> CPU east wall. The default preserves the shipped
+        # waypoint route byte-for-byte. ``compact`` instead states the real geometry:
+        # stay in the corridor above the three attachments, avoid every occupied cell,
+        # enter the CPU from the east, and use the fewest cells. That distinction is
+        # what lets placement become constraint-driven later without baking another
+        # set of coordinates into this connection.
+        tout_x, tout_y = TX + tape.out_cell[0], TY + tape.out_cell[1]
+        resp_row = CY + cpu.mem_in_row
+        top = min(AY, tout_y, resp_row) - MEM_RESPONSE_CLEARANCE
+        # ``resp_pad`` inserts a there-and-back jog in the corridor above the machine,
+        # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
+        # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
+        # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
+        if compact or moved:
+            start = (tout_x, tout_y - 1)
+            end = (CX + W + 2, resp_row)
+            # The corridor between the CPU and the adapter is spoken for: the request
+            # pipe crosses it on ``req_row``. A STORE that no longer sits north-east of
+            # everything therefore has to climb *east of the adapter*, so the box has to
+            # reach past the adapter's east wall or no route exists at all.
+            box = RouteBox(
+                left=max(0, min(start[0], end[0]) - _ROUTE_MARGIN),
+                top=max(0, top - (1 if resp_pad else 0)),
+                right=max(start[0], end[0] + 1, ax_out) + _ROUTE_MARGIN,
+                bottom=max(start[1], end[1]) + _ROUTE_MARGIN,
+            )
+            blocked = _keepout(g, (start, end)) if moved else g.c
+            try:
+                shortest = constrained_route(
+                    start,
+                    end,
+                    box=box,
+                    blocked=blocked,
+                    end_direction=(-1, 0),
+                )
+                response_route = constrained_route(
+                    start,
+                    end,
+                    box=box,
+                    blocked=blocked,
+                    min_cells=len(shortest) + 2 * resp_pad,
+                    end_direction=(-1, 0),
+                )
+            except RouteError as exc:
+                raise MachineError(f"cannot compact STORE response route: {exc}") from exc
+            route_lengths["store->cpu"] = g.draw_pipe(response_route)
+        else:
+            jog = (
+                [(tout_x, top), (tout_x + resp_pad, top), (tout_x + resp_pad, top - 1)]
+                if resp_pad
+                else [(tout_x, top)]
+            )
+            route_lengths["store->cpu"] = g.draw_pipe(
+                [
+                    (tout_x, tout_y - 1),
+                    *jog,
+                    (CX + W + 3, top - (1 if resp_pad else 0)),
+                    (CX + W + 3, resp_row),
+                    (CX + W + 2, resp_row),
+                ]
+            )
+
 
     # ── the LM-75, below the CPU ─────────────────────────────────────────────
     dsp_touches = (
@@ -2254,8 +2303,11 @@ def _assemble(
         f"cpu:{n}": (CX + x, CY + y, w, h) for n, (x, y, w, h) in cpu.regions.items()
     }
     regions["rom"] = (RX, RY, romlay.width + 1, romlay.height + 2)
-    regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
-    regions["tape"] = (TX, TY, tape.width, tape.height)
+    if hot is None:
+        regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
+        regions["tape"] = (TX, TY, tape.width, tape.height)
+    else:
+        regions.update(extra_regions)
     # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
     # the only place the ROM-PLUS snake would show up at all. Its cell count *is* its
     # capacity in words (``SPEC.md``), so the note is the number that matters.
@@ -2313,9 +2365,10 @@ def _assemble(
     # ``grid`` bands three pipes per slot — router->decoder, decoder->cell,
     # cell->collector — and every one of them is a two-cell stub between facing
     # walls, which is exactly why the extra decoder hop is nearly free.
-    _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
-    store_pipes = tape.pipes if store == "men-y" else _STORE_PIPES[store]
-    _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
+    if hot is None:
+        _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
+        store_pipes = (tape.pipes if store == "men-y" else _STORE_PIPES[store]) + 1
+    _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
     return Machine(
         rows=rows,
         regions=regions,
@@ -2330,11 +2383,507 @@ def _assemble(
             band: (CX + x, CY + y) for x, y, _glyph, band in cpu.pipe_glyphs if band in DSP_BANDS
         },
         stream=blk,
+        tier=tier,
         rom_capacity=rom_capacity,
         route_lengths=route_lengths,
         compact=compact,
         store_offset=(store_dx, store_dy),
         mem_offset=(mem_dx, mem_dy),
+    )
+
+
+#: The row a two-tier adapter's incoming request pipe lands on (interior, 1-based).
+ADAPTER2_IN_ROW = 6
+
+#: Interior rows the two-tier adapter needs.
+ADAPTER2_H = 12
+
+#: The interior rows the hot (tier) and cold (tape) pipes leave the east wall on.
+#: Hot on top and cold on the bottom is forced by the *outside* geometry: the tier
+#: sits north-east of the adapter and the tape's request is routed south, under
+#: both blocks, so a hot pipe leaving below a cold one would have to cross it.
+ADAPTER2_HOT_ROW = 1
+
+ADAPTER2_COLD_ROW = 11
+
+@dataclass(frozen=True)
+class _Adapter2:
+    """A range-routing adapter: two outgoing pipes instead of one."""
+
+    cells: dict[tuple[int, int], str]
+    width: int
+    height: int = ADAPTER2_H
+    in_row: int = ADAPTER2_IN_ROW
+    hot_row: int = ADAPTER2_HOT_ROW
+    cold_row: int = ADAPTER2_COLD_ROW
+
+
+def two_tier_adapter(hot_top: int) -> _Adapter2:
+    """Expand one sign-biased request word onto **one of two** STORE pipes.
+
+    The one-tier adapter branches once, on the request word's *sign*: ``+a`` is a
+    read and ``-a`` a write (see :data:`_ADAPTER`). A second tier means branching
+    again, on the address's *magnitude* — and nothing else, because both tiers
+    speak the identical ``0 addr`` / ``1 addr value`` wire protocol and the hot
+    tier is built with **global** column bases, so the CPU's own slot number is
+    already the address it decodes. The whole second seam is therefore "which pipe
+    does this ``s`` reach", which is a property of *where the glyph sits* (§7.1).
+
+    Hot slots are the **low** addresses ``1 .. hot_top``, and the test is
+    ``A = a - (hot_top + 1)``. ``X`` is three-way — clockwise on positive, straight
+    on zero, counter-clockwise on negative — so the boundary ``a == hot_top + 1``
+    lands on *straight*; with the hot range low that is the first **cold** address,
+    which shares a side with the clockwise arm, and the two merge in two cells. A
+    high hot range would put the zero on the seam itself and cost a dead slot.
+
+    Interior layout, rows 1-based (``L`` is the literal ``` `hot_top+1` ```)::
+
+         1  .......>WM1sWsrs...........v   hot (tier) write arm
+         2  .....................>WM0sWv   hot read arm
+         3  .......:.............:.....v
+         4  ..NM L W-X v...............v   write test: A = a - (hot_top+1), then X
+         5  .......>v..................v
+         6  UX......:..................v
+         7  ........:............:.....v
+         8  ..........M L W-X v........v   read test
+         9  .....................>v....v
+        10  ......................>WM0sWsv cold (tape) read arm
+        11  ........>WM1sWsrs..........v   cold write arm
+        12  ^<<<<<<<<<<<<<<<<<<<<<<<<<@<
+
+    Every vertical run crosses the other half's row only where that row is a nop,
+    which is why the read test starts two columns east of the write test's last
+    glyph and the write's descent column stays west of the read test's first.
+    """
+    if hot_top < 1:
+        raise MachineError(f"a hot tier must hold at least one slot, not {hot_top}")
+    lit = f"`{hot_top + 1}`"
+    lw = len(lit)
+    c_a = 7 + lw  # the write test's X
+    c_d = 10 + lw  # the read test's first glyph
+    c_b = c_d + lw + 3  # the read test's X
+    c_r = c_b + 8  # the return column, east of every arm
+
+    g: dict[tuple[int, int], str] = {}
+
+    def put(x: int, y: int, ch: str) -> None:
+        old = g.get((x, y))
+        if old is not None and old != ch:
+            raise MachineError(f"two-tier adapter collision at {(x, y)}: {old!r} vs {ch!r}")
+        g[(x, y)] = ch
+
+    def text(x: int, y: int, s: str) -> None:
+        for i, ch in enumerate(s):
+            put(x + i, y, ch)
+
+    # entry: one incoming pipe on the west wall, so `U` steers east into `X`
+    put(1, ADAPTER2_IN_ROW, "U")
+    put(2, ADAPTER2_IN_ROW, "X")
+    put(2, 5, ".")
+    put(2, 4, ">")  # A < 0: a write, counter-clockwise -> north
+    put(2, 7, ".")
+    put(2, 8, ">")  # A > 0: a read, clockwise -> south
+
+    # the write half: `N` makes the address positive, then the range test
+    text(3, 4, f"NM{lit}W-X")
+    put(c_a + 1, 4, "v")  # a == hot_top + 1: straight, and it is a *cold* address
+    put(c_a, 5, ">")  # a > hot_top: clockwise
+    put(c_a + 1, 5, "v")  # the two cold paths merge here and descend
+    for y in range(6, 11):
+        put(c_a + 1, y, ".")
+    put(c_a + 1, 11, ">")
+    text(c_a + 2, 11, "+M1sWsrs")  # cold write arm
+    put(c_a, 3, ".")
+    put(c_a, 2, ".")
+    put(c_a, 1, ">")
+    text(c_a + 1, 1, "+M1sWsrs")  # hot write arm
+
+    # the read half: the address is already positive
+    for x in range(3, c_d):
+        put(x, 8, ".")
+    text(c_d, 8, f"M{lit}W-X")
+    put(c_b + 1, 8, "v")
+    put(c_b, 9, ">")
+    put(c_b + 1, 9, "v")
+    put(c_b + 1, 10, ">")
+    text(c_b + 2, 10, "+M0sWs")  # cold read arm
+    for y in (7, 6, 5, 4, 3):
+        put(c_b, y, ".")
+    put(c_b, 2, ">")
+    text(c_b + 1, 2, "+M0sWs")  # hot read arm
+
+    # the return leg: south down the last column, west along the floor, north home
+    for y in range(1, ADAPTER2_H):
+        put(c_r, y, "v")
+    put(c_r, ADAPTER2_H, "<")
+    put(c_r - 1, ADAPTER2_H, "@")
+    for x in range(2, c_r - 1):
+        put(x, ADAPTER2_H, "<")
+    put(1, ADAPTER2_H, "^")
+    for y in range(ADAPTER2_IN_ROW + 1, ADAPTER2_H):
+        put(1, y, "^")
+    return _Adapter2(cells=g, width=c_r)
+
+
+# ── the tape, as a STORE block ───────────────────────────────────────────────
+#: Every memory tier ``build`` will accept, in the order they are worth trying.
+#: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
+#: footprint despite an access cost that ignores ``n``.
+STORE_TIERS = ("tape", "grid", "men", "men-y")
+
+#: Blank columns between the CPU's east wall and the adapter room, and between the
+#: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
+#: which is squared in the score, and once in the memory *response* pipe, whose whole
+#: length is charged on every read because a read is strictly serial (§7.4b) — and a
+#: read is where 45% of `gradebook`'s CPU time goes. So these are not cosmetic spacing;
+#: they are two of the cheapest numbers in the generator to be wrong about.
+#:
+#: ``CPU_ADAPTER_GAP`` is a hard floor: every program fails to place its pipes at 3 or
+#: less, so 4 is the real minimum and not a guess.
+#:
+#: ``ADAPTER_TAPE_GAP`` was 6 and wanted to be **1**, which is worth ~9-10% of
+#: footprint on every width-bound machine, plus five cells off every read:
+#:
+#: | | 6 | 1 |
+#: |---|---|---|
+#: | `brackets` | 95x70, 9,025 | **90x70, 8,100** |
+#: | `gradebook` | 113x101, 12,769 | **108x101, 11,664** |
+#: | `palette` | 95x89, 9,025 | **90x89, 8,100** |
+#: | `sudoku-validity` | 83x80, 6,889 | **80x80, 6,400** |
+#: | `tcp` | 109x74, 11,881 | **104x74, 10,816** |
+#:
+#: Height-bound machines (`matmul`, `snake`, `snake-ring`, `plotter`) keep their
+#: footprint and still gain the ticks. `palette` was in that list on the strength of
+#: being a display problem like `plotter`; it is not, it is 95 wide against 89 tall and
+#: the five columns come straight off its score.
+CPU_ADAPTER_GAP = 4
+ADAPTER_TAPE_GAP = 1
+
+#: Whole-machine placement floors. These are geometric minima, not visual
+#: padding:
+#:
+#: * with an input room, columns 3..5 hold that room, 6..7 are the mandatory
+#:   two-cell pipe, and the CPU west wall can therefore start at x=8;
+#: * without input, the ROM corridor itself needs two cells (x=1..2), so the CPU
+#:   can start at x=3;
+#: * STREAM layouts retain their own west clearance. FastLittleman accepts the
+#:   x=3 placement, but the reference engine leaves the coprocessor machine
+#:   permanently blocked there, so this is a separately validated floor;
+#: * with an input room, the ordinary ROM and CPU walls may be adjacent. The
+#:   input-free x=3 layout needs one blank row for reference-engine compatibility;
+#:   a buffered boustrophedon needs still more clearance.
+CPU_X_WITH_INPUT = 8
+CPU_X_WITHOUT_INPUT = 3
+CPU_X_WITH_STREAM = 8
+ROM_CPU_GAP = 1
+ROM_CPU_GAP_WITHOUT_INPUT = 2
+ROM_BUFFER_CPU_GAP = 3
+
+#: The memory response runs above the adapter/tape attachment, not above the
+#: whole CPU. One row above the highest attachment is the geometric minimum;
+#: zero collides the horizontal and vertical legs on real depth-4 layouts.
+MEM_RESPONSE_CLEARANCE = 1
+
+#: Programs that need a wider adapter-to-STORE gap than the default.
+#:
+#: ``matmul`` is the only one, and it does not merely fail to *place* at 1 — it places,
+#: loads, and then **hangs**, every case at the tick cap. The STREAM block's rings sit
+#: in that corridor, so a gap the request pipe fits through is not necessarily one the
+#: rings survive, and the binding checks cannot see the difference. It is verified
+#: working at 3, 4, 5 and 6 (and 3 is even slightly faster), but `matmul` is
+#: height-bound at 90 rows so *no* gap changes its footprint and the tick win is ~1%.
+#: Not worth re-validating a STREAM machine for, so it stays on the exact geometry that
+#: scored 1,446,608,970.
+ADAPTER_TAPE_GAP_FOR: dict[str, int] = {"matmul": 6}
+
+#: The floor the *store tier* imposes on that gap, which is a separate thing from the
+#: per-program override above: it is the block east of the corridor, not the CPU west of
+#: it, that fails to bind. Only ``tape`` — the shipped tier — reaches 1. Measured, by
+#: building `snake-ring` on each tier at every gap from 1 to 7:
+#:
+#: | tier | binds from | note |
+#: |---|---|---|
+#: | `tape` | **1** | the default; footprint flat across all seven |
+#: | `men-y` | 3 | flat too, so the floor costs it nothing |
+#: | `men` | 5 | and it *grows* per column: 21,025 at 5, 21,609 at 7 |
+#: | `grid` | 6 | |
+#:
+#: All three non-``tape`` tiers are measured negatives (ARCH.md §4.1) whose numbers are
+#: quoted in tests as comparisons, so they are pinned at the 6 they were measured on
+#: rather than dropped to their true floors — re-measuring a losing tier buys nothing,
+#: and moving `men` off 6 would silently restate a recorded result.
+ADAPTER_TAPE_GAP_BY_STORE: dict[str, int] = {"grid": 6, "men": 6, "men-y": 6}
+
+
+
+@dataclass
+class _Seam:
+    """What the two-tier store section hands back to :func:`_assemble`."""
+
+    regions: dict[str, tuple[int, int, int, int]]
+    req_row: int
+    resp_row: int
+    pipes: int  # every pipe this section drew, plus both blocks' internal ones
+    tape: object
+    tier: object
+
+
+#: The merger: ``R`` takes from *any* incoming pipe, so two tiers answering into
+#: one room need no addressing and no ordering logic — the CPU blocks on every
+#: read, so exactly one answer is ever in flight. Same six-cell loop
+#: ``memory_men.collector_rows(1)`` uses, which is where it was measured.
+_MERGER = ("@>Rv", " ^s<")
+_MERGER_W = 4
+_MERGER_H = 2
+
+#: Rows kept clear between the CPU's top row and the two store blocks, for the two
+#: answer lanes to run west in.
+#:
+#: The original seam climbed to ``cy - 1`` / ``cy - 3`` — the band *above* the CPU —
+#: which worked only while the ROM's fold left that band empty. It does not any more:
+#: at ``rom_rows=85`` the ROM's bottom rows sit directly on the CPU's top and reach
+#: past the tape's column, so the tape's riser hit ``'-' vs '|'`` at ``(166, 88)`` on
+#: every pad pair. There is no clear row above, because the ROM is what is there.
+#:
+#: So the lanes move *below* the CPU's top row instead, which is also what the
+#: one-tier build was changed to do ("routing above the whole CPU was a large detour
+#: paid on every read"): the blocks drop three rows, and the two rows that frees are
+#: exactly the merger's own interior rows, so each answer runs straight west into a
+#: merger door with no climb and no descent at all.
+_ANS_BAND = 3
+
+#: Use the side-ported grid man-memory for the hot tier, so its answer leaves the
+#: same wall its request enters. The bottom-ported block forces the answer to travel
+#: the block's whole width and then back west across the machine; with both ports on
+#: one wall the answer is a few cells long and never leaves the adapter's column band.
+#:
+#: **Off, because it does not place yet.** With both stubs on the west wall the
+#: request pipe and the answer pipe leave the same side and cross:
+#: ``collision at (109, 93): '>' vs '|'``. The routing in :func:`_two_tier` still
+#: assumes the answer comes out east. Every measured number in ``LLM-DESIGN.md`` is
+#: the bottom-ported block, so this stays off until the west-wall routing is written.
+TIER_SIDE_PORTS = False
+
+#: Make the hot bank a **pipe tape** instead of a man-memory.
+#:
+#: The seam was built to accelerate the hot addresses, and it does — but every slot
+#: of a man-memory is a live little man, and the grader's cost is ``runners x ticks``.
+#: Measured on `little-little-man`: a 10-slot man tier scored 13% better in ticks and
+#: was refused ``11/28``; a 52-slot one was refused ``4/28``. A pipe tape stores its
+#: words as values in a rotating ring, so it has **four men at n=52 and four at
+#: n=427** — constant in size. Banking the store into a small hot ring and the full
+#: cold one therefore buys most of the latency win at almost none of the wall clock.
+TIER_PIPE_BANK = True
+
+
+@dataclass
+class _PipeBank:
+    """A :func:`tape_block` dressed as a tier: the seam only wants these six fields.
+
+    ``tape_block`` reports ``slots`` as the *ring cell* count (``2n + 4``), so the
+    addressable size has to be carried alongside it rather than read back off it.
+    """
+
+    tape: object
+    slots: int
+
+    @property
+    def cells(self) -> dict[tuple[int, int], str]:
+        return self.tape.cells
+
+    @property
+    def width(self) -> int:
+        return self.tape.width
+
+    @property
+    def height(self) -> int:
+        return self.tape.height
+
+    @property
+    def in_cell(self) -> tuple[int, int]:
+        return self.tape.in_cell
+
+    @property
+    def out_cell(self) -> tuple[int, int]:
+        return self.tape.out_cell
+
+    #: A tape's ring is two pipes at every size, and unlike the man-memory's the
+    #: block's own request and answer stubs are *not* halves of the section's pipes —
+    #: they are the ring legs themselves. So the seam's ``- 2`` has to be cancelled
+    #: here, which is what the extra two account for: 4 + 2 + 4 - 2 = 8.
+    pipes: int = 4
+
+
+def _two_tier(
+    g: _Grid,
+    cpu: _Cpu,
+    cx: int,
+    cy: int,
+    w: int,
+    ax: int,
+    tape_n: int,
+    hot: tuple[int, int],
+) -> _Seam:
+    """Place a range-routing adapter, a hot man-memory tier, the tape, and a merger.
+
+    The floor plan, west to east::
+
+        CPU |  merger      (the corridor band above the adapter)
+            |  ADAPTER2 --hot--> grid tier --.
+            |     `-----cold----------------- \\--> tape
+                                    both answers -> merger -> CPU
+
+    Three placement facts carry it, and each one is forced:
+
+    * **The adapter sits *below* the response corridor.** Its entry row is 6 rows
+      down, so the one-tier alignment (``AY = mem_out_row - 2``) would put the
+      CPU's response row inside the adapter's own rows. The request pipe takes a
+      one-column jog instead, which costs two cells and frees the whole band
+      between the CPU's top and the adapter for the merger.
+    * **The hot tier goes first and the tape second.** The tier answers ~89 % of
+      the reads, so its pipes are the ones worth keeping short; the tape's request
+      is routed the long way round, *under* both blocks, which costs ~250 cells on
+      a path that is already 3,416 ticks.
+    * **Nothing crosses in the corridor.** Both answers run west above the CPU's
+      top row on rows of their own; the cold request never enters that band, which
+      is the only reason a single-layer grid can carry four pipes at once.
+    """
+    # ``grid_side_block`` puts the answer stub on the **same wall** as the request
+    # instead of on the far side of the block, which is the whole reason it exists
+    # ("a tape-shaped slot"). Both of the tier's pipes then face the merger, so the
+    # answer needs no lane across the machine at all — see ``TIER_SIDE_PORTS``.
+    cols, rows_ = hot
+    if TIER_PIPE_BANK:
+        # A *pipe tape* as the hot bank. Its whole point is that a stored word is a
+        # value in a pipe, not a little man, so this costs four men at any size while
+        # a man-memory costs two per slot plus a fixed staff. It answers in
+        # ``8.0 * hot_top`` rather than ~31 ticks, which is far worse per read and
+        # still 8x better than the 427-slot cold bank — and the men are what the
+        # grader's wall clock is spent on, not the ticks.
+        hot_top = cols * rows_
+        tier = _PipeBank(tape_block(hot_top), hot_top)
+    else:
+        if TIER_SIDE_PORTS:
+            from ..memory_men_grid_side import grid_side_block as tier_block
+        else:
+            from ..memory_men_grid_store import grid_block as tier_block
+
+        tier = tier_block(cols, rows_, base=1)
+        hot_top = tier.slots  # addresses 1..hot_top are the tier's; the rest are tape's
+    if hot_top >= tape_n:
+        raise MachineError(
+            f"a {cols}x{rows_} tier holds slots 1..{hot_top}, which is the whole "
+            f"{tape_n}-slot store; drop the tier or grow the program"
+        )
+    adapter = two_tier_adapter(hot_top)
+    tape = tape_block(tape_n)
+    # One column further east than the one-tier adapter: the request pipe drops
+    # down a corridor column and has to turn east *before* the west wall, so it
+    # needs a cell between its descent and the room.
+    ax += 1
+
+    resp_row = cy + cpu.mem_in_row
+    req_row = cy + cpu.mem_out_row
+    # Far enough below the corridor that the merger, both answers and the request
+    # jog all fit between the CPU's top row and the adapter's north wall.
+    ay = cy + _MERGER_H + 8
+    if ay <= req_row + 1:
+        ay = req_row + 2
+    aw = ax + adapter.width + 1  # the adapter's east wall
+    g.room(ax, ay, aw, ay + adapter.height + 1)
+    g.blit(ax, ay, adapter.cells)
+    # CPU east wall -> adapter west wall, with a one-column jog down the corridor.
+    g.draw_pipe(
+        [
+            (cx + w + 2, req_row),
+            (cx + w + 3, req_row),
+            (cx + w + 3, ay + adapter.in_row),
+            (ax - 1, ay + adapter.in_row),
+        ]
+    )
+
+    # ── the hot tier, immediately east of the adapter ────────────────────────
+    gx, gy = aw + 5, cy + _ANS_BAND
+    g.blit(gx, gy, tier.cells)
+    hot_out = ay + adapter.hot_row
+    tin_x, tin_y = gx + tier.in_cell[0], gy + tier.in_cell[1]
+    g.draw_pipe([(aw + 1, hot_out), (aw + 3, hot_out), (aw + 3, tin_y), (tin_x - 1, tin_y)])
+
+    # ── the tape, east of the tier; its request goes the long way, underneath ──
+    tx, ty = gx + tier.width + 4, cy + _ANS_BAND
+    g.blit(tx, ty, tape.cells)
+    cold_out = ay + adapter.cold_row
+    bot = max(gy + tier.height, ty + tape.height) + 3
+    ttin_x, ttin_y = tx + tape.in_cell[0], ty + tape.in_cell[1]
+    lane = tx - 3  # the free columns between the two blocks
+    g.draw_pipe(
+        [
+            (aw + 1, cold_out),
+            (aw + 2, cold_out),
+            (aw + 2, bot),
+            (lane, bot),
+            (lane, ttin_y),
+            (ttin_x - 1, ttin_y),
+        ]
+    )
+
+    # ── the merger, in the corridor band between the CPU's top and the adapter ──
+    mx, my = ax + 1, cy + 1
+    g.room(mx - 1, my - 1, mx + _MERGER_W, my + _MERGER_H)
+    for j, row in enumerate(_MERGER):
+        g.text(mx, my + j, row.replace(" ", "\0"))
+    g.draw_pipe(
+        [
+            (mx - 2, my + 1),
+            (cx + w + 3, my + 1),
+            (cx + w + 3, resp_row),
+            (cx + w + 2, resp_row),
+        ]
+    )
+
+    # Both answers rise into the band the blocks vacated and run west into a merger
+    # door of their own. The lane rows *are* the merger's interior rows, so neither
+    # pipe turns twice and neither leaves the band.
+    #
+    # One rule decides which lane is which: the **nearer** block takes the **lower**
+    # one. The far block's riser is east of the near block's, and it has to cross the
+    # near lane's row to reach a higher lane — so if the near block took the upper
+    # lane, the far riser would cut it. With the tier low, the tier's row stops west
+    # of the tape's riser and nothing crosses.
+    cold_lane, hot_lane = my, my + 1
+    door = mx + _MERGER_W + 1
+    g.draw_pipe(
+        [
+            (tx + tape.out_cell[0], ty + tape.out_cell[1] - 1),
+            (tx + tape.out_cell[0], cold_lane),
+            (door, cold_lane),
+        ]
+    )
+    g.draw_pipe(
+        [
+            (gx + tier.out_cell[0], gy + tier.out_cell[1] - 1),
+            (gx + tier.out_cell[0], hot_lane),
+            (door, hot_lane),
+        ]
+    )
+
+    regions = {
+        "adapter": (ax, ay, adapter.width + 2, adapter.height + 2),
+        "merger": (mx - 1, my - 1, _MERGER_W + 2, _MERGER_H + 2),
+        "tier": (gx, gy, tier.width, tier.height),
+        "tape": (tx, ty, tape.width, tape.height),
+    }
+    # ``touches`` already counts mem_req and mem_resp. These are the four this
+    # section drew — adapter to each store, each store to the merger — plus the
+    # tape's two ring legs and the tier's internals. The tier's own request and
+    # answer stubs are halves of two of those four, hence the ``- 2``.
+    return _Seam(
+        regions=regions,
+        req_row=req_row,
+        resp_row=resp_row,
+        pipes=4 + 2 + tier.pipes - 2,
+        tape=tape,
+        tier=tier,
     )
 
 

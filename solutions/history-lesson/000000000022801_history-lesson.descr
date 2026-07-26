@@ -1,0 +1,16 @@
+# history-lesson — submission aa2d3347-ba0c-490e-af9d-6ff3d1ab3f00
+
+verdict      done: 1/1 cases, area2 22801, footprint-only, score 22,801
+submitted    2026-07-26T15:27:57+0300
+grid         151x124
+problem id   3ef9ec95-03ff-4825-b42d-dbad3ee54af0
+fingerprint  de33beec20f705b01d3327c70b1a3f4515effcf903feca869bd57b2cb8f8ebea
+commit       03f2e49
+local        history-lesson: 1/1 public cases, avg 17,407 ticks
+source       tasks/solutions/history-lesson_rom.man
+
+runner output:
+Passed 1/1 test cases
+
+notes:
+First history-lesson submission — the problem scored zero until now. ROM grid at 151x124 (area2 22,801), 1/1 public case at 17,407 ticks. Chosen over history-lesson_base128.man (97x90, area2 9,409) because that one takes 104,000 ticks: 9,409 x 104,000 = 978M against this build's 22,801 x 17,407 = 397M. The smaller footprint loses on the tick term.

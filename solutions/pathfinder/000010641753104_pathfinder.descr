@@ -1,0 +1,16 @@
+# pathfinder — submission 0ef0ca20-02f1-4d36-9a06-c752b2f78e8b
+
+verdict      done: 18/18 cases, area2 29929, avgTicks 355,567, score 10,641,753,104
+submitted    2026-07-26T16:08:41+0300
+grid         82x173
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  858af005fd66255ce075a7f329a383054e875e01fcb8fd80bb20fb402dde200e
+commit       7e75322
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 9/10: exhaustive bounded adjacent-superblock rewiring found MVUP/MVRIGHT as the unique major win. Swap preserves the program graph, removes two worker rows (175 to 173), and lowers ticks; 45 focused/stress tests plus both engines pass 7/7 after merging origin/main. Local score 8,155,823,523 versus 8,363,232,500.

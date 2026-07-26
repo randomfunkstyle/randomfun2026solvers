@@ -1,0 +1,47 @@
+{
+  "title": "subset-sum scan probe \u2014 'is q in the ring', 5 ticks a word",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "scan station",
+      "x": 15,
+      "y": 18,
+      "w": 2,
+      "h": 5,
+      "note": "r s ~ X twice a lap; X at both corners resolves hit / keep / sentinel.",
+      "color": "#3b82f6",
+      "tags": [
+        "compute"
+      ]
+    },
+    {
+      "name": "fill loop",
+      "x": 1,
+      "y": 10,
+      "w": 16,
+      "h": 4,
+      "note": "BP = k; every value is pushed biased by one so no stored word is 0.",
+      "color": "#3b82f6",
+      "tags": [
+        "setup"
+      ]
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "miss on a full ring",
+      "input": "8 11 12 13 14 15 16 17 18 999",
+      "from_tick": 0,
+      "to_tick": 4000,
+      "watch": [
+        "scan station"
+      ],
+      "note": "One full pass, ending on the sentinel, then emit 0."
+    }
+  ],
+  "lanes": []
+}

@@ -300,6 +300,73 @@ The machine kept here is therefore the single-tape one. `build_machine(hot=HOT)`
 still builds the tier version for anyone who wants to measure it, and
 `tests/test_lm1_two_tier.py` still proves the seam works.
 
+### Re-measured on the compacted CPU, and refused again
+
+Re-placing the seam against main's compacted routing made it **free in area** — the
+tier had cost 203x204, and at 26 slots it now fits inside the same 200x199 box. The
+answer lanes were the whole problem: they were hard-coded to `cy - 1` / `cy - 3`, the
+band *above* the CPU, which the ROM's fold now occupies (`collision at (166, 88)` on
+every pad pair). Moved below the CPU's top row into the merger's own rows they need
+no climb at all, and `_ANS_BAND` is what buys them.
+
+That bought real ticks and changed nothing about the verdict:
+
+| tier | live men | avg ticks | worst runner-ticks | judged |
+|---|---:|---:|---:|---|
+| none | 5 | 19,354,082 | 0.151bn | **28/28** |
+| 10 slots | 30 | 16,743,610 | 0.768bn | **11/28**, time-cap |
+| 26 slots | 62 | 10,001,880 | 0.946bn | not sent |
+
+So the earlier reading of the ceiling — "0.73bn passed, 0.87bn refused" — is **wrong**,
+and it was wrong because it inferred a per-case bound from sorting one build's costs.
+0.768bn is refused. The bound is one-sided and much tighter: **0.151bn passes,
+0.768bn does not.**
+
+## Banking the *tape* instead: 2.12x, judged 28/28
+
+`men x ticks` is the constraint, and the man-memory loses because it pays men *per
+slot*. A pipe tape does not: it has **four little men at n=52 and four at n=427**,
+constant in size, because a stored word is a value in a rotating ring. Its cost is
+`8.0 * N` — so splitting the store into a small hot ring and the full cold one buys
+the latency win on the axis that scores and barely touches the axis that refuses.
+
+The seam already had the parts. `two_tier_adapter` routes by address range and the
+`R` merger takes from any incoming pipe; only the block in the hot slot changed
+(`TIER_PIPE_BANK`, `_PipeBank`). `memory_banked_machine.py` is the same protocol,
+validated earlier on the `memory` problem.
+
+| store | live men | avg ticks | area2 | worst runner-ticks | judged |
+|---|---:|---:|---:|---:|---|
+| one 427-slot tape | 5 | 19,354,082 | 40,000 | 0.151bn | 28/28, **848,506,331,429** |
+| hot 52 + cold 427 | 8 | 7,156,214 | 40,804 | 0.083bn | `fatal: wall` x4 locally |
+| **hot 104 + cold 427** | **8** | **8,788,539** | 41,616 | **0.110bn** | 28/28, **400,740,741,396** |
+| hot 208 + cold 427 | 8 | 11,528,142 | 41,616 | 0.143bn | not sent |
+
+**2.12x, and it was never a gamble**: 0.110bn is *below* the 0.151bn of the machine
+that was already passing 28/28, so the shipped grid does strictly less simulator work
+than its predecessor while running 2.2x fewer ticks. The 52-slot bank is the
+`TAPE_SIZE` trap — a ring sized to exactly its top address stalls rather than faults.
+
+The overlay is `examples/llm-banked-tape.debug.html`, rendered from the submitted grid.
+
+### The local -> judge tick factor is 1.096
+
+Worth stating because it removes the guesswork: local `optimize.verify` averages the
+**14 public** cases and the judge averages **28**, and the private half runs ~19%
+heavier, so `judge_avg = 1.096 x local_avg` — confirmed on four submissions and used
+to predict this one before sending it (estimated 9,632k, judge measured 9,629,487).
+
+### Two dead ends, measured
+
+* **`packed_cells=True`** — eight display cells to a word takes the tape 427 -> 239
+  and a read 3,416 -> 1,912, at **no extra men**, which is exactly the right shape.
+  It is still a loss: the unpack code takes `P` 3,377 -> 3,919, so the best fold is
+  207x213 (45,369, swept) and avg ticks go *up* to 20,889,724. Score 9.48e11 against
+  7.74e11. The shorter tape does not pay for the instructions that shorten it.
+* **`grid_side_block` for the tier** — the side-ported man-memory puts both stubs on
+  one wall, which is the right idea for a seam whose merger is west of the block.
+  It does not place: `collision at (109, 93)`, because `_two_tier` still routes the
+  answer as if it left the east side. Parked behind `TIER_SIDE_PORTS = False`.
 ## Where the box actually goes: half of it is empty
 
 Measured on the 195x196 machine — 38,220 cells in the bounding box, **18,467 used

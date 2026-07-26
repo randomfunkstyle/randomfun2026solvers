@@ -1,0 +1,16 @@
+# sort-numbers — submission 540d7780-5c01-41fb-84bb-27a3b5f1623c
+
+verdict      done: 25/25 cases, area2 625, avgTicks 5,238, score 3,273,525
+submitted    2026-07-26T15:27:31+0300
+grid         25x25
+problem id   85dc7d34-1c5a-4ba4-9712-b151c1970301
+fingerprint  703716420d3058926127d843f6bcbf6ac680c3c8664eae036759c9e2f061ded9
+commit       03f2e49
+local        sort-numbers: 7/7 public cases, avg 3,333 ticks
+source       tasks/solutions/sort-numbers_ring.man
+
+runner output:
+Passed 25/25 test cases
+
+notes:
+First sort-numbers submission — the problem scored zero until now. Value-ring grid at 25x25 (area2 625), 7/7 public cases on the engine at 3,333 ticks average.

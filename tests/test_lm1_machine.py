@@ -246,7 +246,9 @@ def test_machine_generates_and_every_pipe_binds(slug: str, tape_n: int) -> None:
     assert m.plan.lanes == 1 << m.plan.k >= used
     assert m.tape_n == tape_n
     assert "@" in "".join(m.rows)
-    assert {"rom->cpu", "cpu->adapter", "adapter->store", "store->cpu"} <= m.route_lengths
+    # `.keys()`, not the dict: `set <= dict` is a TypeError, so this assertion raised
+    # for every slug rather than checking anything.
+    assert {"rom->cpu", "cpu->adapter", "adapter->store", "store->cpu"} <= m.route_lengths.keys()
     assert all(length >= 2 for length in m.route_lengths.values())
     if any(sem is Sem.INPUT for sem in m.plan.sem.values()):
         assert "input->cpu" in m.route_lengths

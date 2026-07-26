@@ -27,18 +27,13 @@ measured optimum over the program's zone-transition matrix (``G-R`` 29,
 anchor and the input's receive anchor share the rightmost band because the two
 partitions are independent and ``ri`` occurs only five times.
 
-Anchors are placed symmetrically inside their bands so that every boundary
-falls on a half-integer:
-
-    send  SR = t          SG = 2w-1-t      SF = 2w+t        SP = 4w-1-t
-    recv  RR = SR+1       RG = SG-1        RF = SF+1        RI = SP-1
-
-(all relative to the first code column, ``t = (w-1)//2``).  Each adjacent pair
-sums to an **odd** number, so ``|x-c1| == |x-c2|`` has no integer solution and
-a tie — which would fall back on reading order and rebind on a one-cell edit —
-cannot exist.  :func:`send_band` / :func:`recv_band` recompute the winner from
-the same Manhattan rule the engine uses and :meth:`Placer.pipe_op` refuses to
-emit a glyph outside its band, so a mis-binding is a build error.
+Anchors alternate between mirrored offsets inside their bands.  Adjacent
+anchors in either partition therefore sum to an **odd** number, so
+``|x-c1| == |x-c2|`` has no integer solution and a tie — which would fall back
+on reading order and rebind on a one-cell edit — cannot exist.
+:func:`send_band` / :func:`recv_band` recompute the winner from the same
+Manhattan rule the engine uses and :meth:`Placer.pipe_op` refuses to emit a
+glyph outside its band, so a mis-binding is a build error.
 
 ## The room: a west channel and a serpentine code area
 
@@ -85,12 +80,10 @@ east still has to pay for.
 Backticks pair on rows **and columns independently**, and a non-digit caught
 between a vertical pair is a *load* error — the reference engine says
 ``expected a digit or a space between backticks``.  The program needs 20
-multi-digit literals, so 40 backticks, and the only rule that is checkable
-without a global fixpoint is **one backtick per grid column**: the generator
-keeps the set of columns that already hold one and slides the cursor east a
-blank at a time until both delimiters land in fresh ones, dropping to the next
-row if the row runs out.  ``4w = 48`` code columns is what makes that always
-satisfiable, and it is the floor on the band width for that reason alone.
+multi-digit literals, so the generator remembers the row of the most recent
+backtick in every column.  It reuses a column only when every already-emitted
+cell since that delimiter is a digit or blank, exactly rechecking the loader's
+rule rather than imposing the older and costlier one-backtick-per-column rule.
 
 Digits are emitted in *walk* order, so a literal laid down on a westbound row
 reads correctly for the man and backwards in the file.  That is fine: the load
@@ -141,12 +134,11 @@ __all__ = [
 ]
 
 # ── worker geometry ───────────────────────────────────────────────────────────
-#: Columns per band.  4w must be wide enough that the program's 40 backticks can
-#: each own a column; 48 leaves eight spare.
+#: Columns per band.  The current literal and pipe-band placement needs 12.
 BAND_W = 12
 #: West-channel columns.  Every wire runs here; the widest row of the block
-#: graph has ten live wires crossing it, so this is that plus slack.
-NCHW = 13
+#: graph has ten live wires crossing it, plus the shared entry column.
+NCHW = 11
 CODEW = 4 * BAND_W
 IW = NCHW + CODEW
 #: First code column, and the last one.
@@ -154,7 +146,8 @@ CW0, CW1 = NCHW, IW - 1
 #: The column that carries every block's entry ``>``; wires never run down it.
 ENTRY_COL = NCHW - 1
 
-_T = (BAND_W - 1) // 2
+_SEND_T = 3
+_RECV_T = 6
 #: Left-to-right order of the four pipe loops.  Measured over all 24
 #: permutations: the ones that shave a row or two off the height (the
 #: serpentine spends a row on every *reversal* of the band sequence) all pay
@@ -179,9 +172,12 @@ def _anchors() -> tuple[dict[str, int], dict[str, int]]:
     for i, band in enumerate(LOOP_ORDER):
         # mirrored inside alternate bands, which is what makes every adjacent
         # pair sum odd whatever the band width is
-        col = CW0 + i * BAND_W + (_T if i % 2 == 0 else BAND_W - 1 - _T)
-        send[band] = col
-        recv[RECV_OF[band]] = col + (1 if i % 2 == 0 else -1)
+        send[band] = CW0 + i * BAND_W + (
+            _SEND_T if i % 2 == 0 else BAND_W - 1 - _SEND_T
+        )
+        recv[RECV_OF[band]] = CW0 + i * BAND_W + (
+            _RECV_T if i % 2 == 0 else BAND_W - 1 - _RECV_T
+        )
     return send, recv
 
 
@@ -271,8 +267,8 @@ ORDER = [
     ["PACKB"],
     ["PACKT"],
     ["PACKEND"],
-    ["OUTT"],
     ["AFTERLOAD"],
+    ["OUTT"],
     ["POUTB"],
     ["PB0"],
     ["PBITB"],
@@ -292,8 +288,8 @@ ORDER = [
     ["ITERPRE"],
     ["ITERB"],
     ["ITERT"],
-    ["MVUP"],
     ["MVRIGHT"],
+    ["MVUP"],
     ["MVDOWN"],
     ["MVLEFT"],
     ["ROTPRE"],
@@ -375,7 +371,7 @@ class Placer:
     its left.
     """
 
-    def __init__(self, circ: Circuit, backticks: set[int]) -> None:
+    def __init__(self, circ: Circuit, backticks: dict[int, int]) -> None:
         self.c = circ
         self.backticks = backticks
         self.x = self.y = 0
@@ -444,16 +440,26 @@ class Placer:
         """```nnn```, placed so neither delimiter shares a column with another.
 
         Backticks pair vertically as well as horizontally and a live glyph
-        caught between a vertical pair is a load error, so one backtick per grid
-        column is the only rule that is checkable without a global fixpoint.
+        caught between a vertical pair is a load error.  A column may be reused
+        only when every already-emitted cell since its previous delimiter is a
+        digit or blank, which is exactly the loader's rule.
         """
         span = len(digits) + 2
         for _ in range(3):
             while self.ahead >= span + 1:
                 a = self.x
                 b = self.x + (span - 1) * self.dx
-                if a not in self.backticks and b not in self.backticks:
-                    self.backticks |= {a, b}
+                safe_a = a not in self.backticks or all(
+                    self.c.get(a, y).isdigit() or self.c.get(a, y) == " "
+                    for y in range(self.backticks[a] + 1, self.y)
+                )
+                safe_b = b not in self.backticks or all(
+                    self.c.get(b, y).isdigit() or self.c.get(b, y) == " "
+                    for y in range(self.backticks[b] + 1, self.y)
+                )
+                if safe_a and safe_b:
+                    self.backticks[a] = self.y
+                    self.backticks[b] = self.y
                     self.emit("`")
                     for ch in digits:
                         self.emit(ch)
@@ -546,7 +552,7 @@ def worker() -> tuple[Circuit, list[_Block], DebugMap]:
     supers, succ = _superblocks()
     _check_order(succ)
     c = Circuit(IW, 4096, strict_corridors=True)
-    backticks: set[int] = set()
+    backticks: dict[int, int] = {}
     p = Placer(c, backticks)
 
     # ── pass 1: pour the code, one block per row run ─────────────────────────
@@ -697,7 +703,7 @@ def _check_order(succ: dict[str, object]) -> None:
 #: gives 13 ``r``/``s`` pairs per 32-cell walking cycle, 2.46 ticks a word.
 #: Sixteen is the widest relay that fits before the G room without moving any
 #: anchor or widening the scored box.
-RING_RELAY_W, AUX_RELAY_W = 16, 8
+RING_RELAY_W, AUX_RELAY_W = 16, 10
 #: Rows the relay rooms occupy (top wall .. bottom wall).  All three sit flush
 #: at the top of the band, which is only eight rows deep in total: the band is
 #: pure overhead on a dimension that gets squared, so the ring buys its 20 cells
@@ -722,13 +728,19 @@ def build() -> tuple[list[str], DebugMap]:
     r = {k: WX + v for k, v in RECV_ANCHOR.items()}
 
     below = RELAY_ROWS[1] + 1  # the row a relay's pipes attach from
+    in_x = r["I"] - 1
+    relay_x: dict[str, int] = {}
+    right = in_x - 2
+    for band in ("F", "G"):
+        relay_x[band] = right - AUX_RELAY_W - 1
+        right = relay_x[band] - 1
     # ring: 20 cells of capacity out of an eight-row band.  The forward pipe
     # steps two rows up and runs west under the relay; the return drops from the
     # relay's far end, runs east one row above the wall and turns down into its
     # own anchor.  The two share no row, and the return has to arrive at the
     # wall from the *north* — a terminal arrowhead's forward cell must be a room
     # border, and the forward pipe is sitting one column west of it.
-    ring_x = a["R"] - 8
+    ring_x = right - RING_RELAY_W - 1
     stamp(g, ring_x, RELAY_ROWS[0], flat_relay(RING_RELAY_W))
     n_fwd = draw_pipe(g, [
         (a["R"], wall_row), (a["R"], wall_row - 2),
@@ -743,7 +755,7 @@ def build() -> tuple[list[str], DebugMap]:
 
     aux = []
     for band, need in (("G", SCRATCH_CELLS), ("F", FIFO_CELLS)):
-        rx = min(a[band], r[band]) - 2
+        rx = relay_x[band]
         stamp(g, rx, RELAY_ROWS[0], flat_relay(AUX_RELAY_W))
         f = draw_pipe(g, [(a[band], wall_row), (a[band], below)])
         t = draw_pipe(g, [(r[band], below), (r[band], wall_row)])
@@ -752,7 +764,6 @@ def build() -> tuple[list[str], DebugMap]:
         aux.append((band, rx, f + t))
 
     # input room: west of the ri anchor, its pipe stepping across into it
-    in_x = r["I"] - 1
     stamp(g, in_x - 1, wall_row - 5, ["+-+", "|I|", "+-+"])
     draw_pipe(g, [(in_x, wall_row - 2), (in_x, wall_row - 1),
                   (r["I"], wall_row - 1), (r["I"], wall_row)])

@@ -1,0 +1,16 @@
+# pathfinder — submission 66af6c25-373b-4d90-a50a-ab6bedad65c5
+
+verdict      done: 18/18 cases, area2 30625, avgTicks 356,382, score 10,914,203,854
+submitted    2026-07-26T15:59:18+0300
+grid         82x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  9a5ff0de032b3af07d2cadc70a2f4de5f35180a9704e2a197b349bdb27942db1
+commit       58380f0
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 7/10: exhaustive 12x12 equal-span anchor sweep; move send anchors one column outward while keeping receive anchors optimal and relay rooms fixed. Same 82x175; both validators pass 7/7; every public case is one tick faster.

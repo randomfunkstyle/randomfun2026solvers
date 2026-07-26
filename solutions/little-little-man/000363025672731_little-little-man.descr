@@ -1,0 +1,16 @@
+# little-little-man — submission ba717181-4ff6-4632-a677-1ad24f3fe4d5
+
+verdict      done: 28/28 cases, area2 37636, avgTicks 9,645,703, score 363,025,672,731
+submitted    2026-07-26T16:36:54+0300
+grid         192x194
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  8a5a672afbc5b8393bb2b46acf49e15822f544d911e2c95a7725746e8c6fc827
+commit       53251eb
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+ROM fold re-swept under the banked store: 197x192 (38,809) -> 192x194 (37,636). The banked store moved the width/height crossing by one row, so the fold that shipped at 375,276,399,205 was no longer optimal. Swept 84..99: 88 -> 197x192 (38,809), 89 -> 196x193 (38,416), 90 -> 192x194 (37,636), 91 -> 190x195 (38,025). 90 is the crossing — the last fold where width still exceeds height. Engine-verified 14/14: avg 8,803,337 ticks, worst 13,788,195, 8 live men, 0.11bn runner-ticks.
