@@ -48,9 +48,9 @@ op actually resolves to — a mis-bound `s` is otherwise completely silent.
 The search examines every candidate pair at most once, so it costs
 `2^hL * (2^hR + 1) = 1,052,672` element comparisons at `n = 20` **whatever the
 input**.  Engine-measured on the finished grid, the ceiling is **6,329,884
-ticks** — twenty values, all even, an odd target, so nothing is satisfiable and
+ticks** (`6,329,954` including the walk out to the no-solution lane) — twenty values, all even, an odd target, so nothing is satisfiable and
 every left mask is tried against all 257 words of ring B.  That is 42% of the
-15,000,000 cap.  The seven public cases run 5,342 to 1,105,941.
+15,000,000 cap.  The seven public cases run 116,690 to 1,235,098 and average 292,147.
 
 Two facts hold the cost model up, and both were re-measured here rather than
 inherited:

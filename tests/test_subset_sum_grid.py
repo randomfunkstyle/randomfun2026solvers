@@ -24,7 +24,7 @@ GRID = REPO / "tasks" / "solutions" / "subset-sum_mitm.man"
 #: works and every one of the 4096 left masks is tried against all 257 words of
 #: ring B.  The cost of the search does not depend on the input beyond `n`, so
 #: this is the number the cap has to accommodate.
-WORST_CASE_TICKS = 6_329_884
+WORST_CASE_TICKS = 6_329_954
 
 
 def _ring_v(values: list[int], target: int) -> list[int]:
