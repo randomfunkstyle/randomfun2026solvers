@@ -3018,6 +3018,9 @@ TIER_SIDE_PORTS = False
 #: cold one therefore buys most of the latency win at almost none of the wall clock.
 TIER_PIPE_BANK = True
 
+#: Skip-batch for the *hot* bank only; ``None`` means share the cold bank's.
+HOT_SKIP_BATCH: int | None = None
+
 
 @dataclass
 class _PipeBank:
@@ -3107,10 +3110,15 @@ def _two_tier(
         # still 8x better than the 427-slot cold bank — and the men are what the
         # grader's wall clock is spent on, not the ticks.
         hot_top = cols * rows_
+        # The two banks need not share a worker. They are very different: the hot one
+        # is small and answers ~90% of reads, the cold one is 4x larger and answers the
+        # rest, so the lap-length/width trade lands differently on each.
+        # ``HOT_SKIP_BATCH`` overrides the hot bank alone; ``None`` means "same as the
+        # cold bank".
         tier = _PipeBank(
             tape_block(
                 hot_top,
-                skip_batch=tape_skip_batch,
+                skip_batch=tape_skip_batch if HOT_SKIP_BATCH is None else HOT_SKIP_BATCH,
                 relay_size=tape_relay_size,
             ),
             hot_top,

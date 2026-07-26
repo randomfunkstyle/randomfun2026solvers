@@ -1461,6 +1461,28 @@ def _emit_pick(a: Asm, sites: int) -> None:
 #:     | tape only      |    41,616 | 20,275,186 | 31,809,643 | 8.44e11 |
 #:     | + 52-slot tier |    41,616 |  8,605,207 | 13,676,774 | 3.58e11 |
 #:
+#: **Swept independently under ``skip_batch=4`` on the nineteen-opcode machine**, which
+#: moved that machine's optimum a long way down. A bigger hot bank captures more of the
+#: traffic but lengthens the lap every one of those reads waits on, and batch 4 made
+#: short laps much cheaper — so its best size fell from 104 to 56. Measured there over
+#: all 14 public cases, identical men and area:
+#:
+#:     52 slots   avg 6,172,291   FAILS 4 cases (too few hot slots: the TAPE_SIZE trap)
+#:     54 slots   avg 6,623,568
+#:     56 slots   avg 6,612,776   <- the floor of a very flat basin
+#:     58 slots   avg 6,622,432
+#:     60 slots   avg 6,632,415   judged    274,555,216,799
+#:     66 slots   avg 6,677,012
+#:     90 slots   avg 6,731,201
+#:    104 slots   avg 6,890,324   judged    284,219,348,749
+#:
+#: The basin is flat from 54 to 60 and the floor is shallow — 56 beats 60 by 0.3% — so
+#: read that as "small, just above the cliff at 52", not as a tuned constant. **Those
+#: numbers describe the nineteen-opcode machine and are kept as reference, not as this
+#: machine's setting**: the sixteen-opcode fold shrinks the decode instead and reaches
+#: 237,555,126,848, and ``Asm.hot_used`` is 53 here rather than 52, so that sweep's
+#: cliff sits one slot lower than ours. The two were never combined.
+#:
 #: **This is now the default, and the hot bank is a pipe tape, not a man-memory.**
 #: The man-memory version of this tier was judged ``11/28`` at 10 slots and ``4/28``
 #: at 52 — refused on wall clock, because every slot of it is a live little man and
@@ -1486,24 +1508,22 @@ TAPE_RELAY_SIZE = (8, 6)
 #: The hot bank, as ``(cols, rows)`` — but :data:`lm1.machine.TIER_PIPE_BANK` makes
 #: it a pipe tape, and a tape only cares about the product.
 #:
-#: **Size it to what is used, not to a round shape.** Only 52 slots are ever handed
-#: out of this block (``Asm.hot_used``); a larger bank is dead ring cells that every
-#: hot read still rotates past, because a tape answers in ``~8 * n / skip_batch``.
-#: The reserved size also shifts the cold region up, so an oversized bank inflates
-#: the whole address space — 104 made the store 479 slots where 53 makes it 428.
+#: **Size it to what is used, not to a round shape.** ``Asm.hot_used`` reports what is
+#: actually handed out — 53 under the sixteen-opcode fold, because ``MUL16`` joined the
+#: hot set. Anything above that is dead ring cells every hot read still rotates past,
+#: because a tape answers in ``~8 * n / skip_batch``. The reserved size also shifts the
+#: cold region up, so an oversized bank inflates the whole address space.
 #:
-#: Swept on the engine, all 14 public cases passing, `area2` 37,636 throughout:
+#: Sizing it to *exactly* the used count is a **fault**, not a tight fit: it builds,
+#: passes ten of the fourteen public cases and kills the runner with ``fatal: wall`` on
+#: the rest. One spare is the rule; see the guard in :func:`build_asm`.
 #:
-#:     hot   avg ticks   worst        runner-ticks   score
-#:      53    7,175,398   11,371,396   0.0910bn       295,978,414,549
-#:      56    7,190,647   11,387,771   0.0911bn       296,607,383,101
-#:      64    7,228,426   11,460,520   0.0917bn       298,165,754,759
-#:     104    7,680,119   12,151,119   0.0972bn       316,797,643,986   (was shipped)
-#:     128    8,077,039   12,735,198   0.1019bn       333,170,242,865
-#:
-#: Monotonic in the bank size once every hot slot fits, so 53 — one spare above the
-#: 52 used — is the optimum. 52 exactly is a *fault*, not merely a tight fit; see
-#: the guard in :func:`build_asm`.
+#: An alternative line of work re-swept this against ``skip_batch=4`` on the
+#: *nineteen*-opcode machine and landed on 56 (``HOT = (2, 28)``), a flat basin from 54
+#: to 60 — judged 273,750,329,271. That machine is recorded in LLM-DESIGN.md under
+#: "The four-word tape and the re-sized bank"; this one reaches 237,555,126,848 by
+#: shrinking the decode instead, so the two were never combined and this constant is
+#: the fold's, not that sweep's.
 HOT = (4, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
