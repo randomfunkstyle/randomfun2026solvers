@@ -681,14 +681,22 @@ few percent; access count is worth multiples. The planning rule that falls out �
 **one tape access ≈ 7 instructions ≈ 40 recirculated ROM words** — is what turned
 `plotter` from 6 % over the step cap to 61 % under it.
 
-Further variants, in rough order of payoff (the first two are described in
-`programs/README.md` and not yet built):
+Further variants, in rough order of payoff:
 
 - **Relative rotation** instead of a full revolution — rotate `(addr − next) mod
   N` and keep the index in a `register-cell`: ~2.6× on the slope.
-- **A larger pass-through loop ring** — the 2×4 loop costs 8 ticks/value, but a
-  6×6 hollow square amortises the fixed corner/test/decrement cost over 7 values
-  in flight, reaching ~2.9: another ~2.2×.
+- **A two-sided pass-through loop ring — implemented.** `worker_v2_jump` puts a
+  BP test and one `rs,m` body on each side, so it advances two words per lap at
+  ~5 ticks/value instead of 8. Its odd exit re-enters with BP=0 and converges on
+  the normal exit, so it never speculatively consumes another word. The LM-1
+  STORE API exposes `tape_skip_batch=1|2`, or `None` plus a configurable
+  `tape_jump_threshold`; batch 1 remains the byte-identical default because the
+  batch-2 block is 45 rather than 33 columns wide. On a 200-slot six-write,
+  six-read boundary/parity probe it measured 16,392 versus 22,211 ticks
+  (**26.2% fewer**) with identical output.
+- **A still larger pass-through ring** could amortise more of the fixed
+  corner/test/decrement cost, but every word still needs its own BP test to
+  preserve exact odd tails.
 - **Banking** — k rings, address = (bank, offset), ~N/k per access at k× the
   pipe area. Superseded for `matmul` by its sequential-access STREAM block, but
   still relevant to random-access workloads.

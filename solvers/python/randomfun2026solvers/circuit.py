@@ -267,3 +267,38 @@ class Circuit:
         self.run(x, y + k + 1, body + "m", d=N)
         self.set(x, y, ">")
         return [(x + 2, y), (x - 1, y + k + 2)]
+
+    def counted_ring_horizontal(
+        self,
+        x: int,
+        y: int,
+        body: str = "rs",
+    ) -> list[tuple[int, int]]:
+        """Rotate :meth:`counted_ring` clockwise into a two-row block.
+
+        Enter heading SOUTH at the top-right cell.  As with
+        :meth:`counted_ring`, BP is tested once for each value, so odd counts
+        leave through the second exit without consuming an extra value.  For
+        ``body="rs"``::
+
+            d r s m v
+            ^ m s r d
+
+        Returns ``[south exit, north exit]``.  A useful compact arrangement
+        routes the north (odd-tail) exit east across the row above the ring and
+        back through the entry; BP is then zero and the runner immediately
+        takes the single south exit.
+        """
+        k = len(body)
+        if not k:
+            raise ValueError("counted ring body cannot be empty")
+        right = x + k + 2
+        # Bottom side, walked west: test, body, m.
+        self.set(right, y + 1, "d")
+        self.run(right - 1, y + 1, body + "m", d=W)
+        self.set(x, y + 1, "^")
+        # Top side, walked east: test, body, m.
+        self.set(x, y, "d")
+        self.run(x + 1, y, body + "m", d=E)
+        self.set(right, y, "v")
+        return [(right, y + 2), (x, y - 1)]

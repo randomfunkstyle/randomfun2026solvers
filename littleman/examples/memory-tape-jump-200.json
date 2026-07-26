@@ -1,0 +1,253 @@
+{
+  "title": "LM-1 tape STORE \u2014 cells=200, skip_batch=2, jump_threshold=128, capacity=222",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "worker",
+      "x": 8,
+      "y": 8,
+      "w": 34,
+      "h": 18,
+      "note": "34\u00d718 interior; request protocol is op, addr, optional write value",
+      "color": "#38bdf8",
+      "tags": []
+    },
+    {
+      "name": "value-ring",
+      "x": 1,
+      "y": 27,
+      "w": 44,
+      "h": 9,
+      "note": "222-value pipe capacity; 201 required because a WRITE briefly holds replacement and displaced values",
+      "color": "#10b981",
+      "tags": []
+    },
+    {
+      "name": "init",
+      "x": 37,
+      "y": 8,
+      "w": 5,
+      "h": 6,
+      "note": "one-time fill of 200 zero values",
+      "color": "#64748b",
+      "tags": []
+    },
+    {
+      "name": "request-decode",
+      "x": 8,
+      "y": 10,
+      "w": 16,
+      "h": 4,
+      "note": "READ/WRITE setup; B preserves \u00b1(N\u2212addr)",
+      "color": "#60a5fa",
+      "tags": []
+    },
+    {
+      "name": "P1-two-value-skip",
+      "x": 27,
+      "y": 14,
+      "w": 5,
+      "h": 2,
+      "note": "advance addr words; two BP tests and two rs,m bodies per lap",
+      "color": "#22c55e",
+      "tags": []
+    },
+    {
+      "name": "target-access",
+      "x": 24,
+      "y": 17,
+      "w": 17,
+      "h": 5,
+      "note": "READ sends target to output+tape; WRITE replaces target",
+      "color": "#f59e0b",
+      "tags": []
+    },
+    {
+      "name": "P2-two-value-skip",
+      "x": 27,
+      "y": 22,
+      "w": 5,
+      "h": 2,
+      "note": "advance N\u22121\u2212addr words and restore original tape alignment",
+      "color": "#14b8a6",
+      "tags": []
+    },
+    {
+      "name": "main-return",
+      "x": 31,
+      "y": 24,
+      "w": 11,
+      "h": 2,
+      "note": "single P2 exit returns through the east gutter to MAIN",
+      "color": "#ec4899",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [],
+  "lanes": [
+    {
+      "name": "request",
+      "points": [
+        [
+          5,
+          10
+        ],
+        [
+          7,
+          10
+        ]
+      ],
+      "note": "",
+      "color": "#22c55e",
+      "kind": "pipe",
+      "expect": "op, addr, optional value",
+      "tags": [],
+      "cells": [
+        [
+          5,
+          10
+        ],
+        [
+          6,
+          10
+        ],
+        [
+          7,
+          10
+        ]
+      ]
+    },
+    {
+      "name": "read-response",
+      "points": [
+        [
+          10,
+          7
+        ],
+        [
+          10,
+          5
+        ]
+      ],
+      "note": "",
+      "color": "#a78bfa",
+      "kind": "pipe",
+      "expect": "READ value",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          7
+        ],
+        [
+          10,
+          6
+        ],
+        [
+          10,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "P1-odd-tail",
+      "points": [
+        [
+          27,
+          13
+        ],
+        [
+          31,
+          13
+        ],
+        [
+          31,
+          14
+        ]
+      ],
+      "note": "",
+      "color": "#84cc16",
+      "kind": "control",
+      "expect": "odd final word re-enters with BP=0, then takes the common exit",
+      "tags": [],
+      "cells": [
+        [
+          27,
+          13
+        ],
+        [
+          28,
+          13
+        ],
+        [
+          29,
+          13
+        ],
+        [
+          30,
+          13
+        ],
+        [
+          31,
+          13
+        ],
+        [
+          31,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "P2-odd-tail-and-merge",
+      "points": [
+        [
+          27,
+          21
+        ],
+        [
+          31,
+          21
+        ],
+        [
+          31,
+          22
+        ]
+      ],
+      "note": "",
+      "color": "#06b6d4",
+      "kind": "control",
+      "expect": "READ, WRITE, and odd tail converge on the same P2 entry",
+      "tags": [],
+      "cells": [
+        [
+          27,
+          21
+        ],
+        [
+          28,
+          21
+        ],
+        [
+          29,
+          21
+        ],
+        [
+          30,
+          21
+        ],
+        [
+          31,
+          21
+        ],
+        [
+          31,
+          22
+        ]
+      ]
+    }
+  ]
+}
