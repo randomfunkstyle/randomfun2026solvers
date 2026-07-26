@@ -44,8 +44,8 @@ Block = tuple[list[str], "dict[str, str] | str | None"]
 
 # ── the classifier: the character in A, its bits in BP, the token out ────────
 CLASS: dict[str, Block] = {
-    "PINIT": (["r", "s"], "PLOOP"),
-    "PLOOP": (["r", "b", "M", "L5", "W", "}", "x"], {"zero": "PSEND", "one": "P1"}),
+    "PINIT": (["r", "s", "L5", "M"], "PLOOP"),
+    "PLOOP": (["r", "b", "}", "x"], {"zero": "PSEND", "one": "P1"}),
     "P1": (["]", "x"], {"one": "PSEND", "zero": "PNEG"}),
     "PNEG": (["N"], "PSEND"),
     "PSEND": (["s"], "PLOOP"),
