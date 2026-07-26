@@ -89,7 +89,7 @@ def test_the_constraint_corners() -> None:
     assert dfs([1] * 10, 5).answer == [0, 1, 2, 3, 4]
     assert dfs([99999] * 10, 99999 * 10).answer == list(range(10))
     assert dfs([99999] * 10, 99999 * 10 + 1).answer is None
-    assert dfs([2] * 10, 5).answer is None          # parity makes it unreachable
+    assert dfs([2] * 10, 5).answer is None  # parity makes it unreachable
     assert dfs([1, 99999] * 5, 99999).answer == [1]
 
 
@@ -119,7 +119,7 @@ def test_a_backtrack_never_follows_a_take() -> None:
     rng = random.Random(1)
     for _ in range(200):
         vals = [rng.randint(1, 40) for _ in range(rng.randint(8, 12))]
-        dfs(vals, rng.randint(1, sum(vals)))       # the inline assert is the test
+        dfs(vals, rng.randint(1, sum(vals)))  # the inline assert is the test
     for _, values, target, _ in public_cases():
         dfs(values, target)
 

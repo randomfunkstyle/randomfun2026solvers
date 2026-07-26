@@ -73,9 +73,7 @@ def test_halt_has_no_exit_at_all() -> None:
 
 def test_a_fragment_with_a_second_exit_is_not_linear() -> None:
     """A conditional turn needs a router, not a packer, so it must be refused."""
-    fork = Fragment(
-        "fork", "d", exits=(Port(0, 0, E), Port(0, 0, S)), note="BP>0 turns south"
-    )
+    fork = Fragment("fork", "d", exits=(Port(0, 0, E), Port(0, 0, S)), note="BP>0 turns south")
     assert not fork.is_linear
     with pytest.raises(ValueError, match="not linear"):
         pack([fork], 12)

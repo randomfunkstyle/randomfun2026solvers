@@ -77,21 +77,39 @@ class FakeDisplayEngine:
             if matched >= len(want):
                 break
             if list(got) != want[matched]:
-                return FastResult(output=[], step=self.ticks[i], halted=False,
-                                  reason="wrong-frame", fatal="wrong-frame", passed=False)
+                return FastResult(
+                    output=[],
+                    step=self.ticks[i],
+                    halted=False,
+                    reason="wrong-frame",
+                    fatal="wrong-frame",
+                    passed=False,
+                )
             matched += 1
             if matched == len(want):
-                return FastResult(output=list(self.output), step=self.ticks[i], halted=False,
-                                  reason="output-settled", fatal=None,
-                                  passed=not self.output)
+                return FastResult(
+                    output=list(self.output),
+                    step=self.ticks[i],
+                    halted=False,
+                    reason="output-settled",
+                    fatal=None,
+                    passed=not self.output,
+                )
         if not want:
-            return FastResult(output=list(self.output), step=0, halted=False,
-                              reason="output-settled", fatal=None, passed=not self.output)
+            return FastResult(
+                output=list(self.output),
+                step=0,
+                halted=False,
+                reason="output-settled",
+                fatal=None,
+                passed=not self.output,
+            )
         # The native runner leaves ``passed`` *unknown* when it runs out of ticks
         # with frames outstanding — verified against FastLittleman on
         # palette_cpu.man at an insufficient cap.
-        return FastResult(output=[], step=max_ticks, halted=False, reason="tick-cap",
-                          fatal=None, passed=None)
+        return FastResult(
+            output=[], step=max_ticks, halted=False, reason="tick-cap", fatal=None, passed=None
+        )
 
 
 def one_round_case(frames: list[list[str]], name: str = "fake") -> dict[str, Any]:
@@ -209,17 +227,24 @@ def test_a_stall_reports_the_cap_and_no_mismatch_index():
 
 def test_a_case_with_no_frames_is_rejected_rather_than_silently_passing():
     engine = FakeDisplayEngine(commits=[], ticks=[])
-    res = run_case(STUB_GRID, {"name": "empty", "rounds": [{"in": [1], "out": []}]},
-                   backend="fast", engine=engine)
+    res = run_case(
+        STUB_GRID,
+        {"name": "empty", "rounds": [{"in": [1], "out": []}]},
+        backend="fast",
+        engine=engine,
+    )
     assert res.passed is False and "no frames" in res.error
 
 
 def test_the_engine_is_handed_slash_separated_rounds_by_default():
     want = [frame("1"), frame("2")]
-    case = {"name": "two rounds", "rounds": [
-        {"in": [1], "out": [], "frames": [want[0]]},
-        {"in": [2], "out": [], "frames": [want[1]]},
-    ]}
+    case = {
+        "name": "two rounds",
+        "rounds": [
+            {"in": [1], "out": [], "frames": [want[0]]},
+            {"in": [2], "out": [], "frames": [want[1]]},
+        ],
+    }
     engine = FakeDisplayEngine(commits=want, ticks=[10, 20])
     run_case(STUB_GRID, case, backend="fast", engine=engine)
     call = engine.calls[0]
@@ -230,10 +255,13 @@ def test_the_engine_is_handed_slash_separated_rounds_by_default():
 
 def test_ungated_collapses_the_case_to_a_single_round():
     want = [frame("1"), frame("2")]
-    case = {"name": "two rounds", "rounds": [
-        {"in": [1], "out": [], "frames": [want[0]]},
-        {"in": [2], "out": [], "frames": [want[1]]},
-    ]}
+    case = {
+        "name": "two rounds",
+        "rounds": [
+            {"in": [1], "out": [], "frames": [want[0]]},
+            {"in": [2], "out": [], "frames": [want[1]]},
+        ],
+    }
     engine = FakeDisplayEngine(commits=want, ticks=[10, 20])
     run_case(STUB_GRID, case, backend="fast", engine=engine, gated=False)
     call = engine.calls[0]
@@ -292,8 +320,12 @@ def test_check_all_refuses_to_score_a_failing_program():
 def test_check_all_uses_the_problems_own_tick_cap_not_the_5m_default():
     want = [frame("1")]
     engine = FakeDisplayEngine(commits=want, ticks=[5])
-    check_all(STUB_GRID, _problem([one_round_case(want)], tickCap=15_000_000),
-              backend="fast", engine=engine)
+    check_all(
+        STUB_GRID,
+        _problem([one_round_case(want)], tickCap=15_000_000),
+        backend="fast",
+        engine=engine,
+    )
     assert engine.calls[0]["max_ticks"] == 15_000_000
 
     engine = FakeDisplayEngine(commits=want, ticks=[5])
@@ -301,8 +333,13 @@ def test_check_all_uses_the_problems_own_tick_cap_not_the_5m_default():
     assert engine.calls[0]["max_ticks"] == scoring.DEFAULT_TICK_CAP
 
     engine = FakeDisplayEngine(commits=want, ticks=[5])
-    check_all(STUB_GRID, _problem([one_round_case(want)], tickCap=15_000_000),
-              backend="fast", cap=999, engine=engine)
+    check_all(
+        STUB_GRID,
+        _problem([one_round_case(want)], tickCap=15_000_000),
+        backend="fast",
+        cap=999,
+        engine=engine,
+    )
     assert engine.calls[0]["max_ticks"] == 999
 
 
@@ -333,8 +370,15 @@ def test_the_table_names_every_case_and_shows_the_footer():
 
 
 def test_case_result_tuple_is_the_documented_shape():
-    res = CaseResult(name="x", passed=False, frames_expected=5, frames_matched=2,
-                     first_mismatch_index=2, ticks=99, error="boom")
+    res = CaseResult(
+        name="x",
+        passed=False,
+        frames_expected=5,
+        frames_matched=2,
+        first_mismatch_index=2,
+        ticks=99,
+        error="boom",
+    )
     assert res.as_tuple() == (False, 2, 2, 99, "boom")
 
 

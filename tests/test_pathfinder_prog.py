@@ -4,6 +4,7 @@ The model is pure Python (no engine, no grid), so this whole file belongs in
 the fast tier: it is the thing that says the *algorithm* and the *register
 schedule* are right, independently of where the glyphs end up on the grid.
 """
+
 from __future__ import annotations
 
 import json
@@ -48,7 +49,7 @@ def test_every_block_is_reachable():
     stack = ["INIT"]
     while stack:
         _, succ = P[stack.pop()]
-        for nxt in ([succ] if isinstance(succ, str) else succ.values()):
+        for nxt in [succ] if isinstance(succ, str) else succ.values():
             if nxt != "HALT" and nxt not in seen:
                 seen.add(nxt)
                 stack.append(nxt)
@@ -57,8 +58,7 @@ def test_every_block_is_reachable():
 
 def test_branch_lanes_are_declared():
     """A branch token must be last in its block and name every lane it can pick."""
-    lanes = {"X": {"zero", "pos", "neg"}, "x": {"one", "zero"},
-             "d": {"pos", "zero"}}
+    lanes = {"X": {"zero", "pos", "neg"}, "x": {"one", "zero"}, "d": {"pos", "zero"}}
     for name, (toks, succ) in pf.build().items():
         branches = [t for t in toks if t in lanes]
         if isinstance(succ, dict):

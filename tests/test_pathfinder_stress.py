@@ -15,6 +15,7 @@ The measured pipe high-water marks are asserted to be *invariant* across all of
 them: the ring is 18 words, the spill 6 and the scratch 7 whatever the board,
 which is what lets the physical loops be sized once.
 """
+
 from __future__ import annotations
 
 import random
@@ -24,7 +25,7 @@ import pytest
 from randomfun2026solvers import pathfinder_prog as pf
 
 W = 16
-DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))   # up, right, down, left
+DIRS = ((0, -1), (1, 0), (0, 1), (-1, 0))  # up, right, down, left
 
 
 def reference(board, rx, ry, flags):
@@ -38,8 +39,11 @@ def reference(board, rx, ry, flags):
         d = dist[(rx, ry)]
         assert d > 0, "the flag must be reachable and different from the robot"
         for _ in range(d):
-            nx, ny = next((rx + dx, ry + dy) for dx, dy in DIRS
-                          if dist.get((rx + dx, ry + dy), -1) == dist[(rx, ry)] - 1)
+            nx, ny = next(
+                (rx + dx, ry + dy)
+                for dx, dy in DIRS
+                if dist.get((rx + dx, ry + dy), -1) == dist[(rx, ry)] - 1
+            )
             buf[ry][rx] = 0
             rx, ry = nx, ny
             buf[ry][rx] = 10
@@ -54,8 +58,7 @@ def _dists(board, sx, sy):
         x, y = q.popleft()
         for dx, dy in DIRS:
             n = (x + dx, y + dy)
-            if 0 <= n[0] < W and 0 <= n[1] < W and not board[n[1] * W + n[0]] \
-                    and n not in d:
+            if 0 <= n[0] < W and 0 <= n[1] < W and not board[n[1] * W + n[0]] and n not in d:
                 d[n] = d[(x, y)] + 1
                 q.append(n)
     return d
@@ -102,16 +105,14 @@ def _boards():
 BOARDS = list(_boards())
 
 
-@pytest.mark.parametrize(("name", "board", "flags"), BOARDS,
-                         ids=[b[0] for b in BOARDS])
+@pytest.mark.parametrize(("name", "board", "flags"), BOARDS, ids=[b[0] for b in BOARDS])
 def test_matches_the_statement(name, board, flags):
     ins = [*board, 1, 1]
     for fx, fy in flags:
         ins += [fx, fy]
     m = pf.Machine(pf.build(), ins)
     assert m.run() == reference(board, 1, 1, flags)
-    assert (m.maxring, m.maxfifo, m.maxscr) == \
-        (pf.RING_WORDS, pf.FIFO_WORDS, pf.SCRATCH_WORDS)
+    assert (m.maxring, m.maxfifo, m.maxscr) == (pf.RING_WORDS, pf.FIFO_WORDS, pf.SCRATCH_WORDS)
 
 
 def test_comb_exceeds_the_stated_move_cap():

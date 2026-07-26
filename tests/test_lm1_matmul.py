@@ -124,9 +124,7 @@ class _Counting(DictStore):
 
 def reference(n: int, m: int, k: int, a: list[int], b: list[int]) -> list[int]:
     """C = A·B, row-major, straight from the problem statement."""
-    return [
-        sum(a[i * m + t] * b[t * k + j] for t in range(m)) for i in range(n) for j in range(k)
-    ]
+    return [sum(a[i * m + t] * b[t * k + j] for t in range(m)) for i in range(n) for j in range(k)]
 
 
 def _run(rounds: list[Round]):
@@ -246,9 +244,7 @@ def test_several_rounds_in_one_run_reuse_the_rings() -> None:
     for n, m, k in ((2, 3, 4), (5, 2, 2), (4, 4, 3)):
         a = [((i * 13 + 5) % 199) - 99 for i in range(n * m)]
         b = [((i * 29 + 3) % 199) - 99 for i in range(m * k)]
-        rounds.append(
-            Round(input=(n, m, k, *a, *b), expected=tuple(reference(n, m, k, a, b)))
-        )
+        rounds.append(Round(input=(n, m, k, *a, *b), expected=tuple(reference(n, m, k, a, b))))
     res, _store, unit = _run(rounds)
     assert res.output == tuple(v for r in rounds for v in r.expected)
     assert not unit.ring_a and not unit.ring_b and not unit.p1 and not unit.p2

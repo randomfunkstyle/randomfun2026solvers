@@ -151,9 +151,7 @@ def test_each_display_s_is_strictly_nearest_its_own_port(slug: str) -> None:
     p = machine.plan(prog)
     cpu = machine.build_cpu(prog, p)
     rows = {
-        machine.DSP_SEM_BAND[p.sem[m]]: p.row[m]
-        for m in p.row
-        if p.sem[m] in machine.DSP_SEM_BAND
+        machine.DSP_SEM_BAND[p.sem[m]]: p.row[m] for m in p.row if p.sem[m] in machine.DSP_SEM_BAND
     }
     assert set(cpu.dsp_cols) == set(rows)
     wall = cpu.height + 2  # the pipes' source cells sit one row below the south wall
@@ -351,9 +349,7 @@ def test_folding_the_rom_is_what_buys_plotters_footprint(slug: str) -> None:
     already right, so it carries no ``ROM_ROWS`` entry and must not need one.
     """
     prog = programs.load(slug)
-    default = machine.build(
-        prog, tape_n=machine.TAPE_SIZE[slug], display=machine.display_for(slug)
-    )
+    default = machine.build(prog, tape_n=machine.TAPE_SIZE[slug], display=machine.display_for(slug))
     tuned = machine.build_for(slug)
     if slug in machine.ROM_ROWS:
         assert tuned.rom_rows == machine.ROM_ROWS[slug]

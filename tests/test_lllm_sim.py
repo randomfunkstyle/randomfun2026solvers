@@ -178,7 +178,9 @@ def test_the_halted_man_is_drawn_where_he_stopped_and_never_moves_again(
     assert render(state) == frame
 
 
-@pytest.mark.parametrize("name", ["off the edge", "widdershins", "revolving door", "swan dive", "victory lap"])
+@pytest.mark.parametrize(
+    "name", ["off the edge", "widdershins", "revolving door", "swan dive", "victory lap"]
+)
 def test_hitting_a_wall_moves_him_onto_the_wall_cell(name: str) -> None:
     """The wall halt is *on* the wall, not one cell short of it."""
     case = CASES[name]
@@ -230,7 +232,16 @@ def test_plus_and_minus_are_walls_only_on_the_room_border() -> None:
     program = program_of(CASES["swan dive"])
     assert program.rows[1] == "|@8-+2MX |"
     assert [classify(program, x, 1)[1] for x in range(program.width)] == [
-        COLOUR_WALL, 0, 8, COLOUR_ARITH, COLOUR_ARITH, 8, 12, 3, 0, COLOUR_WALL,
+        COLOUR_WALL,
+        0,
+        8,
+        COLOUR_ARITH,
+        COLOUR_ARITH,
+        8,
+        12,
+        3,
+        0,
+        COLOUR_WALL,
     ]
 
 

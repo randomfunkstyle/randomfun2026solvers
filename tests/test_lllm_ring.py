@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from randomfun2026solvers import lllm_layout, lllm_ring, lllm_tables, optimize
 
-PROBLEM = Path(__file__).resolve().parents[1] / "tasks" / "problems" / (
-    "little-little-little-man.json"
+PROBLEM = (
+    Path(__file__).resolve().parents[1] / "tasks" / "problems" / ("little-little-little-man.json")
 )
 
 
@@ -54,8 +54,9 @@ def test_branch_blocks_end_in_a_branch_glyph() -> None:
         if isinstance(succ, dict):
             assert toks[-1] in ("X", "x", "d"), (name, toks[-1])
             keys = set(succ)
-            want = {"X": {"neg", "zero", "pos"}, "x": {"one", "zero"},
-                    "d": {"pos", "zero"}}[toks[-1]]
+            want = {"X": {"neg", "zero", "pos"}, "x": {"one", "zero"}, "d": {"pos", "zero"}}[
+                toks[-1]
+            ]
             assert keys == want, (name, keys)
         else:
             assert not toks or toks[-1] not in ("X", "x", "d"), name
@@ -78,8 +79,11 @@ def test_token_program_reproduces_every_public_frame(case: dict) -> None:
 
 
 # ── the grid ──────────────────────────────────────────────────────────────────
-GRID = Path(__file__).resolve().parents[1] / "tasks" / "solutions" / (
-    "little-little-little-man_ring.man"
+GRID = (
+    Path(__file__).resolve().parents[1]
+    / "tasks"
+    / "solutions"
+    / ("little-little-little-man_ring.man")
 )
 
 
@@ -110,8 +114,10 @@ def test_every_pipe_op_stands_in_a_band_that_binds_its_own_pipe() -> None:
     # `check_binding` raises while planning, so this pins the *bands* instead:
     # every column of a band must resolve to that band's pipe, both ways.
     for band, (lo, hi) in lllm_layout.ZONE_COLS.items():
-        for token in ("rr" if band == "ST" else "rq" if band == "FI" else "ri",
-                      "sr" if band == "ST" else "sq" if band == "FI" else "sp"):
+        for token in (
+            "rr" if band == "ST" else "rq" if band == "FI" else "ri",
+            "sr" if band == "ST" else "sq" if band == "FI" else "sp",
+        ):
             for x in (lo, (lo + hi) // 2, hi):
                 lllm_layout.check_binding(x, token)
 
@@ -121,9 +127,7 @@ def test_no_column_holds_two_backticks(built) -> None:
     # with a turn glyph between it is a load error.
     rows, _dbg, _info = built
     width = max(len(r) for r in rows)
-    counts = Counter(
-        x for r in rows for x, ch in enumerate(r.ljust(width)) if ch == "`"
-    )
+    counts = Counter(x for r in rows for x, ch in enumerate(r.ljust(width)) if ch == "`")
     assert not [x for x, n in counts.items() if n > 1]
 
 

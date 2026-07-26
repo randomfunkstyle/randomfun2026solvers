@@ -10,6 +10,7 @@ Three things are pinned here:
   commits **every** frame of **every** public LLLM case on the real engine when
   driven with that stream.
 """
+
 from __future__ import annotations
 
 import json
@@ -181,8 +182,10 @@ def test_one_pixel_pair_costs_twelve_painter_ticks() -> None:
     source = "\n".join(rows) + "\n"
 
     def ticks_for(pairs: int) -> int:
-        frame = ["".join("9" if y * PANEL_W + x < pairs else "0"
-                         for x in range(PANEL_W)) for y in range(PANEL_H)]
+        frame = [
+            "".join("9" if y * PANEL_W + x < pairs else "0" for x in range(PANEL_W))
+            for y in range(PANEL_H)
+        ]
         prob = probe_problem({"name": f"{pairs}px", "rounds": [{"frames": [frame]}]})
         result = verify(source, prob)
         (verdict,) = result.cases

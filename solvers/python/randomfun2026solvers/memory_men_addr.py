@@ -75,15 +75,15 @@ __all__ = [
 BAND = 3
 
 
-def tile_x0(increment: bool) -> int:
-    """Interior column the tiles start at; the columns west of it are the spawner's.
+def tile_x0(increment: bool) -> int:  # noqa: ARG001 - kept for call-site clarity
+    """Interior column the tiles start at; the two columns west of it are the igniter's.
 
     The ``Y`` sits immediately west of the tiles so its east child lands on the
-    first cell. Behind it the west child needs somewhere to turn around: one
-    column if he only has to walk (the cell room), two if he also has to carry
-    ``+`` ``M`` ``1`` (the decoder room).
+    first cell, and behind it the west child needs one column to turn around in.
+    Two, for both rooms: the decoder's igniter used to need a third to carry
+    ``+ M 1``, and no longer does — see :func:`band_room`.
     """
-    return 3 if increment else 2
+    return 2
 
 
 #: One decoder, and every decoder is this. ``B`` holds his address forever.
@@ -100,9 +100,9 @@ def tile_x0(increment: bool) -> int:
 #: the west side, which is also where the ``Y`` puts the man — born facing east
 #: onto a ``^``, he turns straight into the ring.
 DECODER_TILE: tuple[str, ...] = (
-    ">r~Xv",
-    "^rr<r",
-    "^srs<",
+    " >r~Xv",
+    "W^rr<r",
+    " ^srs<",
 )
 
 #: One cell, and every cell is this. ``B`` holds the value; ``A`` starts at 0,
@@ -158,14 +158,19 @@ ROUTER_ROWS: tuple[str, ...] = (
 )
 
 
-#: Digits in a column's zero-padded base literal. Fixed width so that every
-#: column of a grid puts its bands on the same rows whatever number it starts at.
-_BASE_DIGITS = 3
+#: Digits in a column's zero-padded base literal. Fixed width so every column of
+#: a grid puts its bands on the same rows whatever number it starts at, and two
+#: because `1M`dd`` plus its turn is exactly the room's eight columns.
+_BASE_DIGITS = 2
+
+#: Rows the igniter's preamble needs above the first band: read the literal east,
+#: turn back west into the `Y` column.
+_INIT_H = 2
 
 
-def _init_height(base: int | None) -> int:
+def _init_height(base: int | None) -> int:  # noqa: ARG001 - kept for call sites
     """Rows the igniter's preamble needs above the first band."""
-    return 1 if base is None else 2
+    return _INIT_H
 
 
 def band_room(
@@ -212,24 +217,21 @@ def band_room(
         rows[y][x] = glyph
 
     put(0, 0, "@")
-    if base is not None:
-        # A whole column of memory starts at `base`, so the igniter is handed one
-        # number and counts up from it. Read the literal walking *east* and snake
-        # back west for the `1` — a room this wide has the columns to spare and
-        # rows are what a column costs. Zero-padded to a fixed width so every
-        # column's bands sit on the same rows whatever its base.
-        literal = f"`{base:0{_BASE_DIGITS}d}`M"
+    if increment:
+        # **The counter lives in `A` and the constant in `B`, not the other way
+        # round.** That is what makes the increment a single `+`: `A = A + 1`, with
+        # `B` pinned at 1 for the whole walk. The child then inherits his address
+        # in the wrong hand, and pays for it with one `W` on his birth cell —
+        # free, because he is born west of his ring and never steps there again.
+        #
+        # `1 M` pins B, then the base literal loads the counter, read walking east.
+        literal = f"1M`{base or 0:0{_BASE_DIGITS}d}`"
         for dx, glyph in enumerate(literal):
             put(1 + dx, 0, glyph)
         turn = 1 + len(literal)
         put(turn, 0, "v")
         put(turn, 1, "<")
-        put(turn - 1, 1, "1")  # A = 1 again, picked up on the way back
-        put(ycol, 1, "v")
-    else:
-        if increment:
-            put(1, 0, "1")  # A = 1 for the whole walk; every `+` is an increment
-        put(ycol, 0, "v")
+    put(ycol, 1 if increment else 0, "v")
 
     main_rows: list[int] = []
     for j in range(n):
@@ -247,14 +249,13 @@ def band_room(
             # no band left to seed, and no room to walk into
             put(ycol - 1, r_main, "H")
             continue
-        # the west child, turning around: down the west column, back east under
-        # the tile, and south into the next `Y`.
+        # The west child, turning around in one column: born facing west onto a
+        # `v`, `+` on the way down, and back east into the next `Y`. Five ticks a
+        # band where `+ M 1` cost seven.
+        put(ycol - 1, r_main, "v")
         if increment:
-            put(1, r_main, "+")  # born on it, facing west
-            put(0, r_alt, "M")
-            put(1, r_ret + BAND, "1")
-        put(0, r_main, "v")
-        put(0, r_ret + BAND, ">")
+            put(ycol - 1, r_alt, "+")
+        put(ycol - 1, r_ret + BAND, ">")
         put(ycol, r_ret + BAND, "v")
     return ["".join(r) for r in rows], main_rows
 
@@ -427,21 +428,23 @@ def build_addr(n: int) -> Addr:
     )
     dbg.circle(
         "the increment",
-        dx + 1,
-        roy + main_rows[0],
+        dx,
+        roy + main_rows[0] + 1,
         1,
         note=(
-            "`+` with A=1 pinned: A = 1 + B. Then `M` puts it back in B and `1` restores "
-            "A, so the next `Y` hands out the next address. The cell room walks the same "
-            "path with these three cells blank — cells are addressed by which pipe speaks "
-            "to them and never learn a number."
+            "The whole increment. `B` is pinned at 1 by the `1 M` in the preamble and "
+            "the counter lives in `A`, so handing out the next address is one glyph. The "
+            "child inherits it in the wrong hand and pays with a `W` on his birth cell, "
+            "which is outside his ring. The cell room walks the same path with this cell "
+            "blank — cells are addressed by which pipe speaks to them, and never learn a "
+            "number."
         ),
         color=C_MID,
     )
     for j, main in enumerate(main_rows):
         dbg.circle(
             f"split -> addr {j}",
-            dx + 2,
+            dx + 1,
             roy + main,
             1,
             note=(

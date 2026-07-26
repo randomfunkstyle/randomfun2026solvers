@@ -48,9 +48,7 @@ def test_native_and_python_engines_agree_on_exact_ticks() -> None:
 
 def test_display_frames_are_judged_in_memory() -> None:
     machine = FastLittleman(REPO / "tasks" / "solutions" / "palette_cpu.man")
-    problem = json.loads(
-        (REPO / "tasks" / "problems" / "palette.json").read_text(encoding="utf-8")
-    )
+    problem = json.loads((REPO / "tasks" / "problems" / "palette.json").read_text(encoding="utf-8"))
     case = problem["publicTestData"][0]
     result = machine.run(
         scoring._case_input(case),

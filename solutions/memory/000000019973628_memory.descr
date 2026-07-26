@@ -1,0 +1,16 @@
+# memory — submission 4a81977c-f66a-4cb1-a931-4843e79cb4df
+
+verdict      done: 24/24 cases, area2 11664, avgTicks 1,712, score 19,973,628
+submitted    2026-07-26T03:32:23+0300
+grid         108x107
+problem id   d0b34a23-67c1-4087-b88e-90a74404d50e
+fingerprint  52f50dbbc0ec85a8e0d366d18c263778aa8e8b3bf030b857d233e3ec19370330
+commit       2fb5aca
+local        memory: 7/7 public cases, avg 486 ticks
+source       tasks/solutions/memory_men_grid.man
+
+runner output:
+Passed 24/24 test cases
+
+notes:
+memory_men_grid 4x25: the igniter's increment is one glyph. Counter in A and the constant pinned in B (by a 1 M in the preamble) instead of the other way round, so incrementing is just +; the child inherits the address in the wrong hand and pays with a W on his birth cell, which sits outside his ring. Igniter walk 7 ticks a band -> 5. Fixed cost 177 -> 131.

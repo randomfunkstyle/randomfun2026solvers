@@ -88,9 +88,7 @@ def _walk(stream: list[int], ticks: int = 4000) -> list[tuple[int, str, int]]:
     the input ends the walk, which is how the real painter idles.
     """
     rows = painter().rows()
-    spawn = next(
-        (x, y) for y, r in enumerate(rows) for x, ch in enumerate(r) if ch == "@"
-    )
+    spawn = next((x, y) for y, r in enumerate(rows) for x, ch in enumerate(r) if ch == "@")
     pos, d, a, bp = spawn, (1, 0), 0, 0
     queue = list(stream)
     sends: list[tuple[int, str, int]] = []
@@ -128,9 +126,7 @@ def _walk(stream: list[int], ticks: int = 4000) -> list[tuple[int, str, int]]:
 def test_the_painters_first_act_is_a_read_not_a_commit() -> None:
     """A spurious first frame fails the streaming compare on frame 0."""
     rows = painter().rows()
-    spawn = next(
-        (x, y) for y, r in enumerate(rows) for x, ch in enumerate(r) if ch == "@"
-    )
+    spawn = next((x, y) for y, r in enumerate(rows) for x, ch in enumerate(r) if ch == "@")
     pos, d = spawn, (1, 0)
     for _ in range(20):
         ch = rows[pos[1]][pos[0]]
@@ -262,7 +258,8 @@ def test_the_probe_commits_exactly_the_expected_frames_on_the_reference_engine()
 
     want = expected_frames(RUNS)
     runs = Littleman().display_frames(
-        GRID, [{"name": "pathfinder-panel", "rounds": [{"in": stream_for(RUNS), "frames": want}]}],
+        GRID,
+        [{"name": "pathfinder-panel", "rounds": [{"in": stream_for(RUNS), "frames": want}]}],
         max_ticks=200_000,
     )
     (res,) = runs

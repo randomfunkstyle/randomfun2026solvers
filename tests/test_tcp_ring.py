@@ -165,6 +165,7 @@ def _rooms(lm: Littleman) -> tuple[object, object]:
     Identified by size rather than by index, so the band can be re-laid out
     without silently turning these invariants into tautologies.
     """
+
     def area(r: object) -> int:
         lo, hi = r.min_, r.max_  # type: ignore[attr-defined]
         return (hi.x - lo.x) * (hi.y - lo.y)
@@ -239,9 +240,7 @@ def test_an_insert_costs_the_same_at_every_offset() -> None:
     """
     lm, src = Littleman(), SOLUTION.read_text()
     first = {k: _tick_of_nth_output(lm, src, _k_stores_then_unlock(k), 1) for k in (2, 4, 6, 8, 10)}
-    slopes = {
-        (a, b): (first[b] - first[a]) / (b - a) for a, b in ((2, 4), (4, 6), (6, 8), (8, 10))
-    }
+    slopes = {(a, b): (first[b] - first[a]) / (b - a) for a, b in ((2, 4), (4, 6), (6, 8), (8, 10))}
     assert set(slopes.values()) == {TICKS_PER_INSERT}
 
 

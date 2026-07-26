@@ -6,6 +6,7 @@ a backtick sharing a column with another one is a *load* error. So the fast tier
 here re-derives each of those from the emitted grid rather than trusting the
 generator's own assertions, and the engine runs are marked slow.
 """
+
 from __future__ import annotations
 
 import functools
@@ -22,8 +23,16 @@ ROOT = Path(__file__).resolve().parents[1]
 MAN = ROOT / "tasks" / "solutions" / "pathfinder_grid.man"
 PROBLEM = ROOT / "tasks" / "problems" / "pathfinder.json"
 
-PIPE_TOK = {"sr": ("s", "R"), "sg": ("s", "G"), "sf": ("s", "F"), "sp": ("s", "P"),
-            "rr": ("r", "R"), "rg": ("r", "G"), "rf": ("r", "F"), "ri": ("r", "I")}
+PIPE_TOK = {
+    "sr": ("s", "R"),
+    "sg": ("s", "G"),
+    "sf": ("s", "F"),
+    "sp": ("s", "P"),
+    "rr": ("r", "R"),
+    "rg": ("r", "G"),
+    "rf": ("r", "F"),
+    "ri": ("r", "I"),
+}
 #: From SPEC.md's `validOps`, plus the spawn and the room/pipe structure glyphs.
 VALID = set("0123456789`.MWN+-*/%&|~{}<>^vVXxYdabmq]sSrRUH") | set(" @+-|=:IO")
 
@@ -47,7 +56,7 @@ def test_no_column_can_tie_between_two_anchors():
         for a, b in zip(cols, cols[1:], strict=False):
             assert (a + b) % 2 == 1, f"anchors {a} and {b} tie at column {(a + b) // 2}"
     for x in range(pg.CW0, pg.CW1 + 1):
-        pg.send_band(x)   # raises Collision on a tie
+        pg.send_band(x)  # raises Collision on a tie
         pg.recv_band(x)
 
 
@@ -66,7 +75,7 @@ def test_bands_are_four_contiguous_equal_spans_holding_their_own_anchor():
 
 # ── the block order ───────────────────────────────────────────────────────────
 def test_order_is_exactly_the_program_and_every_chain_falls_through():
-    supers, succ = pg._superblocks()          # raises on a mismatch
+    supers, succ = pg._superblocks()  # raises on a mismatch
     assert sum(len(chain) for chain in pg.ORDER) == len(prog.build())
     assert set(supers) == {chain[0] for chain in pg.ORDER}
 
@@ -74,13 +83,13 @@ def test_order_is_exactly_the_program_and_every_chain_falls_through():
 def test_every_branch_lane_can_reach_where_its_target_sits():
     """North reaches only upward and south only downward — that is the order."""
     _, succ = pg._superblocks()
-    pg._check_order(succ)                     # raises Collision if violated
+    pg._check_order(succ)  # raises Collision if violated
 
 
 def test_a_north_lane_pointing_downwards_is_rejected():
     _, succ = pg._superblocks()
     broken = dict(succ)
-    broken["PACKT"] = {"pos": "ROTT", "zero": "PACKEND"}   # ROTT is far below
+    broken["PACKT"] = {"pos": "ROTT", "zero": "PACKEND"}  # ROTT is far below
     with pytest.raises(Collision, match="north lane"):
         pg._check_order(broken)
 
@@ -107,10 +116,10 @@ def test_placer_puts_every_pipe_op_in_its_own_band():
 
 def test_placer_drops_a_row_when_the_band_is_behind_it():
     _, p = _placer()
-    p.token("sp")                    # far east, still heading east
+    p.token("sp")  # far east, still heading east
     row, dx = p.y, p.dx
     assert dx > 0
-    p.token("sr")                    # band R is behind: must reverse
+    p.token("sr")  # band R is behind: must reverse
     assert p.y == row + 1
     assert p.dx < 0
 
@@ -160,8 +169,7 @@ def test_every_pipe_glyph_in_the_worker_stands_in_its_band():
             assert pg.CW0 <= col <= pg.CW1, f"pipe op in the channel at ({x},{y})"
             band = pg.send_band(col) if row[x] == "s" else pg.recv_band(col)
             got[(row[x], band)] += 1
-    want = Counter(PIPE_TOK[t] for toks, _ in prog.build().values()
-                   for t in toks if t in PIPE_TOK)
+    want = Counter(PIPE_TOK[t] for toks, _ in prog.build().values() for t in toks if t in PIPE_TOK)
     assert got == want
 
 

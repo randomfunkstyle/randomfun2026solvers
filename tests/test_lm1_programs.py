@@ -316,9 +316,7 @@ def test_plotter_draws_exactly_bresenham_on_every_public_case() -> None:
     prog = load("plotter")
     for i in range(0, len(segments), 20):  # 20 rounds is the constraints' limit
         chunk = segments[i : i + 20]
-        res = Emulator(prog).run(
-            [Round(input=s) for s in chunk], max_instructions=MAX_INSTRUCTIONS
-        )
+        res = Emulator(prog).run([Round(input=s) for s in chunk], max_instructions=MAX_INSTRUCTIONS)
         got = frames_from_writes(res.display_writes, width=width, height=height)
         assert len(got) == len(chunk), res.reason
         for segment, frame in zip(chunk, got, strict=True):

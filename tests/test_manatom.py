@@ -58,8 +58,13 @@ def test_an_exit_heading_must_agree_with_the_glyph_it_leaves_from() -> None:
 def test_a_loop_must_agree_about_how_many_values_it_moves() -> None:
     with pytest.raises(ValueError, match="those must agree"):
         gadget(
-            "bad", ["ab"], entry=Port(0, 0, E), exits=(Port(1, 0, E),),
-            ticks=8, per_lap=2, count_multiple=4,
+            "bad",
+            ["ab"],
+            entry=Port(0, 0, E),
+            exits=(Port(1, 0, E),),
+            ticks=8,
+            per_lap=2,
+            count_multiple=4,
         )
 
 
@@ -117,12 +122,7 @@ def test_the_measured_tick_cost_matches_the_declared_one() -> None:
         rows = ["+" + "-" * 28 + "+"]
         rows += ["|" + r[1:29] + "|" for r in c.rows()[1:13]]
         rows.append("+" + "-" * 28 + "+")
-        g = {
-            (x2, y): ch
-            for y, r in enumerate(rows)
-            for x2, ch in enumerate(r)
-            if ch != " "
-        }
+        g = {(x2, y): ch for y, r in enumerate(rows) for x2, ch in enumerate(r) if ch != " "}
         base = len(rows)
         g[(4, base)] = "v"
         g[(4, base + 1)] = "v"
@@ -132,8 +132,7 @@ def test_the_measured_tick_cost_matches_the_declared_one() -> None:
         mx = max(a for a, _ in g)
         my = max(b for _, b in g)
         return "\n".join(
-            "".join(g.get((a, b), " ") for a in range(mx + 1)).rstrip()
-            for b in range(my + 1)
+            "".join(g.get((a, b), " ") for a in range(mx + 1)).rstrip() for b in range(my + 1)
         )
 
     lm = Littleman()

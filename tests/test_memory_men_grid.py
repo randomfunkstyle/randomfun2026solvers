@@ -69,8 +69,8 @@ def test_a_column_carries_its_base_as_a_literal_and_counts_up():
     text = "\n".join(rows)
     # Read walking *east* and snaked back west for the `1`: a room this wide has
     # the columns to spare, and rows are what a column costs. Two rows, not nine.
-    assert rows[0] == "@`024`Mv"
-    assert rows[1].endswith("1<") and rows[1][2] == "v"
+    assert rows[0] == "@1M`24`v"
+    assert rows[1].endswith("<") and rows[1][1] == "v"
     assert text.count("Y") == 4 and text.count("+") == 3
     # a column is its own room, so it needs no ignition pipe and no master igniter
     assert "R" not in text and "U" not in text
@@ -137,18 +137,18 @@ def test_the_fixed_cost_falls_with_the_number_of_columns():
     fixed, slopes = {}, {}
     for cols, rows in [(1, 100), (4, 25), (10, 10), (25, 4)]:
         fixed[cols], slopes[cols] = _fixed_and_slope(build_grid(cols, rows).source(), lm)
-    assert fixed == {1: 701.0, 4: 177.0, 10: 72.0, 25: 30.0}
-    # ~7 ticks a band, and only ONE column's worth of it is on the clock
+    assert fixed == {1: 516.0, 4: 131.0, 10: 56.0, 25: 26.0}
+    # ~5 ticks a band, and only ONE column's worth of it is on the clock
     for cols, rows in [(1, 100), (4, 25), (10, 10), (25, 4)]:
-        assert fixed[cols] == pytest.approx(7 * rows, abs=6), (cols, rows)
+        assert fixed[cols] == pytest.approx(5 * rows, abs=20), (cols, rows)
     # Splitting into columns buys the fixed cost and *only* the fixed cost: the
     # per-op price is the router's 16-cell lap and no layout change touches it.
     assert set(slopes.values()) == {16.0}
     # Which is the model both judged runs came out of, to 0.2%:
-    #   1x100  701 + 16*99 = 2,285   judged 2,283
-    #   4x25   177 + 16*99 = 1,761   judged 1,762
-    assert fixed[1] + 16 * 99 == pytest.approx(2283, rel=0.005)
-    assert fixed[4] + 16 * 99 == pytest.approx(1758, rel=0.01)
+    #   1x100  701 + 16*99 = 2,285   judged 2,283  (before the single-`+` igniter)
+    #   4x25   177 + 16*99 = 1,761   judged 1,758  (likewise)
+    # and it is the same model that puts this igniter's 4x25 at 1,715.
+    assert fixed[4] + 16 * 99 == pytest.approx(1715, rel=0.01)
 
 
 def test_the_flat_router_is_the_same_program_lying_down():

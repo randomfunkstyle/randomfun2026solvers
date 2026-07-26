@@ -62,7 +62,7 @@ def test_every_band_holds_the_identical_tile(tile):
 def test_the_decoder_compares_with_the_hand_a_cell_cannot_spare():
     # `~` reads B, and B is exactly what a value-holding cell has no room for —
     # which is why the decoder is a second man in a second room at all.
-    assert DECODER_TILE[0].startswith(">r~X"), DECODER_TILE[0]
+    assert DECODER_TILE[0].strip().startswith(">r~X"), DECODER_TILE[0]
     assert "".join(DECODER_TILE).count("s") == 2, "forwards op and value, nothing else"
     assert DECODER_TILE[1].count("r") == 3, "two swallowed unselected, one op selected"
     # a cell never sees an address, only its own pipe
@@ -74,24 +74,28 @@ def test_a_tile_is_a_ring_that_wastes_no_cell_on_going_home(tile):
     # The perimeter *is* the program: twelve cells, each one a glyph the man had
     # to run or a turn he had to take. The lane-with-a-return-corridor it replaces
     # spent 8 of its 20 ticks walking back west past nothing.
-    assert [len(r) for r in tile] == [5, 5, 5]
-    perimeter = tile[0] + tile[1][0] + tile[1][-1] + tile[2]
+    # the decoder carries one extra column: the `W` its child is born on, which
+    # is outside the ring and never stepped on again
+    ring = [r[-5:] for r in tile]
+    assert [len(r) for r in ring] == [5, 5, 5]
+    perimeter = ring[0] + ring[1][0] + ring[1][-1] + ring[2]
     assert " " not in perimeter, f"a blank on the ring is a wasted tick: {tile}"
     # the man is born facing east on the west side and turns straight into it
-    assert tile[1][0] == "^" and tile[2][0] == "^"
+    assert ring[1][0] == "^" and ring[2][0] == "^"
     # ...and the other op is the three interior cells, entered off the ring
-    assert tile[1][1:4].strip(), "the interior lane has to do something"
+    assert ring[1][1:4].strip(), "the interior lane has to do something"
 
 
 def test_the_spawner_hands_out_one_address_per_band():
     rows, mains = band_room(6, DECODER_TILE, increment=True)
-    # row 0 turns the spawner south; then each band is return, main, branch
-    assert mains == [BAND * j + 2 for j in range(6)]
-    # `+ M 1` once per gap between `Y`s, and A=1 pinned before the first one
+    # two preamble rows pin B and load the base; then each band is ret, main, branch
+    assert mains == [BAND * j + 3 for j in range(6)]
+    # One `+` per gap between `Y`s — B is pinned at 1 by the `1 M` in the
+    # preamble, so incrementing the counter in A is a single glyph.
     assert sum(r.count("Y") for r in rows) == 6
     assert sum(r.count("+") for r in rows) == 5
-    assert sum(r.count("M") for r in rows) == 5
-    assert sum(r.count("1") for r in rows) == 6
+    assert sum(r.count("M") for r in rows) == 1
+    assert sum(r.count("1") for r in rows) == 1
     assert sum(r.count("H") for r in rows) == 1  # no band left to seed
     # the cell room walks the same path with nothing on it
     plain, _ = band_room(6, CELL_TILE, increment=False)

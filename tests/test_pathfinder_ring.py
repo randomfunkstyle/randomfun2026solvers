@@ -7,6 +7,7 @@ part of the layout that *is* settled: that the binding predicate agrees with
 the engine cell for cell, that the placer refuses to mis-bind, and that the
 backtick rule is enforced rather than hoped for.
 """
+
 from __future__ import annotations
 
 import json
@@ -78,8 +79,7 @@ def test_grid_binding_demands_a_strict_minimum():
     the grid could silently rebind the op; refusing them outright is the only
     version of this that survives a later change.
     """
-    b = GridBinding(20, 20, {"G": 2, "R": 6, "F": 12, "P": 18},
-                    {"G": 3, "R": 8, "F": 13, "I": 18})
+    b = GridBinding(20, 20, {"G": 2, "R": 6, "F": 12, "P": 18}, {"G": 3, "R": 8, "F": 13, "I": 18})
     assert b.send(4) is None  # |4-2| == |4-6|
     assert not b.ok(4, 0, "sg") and not b.ok(4, 0, "sr")
     assert b.ok(3, 0, "sg") and b.ok(5, 0, "sr")
@@ -91,9 +91,7 @@ def test_grid_binding_zones_partition_the_room():
     assert sorted(x for v in cols.values() for x in v) == list(range(b.iw))
     assert sorted(y for v in rows.values() for y in v) == list(range(b.ih))
     # the order the arrangement search picks, west to east / north to south
-    assert [min(cols[z]) for z in ("G", "R", "F", "P")] == sorted(
-        min(cols[z]) for z in cols
-    )
+    assert [min(cols[z]) for z in ("G", "R", "F", "P")] == sorted(min(cols[z]) for z in cols)
 
 
 def test_quadrant_binding_still_rejects_ties():
@@ -126,8 +124,9 @@ def test_a_pipes_send_and_receive_can_share_a_place():
     zone-level one, is the number that decides the layout.
     """
     b, _ = probe()
-    same = [(x, y) for y in range(b.ih) for x in range(b.iw)
-            if b.ok(x, y, "sr") and b.ok(x, y, "rr")]
+    same = [
+        (x, y) for y in range(b.ih) for x in range(b.iw) if b.ok(x, y, "sr") and b.ok(x, y, "rr")
+    ]
     assert len(same) >= 20, "colband(R) x rowband(R) must hold a run of its own"
     for x, y in same:
         assert not b.ok(x, y, "sg") and not b.ok(x, y, "rg")
@@ -148,16 +147,14 @@ def test_check_backticks_accepts_the_placers_discipline():
 
 
 def test_the_program_needs_delimited_literals():
-    lits = [t for toks, _ in pf.build().values() for t in toks
-            if t[0] == "L" and len(t) > 2]
+    lits = [t for toks, _ in pf.build().values() for t in toks if t[0] == "L" and len(t) > 2]
     assert len(lits) == 20
     assert max(len(t) - 1 for t in lits) == 3  # `256` is the widest
 
 
 # ── the placer ───────────────────────────────────────────────────────────────
 def _tiny_placer(iw=14, ih=14):
-    b = GridBinding(iw, ih, {"G": 2, "R": 5, "F": 8, "P": 12},
-                    {"G": 2, "R": 5, "F": 8, "I": 12})
+    b = GridBinding(iw, ih, {"G": 2, "R": 5, "F": 8, "P": 12}, {"G": 2, "R": 5, "F": 8, "I": 12})
     c = Circuit(iw, ih)
     p = Placer(c, b.ok, backtick_cols=(10, 14))
     p.escape_cap = 20
@@ -179,14 +176,13 @@ def test_placer_detours_rather_than_mis_binding():
     """A pipe op standing where its pipe does not win is a build error, so the
     placer must move the man instead of placing it."""
     b, p = _tiny_placer()
-    p.emit("sg")           # legal in column 1 already
-    cell = p.emit("sf")    # colband F is columns 7..9: this has to travel
+    p.emit("sg")  # legal in column 1 already
+    cell = p.emit("sf")  # colband F is columns 7..9: this has to travel
     assert b.ok(*cell, "sf")
     assert p.travel_cells > 0
     for (x, y), ch in p.c.cell.items():
         if ch in "sr":
-            assert any(b.ok(x, y, t) for t in ("sr", "sf", "sg", "sp",
-                                               "rr", "rf", "rg", "ri"))
+            assert any(b.ok(x, y, t) for t in ("sr", "sf", "sg", "sp", "rr", "rf", "rg", "ri"))
 
 
 def test_placer_refuses_to_overwrite():
@@ -211,11 +207,7 @@ def test_glyph_of_maps_a_pipe_op_to_one_cell():
     assert glyph_of("sr") == "s" and glyph_of("ri") == "r"
     assert glyph_of("L7") == "7" and glyph_of("L64") == ""
     assert glyph_of("M") == "M"
-    total = sum(
-        len(glyph_of(t)) or (len(t) + 1)
-        for toks, _ in pf.build().values()
-        for t in toks
-    )
+    total = sum(len(glyph_of(t)) or (len(t) + 1) for toks, _ in pf.build().values() for t in toks)
     assert total == sum(pf.cells(toks) for toks, _ in pf.build().values()) == 596
 
 
@@ -229,7 +221,10 @@ def test_reference_engine_agrees_with_the_binding():
     try:
         out = subprocess.run(
             ["node", str(ROOT / "littleman" / "tools" / "route-check.mjs"), str(path)],
-            capture_output=True, text=True, check=True, cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=ROOT,
         ).stdout
     finally:
         path.unlink(missing_ok=True)
