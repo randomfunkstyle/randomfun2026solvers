@@ -1,13 +1,15 @@
 """``LANE_ORDER``: which lane sits on which row is a tick cost, and a correctness risk.
 
-Two halves, and the second is the one that earned its place. The row a lane sits on
-sets its return walk, so weighting lanes by how often their opcode runs and searching
-that is worth a few percent for free (§7.6). But the search's filter was "passes every
-public case on the reference engine", and for ``matmul`` that filter *passed a grid
-that computes the wrong product* on matrices the public data never reaches. So the
-orders here are pinned, and any program whose public data is thin gets exercised past
-it — that is what `test_brackets_lane_order_survives_inputs_the_public_cases_miss`
-is for.
+The row a lane sits on sets its return walk, so weighting lanes by how often their
+opcode runs and searching that is worth a few percent for free (§7.6). These tests pin
+the orders, pin that they cost no footprint — the constraint that makes the search
+honest — and guard the two ways this work misled us:
+
+* a candidate that passes the public cases can still be wrong, so `brackets` is
+  exercised on inputs its nine public cases never reach, on the *reference* engine;
+* a candidate that *fails* a pinned-tick test can still be right, which is what
+  happened to `matmul` — see
+  `test_a_pinned_tick_test_failing_does_not_mean_the_grid_is_wrong`.
 """
 
 from __future__ import annotations
@@ -68,15 +70,20 @@ def test_the_pinned_order_does_not_cost_footprint(slug: str, footprint: int) -> 
     assert machine.build_for(slug).footprint == footprint
 
 
-def test_matmul_keeps_the_default_order_because_its_public_data_under_covers_it() -> None:
-    """Pinned as a warning, not as a preference.
+def test_a_pinned_tick_test_failing_does_not_mean_the_grid_is_wrong() -> None:
+    """The trap that cost a wrong conclusion, written down so it cannot cost another.
 
-    The search's `matmul` candidate was 1.2% better and passed 7/7 public cases on the
-    reference engine, then failed `test_lm1_matmul`'s stress matrices on the same
-    engine. `matmul` is the one program on the *long* return path (`_LONG_RETURN`, for
-    the STREAM wiring), whose drop-column rule the search's model does not describe.
+    ``test_lm1_matmul`` pins each case's *exact* settle tick — "the recorded tick is
+    enough, and one tick fewer is not" — so a **faster** grid fails it, and the failure
+    looks identical to a wrong answer. `matmul` was removed from ``LANE_ORDER`` on that
+    evidence and restored once the outputs were checked directly: correct on all seven
+    public cases, on the reference engine, at every case's new lower tick.
     """
-    assert "matmul" not in machine.LANE_ORDER
+    assert machine.LANE_ORDER["matmul"] == ("MUL", "BRN", "SUB", "ADDI", "ST", "LD")
+    grid = machine.build_for("matmul").rows
+    result = optimize.verify(grid, "matmul", lm=Littleman())
+    assert result.passed, "matmul's reordered grid must be right, not merely fast"
+    assert all(c.passed for c in result.cases)
 
 
 @pytest.mark.slow
