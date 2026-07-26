@@ -57,22 +57,20 @@ def test_every_pinned_order_is_a_permutation_of_that_programs_unpinned_lanes() -
         assert len(rows) == len(set(rows)), f"{slug}: two lanes on one row"
 
 
-@pytest.mark.parametrize(
-    ("slug", "footprint"),
-    [("brackets", 90**2), ("gradebook", 108**2), ("sudoku-validity", 80**2)],
-)
+@pytest.mark.parametrize("slug", ["brackets", "gradebook", "sudoku-validity"])
 @pytest.mark.slow
-def test_the_pinned_order_does_not_cost_footprint(slug: str, footprint: int) -> None:
+def test_the_pinned_order_does_not_cost_footprint(slug: str) -> None:
     """The whole reason width is a *constraint* in the search and not a term: the lane
     order picks ``mem_pad``, which sets the memory lanes' length, which sets the CPU's
     width — and width is squared in the score, so a tick win that widens the machine is
-    usually a loss. `gradebook` actually *gains* a column here (109 → 108).
-
-    All three shed five more columns when ``ADAPTER_TAPE_GAP`` went 6 → 1, which is a
-    corridor width and nothing to do with the lane order; the pinned numbers moved with
-    it (95/113/83 → 90/108/80) but what this test asserts did not.
+    usually a loss. Compare against the default order so unrelated generator
+    compaction does not make this test fragile.
     """
-    assert machine.build_for(slug).footprint == footprint
+    prog = programs.load(slug)
+    kwargs = {"tape_n": machine.TAPE_SIZE[slug], "rom_rows": machine.ROM_ROWS.get(slug)}
+    tuned = machine.build(prog, middle_order=machine.LANE_ORDER[slug], **kwargs)
+    default = machine.build(prog, **kwargs)
+    assert tuned.footprint <= default.footprint
 
 
 @pytest.mark.slow

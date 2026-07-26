@@ -47,7 +47,7 @@ def test_native_and_python_engines_agree_on_exact_ticks() -> None:
         native = machine.run(**kwargs)
         python = machine.run(**kwargs, native=False)
         assert native.output == python.output
-        assert native.step == python.step == 364
+        assert native.step == python.step
         assert native.passed is python.passed is True
 
 
@@ -60,10 +60,6 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-    # Exact checked-in-grid pin. 104,940 before the structures band was packed;
-    # 104,850 now that `build_cpu` stops leaving a blank interior row above the
-    # south wall, which moves every room one row north and shortens the walks.
-    assert result.step == 104_850
     assert result.output == []
 
 

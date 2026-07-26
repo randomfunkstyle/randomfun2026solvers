@@ -1450,14 +1450,10 @@ def build_asm(*, packed_cells: bool = False) -> tuple[str, int]:
     return a.text(header), a.slots
 
 
-#: The ROM fold, re-swept after the structures band was packed (stacked slab entry
-#: rows took the CPU from 203 to 193 tall).  Rows the CPU gives up are worth having
-#: only if the ROM takes them: the box is square-ish, so height alone changes
-#: nothing until the fold converts it into width.
-#:
-#:      rows   84        88        92        96        100
-#:      box    203x193   195x197   187x201   179x205   172x209
-#:      area2  41,209    38,809    40,401    42,025    43,681
+#: The ROM fold, re-swept after two independent compactions landed together: the
+#: packed structures band (stacked slab entry rows, 20 rows -> 10) and main's
+#: compact whole-machine routing.  Rows the CPU gives up only pay once the fold
+#: converts them into width, so the sweep has to be redone whenever either moves.
 ROM_ROWS = 88
 
 
@@ -1476,11 +1472,13 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--asm", type=Path, help="write the assembly here")
     ap.add_argument("--man", type=Path, help="build the machine and write the grid here")
+    ap.add_argument("--html", type=Path, help="write a labelled debug overlay here")
+    ap.add_argument("--json", type=Path, help="write the debug region sidecar here")
     ap.add_argument("--rom-rows", type=int, default=ROM_ROWS, help="ROM fold")
     ap.add_argument("--packed", action="store_true", help="pack four cells to a word")
     args = ap.parse_args(argv)
 
-    if args.man is None:
+    if not (args.man or args.html or args.json):
         text, slots = build_asm(packed_cells=args.packed)
         if args.asm:
             args.asm.write_text(text)
@@ -1492,12 +1490,13 @@ def main(argv: list[str] | None = None) -> int:
     built, program, text = build_machine(packed_cells=args.packed, rom_rows=args.rom_rows)
     if args.asm:
         args.asm.write_text(text)
-    args.man.write_text("\n".join(built.rows) + "\n")
-    side = max(built.width, built.height)
-    print(
-        f"{args.man}: {built.width}x{built.height} footprint {side * side}, "
-        f"P={program.P} words on {args.rom_rows} ROM rows"
-    )
+    if args.man:
+        args.man.write_text("\n".join(built.rows) + "\n")
+    if args.html:
+        built.debug_map().write_html(built.rows, args.html)
+    if args.json:
+        built.debug_map().write_json(args.json)
+    print(built.report())
     return 0
 
 
