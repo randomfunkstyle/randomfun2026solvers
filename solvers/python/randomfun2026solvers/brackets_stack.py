@@ -118,10 +118,10 @@ _BIN = {
 
 
 class _Man:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, blocks=None, entry: str | None = None) -> None:
         self.name = name
-        self.blocks = MEN[name]
-        self.block = ENTRY[name]
+        self.blocks = MEN[name] if blocks is None else blocks
+        self.block = ENTRY[name] if entry is None else entry
         self.pc = 0
         self.a = self.b = self.bp = 0
         self.branch: str | None = None
@@ -129,12 +129,17 @@ class _Man:
         self.glyphs = 0
 
 
-def simulate(text: str, *, max_steps: int = 200_000) -> tuple[int | None, dict[str, int]]:
+def simulate(text: str, *, max_steps: int = 200_000,
+             men=None, entries=None) -> tuple[int | None, dict[str, int]]:
     """Run the three men over one case; return the emitted value and glyph counts.
 
     A cooperative round-robin: every man executes one token per turn unless a
     pipe op blocks him.  That is not the real tick order, but it exercises the
     same control graph and the same blocking discipline.
+
+    `men` and `entries` override the block tables, which is what lets a *layout*
+    transformation — splicing an unconditional edge into its source, say — be
+    re-checked against the same exhaustive corpus as the tables it rewrites.
     """
     wire: dict[str, deque[int]] = {
         "in": deque([len(text)] + [ord(c) for c in text]),
@@ -143,7 +148,9 @@ def simulate(text: str, *, max_steps: int = 200_000) -> tuple[int | None, dict[s
         "ack": deque(),
         "out": deque(),
     }
-    men = [_Man(n) for n in ("CLASS", "WORK", "COUNT")]
+    tables = men or MEN
+    starts = entries or ENTRY
+    men = [_Man(n, tables[n], starts[n]) for n in ("CLASS", "WORK", "COUNT")]
     steps = 0
 
     while any(not m.halted for m in men):
