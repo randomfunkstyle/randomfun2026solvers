@@ -17,14 +17,24 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from randomfun2026solvers import gradebook_place as gp
-from randomfun2026solvers import optimize, scoring
-from randomfun2026solvers.gradebook_cfg import WORKER, worker_glyph_cells
 
 REPO = Path(__file__).resolve().parents[1]
+PKG = REPO / "solvers" / "python"
+if str(PKG) not in sys.path:
+    sys.path.insert(0, str(PKG))
+
+from randomfun2026solvers import blockplace as B  # noqa: E402
+from randomfun2026solvers import gradebook_place as gp  # noqa: E402
+from randomfun2026solvers import optimize, scoring  # noqa: E402
+from randomfun2026solvers.gradebook_cfg import (  # noqa: E402
+    WORKER,
+    worker_glyph_cells,
+)
+
 GRID = REPO / "tasks" / "solutions" / "gradebook_ring.man"
 PROBLEM = REPO / "tasks" / "problems" / "gradebook.json"
 ROUTE_CHECK = REPO / "littleman" / "tools" / "route-check.mjs"
@@ -75,8 +85,6 @@ def test_the_eight_pipe_columns_are_distinct_and_never_touch() -> None:
 def test_a_bank_exists_for_every_run_of_bands_a_block_could_need() -> None:
     """Fourteen of the thirty-seven blocks use two bands or more."""
     _geo, banks = gp.layout(gp.BANKS)
-    from randomfun2026solvers import blockplace as B
-
     idx = {z: i for i, z in enumerate(gp.ZONES)}
     wide = 0
     for name in WORKER:
@@ -211,13 +219,22 @@ def test_every_public_case_passes_on_the_fast_engine() -> None:
 
 
 @pytest.mark.slow
-def test_every_public_case_passes_on_the_reference_engine(monkeypatch) -> None:
-    """The fast engine is a re-implementation; the reference one is the judge's."""
+def test_the_reference_engine_agrees_with_the_fast_one_to_the_tick(monkeypatch) -> None:
+    """The fast engine is a re-implementation; the reference one is the judge's.
+
+    Comparing tick counts rather than just re-asserting "passed" does two jobs:
+    it is a much sharper statement than agreement on the output, and a run that
+    silently fell back to the fast engine would return the identical object for
+    a reason that has nothing to do with the machine being right.
+    """
+    fast = optimize.verify(GRID, PROBLEM)
     monkeypatch.setenv("LM_VALIDATOR", "reference")
-    res = optimize.verify(GRID, PROBLEM)
-    failed = [(c.name, c.detail) for c in res.cases if not c.passed]
+    ref = optimize.verify(GRID, PROBLEM)
+    failed = [(c.name, c.detail) for c in ref.cases if not c.passed]
     assert not failed, failed
-    assert len(res.cases) == 7
+    assert len(ref.cases) == 7
+    assert [(c.name, c.ticks) for c in ref.cases] == \
+           [(c.name, c.ticks) for c in fast.cases]
 
 
 @pytest.mark.slow
@@ -227,11 +244,36 @@ def test_the_score_is_reported_against_the_build_it_replaces() -> None:
     assert s.score < CPU_SCORE / 20, f"{s.width}x{s.height} scored {s.score:.3g}"
 
 
-# ── the sixteen semantic gates, against the grid ─────────────────────────────
+# ── the semantic gates, against the grid ─────────────────────────────────────
 #
 # `test_gradebook_cfg.py` runs these against the op model.  Passing there says
 # the *program* is right; it says nothing about whether this grid is that
-# program.  Re-run as a synthetic problem so the real engine answers them.
+# program, and gradebook's own first submission scored 19/20 on a private case
+# after passing 7/7 public.  So they are re-run here as a synthetic problem, and
+# the real engine answers them off the real grid.
+#
+# Thirteen behaviours; some need more than one roster to pin down, so there are
+# more cases than gates.  Every case names the gate it belongs to, and
+# :func:`test_every_semantic_gate_of_the_cfg_suite_is_here` checks the set
+# against the list rather than against a number somebody typed.
+GATE_NAMES = (
+    "TOP breaks a three-way tie with the smallest id",
+    "TOP on an all-zero subject still names a student",
+    "TOP follows a SET that demotes the leader",
+    "AVG rounds down",
+    "AVG divides by every legal roster size",
+    "every subject of a full-width roster is addressable",
+    "SET emits nothing and GET sees it",
+    "a SET to 0 and to 100 both survive the packing",
+    "AVG is exact when every column is at its maximum",
+    "the id column cannot carry into subject four",
+    "a search that wraps the sentinel still finds its student",
+    "a batch of eight operations is answered in full",
+    "ten rounds of eight operations all land",
+)
+
+
+
 def _roster(students, subjects) -> dict:
     values = [len(students), subjects]
     for rec in students:
@@ -249,8 +291,11 @@ def _batch(ops, expected) -> dict:
 def _gates() -> list[dict]:
     cases: list[dict] = []
 
-    def case(name, *rounds):
-        cases.append({"name": name, "rounds": list(rounds)})
+    def case(gate, *rounds, tag=""):
+        # A case is one *run* of the machine, and a run reads exactly one roster
+        # -- a second one would be read as a batch.  So a gate that needs several
+        # rosters needs several cases, and they carry the gate's name with them.
+        cases.append({"gate": gate, "name": gate + tag, "rounds": list(rounds)})
 
     case("TOP breaks a three-way tie with the smallest id",
          _roster([(5000, 70), (1200, 70), (9999, 70), (3000, 10)], 1),
@@ -265,19 +310,21 @@ def _gates() -> list[dict]:
          _batch([(2, 2000, 1, 5), (4, 1)], (7000,)))
     for grades, want in (((1, 2, 3, 3), 2), ((0, 0, 0, 1), 0),
                          ((100, 100, 100, 100), 100), ((99, 100, 100, 100), 99)):
-        case(f"AVG rounds down {grades} -> {want}",
+        case("AVG rounds down",
              _roster([(4001 + i, g) for i, g in enumerate(grades)], 1),
-             _batch([(3, 1)], (want,)))
-    case("AVG divides by every legal roster size",
-         *[r for n in range(4, 17)
-           for r in (_roster([(1000 + i, i + 1) for i in range(n)], 1),
-                     _batch([(3, 1)], ((n + 1) // 2,)))])
+             _batch([(3, 1)], (want,)), tag=f" {grades} -> {want}")
+    for n in range(4, 17):
+        # `N` is the ring's own sentinel *and* AVG's divisor, so every roster
+        # size the rules allow is a different division.
+        case("AVG divides by every legal roster size",
+             _roster([(1000 + i, i + 1) for i in range(n)], 1),
+             _batch([(3, 1)], ((n + 1) // 2,)), tag=f", N={n}")
     for k in range(1, 5):
         students = [(2000 + i, *[10 * (s + 1) + i for s in range(k)]) for i in range(4)]
         ops = [(1, 2000 + i, s + 1) for i in range(4) for s in range(k)]
         want = [10 * (s + 1) + i for i in range(4) for s in range(k)]
-        case(f"every subject of a K={k} roster is addressable",
-             _roster(students, k), _batch(ops, want))
+        case("every subject of a full-width roster is addressable",
+             _roster(students, k), _batch(ops, want), tag=f", K={k}")
     case("SET emits nothing and GET sees it",
          _roster([(1111, 1, 2), (2222, 3, 4), (3333, 5, 6), (4444, 7, 8)], 2),
          _batch([(2, 3333, 2, 42)], ()),
@@ -318,8 +365,10 @@ def _gates() -> list[dict]:
 GATES = _gates()
 
 
-def test_there_really_are_sixteen_gates() -> None:
-    assert len(GATES) == 16
+def test_every_semantic_gate_of_the_cfg_suite_is_here() -> None:
+    """The gates are named, not counted: a dropped one has to show up as a name."""
+    assert list(dict.fromkeys(g["gate"] for g in GATES)) == list(GATE_NAMES)
+    assert len(GATES) == 31, "thirteen gates, thirty-one runs of the machine"
 
 
 @pytest.mark.slow

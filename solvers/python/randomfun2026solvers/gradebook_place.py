@@ -37,7 +37,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from randomfun2026solvers import blockplace as B
-from randomfun2026solvers.blockorder import anneal, edges_of
 from randomfun2026solvers.circuit import Collision
 from randomfun2026solvers.gradebook_cfg import WORKER
 from randomfun2026solvers.lllm_layout import Geometry, block_order
@@ -305,7 +304,7 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0
 
     room = build_room(banks, zones, order, home, seed)
     walked_cells_all_hold_a_glyph(room)
-    geo, bk = layout(banks, zones)
+    geo, _banks = layout(banks, zones)
     iw, ih = geo.iw, room.height
     wx, wy = 1, BAND_H + 1
     g = Circuit(wx + iw + 1, wy + ih + 1)
@@ -330,7 +329,6 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0
         return pipe(g, legs, into=into)
 
     for z in zones:
-        band = bk[f"{z}:{z}"]
         cin, cout = wx + geo.pipe_in[z], wx + geo.pipe_out[z]
         if z == "IO":
             # No turnaround: `ri` drains the input room and `so` fills the output
