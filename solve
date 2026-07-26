@@ -61,11 +61,8 @@ case "$solver" in
     fi
     exec python3 -m randomfun2026solvers.cli "$@"
     ;;
-  swift-smoke | swift-*)
-    exec swift run --package-path "$ROOT_DIR/solvers/swift" SwiftSolver -- "$@"
-    ;;
   *)
-    echo "unknown solver '$solver'; known solvers: shell-smoke, sudoku, probe, swift-smoke" >&2
+    echo "unknown solver '$solver'; known solvers: shell-smoke, sudoku, probe" >&2
     exit 2
     ;;
 esac

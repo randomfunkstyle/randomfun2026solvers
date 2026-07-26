@@ -95,6 +95,7 @@ from typing import TYPE_CHECKING
 from . import rom as rommod
 from .asm import Program
 from .isa import TARGET_SEMS, Isa, Micro, Sem
+from .routing import RouteBox, RouteError, constrained_route
 
 if TYPE_CHECKING:  # the tape block's own canvas; imported lazily at run time
     from ..circuit import Circuit
@@ -1609,6 +1610,10 @@ class Machine:
     #: Pipe lengths for the serial routes whose latency is paid on every
     #: instruction or STORE access.
     route_lengths: dict[str, int] = field(default_factory=dict)
+    #: Opt-in constraint placement metadata. The first compactable block is STORE;
+    #: fixed blocks remain at their normal coordinates.
+    compact: bool = False
+    store_offset: tuple[int, int] = (0, 0)
     #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
     #: the only thing that knows what any cell *means* — the grid carries no
     #: comments — so it records that here for ``man_debug`` overlays and for
@@ -1676,6 +1681,7 @@ class Machine:
     def report(self) -> str:
         panel = f", LM-75 {self.display[0]}x{self.display[1]}" if self.display else ""
         stream = f", stream_pad={self.stream_pad}" if self.stream else ""
+        placement = f", compact store_dy={self.store_offset[1]}" if self.compact else ""
         routes = (
             ", routes "
             + " ".join(
@@ -1689,6 +1695,7 @@ class Machine:
             f"footprint {self.footprint}, {len(self.plan.number)} opcodes "
             f"(depth {self.plan.k}), P={self.program.P} words on {self.rom_rows} ROM rows, "
             f"tape N={self.tape_n}, mem_pad={self.mem_pad}{stream}{panel}{routes}"
+            f"{placement}"
         )
 
 
@@ -1713,6 +1720,7 @@ def build(
     store: str = "tape",
     middle_order: Sequence[str] | None = None,
     rom_buffer: int | None = None,
+    compact: bool = False,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -1749,6 +1757,11 @@ def build(
     tokens instead of one padded fixed width, which roughly halves it. Pass ``False``
     for the original fixed-width fold; the word stream is identical either way, so it
     is purely a size/speed choice.
+
+    ``compact`` is deliberately opt-in while constraint placement is young. It
+    anchors every ordinary block, declares STORE vertically movable inside the
+    baseline bounding box, reroutes only STORE's request/response connections, and
+    minimizes footprint followed by total serial-pipe length.
     """
     # Checked here rather than in ``_assemble``, which the pad search calls up to 40
     # times while *catching* MachineError — so a typo'd tier came back as whichever
@@ -1797,6 +1810,7 @@ def build(
                     short_return,
                     store,
                     rom_buffer,
+                    False,
                 )
             except MachineError as exc:
                 last = exc
@@ -1810,6 +1824,58 @@ def build(
                 best = m
     if best is None:
         raise MachineError(f"no pad pair makes every pipe bind; last: {last}")
+    if compact:
+        # Keep every unlisted block fixed. STORE may move vertically anywhere that
+        # stays inside the baseline bounding box; both connections touching it are
+        # then rerouted from constraints. This is intentionally the first, small
+        # placement search rather than permission to rewrite the whole machine.
+        _tx, tape_y, _tw, tape_h = best.regions["tape"]
+        min_dy = -tape_y
+        max_dy = best.height - (tape_y + tape_h)
+        compact_best: Machine | None = None
+        for store_dy in range(min_dy, max_dy + 1):
+            try:
+                candidate = _assemble(
+                    program,
+                    p,
+                    words,
+                    tape_n,
+                    rom_rows,
+                    best.mem_pad,
+                    display,
+                    stream,
+                    resp_pad,
+                    best.stream_pad,
+                    packed_rom,
+                    short_return,
+                    store,
+                    rom_buffer,
+                    True,
+                    store_dy,
+                )
+            except MachineError:
+                continue
+            # Footprint is the contest objective. Once tied, shorter serial pipes
+            # win, then occupied rectangle area and the smallest displacement.
+            key = (
+                candidate.footprint,
+                sum(candidate.route_lengths.values()),
+                candidate.width * candidate.height,
+                abs(store_dy),
+            )
+            if compact_best is None:
+                compact_best = candidate
+            else:
+                incumbent = (
+                    compact_best.footprint,
+                    sum(compact_best.route_lengths.values()),
+                    compact_best.width * compact_best.height,
+                    abs(compact_best.store_offset[1]),
+                )
+                if key < incumbent:
+                    compact_best = candidate
+        if compact_best is not None:
+            return compact_best
     return best
 
 
@@ -1847,6 +1913,8 @@ def _assemble(
     short_return: bool = True,
     store: str = "tape",
     rom_buffer: int | None = None,
+    compact: bool = False,
+    store_dy: int = 0,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
@@ -1986,25 +2054,51 @@ def _assemble(
             f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
         )
     TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store)
-    TY = CY
+    TY = CY + store_dy
+    if TY < 0:
+        raise MachineError(f"STORE placement leaves the grid: y={TY}")
     g.blit(TX, TY, tape.cells)
 
     # adapter east wall -> the tape's request stub
     tin_x, tin_y = TX + tape.in_cell[0], TY + tape.in_cell[1]
     ax_out = AX + ADAPTER_W + 2
     mid = ax_out + 2
-    route_lengths["adapter->store"] = g.draw_pipe(
-        [
-            (ax_out, AY + ADAPTER_OUT_ROW),
-            (mid, AY + ADAPTER_OUT_ROW),
-            (mid, tin_y),
-            (tin_x - 1, tin_y),
-        ]
-    )
+    adapter_out = (ax_out, AY + ADAPTER_OUT_ROW)
+    store_in = (tin_x - 1, tin_y)
+    if compact:
+        try:
+            store_request = constrained_route(
+                adapter_out,
+                store_in,
+                box=RouteBox(
+                    left=min(adapter_out[0], store_in[0]),
+                    top=min(adapter_out[1], store_in[1]),
+                    right=max(adapter_out[0], store_in[0]),
+                    bottom=max(adapter_out[1], store_in[1]),
+                ),
+                blocked=g.c,
+                start_direction=(1, 0),
+                end_direction=(1, 0),
+            )
+        except RouteError as exc:
+            raise MachineError(f"cannot compact STORE request route: {exc}") from exc
+        route_lengths["adapter->store"] = g.draw_pipe(store_request)
+    else:
+        route_lengths["adapter->store"] = g.draw_pipe(
+            [
+                adapter_out,
+                (mid, AY + ADAPTER_OUT_ROW),
+                (mid, tin_y),
+                store_in,
+            ]
+        )
 
-    # The tape's response stub -> CPU east wall. It only climbs above the three
-    # attachment rows before running west; routing above the whole CPU was a large
-    # detour paid on every read.
+    # The tape's response stub -> CPU east wall. The default preserves the shipped
+    # waypoint route byte-for-byte. ``compact`` instead states the real geometry:
+    # stay in the corridor above the three attachments, avoid every occupied cell,
+    # enter the CPU from the east, and use the fewest cells. That distinction is
+    # what lets placement become constraint-driven later without baking another
+    # set of coordinates into this connection.
     tout_x, tout_y = TX + tape.out_cell[0], TY + tape.out_cell[1]
     resp_row = CY + cpu.mem_in_row
     top = min(AY, tout_y, resp_row) - MEM_RESPONSE_CLEARANCE
@@ -2012,20 +2106,49 @@ def _assemble(
     # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
     # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
     # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
-    jog = (
-        [(tout_x, top), (tout_x + resp_pad, top), (tout_x + resp_pad, top - 1)]
-        if resp_pad
-        else [(tout_x, top)]
-    )
-    route_lengths["store->cpu"] = g.draw_pipe(
-        [
-            (tout_x, tout_y - 1),
-            *jog,
-            (CX + W + 3, top - (1 if resp_pad else 0)),
-            (CX + W + 3, resp_row),
-            (CX + W + 2, resp_row),
-        ]
-    )
+    if compact:
+        start = (tout_x, tout_y - 1)
+        end = (CX + W + 2, resp_row)
+        box = RouteBox(
+            left=min(start[0], end[0]),
+            top=max(0, top - (1 if resp_pad else 0)),
+            right=max(start[0], end[0] + 1),
+            bottom=max(start[1], end[1]),
+        )
+        try:
+            shortest = constrained_route(
+                start,
+                end,
+                box=box,
+                blocked=g.c,
+                end_direction=(-1, 0),
+            )
+            response_route = constrained_route(
+                start,
+                end,
+                box=box,
+                blocked=g.c,
+                min_cells=len(shortest) + 2 * resp_pad,
+                end_direction=(-1, 0),
+            )
+        except RouteError as exc:
+            raise MachineError(f"cannot compact STORE response route: {exc}") from exc
+        route_lengths["store->cpu"] = g.draw_pipe(response_route)
+    else:
+        jog = (
+            [(tout_x, top), (tout_x + resp_pad, top), (tout_x + resp_pad, top - 1)]
+            if resp_pad
+            else [(tout_x, top)]
+        )
+        route_lengths["store->cpu"] = g.draw_pipe(
+            [
+                (tout_x, tout_y - 1),
+                *jog,
+                (CX + W + 3, top - (1 if resp_pad else 0)),
+                (CX + W + 3, resp_row),
+                (CX + W + 2, resp_row),
+            ]
+        )
 
     # ── the LM-75, below the CPU ─────────────────────────────────────────────
     dsp_touches = (
@@ -2130,6 +2253,8 @@ def _assemble(
         stream=blk,
         rom_capacity=rom_capacity,
         route_lengths=route_lengths,
+        compact=compact,
+        store_offset=(0, store_dy),
     )
 
 
@@ -2572,13 +2697,14 @@ def display_for(slug: str) -> tuple[int, int] | None:
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
 
-def build_for(slug: str, *, store: str = "tape") -> Machine:
+def build_for(slug: str, *, store: str = "tape", compact: bool = False) -> Machine:
     """Generate the machine for a checked-in task program.
 
     Everything not derivable from the ``.asm`` comes from the registry above, except
     the panel size, which comes from the problem JSON: a display-judged problem
     requires *exactly one* display at the stated resolution, so it is not a free
-    variable the generator may shrink.
+    variable the generator may shrink. Pass ``compact=True`` for the opt-in
+    constraint-placement pass; default generation remains the checked-in layout.
     """
     from . import programs
 
@@ -2593,6 +2719,7 @@ def build_for(slug: str, *, store: str = "tape") -> Machine:
         store=store,
         middle_order=LANE_ORDER.get(slug),
         rom_buffer=ROM_BUFFER.get(slug),
+        compact=compact,
     )
 
 
@@ -2609,9 +2736,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--html", type=_Path, help="write a labelled debug overlay here")
     ap.add_argument("--json", type=_Path, help="write the debug region sidecar here")
     ap.add_argument("--report", action="store_true", help="print the size report to stderr")
+    ap.add_argument(
+        "--compact",
+        action="store_true",
+        help="use opt-in constraint routing for movable/compactable connections",
+    )
     args = ap.parse_args(argv)
 
-    m = build_for(args.slug)
+    m = build_for(args.slug, compact=args.compact)
     if args.report:
         import sys as _sys
 

@@ -1,0 +1,16 @@
+# pathfinder — submission 7b4c3031-db6e-4f0e-a13f-e2cf62bf0f4b
+
+verdict      done: 18/18 cases, area2 30625, avgTicks 361,651, score 11,075,560,174
+submitted    2026-07-26T15:43:14+0300
+grid         84x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  adbf664267490b182c57a568ada1c76fccd17c65c529e1537fbe2d053f87e31e
+commit       208b494
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 2/10: widen both F/G turnaround relays from 6 to 8 interior columns. Box stays 84x175; both validators pass 7/7; local score 8,479,546,250 versus 8,490,864,375.

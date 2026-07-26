@@ -145,8 +145,8 @@ __all__ = [
 #: each own a column; 48 leaves eight spare.
 BAND_W = 12
 #: West-channel columns.  Every wire runs here; the widest row of the block
-#: graph has ten live wires crossing it, so this is that plus slack.
-NCHW = 13
+#: graph has ten live wires crossing it, plus the shared entry column.
+NCHW = 11
 CODEW = 4 * BAND_W
 IW = NCHW + CODEW
 #: First code column, and the last one.
@@ -694,8 +694,10 @@ def _check_order(succ: dict[str, object]) -> None:
 
 # ── the north band and the whole grid ─────────────────────────────────────────
 #: Relay interiors.  The ring's is wider because it turns 18 words a lap: 14
-#: gives 11 ``r``/``s`` pairs per 28-cell walking cycle, 2.55 ticks a word.
-RING_RELAY_W, AUX_RELAY_W = 14, 6
+#: gives 13 ``r``/``s`` pairs per 32-cell walking cycle, 2.46 ticks a word.
+#: Sixteen is the widest relay that fits before the G room without moving any
+#: anchor or widening the scored box.
+RING_RELAY_W, AUX_RELAY_W = 16, 10
 #: Rows the relay rooms occupy (top wall .. bottom wall).  All three sit flush
 #: at the top of the band, which is only eight rows deep in total: the band is
 #: pure overhead on a dimension that gets squared, so the ring buys its 20 cells
