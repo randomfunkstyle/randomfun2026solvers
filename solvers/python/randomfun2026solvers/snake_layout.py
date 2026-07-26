@@ -185,6 +185,64 @@ def _bands(worker, order: list[str], plans: dict[str, Plan]) -> tuple[dict[str, 
     return bands, y
 
 
+# ── block order ───────────────────────────────────────────────────────────────
+#
+# A corridor's *length is a tick cost*, paid every time the edge is taken, and
+# with 44 blocks stacked one to a band the vertical leg is most of it — a walk
+# from `M_CMP` to `M_KEEP` cost 23 rows each way under depth-first order, twice
+# per body cell.  So the order is chosen by descending on the total corridor
+# length rather than by walking the graph.
+#
+# The objective is **unweighted**: every CFG edge counts once.  A profile taken
+# from the public cases scores better on paper and measured *worse* on the
+# engine (17.7k ticks against 15.8k), because weighting collapses the cold death
+# paths onto the hot loop and lengthens the corridors that carry it.
+ORDER_STEPS = 30_000
+ORDER_SEED = 7
+
+
+def _metrics(worker, plans: dict[str, Plan]) -> dict[str, tuple[int, int, dict[str, int]]]:
+    """Per block: how many rows it needs, and where its rows sit inside them."""
+    out: dict[str, tuple[int, int, dict[str, int]]] = {}
+    for name, p in plans.items():
+        band, height = _bands(worker, [name], {name: p})
+        out[name] = (height, band[name].ys[0], band[name].lanes)
+    return out
+
+
+def tuned_order(worker, plans: dict[str, Plan], base: list[str]) -> list[str]:
+    """Shuffle blocks, keeping the entry first, to shorten every corridor."""
+    import random
+
+    metric = _metrics(worker, plans)
+    lanes = {n: [(metric[n][2][k], t) for k, t in _lanes_of(worker, n, plans[n])]
+             for n in base}
+
+    def cost(order: list[str]) -> int:
+        y, top = {}, 0
+        for name in order:
+            y[name] = top
+            top += metric[name][0]
+        return sum(abs(y[t] + metric[t][1] - y[n] - off)
+                   for n in order for off, t in lanes[n])
+
+    rng = random.Random(ORDER_SEED)
+    best = cur = list(base)
+    best_c = cur_c = cost(cur)
+    for _ in range(ORDER_STEPS):
+        i, j = rng.randrange(1, len(cur)), rng.randrange(1, len(cur))
+        if i == j:
+            continue
+        cand = list(cur)
+        cand.insert(j, cand.pop(i))
+        c = cost(cand)
+        if c <= cur_c:                     # plateau moves keep it from sticking
+            cur, cur_c = cand, c
+            if c < best_c:
+                best, best_c = list(cand), c
+    return best
+
+
 def _exit_col(plan: Plan, kind: str) -> int:
     """The column a lane leaves the code from."""
     if kind == "straight":
@@ -264,7 +322,10 @@ def build_room(worker=WORKER_L, code_w: int = 34, entry: str = "INIT",
     chosen = order
     for nch in range(4, 25):
         geo = geometry(nch, code_w)
-        order = chosen or block_order(worker, entry)
+        if chosen is None:
+            base = block_order(worker, entry)
+            chosen = tuned_order(worker, plan_blocks(base, worker, geo), base)
+        order = chosen
         plans = plan_blocks(order, worker, geo)
         bands, ih = _bands(worker, order, plans)
         glyph_ys = {n: b.ys for n, b in bands.items()}
@@ -335,7 +396,7 @@ RELAY_X, RELAY_Y = 4, 0
 RING_MIN = 14        # the ring holds 12 words at rest; leave real slack
 
 
-def build_grid(code_w: int = 34) -> tuple[list[str], DebugMap, dict[str, object]]:
+def build_grid(code_w: int = 34, order: list[str] | None = None) -> tuple[list[str], DebugMap, dict[str, object]]:
     """Worker + ring + input + the proven painter/LM-75 harness, as one grid."""
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.plotter_block import pipe
@@ -349,7 +410,7 @@ def build_grid(code_w: int = 34) -> tuple[list[str], DebugMap, dict[str, object]
     )
     from randomfun2026solvers.value_ring import stamp, walls
 
-    room = build_room(code_w=code_w)
+    room = build_room(code_w=code_w, order=order)
     geo, iw, ih = room.geo, room.geo.iw, room.circuit.h
     col = {k: WX + v for k, v in
            {**geo.pipe_in, **{f"out_{k}": v for k, v in geo.pipe_out.items()}}.items()}
