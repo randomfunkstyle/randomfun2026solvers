@@ -330,7 +330,14 @@ def block_zones(worker, name: str, token_zone: dict[str, str]) -> set[str]:
 
 # ── one block's rows and exits ────────────────────────────────────────────────
 def lanes_of(worker, name: str, plan):
-    """(lane kind, target) for every edge leaving a block, in glyph order."""
+    """(lane kind, target) for every edge leaving a block, in glyph order.
+
+    A branch lane the CFG omits is not routed.  `matmul` proves by simulation
+    that three of its lanes can never be taken -- each tests a counter that is
+    stepped down to zero and stops there -- and drops them from the successor
+    dict.  Routing one costs corridor cells and, worse, the row a turning lane
+    reserves under the branch glyph, for an edge no man ever walks.
+    """
     from randomfun2026solvers.lllm_layout import _straight_key, _turn_keys
 
     succ = worker[name][1]
@@ -338,10 +345,11 @@ def lanes_of(worker, name: str, plan):
         return [("straight", succ)]
     out = []
     key = _straight_key(plan.branch)
-    if key is not None:
+    if key is not None and succ.get(key) is not None:
         out.append(("straight", succ[key]))
     for lane, turn in _turn_keys(plan.branch).items():
-        out.append((turn, succ[lane]))
+        if succ.get(lane) is not None:
+            out.append((turn, succ[lane]))
     return out
 
 
@@ -469,21 +477,36 @@ class RowMap:
 
 
 def pack(worker, order: list[str], plans, assign: dict[str, Bank],
-         *, hints: dict[str, str] | None = None) -> tuple[dict[str, Placed], int]:
+         *, hints: dict[str, str] | None = None,
+         lookback: int | None = None) -> tuple[dict[str, Placed], int]:
     """Give every block the topmost rows its columns are free on.
 
     `hints` names, per block, the block that reaches it: the search starts at
     that block's row rather than at the top of the room, so a corridor stays as
     short as the packing allows.  Corridor length is tick count, and a placer
     that only minimised height would spend every row it saved on the walk.
+
+    `lookback` bounds how far above the *previous block in the order* a block
+    may float: `None` is topmost-fit, `0` is strictly monotone, `k` lets a block
+    rise `k` rows to share a row with a neighbour it was laid near.
+
+    Topmost-fit is fine when the banks are few and wide, because a block that
+    does not fit beside its neighbours is pushed down anyway.  It is badly wrong
+    when they are many and narrow, which is `matmul`'s case: a one-glyph block
+    always finds row 0 free in *some* bank, so `BL1` landed on row 54 and
+    `BL1_Z`, the block it falls through to, on row 8 -- a 46-row corridor
+    between two adjacent blocks, and the order the anneal chose thrown away.
+    The packing that resulted was six rows shorter and could not be routed at
+    all: nine of its forty-four edges had nowhere left to go.
     """
     rows, out = RowMap(), {}
+    prev = 0
     for name in order:
         bank, plan = assign[name], plans[name]
         offs, claims = _shape(worker, name, plan, bank.entry)
         lo0, hi0 = claims[0][1], claims[0][2]
         claims[0] = (claims[0][0], min(lo0, bank.entry), hi0)
-        start = 0
+        start = 0 if lookback is None else max(0, prev - lookback)
         if hints and (h := hints.get(name)) in out:
             start = max(0, out[h].ys[0])
         y = start
@@ -491,6 +514,7 @@ def pack(worker, order: list[str], plans, assign: dict[str, Bank],
             y += 1
         placed = [(y + o, lo, hi) for o, lo, hi in claims]
         rows.take(placed)
+        prev = y
         ys = [y + o for o in offs]
         out[name] = Placed(name, bank, plan, ys,
                            lane_claims(worker, name, plan, ys, bank.entry))
@@ -641,8 +665,20 @@ def walk_edges(fld: Field, worker, placed: dict[str, Placed]) -> None:
 
 def build(worker, entry: str, banks: dict[str, Bank], base_geo, *,
           order: list[str] | None = None, hints: dict[str, str] | None = None,
-          attempts: int = 24, seed: int = 0) -> Room:
-    """Plan, pack, stamp and route one room.  `banks` maps block name -> bank."""
+          attempts: int = 24, seed: int = 0, pad: int = 0,
+          width: int | None = None, lookback: int | None = None) -> Room:
+    """Plan, pack, stamp and route one room.  `banks` maps block name -> bank.
+
+    `pad` adds rows south of the packing for the router alone.  A room packed to
+    its floor can be unroutable rather than merely expensive: a corridor needs a
+    column that is op-free for its whole drop, and the more banks stand side by
+    side the fewer of those there are.  Rows the router does not reach are
+    trimmed again, so padding costs nothing unless it is used -- and when it is
+    used, it is because there was no room at all without it.
+
+    `width` widens the field east of the last bank, for the same reason in the
+    other direction.
+    """
     from randomfun2026solvers.lllm_layout import block_order, plan_blocks
 
     order = order or block_order(worker, entry)
@@ -673,8 +709,10 @@ def build(worker, entry: str, banks: dict[str, Bank], base_geo, *,
             break
         else:
             raise Collision(f"{name} fits no bank: {why}")
-    placed, height = pack(worker, order, plans, chosen, hints=hints)
-    width = max(b.iw for bs in cands.values() for b in bs)
+    placed, height = pack(worker, order, plans, chosen, hints=hints,
+                          lookback=lookback)
+    height += pad
+    width = max([width or 0] + [b.iw for bs in cands.values() for b in bs])
     fld = Field(width, height)
     stamp(fld, placed, entry)
     edges = route_edges(fld, worker, placed, order, attempts=attempts, seed=seed)
