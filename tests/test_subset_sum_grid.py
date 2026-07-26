@@ -14,10 +14,17 @@ from pathlib import Path
 
 import pytest
 
-from randomfun2026solvers import subset_sum_grid as ssg
-from randomfun2026solvers.subset_sum_mitm import HR, public_cases
+from randomfun2026solvers import scoring, subset_sum_grid as ssg
+from randomfun2026solvers.subset_sum_mitm import HR, expected_output, public_cases
 
 REPO = Path(__file__).resolve().parents[1]
+GRID = REPO / "tasks" / "solutions" / "subset-sum_mitm.man"
+
+#: Engine-measured ceiling: twenty values, all even, an odd target, so no subset
+#: works and every one of the 4096 left masks is tried against all 257 words of
+#: ring B.  The cost of the search does not depend on the input beyond `n`, so
+#: this is the number the cap has to accommodate.
+WORST_CASE_TICKS = 6_329_884
 
 
 def _ring_v(values: list[int], target: int) -> list[int]:
@@ -75,6 +82,25 @@ def test_the_grid_holds_no_backtick() -> None:
     """Every constant is reachable from a digit, so the vertical-pairing load
     error that eats multi-digit literals cannot arise."""
     assert "`" not in "\n".join(ssg.build("load"))
+
+
+def test_checked_in_grid_matches_the_generator() -> None:
+    """A generated grid carries no comments, so drift here is invisible."""
+    assert GRID.read_text(encoding="utf-8") == "\n".join(ssg.build("full")) + "\n"
+
+
+def test_the_search_is_sized_to_the_constraints_not_the_public_cases() -> None:
+    """`hL = n - 8` is the only geometry the machine derives from its input.
+
+    Everything else — 256, the peel width, ring B's length — is a literal, so a
+    twenty-value private case runs the same machine as a ten-value public one,
+    just for more laps.  That is the whole reason for fixing the right half.
+    """
+    assert HR == 8
+    for n in range(10, 21):
+        hl = n - HR
+        assert 2 <= hl <= 12
+        assert (1 << hl) * ((1 << HR) + 1) <= (1 << 20) + (1 << 12)
 
 
 def test_rings_are_longer_than_their_contents() -> None:
@@ -138,3 +164,59 @@ def test_ring_b_holds_every_right_half_sum(tmp_path: Path, case) -> None:
     inp = " ".join(str(v) for v in [len(values), *values, 1000])
     snap = Littleman().tick(grid, 900_000, input=inp)
     assert snap.model_dump()["output"] == _ring_b(values)
+
+
+@pytest.mark.slow
+def test_every_public_case_passes() -> None:
+    """`littleman-validate` uses a 5,000,000 default cap whatever the problem;
+    `score_program` reads the real 15,000,000 out of the problem JSON, which is
+    the difference between a false step-cap failure and the truth."""
+    res = scoring.score_program(GRID, "subset-sum")
+    assert len(res.cases) == 7
+    assert max(c.ticks for c in res.cases) < 15_000_000
+
+
+@pytest.mark.slow
+def test_the_worst_case_fits_the_cap_with_room() -> None:
+    """The search cost is flat in the input, so the ceiling is measurable.
+
+    All values even and the target odd is unsatisfiable while staying inside
+    `1 <= v <= 99999` and `t` between 10% and 60% of the sum, so phase 2 runs to
+    exhaustion: every left mask, every scan to the sentinel.  Nothing an input
+    can do costs more than this.
+    """
+    adv = [2 * (12345 + 3719 * i % 40000) for i in range(20)]
+    case = {
+        "name": "adversarial n=20, no solution",
+        "rounds": [{"in": [str(len(adv)), *map(str, adv), str(sum(adv) // 3 | 1)],
+                    "out": ["0"]}],
+    }
+    prob = {"slug": "subset-sum", "scoring": "footprint-tick",
+            "tickCap": 15_000_000, "publicTestData": [case]}
+    res = scoring.score_program(GRID, prob)
+    assert res.cases[0].ticks == WORST_CASE_TICKS
+    assert res.cases[0].ticks * 2 < 15_000_000
+
+
+@pytest.mark.slow
+def test_random_inputs_inside_the_constraints() -> None:
+    """The private cases are where this problem was being failed, so sample the
+    stated constraints rather than the seven public shapes."""
+    import random
+
+    rng = random.Random(20260726)
+    cases = []
+    for i in range(12):
+        n = rng.randint(10, 20)
+        vals = [rng.randint(1, 99999) for _ in range(n)]
+        tot = sum(vals)
+        t = rng.randint(max(101, tot // 10), min(999_999, 3 * tot // 5))
+        cases.append({
+            "name": f"random n={n} #{i}",
+            "rounds": [{"in": [str(n), *map(str, vals), str(t)],
+                        "out": [str(v) for v in expected_output(vals, t)]}],
+        })
+    prob = {"slug": "subset-sum", "scoring": "footprint-tick",
+            "tickCap": 15_000_000, "publicTestData": cases}
+    res = scoring.score_program(GRID, prob)
+    assert max(c.ticks for c in res.cases) < 15_000_000
