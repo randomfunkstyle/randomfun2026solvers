@@ -71,15 +71,16 @@ class Geometry:
         return sum(self.recv_w.values())
 
 
-#: Found by :mod:`randomfun2026solvers.matmul_geom_search`; see that module for
-#: the objective (walked rows first, then walked cells weighted by how often the
-#: block runs).  The two orders differ, which is the whole point of splitting
-#: them: `MAC` reads `s`, `b`, `c` in that order and sends them back in the same
-#: order, so its receive columns and its send columns interleave.
-_W = {"q": 9, "s": 11, "k": 8, "b": 10, "c": 7, "io": 7, "x": 8}
+#: Found by :mod:`randomfun2026solvers.matmul_geom_search`, whose objective is
+#: the contest's own -- ``max(w, h)^2 * ticks`` -- rather than the room's height.
+#: `s`, `b`, `c` come out adjacent and as narrow as the rule allows, because
+#: ``MAC`` reads them in that order 1,536 times at full size and the man walks
+#: every blank between two bands: the hot loop's cost is the *spread* of the
+#: three, not the twelve glyphs it executes.
+_W = {"q": 8, "k": 10, "io": 7, "s": 7, "b": 7, "c": 7, "x": 8}
 GEOMETRY = Geometry(
-    recv_order=("q", "s", "k", "b", "c", "io", "x"),
-    send_order=("q", "s", "k", "b", "c", "io", "x"),
+    recv_order=("q", "k", "io", "s", "b", "c", "x"),
+    send_order=("q", "k", "io", "s", "b", "c", "x"),
     recv_w=_W,
     send_w=dict(_W),
 )
@@ -314,6 +315,25 @@ class Pen:
         if not self.row.east:
             self.wrap()
 
+    def restart_east(self, target: int, need: int) -> None:
+        """Begin a fresh east-walked row at or west of `target`, `need` columns wide.
+
+        Wrapping alone cannot do this: a wrap keeps the column, and a block that
+        has to start back at its first band would find the band behind the pen.
+        Turning west first and walking back through blanks is what puts the pen
+        where the next row can start.
+        """
+        if target + need > self.b.x1:
+            raise Collision(f"a row of {need} columns does not fit from {target}")
+        for _ in range(3):
+            if self.row.east:
+                self.wrap()
+                continue
+            self.x = min(self.x, target - 1)
+            self.wrap()
+            return
+        raise Collision("cannot restart a row heading east")
+
     def literal_span(self, digits: str) -> int:
         """Exactly how many cells `` `ddd` `` will take from here, skips included."""
         x, n = self.x, 0
@@ -397,10 +417,8 @@ def chains_of() -> list[Chain]:
     link: dict[str, str] = {}
     taken: set[str] = set()
     for name in LAID:
-        if name in SELF_LOOPS:
-            continue                          # its own chain: the loop closes on its entry
         tgt = fallthrough(name)
-        if tgt and tgt not in SELF_LOOPS and preds[tgt] == 1 and tgt not in taken:
+        if tgt and preds[tgt] == 1 and tgt not in taken:
             link[name] = tgt
             taken.add(tgt)
 
@@ -443,6 +461,19 @@ def flatten(chain: Chain) -> list[Item]:
     return out
 
 
+def _solo_span(name: str, bands: Bands) -> tuple[int, int]:
+    """Where a block starts, and how wide it is, laid alone on an east row."""
+    pen = Pen(bands, set(), bands.x0, east=True)
+    for it in flatten(Chain([name])):
+        if it.band is not None:
+            pen.seek(it.band, it.send)
+        pen.put(it.payload)
+    if len(pen.rows) > 1:
+        raise Collision(f"{name} cannot be laid on one row")
+    at = pen.rows[0].cells[0][0]
+    return at, pen.x - at
+
+
 def plan_chain(chain: Chain, bands: Bands, backticks: set[int]) -> None:
     """Lay the chain's glyphs into walked rows, in place."""
     flat = flatten(chain)
@@ -451,6 +482,17 @@ def plan_chain(chain: Chain, bands: Bands, backticks: set[int]) -> None:
     pen = Pen(bands, backticks, start, east=True)
 
     for i, it in enumerate(flat):
+        if it.block in SELF_LOOPS and it.block not in chain.start_at:
+            # The loop's return leg comes up the column just west of the block's
+            # first glyph and turns east there, so that cell has to be free and
+            # the whole block has to fit on one east-walked row.  A `>` in an
+            # east walk is a no-op to the man already going east, which is why a
+            # self-loop can sit inside a chain at all -- and keeping `MAC` inside
+            # its chain is worth a fifth of the ticks.
+            at, wide = _solo_span(it.block, bands)
+            pen.restart_east(at - 1, wide + 2)
+            if pen.row.cells:
+                pen.x += pen.step             # the gap the return leg turns in
         if it.band is not None:
             pen.seek(it.band, it.send)
         else:
@@ -576,6 +618,8 @@ def assign_channels(lanes: list[Lane], entry_y: dict[str, int]) -> int:
     """Colour the vertical corridors: one margin column per overlapping group."""
     spans: list[list[tuple[int, int]]] = []
     for lane in lanes:
+        if lane.kind == "loop":
+            continue                          # closes on its own row; no corridor
         lo, hi = sorted((lane.row, entry_y[lane.target]))
         for ch, taken in enumerate(spans):
             if all(hi + 1 < a or b + 1 < lo for a, b in taken):
@@ -615,21 +659,28 @@ def _walk(c: Circuit, y: int, x_from: int, x_to: int, glyph: str) -> None:
 
 
 def build_room(p: Plan | None = None) -> Room:
-    """Draw the whole worker: glyphs, wrap links, lanes and channels."""
+    """Draw the whole worker: glyphs, wrap links, lanes and corridors."""
     p = p or plan()
     lanes, entry_y, ih = assign_rows(p.chains)
-    channels = assign_channels(lanes, entry_y)
-    # One spare column between the corridors and the code: a chain whose first
-    # glyph sits in column 0 puts its entry cell one to the west of it.
-    margin = channels + 1
+    # The west margin is sized so that *every* lane could take a corridor of its
+    # own there; the router below almost never needs one, but a long span over a
+    # busy room has no clear column inside the code and must have a fallback.
+    margin = assign_channels(lanes, entry_y) + 1
     iw = margin + p.bands.x1 + 1
     c = Circuit(iw, ih)
 
-    entry_x = {ch.blocks[0]: ch.entry_col + margin - 1 for ch in p.chains}
+    turns: set[tuple[int, int]] = set()       # cells a walk turns in
+    vert: set[tuple[int, int]] = set()        # cells a walk crosses north-south
+    first_x: dict[str, int] = {}
+    first_y: dict[str, int] = {}
+    for chain in p.chains:
+        for name, (ri, col) in chain.start_at.items():
+            first_x[name] = col + margin
+            first_y[name] = chain.rows[ri].y
 
     for i, chain in enumerate(p.chains):
         head = chain.blocks[0]
-        c.set(entry_x[head], entry_y[head], "@" if i == 0 else ">")
+        c.set(first_x[head] - 1, entry_y[head], "@" if i == 0 else ">")
         for j, row in enumerate(chain.rows):
             for col, glyph in row.cells:
                 c.set(col + margin, row.y, glyph)
@@ -638,44 +689,209 @@ def build_room(p: Plan | None = None) -> Room:
                 c.set(row.end + margin, row.y, "v")
                 for yy in range(row.y + 1, nxt.y):
                     c.set(row.end + margin, yy, " ")
+                    vert.add((row.end + margin, yy))
                 c.set(row.end + margin, nxt.y, ">" if nxt.east else "<")
+                turns.update({(row.end + margin, row.y),
+                              (row.end + margin, nxt.y)})
 
-    for lane in lanes:
+    def clear(y: int, x_from: int, x_to: int) -> bool:
+        """Can a corridor walk this row from `x_from` to `x_to`?
+
+        A turn glyph already pointing the way we are walking is a merge, not a
+        collision -- two lanes into the same entry share the last stretch of it.
+        """
+        step = 1 if x_to > x_from else -1
+        glyph = ">" if step > 0 else "<"
+        return all(c.get(x, y) in (" ", glyph) for x in range(x_from + step, x_to, step))
+
+    def free_col(x: int, y0: int, y1: int) -> bool:
+        """Can a corridor run down this column between the two rows?
+
+        Two walks may **cross** at a blank -- one going north, one going east --
+        but they may not share it lengthwise, and neither may turn where the
+        other passes.  A cell that is walked and holds no glyph is invisible to
+        every other check, so both sets are tracked explicitly.
+        """
+        step = 1 if y1 > y0 else -1
+        return all(c.free(x, yy) and (x, yy) not in turns and (x, yy) not in vert
+                   for yy in range(y0 + step, y1, step))
+
+    def spare(x: int, y: int) -> bool:
+        return c.free(x, y) and (x, y) not in vert
+
+    # Where each lane leaves from, drawn *before* any corridor is routed: a
+    # straight lane's drop to its own lane row occupies a column for a row or
+    # two, and a corridor that took that column first would be crossed by it
+    # without either check noticing.
+    starts: dict[int, tuple[int, bool]] = {}
+    for i, lane in enumerate(lanes):
         chain = next(ch for ch in p.chains if lane.src in ch.blocks)
         last = chain.rows[-1]
+        if lane.kind == "loop":
+            starts[i] = (lane.col + margin, True)
+            continue
         if lane.kind == "straight" and not last.east:
-            start = lane.col + margin          # already walking west; no turn needed
-        elif lane.kind == "straight":
+            starts[i] = (lane.col + margin, False)
+            continue
+        if lane.kind == "straight":
             start = last.end + margin
             c.set(start, last.y, "v")
             for yy in range(last.y + 1, lane.row):
+                if not spare(start, yy):
+                    raise Collision(f"{lane.src}: the drop to its lane row is busy")
                 c.set(start, yy, " ")
-            c.set(start, lane.row, "<")
-        else:                                  # a branch's clockwise lane
-            start = lane.col + margin
-            c.set(start, lane.row, "<")
+                vert.add((start, yy))
+            turns.add((start, last.y))
+            starts[i] = (start, True)
+        else:
+            starts[i] = (lane.col + margin, True)
 
-        target_y = entry_y[lane.target]
-        stop = entry_x[lane.target] if lane.kind == "loop" else lane.channel
-        _walk(c, lane.row, start, stop, "<")
+    for i, lane in enumerate(lanes):
+        chain = next(ch for ch in p.chains if lane.src in ch.blocks)
+        last = chain.rows[-1]
+        start, always = starts[i]
         if lane.kind == "loop":
-            # The return leg merges into the block's own entry cell from below,
-            # so a self-loop costs one turn and the walk back -- not a corridor.
+            # The return leg walks back along the row below and turns up into the
+            # cell just west of the block's own first glyph, which the pen left
+            # blank for it: a self-loop costs a turn and the walk back, not a
+            # corridor, and it is the only reason `MAC` can sit inside a chain.
+            stop, home = first_x[lane.src] - 1, first_y[lane.src]
+            c.set(lane.col + margin, lane.row, "<")
+            _walk(c, lane.row, lane.col + margin, stop, "<")
             c.set(stop, lane.row, "^")
-            for yy in range(target_y + 1, lane.row):
+            for yy in range(home + 1, lane.row):
+                if not spare(stop, yy):
+                    raise Collision(f"{lane.src}: the loop's return column is busy")
                 c.set(stop, yy, " ")
+                vert.add((stop, yy))
+            c.set(stop, home, ">")
+            turns.update({(stop, lane.row), (stop, home)})
             continue
-        c.set(stop, lane.row, "v" if target_y > lane.row else "^")
-        step = 1 if target_y > lane.row else -1
-        for yy in range(lane.row + step, target_y, step):
-            if not c.free(stop, yy):
-                raise Collision(f"channel {stop} blocked at row {yy} "
-                                f"({lane.src}->{lane.target})")
-            c.set(stop, yy, " ")
-        c.set(stop, target_y, ">")
-        _walk(c, target_y, stop, entry_x[lane.target], ">")
+
+        target_y, home = entry_y[lane.target], first_x[lane.target] - 1
+        # A corridor only conflicts with another where one of them *turns*: a
+        # straight run crosses a blank without noticing it.  So the channel is
+        # chosen for shortness, anywhere in the room, and falls back to the west
+        # margin only when the direct columns are taken.
+        best = None
+        for ch in range(iw - 1):
+            # Two corridors may share the cell they both turn east in: they are
+            # merging into the same entry, and a `>` met while already heading
+            # east is a no-op.  Any other collision is refused.
+            if ch == start or not spare(ch, lane.row):
+                continue
+            if not (spare(ch, target_y) or (c.get(ch, target_y) == ">"
+                                            and (ch, target_y) in turns)):
+                continue
+            if not clear(lane.row, start, ch) or not free_col(ch, lane.row, target_y):
+                continue
+            if ch != home and not clear(target_y, ch, home):
+                continue
+            cost = abs(start - ch) + abs(ch - home)
+            if best is None or cost < best[0]:
+                best = (cost, ch)
+        if best is None:
+            import os
+            if os.environ.get("MM_DEBUG"):
+                for ch in range(iw - 1):
+                    why = []
+                    if ch == start: why.append("start")
+                    if not c.free(ch, lane.row): why.append(f"row{lane.row}={c.get(ch,lane.row)!r}")
+                    if not (c.free(ch, target_y) or (c.get(ch, target_y) == ">" and (ch, target_y) in turns)): why.append(f"trow={c.get(ch,target_y)!r}")
+                    if not clear(lane.row, start, ch): why.append("hrun")
+                    if not free_col(ch, lane.row, target_y): why.append("vrun")
+                    if ch != home and not clear(target_y, ch, home): why.append("erun")
+                    print("  ch", ch, why)
+            raise Collision(
+                f"no corridor for {lane.src}->{lane.target}: row {lane.row} "
+                f"col {start} to row {target_y} col {home}")
+        ch = best[1]
+        lane.channel = ch
+        if always or ch > start:
+            c.set(start, lane.row, "<" if ch < start else ">")
+        for yy in range(min(lane.row, target_y) + 1, max(lane.row, target_y)):
+            c.set(ch, yy, " ")
+            vert.add((ch, yy))
+        c.set(ch, lane.row, "v" if target_y > lane.row else "^")
+        c.set(ch, target_y, ">")
+        turns.update({(ch, lane.row), (ch, target_y)})
+        _walk(c, target_y, ch, home, ">")   # merges are legal; _walk allows them
 
     return Room(c, p.bands, p.chains, lanes, entry_y, margin, iw, ih)
+
+
+# ── how often each block and each lane runs ───────────────────────────────────
+def trace(values: list[int]) -> tuple[dict[str, int], dict[tuple[str, str], int], list[int]]:
+    """Run the CFG over one case, counting block entries and lanes taken."""
+    from collections import Counter, deque
+
+    from randomfun2026solvers.matmul_cfg import _BIN
+
+    inp: deque[int] = deque(values)
+    ring = {k: deque() for k in "xbcsqk"}
+    out: list[int] = []
+    a = b = bp = 0
+    runs: Counter[str] = Counter()
+    lanes: Counter[tuple[str, str]] = Counter()
+    block = "HEAD"
+    while True:
+        toks, succ = LAID[block]
+        runs[block] += 1
+        branch = None
+        for t in toks:
+            if t == "H":
+                return dict(runs), dict(lanes), out
+            if t.startswith("L") and t != "L":
+                a = int(t[1:])
+            elif t == "ri":
+                a = inp.popleft()
+            elif t == "so":
+                out.append(a)
+            elif t[0] == "r" and t[1:] in ring:
+                a = ring[t[1:]].popleft()
+            elif t[0] == "s" and t[1:] in ring:
+                ring[t[1:]].append(a)
+            elif t == "M":
+                b = a
+            elif t == "W":
+                a, b = b, a
+            elif t == "N":
+                a = -a
+            elif t == "/":
+                a, b = a // b, a % b
+            elif t == "%":
+                a = a % b if b else 0
+            elif t in _BIN:
+                a = _BIN[t](a, b)
+            elif t == "b":
+                bp = a
+            elif t == "m":
+                bp -= 1
+            elif t == "]":
+                bp >>= 1
+            elif t == "X":
+                branch = "zero" if a == 0 else ("pos" if a > 0 else "neg")
+            elif t == "d":
+                branch = "pos" if bp > 0 else "zero"
+            else:  # pragma: no cover - the token table is closed
+                raise AssertionError(t)
+        lanes[(block, branch or "straight")] += 1
+        block = succ if isinstance(succ, str) else succ[branch]
+
+
+def public_traces() -> list[tuple[dict[str, int], dict[tuple[str, str], int]]]:
+    """Block and lane counts for each of the seven public cases."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    prob = json.loads((root / "tasks/problems/matmul.json").read_text())
+    outs = []
+    for case in prob["publicTestData"]:
+        rnd = case["rounds"][0]
+        runs, lanes, _ = trace([int(v) for v in rnd["in"]])
+        outs.append((runs, lanes))
+    return outs
 
 
 # ── walking the drawn room, to prove it is the CFG ────────────────────────────
@@ -765,6 +981,74 @@ def _glyphs(name: str) -> list[str]:
     return out
 
 
+def walk_costs(room: Room) -> tuple[dict[str, int], dict[tuple[str, str], int]]:
+    """Cells the man walks inside each block, and along each lane out of it.
+
+    The op count is a floor, not a cost: a block's glyphs are spread across the
+    bands its pipe ops belong to, and the man walks every blank in between.  This
+    is what makes the band *spread* -- not the block's length -- the thing that
+    sets the tick count, and why :mod:`matmul_geom_search` prices a geometry by
+    walking it rather than by counting rows.
+    """
+    c = room.circuit
+    start: dict[tuple[int, int], str] = {}
+    for chain in room.chains:
+        for name, (ri, col) in chain.start_at.items():
+            start[(col + room.margin, chain.rows[ri].y)] = name
+
+    def follow(pos: tuple[int, int], d: tuple[int, int]) -> int:
+        for n in range(4 * (room.iw + room.ih)):
+            if pos in start:
+                return n
+            ch = c.get(*pos)
+            if ch in _TURN:
+                d = _TURN[ch]
+            pos = (pos[0] + d[0], pos[1] + d[1])
+        raise Collision(f"lane from {pos} never reaches a block")
+
+    body: dict[str, int] = {}
+    lane_cost: dict[tuple[str, str], int] = {}
+    for name in LAID:
+        chain = next(ch for ch in room.chains if name in ch.start_at)
+        ri, col = chain.start_at[name]
+        row = chain.rows[ri]
+        pos, d = (col + room.margin, row.y), (E if row.east else W)
+        want, ops, steps = len(_glyphs(name)), 0, 0
+        while True:
+            ch = c.get(*pos)
+            if ch in _TURN:
+                d = _TURN[ch]
+            elif ch in _LANE_TURN:
+                ops += 1
+                for lane, turn in _LANE_TURN[ch].items():
+                    if (name, lane) in DEAD_LANES:
+                        continue
+                    nd = turn[d] if turn else d
+                    lane_cost[(name, lane)] = 1 + follow(
+                        (pos[0] + nd[0], pos[1] + nd[1]), nd)
+                break
+            elif ch == "H":
+                break
+            elif ch != " ":
+                ops += 1
+                if ops == want:
+                    lane_cost[(name, "straight")] = 1 + follow(
+                        (pos[0] + d[0], pos[1] + d[1]), d)
+                    break
+            pos = (pos[0] + d[0], pos[1] + d[1])
+            steps += 1
+        body[name] = steps
+    return body, lane_cost
+
+
+def estimate_ticks(room: Room, runs: dict[str, int],
+                   lanes: dict[tuple[str, str], int]) -> int:
+    """Cells the man walks for one case, given how often each block and lane ran."""
+    body, cost = walk_costs(room)
+    total = sum(body[name] * n for name, n in runs.items())
+    return total + sum(cost.get(key, 0) * n for key, n in lanes.items())
+
+
 def check_room(room: Room) -> None:
     """Raise unless every block walks its own tokens and lands where it should."""
     walked = walk_blocks(room)
@@ -810,6 +1094,7 @@ RELAY = [
 RELAY_W, RELAY_H = 6, 4                      # outside, walls included
 STRIP_W = 7                                  # columns each strip block owns
 NB = 16                                      # rows of north band above the wall
+MARGIN = 3                                   # spare columns west of the code
 WX = 1
 
 
