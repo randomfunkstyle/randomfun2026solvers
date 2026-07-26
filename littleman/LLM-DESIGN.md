@@ -1,23 +1,35 @@
 # `little-little-man` — machine design
 
-**Status: 14/14 public on the engine, unsubmitted.** `tasks/solutions/little-little-man_cpu.man`
+**Status: judged, 28/28 cases.** `tasks/solutions/little-little-man_cpu.man`
 
     w x h = 184 x 183     area2 = 33,856     avgTicks = 6,389,522
-    local score = 216,323,661,669       judged estimate ~237.1e9 (x1.096)
+    local score = 216,323,661,669       judged = 237,555,126,848
 
-The last *judged* machine was 192x194 / 37,636 / 6,890,324 = **285,146,989,930**
-(28/28). This build folds the program to 16 opcodes, which takes the decode trie
-from depth 5 to 4 and the lane band from 63 rows to 31: **-16.6% on local score**,
-with ticks improving 7.3% as well because a shallower trie makes every instruction
-cheaper to issue. 10 live men against a 12 bound; `men x ticks` 63.9M against the
-700M floor.
+This build folds the program to 16 opcodes, which takes the decode trie from depth
+5 to 4 and the lane band from 63 rows to 31: **-16.6% on local score**, with ticks
+improving 7.3% as well because a shallower trie makes every instruction cheaper to
+issue. 10 live men against a 12 bound; `men x ticks` 63.9M against the 700M floor.
+The judged number came in 0.2% above the `x1.096` estimate of 237.1e9, the fourth
+consecutive submission that factor has predicted.
+
+**A parallel line of work reached 273,750,329,271 by a different route** — the
+four-word-per-lap tape worker (`TAPE_SKIP_BATCH = 4`) plus a hot bank re-swept
+against it, landing on 56 slots. That machine is nineteen opcodes and 192x194; this
+one is ahead because it shrinks the decode rather than the store, and the two have
+never been combined. Its measurements are kept where they were written — the
+`HOT` and `TAPE_SKIP_BATCH` docstrings in `llm_lm1.py`, and "Banking the *tape*
+instead" below — marked as that machine's rather than this one's, because they are
+a real result and the next person should be able to read what it did. Note its
+sweep found the size cliff at 52 where ours is at 53: `Asm.hot_used` counts the
+`MUL16` scratch this fold introduced.
 
 | piece | where | state |
 |---|---|---|
 | LLM reference interpreter | `llm_sim.py`, `tests/test_llm_sim.py` | all 14 public cases byte-exact |
-| the interpreter program | `llm_lm1.py` -> `lm1/programs/little-little-man.asm` | 1,757 instructions, 3,377 ROM words |
-| the assembler front end | `llm_asm.py` | slots, labels, indexed load/store |
-| the machine | `lm1/machine.py` (`build`, `tape_n=427`, `display=(16,16)`) | 203x204, ROM folded to 84 rows |
+| the interpreter program | `llm_lm1.py` -> `lm1/programs/little-little-man.asm` | 16 opcodes, P=3,538 ROM words on 89 rows |
+| the assembler front end | `llm_asm.py` | slots, labels, indexed load/store, `hot_used` |
+| the display fan-out | `lm1/dsprelay.py` | one `DSP` behind a relay, engine-proven 15/15 |
+| the machine | `lm1/machine.py` (`build`, `tape_n=479`, `display=(16,16)`) | 184x183, ROM folded to 89 rows |
 
 ## Why a CPU and not a dataflow ring
 
