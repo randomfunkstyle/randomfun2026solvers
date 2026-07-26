@@ -51,7 +51,55 @@ the binding one rather than by guessing.
 
 from __future__ import annotations
 
-__all__ = ["ROTATION_MODEL", "relay", "relay_words", "ticks_per_rotation"]
+__all__ = ["ROTATION_MODEL", "flat_relay", "flat_relay_words", "relay",
+           "relay_words", "ticks_per_rotation"]
+
+
+def flat_relay_words(w: int) -> int:
+    """Words a two-row turnaround room of interior width ``w`` carries per lap."""
+    if w < 5:
+        raise ValueError(f"interior {w}x2: the walk needs the five turn cells")
+    return w - 3               # 2w cells, less four turns and the spawn, in pairs
+
+
+def flat_relay(w: int) -> list[str]:
+    """`relay` at interior height **two**, which the perimeter walk cannot reach.
+
+    :func:`relay` needs three interior rows because it walks a rectangle whose two
+    long sides must not touch.  Two rows is a different shape -- east along the
+    top, west along the bottom -- and it is the *rows* that a band pays for::
+
+        +----------+
+        |>@rsrsrs v|
+        |^srsrsrsr<|
+        +----------+
+
+    Four cells turn, one spawns, and the remaining ``2w-5`` alternate ``r``/``s``.
+    That count is always odd, so exactly one cell is blank, and **where** the blank
+    goes is load-bearing: the walk must never reach an ``s`` it has no word for, so
+    the blank is placed to keep every ``r`` followed by its own ``s``.  It falls at
+    the end of the top run when ``w`` is even and at the start of the bottom one
+    when ``w`` is odd, which is what the parity below works out.
+
+    The room still holds exactly **one** word at rest -- one spawn, one man -- so a
+    ring sized on `snake_layout.RING_MIN` or `gradebook_place.RING_WORDS` counts it
+    as one however wide it is.
+    """
+    flat_relay_words(w)
+    turns = {(0, 0): ">", (w - 1, 0): "v", (w - 1, 1): "<", (0, 1): "^"}
+    walk = ([(x, 0) for x in range(1, w - 1)]
+            + [(x, 1) for x in range(w - 2, 0, -1)])
+    cell = dict(turns)
+    cell[walk[0]] = "@"
+    ops = walk[1:]
+    blank = w - 4 if (w - 3) % 2 else w - 3          # the top run is w-3 long
+    ops = [p for i, p in enumerate(ops) if i != blank]
+    for i, p in enumerate(ops):
+        cell[p] = "rs"[i % 2]
+    return (["+" + "-" * w + "+"]
+            + ["|" + "".join(cell.get((x, y), " ") for x in range(w)) + "|"
+               for y in (0, 1)]
+            + ["+" + "-" * w + "+"])
 
 
 def relay_words(w: int, h: int) -> int:

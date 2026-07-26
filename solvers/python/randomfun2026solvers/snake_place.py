@@ -43,11 +43,34 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = ["BANKS", "build_grid", "build_room", "layout"]
 
-#: Rows above the room: the relay, the input room and the risers.  One more
-#: than the band layout used, because the ring pipes now run straight down
-#: instead of doglegging east, and the ring has to hold 14 words at rest.
-BAND_H = 12
-WY = BAND_H + 1
+#: Rows above the room: the relay, the input room and the risers.
+#:
+#: **The ring's capacity is bought sideways, not downwards.**  A straight pair of
+#: risers holds ``2*(BAND_H - 4)`` cells, so the 14 words snake needs at rest used
+#: to force ``BAND_H = 12``.  Folding the outgoing riser along the row under the
+#: relay -- `gradebook_place.ring_legs`' trick, which snake never got -- buys
+#: :data:`REACH` cells for nothing, and the relay is 10 columns of empty north
+#: band wide already, so those columns cost the grid nothing at all.
+#:
+#: ``8`` is what that leaves: rows 0-3 are the relay, 4-7 are the risers, and the
+#: pair holds ``2*(8-4) + 6 = 14``.  The ring is also two cells *shorter* than the
+#: straight one it replaces (34 against 36), so the fold is not a trade.
+BAND_H = 8
+
+#: How far the outgoing riser reaches west along the row under the relay.
+#:
+#: West rather than east, and only the outgoing one.  Reaching *east* with the
+#: incoming riser is the obvious symmetric move and it is wrong: it drags `RING`'s
+#: ``r`` anchor toward the `IO` band and steals the split, which
+#: :func:`audit_bindings` then refuses.  West is free -- the columns there are
+#: north band nobody uses -- and it leaves both anchors exactly where the
+#: straight risers had them, so the bands are unchanged.
+REACH = 6
+
+#: The relay's interior width.  Its ports are the outgoing riser's fold end and
+#: the incoming riser's foot, ``SPREAD + REACH`` apart, so ``REACH + SPREAD + 1``
+#: is the floor.  10 is what `snake_ring.FLAT_RELAY` already is.
+RELAY_W = 10
 
 #: Columns between the two pipes of a pair.  Both midpoints still land on the
 #: split, and the gap is what the input room stands in.
@@ -142,14 +165,16 @@ def tuned_order(banks=BANKS, steps: int = 40_000) -> list[str]:
 
 
 # ── the whole machine ─────────────────────────────────────────────────────────
-def build_grid(banks=BANKS, order=None, frac: float = 0.7,
-               seed: int = 0) -> tuple[list[str], DebugMap, dict[str, object]]:
+def build_grid(banks=BANKS, order=None, frac: float = 0.7, seed: int = 0,
+               band_h: int = BAND_H, reach: int = REACH,
+               relay_w: int = RELAY_W
+               ) -> tuple[list[str], DebugMap, dict[str, object]]:
     """Worker + ring + input + the proven painter/LM-75 harness, as one grid."""
+    from randomfun2026solvers.dataflow_relay import flat_relay
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.plotter_block import pipe
     from randomfun2026solvers.snake_layout import _cells
     from randomfun2026solvers.snake_ring import (
-        FLAT_RELAY,
         HARNESS_H,
         HARNESS_W,
         PROBE_PAINTER,
@@ -161,34 +186,52 @@ def build_grid(banks=BANKS, order=None, frac: float = 0.7,
     walked_cells_all_hold_a_glyph(room)
     geo, _bk = layout(banks)
     iw, ih = geo.iw, room.height
+    wy = band_h + 1
     ring_in, inp = WX + geo.pipe_in["RING"], WX + geo.pipe_in["IO"]
     ring_out, painter_col = WX + geo.pipe_out["RING"], WX + geo.pipe_out["IO"]
 
     hx = WX + iw + 3                       # two clear columns for the feed pipe
-    g = Circuit(hx + HARNESS_W, WY + ih + 1)
+    g = Circuit(hx + HARNESS_W, wy + ih + 1)
     for y, line in enumerate(room.rows()):
         for x, ch in enumerate(line):
             if ch != " ":
-                g.set(WX + x, WY + y, ch)
-    walls(g, WX, WY, iw, ih)
-    north = WY - 1
+                g.set(WX + x, wy + y, ch)
+    walls(g, WX, wy, iw, ih)
+    north = wy - 1
 
-    # ── the ring: relay directly over the ring pair, both pipes kept vertical ──
-    relay_x = ring_out - 2
-    stamp(g, relay_x, 0, FLAT_RELAY)
+    # ── the ring: the relay over the pair, the outgoing riser folded west ──────
+    #
+    # Ports: the outgoing riser turns west along the row under the relay and ends
+    # `reach` columns away, the incoming one drops straight from the relay's wall.
+    # So the two ports are `reach + SPREAD` apart and the relay is placed to cover
+    # both.  Only the outgoing one folds -- see :data:`REACH`.
     relay_s = 3                            # the relay's south wall row
+    top, bot = relay_s + 1, north - 1
+    if bot < top:
+        raise Collision(f"band {band_h} leaves no row for a riser")
+    out_port, in_port = ring_out - reach, ring_in
+    relay_x = out_port - 1
+    if in_port > relay_x + relay_w:
+        raise Collision(f"relay interior {relay_w} cannot span ports "
+                        f"{out_port}..{in_port}")
+    if relay_x < 0:
+        raise Collision(f"reach {reach} pushes the relay off the west wall")
+    stamp(g, relay_x, 0, flat_relay(relay_w))
     feed_y = PROBE_PAINTER[1] + 1
     legs = {
         # A pipe's first cell must point *away* from its room or it parses as a
         # loose pipe the relay's `s` cannot see, and the machine still loads.
-        "out_RING": [(ring_out, north - 1), (ring_out, relay_s + 1)],
-        "in_RING": [(ring_in, relay_s + 1), (ring_in, north - 1)],
+        "out_RING": [(ring_out, bot), (ring_out, top), (out_port, top)],
+        "in_RING": [(in_port, top), (in_port, bot)],
         "in_IO": [(inp, 3), (inp, north - 1)],
         "out_IO": [(painter_col, north - 1), (painter_col, 1),
                    (hx, 1), (hx, feed_y)],
     }
     pipes = {k: _cells(v) for k, v in legs.items()}
-    fwd = pipe(g, legs["out_RING"], into=(ring_out, relay_s))
+    if relay_x + relay_w + 1 >= inp - 1:
+        raise Collision(f"relay reaches {relay_x + relay_w + 1}, the input room "
+                        f"stands at {inp - 1}")
+    fwd = pipe(g, legs["out_RING"], into=(out_port, relay_s))
     ret = pipe(g, legs["in_RING"], into=(ring_in, north))
     if fwd + ret < RING_MIN:
         raise Collision(f"ring holds {fwd + ret} words, wanted {RING_MIN}")
@@ -201,19 +244,19 @@ def build_grid(banks=BANKS, order=None, frac: float = 0.7,
     rows = [r.rstrip() for r in g.rows()]
     while rows and not rows[-1]:
         rows.pop()
-    audit_bindings(room, geo, pipes)
+    audit_bindings(room, geo, pipes, wy)
 
     d = DebugMap("snake — a dataflow ring machine, banked")
     d.region("harness", hx + 1, 0, HARNESS_W - 1, HARNESS_H, color="#a855f7",
              note="painter + LM-75, engine-verified on all 129 public frames")
-    d.region("relay", relay_x, 0, 12, 4, color="#0ea5e9",
+    d.region("relay", relay_x, 0, relay_w + 2, 4, color="#0ea5e9",
              note=f"turnaround of the {fwd + ret}-cell body ring")
     d.region("input", inp - 1, 0, 3, 3, color="#64748b")
     for band, (lo, hi) in geo.zone_cols.items():
-        d.region(f"band:{band}", WX + lo, WY, hi - lo + 1, ih, color="#1f2937",
+        d.region(f"band:{band}", WX + lo, wy, hi - lo + 1, ih, color="#1f2937",
                  note=f"{band} pipe ops stand here; nearest column binds")
     for name, p in room.placed.items():
-        d.region(f"block:{name}", WX + p.bank.entry, WY + p.ys[0],
+        d.region(f"block:{name}", WX + p.bank.entry, wy + p.ys[0],
                  p.bank.iw - p.bank.entry, p.ys[-1] - p.ys[0] + 1,
                  note=f"{p.bank.name}: " + " ".join(WORKER_L[name][0]),
                  color="#f59e0b", tags=["block"])
@@ -229,7 +272,8 @@ def build_grid(banks=BANKS, order=None, frac: float = 0.7,
     return rows, d, info
 
 
-def audit_bindings(room: B.Room, geo, pipes: dict[str, list[tuple[int, int]]]) -> None:
+def audit_bindings(room: B.Room, geo, pipes: dict[str, list[tuple[int, int]]],
+                   wy: int = BAND_H + 1) -> None:
     """Every `r`/`s` in the worker must reach the pipe its band promised it.
 
     Measured over *every* cell of each pipe, which is stricter than the spec's
@@ -244,7 +288,7 @@ def audit_bindings(room: B.Room, geo, pipes: dict[str, list[tuple[int, int]]]) -
             raise Collision(f"{name}: {len(placed)} r/s glyphs, {len(pipe_toks)} tokens")
         for (cx, cy), tok in zip(placed, pipe_toks, strict=True):
             side = "in" if tok[0] == "r" else "out"
-            gx, gy = WX + cx, WY + cy
+            gx, gy = WX + cx, wy + cy
             best = min(("RING", "IO"),
                        key=lambda z: min(abs(gx - px) + abs(gy - py)
                                          for px, py in pipes[f"{side}_{z}"]))
