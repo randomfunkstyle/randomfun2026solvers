@@ -88,6 +88,7 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from . import rom as rommod
@@ -432,7 +433,7 @@ class _Plan:
     sem: dict[str, Sem] = field(default_factory=dict)
 
 
-def plan(program: Program) -> _Plan:
+def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Plan:
     """Assign lane rows by pipe need, then derive opcode numbers from the trie.
 
     The trie sorts its leaves in **bit-reversed** order (``ARCH.md`` §2.4), so
@@ -441,6 +442,14 @@ def plan(program: Program) -> _Plan:
     south wall their pipes leave from, and everything else in between — longest
     micro-program first, so the drop columns form a descending staircase and short
     lanes can turn south early instead of all walking out to a shared column.
+
+    ``middle_order`` overrides that last rule — the order of the *unpinned* lanes,
+    north to south. Length-descending is a good guess in the dark, but the row a
+    lane sits on is a **tick** cost and the weight on it is how often the opcode
+    runs, which length knows nothing about: a lane's return walk is
+    ``2 * drop_x - row`` (east to the drop column, south to the collector, west
+    along it), so a hot lane wants to be *low* on both terms at once. See
+    ``LANE_ORDER`` for the per-program orders this bought and §7.6 for the method.
     """
     used = [op.mnemonic for op in program.ops_used]
     sems = {op.mnemonic: op.sem for op in program.ops_used}
@@ -490,7 +499,16 @@ def plan(program: Program) -> _Plan:
     for g in (3, 2):
         for m in reversed([n for n in order if group(n) == g]):
             placed[m] = slots.pop()
-    for m in [n for n in order if group(n) == 1]:
+    middle = [n for n in order if group(n) == 1]
+    if middle_order is not None:
+        want = list(middle_order)
+        if sorted(want) != sorted(middle):
+            raise MachineError(
+                f"middle_order must be a permutation of the unpinned lanes "
+                f"{sorted(middle)}; got {sorted(want)}"
+            )
+        middle = want
+    for m in middle:
         placed[m] = slots.pop(0)
 
     return _Plan(
@@ -1402,6 +1420,7 @@ def build(
     packed_rom: bool = True,
     short_return: bool | None = None,
     store: str = "tape",
+    middle_order: Sequence[str] | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -1448,7 +1467,7 @@ def build(
         )
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
-    p = plan(program)
+    p = plan(program, middle_order=middle_order)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
     top = _highest_address(program)
@@ -2041,6 +2060,58 @@ TAPE_SIZE = {
 #: because a ring is briefly holding one more than it stores.
 STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 
+#: Lane orders that beat ``plan``'s length-descending default, north to south.
+#:
+#: A lane's row is a **tick** cost: the return walk is ``2 * drop_x - row`` (east to
+#: the drop column, south to the collector, west along it), and ``drop_x`` is the
+#: running suffix maximum of the lane extents at or below that row. So a hot opcode
+#: wants to sit *low* — both terms improve at once — while a *long* one wants to sit
+#: high, because everything above it pays for its extent. Length-descending gets the
+#: second half right and knows nothing about the first, which is where these come
+#: from: weight each lane by how often the opcode actually runs (measured on the
+#: emulator over the public cases) and minimise the weighted walk.
+#:
+#: Every entry was found by search and then **verified on the engine**, keeping only
+#: candidates whose footprint did not grow — that filter is not optional, because the
+#: order picks ``mem_pad``, which sets the memory lanes' length, which sets the CPU's
+#: width, which is squared in the score. Measured, against the same build with the
+#: default order:
+#:
+#: | program | footprint | ticks | score |
+#: |---|---|---|---|
+#: | `brackets` | 9,025 → 9,025 | 26,000 → 25,111 | **0.966x** |
+#: | `gradebook` | 12,996 → **12,769** | 301,571 → 298,571 | **0.973x** |
+#: | `sudoku-validity` | 6,889 → 6,889 | 434,667 → 432,167 | **0.994x** |
+#:
+#: `gradebook` also *loses* a column, which is the tell that the default was not on
+#: the frontier at all: 114 → 113 is a footprint win the length rule left behind.
+#: `tcp` and `snake-ring` were searched the same way and kept their default order —
+#: see §7.6. Re-run `scratch/lane_order_search.py` when a program's `.asm` changes,
+#: since the weights come from its own execution profile.
+LANE_ORDER: dict[str, tuple[str, ...]] = {
+    "brackets": (
+        "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
+        "ST", "MULI", "SUBI", "DIVI", "MODI", "BRZ",
+    ),
+    "gradebook": (
+        "MUL", "DIV", "MOVA", "SUB", "ADD", "JMPF", "BRN",
+        "AND", "BRZ", "ST", "LD", "LDI", "SUBI", "MULI",
+    ),
+    # `matmul` is deliberately absent. The search found ("MUL", "BRN", "SUB", "ADDI",
+    # "ST", "LD") at 0.988x, it passed all seven public cases on the reference engine —
+    # and it fails `test_lm1_matmul`'s stress matrices (identity, 16x16x16, negative
+    # heavy) on that same engine. So the public data under-covers `matmul`, and a
+    # public-case-only search is not a safe filter for it: `matmul` is the one program
+    # here on the *long* return path (`_LONG_RETURN`, for the STREAM wiring), where the
+    # drop columns follow the older strictly-ordered rule the model does not describe.
+    # 1.2% is not worth reopening that; anyone who wants it must put the stress cases
+    # into the search's verify step, not just `publicTestData`.
+    "sudoku-validity": (
+        "HALT", "STP", "ADD", "LDP", "MULI", "ST",
+        "MODI", "DIVI", "SUBI", "ADDI", "BRZ",
+    ),
+}
+
 #: ROM fold overrides, where the default heuristic is not the footprint optimum.
 #: The default folds the ROM toward the *CPU's own* width, which is right only while
 #: the CPU and the tape are the sole things setting the bounding box.
@@ -2138,6 +2209,7 @@ def build_for(slug: str, *, store: str = "tape") -> Machine:
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
+        middle_order=LANE_ORDER.get(slug),
     )
 
 
