@@ -1449,6 +1449,19 @@ def _emit_pick(a: Asm, sites: int) -> None:
 #: so ``(4, 26)`` = 104 slots costs three extra men and was judged **28/28 at
 #: 400,740,741,396** — 2.12x the single-tape machine, at a *lower* runner-tick
 #: product (0.110bn against 0.151bn). See ``machine.TIER_PIPE_BANK`` and LLM-DESIGN.
+#: Both banks use the two-word-per-lap tape worker (``machine.tape_block``'s
+#: ``skip_batch=2``): it tests ``BP`` once per word but carries two, so the rotation a
+#: read waits on roughly halves. Measured over all 14 public cases at an identical
+#: 192x194 / 37,636 and an identical 8 live men:
+#:
+#:     skip_batch=1   avg 8,803,337   worst 13,788,195   0.1103bn   judged 363,025,672,731
+#:     skip_batch=2   avg 7,680,119   worst 12,151,119   0.0972bn
+#:
+#: So it is ~12.8% of the score for no area and *fewer* runner-ticks. The block is 45
+#: columns rather than 33, which is free here because the banks end well west of the
+#: ROM's own width.
+TAPE_SKIP_BATCH = 2
+
 HOT = (4, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
@@ -1520,7 +1533,14 @@ def build_machine(
     hot_slots = hot[0] * hot[1] if hot else 0
     text, slots = build_asm(packed_cells=packed_cells, hot_slots=hot_slots)
     program = assemble(text, name="little-little-man")
-    built = machine.build(program, tape_n=slots, display=(PANEL, PANEL), rom_rows=rom_rows, hot=hot)
+    built = machine.build(
+        program,
+        tape_n=slots,
+        display=(PANEL, PANEL),
+        rom_rows=rom_rows,
+        hot=hot,
+        tape_skip_batch=TAPE_SKIP_BATCH,
+    )
     return built, program, text
 
 

@@ -1,0 +1,16 @@
+# little-little-man — submission 81a67b5b-1562-47d1-abeb-9444b2fc5c06
+
+verdict      done: 28/28 cases, area2 37636, avgTicks 8,426,492, score 317,139,442,159
+submitted    2026-07-26T17:14:58+0300
+grid         192x194
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  4d5b54950ba5e23b67d421b6ee36861de9431a41e1e992b227a5fdd7fca204de
+commit       7f4e75f
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+two-word-per-lap tape worker (skip_batch=2) on both banks: tests BP once per word but carries two, so the rotation a read waits on roughly halves. avg 8.80M -> 7.68M at an identical 192x194/37,636 and identical 8 live men, runner-ticks 0.110bn -> 0.097bn.
