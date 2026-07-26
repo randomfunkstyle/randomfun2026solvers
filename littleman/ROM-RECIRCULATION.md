@@ -22,31 +22,55 @@ why, and the ideas that are still open.
 Words discarded per public case, counted on the emulator over the ROM image
 (`image_program`), against each machine's measured average ticks:
 
-| program | words/case | ≈ share of ticks | note |
-|---|---|---|---|
-| `sudoku-validity` | 18,817 | ~26% | **zero jumps** — all 44 branches |
-| `snake` | 5,258 | ~26% | |
-| `little-little-man` | 541,753 | **21.4%, measured** | `cpu:slab:JMPF` in the heat map |
-| `gradebook` | 7,571 | ~15% | 29 jumps, 45 branches |
-| `tcp` | 754 | ~5% | one jump in the whole program |
-| `brackets` | 149 | ~4% | three jumps |
-| `palette` | 31 | ~0.5% | |
-| `snake-ring` | 0 | — | never takes a branch on the public cases |
+**Re-measured over *every* public case, at a measured tick rate.** The table below
+replaces an earlier one that sampled three cases a problem and multiplied by an
+assumed 6–9 ticks a word. Both of those inputs were wrong, in opposite directions,
+and the conclusion got stronger rather than weaker.
 
-Only `little-little-man`'s number is a real profile — it is `LLM-DESIGN.md:131`,
-sampled with `tools/heatmap.mjs`. The rest are word counts times an assumed 6–9
-ticks a word and should be read as an ordering, not as percentages. The emulator
-ran the first three cases of each problem, which is not necessarily
-representative.
+The rate is **4.8 ticks a recirculated word**, not 6–9. `_discard_loop` retires two
+words per lap of an eight-cell cycle — 4.0 in the steady state — and the profile
+implies 4.8 once each branch's entry and exit are amortised in: `switchboard`
+discards 1,305,966 words and spends ~6,268,661 ticks in `cpu:slab:JMPF`.
+
+| program | words/case | discard ticks | total ticks | share |
+|---|---|---|---|---|
+| `little-little-man` | 764,936 | 3,671,693 | 7,009,707 | **52.4%** (engine) |
+| `pathfinder` | 148,058 | 710,680 | 1,575,791 | 45.1% |
+| `snake` | 15,180 | 72,865 | 169,651 | 42.9% |
+| `gradebook` | 9,905 | 47,545 | 118,795 | 40.0% |
+| `matmul` | 4,868 | 23,366 | 62,796 | 37.2% |
+| `sudoku-validity` | 16,304 | 78,260 | 218,224 | 35.9% |
+| `plotter` | 2,429 | 11,658 | 66,998 | 17.4% |
+| `brackets` | 445 | 2,135 | 13,694 | 15.6% |
+| `tcp` | 638 | 3,062 | 24,035 | 12.7% |
+| `palette` | 77 | 370 | 59,102 | 0.6% |
+
+`little-little-man`'s row is engine-measured (`optimize.verify` for the total,
+`tools/heatmap.mjs` for the split). The rest are emulator totals with the
+emulator's own `skip_word = 8` backed out and 4.8 substituted, so they are
+comparable to each other and to the engine row on the discard term.
+
+**Recirculation is 36–52% of six different machines.** It is not an
+`little-little-man` peculiarity; it is what a CPU-generated machine spends its time
+on, and anything that moves the rate moves all of them at once.
 
 Two things worth keeping in mind before optimising for this:
 
 - **`sudoku-validity` has no jumps at all.** A taken *branch* discards through the
   same loop, so "does this program jump" is the wrong question; "does it loop" is
   the right one.
-- **`little-little-man` is where the money is.** 21.4% of a 926,292,239,445 score
-  is larger than the entire score of most other tasks. `tcp` and `brackets`, by
-  contrast, are rounding error — measuring anything on them proves nothing.
+- **This is not one problem's tax.** The first version of this note read as though
+  `little-little-man` were the only machine worth the trouble. Measured across every
+  public case, six machines spend 36–52% of their ticks recirculating, so the rate
+  is a *generator-wide* constant and a change to `_discard_loop` is worth ~11% on
+  `little-little-man` and 7–10% on `pathfinder`, `snake`, `gradebook`, `matmul` and
+  `sudoku-validity` simultaneously. `tcp`, `brackets` and `palette` remain rounding
+  error — measuring anything on them still proves nothing.
+- **The share rose as the rest of the machine got faster.** `little-little-man` was
+  21.4% when a store read cost 3,416 ticks; the banked store cut the store term to
+  ~14% and recirculation became 52% of what is left, without a single extra word
+  being discarded. Shares move when *other* terms move, so re-measure before
+  choosing a target rather than trusting a share recorded against an older machine.
 
 ## The negative: buffering the ROM corridor ("ROM-PLUS")
 
@@ -121,11 +145,34 @@ recirculation is worth 21.4% of ticks, this feature is pure loss.
 
 ## Still open
 
-**1. Unroll the discard loop two words to a lap.** Every discard count is even —
-`rom_words` emits `2 * (...)` because instructions are two words wide — so a loop
-that discards two words a lap with `BP` counting *instructions* is exactly correct
-for every jump, with no remainder arm. `d, r, r, <, ^, m, >` is 7 ticks for 2
-words against the present 6 for 1: **~1.7×** on 21% of `little-little-man`.
+**1. Unroll the discard loop two words to a lap. — DONE, and the residual idea is
+impossible.** `b016681` built it: `_discard_loop` is now a 2x4 burst retiring two
+words per lap, which took the rate from 6 ticks a word to 4.
+
+The `d, r, r, <, ^, m, >` variant proposed here — 7 ticks for 2 words, by having
+`BP` count *instructions* so the lap decrements once instead of twice — **cannot be
+built, and would buy nothing if it could.** A grid graph is bipartite, so every
+closed walk on it has even length: there is no 7-cell cycle. What the loop costs is
+the number of cells the man *walks*, not the number of glyphs that do work, so
+dropping one `m` to a plain corridor cell leaves the 2x4 cycle eight cells long and
+eight ticks a lap. Counting instructions rather than words is free of benefit here.
+
+The rate only improves by making the cycle *deeper*: a 2x(k+2) block retires `k`
+words in `2k + 4` cells, so k=2 is 4.0 ticks a word, k=3 is 3.33 and k=4 is 3.0,
+tending to 2.0. The obstacle is exactness. `rom_words` guarantees every count is
+*even*, which is what makes k=2 total; k=4 needs every count divisible by four, and
+k=3 needs a remainder arm for counts that are not multiples of three. Two ways
+round it, neither built:
+
+* **Align the targets.** Pad the image so every branch target sits at an even
+  instruction index, and every count becomes a multiple of four. Costs a few `NOP`s
+  of `P` — which lengthens every discard — against 4.8 -> ~3.8 ticks a word.
+* **Two exits in one lap.** Let `BP` count pairs and give the 12-cell cycle two `a`
+  tests, one per pair, so an odd remainder leaves through the first. No padding, but
+  two escape corridors out of one slab.
+
+At 4.8 -> 3.8 that is ~21% of the discard term: **~11% of `little-little-man`'s
+ticks, and 7-10% of five other machines'** — see the table above.
 *Pro:* exact, small, no new glyph, no new room. *Con:* one more cell of slab
 width, and `_SLAB_PITCH`/binding has to still hold.
 
