@@ -57,7 +57,12 @@ def test_every_pinned_order_is_a_permutation_of_that_programs_unpinned_lanes() -
         assert len(rows) == len(set(rows)), f"{slug}: two lanes on one row"
 
 
-@pytest.mark.parametrize("slug", ["brackets", "gradebook", "sudoku-validity"])
+# Derived from the table, not a copy of it: `gradebook` left ``LANE_ORDER`` because
+# this very assertion caught its pinned order costing 4.2% of area once ``MEM_PLACE``
+# made the CPU's width the machine's width, and a hand-written list would have gone on
+# naming a slug that is no longer pinned. ``matmul`` is exercised by its own test
+# below, which has to check output rather than footprint.
+@pytest.mark.parametrize("slug", sorted(set(machine.LANE_ORDER) - {"matmul"}))
 @pytest.mark.slow
 def test_the_pinned_order_does_not_cost_footprint(slug: str) -> None:
     """The whole reason width is a *constraint* in the search and not a term: the lane
@@ -65,9 +70,21 @@ def test_the_pinned_order_does_not_cost_footprint(slug: str) -> None:
     width — and width is squared in the score, so a tick win that widens the machine is
     usually a loss. Compare against the default order so unrelated generator
     compaction does not make this test fragile.
+
+    ``MEM_PLACE`` has to come along, and not as a detail: ``ROM_ROWS`` is swept
+    *jointly* with the placement, because the fold is only free to keep narrowing once
+    STORE has stopped setting the width. `gradebook`'s 40-row fold is the optimum for
+    the relocated block and the wrong answer for the default one, so building with one
+    and not the other compares two machines neither of which is shipped.
     """
     prog = programs.load(slug)
-    kwargs = {"tape_n": machine.TAPE_SIZE[slug], "rom_rows": machine.ROM_ROWS.get(slug)}
+    mem_offset, store_offset = machine.MEM_PLACE.get(slug, ((0, 0), (0, 0)))
+    kwargs = {
+        "tape_n": machine.TAPE_SIZE[slug],
+        "rom_rows": machine.ROM_ROWS.get(slug),
+        "mem_offset": mem_offset,
+        "store_offset": store_offset,
+    }
     tuned = machine.build(prog, middle_order=machine.LANE_ORDER[slug], **kwargs)
     default = machine.build(prog, **kwargs)
     assert tuned.footprint <= default.footprint

@@ -1,0 +1,16 @@
+# gradebook — submission 9f82f9aa-868a-4bba-a6c6-20693d47507d
+
+verdict      done: 20/20 cases, area2 8649, avgTicks 738,432, score 6,386,700,098
+submitted    2026-07-26T17:34:25+0300
+grid         93x92
+problem id   d1415447-bf8d-49ef-924e-e024b06a504d
+fingerprint  ab2218ec21660acbbf8eceb3cf520aef1c780776332e05b9a0e44b23724fffe8
+commit       d394db2
+local        gradebook: 7/7 public cases, avg 286,287 ticks
+source       tasks/solutions/gradebook_cpu.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+93x92: memory relocated off the east column, pinned lane order dropped, refold 40->38 (was 107x85)
