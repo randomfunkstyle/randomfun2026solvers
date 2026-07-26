@@ -62,6 +62,34 @@ Two things that looked right and measured wrong, kept so they are not retried:
   skipping cheaper in principle; measured across `IW` from +90 to +170 the ticks
   move by 0.05% and the height not at all, so the only effect is width — which
   starts costing the moment it passes the height.
+* **Giving the hot lanes the channel columns nearest the entry.** A lane's whole
+  walk is `end + first_glyph - 2 * ch`, so every edge is cheaper the further east
+  its channel sits, and ~30% of this machine's ticks are in that `2 * (NC - ch)`.
+  It is not a free choice: a lane turns east out of its channel *on the target's
+  arrival row* and runs to the entry, so every channel occupied on that row has
+  to stand west of it. Sorting the 28 packed column groups under that constraint
+  by measured frequency, and again by the exact opposite, produces **the same 28
+  columns** — the constraint alone determines the order, and there is nothing
+  left to spend. Closed unless the entry discipline itself changes.
+
+### Where the remaining time is
+
+Per the `visits x (body + lane)` profile, on the shipped machine:
+
+| | share |
+|---|---|
+| `DEC_TAB` — hash, both magics, colour, `@` test | 23% |
+| the rest of the setup cell (`CELL`, `TAIL_R`, `KEEP_R`, `DEC_*`) | ~30% |
+| the interpreted tick (dispatch, lanes, `MOVE`, `TICK*`) | ~25% |
+| the store ring | 2% |
+
+`DEC_TAB` walks 204 cells for 88 glyphs, and 137 of those are one wrap: its
+`rq`/`sq` pair sits after the 21-cell class magic, by which point the pen has run
+past the file band, so the block turns round, walks the whole room west, and
+comes back east to reach the painter band. Widening the file band to cover
+column 109 needs the I/O pipes ~140 columns out, which puts the grid past 202
+wide — where width starts costing. That is the next thing to try and it is a
+geometry problem, not a program one.
 
 ## What has to happen
 
