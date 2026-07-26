@@ -697,7 +697,7 @@ def _check_order(succ: dict[str, object]) -> None:
 #: gives 13 ``r``/``s`` pairs per 32-cell walking cycle, 2.46 ticks a word.
 #: Sixteen is the widest relay that fits before the G room without moving any
 #: anchor or widening the scored box.
-RING_RELAY_W, AUX_RELAY_W = 16, 6
+RING_RELAY_W, AUX_RELAY_W = 16, 8
 #: Rows the relay rooms occupy (top wall .. bottom wall).  All three sit flush
 #: at the top of the band, which is only eight rows deep in total: the band is
 #: pure overhead on a dimension that gets squared, so the ring buys its 20 cells
