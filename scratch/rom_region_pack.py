@@ -16,6 +16,24 @@ whatever lies between — CPU glyphs, a turn arrow — and a non-digit inside a 
 a load error (``SPEC.md`` Fine print; ``lm1.rom``'s "accidental vertical literals").
 ``rom_lshape_probe.build_l_rom`` gates on exactly that.
 
+**Feasible for the real program**, measured rather than hoped. `little-little-man`'s
+3,377 words (12,737 cells) pack into an L whose arm is the empty strip at `x 146..190`,
+east of the teleports and the banks, at every band size tried:
+
+    wide band   arm rows   placed       odd columns west of the arm   closable
+       55          92      3377/3377                 62                 ALL
+       65          50      3377/3377                 52                 ALL
+       70          29      3377/3377                 54                 ALL
+
+"Closable" is the gate that matters: those columns carry an open literal into rows that
+hold CPU glyphs, and one parity-closer row of empty literals (a nop per SPEC) shuts
+every one of them -- none is `bad` and none holds more than 18 digits.
+
+Projected geometry at band=55: height 194 -> ~155, since the CPU stack needs ~100 rows
+below the band. But `area2 = max(192, 155)^2 = 192^2` = 36,864, only **-2%** -- width
+binds the instant height drops. The L is an *enabler*; the -32% needs a joint width
+sweep on top of it.
+
 **Engine-verified**, not argued: ``littleman/examples/rom-lshape-probe.man`` is a real
 L-shaped looping ROM over words 1..60 whose arm is indented 10 columns from the west.
 It emits 1,851 words over 30.9 laps **in perfect order** (``lm.mjs tick ... 12000``),
