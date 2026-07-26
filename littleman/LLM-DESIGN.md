@@ -184,6 +184,36 @@ ring for anything the folded layouts cannot hold. 33x48 at `n = 427`, **zero wid
 cost**, 8.0 ticks a slot a read, up to 1,975 slots, and byte-identical output for
 every `n <= 107`.
 
+## The store backends, measured on this program
+
+`machine.build` takes `store=` and there are three tiers.  Asked directly, at this
+program's 427 slots:
+
+| `store=` | result | area2 |
+|---|---|---|
+| `"tape"` | **203x204** | **41,616** |
+| `"men"` | `ValueError: a line STORE block wants 1..24 cells, not 427` | — |
+| `"men-y"` | 1381x204 | 1,907,161 |
+
+So the man-memory is a **latency win and a width loss**: `men-y` costs
+`358 + 3.07 * N` a read against the tape's `8.0 * N` — about half, on a machine
+where the heat map says 61% of the CPU's time is store round trips — but its block
+is `83 + 3 * N` columns wide, so the box goes 46x and the score with it.  There is
+no `N` where that trade comes out ahead here, and the repo's own sweep found the
+same on six other programs (`OPTIMIZATION.md`): `tcp` was the only one whose ticks
+improved at all, by 7.4%, and its 253-column layout still lost 399% on the
+objective.
+
+`memory_men_grid` — the newest man-memory, `cols x rows` — is not a candidate yet
+either: `build_grid` only accepts 4x25 (any other shape raises `IndexError`) and
+nothing in `lm1/` registers it as a store tier.
+
+The version of the idea that *would* pay is `snake-ring`'s: not swapping the
+store, but taking the big structure *out* of it.  The 256-cell grid in a
+coprocessor behind `SND`/`RCV` leaves ~170 scalars in the tape, and a read falls
+from 3,416 to ~1,360 ticks with no change to the box — which is how `snake` went
+from a 66-slot tape at 523 ticks a read to 9 slots at ~180.
+
 ## What is left on the table
 
 * **Code banks (ARCH.md §5.5).** Every one of the ~470 taken branches a case
