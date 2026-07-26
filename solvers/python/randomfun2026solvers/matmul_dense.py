@@ -29,38 +29,53 @@ ring's two pipes are two independent nearest-sets, so `sx` can attach beside
 ``TBODY`` reads it.  The ring is then a long pipe between the two, which is
 exactly what a ring wants: pipe cells *are* its storage.
 
-## The open problem: a wrong value reaches `MAC` on a case bigger than 2x2x2
+## The open problem: `k`'s constants come out wrong on a case bigger than 2x2x2
 
 Public case 0 (2x2x2) emits `19 22 43 50`, which is right.  Case 2 (4x4x4)
 emits nothing: from about tick 20,000 the worker stands on ``MAC``'s `rb` and
-never moves again, and its `A` holds **2^21** -- `LANE`, a constant out of the
-`k` ring -- where an entry of `A` (at most 99 in magnitude) belongs.  So the
-spill handed `MAC` a constant, which means the `x` ring it came from held one.
+never moves, its `A` holding **2^21** where an entry of `A` belongs.
 
-What that is *not*, each checked rather than assumed:
+Read out of the pipes at that moment (`lm.mjs tick --json` carries every pipe's
+`values`), the rings say where to look:
 
-* **not a binding error.**  All 66 pipe ops in the room were put to the
-  runtime's own ``lm.mjs route`` one cell at a time and compared against the
-  band they were laid in: **0 mismatches**, sends and receives alike.  (Read the
-  *last* cell of a receive's route and the *first* of a send's -- both ends
-  touch the north wall, and taking the wrong one makes every receive look
-  unbound.)
-* **not a dead relay.**  Seven runners, none halted, at every tick sampled.
-  Two men touching would stop both and freeze a ring for good.
-* **not two pipes fused.**  ``Circuit.set`` permits a write when the cell
-  already holds the same glyph, so two pipes crossing where both want `-` would
-  merge silently and leak values between rings -- but the ring cells the builder
-  draws (2,028) and the pipe glyphs on the grid (2,242, the difference being the
-  two I/O pipes) agree, so no cell is shared.
-* **not the shared-relay deadlock** predicted earlier: every ring got its own
-  turnaround room, so no relay ever chooses between two rings.
+    x   15 words: 16, 15, 14, 13, ...        the entries of `A`, correct
+    s    2 words: 2^21, 1                    should hold exactly one
+    k    4 words: 2^19, 2^21, 2^21, 1        should be LANE D LANE D D BIAS3
 
-The suspect left is **capture**: a pipe ends at the first arrowhead whose
-forward cell lies on *any* room border, so a ring's pipe running past another
-ring's turnaround room in the strip can be swallowed by it.  That relay would
-then have two incoming pipes, its `r` would take the nearer, and `k`'s constants
-would arrive in `x` -- which is exactly the value seen.  The check is to count
-the pipes attaching to each relay room; it must be two.
+So `x` is right and the **constants are wrong** -- three `LANE`s where there are
+two, two `1`s where there are none, and `BIAS3` missing altogether.  A `1` where
+`D` belongs is `{` running with `B = 0`.  The two spare words sit in `s`, which
+is why ``MAC`` reads `LANE` for `a`: the spill ring is one word behind for good.
+
+This is *not* a plumbing fault, and that is worth stating because four separate
+plumbing faults were ruled out to get here:
+
+* **not a binding error** -- all 66 pipe ops put to the runtime's own
+  ``lm.mjs route`` one cell at a time: 0 mismatches.  (Read the *last* cell of a
+  receive's route and the *first* of a send's; both ends touch the north wall,
+  and taking the wrong one makes every receive look unbound.)
+* **not a misplaced op** -- every op walked from its block's first glyph and
+  checked against *its own token's* band, not merely against the band model:
+  0 misplaced.  The route audit alone proves the model, not the placement.
+* **not a phantom pipe** -- 14 sources and 14 destinations, one in and one out
+  of every relay.  There *were* two phantom sources (see below); fixing them did
+  not move the stall.
+* **not a dead relay, and not the shared-relay deadlock** -- seven runners, none
+  halted, and every ring has a turnaround room to itself.
+
+What was real, and is fixed: the coil's serpentine turned at row `deep` while
+the relay was stamped at `deep + 1`, so the upward leg's `^` had a room wall
+behind it and **was** a second pipe out of that relay.  An arrowhead with a wall
+behind it is a pipe mouth whether or not the layout meant one; the relay's `s`
+would send to whichever of the two was nearer and inject values into the middle
+of the coil.  One blank row between the coil and the relay is the whole fix, and
+``brackets_men.pipe_mouths`` counts them the way the runtime does, which neither
+``lm.mjs analyze`` nor ``route-check.mjs`` will.
+
+The remaining suspect is therefore the constant-building run in ``BLOAD_DONE``
+itself -- `L19` rewrites to `2 M 9 * M 1 +` and the `{` after it reads `B` --
+and the reason 2x2x2 survives it is that `G = 1` there, so the emit path touches
+only the first `KONST` slot.
 
 ## The old open problem: the rectangle's anchors make the north band unroutable
 
@@ -1025,10 +1040,18 @@ def build_grid(room: DenseRoom | None = None):
             for c_off in coil:
                 legs += [(gx + c_off, y), (gx + c_off, deep if y == top else top)]
                 y = deep if y == top else top
+            # The serpentine turns at `deep`, so the relay may not start at
+            # `deep + 1`: an arrowhead with a room wall behind it **is** a pipe
+            # mouth, and the upward leg's `^` would then read as a second pipe
+            # out of the relay.  The relay's `s` would send to whichever of the
+            # two is nearer -- injecting values into the middle of the coil --
+            # and the ring's order would quietly break.  One blank row is the
+            # whole fix.
+            legs.append((gx + coil[-1], deep + 1))
             fwd = draw_pipe(g, [q for j, q in enumerate(legs)
                                 if j == 0 or q != legs[j - 1]])
-            stamp(g, gx, deep + 1, RELAY)
-            ret = draw_pipe(g, [(back, deep), (back, r_in), (rc, r_in),
+            stamp(g, gx, deep + 2, RELAY)
+            ret = draw_pipe(g, [(back, deep + 1), (back, r_in), (rc, r_in),
                                 (rc, wall - 1)])
         else:
             # Straight down into a relay whose depth is chosen so the ring is
