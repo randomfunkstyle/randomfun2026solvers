@@ -183,8 +183,7 @@ worst yields no improvement — it can never ship a wrong grid.
   (or `passes=[rule_pass("<family>")]`) accepts the rewrite and the objective drops with
   `passed=True`. A clean no-match on packed archives is an acceptable outcome — the
   fixture win is the required proof.
-- `uv run pytest -q` stays green (the lone known failure is `test_cli.py::test_swift_smoke`,
-  `swift: not found`, unrelated). Then `manbench` to measure real portfolio impact.
+- `uv run pytest -q` stays green. Then `manbench` to measure real portfolio impact.
 
 ## 4. Known gaps / next levers
 - `loop.mirror_horizontal` is registered but inert alone — it needs a companion man
