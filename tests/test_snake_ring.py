@@ -49,9 +49,14 @@ def test_the_generator_reproduces_the_checked_in_panel_probe() -> None:
     assert "\n".join(rows) + "\n" == PROBE.read_text()
 
 
-def test_the_panel_harness_footprint_is_22x26() -> None:
+def test_the_harness_bounding_box_is_the_one_callers_reserve_for_it() -> None:
+    """`snake_layout` places the worker beside the harness using these two, so a
+    harness that outgrows them would silently overlap the room next door."""
+    from randomfun2026solvers.snake_ring import HARNESS_H, HARNESS_W
+
     rows = PROBE.read_text().rstrip("\n").split("\n")
-    assert (max(len(r) for r in rows), len(rows)) == (22, 26)
+    assert max(len(r) for r in rows) <= HARNESS_W
+    assert len(rows) <= HARNESS_H
 
 
 def test_the_three_port_pipes_deliver_in_the_order_the_panel_needs() -> None:
@@ -156,9 +161,13 @@ def painter_stream(case: dict) -> list[dict]:
             dirn = p[0]
     rows = []
     for delta, frame in zip(out, expected(case), strict=True):
-        stream = [str(len(delta))]
+        # the worker's protocol: (addr, colour) pairs, then a negative terminator
+        # on which the painter commits.  No leading count -- a move's second
+        # colour and a death's body length are both unknown when the frame starts.
+        stream: list[str] = []
         for addr, colour in delta:
             stream += [str(addr), str(colour)]
+        stream.append("-1")
         rows.append({"in": stream, "out": [], "frames": [frame]})
     return rows
 

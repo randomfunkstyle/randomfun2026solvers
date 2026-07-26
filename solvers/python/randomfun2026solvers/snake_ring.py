@@ -27,11 +27,14 @@ from randomfun2026solvers.value_ring import stamp, walls
 
 __all__ = [
     "FLAT_RELAY",
+    "HARNESS_H",
+    "HARNESS_W",
     "PANEL_H",
     "PANEL_W",
     "WORKER",
     "build_panel_probe",
     "painter",
+    "stamp_harness",
     "simulate_worker",
     "worker_glyph_cells",
 ]
@@ -40,52 +43,58 @@ PANEL_W = PANEL_H = 16
 
 # ── the painter ───────────────────────────────────────────────────────────────
 #
-# Protocol on its single incoming pipe: `n, (addr, colour) x n`, then it commits
-# the frame itself with `SWAP 1`.  `SWAP 1` copies next -> current *preserving*
-# both buffers and the cursor (`lm1/display.py`), so a frame is a **delta**: after
-# the first paint the worker only ever repaints the pixels that changed — two per
-# tick (tail black, head green), one per fruit spawn, and the body on death.
+# Protocol on its single incoming pipe: `(addr, colour) x n` then a **negative
+# terminator**, on which the painter commits the frame itself with `SWAP 1`.
+# `SWAP 1` copies next -> current *preserving* both buffers and the cursor
+# (`lm1/display.py`), so a frame is a **delta**: after the first paint the worker
+# only ever repaints the pixels that changed — two per tick (tail black, head
+# green), one per fruit spawn, and the body on death.
 #
-# Interior 11x3.  The pixel loop is `counted_loop_horizontal(0, 0, "rsrs")`,
-# entered heading west at (5,0):
+# A terminator rather than a leading count, because the worker cannot know the
+# count in advance: a move's second pixel is only owed a *colour* once the
+# self-collision scan resolves, and a death repaints a body whose length is
+# whatever the ring turns out to hold.  So the painter carries the test instead:
 #
-#       > . . . m v . b r < <
-#       ^ s r s r d . . @ . ^
-#       . . . . . > . 1 s ^ .
+#        col: 0  1  2  3  4  5  6  7
+#     row 0:  .  .  .  .  v  <  .  .      addr > 0 rejoins the pixel path
+#     row 1:  v  s  r  s  <  X  r  <      the pixel loop, walked west
+#     row 2:  >  .  .  @  .  .  .  ^      the return leg, walked east
+#     row 3:  .  .  .  .  .  1  .  .
+#     row 4:  .  .  .  .  .  s  .  .      s@SWAP: the commit
+#     row 5:  .  .  .  .  .  >  .  ^
 #
-# 12 cells per pixel.  The two loop sends must sit in **different columns**: all
-# three port pipes leave the south wall and `s` binds by Manhattan distance to the
-# pipe's source segment, so two sends in one column would bind to the same pipe.
-# Walking the body westward puts `s@ADDR` at column 3 and `s@DATA` at column 1,
-# and `s@SWAP` is pushed out to column 8 on the row below.
+# `X` entered heading **west** turns clockwise (north) on positive and
+# counter-clockwise (south) on negative, so the terminator peels off downward
+# and an address peels off upward — and `v` at (4,0) drops it back onto `<` at
+# (4,1), which the zero case (address 0 is a real cell) walks straight through.
+# One test, one merge, 16 cells per pixel.
 #
-# The spawn sits at (8,1) heading east — into `^` at (10,1), up and back west into
-# the `r b` preamble — so the man's first act is to read `n`, not to commit a black
-# frame (which would fail the streaming compare on its first frame).
-PAINTER_IW, PAINTER_IH = 11, 3
-P_DATA, P_ADDR, P_SWAP = 1, 3, 8  # interior columns of the three sends
+# The three sends must sit in **different columns**: all three port pipes leave
+# the south wall and `s` binds by Manhattan distance, so two sends in one column
+# would bind the same pipe.  Walking the pixel westward puts `s@ADDR` at column 3
+# and `s@DATA` at column 1 — DATA west of ADDR, which is also what lets DATA's
+# pipe hug the panel's west wall while SWAP's, at column 5, sweeps east around it
+# without either crossing ADDR's two-cell drop.
+#
+# The spawn sits at (3,2) on the return leg, so the man's first act is the `r` at
+# (6,1) rather than a commit that would black out the display's first frame.
+PAINTER_IW, PAINTER_IH = 8, 6
+P_DATA, P_ADDR, P_SWAP = 1, 3, 5  # interior columns of the three sends
 
 
 def painter() -> Circuit:
     c = Circuit(PAINTER_IW, PAINTER_IH)
-    exit_ = c.counted_loop_horizontal(0, 0, "rsrs")
-    assert exit_ == (5, 2), exit_
-
-    # commit: `1` then s@SWAP, far east of both loop sends so it binds SWAP
-    c.set(5, 2, ">")
-    c.run(7, 2, "1s")
-    c.set(9, 2, "^")
-    c.set(9, 1, " ")
-
-    # preamble, walked west into the loop entry at (5,0)
-    c.set(9, 0, "<")
-    c.run(8, 0, "rb", d=W)
-    c.set(6, 0, " ")
-
-    # spawn: east into the riser, then west over itself into `r b`
-    c.set(8, 1, "@")
-    c.set(10, 1, "^")
-    c.set(10, 0, "<")
+    c.set(5, 0, "<")
+    c.set(4, 0, "v")
+    c.run(7, 1, "<rX<srs", d=W)     # entry, read, test, merge, ADDR, read, DATA
+    c.set(0, 1, "v")
+    c.set(0, 2, ">")
+    c.set(3, 2, "@")
+    c.set(7, 2, "^")
+    c.set(5, 3, "1")                # the terminator's lane, walked south
+    c.set(5, 4, "s")
+    c.set(5, 5, ">")
+    c.set(7, 5, "^")
     return c
 
 
@@ -102,19 +111,24 @@ def painter() -> Circuit:
 # * ADDR must not arrive after its own DATA, and SWAP must not overtake the DATA
 #   writes still in flight, so ADDR is the shortest pipe and SWAP the longest.
 #   With ADDR = 2 and the sends 2 ticks apart that is satisfied with slack.
-PROBE_PAINTER = (2, 1)  # painter interior origin
-PROBE_PANEL = (3, 7)    # panel *wall* origin
+PROBE_PAINTER = (2, 1)   # painter interior origin
+PROBE_PANEL = (3, 10)    # panel *wall* origin
 
 
-def build_panel_probe() -> tuple[list[str], dict[str, int]]:
-    """Display + painter + the three port pipes, fed by the input room.
+#: The harness's bounding box, so a caller can reserve columns for it.
+HARNESS_W, HARNESS_H = 22, 29
 
-    The input pipe stands in for the worker, so the probe speaks the painter's
-    exact protocol and a correct frame here means the panel harness is right.
+
+def stamp_harness(g: Circuit, ox: int = 0, oy: int = 0) -> dict[str, int]:
+    """Painter + LM-75 + the three port pipes, with `(ox, oy)` as its origin.
+
+    Everything the engine has already signed off on lives here; the caller only
+    supplies the feed pipe, which may enter any non-corner cell of the painter's
+    wall because the painter has exactly one incoming pipe and so binds `r`
+    unambiguously wherever it arrives.
     """
-    g = Circuit(22, 26)
-    px, py = PROBE_PAINTER
-    dx, dy = PROBE_PANEL
+    px, py = ox + PROBE_PAINTER[0], oy + PROBE_PAINTER[1]
+    dx, dy = ox + PROBE_PANEL[0], oy + PROBE_PANEL[1]
 
     stamp(g, px, py, painter().rows())
     walls(g, px, py, PAINTER_IW, PAINTER_IH)
@@ -131,12 +145,23 @@ def build_panel_probe() -> tuple[list[str], dict[str, int]]:
                       (px + P_SWAP, dy + PANEL_H + 2)],
                   into=(px + P_SWAP, dy + PANEL_H + 1))
 
-    stamp(g, 16, 0, ["+-+", "|I|", "+-+"])
-    pipe(g, [(15, 1), (14, 1)], into=(px + PAINTER_IW, 1))
-
     lens = {"addr": l_addr, "data": l_data, "swap": l_swap}
     if not (l_addr - 2 <= l_data and l_swap > l_data - 12):
         raise ValueError(f"pipe lengths deliver out of order: {lens}")
+    return lens
+
+
+def build_panel_probe() -> tuple[list[str], dict[str, int]]:
+    """Display + painter + the three port pipes, fed by the input room.
+
+    The input pipe stands in for the worker, so the probe speaks the painter's
+    exact protocol and a correct frame here means the panel harness is right.
+    """
+    g = Circuit(HARNESS_W, HARNESS_H)
+    lens = stamp_harness(g)
+    east = PROBE_PAINTER[0] + PAINTER_IW    # the painter's east wall column
+    stamp(g, east + 3, 0, ["+-+", "|I|", "+-+"])
+    pipe(g, [(east + 2, 1), (east + 1, 1)], into=(east, 1))
     return [r.rstrip() for r in g.rows()], lens
 
 
@@ -148,17 +173,29 @@ def build_panel_probe() -> tuple[list[str], dict[str, int]]:
 # inside one cycle is.  A flat two-row relay walks east along the top row and west
 # along the bottom, and every cell that is not a turn can be half of a pair:
 #
-#       @rsrsrsrsv
-#       ^srsrsrs<
+#       > @ r s r s r s _ v
+#       ^ s r s r s r s r <
 #
-# 20 cells, 8 pairs, so 2.5 ticks/word — the spawn is a nop at the cycle's start
-# so the man's first act is `r`, not an `s` that would inject a spurious 0 into
-# the ring.  One incoming pipe and one outgoing, so no `r`/`s` here needs a
-# binding argument and both ports may sit on whichever wall the routing wants.
+# 20 cells, 7 pairs, so 2.9 ticks/word.  Two cells are spent on shape rather than
+# work, and both are load-bearing:
+#
+# * `>` at the north-west corner, not the spawn: the returning man arrives from
+#   the south heading **north** and has to be turned east, and `@` is only a nop,
+#   so a spawn in that corner would walk him straight out through the wall.
+# * the spawn at (1,0) instead, where heading east is already correct — and where
+#   the man's first act is the `r` at (2,0), not an `s` that would inject a
+#   spurious 0 into the ring.
+#
+# The single blank before `v` is what makes the pair count odd-safe: the walking
+# cycle is `r s` throughout, so every `r` is followed by its own `s`.
+#
+# One incoming pipe and one outgoing, so no `r`/`s` here needs a binding
+# argument and both ports may sit on whichever wall the routing wants — but a
+# port's first pipe cell must still point *away* from this room.
 FLAT_RELAY = [
     "+----------+",
-    "|@rsrsrsrsv|",
-    "|^srsrsrs<.|",
+    "|>@rsrsrs v|",
+    "|^srsrsrsr<|",
     "+----------+",
 ]
 RELAY_IW, RELAY_IH = 10, 2
