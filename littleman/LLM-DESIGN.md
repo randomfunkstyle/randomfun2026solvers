@@ -485,6 +485,50 @@ Every `MULI`/`DIVI`/`MODI` site in the program is a power of two (`MULI 16`;
 Minimum viable pair is therefore **`DSP` fold (−2) plus `MULI` (−1)**, or
 **`MULI` + `DIVMOD` + the `DSP` fold** (−4, landing on 15, which is still `k = 4`).
 
+### The fold changes one generator, not eleven
+
+`DSPA`/`DSPD`/`DSPS` and `MULI` appear in the checked-in `.asm` for `plotter`,
+`palette`, `snake`, `pathfinder`, `brackets`, `snake-ring`, `pathfinder-unit` and
+`gradebook`, which makes the fold look like an ISA amputation with ten machines
+downstream of it. It is not, because **`k` is computed per program, not per ISA**:
+
+```python
+codes = {i.code for i in self.instrs}        # asm.py, Program.ops_used
+used  = [op.mnemonic for op in program.ops_used]
+k     = max(1, (len(used) - 1).bit_length()) # machine.py:480
+```
+
+`ops_used` is the set of codes *present in this program*. So `DSP` is **added**
+alongside the existing opcodes, `llm_lm1.py` alone stops emitting the three it
+replaces, and every other generator keeps the ops it always had with its machine
+byte-identical. The blast radius is one file, and the ISA grows rather than
+shrinks — which is the opposite of how the entry has read since it was written.
+
+### The relay is built and proven
+
+`lm1/dsprelay.py`, verified on the engine across all three ports and five values:
+each port takes its own arm and the value survives the branch. The arms emit
+different tags on purpose, so a pass cannot be a run where the branch did nothing.
+
+Two details the "three-way `X` on the word's sign" sketch above leaves out, both
+found by building it:
+
+* **The selector cannot carry a sign.** `rom.digit_width` rejects a negative
+  literal, so a ROM operand is non-negative and `X` has nothing to test. The relay
+  makes the sign itself — `M`, `` `1` ``, `W`, `-` gives `p - 1` as −1/0/+1 — which
+  costs three glyphs in one room rather than a wider word in every ROM literal.
+* **The middle arm is reached by zero**, so all three of `X`'s exits carry traffic.
+  A two-way branch would have had to leave `p = 1` to luck.
+
+Port codes are the emulator's own (0 ADDR, 1 DATA, 2 SWAP), so nothing translates
+between the lane, the relay and `display_writes`.
+
+What remains is placement: the relay's three `s` glyphs each have to bind to their
+own outgoing pipe (§7.1), and `_display` currently routes ADDR/DATA/SWAP from the
+*CPU's* south wall. The clean decomposition is to leave that routing alone and have
+it source its three columns from the relay's south wall instead of `cpu.dsp_cols` —
+the relay then presents exactly the interface the CPU used to.
+
 ### One route that looks free and is not
 
 `SUBI n` is arithmetically `ADDI (2**64 - n)` — `wrap` is signed 64-bit two's
