@@ -1,0 +1,16 @@
+# pathfinder — submission 2fc93863-333e-4c1e-805f-2a7148024c3d
+
+verdict      done: 18/18 cases, area2 30625, avgTicks 356,381, score 10,914,173,229
+submitted    2026-07-26T16:01:06+0300
+grid         82x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  341053e9360ec3f68701184b4989ba8d500775726a9134a2c7436eb5dcbafcb5
+commit       483a273
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 8/10: use the unique best send offset from the exhaustive equal-span anchor sweep, one further column outward from improvement 7. Same 82x175; both validators pass 7/7 after merging origin/main; every public case is one tick faster.
