@@ -1462,7 +1462,28 @@ def _emit_pick(a: Asm, sites: int) -> None:
 #: ROM's own width.
 TAPE_SKIP_BATCH = 2
 
-HOT = (4, 26)
+#: The hot bank, as ``(cols, rows)`` — but :data:`lm1.machine.TIER_PIPE_BANK` makes
+#: it a pipe tape, and a tape only cares about the product.
+#:
+#: **Size it to what is used, not to a round shape.** Only 52 slots are ever handed
+#: out of this block (``Asm.hot_used``); a larger bank is dead ring cells that every
+#: hot read still rotates past, because a tape answers in ``~8 * n / skip_batch``.
+#: The reserved size also shifts the cold region up, so an oversized bank inflates
+#: the whole address space — 104 made the store 479 slots where 53 makes it 428.
+#:
+#: Swept on the engine, all 14 public cases passing, `area2` 37,636 throughout:
+#:
+#:     hot   avg ticks   worst        runner-ticks   score
+#:      53    7,175,398   11,371,396   0.0910bn       295,978,414,549
+#:      56    7,190,647   11,387,771   0.0911bn       296,607,383,101
+#:      64    7,228,426   11,460,520   0.0917bn       298,165,754,759
+#:     104    7,680,119   12,151,119   0.0972bn       316,797,643,986   (was shipped)
+#:     128    8,077,039   12,735,198   0.1019bn       333,170,242,865
+#:
+#: Monotonic in the bank size once every hot slot fits, so 53 — one spare above the
+#: 52 used — is the optimum. 52 exactly is a *fault*, not merely a tight fit; see
+#: the guard in :func:`build_asm`.
+HOT = (1, 53)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 
@@ -1477,6 +1498,15 @@ def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tupl
     """
     a = Asm(hot_slots=hot_slots)
     _declare(a, packed_cells=packed_cells)
+    if hot_slots and a.hot_used >= hot_slots:
+        # A bank with no spare slot builds, passes ten of the fourteen public cases,
+        # and kills the runner with `fatal: wall` on the other four. Measured at
+        # `hot_slots=52` against `hot_used=52`; one spare is enough. Caught here
+        # because the symptom points at the program and the cause is this number.
+        raise ValueError(
+            f"the hot bank holds {hot_slots} slots and {a.hot_used} are used; it "
+            "needs at least one spare or the machine faults on a wall"
+        )
     a.jmp("setup", "the ROM starts here; setup runs once and falls into round")
     _emit_round(a, packed=packed_cells)
     _emit_pick(a, 2 * MAX_MEN)
