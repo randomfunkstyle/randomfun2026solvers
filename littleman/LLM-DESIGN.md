@@ -308,6 +308,45 @@ coprocessor behind `SND`/`RCV` leaves ~170 scalars in the tape, and a read falls
 from 3,416 to ~1,360 ticks with no change to the box — which is how `snake` went
 from a 66-slot tape at 523 ticks a read to 9 slots at ~180.
 
+## The two-tier store: 2.36x faster in ticks, rejected on wall clock
+
+Built, engine-verified, submitted, **refused**: `4/28`, the runner reporting
+`10 time-cap` on the public cases and `14 time-cap` on the private ones. Worth
+recording in full, because everything about it looked right.
+
+The change: the cold 256-word program grid stays on the tape, the 52 hottest slots
+(90.6% of all reads) move to a man-memory tier reached through a range-routing
+adapter and a response merger. Measured across all 14 public cases:
+
+| | footprint | avg ticks | max ticks | score |
+|---|---:|---:|---:|---:|
+| one tape | 41,616 | 20,275,186 | 31,809,643 | 8.44e11 |
+| + tier | 41,616 | **8,605,207** | 13,676,774 | **3.58e11** |
+
+It is not wrong: on the reference wasm, under engine round-gating, `first steps`
+matches 4/4 frames at 1,492,654 ticks — the same number the native validator
+gives. The frames are right and the ticks are real.
+
+**What kills it is that a stored word is a live man.**
+
+| | live men | ticks a case | runner-ticks |
+|---|---:|---:|---:|
+| one 427-slot tape | 5 | 20,275,186 | 0.10bn |
+| + 52-slot tier | **114** | 8,605,207 | **0.98bn** |
+
+Score counts ticks; the grader spends wall clock, and wall clock goes as
+`runners x ticks`. The tier added 109 men — 52 cells, their decoders, repeaters,
+router, collector, relay — and the simulator steps every one of them on every tick
+for the whole run, read or not. Ticks fell 2.36x, simulator work rose 9.7x.
+
+A pipe tape stores 427 words in **zero** runners, because values move without a man.
+That asymmetry is the whole result, and it is now in `ARCH.md` §4.1 as a third
+axis on the tier table.
+
+The machine kept here is therefore the single-tape one. `build_machine(hot=HOT)`
+still builds the tier version for anyone who wants to measure it, and
+`tests/test_lm1_two_tier.py` still proves the seam works.
+
 ## What is left on the table
 
 * **Code banks (ARCH.md §5.5).** Every one of the ~470 taken branches a case

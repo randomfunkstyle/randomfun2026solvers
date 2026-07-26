@@ -1450,7 +1450,7 @@ HOT = (2, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 
-def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tuple[str, int]:
+def build_asm(*, packed_cells: bool = False, hot_slots: int = 0) -> tuple[str, int]:
     """Return the ``.asm`` text and the tape slot count it needs.
 
     ``hot_slots`` reserves the lowest addresses for ``machine.build(hot=...)``'s
@@ -1487,7 +1487,7 @@ ROM_ROWS = 84
 
 
 def build_machine(
-    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = HOT
+    *, packed_cells: bool = False, rom_rows: int = ROM_ROWS, hot: tuple[int, int] | None = None
 ):
     """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel.
 

@@ -132,12 +132,15 @@ def test_the_grid_passes_every_public_case_on_the_engine() -> None:
     failed = [(c.name, c.detail) for c in result.cases if not c.passed]
     assert not failed, failed
     assert len(result.cases) == 14
-    # Measured 8,605,207 average / 13,676,774 worst against a 50M cap, with the
-    # man-memory tier carrying the hot 52 slots.  The margin is the point of the
-    # assertion: a change that doubles the worst case fails a private test rather
-    # than merely scoring badly.  (The single-tape machine this replaced was
-    # 20,275,186 / 31,809,643 — 2.36x more, at the identical footprint.)
-    assert max(c.ticks for c in result.cases) < 20_000_000
+    # Measured 20,275,186 average / 31,809,643 worst against a 50M cap.  The margin
+    # is the point of the assertion: a change that doubles the worst case fails a
+    # private test rather than merely scoring badly.
+    #
+    # The two-tier build (``hot=HOT``) measures 8,605,207 / 13,676,774 here and on
+    # the native validator, and was **rejected by the judge at 4/28** — see
+    # ``LLM-DESIGN.md``.  Until that divergence is explained, the shipped machine is
+    # the single-tape one, and this assertion guards *it*.
+    assert max(c.ticks for c in result.cases) < 40_000_000
 
 
 def test_the_registered_asm_still_matches_the_generator() -> None:
