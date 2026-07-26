@@ -1,0 +1,16 @@
+# little-little-man — submission a327f27e-0004-4ada-870d-1fea04513f5a
+
+verdict      done: 28/28 cases, area2 37636, avgTicks 8,332,168, score 313,589,490,978
+submitted    2026-07-26T17:36:53+0300
+grid         192x194
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  64833c567f505fdd3d04ad92135fa7cc5250adb116eba018e6f6222f87111ee6
+commit       79d10c3
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+L/U teleports replace the merger and both answer lanes; banks stacked. A long room is a teleport because R has no distance term (verified 66 ticks at 1 column and at 31). L collects both banks and carries the answer west for free; U makes the cold bank's climb O(1) in the hot bank's height. avg 7,680,119 -> 7,594,099 at the same 37,636.

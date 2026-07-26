@@ -2701,6 +2701,11 @@ _MERGER_H = 2
 #: merger door with no climb and no descent at all.
 _ANS_BAND = 3
 
+#: A teleport room's ``R``/``s`` loop is 4x2 whatever the room's length: these are the
+#: *loop's* extent, not the room's. See :func:`memory_men.teleport`.
+_TELE_W = 4
+_TELE_H = 2
+
 #: Use the side-ported grid man-memory for the hot tier, so its answer leaves the
 #: same wall its request enters. The bottom-ported block forces the answer to travel
 #: the block's whole width and then back west across the machine; with both ports on
@@ -2857,73 +2862,69 @@ def _two_tier(
     )
 
     # ── the hot tier, immediately east of the adapter ────────────────────────
-    gx, gy = aw + 5, cy + _ANS_BAND
+    # Slide the bank up until its own ``^`` answer stub ends one cell below L's south
+    # wall, so the block's built-in pipe *is* the answer connection and no caller pipe
+    # is needed. ``blit`` writes only the cells a block defines and a ``tape_block``'s
+    # top rows are empty, so its box may overlap L freely — no *glyph* does.
+    gx, gy = aw + 5, cy + _TELE_H + 2 - tier.out_cell[1]
     g.blit(gx, gy, tier.cells)
     hot_out = ay + adapter.hot_row
     tin_x, tin_y = gx + tier.in_cell[0], gy + tier.in_cell[1]
     g.draw_pipe([(aw + 1, hot_out), (aw + 3, hot_out), (aw + 3, tin_y), (tin_x - 1, tin_y)])
 
-    # ── the tape, east of the tier; its request goes the long way, underneath ──
-    tx, ty = gx + tier.width + 4, cy + _ANS_BAND
+    # ── the cold tape, stacked *under* the hot bank ───────────────────────────
+    # Side by side, the cold request travelled under both blocks — ~250 cells — and the
+    # machine's used width ran to the far edge of the second block. Stacked, the request
+    # drops down a free column west of both banks and turns straight in.
+    tx, ty = gx, gy + tier.height
     g.blit(tx, ty, tape.cells)
     cold_out = ay + adapter.cold_row
-    bot = max(gy + tier.height, ty + tape.height) + 3
     ttin_x, ttin_y = tx + tape.in_cell[0], ty + tape.in_cell[1]
-    lane = tx - 3  # the free columns between the two blocks
-    g.draw_pipe(
-        [
-            (aw + 1, cold_out),
-            (aw + 2, cold_out),
-            (aw + 2, bot),
-            (lane, bot),
-            (lane, ttin_y),
-            (ttin_x - 1, ttin_y),
-        ]
-    )
+    drop = aw + 2
+    g.draw_pipe([(aw + 1, cold_out), (drop, cold_out), (drop, ttin_y), (ttin_x - 1, ttin_y)])
 
-    # ── the merger, in the corridor band between the CPU's top and the adapter ──
-    mx, my = ax + 1, cy + 1
-    g.room(mx - 1, my - 1, mx + _MERGER_W, my + _MERGER_H)
-    for j, row in enumerate(_MERGER):
-        g.text(mx, my + j, row.replace(" ", "\0"))
-    g.draw_pipe(
-        [
-            (mx - 2, my + 1),
-            (cx + w + 3, my + 1),
-            (cx + w + 3, resp_row),
-            (cx + w + 2, resp_row),
-        ]
-    )
-
-    # Both answers rise into the band the blocks vacated and run west into a merger
-    # door of their own. The lane rows *are* the merger's interior rows, so neither
-    # pipe turns twice and neither leaves the band.
+    # ── two teleports carry both answers home ────────────────────────────────
+    # ``R`` receives from *any* incoming pipe in the room and, unlike ``r``, has **no
+    # distance term** (SPEC.md "Which pipe do I talk to?"). So a long room is a
+    # teleport: a value entering a pipe at its far end is taken by the man at the near
+    # end in one instruction, having transited no pipe cells at all. Measured on the
+    # engine: the same 66 ticks with the man 1 column from the entry pipe and 31.
     #
-    # One rule decides which lane is which: the **nearer** block takes the **lower**
-    # one. The far block's riser is east of the near block's, and it has to cross the
-    # near lane's row to reach a higher lane — so if the near block took the upper
-    # lane, the far riser would cut it. With the tier low, the tier's row stops west
-    # of the tape's riser and nothing crosses.
-    cold_lane, hot_lane = my, my + 1
-    door = mx + _MERGER_W + 1
-    g.draw_pipe(
-        [
-            (tx + tape.out_cell[0], ty + tape.out_cell[1] - 1),
-            (tx + tape.out_cell[0], cold_lane),
-            (door, cold_lane),
-        ]
-    )
-    g.draw_pipe(
-        [
-            (gx + tier.out_cell[0], gy + tier.out_cell[1] - 1),
-            (gx + tier.out_cell[0], hot_lane),
-            (door, hot_lane),
-        ]
-    )
+    #     L L L L L L L L <  U        L = teleport   (wide, leaves west to the CPU)
+    #              ^         U        U = teleport_v (tall, leaves north into L)
+    #          [ hot  ]      U
+    #          [ cold ]----> U
+    #
+    # **L** replaces the merger: ``R`` needs no pipe affinity, so one room collects both
+    # banks with no ordering logic, then carries the answer the machine's whole width
+    # west for nothing. **U** makes the *cold* bank's climb free — without it that climb
+    # is an ordinary pipe running the height of the hot bank, and it grows with the cold
+    # bank, the taller of the two. A teleport is O(1) in its length.
+    from ..memory_men import teleport, teleport_v
+
+    l_wall = cy + _TELE_H + 1
+    ux = gx + tier.width
+    lx0, lx1 = cx + w + 3, ux - 3
+
+    cold_row = ty + tape.out_cell[1] - 1
+    u_rows, _ = teleport_v(cold_row - cy)
+    g.room(ux, cy, ux + _TELE_W + 1, cy + len(u_rows) + 1)
+    for k, row in enumerate(u_rows):
+        g.text(ux + 1, cy + 1 + k, row.replace(" ", "\0"))
+
+    l_rows, _ = teleport(lx1 - lx0 - 1)
+    g.room(lx0, cy, lx1, l_wall)
+    for k, row in enumerate(l_rows):
+        g.text(lx0 + 1, cy + 1 + k, row.replace(" ", "\0"))
+
+    g.draw_pipe([(tx + tape.out_cell[0], cold_row), (ux - 1, cold_row)])
+    g.draw_pipe([(ux - 1, cy + 2), (lx1 + 1, cy + 2)])
+    g.draw_pipe([(lx0 + 3, l_wall + 1), (lx0 + 3, resp_row), (cx + w + 2, resp_row)])
 
     regions = {
         "adapter": (ax, ay, adapter.width + 2, adapter.height + 2),
-        "merger": (mx - 1, my - 1, _MERGER_W + 2, _MERGER_H + 2),
+        "teleport:L": (lx0, cy, lx1 - lx0 + 1, _TELE_H + 2),
+        "teleport:U": (ux, cy, _TELE_W + 2, len(u_rows) + 2),
         "tier": (gx, gy, tier.width, tier.height),
         "tape": (tx, ty, tape.width, tape.height),
     }
@@ -2935,7 +2936,10 @@ def _two_tier(
         regions=regions,
         req_row=req_row,
         resp_row=resp_row,
-        pipes=4 + 2 + tier.pipes - 2,
+        # Ten pipes: CPU->adapter, adapter->each bank, hot->L (the block's own stub),
+        # cold->U, U->L, L->CPU, and two ring legs per bank. ``touches`` already counts
+        # mem_req (CPU->adapter) and mem_resp (L->CPU), hence the ``- 2``.
+        pipes=7 + 4 - 2,
         tape=tape,
         tier=tier,
     )
