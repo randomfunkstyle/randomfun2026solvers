@@ -79,6 +79,42 @@ footprint is the *other* half of the score and which way to spend it is a
 per-machine question — ``little-little-man`` is square and has a dead rectangle
 east of the CPU stack, ``tcp`` has neither.
 
+``unit`` — the cheap half of the curve
+--------------------------------------
+
+A pure ladder draws **one ``r`` cell per discardable word**: 511 cells of grid to
+discard 511 words, however it is folded. That is the expensive part, and on a
+footprint-scored machine it may well be the disqualifying one.
+
+The fix is to stop believing the earlier claim that ``m`` costs a cell per word.
+It costs a cell per *lap* — the reason today's loop is 4 ticks a word is that its
+lap is two words long. A lap of ``U`` words in a rectangular loop is ``U + 6``
+cells (four corners, one ``m``, one nop to make ``U`` even), so it runs at
+``1 + 6/U`` ticks a word using ``U + 6`` cells of grid **whatever the count**.
+
+What a counted loop cannot do is divide, and that is exactly what the ladder
+already provides: after ``t`` stages the ladder has discarded ``n mod 2**t`` and
+left ``BP = n >> t``. Hand that to a loop of ``U = 2**t`` words a lap and the two
+halves compose into::
+
+    n + 6 * (n >> t) + 5 * t          ticks, in ~2**t + 5*t cells, for *any* n
+
+``unit_bits=t`` builds that. It is slower than the pure ladder and very much
+smaller, it has **no capacity limit** — a loop runs as many laps as ``BP`` says,
+so the block does not have to grow when the program does — and it spans the
+whole range from "barely bigger than what is there today" to "within 5% of the
+ladder":
+
+===========  ========  ==============  ===========  ==========
+``unit_bits``   cells   ticks/word@510   vs today       shape
+===========  ========  ==============  ===========  ==========
+2 (U=4)          ~30         2.51          1.6x      loop-dominated
+3 (U=8)          ~65         1.77          2.3x      the cheap knee
+4 (U=16)        ~110         1.50          2.7x
+5 (U=32)        ~180         1.22          3.3x
+none (ladder)   ~893         1.17          3.4x      one cell per word
+===========  ========  ==============  ===========  ==========
+
 What this component does not solve
 ----------------------------------
 
@@ -138,6 +174,7 @@ class DrainBlock:
     exit: tuple[int, int]  # first cell *below* the block; heading south, BP = 0
     reads: list[tuple[int, int]]  # every `r`, for a pipe-binding check
     even: bool = False  # no bit-0 stage: counts must be multiples of two
+    unit: int = 0  # words a lap of the coarse loop discards; 0 = no loop
     stage_rows: list[tuple[int, int, int]] = field(default_factory=list)  # (bit, top, rows)
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
@@ -147,13 +184,28 @@ class DrainBlock:
         return 2 if self.even else 1
 
     @property
+    def bounded(self) -> bool:
+        """False when a coarse loop makes the block good for any count at all."""
+        return not self.unit
+
+    @property
     def capacity(self) -> int:
-        """The largest count this ladder can discard."""
+        """The largest count this block can discard.
+
+        A looped block has no real ceiling — the loop runs whatever ``BP`` says —
+        so this reports the largest count that still fits in a 64-bit backpack,
+        which is the only limit ``SPEC.md`` imposes.
+        """
+        if self.unit:
+            return ((1 << 62) // self.unit) * self.unit
         return ((1 << self.bits) - 1) & ~(self.step - 1)
 
-    def counts(self) -> range:
-        """Every count this ladder accepts — what an exhaustive test sweeps."""
-        return range(0, self.capacity + 1, self.step)
+    def counts(self, limit: int | None = None) -> range:
+        """Every count to sweep. Looped blocks need a ``limit``; ladders do not."""
+        top = self.capacity if limit is None else limit
+        if not self.bounded and limit is None:
+            raise DrainError("a looped block is unbounded — say how far to sweep")
+        return range(0, top + 1, self.step)
 
     def rows_text(self) -> list[str]:
         w = max(x for x, _ in self.cells) + 1
@@ -180,14 +232,32 @@ def _legs(run: int, max_width: int | None) -> tuple[int, int]:
     return legs, w
 
 
-def build_drain(bits: int, *, max_width: int | None = None, even: bool = False) -> DrainBlock:
+def build_drain(
+    bits: int,
+    *,
+    max_width: int | None = None,
+    even: bool = False,
+    unit_bits: int | None = None,
+) -> DrainBlock:
     """Draw a ``bits``-stage ladder able to discard any count below ``2 ** bits``.
 
     ``max_width`` caps how wide a single stage's fold may be; ``None`` gives the
     two-row hairpin, which is the fastest to skip and the widest. ``even`` drops
     the bit-0 stage in favour of a bare ``]``, which is what every ROM discard
-    count wants — see the module docstring.
+    count wants.
+
+    ``unit_bits=t`` truncates the ladder at ``t`` stages and hangs a counted loop
+    of ``2 ** t`` words a lap underneath it, which trades a few percent of speed
+    for most of the area and removes the capacity limit entirely. ``bits`` is
+    ignored in that case — the loop takes whatever ``BP`` is left. See the module
+    docstring for the curve.
     """
+    if unit_bits is not None:
+        if unit_bits < 2:
+            # A unit of two is `1 + 6/2` = 4 ticks a word: exactly the counted
+            # loop this replaces, in more cells. There is no point below 4 words.
+            raise DrainError("a coarse loop needs a unit of at least four words")
+        bits = unit_bits
     if bits < 1:
         raise DrainError("a ladder needs at least one stage")
     if even and bits < 2:
@@ -265,6 +335,35 @@ def build_drain(bits: int, *, max_width: int | None = None, even: bool = False) 
         regions[f"drain:bit{j}"] = (spine - w - 1, top, w + 3, body + 1)
         y = top + body + 1
 
+    exit_at = (spine, y)
+    unit = 0
+    if unit_bits is not None:
+        # ── the coarse loop ──────────────────────────────────────────────────
+        # The ladder has left ``BP = n >> unit_bits``: exactly the number of laps
+        # of ``2 ** unit_bits`` words still owed. A rectangular loop is four
+        # corners, one ``m`` and one nop — the nop only so the read count comes
+        # out *even*, since a rectilinear cycle always has even length and an
+        # even number of corners, which would otherwise force an odd unit and no
+        # power of two to divide by.
+        unit = 1 << unit_bits
+        body = unit // 2 + 1  # cells per leg; 2*(body-1) == unit reads a lap
+        put(spine, y, "<")  # the ladder's man turns west onto the test
+        put(spine - 1, y, "a")  # BP > 0: counter-clockwise from west is south
+        put(spine - 1, y + 1, ".")  # the parity nop
+        for row in range(y + 2, y + body + 1):
+            put(spine - 1, row, "r")
+        put(spine - 1, y + body + 1, ">")
+        put(spine, y + body + 1, "^")
+        for row in range(y + 2, y + body + 1):
+            put(spine, row, "r")
+        put(spine, y + 1, "m")  # decrement immediately before the test
+        regions["drain:loop"] = (spine - 1, y, 2, body + 2)
+
+        # BP == 0 walks straight west out of the `a`, clear of the loop.
+        put(spine - 2, y, "v")
+        exit_at = (spine - 2, y + 1)
+        y += body + 2
+
     width = spine + 2
     return DrainBlock(
         cells=cells,
@@ -273,9 +372,10 @@ def build_drain(bits: int, *, max_width: int | None = None, even: bool = False) 
         bits=bits,
         spine=spine,
         entry=(spine, 0),
-        exit=(spine, y),
+        exit=exit_at,
         reads=reads,
         even=even,
+        unit=unit,
         stage_rows=stage_rows,
         regions={"drain": (0, 0, width, y), **regions},
     )
@@ -302,11 +402,15 @@ def walk(block: DrainBlock, n: int, *, limit: int | None = None) -> tuple[int, i
     x, y = block.entry
     d = _SOUTH
     bp, reads, ticks = n, 0, 0
-    # The ladder is straight-line — every stage falls into the next and nothing
-    # loops — so the man cannot step on a cell twice and the cell count *is* the
-    # bound. A tighter guess than that is a guess about the fold, and a deep fold
-    # walks four turn cells per pair of legs.
-    cap = limit if limit is not None else len(block.cells) + 2
+    # A pure ladder is straight-line — every stage falls into the next and
+    # nothing loops — so the man cannot step on a cell twice and the cell count
+    # *is* the bound. A coarse loop does revisit, once per lap, so it gets the
+    # laps it is owed plus the ladder's own bound.
+    cap = limit
+    if cap is None:
+        cap = len(block.cells) + 2
+        if block.unit:
+            cap += (n // block.unit + 1) * (block.unit + 6)
 
     while (x, y) != block.exit:
         ch = block.cells.get((x, y))
@@ -318,12 +422,19 @@ def walk(block: DrainBlock, n: int, *, limit: int | None = None) -> tuple[int, i
             bp >>= 1
         elif ch == "r":
             reads += 1
+        elif ch == "a":
+            if bp > 0:
+                d = _ccw(d)
+        elif ch == "m":
+            bp -= 1
         elif ch == "v":
             d = _SOUTH
         elif ch == "<":
             d = _WEST
         elif ch == ">":
             d = _EAST
+        elif ch == "^":
+            d = _NORTH
         elif ch != ".":
             raise DrainError(f"unexpected glyph {ch!r} at {(x, y)}")
         x, y = x + d[0], y + d[1]
@@ -353,11 +464,14 @@ def build_probe(block: DrainBlock) -> tuple[list[str], dict[tuple[int, int], tup
     g = _Grid()
     # Room x0 is chosen so the input room and its pipe fit to the west.
     x0, y0 = 8, 0
-    inner_w = max(block.width, block.spine + 2)
+    # The setup row needs `@ r b` west of the spine, and a narrow block (a small
+    # coarse loop is four columns wide) does not otherwise leave room for them.
+    pad = max(1, 4 - block.spine)
+    inner_w = max(pad - 1 + block.width, block.spine + pad + 2)
     rh = block.height + 5
     g.room(x0, y0, x0 + inner_w + 1, y0 + rh + 1)
 
-    ox, oy = x0 + 1, y0 + 2
+    ox, oy = x0 + pad, y0 + 2
     g.blit(ox, oy, block.cells)
     spine = ox + block.spine
 
@@ -369,11 +483,13 @@ def build_probe(block: DrainBlock) -> tuple[list[str], dict[tuple[int, int], tup
         g.soft(x, y0 + 1, ".")
     g.put(spine, y0 + 1, "v")
 
-    # Tail, below it: the witness read, the send, and the halt.
-    tail = oy + block.height
-    g.put(spine, tail, "r")
-    g.put(spine, tail + 1, "s")
-    g.put(spine, tail + 2, "H")
+    # Tail, below it: the witness read, the send, and the halt. A looped block
+    # leaves on a different column from the one it entered — the coarse loop
+    # occupies the spine — so this follows `exit`, not the spine.
+    out_x, tail = ox + block.exit[0], oy + block.exit[1]
+    g.put(out_x, tail, "r")
+    g.put(out_x, tail + 1, "s")
+    g.put(out_x, tail + 2, "H")
 
     # One incoming pipe and one outgoing, so every `r` and the `s` bind
     # unambiguously whatever the ladder's shape.
@@ -390,6 +506,87 @@ def build_probe(block: DrainBlock) -> tuple[list[str], dict[tuple[int, int], tup
     return g.rows(), translate
 
 
+def trace(block: DrainBlock, n: int) -> list[tuple[int, int]]:
+    """Every cell the man steps on for count ``n``, in order."""
+    path: list[tuple[int, int]] = []
+    x, y = block.entry
+    d, bp = _SOUTH, n
+    while (x, y) != block.exit:
+        path.append((x, y))
+        ch = block.cells[(x, y)]
+        if ch == "x":
+            d = _cw(d) if bp & 1 else _ccw(d)
+        elif ch == "]":
+            bp >>= 1
+        elif ch == "a":
+            d = _ccw(d) if bp > 0 else d
+        elif ch == "m":
+            bp -= 1
+        elif ch in "v<>^":
+            d = {"v": _SOUTH, "<": _WEST, ">": _EAST, "^": _NORTH}[ch]
+        x, y = x + d[0], y + d[1]
+    return [*path, (x, y)]
+
+
+def debug_map(block: DrainBlock, *, counts: tuple[int, ...] = ()) -> tuple[list[str], object]:
+    """``(rows, DebugMap)`` — the probe grid with every stage named and traced.
+
+    The picture is the argument: a stage's *taken* path threads the fold and its
+    *skipped* path falls two cells past it, and putting both on one grid is the
+    only way to see at a glance that the bypass does not scale with the run.
+    """
+    from ..man_debug import DebugMap
+
+    rows, translate = build_probe(block)
+    ox, oy = translate[next(iter(block.cells))]
+    bx, by = next(iter(block.cells))
+    dbg = DebugMap(
+        f"DRAIN — {'ladder' if block.bounded else f'ladder + loop of {block.unit}'}, "
+        f"{block.width}x{block.height}, {len(block.reads)} reads drawn",
+        offset=(ox - bx, oy - by),
+    )
+    for bit, top, rows_used in block.stage_rows:
+        run = 1 << bit
+        x, y, w, h = block.regions[f"drain:bit{bit}"]
+        dbg.region(
+            f"bit{bit}",
+            x,
+            y,
+            w,
+            h,
+            note=f"bit {bit}: {run} word{'s' if run > 1 else ''} when set, "
+            f"{run + 5} ticks taken / 5 skipped",
+            color="#38bdf8" if bit % 2 else "#0ea5e9",
+            local=True,
+        )
+    if "drain:loop" in block.regions:
+        x, y, w, h = block.regions["drain:loop"]
+        dbg.region(
+            "coarse loop",
+            x,
+            y,
+            w,
+            h,
+            note=f"{block.unit} words a lap in {block.unit + 6} cells — the area "
+            "does not grow with the count",
+            color="#f97316",
+            local=True,
+        )
+    palette = ("#22c55e", "#ef4444", "#a855f7", "#eab308")
+    for i, n in enumerate(counts):
+        ticks = len(trace(block, n)) - 1
+        dbg.lane(
+            f"n={n}",
+            trace(block, n),
+            note=f"discards {n} in {ticks} ticks ({ticks / max(1, n):.2f} a word); "
+            f"bits set: {format(n, 'b')}",
+            color=palette[i % len(palette)],
+            kind="control",
+            local=True,
+        )
+    return rows, dbg
+
+
 def probe_input(n: int, words: int) -> list[int]:
     """``n`` followed by ``1..words`` — the witness read returns ``n + 1``."""
     return [n, *range(1, words + 1)]
@@ -401,10 +598,22 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("bits", type=int)
     ap.add_argument("--max-width", type=int)
+    ap.add_argument("--unit-bits", type=int, help="truncate the ladder and add a coarse loop")
+    ap.add_argument("--even", action="store_true", help="no bit-0 stage; even counts only")
     ap.add_argument("--probe", action="store_true", help="print the testable grid instead")
+    ap.add_argument("--html", help="write an overlay here, tracing --trace")
+    ap.add_argument("--trace", default="", help="comma-separated counts to draw as lanes")
     args = ap.parse_args(argv)
 
-    blk = build_drain(args.bits, max_width=args.max_width)
+    blk = build_drain(
+        args.bits, max_width=args.max_width, even=args.even, unit_bits=args.unit_bits
+    )
+    if args.html:
+        counts = tuple(int(v) for v in args.trace.split(",") if v.strip())
+        rows, dbg = debug_map(blk, counts=counts)
+        dbg.write_html(rows, args.html)
+        print(f"wrote {args.html}")
+        return 0
     if args.probe:
         rows, _ = build_probe(blk)
         print("\n".join(rows))

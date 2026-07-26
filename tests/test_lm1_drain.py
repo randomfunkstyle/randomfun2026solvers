@@ -235,3 +235,69 @@ def test_every_drawn_read_is_reachable() -> None:
         x, y = x + d[0], y + d[1]
     assert set(block.reads) <= walked
     assert len(block.reads) == block.capacity
+
+
+# ── the cheap half of the curve: a coarse loop instead of the wide stages ─────
+@pytest.mark.parametrize("unit_bits", [2, 3, 4, 5, 6])
+def test_a_looped_drain_discards_any_count(unit_bits: int) -> None:
+    """The loop removes the capacity limit, so this sweeps past ``2 ** bits``.
+
+    A pure ladder can only discard what it has drawn cells for; a loop runs
+    whatever ``BP`` says. That is the property worth testing, because it is what
+    stops the block having to grow when the program does.
+    """
+    block = drain.build_drain(0, unit_bits=unit_bits, even=True)
+    assert not block.bounded
+    for n in range(0, 4 * (1 << unit_bits) + 1024, 2):
+        reads, _ = drain.walk(block, n)
+        assert reads == n, f"unit={block.unit} BP={n} discarded {reads}"
+
+
+def test_a_unit_below_four_words_is_refused() -> None:
+    """It would be the counted loop it replaces, in more cells: 1 + 6/2 = 4."""
+    with pytest.raises(drain.DrainError):
+        drain.build_drain(0, unit_bits=1, even=True)
+
+
+def test_the_loop_is_where_the_area_went() -> None:
+    """The trade the ``unit_bits`` curve exists for, as a fact rather than prose.
+
+    A ladder draws one ``r`` per discardable word — 511 cells to discard 511 —
+    while a loop re-walks one short run, so its cells are set by the *unit* and
+    not by the count. At ``unit_bits=6`` that is a quarter of the cells for the
+    same speed, which is why a width-capped ladder is never the right answer: a
+    loop is a fold whose turn cells cost nothing, because it reuses them.
+    """
+    ladder = drain.build_drain(9, max_width=16, even=True)
+    looped = drain.build_drain(0, unit_bits=6, even=True)
+    assert len(looped.cells) * 3 < len(ladder.cells)
+    assert drain.cost(looped, 510) <= drain.cost(ladder, 510)
+
+
+@pytest.mark.parametrize(
+    ("unit_bits", "ceiling"),
+    [(2, 2.55), (3, 1.80), (4, 1.45), (5, 1.25), (6, 1.15)],
+)
+def test_the_cheap_end_of_the_curve_is_still_worth_having(unit_bits: int, ceiling: float) -> None:
+    """Measured ticks/word at 510, the count a backward jump actually discards.
+
+    Even the smallest — 21 cells, barely bigger than the 8-cell loop it replaces
+    — is 1.6x. These are pins on a published curve: if one moves, the table in
+    the module docstring is wrong and a caller has chosen its size on bad data.
+    """
+    block = drain.build_drain(0, unit_bits=unit_bits, even=True)
+    rate = drain.cost(block, 510) / 510
+    assert rate <= ceiling, f"{rate:.3f} ticks/word at unit={block.unit}"
+    assert rate < 4.0, "no better than the counted loop it replaces"
+
+
+def test_the_reference_interpreter_agrees_about_the_looped_drain(
+    lm: littleman.Littleman,
+) -> None:
+    """Counts either side of a lap boundary, where an off-by-one would hide."""
+    block = drain.build_drain(0, unit_bits=3, even=True)
+    src = "\n".join(drain.build_probe(block)[0]) + "\n"
+    for n in (0, 2, 6, 8, 10, 16, 18, 24, 30, 32, 62, 64, 66):
+        snap = lm.run(src, input=drain.probe_input(n, 100), max_ticks=50_000)
+        assert snap.fatal is None, f"n={n}: {snap.fatal}"
+        assert snap.output == [n + 1], f"n={n} left {snap.output}"
