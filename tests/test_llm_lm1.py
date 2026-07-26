@@ -115,11 +115,7 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
 @pytest.mark.slow
 def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     machine, _program = built
-<<<<<<< HEAD
     assert (machine.width, machine.height) == (203, 203)
-=======
-    assert (machine.width, machine.height) == (204, 203)
->>>>>>> b016681 (Compact LM-1 jump read loops)
 
 
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:
