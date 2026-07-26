@@ -89,10 +89,14 @@ order and the routing — see :func:`_display`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from . import rom as rommod
 from .asm import Program
 from .isa import TARGET_SEMS, Isa, Micro, Sem
+
+if TYPE_CHECKING:  # the tape block's own canvas; imported lazily at run time
+    from ..circuit import Circuit
 
 __all__ = [
     "Band",
@@ -1128,6 +1132,64 @@ class _Tape:
     height: int
     in_cell: tuple[int, int]  # where the request pipe must arrive, pointing east
     out_cell: tuple[int, int]  # where the response pipe leaves, pointing north
+    #: Ring capacity in values — the forward plus return pipe cell count. Must be
+    #: ``>= n + 1``; overshoot is free (see :func:`tape_block`) but worth asserting,
+    #: since a ring one value short does not fault, it just stalls the machine.
+    slots: int = 0
+
+
+#: The tape worker's room corner inside the block. Every anchor below is derived
+#: from it, so both ring layouts hang the same four pipes off the same four cells.
+_TAPE_WX, _TAPE_WY = 8, 8
+
+
+def _tape_shell(n: int) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
+    """The worker room and the two CPU-facing pipe stubs — the part no ring changes.
+
+    Shared by both ring layouts so neither can drift from the other. What fixes every
+    ``r``/``s`` binding *inside* the worker is the worker's four wall anchors, not the
+    shape of the ring: a ring may be routed any way at all so long as it still leaves
+    the east wall on ``memory_tape.V2_FWD_ROW`` and comes back north into the bottom
+    wall at ``memory_tape.V2_RET_COL``. That is the licence the serpentine uses.
+
+    Returns the canvas plus the request and response stub cells.
+    """
+    from ..circuit import Circuit
+    from ..memory_tape import V2_IH, V2_IN_ROW, V2_IW, V2_OUT_COL, worker_v2
+
+    g = Circuit(400, 200)
+    wk = worker_v2(n)
+    WX, WY = _TAPE_WX, _TAPE_WY
+    for (x, y), ch in wk.cell.items():
+        g.set(WX + x, WY + y, ch)
+    for x in range(-1, V2_IW + 1):
+        g.set(WX + x, WY - 1, "+" if x in (-1, V2_IW) else "-")
+        g.set(WX + x, WY + V2_IH, "+" if x in (-1, V2_IW) else "-")
+    for y in range(V2_IH):
+        g.set(WX - 1, WY + y, "|")
+        g.set(WX + V2_IW, WY + y, "|")
+
+    # request stub: two cells pointing east into the worker's left wall
+    iy = WY + V2_IN_ROW
+    g.set(WX - 3, iy, ">")
+    g.set(WX - 2, iy, ">")
+    # response stub: two cells climbing north out of the worker's top wall
+    ox = WX + V2_OUT_COL
+    g.set(ox, WY - 2, "^")
+    g.set(ox, WY - 3, "^")
+    return g, (WX - 3, iy), (ox, WY - 3)
+
+
+def _tape_of(g: Circuit, in_cell: tuple[int, int], out_cell: tuple[int, int], slots: int) -> _Tape:
+    cells = {k: v for k, v in g.cell.items() if v != " "}
+    return _Tape(
+        cells=cells,
+        width=max(x for x, _ in cells) + 1,
+        height=max(y for _, y in cells) + 1,
+        in_cell=in_cell,
+        out_cell=out_cell,
+        slots=slots,
+    )
 
 
 def tape_block(n: int) -> _Tape:
@@ -1136,48 +1198,50 @@ def tape_block(n: int) -> _Tape:
     ``memory_tape.assemble_v2`` builds the tape as a standalone answer to the
     ``memory`` problem, so it comes with its own ``I`` and ``O`` rooms. A program
     may have at most one of each and the CPU owns them, so those two rooms are
-    replaced here by pipe stubs the caller extends. Everything else — worker,
-    relay, folded ring — is untouched, which is the point: it is measured hardware
-    (``ARCH.md`` §4.1) and this must not perturb it.
+    replaced here by pipe stubs the caller extends. The **worker is untouched at
+    every size**, which is the point: it is measured hardware (``ARCH.md`` §4.1) and
+    this must not perturb it. Only the ring around it is re-routed, and only above
+    107 slots — every ``n <= 107`` emits the same cells it always did, which is what
+    keeps the ten checked-in ``.man`` files byte-identical.
 
-    ``n`` is the slot count. Footprint is 32×32 whatever ``n`` is and cost is
-    ``~105 + 8.3n`` ticks per access, so ``n`` is sized to the program's actual
-    high address and there is no trade-off to weigh.
+    ``n`` is the slot count. Ring **capacity is pipe length** (``SPEC.md``: a pipe
+    is a FIFO whose capacity equals its cell count) and it must be ``>= n + 1`` — a
+    WRITE briefly holds one more value than it stores. The folds below are two
+    L-shaped pipes whose length is a *perimeter*, so they top out at 108 slots and
+    ``tape_block(108)`` used to raise; past that :func:`_serpentine_tape` routes the
+    forward pipe as a boustrophedon and length scales with *area* instead. The two
+    meet exactly where they overlap: fold 12 gives 108 cells, and the serpentine's
+    first (five-row) tier gives 152. The ceiling is now ``n=1975``.
+
+    The block is 33 columns wide whatever ``n`` is; **height** is 34 up to ``n=107``
+    and then ``31 + rows``, i.e. two more rows per 48 further slots — 36 at
+    ``n=108``, 46 at ``n=380``, 48 at ``n=420``. That height is usually *free*,
+    because the block sits east of the adapter beside the CPU's own panel/stream
+    stack, which is taller. Rebuilt at ``n=420``, nine of the ten machines rebuilt
+    keep their bounding box to the cell: ``brackets`` 95x69, ``tcp`` 109x74,
+    ``gradebook`` 114x101, ``plotter`` 109x104, ``snake`` 123x129, ``pathfinder``
+    180x184. The exception is ``matmul`` (88x90 -> 100x90, 8,100 -> 10,000): it is the
+    one machine that is both square *and* has a STREAM block under the CPU, so the
+    extra rows push the pad search onto a wider ``mem_pad``. Size to the real high
+    address, as always — this is not a knob to spend.
+
+    Cost is unchanged too — measured **8.00 ticks per slot per access**, dead linear
+    and with no step at the 107/108 seam. Excess ring capacity only delays the first
+    value of a lap; the worker's own ``rs`` loop is an order of magnitude slower than
+    one cell per tick, so the worker stays the bottleneck and overshoot is free.
     """
-    from ..circuit import Circuit
     from ..memory_tape import (
         RELAY,
         V2_FWD_ROW,
         V2_IH,
-        V2_IN_ROW,
         V2_IW,
-        V2_OUT_COL,
         V2_RET_COL,
         _draw_pipe,
-        worker_v2,
     )
 
+    WX, WY = _TAPE_WX, _TAPE_WY
     for fold in (0, 2, 4, 6, 8, 10, 12):
-        g = Circuit(400, 200)
-        wk = worker_v2(n)
-        WX, WY = 8, 8
-        for (x, y), ch in wk.cell.items():
-            g.set(WX + x, WY + y, ch)
-        for x in range(-1, V2_IW + 1):
-            g.set(WX + x, WY - 1, "+" if x in (-1, V2_IW) else "-")
-            g.set(WX + x, WY + V2_IH, "+" if x in (-1, V2_IW) else "-")
-        for y in range(V2_IH):
-            g.set(WX - 1, WY + y, "|")
-            g.set(WX + V2_IW, WY + y, "|")
-
-        # request stub: two cells pointing east into the worker's left wall
-        iy = WY + V2_IN_ROW
-        g.set(WX - 3, iy, ">")
-        g.set(WX - 2, iy, ">")
-        # response stub: two cells climbing north out of the worker's top wall
-        ox = WX + V2_OUT_COL
-        g.set(ox, WY - 2, "^")
-        g.set(ox, WY - 3, "^")
+        g, in_cell, out_cell = _tape_shell(n)
 
         bottom_y = WY + V2_IH
         fy = WY + V2_FWD_ROW
@@ -1207,15 +1271,101 @@ def tape_block(n: int) -> _Tape:
         )
         if n_fwd + n_ret < n + 1:
             continue
-        cells = {k: v for k, v in g.cell.items() if v != " "}
-        return _Tape(
-            cells=cells,
-            width=max(x for x, _ in cells) + 1,
-            height=max(y for _, y in cells) + 1,
-            in_cell=(WX - 3, iy),
-            out_cell=(ox, WY - 3),
+        return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
+    return _serpentine_tape(n)
+
+
+#: Columns the big ring reserves under the worker, in block coordinates.
+#: ``_SNAKE_WEST`` is where an interior westbound leg turns south, ``_SNAKE_CLIMB``
+#: the column the return pipe climbs. The gap between them is deliberate: two
+#: different pipes running in adjacent columns parse fine, but ``lllm_layout``'s
+#: 257-word ring left a spare column between its snake and its climb and that ring
+#: is the one thing in this repo already proven at this size, so copy it.
+_SNAKE_CLIMB = 8
+_SNAKE_WEST = 10
+#: First serpentine row, measured from the worker's bottom wall. The return pipe's
+#: westbound leg takes ``+2`` (its last cell is ``+1``, pointing into the wall), so
+#: ``+4`` leaves one blank row between the two pipes.
+_SNAKE_TOP = 4
+
+
+def _serpentine_tape(n: int) -> _Tape:
+    """The same ring, with the forward pipe snaked so capacity scales with area.
+
+    Two L-shaped pipes give a *perimeter* of capacity and the band under the worker
+    is only 26 columns wide, which is why the folded layout dies at 108 slots. The
+    fix is the one ``lllm_layout._serpentine`` already uses for its 257-word store
+    ring: sweep the forward pipe boustrophedon-wise across the band. Each row adds
+    23 cells to the snake and one to the return pipe's climb, so the ring holds
+    ``24 * rows + 32`` values — 152 at five rows, 1976 at eighty-one::
+
+        worker  ─────────────────────────────┐        east column, as before
+        ═══════════════════════╤═════════════│═
+                 ret leg  ◄────┘             │        row +2, into the bottom wall
+                 (blank separator row)       │
+        relay ◄──┬──────────────────────◄────┘        row +4, first westbound leg
+              │  └─────────────────────────►┐
+              │  ┌──────────────────────◄────┘             ...
+              ▲  ▼
+        ┌───┐ │  └ ... last leg is westbound, into the relay's east wall
+        │r s│ ▲
+        └───┘ └── the return pipe climbs a column of its own back to the wall
+
+    Three things make it planar. The relay follows the snake **down** so the last
+    westbound leg lands on its east wall exactly as the folded layout's did (fwd on
+    the relay's bottom interior row, ret on its top one). Interior westbound legs
+    stop two columns short of the relay so only the final one reaches it. And the
+    return pipe owns :data:`_SNAKE_CLIMB` alone, west of every interior leg, so it
+    can climb from under the relay back to the worker's bottom wall without
+    crossing the snake.
+
+    The row count must be **odd** so the last leg runs west; that wastes at most one
+    row of capacity, and capacity overshoot is free (see :func:`tape_block`).
+    """
+    from ..memory_tape import RELAY, V2_FWD_ROW, V2_IH, V2_IW, V2_RET_COL, _draw_pipe
+
+    WX, WY = _TAPE_WX, _TAPE_WY
+    bottom_y = WY + V2_IH
+    fy = WY + V2_FWD_ROW
+    ret_col = WX + V2_RET_COL
+    east = WX + V2_IW + 2
+    top = bottom_y + _SNAKE_TOP
+
+    # Seventeen rows carry the ~420 slots a little-little-man interpreter wants; the
+    # last tier here holds 1976 values, at which point the block is 112 rows tall.
+    for rows in range(5, 82, 2):
+        g, in_cell, out_cell = _tape_shell(n)
+        last = top + rows - 1  # the final, relay-bound westbound leg
+        relay_y = last - 3  # so `last` is the relay's bottom interior row
+        for i, row in enumerate(RELAY):
+            for j, ch in enumerate(row):
+                g.set(1 + j, relay_y + i, ch)
+        adj = len(RELAY[0]) + 1  # first column east of the relay's wall
+
+        snake: list[tuple[int, int]] = [(WX + V2_IW + 1, fy), (east, fy), (east, top)]
+        for i in range(rows):
+            y = top + i
+            if i == rows - 1:
+                snake.append((adj, y))  # into the relay
+            elif i % 2 == 0:
+                snake += [(_SNAKE_WEST, y), (_SNAKE_WEST, y + 1)]
+            else:
+                snake += [(east, y), (east, y + 1)]
+        n_fwd = _draw_pipe(g, snake)
+        n_ret = _draw_pipe(
+            g,
+            [
+                (adj, relay_y + 1),
+                (_SNAKE_CLIMB, relay_y + 1),
+                (_SNAKE_CLIMB, bottom_y + 2),
+                (ret_col, bottom_y + 2),
+                (ret_col, bottom_y + 1),
+            ],
         )
-    raise MachineError(f"no fold gives the tape {n + 1} slots")
+        if n_fwd + n_ret < n + 1:
+            continue
+        return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
+    raise MachineError(f"no serpentine gives the tape {n + 1} slots; widen the band")
 
 
 # ── pipe binding: the §7.1 safety net, before the interpreter sees anything ──

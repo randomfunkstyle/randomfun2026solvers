@@ -136,3 +136,11 @@ def test_the_grid_passes_every_public_case_on_the_engine() -> None:
     # is the point of the assertion: a change that doubles the worst case fails a
     # private test rather than scoring badly.
     assert max(c.ticks for c in result.cases) < 40_000_000
+
+
+def test_the_registered_asm_still_matches_the_generator() -> None:
+    """`lm1/programs/little-little-man.asm` is generated; keep it from drifting."""
+    from randomfun2026solvers.lm1 import programs as lm1_programs
+
+    text, _slots = llm_lm1.build_asm()
+    assert lm1_programs.available()[SLUG].read_text() == text

@@ -230,7 +230,121 @@ def test_checked_in_grids_match_the_generator() -> None:
         )
 
 
+# ── the big STORE: a serpentine ring instead of two folded L-pipes ────────────
+#: Five slots spread across a 380-slot store, read back and painted as the first
+#: five pixels of a 16x16 LM-75 frame. A slot that came back wrong is either the
+#: wrong colour or, if it came back as garbage, a ``fatal`` on the DATA port.
+#:
+#: The trailing dead block earns its keep: seven opcodes put the decode trie at
+#: depth 3 and *that* CPU layout collides with itself (``collision at (16, 15)`` in
+#: ``build_cpu``) for any tape size at all. Eleven opcodes is ``palette``'s known-good
+#: depth-4 trie.
+BIG_TAPE_ASM = """
+        LDI 3
+        ST  1
+        LDI 6
+        ST  100
+        LDI 9
+        ST  200
+        LDI 12
+        ST  300
+        LDI 15
+        ST  379
+        LDI 0
+        DSPA
+        LD  1
+        DSPD
+        LD  100
+        DSPD
+        LD  200
+        DSPD
+        LD  300
+        DSPD
+        LD  379
+        DSPD
+        LDI 0
+        DSPS
+        HALT
+dead:   ADDI 0
+        SUBI 0
+        BRZ  dead
+        JMPF dead
+"""
+BIG_TAPE_FRAME = ["369cf" + "0" * 11] + ["0" * 16] * 15
+
+
+def test_the_tape_ring_snakes_past_the_folded_ceiling() -> None:
+    """108 slots was the wall, and the fix must not move a cell below it.
+
+    Two folded L-pipes give a *perimeter* of ring capacity in a 26-column band, so
+    ``tape_block(108)`` used to raise ``no fold gives the tape 109 slots``. Past 107
+    the forward pipe is snaked instead and capacity scales with area. Pinned here:
+    the folded tier's geometry is untouched, the snake keeps the block's **width**
+    (which is what the machine's bounding box is made of) and buys height, and the
+    ring is always big enough — a ring one value short does not fault, it stalls.
+    """
+    for n in (1, 8, 100, 107):
+        t = machine.tape_block(n)
+        assert (t.width, t.height, t.slots) == (33, 34, 108), n
+
+    # 31 + rows, rows odd, 24 slots a row: two rows of block per 48 further slots.
+    got = {n: machine.tape_block(n) for n in (108, 151, 152, 200, 300, 380, 420)}
+    assert {t.width for t in got.values()} == {33}
+    assert {n: t.height for n, t in got.items()} == {
+        108: 36,
+        151: 36,
+        152: 38,
+        200: 40,
+        300: 44,
+        380: 46,
+        420: 48,
+    }
+    assert all(t.slots >= n + 1 for n, t in got.items())
+    assert got[380].slots == 392 and got[420].slots == 440
+
+    assert machine.tape_block(1975).slots == 1976
+    with pytest.raises(machine.MachineError, match="no serpentine"):
+        machine.tape_block(1976)
+
+
 # ── full runs ────────────────────────────────────────────────────────────────
+@node_required
+@slow
+def test_a_380_slot_store_round_trips_on_the_real_engine() -> None:
+    """The whole machine, at 380 slots, on the reference interpreter.
+
+    Drawing the ring is not the same as running it: after a lap 392 cells long it
+    still has to come back into the alignment the worker's ``P1``/``P2`` counts
+    assume, or every read returns the wrong cell. Both ends of the range are
+    exercised (slot 1 and slot 379), and rebuilding at 420 measures the two claims
+    the extra size is sold on — the bounding box does not grow with it, and the cost
+    is still 8 ticks per slot per access.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    prog = assemble(BIG_TAPE_ASM, name="big-tape")
+
+    def judged(tape_n: int) -> tuple[machine.Machine, int]:
+        m = machine.build(prog, tape_n=tape_n, display=(16, 16))
+        snap = Littleman().judge(
+            "\n".join(m.rows) + "\n", frames=[[BIG_TAPE_FRAME]], max_ticks=2_000_000
+        )
+        assert snap.fatal is None, f"n={tape_n} fatal: {snap.fatal}"
+        assert snap.frame_judge is not None and snap.frame_judge.matched == 1
+        assert snap.frame_judge.mismatch is None
+        return m, snap.step
+
+    m380, ticks380 = judged(380)
+    assert m380.regions["tape"][2:] == (33, 46)
+    m420, ticks420 = judged(420)
+    assert (m420.regions["tape"][2:], m420.width, m420.height) == (
+        (33, 48),
+        m380.width,
+        m380.height,
+    )
+    assert (ticks420 - ticks380) / (420 - 380) / 10 == 8.0  # 10 STORE accesses
+
+
 @node_required
 @slow
 @pytest.mark.parametrize(("slug", "tape_n"), sorted(TARGETS.items()))
