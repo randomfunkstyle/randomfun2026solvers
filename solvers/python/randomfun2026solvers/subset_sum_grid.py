@@ -43,6 +43,13 @@ outside the band it was asked for.  ``tests/test_subset_sum_grid.py`` re-derives
 the binding independently from ``route-check.mjs``, which reports the pipe each
 op actually resolves to — a mis-bound `s` is otherwise completely silent.
 
+`route-check` is **not** a sound check on how many pipes exist, only on where the
+drawn ones go: the runtime mints a pipe at every arrowhead whose backward cell is
+a wall, and both it and ``lm.mjs analyze`` fold a stray one into its neighbour.
+:func:`_mouths` counts them the runtime's way and :func:`build` calls it, which
+is what caught a seventh pipe leaving the worker's **east** wall the first time
+the rings were routed into the void.
+
 ## What it costs, and why the cost is a measurement
 
 The search examines every candidate pair at most once, so it costs
@@ -51,7 +58,7 @@ input**.  Engine-measured on the finished grid, the ceiling is **6,329,884
 ticks** (`6,329,912` including the walk out to the no-solution lane) — twenty
 values, all even, an odd target, so nothing is satisfiable and every left mask
 is tried against all 257 words of ring B.  That is 42% of the 15,000,000 cap.
-The seven public cases run 116,690 to 1,235,098 and average 292,126.
+The seven public cases run 115,496 to 1,223,406 and average 288,792 at `92x153`.
 
 Two facts hold the cost model up, and both were re-measured here rather than
 inherited:
@@ -71,7 +78,35 @@ inherited:
 `ONE` is gone from ring V for the same reason — `B = 1` comes from a digit glyph
 — which is why the ring is `n + 7` words and not `n + 9`.
 
-## No backticks## No backticks
+## Where the ticks are, measured rather than guessed
+
+`subset_sum_mitm.walk` charges the machine word for word, and running it over the
+seven public cases plus twelve random `n = 20` cases drawn inside the stated
+constraints (`1 <= v <= 99999`, `t` uniform in 10%..60% of the sum) splits the
+cost cleanly:
+
+* **the ring-B scan is ~70% of a big case** — 141,131 of the near-total case's
+  scanned words, at five ticks each;
+* **phase 3 is ~15%** and is nearly the whole of a small case: it walks up to 256
+  right masks at ~520 ticks a lap, which is why every `n <= 14` case lands
+  between 115k and 165k ticks whatever else it does;
+* the per-lap ring-V rotation is the rest.
+
+Two prunes were priced against that and only one is worth anything:
+
+* **the `totalR` upper bound is worth 3.4% and is not worth a ring word.**  Over
+  the nineteen cases the scanned-word total goes 3,368,780 -> 3,252,616.  The
+  low-side test the grid already does (`r + 1 <= 0` never reaches the scan) is
+  what does the work; it alone takes the same total from 7,828,758 down to
+  3,368,780.  Measured, so it is not re-tried.
+* **sorting ring B and stopping at the first word past the residual is worth
+  2.2x** on the same total, 3,368,780 -> 1,541,415.  That is the one real tick
+  lever left, and its price is a sorted-doubling build: eight merge passes,
+  1,022 merge steps.  At the 129 ticks a merge step measured in
+  :mod:`subset_sum_merge_probe` it costs 132k a case and eats the gain; the
+  question that decides it is whether a merge step can be drawn at ~30.
+
+## No backticks
 
 The only constants the machine needs are `1`, `8`, `256 = 1 << 8` and `2^hL`,
 and every one is reachable from a single digit glyph, so the grid holds no
@@ -111,7 +146,7 @@ BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)
 #: Worker interior.  ``IH`` is set by :data:`NOSOL_ROW` — the deepest thing in the
 #: room is the no-solution emit, and everything below the last code block is the
 #: corridor that reaches it.  One row of slack past that row is all it needs.
-IW, IH = 46, 179
+IW, IH = 46, 146
 
 
 def _op(c: Circuit, x: int, y: int, glyph: str, band: str) -> None:
@@ -470,8 +505,33 @@ def _serpentine(x0: int, x1: int, rows: list[int]) -> list[tuple[int, int]]:
 #: contents blocks a send behind its own backlog and deadlocks in silence.
 V_CAP, B_CAP = 30, 262
 
-WX, WY = 1, 24
-GW, GH = 82, WY + IH + 1
+#: The worker sits five rows down, not twenty-four.  Everything above it is a
+#: **turn band**: each of the six pipes leaves the north wall, climbs its own
+#: column and turns east or west on a row of its own.  Four ring runs nest by
+#: distance from the wall — the easternmost anchor turns lowest, so no run ever
+#: crosses a column whose riser is still climbing — and the I/O rooms take the
+#: three rows the runs do not reach, west of column 20.
+#:
+#: The rings themselves live **east of the worker**, in the 33x147 rectangle the
+#: render showed empty for the room's whole height.  That is free area: the score
+#: charges ``max(w, h)`` and the worker room is more than twice as tall as it is
+#: wide, so every cell of pipe moved out of the band above it is a row off the
+#: charged side and every cell moved into the void beside it is free.
+#:
+#:     81x169   area2 28,561      ring B serpentined across a 19-row north band
+#:     91x153   area2 23,409      both rings in the void, north band down to 5
+#:
+#: A ring may be much longer than the words it carries: what a long ring costs is
+#: latency, not ticks, and the lap only stalls if the ring is longer than the man
+#: takes to walk one lap (``cells > words * ticks-per-word``).  Ring V carries 28
+#: words at five ticks each, so it is safe to about 140 cells; ring B carries 257,
+#: so it is safe to well over a thousand.
+WX, WY = 1, 6
+GW, GH = 92, WY + IH + 1
+
+#: The four ring anchors, in worker-interior columns, paired with the row each
+#: one turns on.  Sorted east to west: the easternmost turns nearest the wall.
+_TURN_ROW = {BFWD_COL: 3, BRET_COL: 2, VFWD_COL: 1, VRET_COL: 0}
 
 
 def worker(stage: str = "full") -> Circuit:
@@ -516,8 +576,42 @@ def worker(stage: str = "full") -> Circuit:
     raise ValueError(f"unknown stage {stage!r}")
 
 
+#: Every room's outer rectangle, `(x, y, w, h)`, in the order :func:`build` draws
+#: them.  Taken from the floor plan and not from the glyphs, because `|` and `-`
+#: are a pipe's body as well as a wall and the finished grid cannot tell them
+#: apart — which is exactly what lets a phantom pipe hide.
+def _boxes() -> list[tuple[int, int, int, int]]:
+    return [
+        (WX - 1, WY - 1, IW + 2, IH + 2),               # the worker
+        (WX + IN_COL - 1, 0, 3, 3),                     # I
+        (WX + OUT_COL - 1, 0, 3, 3),                    # O
+        (54, 6, 8, 6),                                  # ring V's relay
+        (49, 20, 8, 6),                                 # ring B's relay
+    ]
+
+
+def _mouths(rows: list[str], *, expect: int) -> None:
+    """Count pipe mouths the way the **runtime** does, and refuse a surprise.
+
+    An arrowhead whose backward cell is a room border is the start of a pipe
+    whether or not one was meant.  `route-check.mjs` and `lm.mjs analyze` both
+    fold a stray one into its neighbour and report the pipes that were drawn;
+    the engine builds it.  Six is the whole design: I, O, and two per ring.
+    """
+    from randomfun2026solvers.brackets_men import pipe_mouths, wall_cells
+
+    found = pipe_mouths([r.rstrip() for r in rows], wall_cells(_boxes()))
+    if len(found) != expect:
+        listed = ", ".join(f"{ch!r}@{c}" for c, ch in sorted(found))
+        raise ValueError(f"{len(found)} pipe mouths, wanted {expect}: {listed}")
+
+
 def build(stage: str = "full") -> list[str]:
-    """Worker room, I/O rooms, two relays and the four ring pipes."""
+    """Worker room, I/O rooms, two relays and the four ring pipes.
+
+    The whole of the grid outside the worker room is drawn here, and all of it
+    is either the five-row turn band above the room or the void east of it.
+    """
     from randomfun2026solvers.dataflow_relay import relay
     from randomfun2026solvers.value_ring import draw_pipe, stamp, walls
 
@@ -525,27 +619,47 @@ def build(stage: str = "full") -> list[str]:
     stamp(g, WX, WY, worker(stage).rows())
     walls(g, WX, WY, IW, IH)
 
-    stamp(g, WX + IN_COL - 1, 18, ["+-+", "|I|", "+-+"])
-    draw_pipe(g, [(WX + IN_COL, 21), (WX + IN_COL, 22)])
-    stamp(g, WX + OUT_COL - 1, 18, ["+-+", "|O|", "+-+"])
-    draw_pipe(g, [(WX + OUT_COL, 22), (WX + OUT_COL, 21)])
+    # ── I/O: two rooms in the band's top three rows, pipes on the bottom two ─
+    stamp(g, WX + IN_COL - 1, 0, ["+-+", "|I|", "+-+"])
+    draw_pipe(g, [(WX + IN_COL, 3), (WX + IN_COL, WY - 2)])
+    stamp(g, WX + OUT_COL - 1, 0, ["+-+", "|O|", "+-+"])
+    draw_pipe(g, [(WX + OUT_COL, WY - 2), (WX + OUT_COL, 3)])
 
-    # ── ring V: relay west, both pipes clear of the north band ──────────────
-    stamp(g, 8, 10, relay(6, 4))
-    n = draw_pipe(g, [(WX + VFWD_COL, 22), (WX + VFWD_COL, 8), (12, 8), (12, 9)])
-    n += draw_pipe(g, [(12, 16), (12, 18), (WX + VRET_COL, 18), (WX + VRET_COL, 22)])
+    vf, vr_, bf, br_ = (WX + col for col in (VFWD_COL, VRET_COL, BFWD_COL, BRET_COL))
+    tvf, tvr = _TURN_ROW[VFWD_COL], _TURN_ROW[VRET_COL]
+    tbf, tbr = _TURN_ROW[BFWD_COL], _TURN_ROW[BRET_COL]
+    wall = WY - 2                       # the last band row, against the north wall
+
+    # ── ring V: relay just east of the room, 97 cells for 28 words ───────────
+    #
+    # Descent columns nest the same way the turn rows do — ``BFWD 49 < BRET 50 <
+    # VFWD 51 < VRET 52`` — because a run on row `y` may only cross a descent
+    # column whose own turn row is *below* `y`.  `Circuit.set` refuses an
+    # overwrite, so a crossing that was got wrong is a build error rather than a
+    # silently re-steered pipe.
+    #
+    # **Column 48 is reserved and must stay empty.**  It is the column against
+    # the worker's east wall, so an east-pointing arrowhead there is the mouth of
+    # a seventh pipe leaving the worker — the runtime builds it, `route-check`
+    # and `analyze` both fold it away, and every `s` in the `b` band would then
+    # bind by a distance that includes an east-wall anchor.  The first draft of
+    # this block descended at 48 and :func:`_mouths` is what found it.
+    stamp(g, 54, 6, relay(6, 4))                        # cols 54..61, rows 6..11
+    n = draw_pipe(g, [(vf, wall), (vf, tvf), (51, tvf), (51, 13), (57, 13), (57, 12)])
+    n += draw_pipe(g, [(53, 8), (52, 8), (52, tvr), (vr_, tvr), (vr_, wall)])
     if n < V_CAP:
         raise ValueError(f"ring V holds {n} words, need >= {V_CAP}")
 
-    # ── ring B: 257 stored sums, so the two pipes nest instead of crossing ───
-    stamp(g, 30, 2, relay(6, 4))
-    m = draw_pipe(g, [(WX + BFWD_COL, 22), (WX + BFWD_COL, 20), (80, 20), (80, 4), (38, 4)])
-    ret = [(33, 8), (33, 10)]
-    ret += _serpentine(78, 35, [10, 12, 14, 16, 18])[1:]
-    ret += [(WX + BRET_COL, 18), (WX + BRET_COL, 22)]
+    # ── ring B: 257 stored sums serpentined down the void, five rows of it ───
+    stamp(g, 49, 20, relay(6, 4))                       # cols 49..56, rows 20..25
+    m = draw_pipe(g, [(bf, wall), (bf, tbf), (49, tbf), (49, 17), (52, 17), (52, 19)])
+    ret = [(57, 22)]
+    ret += _serpentine(58, 90, [22, 24, 26, 28, 30])[1:]
+    ret += [(91, 30), (91, 16), (50, 16), (50, tbr), (br_, tbr), (br_, wall)]
     m += draw_pipe(g, ret)
     if m < B_CAP:
         raise ValueError(f"ring B holds {m} words, need >= {B_CAP}")
+    _mouths(g.rows(), expect=6)
     rows = [r.rstrip() for r in g.rows()]
     while rows and not rows[0].strip():
         rows.pop(0)
@@ -588,12 +702,12 @@ LOOP_COL = 11
 
 #: Phase 2's rows.  Named because six blocks and nine lanes have to agree about
 #: them and an off-by-one row is a silently re-steered man, not a crash.
-P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 24, 32, 39, 45, 50
+P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 23, 29, 35, 40, 44
 #: The scan gets a band of its own, forty rows clear of everything else.  The
 #: four lanes it fans out into were what defeated the first attempt at a tight
 #: layout; there is no area pressure on this problem, so they get room.
-SCAN_TOP, SCAN_SOUTH, SCAN_NORTH = 60, 35, 34
-MISS_ROW, HIT_ROW, HIT_COL, P3_HEAD = 53, 70, 12, 72
+SCAN_TOP, SCAN_SOUTH, SCAN_NORTH = 50, 35, 34
+MISS_ROW, HIT_ROW, HIT_COL, P3_HEAD = 46, 55, 12, 56
 
 
 def _phase2(c: Circuit) -> None:
@@ -740,13 +854,61 @@ def _scan(c: Circuit) -> None:
 #:
 #: ``NOSOL_ROW`` **sets the machine's charged side**, because the room is taller
 #: than it is wide and everything below the last code block is corridor reaching
-#: this row.  It was 220 against a deepest code block at 193; 196 is the floor,
-#: and it is a hard one — 195 lands on ``_emit``'s ``H`` at column 5 and 194 on
-#: its ``0`` at column 8, both build errors.  Between 192 and 195 the grid still
-#: *builds* and the ``no solution`` case fails on the engine instead, which is
-#: the failure worth naming: south of the emit block the corridor is unobstructed
-#: but the answer no longer binds the ``O`` pipe.
-NOSOL_COL, NOSOL_ROW = 44, 178
+#: this row.  So does every row constant above it: the phases are stacked, and
+#: pulling any one up carries the whole stack with it.
+#:
+#: The stack has been compacted greedily, top down, each constant pulled up as
+#: far as it will build **and still pass every public case on the engine**.  Two
+#: passes, because the first held :data:`SCAN_TOP` and ``P2_HEAD`` fixed:
+#:
+#:     81x202   area2 40,804   avg 292,126   worst 6,329,912
+#:     81x179   area2 32,041   avg 290,418   worst 6,315,279   pass 1
+#:     81x169   area2 28,561   avg 288,808   worst 6,267,839   pass 2
+#:
+#: Ticks improve rather than trade, because a row removed from a corridor is also
+#: a row the man does not walk — and *which* corridor decides by how much.  The
+#: trailing walk below the last block was 51 rows for 42 ticks; pass 1's phase
+#: rows were 23 for 14,633 (636 a row); pass 2's were 10 for 47,440 (**4,744 a
+#: row**), because ``SCAN_TOP`` and ``HIT_ROW`` sit deepest inside the per-lap
+#: walk and there are 4,096 laps.
+#:
+#: **`SCAN_TOP` was the whole of the second pass.**  Pass 1 could close only 5 of
+#: the 17 rows between ``MISS_ROW`` and ``HIT_ROW`` before the hit lane met phase
+#: 2's ``X`` at (35, 63) — and that ``X`` is the scan band, which pass 1 never
+#: moved.  Dropping ``SCAN_TOP`` 60 -> 50 freed ``HIT_ROW`` for 8 more rows.  The
+#: comment that band carried, that it is "forty rows clear of everything else"
+#: with "no area pressure on this problem", was true when written and had become
+#: the binding constraint.
+#:
+#: **Verifying in the loop is not optional, and it cost exactly one row.**  A
+#: build-only greedy reaches ``NOSOL_ROW`` 154 and the grid assembles cleanly at
+#: 81x178 — then fails three of the seven cases (`tiny warm up`,
+#: `last-index-required`, `near-total-sum, 20 values`).  South of the emit block
+#: the corridor is unobstructed but the answer stops binding the ``O`` pipe, and
+#: nothing about the geometry says so.
+#:
+#: **This row is now the whole of the charged side, and cells no longer bound it.**
+#: With both rings moved out of the band above the room and into the void beside
+#: it, the grid is `92x153` and every one of those 153 rows is the room plus its
+#: two walls plus the five-row turn band.  The cell-count floor says the same
+#: thing from the other direction::
+#:
+#:     I room 9 + O room 9 + two turnarounds 48 + ring V 30 + ring B 262 = 358
+#:     worker room 48 x 148                                             = 7,104
+#:     total                                                              7,462   -> side >= 87
+#:
+#: So 87 is what the *area* allows and 153 is what the *row count* forces: the
+#: gap is entirely the worker's 146 interior rows, of which roughly half are the
+#: one-row corridor every :func:`_link` spends turning the man around.  Nothing
+#: outside the room can pay that back.  The two ways in are (a) a boustrophedon
+#: stack, where the westbound return leg carries the next block's glyphs instead
+#: of being blank — that removes the corridor row *and* its 25-column walk, but
+#: every gadget with an `X`/`x`/`d` turn has to be redrawn mirrored, because
+#: chirality is relative to the heading; or (b) two worker rooms side by side
+#: with ring V threaded through both, which needs a baton word and an idle relay
+#: loop in whichever room is not the active phase.  Width is free either way:
+#: the grid is 92 wide against a 153 side.
+NOSOL_COL, NOSOL_ROW = 44, 145
 
 
 def _nosol(c: Circuit) -> None:
@@ -780,7 +942,7 @@ def _hit_probe(c: Circuit) -> None:
 
 #: Phase 3's rows.  It is phase 2's lap with `CR` driving it, so it reuses every
 #: block; only the prologue and the final comparison differ.
-P3_MASK, P3_SKIP, P3_PEEL, P3_TEST = 78, 85, 90, 96
+P3_MASK, P3_SKIP, P3_PEEL, P3_TEST = 61, 67, 71, 76
 
 
 def _phase3(c: Circuit) -> None:
@@ -839,9 +1001,9 @@ def _phase3(c: Circuit) -> None:
 #: Emit's rows.  Three laps: count the bits and answer `k`, then the left half's
 #: chosen values, then the right half's.  Left before right **is** increasing
 #: index order, which is why no combined mask and no output buffer are needed.
-E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 104, 108, 114, 120, 125
-E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 130, 134, 140, 145, 150, 155
-E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 160, 164, 170, 175
+E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 80, 83, 89, 94, 98
+E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 103, 106, 112, 116, 121, 125
+E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 128, 131, 137, 142
 
 
 def _emit(c: Circuit) -> None:

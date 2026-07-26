@@ -8,7 +8,7 @@
     {
       "name": "load",
       "x": 1,
-      "y": 22,
+      "y": 4,
       "w": 46,
       "h": 22,
       "note": "Read n, derive hL = n-8, lay ring V's header GL,GL,256,256, append the values with MB between the halves, and double ring B by each right value until it holds all 256 sums.",
@@ -20,9 +20,9 @@
     {
       "name": "phase 2 \u2014 left masks",
       "x": 1,
-      "y": 46,
+      "y": 27,
       "w": 46,
-      "h": 30,
+      "h": 25,
       "note": "One lap per left mask, counter walked DOWN so bitrev(C) visits index sets in lexicographic order. Peel, reach MT, turn the sum into r+1, write RR, scan.",
       "color": "#3b82f6",
       "tags": [
@@ -32,7 +32,7 @@
     {
       "name": "scan station",
       "x": 35,
-      "y": 81,
+      "y": 53,
       "w": 2,
       "h": 5,
       "note": "r s ~ X twice a lap: ten cells, two words, five ticks a word measured on the engine. A==0 hit, A>0 keep going, A<0 sentinel. Never entered with r+1 <= 0.",
@@ -45,9 +45,9 @@
     {
       "name": "phase 3 \u2014 right masks",
       "x": 1,
-      "y": 94,
+      "y": 60,
       "w": 46,
-      "h": 27,
+      "h": 23,
       "note": "The same lap driven by CR, comparing the biased right-half sum against RR.",
       "color": "#3b82f6",
       "tags": [
@@ -57,9 +57,9 @@
     {
       "name": "emit",
       "x": 1,
-      "y": 126,
+      "y": 84,
       "w": 46,
-      "h": 75,
+      "h": 66,
       "note": "popcount(C*256 + CR) answers k without a bit reversal, then one lap emits the left half's chosen values and one the right \u2014 which is already increasing index order.",
       "color": "#3b82f6",
       "tags": [
