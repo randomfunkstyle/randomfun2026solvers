@@ -1,0 +1,52 @@
+# brackets — submission edfe8098-42e8-4408-a418-00a5181e14ad
+
+verdict      done: 26/26 cases, area2 625, avgTicks 528.73, score 330,456
+submitted    2026-07-26
+grid         23x25
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+local        9/9 public cases under LM_VALIDATOR=reference, avg 310.4 ticks, local 194,028
+source       tasks/solutions/brackets_stack.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+1,222,788 -> 330,456 (3.70x) at the SAME footprint. The whole win is ticks:
+~100 local ticks/char -> ~10 glyphs/char.
+
+DESIGN: the entire 32-deep stack is ONE REGISTER. v = 3v + d with d in {1,2,3},
+so v = 0 means empty and no sentinel is needed; pop is w = v - d, and valid iff
+w >= 0 and w % 3 == 0, which catches underflow AND shallow mismatches together.
+Widest reachable word (3^33-3)/2 = 2.78e15, three orders inside 2^63. No ring,
+no tape, no rotation.
+
+The stack lives in B, which `r` never clobbers, so the worker never spills — and
+that is exactly why there are THREE MEN: the worker can never classify, because
+`M` would overwrite the stack, and the position is a fourth quantity. CLASS is
+stateless (B=5 loaded once in INIT, never touched in the loop, so per char it is
+`r b } x`); WORK holds the stack; COUNT holds position in B and remaining in BP,
+counting the worker's acks so at a failure it holds exactly i-1.
+
+Classifier: "openers are even, closers odd" is FALSE ([ = 91, { = 123). The real
+identities are `c >> 5` giving type 1/2/3 for all six codes, and closer iff
+(bit0, bit1) = (1, 0).
+
+THE BUG THAT COST A SUBMISSION (20/26, one PUBLIC case wrong):
+An arrowhead with a room wall behind it IS THE MOUTH OF A PIPE leaving that room,
+intended or not. Two cells of the routed `tok` corridor turned south directly
+under CLASS's south wall, so the runtime built SEVEN pipes where `analyze`
+reported five; CLASS's four `s` glyphs bound three different queues by nearest
+column and WORK read tokens out of order. Minimal repro `{}({)` -> 6, want 5;
+nothing below length 5 fails. route_pipe now refuses any cell that would become a
+mouth, and check_no_phantom_pipes counts mouths the way the runtime does. Walls
+must come from the floor plan, not the glyphs, because `|` and `-` are a pipe's
+body as well as a room's wall — that ambiguity is where the phantom hides.
+
+WHY IT WAS NOT CAUGHT: scoring.score_program compared output LENGTH, not content
+(fixed in 22a081d), and FastLittleman disagrees with the reference engine on this
+grid. tests/test_pipe_mouths.py isolates that in nine lines: the reference engine
+refuses to load a grid ("the output room has more than one incoming pipe") that
+FastLittleman loads and reports as 1 pipe. The phantom only materialises when its
+mouth precedes the real mouth in row-major order.
+
+The slow tier for this problem is now the reference engine and nothing else.
