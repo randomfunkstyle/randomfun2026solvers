@@ -6,33 +6,42 @@ cells over the seven public cases against the CPU build's 153,786 ticks).  This
 module is only the *layout*: it turns those tokens into glyphs, gives every pipe
 op a column that binds to the pipe it means, and routes the control edges.
 
-## Six rings on the north wall, so binding is one-dimensional
+Measured: **88x98, 31,553 ticks a case, score 3.03e8** against the CPU build's
+85x86 and 153,786 ticks (1.14e9) -- 3.8x better, from 4.9x the ticks and 1.3x
+the area.
+
+## Fourteen pipes on the north wall, so binding is one-dimensional
 
 Every pipe attaches to the worker's **north** wall, so the Manhattan distance
 from a cell to any of them is ``|x - col| + y + 1``: the ``y`` term is shared and
 "nearest pipe" collapses to *nearest column* at every row (``tcp_ring``'s rule).
-Incoming and outgoing pipes are two independent nearest-sets, so ring `k`'s
-receive column and send column may sit **next to each other** -- the room is cut
-into seven vertical bands (`io` plus the six rings) and a band's usable span is
-where the incoming *and* the outgoing Voronoi cells agree.
+Receives and sends are two independent nearest-sets, so a ring's two columns may
+sit **next to each other** and one turnaround room straddles both.  The room is
+cut into seven bands (`io` plus the six rings), and each band's usable span is
+computed by brute force with ties excluded -- a tie breaks by reading order over
+pipe *segments*, which is far too easy to get wrong by accident.
 
-Band order is searched, not guessed: :func:`best_order` lays every permutation
-and keeps the one that needs the fewest rows.  `s`, `b`, `c` end up adjacent
-because ``MAC`` -- 62% of the ticks -- reads them in that order, and a band it
-had to come back to would cost a row *inside the hot loop*.
+Where the bands go is searched, not guessed, and against the contest's own
+objective rather than the room's height: see :mod:`matmul_geom_search`.  The hot
+loop's cost is the *spread* of `s`, `b`, `c`, not the twelve glyphs it runs.
 
 ## Fall-through is a pen wrap, so a chain costs no routing
 
-Blocks are grouped into maximal fall-through **chains**: inside a chain the
-successor simply continues along the same walked row (a branch's straight lane
-runs on east past the branch glyph) or wraps to the next row, exactly as if the
-chain were one long block.  Only 17-20 edges are left to route, against 47 in
-the CFG, and only a chain *head* needs an entry cell.
+Blocks are grouped into maximal fall-through **chains** -- 32 blocks into 17 --
+and inside a chain the successor simply continues along the same walked row (a
+branch's straight lane runs on east past the branch glyph) or wraps to the next.
+That leaves 28 edges to route against the CFG's 47, and only a chain *head*
+needs an entry cell.  A self-loop stays inside its chain: its return leg turns up
+into the blank column just west of its own first glyph, and a `>` met while
+already heading east is a no-op.
+
+Corridors take any clear column in the room, not a margin: two walks may **cross
+at a blank** and conflict only where one of them turns, so the sets of turned and
+of vertically-walked cells are both tracked and checked.
 
 Three lanes never fire and are not drawn: ``BROW``, ``ROW`` and ``TTAIL`` test a
-counter that is decremented to zero and never below it, so their ``neg`` lanes
-are dead.  :func:`randomfun2026solvers.matmul_cfg.simulate` is instrumented in
-the tests to prove it over every shape in 2..16.
+counter that is stepped down to zero and stops there, so their ``neg`` lanes are
+dead -- proven over every shape in 2..16 in ``tests/test_matmul_grid.py``.
 """
 
 from __future__ import annotations
@@ -47,10 +56,17 @@ __all__ = [
     "BANDS",
     "Bands",
     "Chain",
+    "Geometry",
     "Plan",
-    "best_order",
+    "Room",
+    "build_grid",
+    "build_room",
     "chains_of",
-    "plan_chains",
+    "check_room",
+    "estimate_ticks",
+    "plan",
+    "public_traces",
+    "trace",
 ]
 
 #: The rings, plus `io` for the input/output pair.
@@ -77,7 +93,7 @@ class Geometry:
 #: ``MAC`` reads them in that order 1,536 times at full size and the man walks
 #: every blank between two bands: the hot loop's cost is the *spread* of the
 #: three, not the twelve glyphs it executes.
-_W = {"q": 8, "k": 10, "io": 7, "s": 7, "b": 7, "c": 7, "x": 8}
+_W = {"q": 11, "k": 11, "io": 4, "s": 7, "b": 4, "c": 8, "x": 10}
 GEOMETRY = Geometry(
     recv_order=("q", "k", "io", "s", "b", "c", "x"),
     send_order=("q", "k", "io", "s", "b", "c", "x"),
@@ -1093,7 +1109,7 @@ RELAY = [
 ]
 RELAY_W, RELAY_H = 6, 4                      # outside, walls included
 STRIP_W = 7                                  # columns each strip block owns
-NB = 16                                      # rows of north band above the wall
+NB = 15                                      # rows of north band above the wall
 MARGIN = 3                                   # spare columns west of the code
 WX = 1
 

@@ -27,7 +27,12 @@ __all__ = ["evaluate", "search"]
 
 #: A band narrower than this cannot host its ring's turnaround room, which
 #: straddles both attach columns and needs three clear columns either side.
+#: Only the *stacked* rings have one: `b`, `x` and `io` reach their rooms out in
+#: the strip, so their bands need room for their ops and nothing more -- and
+#: `b` sits between `s` and `c` in ``MAC``, so every column it does not spend is
+#: two ticks off the hot loop's lap.
 MIN_WIDTH = 7
+MIN_FREE = 4
 
 
 def geometry(order: tuple[str, ...], widths: tuple[int, ...]) -> G.Geometry:
@@ -53,8 +58,9 @@ def search(iters: int = 4000, seed: int = 0, total: int = 52) -> G.Geometry:
     rng = random.Random(seed)
     traces = G.public_traces()
     order = list(G.BANDS)
-    widths = [MIN_WIDTH] * 7
-    for _ in range(total - MIN_WIDTH * 7):
+    floor = [MIN_WIDTH if b in G.LEVELS else MIN_FREE for b in order]
+    widths = list(floor)
+    for _ in range(total - sum(widths)):
         widths[rng.randrange(7)] += 1
 
     cur = evaluate(geometry(tuple(order), tuple(widths)), traces)
@@ -68,14 +74,14 @@ def search(iters: int = 4000, seed: int = 0, total: int = 52) -> G.Geometry:
             nw[i], nw[j] = nw[j], nw[i]
         elif move < 0.8:
             i, j = rng.sample(range(7), 2)
-            if nw[i] > MIN_WIDTH:
-                nw[i] -= 1
-                nw[j] += 1
+            nw[i] -= 1
+            nw[j] += 1
         else:
             i = rng.randrange(7)
             nw[i] += rng.choice((-1, 1))
-            if nw[i] < MIN_WIDTH:
-                continue
+        if any(w < (MIN_WIDTH if b in G.LEVELS else MIN_FREE)
+               for b, w in zip(no, nw)):
+            continue
         cand = evaluate(geometry(tuple(no), tuple(nw)), traces)
         if cand is None:
             continue
@@ -93,7 +99,7 @@ if __name__ == "__main__":  # pragma: no cover - the search CLI
 
     traces = G.public_traces()
     best = None
-    for total in range(35, 70, 3):
+    for total in range(30, 66, 3):
         for seed in range(2):
             geom = search(iters=int(sys.argv[1]) if len(sys.argv) > 1 else 1500,
                           seed=seed, total=total)
