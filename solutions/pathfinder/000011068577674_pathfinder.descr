@@ -1,0 +1,16 @@
+# pathfinder — submission 6b3a81ef-e616-42e0-9b6f-a2e9206957e7
+
+verdict      done: 18/18 cases, area2 30625, avgTicks 361,423, score 11,068,577,674
+submitted    2026-07-26T15:44:28+0300
+grid         84x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+fingerprint  db5b869709f3abb3a0deed95fb676d5954e3c67663d940d16d621c58b9c3bef5
+commit       c6d9fe6
+local        pathfinder: all public frame cases match (emulator)
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Improvement 3/10: widen both F/G turnaround relays from 8 to the collision-free maximum 10. Box stays 84x175; both validators pass 7/7; local score 8,474,462,500 versus 8,479,546,250.
