@@ -54,7 +54,7 @@ WY = BAND_H + 1
 SPREAD = 3
 
 #: channel columns and code columns of each bank, west to east
-BANKS = ((6, 12), (6, 12), (5, 12))
+BANKS = ((5, 11), (5, 11), (5, 11))
 
 
 def layout(banks=BANKS):
@@ -105,10 +105,23 @@ def default_split(order: list[str], frac: float = 0.7) -> dict[str, str]:
     return {n: ("P" if i < k else "Q") for i, n in enumerate(ring)}
 
 
+#: The order :func:`tuned_order` settles on, pinned so the generator is
+#: deterministic and does not pay for an anneal on every build.  Re-derive it
+#: with ``python -m randomfun2026solvers.snake_place --order``.
+ORDER = [
+    "INIT", "FR_PUSH", "FR_BODY", "FRUIT", "FR_END", "FR2_PUSH", "FR2_BODY",
+    "FR2_END", "G_PUSH", "G_BODY", "G_END", "T_GROW", "MAIN", "TICK", "T_H",
+    "T_H_OK", "T_F", "DEAD_HV", "T_V_OK", "DEAD_V", "T_V", "T_MOVE", "M_END",
+    "M_BODY", "M_KEEP", "M_CMP", "DEAD_C", "DC_A_PIX", "DC_A", "DC_MARK",
+    "DC_B_PIX", "DC_B", "DEAD_DONE", "HALT", "DEAD_PIX", "DEAD_PAINT", "DIR",
+    "DIR_V", "DIR_NEG", "DIR_H", "DIR_SET", "ROT_END", "ROT_PUSH", "ROT_BODY",
+]
+
+
 def build_room(banks=BANKS, order=None, frac: float = 0.7, seed: int = 0,
                attempts: int = 40) -> B.Room:
     geo, bk = layout(banks)
-    order = order or block_order(WORKER_L, "INIT")
+    order = list(order or ORDER)
     return B.build(WORKER_L, "INIT", assign(bk, default_split(order, frac)), geo,
                    order=order, attempts=attempts, seed=seed)
 
@@ -122,7 +135,6 @@ def tuned_order(banks=BANKS, steps: int = 40_000) -> list[str]:
     that carry it.
     """
     base = block_order(WORKER_L, "INIT")
-    geo, bk = layout(banks)
     room = build_room(banks, base)
     rows = {n: len(p.plan.rows) + (2 if p.plan.branch else 0)
             for n, p in room.placed.items()}
@@ -264,7 +276,11 @@ if __name__ == "__main__":  # pragma: no cover - the generator's CLI
     ap.add_argument("--man", "--out", dest="man", type=Path)
     ap.add_argument("--html", type=Path)
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--order", action="store_true", help="re-derive ORDER")
     args = ap.parse_args()
+    if args.order:
+        print(tuned_order())
+        raise SystemExit
     grid, dbg, meta = build_grid()
     if args.man:
         args.man.write_text("\n".join(grid) + "\n")

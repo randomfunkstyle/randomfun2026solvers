@@ -7,8 +7,13 @@ pairs down a column.  None of them stop the grid loading.
 """
 from __future__ import annotations
 
+import re
+import subprocess
+from pathlib import Path
+
 import pytest
 from randomfun2026solvers import blockplace as B
+from randomfun2026solvers import optimize
 from randomfun2026solvers import snake_place as SP
 from randomfun2026solvers.blockplace import E, N, S, W
 from randomfun2026solvers.snake_layout import TOKEN_ZONE, WORKER_L
@@ -140,3 +145,35 @@ def test_the_banks_do_not_overlap_and_the_split_lies_between_the_zones() -> None
         geo.check_binding(x, "sp")
     for a, b in ((banks["P"], banks["Q"]), (banks["Q"], banks["R"])):
         assert a.code_hi < b.ch0
+
+
+# ── the engine ────────────────────────────────────────────────────────────────
+GRID = Path(__file__).resolve().parents[1] / "tasks" / "solutions" / "snake_banked.man"
+PROBLEM = Path(__file__).resolve().parents[1] / "tasks" / "problems" / "snake.json"
+ROUTE_CHECK = (Path(__file__).resolve().parents[1] / "littleman" / "tools"
+               / "route-check.mjs")
+
+
+def test_the_checked_in_banked_grid_is_what_the_generator_emits() -> None:
+    rows, _dbg, _info = SP.build_grid()
+    assert GRID.read_text() == "\n".join(rows) + "\n"
+
+
+@pytest.mark.slow
+def test_every_pipe_parses_and_every_send_reaches_one() -> None:
+    """A pipe whose first cell points the wrong way still lets the grid load, so
+    ask the oracle: seven pipes, and no `r`/`s` anywhere routing to nothing."""
+    out = subprocess.run(["node", str(ROUTE_CHECK), str(GRID)],
+                         capture_output=True, text=True, check=True).stdout
+    assert "ERR" not in out
+    listed = [ln for ln in out.splitlines() if re.match(r"  \d+: \d+ cells", ln)]
+    assert len(listed) == 7, listed
+    assert '"cells":[]' not in out
+
+
+@pytest.mark.slow
+def test_the_banked_grid_passes_every_public_case() -> None:
+    result = optimize.verify(GRID, PROBLEM, tick_cap=15_000_000)
+    failed = [(c.name, c.detail) for c in result.cases if not c.passed]
+    assert not failed, failed
+    assert len(result.cases) == 5
