@@ -14,23 +14,23 @@ The pop test is one sign test plus one remainder test: `w < 0` is exactly the
 underflow-or-mismatch case (`v = 0`, or a shallow stack whose digit is smaller
 than the closer's), and `w % 3 != 0` is the mismatch case.
 
-**The stack lives in B, not A.**  `r` clobbers only A, so the loop never has to
-spill: B carries the stack across the read, A holds the incoming character, and
-BP holds its bits.  Classification is a pure backpack decision tree — `b` then
-`]`/`x` — which touches neither hand:
+**The stack lives in B, not A.**  `r` clobbers only A, so the worker never has
+to spill: B carries the stack across every read.  That leaves his A free for the
+incoming token and his BP untouched, but it also means he can never classify a
+character himself — `M` would overwrite the stack — so the machine is three men.
 
-    bit0 0 -> bit1 0 `(`            1 EOS
-         1 -> bit1 1 -> bit5 0 `[`  1 `{`
-                   0 -> bit2 0 `)`
-                             1 -> bit5 0 `]`  1 `}`
-
-That leaves the 1-based position, a fourth quantity, which is why the machine
-is three men rather than one.  `FEEDER` reads the length prefix, forwards that
-many characters and appends the sentinel `2` (bit0 = 0, bit1 = 1 — a free leaf
-of the same tree, so end-of-string costs the worker no extra test).  `COUNTER`
-counts the acknowledgements the worker emits after each *successfully* consumed
-character, so at a failure it holds exactly `i - 1`; the worker's verdict word
-tells it which answer to print (`-1` -> `count + 1`, `-2` -> `0`).
+* `CLASS` is stateless per character, so all three of its registers are scratch.
+  `c >> 5` is exactly the type 1..3 for all six codes, and a closer is exactly
+  `bit0 = 1, bit1 = 0`, so `b` parks the raw code in the backpack before the
+  shift destroys it and two `x` tests recover the sign.  Thirteen cells.
+* `WORK` holds the stack and does the arithmetic above.
+* `COUNT` holds `remaining` in BP and the 1-based position in B.  It counts the
+  acknowledgements the worker emits after each *successfully* consumed
+  character, so at a failure it holds exactly `i - 1`, and the worker's verdict
+  word says which answer to print (`-1` -> `count + 1`, `-2` -> `0`).  When the
+  countdown runs out it hands the worker a `0`, which is the end-of-string
+  sentinel: the worker is by then blocked on `R` with a dry token pipe, so the
+  sentinel is the only value that can reach him.
 """
 
 from __future__ import annotations
@@ -38,61 +38,53 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-__all__ = ["COUNTER", "FEEDER", "MAIN", "reference", "simulate"]
+__all__ = ["CLASS", "COUNT", "WORK", "reference", "simulate"]
 
 Block = tuple[list[str], "dict[str, str] | str | None"]
 
-# ── the worker: stack in B, character in A, its bits in BP ────────────────────
-MAIN: dict[str, Block] = {
-    "INIT": (["R", "s", "L0", "M"], "LOOP"),
-    "LOOP": (["R", "b", "x"], {"zero": "B1Z", "one": "B1O"}),
-    "B1Z": (["]", "x"], {"zero": "PUSH1", "one": "EOS"}),
-    "B1O": (["]", "x"], {"one": "OPEN23", "zero": "B2"}),
-    "OPEN23": (["]", "]", "]", "]", "x"], {"zero": "PUSH2", "one": "PUSH3"}),
-    "B2": (["]", "x"], {"zero": "POP1", "one": "CLOS23"}),
-    "CLOS23": (["]", "]", "]", "x"], {"zero": "POP2", "one": "POP3"}),
-
-    "PUSH1": (["L1", "+", "+", "+", "s", "M"], "LOOP"),
-    "PUSH2": (["L2", "+", "+", "+", "s", "M"], "LOOP"),
-    "PUSH3": (["L3", "+", "+", "+", "s", "M"], "LOOP"),
-
-    "POP1": (["L1", "N"], "POPW"),
-    "POP2": (["L2", "N"], "POPW"),
-    "POP3": (["L3", "N"], "POPW"),
-    # A = -d, B = v  ->  w = v - d
-    "POPW": (["+", "X"], {"neg": "FAIL", "zero": "POPZ", "pos": "POPD"}),
-    "POPZ": (["s", "M"], "LOOP"),
-    "POPD": (["M", "L3", "W", "/", "W", "X"],
-             {"zero": "POPQ", "pos": "FAIL", "neg": "FAIL"}),
-    "POPQ": (["W", "s", "M"], "LOOP"),
-
-    "EOS": (["W", "X"], {"zero": "BAL", "pos": "FAIL", "neg": "FAIL"}),
-    "BAL": (["L2", "N", "s", "H"], None),
-    "FAIL": (["L1", "N", "s", "H"], None),
+# ── the classifier: the character in A, its bits in BP, the token out ────────
+CLASS: dict[str, Block] = {
+    "PINIT": (["r", "s"], "PLOOP"),
+    "PLOOP": (["r", "b", "M", "L5", "W", "}", "x"], {"zero": "PSEND", "one": "P1"}),
+    "P1": (["]", "x"], {"one": "PSEND", "zero": "PNEG"}),
+    "PNEG": (["N"], "PSEND"),
+    "PSEND": (["s"], "PLOOP"),
 }
 
-# ── the counter: the length prefix, then one ack a character, then the answer ─
-# `remaining` lives in BP and `count` in B, so A stays free.  When the countdown
-# runs out the counter hands the worker the sentinel `2` — the worker is by then
-# blocked on `R` with a dry input pipe, so the sentinel is the only value that
-# can reach him and end-of-string needs no extra state on his side.
-COUNTER: dict[str, Block] = {
+# ── the worker: A takes the token, B is the stack, BP is never touched ────────
+WORK: dict[str, Block] = {
+    "QINIT": (["R", "s", "L0", "M"], "QLOOP"),
+    "QLOOP": (["R", "X"], {"pos": "QPUSH", "neg": "QPOP", "zero": "QEOS"}),
+    "QPUSH": (["+", "+", "+", "s", "M"], "QLOOP"),
+    "QPOP": (["+", "X"], {"neg": "QFAIL", "zero": "QZERO", "pos": "QDIV"}),
+    "QZERO": (["s", "M"], "QLOOP"),
+    "QDIV": (["M", "L3", "W", "/", "W", "X"],
+             {"zero": "QQUOT", "pos": "QFAIL", "neg": "QFAIL"}),
+    "QQUOT": (["W", "s", "M"], "QLOOP"),
+    "QEOS": (["W", "X"], {"zero": "QBAL", "pos": "QFAIL", "neg": "QFAIL"}),
+    "QBAL": (["L2", "N", "s", "H"], None),
+    "QFAIL": (["L1", "N", "s", "H"], None),
+}
+
+# ── the counter: `remaining` in BP, the position in B ────────────────────────
+COUNT: dict[str, Block] = {
     "CINIT": (["r", "b", "L0", "M"], "CTEST"),
     "CTEST": (["d"], {"pos": "CLOOP", "zero": "CEND"}),
     "CLOOP": (["r", "X"], {"pos": "CINC", "zero": "CINC", "neg": "CTERM"}),
     "CINC": (["L1", "+", "M", "m"], "CTEST"),
-    "CEND": (["L2", "sw"], "CLOOP"),
+    "CEND": (["L0", "sw"], "CLOOP"),
     "CTERM": (["b", "x"], {"one": "COUT1", "zero": "COUT0"}),
     "COUT1": (["L1", "+", "so", "H"], None),
     "COUT0": (["L0", "so", "H"], None),
 }
 
-MEN = {"MAIN": MAIN, "COUNTER": COUNTER}
-ENTRY = {"MAIN": "INIT", "COUNTER": "CINIT"}
+MEN = {"CLASS": CLASS, "WORK": WORK, "COUNT": COUNT}
+ENTRY = {"CLASS": "PINIT", "WORK": "QINIT", "COUNT": "CINIT"}
 #: man -> (incoming wires in nearest order, token -> outgoing wire)
 WIRES = {
-    "MAIN": (["in", "term"], {"s": "ack"}),
-    "COUNTER": (["ack"], {"sw": "term", "so": "out"}),
+    "CLASS": (["in"], {"s": "tok"}),
+    "WORK": (["tok", "term"], {"s": "ack"}),
+    "COUNT": (["ack"], {"sw": "term", "so": "out"}),
 }
 
 
@@ -146,17 +138,19 @@ def simulate(text: str, *, max_steps: int = 200_000) -> tuple[int | None, dict[s
     """
     wire: dict[str, deque[int]] = {
         "in": deque([len(text)] + [ord(c) for c in text]),
+        "tok": deque(),
         "term": deque(),
         "ack": deque(),
         "out": deque(),
     }
-    men = [_Man(n) for n in ("MAIN", "COUNTER")]
+    men = [_Man(n) for n in ("CLASS", "WORK", "COUNT")]
     steps = 0
 
     while any(not m.halted for m in men):
         steps += 1
         if steps > max_steps:  # pragma: no cover - runaway guard
             raise RuntimeError(f"did not settle on {text!r}")
+        moved = False
         for m in men:
             if m.halted:
                 continue
@@ -164,9 +158,10 @@ def simulate(text: str, *, max_steps: int = 200_000) -> tuple[int | None, dict[s
             if m.pc >= len(toks):
                 if succ is None:
                     m.halted = True
-                    continue
-                m.block = succ if isinstance(succ, str) else succ[m.branch]
-                m.pc = 0
+                else:
+                    m.block = succ if isinstance(succ, str) else succ[m.branch]
+                    m.pc = 0
+                moved = True
                 continue
             t = toks[m.pc]
             ins, outs = WIRES[m.name]
@@ -212,6 +207,9 @@ def simulate(text: str, *, max_steps: int = 200_000) -> tuple[int | None, dict[s
                 raise AssertionError(t)
             m.pc += 1
             m.glyphs += 1
+            moved = True
+        if not moved:  # every live man is blocked on a pipe that will stay dry
+            break
 
     out = wire["out"]
     counts = {m.name: m.glyphs for m in men}
