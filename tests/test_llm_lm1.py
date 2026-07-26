@@ -117,17 +117,17 @@ def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     """``ROM_ROWS`` is a swept constant, not a default; this is what it bought.
 
     Score is ``max(w, h)^2``, so only the larger side is charged and the fold's
-    optimum is where width and height cross.  ``rom_rows=89`` is the last fold at
-    which width still exceeds height: 88 gives 195x192 (38,025) and 90 gives
-    190x194 (37,636), against this build's 192x193 (37,249).
+    optimum is where width and height cross.  ``rom_rows=90`` is the last fold at
+    which width still exceeds height: 89 gives 196x193 (38,416) and 91 gives
+    190x195 (38,025), against this build's 192x194 (37,636).
 
     Pinned because the sweep is invalidated by *any* geometry change anywhere in
     the generator — the CPU, the ROM and the tape all move the crossing — and a
     silently drifted fold costs footprint without failing anything else.
     """
     machine, _program = built
-    assert (machine.width, machine.height) == (192, 193)
-    assert max(machine.width, machine.height) ** 2 == 37_249
+    assert (machine.width, machine.height) == (192, 194)
+    assert max(machine.width, machine.height) ** 2 == 37_636
 
 
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:
@@ -145,14 +145,18 @@ def test_the_grid_passes_every_public_case_on_the_engine() -> None:
     failed = [(c.name, c.detail) for c in result.cases if not c.passed]
     assert not failed, failed
     assert len(result.cases) == 14
-    # Measured 19,354,082 average / 30,213,928 worst against a 50M cap.  The margin
-    # is the point of the assertion: a change that doubles the worst case fails a
-    # private test rather than merely scoring badly.
+    # Measured 8,803,337 average / 13,788,195 worst against a 50M cap on the shipped
+    # banked-store build (judged 28/28 at 363,025,672,731).  The margin is the point
+    # of the assertion: a change that doubles the worst case fails a private test
+    # rather than merely scoring badly.
     #
-    # The two-tier build (``hot=HOT``) measures 8,605,207 / 13,676,774 here and on
-    # the native validator, and was **rejected by the judge at 4/28** — see
-    # ``LLM-DESIGN.md``.  Until that divergence is explained, the shipped machine is
-    # the single-tape one, and this assertion guards *it*.
+    # The banked store is *two pipe tapes*, which is why it is safe where the earlier
+    # man-memory tier was not: a stored word in a man-memory is a little man, and that
+    # build ran 114 live men and was **rejected by the judge 4/28 with ``10 time-cap``**
+    # despite passing every local validator (see ``LLM-DESIGN.md``).  Banking costs no
+    # runners — this machine measures 8 live men — so it keeps the 2.2x tick win
+    # without the wall-clock bill.  ``test_the_shipped_machine_is_inside_the_judge_s_time_cap``
+    # is what actually guards that distinction.
     assert max(c.ticks for c in result.cases) < 40_000_000
 
 
