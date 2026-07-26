@@ -1375,6 +1375,21 @@ Four things this exercise established that outlive the numbers:
 `tcp` and `snake-ring` were searched over three seeds each and kept their defaults — no
 candidate that held the footprint beat them.
 
+Two follow-ups were run on top of the new orders and both came back empty, which is
+worth recording so they are not re-run:
+
+- **The ROM fold is at its optimum and the curve is flat.** Full sweeps (not `romopt`'s
+  ±1 neighbourhood) put `brackets` on 9,025 for *every* fold from 5 to 21 rows — width
+  is binding at 95 — with ticks falling monotonically by a total of 0.15% across that
+  whole range, and `gradebook` on 12,769 from 31 rows up, gaining 0.04%. Both are
+  therefore free to spend height on anything that wants it: `brackets` has 25 spare
+  rows under its own width, `gradebook` 12.
+- **`matmul` still cannot take the short return path.** Retested after the reorder,
+  because the recorded verdict was measured with the old lane order and the reorder moves
+  every drop column: it fails identically, `'.'` vs `'v'` at (22, 1), for every fold from
+  3 to 11 rows. That is one deterministic collision rather than a search that ran out of
+  room, so `_LONG_RETURN` stays as it is and the fix is a layout change, not a pad.
+
 Two other footprint facts fell out of the same measurement:
 
 - `rows_for_budget(..., max(40, W))` caps the ROM at 40 columns even when the
