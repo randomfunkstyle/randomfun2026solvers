@@ -82,6 +82,32 @@ def test_the_eight_pipe_columns_are_distinct_and_never_touch() -> None:
     assert all(b - a >= 2 for a, b in zip(cols, cols[1:], strict=False)), cols
 
 
+def test_no_column_of_any_band_is_equidistant_from_two_pipes() -> None:
+    """A tie is not a binding.  `Geometry.binds` breaks one westward; nothing
+    says the engine does, and the op that stands on one reads a plausible number
+    off the wrong ring.  `audit_bindings` caught one on a wide `IO` bank."""
+    geo, _ = gp.layout(gp.BANKS)
+    for z, (lo, hi) in geo.zone_cols.items():
+        for x in range(lo, hi + 1):
+            for cols in (geo.pipe_in, geo.pipe_out):
+                near = sorted(abs(x - c) for c in cols.values())
+                assert near[0] != near[1], (z, x, near)
+
+
+def test_no_edge_of_the_cfg_could_have_been_a_free_fall_through() -> None:
+    """`blockplace` routes every edge as a corridor, which is only a loss when a
+    block's successor could have been laid immediately after it -- the trap that
+    cost `matmul` 21% of its ticks.  It cannot arise here: every fall-through
+    target is re-entered from somewhere else, so none of them can be merged."""
+    preds: dict[str, int] = {}
+    for _n, (_toks, succ) in WORKER.items():
+        for target in ([succ] if isinstance(succ, str) else succ.values()):
+            preds[target] = preds.get(target, 0) + 1
+    fall_through = [(n, s) for n, (_t, s) in WORKER.items() if isinstance(s, str)]
+    assert len(fall_through) == 23
+    assert [(n, s) for n, s in fall_through if preds[s] == 1] == []
+
+
 def test_a_bank_exists_for_every_run_of_bands_a_block_could_need() -> None:
     """Fourteen of the thirty-seven blocks use two bands or more."""
     _geo, banks = gp.layout(gp.BANKS)

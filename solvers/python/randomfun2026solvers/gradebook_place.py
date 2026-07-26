@@ -23,13 +23,36 @@ and hoped for: `blockplace.bank_geometry` measures every glyph against every
 pipe in the room while it plans, and :func:`audit_bindings` measures the built
 grid against every *cell* of every pipe afterwards.
 
-## Why the zone order is what it is
+## Why the band order is what it is
 
 Band order is a free choice and it decides how wide the multi-band blocks have
-to be.  ``RING IDS FILE IO`` is what :func:`tuned_zones` settles on: ``FILE`` is
-the hub -- it shares a block with ``RING`` seven times and with ``IO`` seven
-times -- so it wants a neighbour on each side, and ``IDS`` is the rarest band
-(four blocks) so it pays least for being pushed to an edge of the interior.
+to be.  ``RING IDS FILE IO`` is what ``--zones`` settles on: ``FILE`` is the hub
+-- it shares a block with ``RING`` seven times and with ``IO`` seven times -- so
+it wants a neighbour on each side, and ``IDS`` is the rarest band (four blocks)
+so it pays least for being pushed to an edge of the interior.  Most of the other
+twenty-three orders do not lay out at all, and the one that reaches a shorter
+room -- ``IO IDS FILE RING``, 59 rows against 64 -- pays 27% more ticks for it,
+because it puts ``IO`` and ``RING`` at opposite walls and every operation's hot
+path crosses between them.
+
+## What this machine actually costs
+
+**It is corridor-bound, not code-bound.**  322 cells of program sit in ~2,900
+cells of corridor, and the corridor is what the ticks are: measured across the
+shortlist, a case runs 6.2 to 6.8 ticks for every corridor cell in the room.
+That is worth stating plainly because it sets which knobs matter -- the ones
+that move corridor length -- and because it makes the op model's 1,726 ticks a
+case a *floor* rather than an estimate.  On the grid it measures near 18,000.
+
+Two things this machine is *not* vulnerable to, both checked rather than assumed:
+
+* **No fall-through chains.**  `blockplace` routes every CFG edge as a corridor,
+  so a machine whose blocks fall through into each other pays for edges that
+  ought to be free -- the trap that cost `matmul` 21% of its ticks.  Twenty-three
+  of gradebook's blocks do fall through, and **not one** of their targets has a
+  single predecessor: every loop head and every operation's return point is
+  re-entered from two or three places.  There is nothing to merge.
+* **No op stands on a tie.**  See :func:`bands_of`.
 """
 
 from __future__ import annotations
@@ -64,15 +87,27 @@ def bands_of(pipe_in: dict[str, int], pipe_out: dict[str, int],
     """The columns in ``[lo, hi]`` where an `r` and an `s` bind the same band.
 
     `Geometry.binds` is the authority on where a pipe op may stand, so the bands
-    are read *out of it* rather than derived from the midpoints by hand.  A
-    column where the incoming and outgoing rules disagree belongs to no band and
-    is simply left out -- it is the dead gap the channel columns stand in.
+    are read *out of it* rather than derived from the midpoints by hand.  A column
+    where the incoming and outgoing rules disagree belongs to no band and is left
+    out -- it is the dead gap the channel columns stand in.
+
+    So is a column **equidistant from two pipes**, even though `binds` will
+    happily name one: its rule breaks the tie westward, and nothing says the
+    engine breaks it the same way.  With eight pipes in four pairs there are ties
+    to be had -- an ``IO`` band whose bank is wide enough reaches a column exactly
+    between its own riser and ``IDS``'s -- and the op that stands there reads a
+    plausible number from the wrong ring.  `audit_bindings` found one; excluding
+    them here is what stops it being found again.
     """
+    def tied(x: int, cols: dict[str, int]) -> bool:
+        near = sorted(abs(x - c) for c in cols.values())
+        return near[0] == near[1]
+
     probe = Geometry(TOKEN_ZONE, {}, pipe_in, pipe_out, lo, hi + 1)
     runs: dict[str, tuple[int, int]] = {}
     for x in range(lo, hi + 1):
         z = probe.binds(x, "rr")
-        if z != probe.binds(x, "sr"):
+        if z != probe.binds(x, "sr") or tied(x, pipe_in) or tied(x, pipe_out):
             continue
         a, b = runs.get(z, (x, x))
         runs[z] = (min(a, x), max(b, x))
@@ -193,20 +228,55 @@ def assign(banks: dict[str, B.Bank], zones: tuple[str, ...],
 #: hold nothing but one- to three-cell blocks and want almost no width; ``IO``
 #: holds ``TOP`` (33 cells) and ``T_END`` (21) and wants all it can get.
 #:
-#: **Width is free here and corridor cells are not.**  The room's height barely
-#: moves -- 62 to 64 rows across every shape ``--sweep`` will accept -- because
-#: what makes a block tall is how often its tokens cross a band, and that is the
-#: program's business, not the layout's.  So the side that is squared is the
-#: *height*, at 77, and any shape narrower than that scores the same 5,929.  The
-#: tie is broken on corridor length, which is ticks: this shape walks 2,783 cells
-#: of corridor where the square one walks 3,002.
+#: **The two sides trade against each other and neither is free.**  A narrower
+#: room does not get shorter -- what makes a block tall is how often its tokens
+#: cross a band, which is the program's business -- but it does make every
+#: corridor that crosses it shorter, and this machine is corridor-bound: 322
+#: cells of program against ~2,900 cells of corridor.  So a shape that saves a
+#: row usually spends it on ticks and the choice cannot be made on either number
+#: alone.  ``--sweep`` prices candidates on ``area2 x corridor``, which is close
+#: enough to shortlist and *not* close enough to decide -- ticks a corridor cell
+#: ran 6.2 to 6.8 across the shortlist -- so the engine picks the winner.
 BANKS = ((6, 8), (5, 8), (6, 10), (6, 13))
 
 
+#: Rip-up-and-retry budget for the router.  Not a knob to leave low: the router
+#: tears a whole bank down on a failure, and the difference between 60 and 150
+#: here was two rows of room -- the retries are what find the packing, not just
+#: a legal routing of the one it was handed.
+ATTEMPTS = 150
+
+
+#: The order blocks are laid in, pinned so the build is deterministic and pays
+#: for no search.  An unweighted minimum-linear-arrangement anneal, from
+#: `blockorder.anneal`; re-derive with ``--sweep``.
+#:
+#: **Swept jointly with** :data:`BANKS`, which is the whole point.  The anneal
+#: trades rows for corridor cells, so bolted onto widths already tuned under a
+#: DFS order it reads as a regression -- that shape has absorbed the rows
+#: already, and the first attempt here duly measured 6,084 against DFS's 5,625
+#: and was thrown away.  Swept together it is the largest single lever on the
+#: machine: three rows of room, 2,946 corridor cells down to 2,432, and **22% off
+#: the ticks** -- 20,018 to 15,646, which is 1.13e8 down to 9.52e7.
+ORDER = [
+    "INIT", "A_END", "ROUND", "OP", "REST_E", "OP_GO", "GET", "SET",
+    "S_SKIP", "S_L", "S_TEST", "FOUND", "G_HIT", "REST_B", "REST", "S_HIT",
+    "A_ADD", "A_L", "AVG", "D34", "T_END", "TOP", "T_MSK", "T_L", "T_MID",
+    "T_X", "T_SET", "T_CMP", "PHASE", "ROSTER", "STU", "HORN_B", "HORN",
+    "CELL", "PADSET", "PAD_B", "PAD",
+]
+
+
+def block_rows(room: B.Room) -> dict[str, int]:
+    """Rows each block costs, the number `blockorder.anneal` prices its moves by."""
+    return {n: len(p.plan.rows) + (2 if p.plan.branch else 0)
+            for n, p in room.placed.items()}
+
+
 def build_room(banks=BANKS, zones=ZONES, order=None, home=None,
-               seed: int = 0, attempts: int = 60) -> B.Room:
+               seed: int = 0, attempts: int = ATTEMPTS) -> B.Room:
     geo, bk = layout(banks, zones)
-    order = list(order or block_order(WORKER, "INIT"))
+    order = list(order or ORDER or block_order(WORKER, "INIT"))
     return B.build(WORKER, "INIT", assign(bk, zones, home), geo,
                    order=order, attempts=attempts, seed=seed)
 
@@ -293,7 +363,8 @@ def _ring_legs(cin: int, cout: int):
             "out": _riser(cout, top, bot, east=True)}
 
 
-def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0
+def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0,
+               attempts: int = ATTEMPTS
                ) -> tuple[list[str], DebugMap, dict[str, object]]:
     """The worker room, three turnaround rooms, both I/O rooms and eight pipes."""
     from randomfun2026solvers.circuit import Circuit
@@ -302,7 +373,7 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0
     from randomfun2026solvers.plotter_block import pipe
     from randomfun2026solvers.value_ring import stamp, walls
 
-    room = build_room(banks, zones, order, home, seed)
+    room = build_room(banks, zones, order, home, seed, attempts)
     walked_cells_all_hold_a_glyph(room)
     geo, _banks = layout(banks, zones)
     iw, ih = geo.iw, room.height
@@ -435,12 +506,18 @@ def audit_bindings(room: B.Room, wx: int, wy: int,
         for (cx, cy), tok in zip(placed, toks, strict=True):
             side = "in" if tok[0] == "r" else "out"
             gx, gy = wx + cx, wy + cy
-            best = min(TOKEN_ZONE.values(),
-                       key=lambda z: min(abs(gx - px) + abs(gy - py)
-                                         for px, py in pipes[f"{side}_{z}"]))
-            if best != TOKEN_ZONE[tok]:
-                raise Collision(f"{name}: {tok!r} at ({gx},{gy}) reaches {best}, "
-                                f"not {TOKEN_ZONE[tok]}")
+            reach = sorted(
+                (min(abs(gx - px) + abs(gy - py) for px, py in pipes[f"{side}_{z}"]), z)
+                for z in dict.fromkeys(TOKEN_ZONE.values()))
+            if reach[0][1] != TOKEN_ZONE[tok]:
+                raise Collision(f"{name}: {tok!r} at ({gx},{gy}) reaches "
+                                f"{reach[0][1]}, not {TOKEN_ZONE[tok]}")
+            # A tie is not a win.  `Geometry.binds` breaks one westward and the
+            # engine need not agree, so an op standing on one is a coin toss
+            # between two rings that the grid loads through either way.
+            if reach[0][0] == reach[1][0]:
+                raise Collision(f"{name}: {tok!r} at ({gx},{gy}) is {reach[0][0]} "
+                                f"from both {reach[0][1]} and {reach[1][1]}")
 
 
 def walked_cells_all_hold_a_glyph(room: B.Room) -> None:
@@ -469,26 +546,37 @@ if __name__ == "__main__":  # pragma: no cover - the generator's CLI
     ap.add_argument("--zones", action="store_true",
                     help="re-derive the band order and print the table")
     ap.add_argument("--sweep", action="store_true",
-                    help="re-derive BANKS: try bank shapes, print the best few")
+                    help="re-derive BANKS and ORDER jointly, print the best few")
     args = ap.parse_args()
     if args.sweep:
-        import random
+        from randomfun2026solvers.blockorder import anneal, edges_of
 
-        cands = [((n, wr), (5, wi), (n, wf), (n, wo))
-                 for n in (5, 6, 7) for wr in (7, 9, 11, 13)
-                 for wi in (8, 10, 12) for wf in (9, 11, 13, 15)
-                 for wo in (13, 15, 17, 19, 21)]
-        random.Random(1).shuffle(cands)
-        seen = []
-        for b in cands:
-            try:
-                r = build_room(b, attempts=30)
-            except Exception:                               # noqa: BLE001 - skipped
-                continue
-            w, h = r.width + 3, r.height + BAND_H + 2
-            seen.append((max(w, h) ** 2, r.corridor_cells, w, h, b))
-        for a2, corr, w, h, b in sorted(seen)[:8]:
-            print(f"area2 {a2:5d}  {w:3d}x{h:3d}  corridor {corr:5d}  {b}")
+        base = block_order(WORKER, "INIT")
+        rows = block_rows(build_room(BANKS, order=base))
+        weight = dict.fromkeys(edges_of(WORKER), 1)
+        orders = {"dfs": base}
+        for i, seeds in enumerate([(1, 5, 11), (23, 42, 99), (7,), (13,)]):
+            orders[f"anneal{i}"] = anneal(base, rows, weight, steps=20_000,
+                                          seeds=seeds)
+        shapes = [((6, wr), (5, wi), (6, wf), (6, wo))
+                  for wr in (8, 9, 10, 11) for wi in (8, 9)
+                  for wf in (10, 11, 12) for wo in (13, 14)]
+        # `area2 x corridor cells` is the proxy the sweep is priced on -- it is
+        # not exact (ticks a corridor cell ran 6.2 to 6.8 across these shapes),
+        # so it shortlists and the engine chooses.
+        out = []
+        for tag, o in orders.items():
+            for b in shapes:
+                try:
+                    r = build_room(b, order=o)
+                except Exception:                           # noqa: BLE001 - skipped
+                    continue
+                w, h = r.width + 3, r.height + BAND_H + 2
+                a2 = max(w, h) ** 2
+                out.append((a2 * r.corridor_cells, a2, r.corridor_cells, w, h, tag, b))
+        for proxy, a2, corr, w, h, tag, b in sorted(out)[:10]:
+            print(f"{tag:9s} {b}  {w:3d}x{h:3d}  area2 {a2:5d}  corridor {corr:5d}"
+                  f"  proxy {proxy / 1e6:.2f}M")
         raise SystemExit
     if args.zones:
         import itertools
@@ -499,8 +587,8 @@ if __name__ == "__main__":  # pragma: no cover - the generator's CLI
                 w, h = r.width + 3, r.height + BAND_H + 2
                 print(f"{' '.join(zs):22s} {w:3d}x{h:3d}  area2 {max(w, h) ** 2:5d}"
                       f"  corridor {r.corridor_cells}")
-            except Collision as exc:
-                print(f"{' '.join(zs):22s} does not lay out: {exc}")
+            except Exception as exc:                        # noqa: BLE001 - reported
+                print(f"{' '.join(zs):22s} does not lay out: {str(exc)[:60]}")
         raise SystemExit
     grid, dbg, meta = build_grid()
     if args.man:
