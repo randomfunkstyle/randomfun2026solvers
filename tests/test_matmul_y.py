@@ -27,6 +27,7 @@ if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
 from randomfun2026solvers import matmul_y  # noqa: E402
+from randomfun2026solvers.circuit import Circuit  # noqa: E402
 from randomfun2026solvers.lm1.machine import MachineError, _Grid  # noqa: E402
 
 LM = REPO / "littleman"
@@ -119,6 +120,93 @@ def test_the_adder_accumulates_a_row_of_c(k, m, products, tmp_path) -> None:
     values, expected = matmul_y.adder_case(k, m, products)
     got, _ticks = _judge(grid, values, expected, tmp_path)
     assert got == expected
+
+
+# ── MAIN's row map ───────────────────────────────────────────────────────────
+def test_mains_row_order_is_what_each_loop_body_needs() -> None:
+    """`counted_loop` walks a body *down a column*, so row order is the program.
+
+    Each constraint below is a loop that stops working if the rows move:
+
+    * the MAC is `r(b_ret) s(b_fwd) * s(prod)` and the order is forced — `b` has
+      to go back into ring B before `*` overwrites it — so those three rows must
+      ascend, with a spare row between b_fwd and prod for the `*`;
+    * both fills read `in`, so `in` sits above `a_fwd` and `b_fwd`.
+
+    Violating any of these still generates a grid; it just computes the wrong
+    thing, or binds a glyph to a pipe nobody meant.
+    """
+    r = matmul_y.MAIN_ROWS
+    assert r["b_ret"] < r["b_fwd"] < r["prod"], "the MAC body is not in ring order"
+    assert r["prod"] - r["b_fwd"] >= 2, "no row left between s(b_fwd) and s(prod) for `*`"
+    assert r["in"] < r["a_fwd"], "the A fill body would send before it reads"
+    assert r["in"] < r["b_fwd"], "the B fill body would send before it reads"
+    assert len(set(r.values())) == len(r), f"two pipes share a row: {r}"
+    assert matmul_y.MAIN_TOP < min(r.values()) and max(r.values()) <= matmul_y.MAIN_BOT
+
+
+def test_the_ring_a_end_marker_survives_the_only_test_that_can_see_it() -> None:
+    """The marker test may touch A and BP only — B is holding the scalar.
+
+    `b` copies A into BP and seven `]` shift it arithmetically. Entries are
+    -99..99 and the marker is 128, so exactly the marker leaves BP > 0 and `d`
+    turns for it alone. Six shifts would not do: 99 >> 6 is 1.
+    """
+    shifts = matmul_y._SENTINEL_TEST.count("]")
+    for value in (*range(-99, 100), matmul_y.SENTINEL):
+        turned = (value >> shifts) > 0
+        assert turned == (value == matmul_y.SENTINEL), f"{value} >> {shifts} misclassified"
+    assert (99 >> (shifts - 1)) > 0, "one fewer shift would misread 99 as the marker"
+
+
+def test_the_end_marker_is_built_without_a_backtick_literal() -> None:
+    """`2M` then repeated `*` doubles A up to 128, leaving B free of backticks.
+
+    Backticks pair on rows *and* columns independently, so a literal dropped into
+    a serpentine can silently pair with one three rows away and fail to load.
+    Doubling avoids the whole hazard.
+    """
+    build = matmul_y._SENTINEL_BUILD
+    assert "`" not in build
+    a, b = 0, 0
+    for ch in build:
+        if ch.isdigit():
+            a = int(ch)
+        elif ch == "M":
+            b = a
+        elif ch == "*":
+            a *= b
+        else:
+            raise AssertionError(f"unexpected glyph {ch!r} in the marker build")
+    assert a == matmul_y.SENTINEL
+
+
+def test_a_serpentine_puts_every_op_on_its_row() -> None:
+    """Ops land on their pipe's row; unrowed ops ride whatever cell comes next."""
+    c = Circuit(40, 20)
+    w = matmul_y.Serpentine(c, 2, 1, matmul_y.MAIN_TOP, matmul_y.MAIN_BOT)
+    rows = matmul_y.MAIN_ROWS
+    placed = []
+    for glyph, row in (("r", rows["in"]), ("M", None), ("r", rows["in"]),
+                       ("s", rows["rm_fwd"]), ("W", None), ("s", rows["rn_fwd"]),
+                       ("r", rows["in"]), ("s", rows["rk_fwd"])):
+        w.op(glyph, row)
+        placed.append((glyph, row, w.x, w.y))
+    for glyph, row, x, y in placed:
+        assert c.get(x, y) == glyph, f"{glyph!r} is not at ({x},{y})"
+        if row is not None:
+            assert y == row, f"{glyph!r} landed on row {y}, not its pipe's row {row}"
+
+
+def test_a_serpentine_turns_rather_than_walking_backwards() -> None:
+    """Revisiting a row costs one column, not a corridor through live code."""
+    c = Circuit(40, 20)
+    w = matmul_y.Serpentine(c, 2, 1, matmul_y.MAIN_TOP, matmul_y.MAIN_BOT)
+    w.op("r", matmul_y.MAIN_ROWS["in"])
+    first = w.x
+    w.op("r", matmul_y.MAIN_ROWS["in"])  # same row again: must start a new pass
+    assert w.x == first + 1, "revisiting a row did not open a new column"
+    assert w.y == matmul_y.MAIN_ROWS["in"]
 
 
 # ── men on a cycle ───────────────────────────────────────────────────────────

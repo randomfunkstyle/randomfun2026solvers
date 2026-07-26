@@ -94,6 +94,7 @@ is what keeps MAIN off ring C. Three sends per row of C, at most 48 per round.
 
 from __future__ import annotations
 
+from .circuit import N, S, Circuit
 from .lm1.machine import MachineError, _Grid
 
 __all__ = [
@@ -104,6 +105,9 @@ __all__ = [
     "A_COUT",
     "A_OUT",
     "A_PROD",
+    "MAIN_ROWS",
+    "SENTINEL",
+    "Serpentine",
     "adder_cells",
     "build_adder_probe",
     "counted_cycle",
@@ -362,6 +366,122 @@ def adder_case(k: int, m: int, products: list[list[int]]) -> tuple[list[int], li
         raise ValueError(f"expected {m} rows of {k} products")
     values = [k, (m - 1) * k, k, *(v for row in products for v in row)]
     return values, [sum(row[j] for row in products) for j in range(k)]
+
+
+# ── MAIN ─────────────────────────────────────────────────────────────────────
+# MAIN's row map is the whole trick to keeping it small. `circuit.counted_loop`
+# lays a loop body *down a column*, one glyph per row, so a blank in the body is
+# a no-op that moves the next glyph onto its pipe's row — the same idiom
+# `stream.py` uses for its arms. Pick the row order to match the order each loop
+# body needs its pipes in, and every loop comes out as short as its body:
+#
+#   fill A   `rs`     rows 3,4      r(in)   s(a_fwd)
+#   fill B   `r  s`   rows 3..6     r(in)         s(b_fwd)
+#   the MAC  `rs*s`   rows 5..8     r(b_ret) s(b_fwd) * s(prod)
+#   drain B  `r`      row 5         r(b_ret)
+#
+# The MAC's order is forced — `b` has to go back into ring B *before* `*`
+# overwrites it — so b_ret < b_fwd < prod with the `*` between them. Both fills
+# read `in`, so `in` sits above all of them. Everything else is free.
+MAIN_ROWS: dict[str, int] = {
+    "in": 3,       # west
+    "a_fwd": 4,    # east
+    "b_ret": 5,    # west
+    "b_fwd": 6,    # east
+    "prod": 8,     # east
+    "a_ret": 9,    # west
+    "rk_ret": 10,  # west
+    "rk_fwd": 11,  # east
+    "rm_ret": 12,  # west
+    "rm_fwd": 13,  # east
+    "rn_ret": 14,  # west
+    "rn_fwd": 15,  # east
+    "cmd": 16,     # east
+}
+MAIN_TOP, MAIN_BOT = 2, 17  # the serpentine's turn rows; 1 and 18 stay corridors
+MAIN_IH = 18
+
+#: Ring A's end marker. Entries are -99..99, so any |value| > 99 separates — but
+#: the test has to leave the scalar in B, where the MAC needs it, so it may only
+#: touch A and BP. `b` copies A into BP and seven `]` shifts arithmetically:
+#: 128>>7 == 1 while 99>>7 == 0 and -99>>7 == -1, so `d` turns for the marker and
+#: for nothing else. 128 is also buildable in A alone (`2 M` then six `*`), which
+#: avoids a backtick literal and the row/column pairing hazards that come with it.
+SENTINEL = 128
+_SENTINEL_BUILD = "2M******"
+_SENTINEL_TEST = "b]]]]]]]"
+
+
+class Serpentine:
+    """Lay a straight-line op sequence as a vertical serpentine.
+
+    The man walks one column from `top` to `bot` (or back), so every pipe row is
+    reachable exactly once per pass. An op whose row lies behind the current
+    heading starts a new pass one column east, which costs two cells and one
+    column; an op with no row rides whatever cell comes next, which is what makes
+    the arithmetic between pipe operations free.
+    """
+
+    def __init__(self, c: Circuit, x: int, y: int, top: int, bot: int, heading=S) -> None:
+        self.c, self.x, self.y, self.top, self.bot, self.d = c, x, y, top, bot, heading
+
+    def _step(self) -> tuple[int, int]:
+        """The next cell in the current heading, turning east if the wall is next."""
+        nxt = self.y + self.d[1]
+        if not self.top <= nxt <= self.bot:
+            self._turn()
+            nxt = self.y + self.d[1]
+        return self.x, nxt
+
+    def _turn(self) -> None:
+        """Send the man one column east and reverse his vertical heading."""
+        edge = self.y + self.d[1]
+        if not self.top <= edge <= self.bot:
+            edge = self.y
+        self.c.set(self.x, edge, ">")
+        self.d = N if self.d == S else S
+        self.x += 1
+        self.c.turn(self.x, edge, self.d)
+        self.y = edge
+
+    def op(self, glyph: str, row: int | None = None) -> None:
+        if row is None:
+            x, y = self._step()
+            self.c.set(x, y, glyph)
+            self.y = y
+            return
+        if (row - self.y) * self.d[1] <= 0:
+            self._turn()
+        while self.y + self.d[1] != row:
+            x, y = self._step()
+            self.c.set(x, y, " ")
+            self.y = y
+        self.c.set(self.x, row, glyph)
+        self.y = row
+
+    def ops(self, glyphs: str) -> None:
+        for ch in glyphs:
+            self.op(ch)
+
+    def park(self, row: int) -> tuple[int, int]:
+        """Walk to one cell short of `row` and hand (x, row) to the next block.
+
+        A `counted_loop` placed there owns the `>` on that cell, which turns the
+        arriving man east into the loop; it hands him back two columns on, still
+        on `row`.
+        """
+        if (row - self.y) * self.d[1] <= 0:
+            self._turn()
+        while self.y + self.d[1] != row:
+            x, y = self._step()
+            self.c.set(x, y, " ")
+            self.y = y
+        return self.x, row
+
+    def resume(self, x: int, y: int, heading=S) -> None:
+        """Pick the man up at (x, y) heading east and turn him vertical again."""
+        self.c.turn(x, y, heading)
+        self.x, self.y, self.d = x, y, heading
 
 
 if __name__ == "__main__":  # pragma: no cover - a look at the grid
