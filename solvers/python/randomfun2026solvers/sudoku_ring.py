@@ -2,7 +2,15 @@
 """Lay :data:`sudoku_cfg.WORKER` out as one room, two pipe rings and six pipes.
 
 The design is :mod:`randomfun2026solvers.sudoku_cfg`; this module only *places*
-it.  Eleven blocks, 82 glyph cells, one worker room of 26x19.
+it.  Eleven blocks, 82 glyph cells, one worker room of 25x18 inside a 27x27
+grid -- against the 77x77 CPU build's 5,929.
+
+The machine is **walking-bound, not pipe-bound**: sweeping both turnaround rooms
+from 4x3 to 8x6 moves the measured tick count by one part in ten thousand, and
+the sampling profile shows both relay men stalled on their own `r` the whole
+run.  So every corridor cell in the room below is a cost, and the row map is
+written the way it is to keep the round loop's four band-to-band traverses as
+short as the pipe-column discipline allows.
 
 ## Column discipline
 
@@ -22,20 +30,23 @@ is what makes the layout below checkable rather than hopeful -- a mis-bound
 
 ## Rows
 
-    0-2   INIT `9 b 0` and the nine-word fill loop (a `counted_loop`)
-    3     the fill loop's exit corridor, west into ROUND's entry
-    4-10  ROUND -- 51 glyphs serpentined over seven rows.  The wraps are forced
+    0-2   INIT `9 b 0` and the nine-word fill loop (a `counted_loop`).  Its exit
+          gets no corridor row of its own: it drops down column 24 -- the one
+          column the round loop never enters -- and merges into ROT2's own
+          return, which costs twenty ticks once and saves a row forever.
+    3-9   ROUND -- 51 glyphs serpentined over seven rows.  The wraps are forced
           by the band order: `ri`(west) -> `sq`(middle) has to walk east and
           `sq` -> `ri` has to walk west, so every IO/FILE alternation costs a row.
-    11-13 ROT1: a `counted_ring_horizontal` at columns 20-24, with row 11 doing
+    10-12 ROT1: a `counted_ring_horizontal` at columns 19-23, with row 10 doing
           double duty as the odd-tail return lane *and* as the entry corridor --
           a man walking east over the return lane's `>` merely re-turns east.
-    14    ACCESS `r + s & - X` walked **west** from column 24, then OK on the
+    13    ACCESS `r + s & - X` walked **west** from column 23, then OK on the
           same row: `X`'s zero lane continues west and runs straight into it.
-    13/15 ACCESS's two failing lanes.  `X` entered heading west turns north on a
-          positive A and south on a negative one; both reach BAD on row 13.
-    15-17 ROT2, the phase restore, sharing row 15 with OK's run east to it.
-    18    the return corridor, west then north up column 0 into ROUND.
+    12/14 ACCESS's two failing lanes.  `X` entered heading west turns north on a
+          positive A and south on a negative one; both reach BAD on row 12, the
+          southern one crossing OK's two runs at blanks on its way back up.
+    14-16 ROT2, the phase restore, sharing row 14 with OK's run east to it.
+    17    the return corridor, west then north up column 0 into ROUND.
 
 `A > 0` is in fact unreachable at the `X` -- ``t = (WORD + P) & P`` is a subset
 of ``P``'s three bits, so ``t - P <= 0`` always -- but the lane is routed to BAD
