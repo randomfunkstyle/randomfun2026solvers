@@ -56,15 +56,35 @@ def test_a_branching_block_ends_in_its_branch_glyph(worker: dict) -> None:
         assert set(succ) <= lanes[toks[-1]], name
 
 
-def test_neither_man_touches_the_other_s_rings() -> None:
-    """The two rooms share exactly two pipes: `x` south and `p` north."""
-    def pipes(worker: dict) -> set[str]:
-        return {t for toks, _ in worker.values() for t in toks
-                if len(t) == 2 and t[0] in "rs" and t not in ("ri", "so")}
+def _pipes(worker: dict) -> set[str]:
+    return {t for toks, _ in worker.values() for t in toks
+            if len(t) == 2 and t[0] in "rs" and t not in ("ri", "so")}
 
-    assert pipes(WORKER_M) == {"rx", "sp", "ra", "sa", "rb", "sb", "rf", "sf"}
-    assert pipes(WORKER_C) == {"sx", "rp"} | {
-        f"{d}{r}" for r in "kscq" for d in "rs"}
+
+def test_exactly_one_wire_joins_the_two_rooms() -> None:
+    """`p` is the only pipe between them, and it only ever runs one way.
+
+    That is what makes the north band route: every horizontal run leaves its
+    room going east, so sorting the runs by column orders them safely.  A second
+    channel would have to come back westward, and its riser would sit inside the
+    first one's span whichever way the rooms are ordered.
+    """
+    assert _pipes(WORKER_M) == {"sp", "ra", "sa", "rb", "sb", "rf", "sf",
+                                "rk", "sk", "rs", "ss"}
+    assert _pipes(WORKER_C) == {"rp"} | {f"{d}{r}" for r in "kscq" for d in "rs"}
+    # Man M reads the input; man C writes the output; neither does both.
+    assert "ri" in {t for toks, _ in WORKER_M.values() for t in toks}
+    assert "ri" not in {t for toks, _ in WORKER_C.values() for t in toks}
+    assert "so" in {t for toks, _ in WORKER_C.values() for t in toks}
+    assert "so" not in {t for toks, _ in WORKER_M.values() for t in toks}
+
+
+def test_man_c_has_no_load_phase_at_all() -> None:
+    """The two bulk loops moved to the man who is idle during both."""
+    c_toks = [t for toks, _ in WORKER_C.values() for t in toks]
+    assert c_toks.count("ri") == 0            # forwarding `A` is man M's now
+    assert not any(n.startswith("B") for n in WORKER_C)   # so is packing `B`
+    assert any(n.startswith("MB") for n in WORKER_M)
 
 
 def test_the_hot_loops_are_six_glyphs_and_seven() -> None:
@@ -123,11 +143,17 @@ def test_the_declared_pipe_sizes_are_the_measured_peaks() -> None:
 
 
 @pytest.mark.parametrize("case", public_cases(), ids=_names())
-def test_man_c_is_the_clock_and_never_waits(case: list[int]) -> None:
-    """Man M runs one glyph a `t` ahead, so he waits and man C never does."""
+def test_man_c_is_the_clock(case: list[int]) -> None:
+    """Man C walks further than man M on every case, so he sets the tick count.
+
+    Both men stall, and one stall is not avoidable: the input arrives in one
+    stream, so man C can do nothing at all until man M has read `A`, packed `B`
+    and produced a first product.  What must not happen is man M falling behind
+    once the mill is turning, which would put the *multiply* on the clock.
+    """
     res = simulate_pair(case)
-    assert res["stalls"]["C"] == 0
-    assert res["stalls"]["M"] > 0
+    assert res["cells"]["C"] > res["cells"]["M"]
+    assert res["ticks"] >= res["cells"]["C"]
 
 
 def test_the_pair_beats_the_one_man_ring_on_every_public_case() -> None:
@@ -170,18 +196,20 @@ def _spec(worker: dict, rings: dict[str, str], entry: str) -> matmul_grid.Spec:
     return matmul_grid.Spec.of(worker, rings, entry, loops, dead)
 
 
-SPEC_C = _spec(WORKER_C, {"k": "k", "s": "s", "c": "c", "q": "q",
-                          "x": "w", "p": "w"}, "HEAD")
-SPEC_M = _spec(WORKER_M, {"a": "a", "b": "b", "f": "f",
-                          "x": "x", "p": "p"}, "MHEAD")
+#: `so` lands in the `io` band; `rp` gets a band of its own in each room.
+SPEC_C = _spec(WORKER_C, {"k": "k", "s": "s", "c": "c", "q": "q", "p": "w"},
+               "HEAD")
+SPEC_M = _spec(WORKER_M, {"a": "a", "b": "b", "f": "f", "k": "k", "s": "s",
+                          "p": "p"}, "MHEAD")
 
 #: Band orders and widths found by annealing against ``max(w, h)^2 * ticks``.
-_WC = {"q": 10, "s": 7, "k": 7, "io": 4, "w": 4, "c": 9}
-_WM = {"x": 4, "a": 4, "b": 4, "p": 4, "f": 7}
-GEOM_C = matmul_grid.Geometry(("q", "s", "k", "io", "w", "c"),
-                              ("q", "s", "k", "io", "w", "c"), _WC, dict(_WC))
-GEOM_M = matmul_grid.Geometry(("x", "a", "b", "p", "f"),
-                              ("x", "a", "b", "p", "f"), _WM, dict(_WM))
+_WC = {"io": 4, "s": 7, "k": 7, "w": 4, "c": 7, "q": 7}
+_WM = {"s": 7, "k": 7, "io": 4, "a": 4, "b": 4, "p": 4, "f": 7}
+GEOM_C = matmul_grid.Geometry(("io", "s", "k", "w", "c", "q"),
+                              ("io", "s", "k", "w", "c", "q"), _WC, dict(_WC))
+GEOM_M = matmul_grid.Geometry(("s", "k", "io", "a", "b", "p", "f"),
+                              ("s", "k", "io", "a", "b", "p", "f"), _WM,
+                              dict(_WM))
 
 
 @pytest.mark.parametrize(("spec", "geom"), [(SPEC_C, GEOM_C), (SPEC_M, GEOM_M)],
@@ -217,8 +245,7 @@ def test_man_c_s_room_walks_fewer_cells_than_the_one_man_room() -> None:
 
 def test_a_geometry_that_splits_a_band_is_rejected() -> None:
     """Ties are excluded rather than resolved; a split band must not lay."""
-    bad = matmul_grid.Geometry(("f", "x", "a", "b", "p"),
-                               ("p", "b", "a", "x", "f"),
+    bad = matmul_grid.Geometry(GEOM_M.recv_order, GEOM_M.recv_order[::-1],
                                dict(GEOM_M.recv_w), dict(GEOM_M.send_w))
     with matmul_grid.use(SPEC_M), pytest.raises(Collision):
         matmul_grid.build_room(matmul_grid.plan(bad))

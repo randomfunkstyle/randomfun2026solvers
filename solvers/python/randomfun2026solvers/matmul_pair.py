@@ -38,29 +38,38 @@ clock.  Nothing else has to be balanced: whatever man C does alone (the load,
 the unpacking, the emit) man M sits out, and whatever man M does alone (moving
 `A` and `B` into his rings) man C is packing `B` for anyway.
 
-## Who owns what
+## Who owns what: man M takes the whole front end
 
-Man C owns the outside world and the small rings: `q` the per-row file, `k` the
-constants, `c` the `G` accumulators, `s` the one-word spill the unpacking needs.
-Man M owns the two big ones: `a`, the `N*M` entries of `A`, and `b`, the `M*G`
-packed `B` words that turn one lap per output row.  They are joined by exactly
-two one-way pipes -- `x` southbound carrying a three-word header and then every
-value man M will ever need, and `p` northbound carrying products.
+**Man M reads the input.**  He files `A` into his `a` ring, packs `B` into his
+`b` ring, keeps `G` in his file `f`, and forwards only the three dimensions on
+to man C.  Man C never touches the input pipe at all: he reads `N`, `M`, `K`
+off the same wire the products arrive on, and has no load phase.
 
-Because `A` arrives before `B` on the input but man M wants his `b` ring loaded
-first, man M -- not man C -- does the buffering: man C forwards each value the
-moment he has it and man M files it, `rx sa` then `rx sb`.  The 1,408 glyphs
-that costs at full size are free, because man C is packing `B` throughout.
+That is worth two things.  The obvious one is ticks -- forwarding `A` cost man C
+9,708 walked cells at 16x16x16 and packing `B` about 11,000, and man M is idle
+throughout both.  The other is that it leaves **exactly one pipe between the two
+rooms**, which is what makes a two-room grid routable at all.  The north band is
+planar and every pipe attaches to a north wall, so a run must never pass over a
+riser climbing higher than it; with all runs leaving their room eastward,
+sorting them by column orders them safely.  Two channels means one of them runs
+back westward, and its riser sits inside the other's span whichever way the
+rooms are ordered -- a ring's receive column is fixed one east of its send
+column, so the spans cannot be made to nest.  One channel, and the one-man
+build's row rule generalises to two rooms unchanged.
+
+So man C owns only `q` the per-row file, `k` the constants, `c` the `G`
+accumulators, `s` the spill the unpacking needs, and the output.  Both men have
+a `k` and an `s`; they are different pipes in different rooms.
 
 ## What it costs
 
 Cells a case (the tick floor a layout starts from), against the one-man ring
 -- run this module for the table:
 
-    2x2x2       422 / 471      16x16x16   19,033 / 29,976
-    2x3x2       480 / 563      16x2x16     6,377 /  7,716
-    4x4x4     1,113 / 1,452    5x6x4       1,582 /  2,238
-    7x5x9     2,618 / 3,564    mean        4,518 /  6,569   (1.45x)
+    2x2x2       305 / 471      16x16x16   18,859 / 29,976
+    2x3x2       365 / 563      16x2x16     6,231 /  7,716
+    4x4x4       992 / 1,452    5x6x4       1,463 /  2,238
+    7x5x9     2,489 / 3,564    mean        4,386 /  6,569   (1.50x)
 
 At full size that is 4.65 cells a MAC all-in against 7.32, and **2.63 in the
 hot loop against 4.50** -- seven glyphs a group where the one man spends twelve.
@@ -71,40 +80,43 @@ where every group carries all three lanes.)
 
 Both men compile through :mod:`matmul_grid`'s room builder -- see
 ``tests/test_matmul_pair.py``, which walks every block of both rooms.  Annealed
-against the contest objective, man C lays into **50x78** and man M into
-**26x15**, against the one-man build's 64x81.  Priced with
+against the contest objective, man C lays into **46x47** and man M into
+**47x42**, against the one-man build's 64x81.  Priced with
 :func:`matmul_grid.estimate_ticks`, which agrees with the engine to 0.02%
 (132,360 modelled against 132,330 measured at 16x16x16):
 
-    man C   20,041 cells a case      the clock
-    man M    7,946                   never near it
+    man C   15,561 cells a case      the clock
+    man M   11,546                   under it, with the front end as well
     one man 31,553 (measured)
 
-So the ticks are there: **1.57x**, better than the op-level 1.45x, because the
-`t` boundary man M absorbed was 16% of the one-man build's walk and not 11% of
-its glyphs.  What is *not* there is the area.  Two rooms plus the two coiled
-rings come to roughly ``1 + 50 + 3 + 26 + 3 + 9 + 7 = 99`` columns by
-``20 + 2 + 78 = 100`` rows, so ``area^2`` goes 9,604 -> 10,000 and the score
-lands near **2.0e8 against 3.03e8 -- 1.51x**, not the 2.4x the hot loop alone
-suggests.
+**2.03x on ticks** -- better than the op-level 1.50x, because the `t` boundary
+man M absorbed was 16% of the one-man build's *walk* and only 11% of its
+glyphs, and the load loops he took were another 19%.
 
-### Two cross-room channels do not route; one does
+### The area penalty is structural, and it eats most of that
 
-The north band is planar and every pipe attaches to a north wall, so a pipe's
-horizontal run must never pass over a riser that climbs higher than it.  The
-one-man build satisfies this trivially: every run leaves the single room going
-*east*, so sorting the runs by column orders them safely.  With two rooms and
-the two channels above, one channel is always westward, and its riser sits
-inside the other's span whichever way the rooms are ordered -- the two spans
-cannot be made to nest, because a ring's receive column is fixed one east of
-its send column.  Man M's coil runs then cross whichever riser is left.
+What is not there is the area.  Every stacked ring needs a turnaround room
+straddling its two attach columns, so its band cannot be narrower than seven
+columns -- and the split *duplicates* two rings, because both men need
+constants (`k`) and a spill (`s`).  The one-man build pays that floor once for
+six rings and comes out 64 wide; two rooms pay it for nine, in two rectangles
+that must sit side by side:
 
-The fix is not a routing trick, it is a re-split: **give man M the input pipe
-and the `B` packing** and the `x` channel disappears, leaving `p` as the only
-wire between the rooms and every run eastward again.  That also moves man C's
-two remaining bulk loops -- forwarding `A` (9,708 cells at 16x16x16) and packing
-`B` (~11,000) -- onto the man who is idle for both, which is where the next
-factor lives.
+    man C    io 4 + k 7 + s 7 + p 4 + c 7 + q 7  = 36  ->  ~40 inner
+    man M    k 7 + io 4 + s 7 + f 7 + a 4 + b 4 + p 4  = 37  ->  ~41 inner
+    grid     1 + 41 + 3 + 40 + 3 + 9 (a coil) + 7 (b coil) = 104 columns
+
+and the rooms are only ~47 rows tall, so the grid is ~104x70 and half its
+height is waste.  Annealed it measures **114x71, area^2 12,996**, against the
+one-man 88x98 and 9,604; the 104-column figure above is the floor, not a
+target.  So the score lands at **2.07e8 against 3.03e8 -- 1.46x**, and even at
+the floor it would be ~1.7e8, or 1.75x.
+
+Stacking the rooms to use the wasted height does not help: a room's pipes all
+attach to one wall, so a second room below needs a second band, and two bands
+cost forty rows -- more than the height they recover.  The tick win is real and
+large; the area penalty is a property of splitting into rectangles, not a
+packing accident, and it takes back more than half of it.
 
 The packing, the biasing and the base-2^21 argument are unchanged; see
 :mod:`randomfun2026solvers.matmul_cfg`.
@@ -139,12 +151,51 @@ _ = (BIAS, BIAS3, LANE, LANES)
 # and load channel from man C, `sp` the product channel back.  `f` is a two-word
 # file holding the `B` count and then `G` for ever.
 WORKER_M: dict[str, tuple[list[str], dict[str, str] | str]] = {
-    # Header: `count_a`, `G`, `count_b` -- in the order man C can compute them.
-    "MHEAD": (["rx", "b", "rx", "sf", "rx", "sf"], "MLA"),
-    "MLA": (["rx", "sa", "m", "d"], {"pos": "MLA", "zero": "MLB0"}),
-    # `f` is [G, count_b]; take the count out and leave `G` alone for ever.
-    "MLB0": (["rf", "sf", "rf", "b"], "MLB"),
-    "MLB": (["rx", "sb", "m", "d"], {"pos": "MLB", "zero": "MOUT"}),
+    # ══ the three dimensions, forwarded, then A straight into its ring ════════
+    # `f` is man M's file, playing the part `q` plays for man C.
+    "MHEAD": ([
+        "ri", "sp", "sf", "ri", "sp", "sf", "ri", "sp", "sf",  # f = [N, M, K]
+        "rf", "sf", "M",                       # B = N          f = [M, K, N]
+        "rf", "sf", "*",                       # A = N*M        f = [K, N, M]
+        "b",                                   # BP = N*M
+        # `k` during the load is just [LANE, LANE^2] -- one lap per group.
+        "L21", "M", "L1", "{", "sk",
+        "L42", "M", "L1", "{", "sk",
+    ], "MLA"),
+    "MLA": (["ri", "sa", "m", "d"], {"pos": "MLA", "zero": "MBHEAD"}),
+
+    # ══ B arrives row-major, which is exactly the packing order ═══════════════
+    "MBHEAD": ([
+        "rf", "sf", "rf", "sf", "rf", "sf",   # rotate to A = M
+        "sf",                                  # ROWS = M
+        "rf", "sf", "rf", "sf", "rf", "sf",   # head -> ROWS
+    ], "MBROW"),
+    "MBROW": (["rf", "X"],
+              {"pos": "MBROW_GO", "zero": "MBDONE", "neg": "MBDONE"}),
+    "MBROW_GO": ([
+        "M", "L1", "W", "-", "sf",            # ROWS - 1
+        "rf", "b", "sf",                       # BP = K entries left in this row
+        "rf", "sf", "rf", "sf",                # N, M -- head back to ROWS
+    ], "MBGRP"),
+    # One group = up to three entries, low lane first; the tail of a row is
+    # zero-padded by not adding anything.
+    "MBGRP": (["ri", "m", "ss"], "MBL1"),
+    "MBL1": (["d"], {"pos": "MBL1_R", "zero": "MBL1_Z"}),
+    "MBL1_R": (["rk", "sk", "M", "ri", "m", "*", "M", "rs", "+", "ss"], "MBL2"),
+    "MBL1_Z": (["rk", "sk"], "MBL2"),
+    "MBL2": (["d"], {"pos": "MBL2_R", "zero": "MBL2_Z"}),
+    "MBL2_R": (["rk", "sk", "M", "ri", "m", "*", "M", "rs", "+", "ss"], "MBEND"),
+    "MBL2_Z": (["rk", "sk"], "MBEND"),
+    "MBEND": (["rs", "sb", "d"], {"pos": "MBGRP", "zero": "MBROW"}),
+
+    # ══ G, and then nothing but the mill ══════════════════════════════════════
+    "MBDONE": ([
+        "rk", "rk",                            # drop the load-phase pair
+        "rf", "sf",                            # A = K          f = [N, M, K]
+        "M", "L2", "W", "+",                   # A = K + 2
+        "M", "L3", "W", "/",                   # A = ceil(K/3) = G
+        "sf", "rf", "rf", "rf",                # f = [G] and nothing else
+    ], "MOUT"),
     # One `t`.  Un-counted: the `ra` blocks for good once `A` runs dry, which is
     # the moment man C has every product he will ever need.
     "MOUT": (["rf", "sf", "b", "ra", "M"], "MMAC"),
@@ -154,62 +205,18 @@ WORKER_M: dict[str, tuple[list[str], dict[str, str] | str]] = {
 
 # ═════════════════════════════════════════════════════════ man C, the clerk ═════
 #
-# `ri`/`so` the outside world, `sx` the channel to man M, `rp` his products, and
-# the four small rings `q`, `k`, `c`, `s`.
+# `rp` man M's products and the three dimensions ahead of them, `so` the output,
+# and the four small rings `q`, `k`, `c`, `s`.  No input pipe, no load, no `B`.
 WORKER_C: dict[str, tuple[list[str], dict[str, str] | str]] = {
-    # ══ the three dimensions, the two counts and G, then A straight through ════
+    # ══ the three dimensions off the wire, then the constants ═════════════
+    # Man M reads the input and forwards them, so man C never touches the input
+    # pipe: `io` is send-only in his room and he has no load phase at all.
     "HEAD": ([
-        "ri", "sq", "ri", "sq", "ri", "sq",   # Q = [N, M, K]
-        "rq", "sq", "M",                       # B = N            Q = [M, K, N]
-        "rq", "sq", "*",                       # A = N*M          Q = [K, N, M]
-        "sx",                                  # -> man M: count_a
-        "rq", "sq",                            # A = K            Q = [N, M, K]
-        "M", "L2", "W", "+",                   # A = K + 2
-        "M", "L3", "W", "/",                   # A = ceil(K/3) = G
-        "sq",                                  # Q = [N, M, K, G]
-        "sx",                                  # -> man M: G
-        "rq", "sq",                            # N
-        "rq", "sq", "M",                       # B = M
-        "rq", "sq",                            # K
-        "rq", "sq", "*",                       # A = M*G          Q = [N, M, K, G]
-        "sx",                                  # -> man M: count_b
-        # BP = N*M again, for the forwarding loop below.
-        "rq", "sq", "M", "rq", "sq", "*", "b",  # Q = [K, G, N, M]
-        "rq", "sq", "rq", "sq",                 # Q = [N, M, K, G]
-        # KONST during the load is just [LANE, LANE^2] -- one lap per group.
-        "L21", "M", "L1", "{", "sk",
-        "L42", "M", "L1", "{", "sk",
-    ], "LOADA"),
-    "LOADA": (["ri", "sx", "m", "d"], {"pos": "LOADA", "zero": "BHEAD"}),
-
-    # ══ B arrives row-major, which is exactly the packing order ═══════════════
-    # Q = [N, M, K, G] -> [ROWS, K, ...] with ROWS = M, as in the one-man build.
-    # Q = [N, M, K, G] -> [ROWS, K, G, N, M] with ROWS = M, a five-word lap that
-    # brings ROWS back under the hand after `BROW_GO` has read `K`.
-    "BHEAD": ([
-        "rq", "sq",                            # N to the back    Q=[M,K,G,N]
-        "rq", "sq", "sq",                      # M twice: the copy is ROWS
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",  # head -> ROWS
-    ], "BROW"),
-    "BROW": (["rq", "X"], {"pos": "BROW_GO", "zero": "BDONE", "neg": "BDONE"}),
-    "BROW_GO": ([
-        "M", "L1", "W", "-", "sq",             # ROWS - 1
-        "rq", "b", "sq",                       # BP = K entries left in this row
-        "rq", "sq", "rq", "sq", "rq", "sq",    # G, N, M -- head back to ROWS
-    ], "BGRP"),
-    "BGRP": (["ri", "m", "ss"], "BL1"),
-    "BL1": (["d"], {"pos": "BL1_R", "zero": "BL1_Z"}),
-    "BL1_R": (["rk", "sk", "M", "ri", "m", "*", "M", "rs", "+", "ss"], "BL2"),
-    "BL1_Z": (["rk", "sk"], "BL2"),
-    "BL2": (["d"], {"pos": "BL2_R", "zero": "BL2_Z"}),
-    "BL2_R": (["rk", "sk", "M", "ri", "m", "*", "M", "rs", "+", "ss"], "BGRP_END"),
-    "BL2_Z": (["rk", "sk"], "BGRP_END"),
-    "BGRP_END": (["rs", "sx", "d"], {"pos": "BGRP", "zero": "BROW"}),
-
-    # ══ the real constants and the G-word accumulator ring ════════════════════
-    "BDONE": ([
-        "rq", "sq", "rq", "sq",                # Q = [K,G,N,M] -> [N,M,K,G]
-        "rk", "rk",                            # drop the load-phase pair
+        "rp", "sq", "rp", "sq", "rp", "sq",     # Q = [N, M, K]
+        "rq", "sq", "rq", "sq", "rq", "sq",     # A = K      Q = [N, M, K]
+        "M", "L2", "W", "+",                    # A = K + 2
+        "M", "L3", "W", "/",                    # A = ceil(K/3) = G
+        "sq",                                   # Q = [N, M, K, G]
         "L21", "M", "L1", "{", "sk",           # LANE
         "L19", "M", "L1", "{", "sk",           # D
         "L21", "M", "L1", "{", "sk",           # LANE
@@ -279,15 +286,16 @@ _BIN = {
     "}": lambda a, b: a >> b if b >= 0 else 0,
 }
 
-#: Rings that live inside each man's room.  `x` and `p` are the two one-way
-#: pipes joining the rooms and belong to neither.
-OWNED_C = ("q", "k", "c", "s")
-OWNED_M = ("a", "b", "f")
+#: Ring letter -> the pipe it names, per man.  Both men have a `k` and an `s`;
+#: they are different pipes in different rooms, so the token spelling is shared
+#: and the pipe is not.  `p` is the single wire between the two rooms.
+OWNED_C = {"q": "q", "k": "ck", "c": "c", "s": "cs", "p": "p"}
+OWNED_M = {"a": "a", "b": "b", "f": "f", "k": "mk", "s": "ms", "p": "p"}
 
 #: Words each pipe has to hold.  A pipe's capacity is its cell count, and one
 #: that cannot hold its contents deadlocks *silently*.
-RING_WORDS = {"x": 4, "p": 4, "a": 256, "b": 96, "f": 2,
-              "q": 5, "k": 6, "c": 6, "s": 1}
+RING_WORDS = {"p": 4, "a": 256, "b": 96, "f": 5, "mk": 2, "ms": 1,
+              "q": 5, "ck": 6, "c": 6, "cs": 1}
 
 
 class _Man:
@@ -325,10 +333,10 @@ def simulate_pair(values: list[int], *, cap: dict[str, int] | None = None,
     men = {"C": _Man(WORKER_C, "HEAD"), "M": _Man(WORKER_M, "MHEAD")}
     runs: dict[str, dict[str, int]] = {"C": {"HEAD": 1}, "M": {"MHEAD": 1}}
     lanes: dict[str, dict[tuple[str, str], int]] = {"C": {}, "M": {}}
-    reads = {"C": {"p": "p", **{r: r for r in OWNED_C}},
-             "M": {"x": "x", **{r: r for r in OWNED_M}}}
-    writes = {"C": {"x": "x", **{r: r for r in OWNED_C}},
-              "M": {"p": "p", **{r: r for r in OWNED_M}}}
+    reads = {"C": {k: v for k, v in OWNED_C.items()},
+             "M": {k: v for k, v in OWNED_M.items() if k != "p"}}
+    writes = {"C": {k: v for k, v in OWNED_C.items() if k != "p"},
+              "M": dict(OWNED_M)}
 
     ticks = 0
     while True:
