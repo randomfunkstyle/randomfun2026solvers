@@ -54,53 +54,49 @@
 |v                                                  <                                                                                                         |
 |                          v                         <                                                                                                        |
 |                          >                     rsrsrsrsbv                                                                                                   |
-|  v                                                      <                                                                                                   |
-|                                                                                                                                                             |
-|  >                  >    > dv                                                                                                                               |
-|    v                       <                                                                                                                                |
+|                          v                              <                                                                                                   |
+|                     >    > dv                                                                                                                               |
+|  v                         <                                                                                                                                |
 |                          v  <                                                                                                                               |
 |                          >rsMv                                                                                                                              |
-|  v                           <                                                                                                                              |
+|    v                         <                                                                                                                              |
 |      v                     <                                                                                                                                |
-|  >    >                  >rXv                                                                                                                               |
+|    >  >                  >rXv                                                                                                                               |
 |     v                      <                                                                                                                                |
 |                          v  <                                                                                                                               |
 |     >                    >sv                                                                                                                                |
 |       ^                    <                                                                                                                                |
 |      >                   >sWv                                                                                                                               |
-|  v                          <                                                                                                                               |
+|    v                        <                                                                                                                               |
 |      v                           <                                                                                                                          |
-|  >                       >M`12`W-Xv                                                                                                                         |
+|    >                     >M`12`W-Xv                                                                                                                         |
 |     v                            <                                                                                                                          |
 |                          v        <                                                                                                                         |
 |     >                    >M                    rsrsrsrWsrbsrM8Wv                                                                                            |
-|  v                                                             <                                                                                            |
+|    v                                                           <                                                                                            |
 |       v                                                                       <                                                                             |
-|  >          >>>>>>>>     >                                                sWsWx                                                                             |
+|    >        >>>>>>>>     >                                                sWsWx                                                                             |
 |     v                                                                         <                                                                             |
-|                                                                                                                                                             |
 |        v                   <                                                                                                                                |
 |     >                    >]x                                                                                                                                |
-|  v                         <                                                                                                                                |
-|                                                                                                                                                             |
-|  >                       >M1N+v                                                                                                                             |
+|    v                       <                                                                                                                                |
+|    >                     >M1N+v                                                                                                                             |
 |                          v    <                                                                                                                             |
-|  >       >>              >M                                               s9sWv                                                                             |
+|    >     >>              >M                                               s9sWv                                                                             |
 |                                                                       vs      <                                                                             |
 |         ^                                                             <                                                                                     |
 |        >                 >M1+v                                                                                                                              |
-|  ^                           <                                                                                                                              |
+|    ^                         <                                                                                                                              |
 |     v                      <                                                                                                                                |
 |       >                  >]x                                                                                                                                |
-|  v                         <                                                                                                                                |
-|                                                                                                                                                             |
-|  >                       >M `16`+v                                                                                                                          |
+|    v                       <                                                                                                                                |
+|    >                     >M `16`+v                                                                                                                          |
 |          ^                       <                                                                                                                          |
 |     >                    >M  `16`N+v                                                                                                                        |
 |           ^                        <                                                                                                                        |
 |     v                          <                                                                                                                            |
 |      >                   >+M5W-Xv                                                                                                                           |
-|  v                             <                                                                                                                            |
+|    v                           <                                                                                                                            |
 |                          v      <                                                                                                                           |
 |         >                >                     rsr1srsrsrsrM              s9sWsWsWv                                                                         |
 |                                                                       vs          <                                                                         |
@@ -114,11 +110,9 @@
 |        v                   <                                                                                                                                |
 |      >>                  >bx                                                                                                                                |
 |     v                      <                                                                                                                                |
-|                                                                                                                                                             |
 |       v                    <                                                                                                                                |
 |     >                    >]x                                                                                                                                |
 |      v                     <                                                                                                                                |
-|                                                                                                                                                             |
 |      >                   >                     rsrsrMsr-srbsrM`10`Wv                                                                                        |
 |              ^                                                     <                                                                                        |
 |       >                  >                     rsrsrrssrbsrM`12`Wv                                                                                          |
@@ -126,7 +120,6 @@
 |      v                     <                                                                                                                                |
 |        >                 >]x                                                                                                                                |
 |     v                      <                                                                                                                                |
-|                                                                                                                                                             |
 |     >                    >                     rsrsrMsr+srbsrM    `10`Wv                                                                                    |
 |                ^                                                       <                                                                                    |
 |       v                                                <                                                                                                    |
@@ -140,32 +133,30 @@
 |       >                  >                     rM1N+M3W&bsrM3Wv                                                                                             |
 |                   ^                                           <                                                                                             |
 |     v                         <                                                                                                                             |
-|  >                       >M5W-Xv                                                                                                                            |
+|    >                     >M5W-Xv                                                                                                                            |
 |          ^                    <                                                                                                                             |
 |         ^                      <                                                                                                                            |
 |     >                    >M4+Mv                                                                                                                             |
 |                          v    <                                                                                                                             |
 |                          >                     rsrsrsrsrWbsrM3Wv                                                                                            |
 |                    ^                                           <                                                                                            |
-|    >                     >rsmv                                                                                                                              |
+|  >                       >rsmv                                                                                                                              |
 |                     ^        <                                                                                                                              |
 |>  >                      >                     rsrsrsrM                   s9sWsWsWv                                                                         |
 |                                                                       vs          <                                                                         |
 |                      ^                                                <                                                                                     |
 | >                        >M1W-                 srbsrsrsv                                                                                                    |
-|v                                                       <                                                                                                    |
-|                                                                                                                                                             |
-|>     >>  >               > dv                                                                                                                               |
-| v                          <                                                                                                                                |
+|                          v                             <                                                                                                    |
+|      >>  >               > dv                                                                                                                               |
+|v                           <                                                                                                                                |
 |                          v  <                                                                                                                               |
 |                          >                     rsrsrsrsrbsrsv                                                                                               |
-|v                                                            <                                                                                               |
-|                                                                                                                                                             |
-|>    >                    > dv                                                                                                                               |
+|                          v                                  <                                                                                               |
+|     >                    > dv                                                                                                                               |
 |  v                         <                                                                                                                                |
-|v                            <                                                                                                                               |
+| v                           <                                                                                                                               |
 |    v                                                     <                                                                                                  |
-|>                         >                     rsrsrsM1W-Xv                                                                                                 |
+| >                        >                     rsrsrsM1W-Xv                                                                                                 |
 |   v                                                      <                                                                                                  |
 |                          v                                <                                                                                                 |
 |                          >                     rsrsr1sv                                                                                                     |
@@ -178,16 +169,16 @@
 |                                        vs                                   <                                                                               |
 |                                        >       rsrsrsrsrsmv                                                                                                 |
 |     ^                                                     <                                                                                                 |
-| >                        >                     r                          sM1+v                                                                             |
-|v                                                            <                                                                                               |
-|                                                            vXsrsrsrsrsrs      <                                                                             |
+|>                         >                     r                          sM1+v                                                                             |
 | v                                                           <                                                                                               |
+|                                                            vXsrsrsrsrsrs      <                                                                             |
+|v                                                            <                                                                                               |
 |                          v                                 <                                                                                                |
-| >                        >                                                rv                                                                                |
+|>                         >                                                rv                                                                                |
 |  v                                                                         <                                                                                |
 |   v                                    <                                                                                                                    |
 |  >                       >M      `48`W-Xv                                                                                                                   |
-| v                                      <                                                                                                                    |
+|v                                       <                                                                                                                    |
 |                          v              <                                                                                                                   |
 |                          >`12     `s8                                     sv                                                                                |
 |  v                                                                         <                                                                                |
@@ -206,7 +197,7 @@
 |                                    > `162947623267008`}M`15`&             sv                                                                                |
 |        ^                                                                   <                                                                                |
 |   v                           <                                                                                                                             |
-| >                        >M9W-Xv                                                                                                                            |
+|>                         >M9W-Xv                                                                                                                            |
 |  v                            <                                                                                                                             |
 |                          v     <                                                                                                                            |
 |   >                      >+M           `12`+v                                                                                                               |
@@ -215,7 +206,7 @@
 |         ^                                                                  <                                                                                |
 |  >                       >+M            `48`+v                                                                                                              |
 |    ^                                         <                                                                                                              |
-|>                         >                                                r4s`10`v                                                                          |
+| >                        >                                                r4s`10`v                                                                          |
 |                                       vms                                        <                                                                          |
 |          ^                            <                                                                                                                     |
 |                                                                                                                                                             |

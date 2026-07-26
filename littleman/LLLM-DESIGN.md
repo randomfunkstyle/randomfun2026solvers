@@ -2,8 +2,8 @@
 
 **Status: shipped and passing.** `tasks/solutions/little-little-little-man_ring.man`
 
-    w x h = 159 x 222     area2 = 49,284     avg_ticks = 1,460,882.10
-    score = 7.20e10       10 / 10 public cases, both validators, identical ticks
+    w x h = 159 x 213     area2 = 45,369     avg_ticks = 1,425,943.50
+    score = 6.47e10       10 / 10 public cases on the engine, worst 5,070,139 ticks
 
 | piece | where | state |
 |---|---|---|
