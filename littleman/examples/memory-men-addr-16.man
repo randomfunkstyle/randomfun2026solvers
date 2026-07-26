@@ -1,0 +1,57 @@
+ +-+                            +-+
+ |I|                            |O|
+ +-+                            +-+
+  v                              ^
+  v                              ^
++---+  +--------+  +-------+  +----+
+|@U<|  |@1M`00`v|  |@v     |  |@>Rv|
+| M |  | v     <|  |       |  | ^s<|
+| r |  |   >r~Xv|  |  >rbrv|  |    |
+| S |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+| W |  |+  ^srs<|  |  ^sMW<|  |    |
+| S |  |>v >r~Xv|  |>v>rbrv|  |    |
+|UXS|>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|>>^|  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|vYW^rr<r|>>|vY^  Md|>>|    |
+|   |  |+  ^srs<|  |  ^sMW<|  |    |
+|   |  |>v >r~Xv|  |>v>rbrv|  |    |
+|   |>>|HYW^rr<r|>>|HY^  Md|>>|    |
+|   |  |   ^srs<|  |  ^sMW<|  |    |
++---+  +--------+  +-------+  +----+

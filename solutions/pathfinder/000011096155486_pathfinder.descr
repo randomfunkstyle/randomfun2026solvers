@@ -1,0 +1,24 @@
+# pathfinder — submission e9c97178-23df-4708-acee-8e2db06bd7c2
+
+verdict      done: 18/18 cases, area2 30496->30625, avgTicks 362,323.44, score 11,096,155,486
+submitted    2026-07-26
+grid         84x175
+problem id   c778ba35-4918-415b-83d0-37dc8f6f68c9
+local        pathfinder: 7/7 public cases, avg 277,368 ticks, local score 8,494,408,125
+source       tasks/solutions/pathfinder_grid.man
+
+runner output:
+Passed 18/18 test cases
+
+notes:
+Dedicated dataflow machine, not the LM-1 ISA. Bit-parallel BFS run backwards from
+the flag, so each robot move is a local decision and the up/right/down/left
+tie-break falls out of neighbour order — no path storage. Distance mod 3 (the grid
+is bipartite) in three label planes whose roles rotate for free: pushing them back
+into the ring in a different order *is* the rotation. free = NB | S1 | S2 | S3, so
+no fifth plane. g = 255 - p (a 180 deg rotation) keeps every plane word
+non-negative, which makes bit tests branch-free. 51 blocks over one man, an
+18-word ring, a spill FIFO and a scratch FIFO.
+
+Server ticks ran 1.31x the local figure (362,323 vs 277,368).
+Beat the previous board leader (1.2e10).

@@ -88,11 +88,16 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from . import rom as rommod
 from .asm import Program
 from .isa import TARGET_SEMS, Isa, Micro, Sem
+
+if TYPE_CHECKING:  # the tape block's own canvas; imported lazily at run time
+    from ..circuit import Circuit
 
 __all__ = [
     "Band",
@@ -231,6 +236,7 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.AND_MEM: (("s", Band.MEM), ("r", Band.MEM), ("&", None), ("M", None)),
+    Sem.OR_MEM: (("s", Band.MEM), ("r", Band.MEM), ("|", None), ("M", None)),
     # ── indexed memory: `LDP`/`STP`, and *no SPILL block* ─────────────────────
     # ``isa.py`` gives both of these a spill slot, because in the ``0 addr`` /
     # ``1 addr value`` wire protocol the request-opening literal clobbers A while B
@@ -311,6 +317,7 @@ MEMORY_SEMS = frozenset(
         Sem.MUL_MEM,
         Sem.DIV_MEM,
         Sem.AND_MEM,
+        Sem.OR_MEM,
         Sem.STORE_ACC_MEM,
         Sem.LOAD_IND,
         Sem.STORE_IND,
@@ -430,7 +437,7 @@ class _Plan:
     sem: dict[str, Sem] = field(default_factory=dict)
 
 
-def plan(program: Program) -> _Plan:
+def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Plan:
     """Assign lane rows by pipe need, then derive opcode numbers from the trie.
 
     The trie sorts its leaves in **bit-reversed** order (``ARCH.md`` §2.4), so
@@ -439,6 +446,14 @@ def plan(program: Program) -> _Plan:
     south wall their pipes leave from, and everything else in between — longest
     micro-program first, so the drop columns form a descending staircase and short
     lanes can turn south early instead of all walking out to a shared column.
+
+    ``middle_order`` overrides that last rule — the order of the *unpinned* lanes,
+    north to south. Length-descending is a good guess in the dark, but the row a
+    lane sits on is a **tick** cost and the weight on it is how often the opcode
+    runs, which length knows nothing about: a lane's return walk is
+    ``2 * drop_x - row`` (east to the drop column, south to the collector, west
+    along it), so a hot lane wants to be *low* on both terms at once. See
+    ``LANE_ORDER`` for the per-program orders this bought and §7.6 for the method.
     """
     used = [op.mnemonic for op in program.ops_used]
     sems = {op.mnemonic: op.sem for op in program.ops_used}
@@ -488,7 +503,16 @@ def plan(program: Program) -> _Plan:
     for g in (3, 2):
         for m in reversed([n for n in order if group(n) == g]):
             placed[m] = slots.pop()
-    for m in [n for n in order if group(n) == 1]:
+    middle = [n for n in order if group(n) == 1]
+    if middle_order is not None:
+        want = list(middle_order)
+        if sorted(want) != sorted(middle):
+            raise MachineError(
+                f"middle_order must be a permutation of the unpinned lanes "
+                f"{sorted(middle)}; got {sorted(want)}"
+            )
+        middle = want
+    for m in middle:
         placed[m] = slots.pop(0)
 
     return _Plan(
@@ -1122,6 +1146,12 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 
 
 # ── the tape, as a STORE block ───────────────────────────────────────────────
+#: Every memory tier ``build`` will accept, in the order they are worth trying.
+#: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
+#: footprint despite an access cost that ignores ``n``.
+STORE_TIERS = ("tape", "grid", "men", "men-y")
+
+
 @dataclass
 class _Tape:
     cells: dict[tuple[int, int], str]
@@ -1129,6 +1159,101 @@ class _Tape:
     height: int
     in_cell: tuple[int, int]  # where the request pipe must arrive, pointing east
     out_cell: tuple[int, int]  # where the response pipe leaves, pointing north
+    #: Ring capacity in values — the forward plus return pipe cell count. Must be
+    #: ``>= n + 1``; overshoot is free (see :func:`tape_block`) but worth asserting,
+    #: since a ring one value short does not fault, it just stalls the machine.
+    slots: int = 0
+
+
+#: The tape worker's room corner inside the block. Every anchor below is derived
+#: from it, so both ring layouts hang the same four pipes off the same four cells.
+_TAPE_WX, _TAPE_WY = 8, 8
+
+
+def _tape_shell(n: int) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
+    """The worker room and the two CPU-facing pipe stubs — the part no ring changes.
+
+    Shared by both ring layouts so neither can drift from the other. What fixes every
+    ``r``/``s`` binding *inside* the worker is the worker's four wall anchors, not the
+    shape of the ring: a ring may be routed any way at all so long as it still leaves
+    the east wall on ``memory_tape.V2_FWD_ROW`` and comes back north into the bottom
+    wall at ``memory_tape.V2_RET_COL``. That is the licence the serpentine uses.
+
+    Returns the canvas plus the request and response stub cells.
+    """
+    from ..circuit import Circuit
+    from ..memory_tape import V2_IH, V2_IN_ROW, V2_IW, V2_OUT_COL, worker_v2
+
+    g = Circuit(400, 200)
+    wk = worker_v2(n)
+    WX, WY = _TAPE_WX, _TAPE_WY
+    for (x, y), ch in wk.cell.items():
+        g.set(WX + x, WY + y, ch)
+    for x in range(-1, V2_IW + 1):
+        g.set(WX + x, WY - 1, "+" if x in (-1, V2_IW) else "-")
+        g.set(WX + x, WY + V2_IH, "+" if x in (-1, V2_IW) else "-")
+    for y in range(V2_IH):
+        g.set(WX - 1, WY + y, "|")
+        g.set(WX + V2_IW, WY + y, "|")
+
+    # request stub: two cells pointing east into the worker's left wall
+    iy = WY + V2_IN_ROW
+    g.set(WX - 3, iy, ">")
+    g.set(WX - 2, iy, ">")
+    # response stub: two cells climbing north out of the worker's top wall
+    ox = WX + V2_OUT_COL
+    g.set(ox, WY - 2, "^")
+    g.set(ox, WY - 3, "^")
+    return g, (WX - 3, iy), (ox, WY - 3)
+
+
+def _tape_of(g: Circuit, in_cell: tuple[int, int], out_cell: tuple[int, int], slots: int) -> _Tape:
+    cells = {k: v for k, v in g.cell.items() if v != " "}
+    return _Tape(
+        cells=cells,
+        width=max(x for x, _ in cells) + 1,
+        height=max(y for _, y in cells) + 1,
+        in_cell=in_cell,
+        out_cell=out_cell,
+        slots=slots,
+    )
+
+
+def grid_block(n: int) -> _Tape:
+    """``memory_men_addr``'s address-carrying man-memory, wired as STORE.
+
+    One little man per slot, all ``n`` of them holding their own address in B, so
+    the router *broadcasts* rather than walks: **an access costs ~31 ticks and the
+    cost does not depend on ``n``**, against the rotating tape's ~316 + 8.06·n. On
+    a machine whose reads dominate — and §4.1 measured a tape read at 523 ticks
+    versus 19 for a write — that is the difference between a memory that sets the
+    tick count and one that does not.
+
+    What it costs instead is *shape*. The block is 36 columns wide whatever ``n``
+    is, and ``~3n`` rows tall, where the tape is 32x32 flat. So this is a good
+    trade exactly when the machine's bounding box is already set by its **height**
+    and has slack in width — the block then hides underneath a dimension already
+    being paid for, and the swap is free on footprint. It is a bad trade on a
+    short, wide machine, where every one of those rows is a new longest side.
+
+    There is also a one-off ``~5n`` ticks of **ignition** while the spawner walks
+    south handing each band its address. It is charged once per case, not per
+    access, so it disappears against any program doing real work.
+    """
+    from ..memory_men_addr import build_addr
+
+    a = build_addr(n, io=False)
+    assert a.in_cell is not None and a.out_cell is not None, "io=False must report stubs"
+    cells = {
+        (x, y): ch for y, row in enumerate(a.rows) for x, ch in enumerate(row) if ch != " "
+    }
+    return _Tape(
+        cells=cells,
+        width=a.width,
+        height=a.height,
+        in_cell=a.in_cell,
+        out_cell=a.out_cell,
+    )
 
 
 def tape_block(n: int) -> _Tape:
@@ -1137,48 +1262,50 @@ def tape_block(n: int) -> _Tape:
     ``memory_tape.assemble_v2`` builds the tape as a standalone answer to the
     ``memory`` problem, so it comes with its own ``I`` and ``O`` rooms. A program
     may have at most one of each and the CPU owns them, so those two rooms are
-    replaced here by pipe stubs the caller extends. Everything else — worker,
-    relay, folded ring — is untouched, which is the point: it is measured hardware
-    (``ARCH.md`` §4.1) and this must not perturb it.
+    replaced here by pipe stubs the caller extends. The **worker is untouched at
+    every size**, which is the point: it is measured hardware (``ARCH.md`` §4.1) and
+    this must not perturb it. Only the ring around it is re-routed, and only above
+    107 slots — every ``n <= 107`` emits the same cells it always did, which is what
+    keeps the ten checked-in ``.man`` files byte-identical.
 
-    ``n`` is the slot count. Footprint is 32×32 whatever ``n`` is and cost is
-    ``~105 + 8.3n`` ticks per access, so ``n`` is sized to the program's actual
-    high address and there is no trade-off to weigh.
+    ``n`` is the slot count. Ring **capacity is pipe length** (``SPEC.md``: a pipe
+    is a FIFO whose capacity equals its cell count) and it must be ``>= n + 1`` — a
+    WRITE briefly holds one more value than it stores. The folds below are two
+    L-shaped pipes whose length is a *perimeter*, so they top out at 108 slots and
+    ``tape_block(108)`` used to raise; past that :func:`_serpentine_tape` routes the
+    forward pipe as a boustrophedon and length scales with *area* instead. The two
+    meet exactly where they overlap: fold 12 gives 108 cells, and the serpentine's
+    first (five-row) tier gives 152. The ceiling is now ``n=1975``.
+
+    The block is 33 columns wide whatever ``n`` is; **height** is 34 up to ``n=107``
+    and then ``31 + rows``, i.e. two more rows per 48 further slots — 36 at
+    ``n=108``, 46 at ``n=380``, 48 at ``n=420``. That height is usually *free*,
+    because the block sits east of the adapter beside the CPU's own panel/stream
+    stack, which is taller. Rebuilt at ``n=420``, nine of the ten machines rebuilt
+    keep their bounding box to the cell: ``brackets`` 95x69, ``tcp`` 109x74,
+    ``gradebook`` 114x101, ``plotter`` 109x104, ``snake`` 123x129, ``pathfinder``
+    180x184. The exception is ``matmul`` (88x90 -> 100x90, 8,100 -> 10,000): it is the
+    one machine that is both square *and* has a STREAM block under the CPU, so the
+    extra rows push the pad search onto a wider ``mem_pad``. Size to the real high
+    address, as always — this is not a knob to spend.
+
+    Cost is unchanged too — measured **8.00 ticks per slot per access**, dead linear
+    and with no step at the 107/108 seam. Excess ring capacity only delays the first
+    value of a lap; the worker's own ``rs`` loop is an order of magnitude slower than
+    one cell per tick, so the worker stays the bottleneck and overshoot is free.
     """
-    from ..circuit import Circuit
     from ..memory_tape import (
         RELAY,
         V2_FWD_ROW,
         V2_IH,
-        V2_IN_ROW,
         V2_IW,
-        V2_OUT_COL,
         V2_RET_COL,
         _draw_pipe,
-        worker_v2,
     )
 
+    WX, WY = _TAPE_WX, _TAPE_WY
     for fold in (0, 2, 4, 6, 8, 10, 12):
-        g = Circuit(400, 200)
-        wk = worker_v2(n)
-        WX, WY = 8, 8
-        for (x, y), ch in wk.cell.items():
-            g.set(WX + x, WY + y, ch)
-        for x in range(-1, V2_IW + 1):
-            g.set(WX + x, WY - 1, "+" if x in (-1, V2_IW) else "-")
-            g.set(WX + x, WY + V2_IH, "+" if x in (-1, V2_IW) else "-")
-        for y in range(V2_IH):
-            g.set(WX - 1, WY + y, "|")
-            g.set(WX + V2_IW, WY + y, "|")
-
-        # request stub: two cells pointing east into the worker's left wall
-        iy = WY + V2_IN_ROW
-        g.set(WX - 3, iy, ">")
-        g.set(WX - 2, iy, ">")
-        # response stub: two cells climbing north out of the worker's top wall
-        ox = WX + V2_OUT_COL
-        g.set(ox, WY - 2, "^")
-        g.set(ox, WY - 3, "^")
+        g, in_cell, out_cell = _tape_shell(n)
 
         bottom_y = WY + V2_IH
         fy = WY + V2_FWD_ROW
@@ -1208,15 +1335,101 @@ def tape_block(n: int) -> _Tape:
         )
         if n_fwd + n_ret < n + 1:
             continue
-        cells = {k: v for k, v in g.cell.items() if v != " "}
-        return _Tape(
-            cells=cells,
-            width=max(x for x, _ in cells) + 1,
-            height=max(y for _, y in cells) + 1,
-            in_cell=(WX - 3, iy),
-            out_cell=(ox, WY - 3),
+        return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
+    return _serpentine_tape(n)
+
+
+#: Columns the big ring reserves under the worker, in block coordinates.
+#: ``_SNAKE_WEST`` is where an interior westbound leg turns south, ``_SNAKE_CLIMB``
+#: the column the return pipe climbs. The gap between them is deliberate: two
+#: different pipes running in adjacent columns parse fine, but ``lllm_layout``'s
+#: 257-word ring left a spare column between its snake and its climb and that ring
+#: is the one thing in this repo already proven at this size, so copy it.
+_SNAKE_CLIMB = 8
+_SNAKE_WEST = 10
+#: First serpentine row, measured from the worker's bottom wall. The return pipe's
+#: westbound leg takes ``+2`` (its last cell is ``+1``, pointing into the wall), so
+#: ``+4`` leaves one blank row between the two pipes.
+_SNAKE_TOP = 4
+
+
+def _serpentine_tape(n: int) -> _Tape:
+    """The same ring, with the forward pipe snaked so capacity scales with area.
+
+    Two L-shaped pipes give a *perimeter* of capacity and the band under the worker
+    is only 26 columns wide, which is why the folded layout dies at 108 slots. The
+    fix is the one ``lllm_layout._serpentine`` already uses for its 257-word store
+    ring: sweep the forward pipe boustrophedon-wise across the band. Each row adds
+    23 cells to the snake and one to the return pipe's climb, so the ring holds
+    ``24 * rows + 32`` values — 152 at five rows, 1976 at eighty-one::
+
+        worker  ─────────────────────────────┐        east column, as before
+        ═══════════════════════╤═════════════│═
+                 ret leg  ◄────┘             │        row +2, into the bottom wall
+                 (blank separator row)       │
+        relay ◄──┬──────────────────────◄────┘        row +4, first westbound leg
+              │  └─────────────────────────►┐
+              │  ┌──────────────────────◄────┘             ...
+              ▲  ▼
+        ┌───┐ │  └ ... last leg is westbound, into the relay's east wall
+        │r s│ ▲
+        └───┘ └── the return pipe climbs a column of its own back to the wall
+
+    Three things make it planar. The relay follows the snake **down** so the last
+    westbound leg lands on its east wall exactly as the folded layout's did (fwd on
+    the relay's bottom interior row, ret on its top one). Interior westbound legs
+    stop two columns short of the relay so only the final one reaches it. And the
+    return pipe owns :data:`_SNAKE_CLIMB` alone, west of every interior leg, so it
+    can climb from under the relay back to the worker's bottom wall without
+    crossing the snake.
+
+    The row count must be **odd** so the last leg runs west; that wastes at most one
+    row of capacity, and capacity overshoot is free (see :func:`tape_block`).
+    """
+    from ..memory_tape import RELAY, V2_FWD_ROW, V2_IH, V2_IW, V2_RET_COL, _draw_pipe
+
+    WX, WY = _TAPE_WX, _TAPE_WY
+    bottom_y = WY + V2_IH
+    fy = WY + V2_FWD_ROW
+    ret_col = WX + V2_RET_COL
+    east = WX + V2_IW + 2
+    top = bottom_y + _SNAKE_TOP
+
+    # Seventeen rows carry the ~420 slots a little-little-man interpreter wants; the
+    # last tier here holds 1976 values, at which point the block is 112 rows tall.
+    for rows in range(5, 82, 2):
+        g, in_cell, out_cell = _tape_shell(n)
+        last = top + rows - 1  # the final, relay-bound westbound leg
+        relay_y = last - 3  # so `last` is the relay's bottom interior row
+        for i, row in enumerate(RELAY):
+            for j, ch in enumerate(row):
+                g.set(1 + j, relay_y + i, ch)
+        adj = len(RELAY[0]) + 1  # first column east of the relay's wall
+
+        snake: list[tuple[int, int]] = [(WX + V2_IW + 1, fy), (east, fy), (east, top)]
+        for i in range(rows):
+            y = top + i
+            if i == rows - 1:
+                snake.append((adj, y))  # into the relay
+            elif i % 2 == 0:
+                snake += [(_SNAKE_WEST, y), (_SNAKE_WEST, y + 1)]
+            else:
+                snake += [(east, y), (east, y + 1)]
+        n_fwd = _draw_pipe(g, snake)
+        n_ret = _draw_pipe(
+            g,
+            [
+                (adj, relay_y + 1),
+                (_SNAKE_CLIMB, relay_y + 1),
+                (_SNAKE_CLIMB, bottom_y + 2),
+                (ret_col, bottom_y + 2),
+                (ret_col, bottom_y + 1),
+            ],
         )
-    raise MachineError(f"no fold gives the tape {n + 1} slots")
+        if n_fwd + n_ret < n + 1:
+            continue
+        return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
+    raise MachineError(f"no serpentine gives the tape {n + 1} slots; widen the band")
 
 
 # ── pipe binding: the §7.1 safety net, before the interpreter sees anything ──
@@ -1360,10 +1573,15 @@ def build(
     packed_rom: bool = True,
     short_return: bool | None = None,
     store: str = "tape",
+    middle_order: Sequence[str] | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
-    ``store`` picks the memory tier: ``"tape"`` is the rotating ring (§4.1,
+    ``store`` picks the memory tier. ``"grid"`` is the address-carrying man-memory
+    (:func:`grid_block`) and is the one to reach for first: its access cost is ~31
+    ticks *independent of ``n``*, so it wins on ticks at every size, and it pays for
+    that in rows rather than ticks — free on footprint whenever the machine's
+    bounding box is already set by height. ``"tape"`` is the rotating ring (§4.1,
     ``105 + 8.3n`` ticks per access at 33 columns whatever ``n`` is), ``"men"`` is
     ``memory_men_store.men_block`` — one little man per value, a measured
     ``22 + 14 * addr`` per access. The man-memory is faster per access at every
@@ -1393,9 +1611,16 @@ def build(
     for the original fixed-width fold; the word stream is identical either way, so it
     is purely a size/speed choice.
     """
+    # Checked here rather than in ``_assemble``, which the pad search calls up to 40
+    # times while *catching* MachineError — so a typo'd tier came back as whichever
+    # unrelated collision the last pad happened to hit.
+    if store not in STORE_TIERS:
+        raise MachineError(
+            f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
+        )
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
-    p = plan(program)
+    p = plan(program, middle_order=middle_order)
     words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
     top = _highest_address(program)
@@ -1574,10 +1799,14 @@ def _assemble(
         from ..memory_men_y import y_men_block
 
         tape = y_men_block(tape_n)
+    elif store == "grid":
+        tape = grid_block(tape_n)
     elif store == "tape":
         tape = tape_block(tape_n)
     else:
-        raise MachineError(f"unknown store tier {store!r}; expected 'tape', 'men', or 'men-y'")
+        raise MachineError(
+            f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
+        )
     TX = AX + ADAPTER_W + 6
     TY = CY
     g.blit(TX, TY, tape.cells)
@@ -1695,7 +1924,11 @@ def _assemble(
     # The memory tier's own internal pipes: the tape's two ring legs, or the
     # man-memory's command and answer pipe per cell. Everything the machine itself
     # drew is already in ``touches``, plus the one response pipe drawn half here.
-    store_pipes = tape.pipes if store == "men-y" else (2 * tape_n if store == "men" else 2)
+    # ``grid`` bands three pipes per slot — router->decoder, decoder->cell,
+    # cell->collector — and every one of them is a two-cell stub between facing
+    # walls, which is exactly why the extra decoder hop is nearly free.
+    _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
+    store_pipes = tape.pipes if store == "men-y" else _STORE_PIPES[store]
     _check_pipe_count(rows, expected=len(touches) + 1 + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -1739,6 +1972,13 @@ def _stream(
         from . import snake_unit
 
         blk = snake_unit.build_snake()
+    elif unit == "path":
+        # The PATH unit is snake's block with the ring taken out: `pathfinder` keeps
+        # its whole state (four 64-bit board words) in the CPU's tape and asks the
+        # unit only to paint, so all the unit owns is the panel and the robot's cell.
+        from . import path_unit
+
+        blk = path_unit.build_path()
     else:
         from . import stream as streammod
 
@@ -1955,6 +2195,16 @@ TAPE_SIZE = {
     # tape is eight slots and a read costs ~180 ticks instead of ~653. That is the whole
     # point of the rewrite — see snake-ring.asm's header.
     "snake-ring": 9,
+    # pathfinder's board is a bitset, not an array: 256 cells live in four 64-bit
+    # words, so the whole BFS — frontier, reached set, and the four direction masks —
+    # is 40 slots instead of 512. Every slot taxes every read by ~8 ticks (§4.1),
+    # which is also why its power-of-two masks are computed rather than tabulated.
+    "pathfinder": 52,
+    # pathfinder-unit keeps the identical tape: moving the *painting* into a
+    # coprocessor changes the opcode count and the trie's depth, not the data. The
+    # board still lives in the CPU's four bitset words, unlike snake-ring, where the
+    # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
+    "pathfinder-unit": 52,
 }
 
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
@@ -1962,6 +2212,60 @@ TAPE_SIZE = {
 #: A and B hold 256 entries each and a row of C holds 16; one spare value each,
 #: because a ring is briefly holding one more than it stores.
 STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
+
+#: Lane orders that beat ``plan``'s length-descending default, north to south.
+#:
+#: A lane's row is a **tick** cost: the return walk is ``2 * drop_x - row`` (east to
+#: the drop column, south to the collector, west along it), and ``drop_x`` is the
+#: running suffix maximum of the lane extents at or below that row. So a hot opcode
+#: wants to sit *low* — both terms improve at once — while a *long* one wants to sit
+#: high, because everything above it pays for its extent. Length-descending gets the
+#: second half right and knows nothing about the first, which is where these come
+#: from: weight each lane by how often the opcode actually runs (measured on the
+#: emulator over the public cases) and minimise the weighted walk.
+#:
+#: Every entry was found by search and then **verified on the engine**, keeping only
+#: candidates whose footprint did not grow — that filter is not optional, because the
+#: order picks ``mem_pad``, which sets the memory lanes' length, which sets the CPU's
+#: width, which is squared in the score. Measured, against the same build with the
+#: default order:
+#:
+#: | program | footprint | ticks | score |
+#: |---|---|---|---|
+#: | `brackets` | 9,025 → 9,025 | 26,000 → 25,111 | **0.966x** |
+#: | `gradebook` | 12,996 → **12,769** | 301,571 → 298,571 | **0.973x** |
+#: | `matmul` | 8,100 → 8,100 | 120,714 → 118,638 | **0.988x** |
+#: | `sudoku-validity` | 6,889 → 6,889 | 434,667 → 432,167 | **0.994x** |
+#:
+#: `gradebook` also *loses* a column, which is the tell that the default was not on
+#: the frontier at all: 114 → 113 is a footprint win the length rule left behind.
+#: `tcp` and `snake-ring` were searched the same way and kept their default order —
+#: see §7.6. Re-run `scratch/lane_order_search.py` when a program's `.asm` changes,
+#: since the weights come from its own execution profile.
+#:
+#: One trap, because it cost an hour and a wrong conclusion:
+#: ``test_lm1_matmul`` pins each case's **exact** settle tick ("the recorded tick is
+#: enough, and one tick fewer is not"), so a *faster* grid fails it and the failure
+#: reads exactly like a wrong answer. `matmul` was dropped from this table on that
+#: evidence and put back after checking the outputs directly — they were correct on
+#: all seven public cases, on the reference engine, at every case's new lower tick.
+#: When a pinned-tick test fails here, confirm which half of the assertion broke
+#: before concluding anything about correctness.
+LANE_ORDER: dict[str, tuple[str, ...]] = {
+    "brackets": (
+        "HALT", "LDI", "DECM", "SUB", "ADD", "JMPF", "LD",
+        "ST", "MULI", "SUBI", "DIVI", "MODI", "BRZ",
+    ),
+    "gradebook": (
+        "MUL", "DIV", "MOVA", "SUB", "ADD", "JMPF", "BRN",
+        "AND", "BRZ", "ST", "LD", "LDI", "SUBI", "MULI",
+    ),
+    "matmul": ("MUL", "BRN", "SUB", "ADDI", "ST", "LD"),
+    "sudoku-validity": (
+        "HALT", "STP", "ADD", "LDP", "MULI", "ST",
+        "MODI", "DIVI", "SUBI", "ADDI", "BRZ",
+    ),
+}
 
 #: ROM fold overrides, where the default heuristic is not the footprint optimum.
 #: The default folds the ROM toward the *CPU's own* width, which is right only while
@@ -2008,6 +2312,14 @@ ROM_ROWS = {
     # sweep minimum at 122x136; 5 is 144x135 and 7 is 111x137, so this is a real
     # optimum rather than a plateau.
     "snake-ring": 6,
+    # pathfinder's P is 2,484 words — the level step is unrolled over the four board
+    # words and then twice again — so the ROM dominates the box and wants folding
+    # almost square. Swept: 24/40/60/72/80/100/140 rows give footprints of 267k/98k/
+    # 45k/33.9k/36.9k/44.9k/63.5k, so 72 (180x184) is a real minimum, not a plateau.
+    "pathfinder": 72,
+    # pathfinder-unit: P is 2,416 and the CPU is smaller (depth-4 trie, three fewer
+    # lanes), so the fold optimum moves; swept once the block exists.
+    "pathfinder-unit": 72,
 }
 
 
@@ -2052,6 +2364,7 @@ def build_for(slug: str, *, store: str = "tape") -> Machine:
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
+        middle_order=LANE_ORDER.get(slug),
     )
 
 

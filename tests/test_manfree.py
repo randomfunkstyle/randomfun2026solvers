@@ -59,7 +59,11 @@ node_required = pytest.mark.skipif(
 )
 
 PLOTTER = (
-    REPO.parent.parent / "worktrees" / "sort-numbers-ring" / "solutions" / "plotter"
+    REPO.parent.parent
+    / "worktrees"
+    / "sort-numbers-ring"
+    / "solutions"
+    / "plotter"
     / "000000053693850_plotter.man"
 )
 plotter_required = pytest.mark.skipif(
@@ -361,19 +365,37 @@ def test_a_pipe_bending_away_from_a_wall_it_hugs_is_flagged():
     """
     from randomfun2026solvers.manmoves import hug_violations
 
-    room = RoomNode(id=0, x=0, y=0, kind="compute", w=1, h=1,
-                    children=[Atom(id=0, x=1, y=1, rows=["s"])])
+    room = RoomNode(
+        id=0, x=0, y=0, kind="compute", w=1, h=1, children=[Atom(id=0, x=1, y=1, rows=["s"])]
+    )
     # the pipe leaves the east wall at (3,1) and immediately turns north: the cell
     # behind that `^` is the wall, which is the shape the loader misreads
-    bad = PipeNode(id=0, x=3, y=0, path=[(3, 1), (3, 0)], glyphs=["^", "^"],
-                   src=0, dst=-1, entry_dir=N, exit_dir=N)
+    bad = PipeNode(
+        id=0,
+        x=3,
+        y=0,
+        path=[(3, 1), (3, 0)],
+        glyphs=["^", "^"],
+        src=0,
+        dst=-1,
+        entry_dir=N,
+        exit_dir=N,
+    )
     flagged = hug_violations(Ast(rooms=[room], pipes=[bad]))
     assert flagged == [] or "new pipe leaving" in flagged[0]
 
     # and the clear case: an arrowhead one step along, with the wall behind it
-    hugging = PipeNode(id=1, x=3, y=1, path=[(3, 1), (4, 1), (4, 0)],
-                       glyphs=[">", "^", "^"], src=0, dst=-1,
-                       entry_dir=E, exit_dir=N)
+    hugging = PipeNode(
+        id=1,
+        x=3,
+        y=1,
+        path=[(3, 1), (4, 1), (4, 0)],
+        glyphs=[">", "^", "^"],
+        src=0,
+        dst=-1,
+        entry_dir=E,
+        exit_dir=N,
+    )
     ast = Ast(rooms=[room], pipes=[hugging])
     assert hug_violations(ast) == [], "nothing here has a wall directly behind it"
 
@@ -381,12 +403,22 @@ def test_a_pipe_bending_away_from_a_wall_it_hugs_is_flagged():
 def test_hug_violations_names_the_room_it_would_be_misread_as_leaving():
     from randomfun2026solvers.manmoves import hug_violations
 
-    room = RoomNode(id=7, x=0, y=0, kind="compute", w=3, h=1,
-                    children=[Atom(id=0, x=1, y=1, rows=["abc"])])
+    room = RoomNode(
+        id=7, x=0, y=0, kind="compute", w=3, h=1, children=[Atom(id=0, x=1, y=1, rows=["abc"])]
+    )
     # (2,3) sits under the south wall at (2,2); an arrowhead there pointing south
     # has that wall behind it
-    pipe = PipeNode(id=0, x=2, y=3, path=[(2, 3), (2, 4)], glyphs=["v", "v"],
-                    src=-1, dst=-1, entry_dir=S, exit_dir=S)
+    pipe = PipeNode(
+        id=0,
+        x=2,
+        y=3,
+        path=[(2, 3), (2, 4)],
+        glyphs=["v", "v"],
+        src=-1,
+        dst=-1,
+        entry_dir=S,
+        exit_dir=S,
+    )
     got = hug_violations(Ast(rooms=[room], pipes=[pipe]))
     assert not got or "room7" in got[0]
 
@@ -532,9 +564,11 @@ def test_a_line_is_measured_by_extent_not_by_count():
     by extent — and it is the extent that decides whether anything can share it."""
     from randomfun2026solvers.manfree import spans
 
-    ast = Ast(pipes=[
-        PipeNode(id=0, x=0, y=0, path=[(0, 0), (39, 0)], glyphs=[">", ">"]),
-    ])
+    ast = Ast(
+        pipes=[
+            PipeNode(id=0, x=0, y=0, path=[(0, 0), (39, 0)], glyphs=[">", ">"]),
+        ]
+    )
     (row,) = [s for s in spans(ast, "row") if s.index == 0]
     assert row.cells == 2
     assert (row.lo, row.hi, row.width) == (0, 39, 40)
@@ -545,10 +579,12 @@ def test_two_lines_with_disjoint_extents_are_offered_as_a_fold():
     """The lever that took plotter 64 rows to 56, and that no cut can find."""
     from randomfun2026solvers.manfree import merge_candidates
 
-    ast = Ast(pipes=[
-        PipeNode(id=0, x=0, y=0, path=[(0, 0), (6, 0)], glyphs=[">", ">"]),
-        PipeNode(id=1, x=8, y=3, path=[(8, 3), (20, 3)], glyphs=[">", ">"]),
-    ])
+    ast = Ast(
+        pipes=[
+            PipeNode(id=0, x=0, y=0, path=[(0, 0), (6, 0)], glyphs=[">", ">"]),
+            PipeNode(id=1, x=8, y=3, path=[(8, 3), (20, 3)], glyphs=[">", ">"]),
+        ]
+    )
     pairs = merge_candidates(ast, "row")
     assert [(a.index, b.index) for a, b in pairs] == [(0, 3)]
     a, b = pairs[0]
@@ -559,10 +595,12 @@ def test_an_overlapping_pair_reports_how_far_it_is_from_folding():
     """A packed grid has no disjoint pair, so the useful number is the shift."""
     from randomfun2026solvers.manfree import merge_candidates, near_merges
 
-    ast = Ast(pipes=[
-        PipeNode(id=0, x=0, y=0, path=[(0, 0), (10, 0)], glyphs=[">", ">"]),
-        PipeNode(id=1, x=8, y=3, path=[(8, 3), (20, 3)], glyphs=[">", ">"]),
-    ])
+    ast = Ast(
+        pipes=[
+            PipeNode(id=0, x=0, y=0, path=[(0, 0), (10, 0)], glyphs=[">", ">"]),
+            PipeNode(id=1, x=8, y=3, path=[(8, 3), (20, 3)], glyphs=[">", ">"]),
+        ]
+    )
     assert merge_candidates(ast, "row") == [], "they overlap on columns 8..10"
     (a, b, overlap) = near_merges(ast, "row")[0]
     assert {a.index, b.index} == {0, 3}
@@ -571,16 +609,34 @@ def test_an_overlapping_pair_reports_how_far_it_is_from_folding():
 
 def _two_room_ring() -> Ast:
     """Two rooms wired both ways: pipe0 out, pipe1 back. A ring, by topology."""
-    left = RoomNode(id=0, x=0, y=0, kind="compute", w=1, h=1,
-                    children=[Atom(id=0, x=1, y=1, rows=["s"])])
-    right = RoomNode(id=1, x=8, y=0, kind="compute", w=1, h=1,
-                     children=[Atom(id=0, x=9, y=1, rows=["r"])])
-    out = PipeNode(id=0, x=3, y=1, path=[(3, 1), (4, 1), (5, 1), (6, 1), (7, 1)],
-                   glyphs=[">", "-", "-", "-", ">"], src=0, dst=1,
-                   entry_dir=E, exit_dir=E)
-    back = PipeNode(id=1, x=3, y=4, path=[(7, 4), (6, 4), (5, 4), (4, 4), (3, 4)],
-                    glyphs=["<", "-", "-", "-", "<"], src=1, dst=0,
-                    entry_dir=W, exit_dir=W)
+    left = RoomNode(
+        id=0, x=0, y=0, kind="compute", w=1, h=1, children=[Atom(id=0, x=1, y=1, rows=["s"])]
+    )
+    right = RoomNode(
+        id=1, x=8, y=0, kind="compute", w=1, h=1, children=[Atom(id=0, x=9, y=1, rows=["r"])]
+    )
+    out = PipeNode(
+        id=0,
+        x=3,
+        y=1,
+        path=[(3, 1), (4, 1), (5, 1), (6, 1), (7, 1)],
+        glyphs=[">", "-", "-", "-", ">"],
+        src=0,
+        dst=1,
+        entry_dir=E,
+        exit_dir=E,
+    )
+    back = PipeNode(
+        id=1,
+        x=3,
+        y=4,
+        path=[(7, 4), (6, 4), (5, 4), (4, 4), (3, 4)],
+        glyphs=["<", "-", "-", "-", "<"],
+        src=1,
+        dst=0,
+        entry_dir=W,
+        exit_dir=W,
+    )
     ast = Ast(rooms=[left, right], pipes=[out, back])
     ast.source = [""]
     return ast
@@ -638,10 +694,23 @@ def test_optimistic_unpins_undeclared_pipes_without_touching_declared_ones():
     """
     from randomfun2026solvers.manfree import PIPE_FLOOR, optimistic
 
-    a = PipeNode(id=0, x=0, y=0, path=[(x, 0) for x in range(6)],
-                 glyphs=[">", "-", "-", "-", "-", ">"], pinned=True)
-    b = PipeNode(id=1, x=0, y=2, path=[(x, 2) for x in range(6)],
-                 glyphs=[">", "-", "-", "-", "-", ">"], min_capacity=5, pinned=False)
+    a = PipeNode(
+        id=0,
+        x=0,
+        y=0,
+        path=[(x, 0) for x in range(6)],
+        glyphs=[">", "-", "-", "-", "-", ">"],
+        pinned=True,
+    )
+    b = PipeNode(
+        id=1,
+        x=0,
+        y=2,
+        path=[(x, 2) for x in range(6)],
+        glyphs=[">", "-", "-", "-", "-", ">"],
+        min_capacity=5,
+        pinned=False,
+    )
     ast = Ast(pipes=[a, b])
     opt = optimistic(ast)
     assert opt.pipes[0].min_capacity == PIPE_FLOOR

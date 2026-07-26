@@ -1,0 +1,16 @@
+# memory — submission 3a80e676-2ae4-433d-968f-b15e9940b5d0
+
+verdict      done: 24/24 cases, area2 11664, avgTicks 1,758, score 20,510,172
+submitted    2026-07-26T03:17:59+0300
+grid         108x107
+problem id   d0b34a23-67c1-4087-b88e-90a74404d50e
+fingerprint  e512c96b59ba0b28096ecf11a462978d3042a5cc5505f290faff572c67e5b383
+commit       d6d438c
+local        memory: 7/7 public cases, avg 532 ticks
+source       tasks/solutions/memory_men_grid.man
+
+runner output:
+Passed 24/24 test cases
+
+notes:
+memory_men_grid 4x25: the per-column collector is gone. At most one cell sends per operation - a cell only reaches its s if its decoder spoke to it, and exactly one decoder does - so a cell room needs ONE outgoing pipe, straight down its south wall to the collector strip. 25 answer pipes per column become 1, and the collector room and its gap come off the width: 132x105 -> 108x107, footprint 17,424 -> 11,664.

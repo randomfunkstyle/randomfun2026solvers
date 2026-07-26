@@ -75,13 +75,13 @@ slow = pytest.mark.skipif(
 #: are the deliverable, so they are pinned exactly (with 5 % of slack in the
 #: assertion below, to allow an improvement without a test edit).
 REAL_TICKS = {
-    "2x2 warm up": 14_126,
-    "non-square 2x3x2": 18_386,
-    "identity": 39_382,
-    "negative heavy": 69_040,
-    "skinny 16x2x16": 71_638,
-    "max magnitude 7x5x9": 79_416,
-    "16x16x16 full size": 548_758,
+    "2x2 warm up": 13_959,
+    "non-square 2x3x2": 18_171,
+    "identity": 38_891,
+    "negative heavy": 68_195,
+    "skinny 16x2x16": 70_547,
+    "max magnitude 7x5x9": 78_415,
+    "16x16x16 full size": 542_291,
 }
 
 #: ``(instructions, multiply-accumulates)`` per case, from the emulator. The ratio
@@ -124,9 +124,7 @@ class _Counting(DictStore):
 
 def reference(n: int, m: int, k: int, a: list[int], b: list[int]) -> list[int]:
     """C = A·B, row-major, straight from the problem statement."""
-    return [
-        sum(a[i * m + t] * b[t * k + j] for t in range(m)) for i in range(n) for j in range(k)
-    ]
+    return [sum(a[i * m + t] * b[t * k + j] for t in range(m)) for i in range(n) for j in range(k)]
 
 
 def _run(rounds: list[Round]):
@@ -246,9 +244,7 @@ def test_several_rounds_in_one_run_reuse_the_rings() -> None:
     for n, m, k in ((2, 3, 4), (5, 2, 2), (4, 4, 3)):
         a = [((i * 13 + 5) % 199) - 99 for i in range(n * m)]
         b = [((i * 29 + 3) % 199) - 99 for i in range(m * k)]
-        rounds.append(
-            Round(input=(n, m, k, *a, *b), expected=tuple(reference(n, m, k, a, b)))
-        )
+        rounds.append(Round(input=(n, m, k, *a, *b), expected=tuple(reference(n, m, k, a, b))))
     res, _store, unit = _run(rounds)
     assert res.output == tuple(v for r in rounds for v in r.expected)
     assert not unit.ring_a and not unit.ring_b and not unit.p1 and not unit.p2

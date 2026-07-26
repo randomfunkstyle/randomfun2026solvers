@@ -20,6 +20,7 @@ from 15.9bn to **3.37bn**.
 | 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
 | 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
 | 4 | `snake` | 121×136 | **3,369,020,288** | LM-1 + body-ring coprocessor (17/17, judged) |
+| 4 | `pathfinder` | 84×175 | **11,096,155,486** | bespoke dataflow, bit-parallel BFS (18/18, judged) |
 | — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
 
 `lm1/machine.py` takes an assembled program and emits the whole machine — looping
@@ -491,6 +492,55 @@ slot count. It is free on footprint and linear on ticks — there is no trade-of
 to weigh.** `tcp` at N=48 is 1.9× cheaper per access than the N=100 build,
 `brackets` at N=32 is 2.6×, `sort-numbers` at N=16 is 4.1×.
 
+#### The man-memory as STORE: an access that ignores `n`, and it still loses
+
+`memory_men_addr` answers in **~31 ticks whatever `n` is** — the router *broadcasts*
+the address and the one cell holding it in B replies, so nothing walks — against the
+tape's `316 + 8.06n` in a generated machine. It is wired as a drop-in tier by
+`machine.grid_block` (`store="grid"`, `build_addr(n, io=False)` swapping the `I`/`O`
+rooms for stubs), and it is **correct on every program tried**: `brackets` 9/9,
+`gradebook` 7/7, `tcp` 6/6, `matmul` 7/7, `snake-ring` 5/5 frames.
+
+It is nevertheless the wrong trade almost everywhere, and the reason is geometry.
+The block is 36 columns wide whatever `n` is and **`3n + 9` rows tall**, where the
+tape is 32×32 flat. The ROM already occupies every row above the block, so those
+rows are *additive* below the ROM+CPU stack — raising the block gains nothing.
+Measured on the engine, same program, same cases, tape versus grid:
+
+| program | `n` | footprint | ticks | score |
+|---|---|---|---|---|
+| `snake-ring` | 9 | **1.000×** | 0.970× | **0.970×** |
+| `brackets` | 5 | 1.064× | 0.962× | 1.024× |
+| `matmul` | 16 | 1.335× | 0.875× | 1.169× |
+| `gradebook` | 32 | 1.617× | 0.777× | 1.257× |
+| `tcp` | 52 | 2.667× | **0.563×** | 1.501× |
+
+**Both columns are monotone in `n` and the footprint one wins, because it is
+squared.** The tick saving grows with `n` — exactly as it should, since the tape's
+`8.06n` is what is being deleted — but `3n` rows grow the longer side faster.
+Break-even sits at `n ≈ 9`, i.e. only where the block still fits inside the CPU's own
+height (`3n + 9 ≤ H`, and `H ≈ 54` on most of these machines, so `n ≤ 15`).
+
+Three consequences worth keeping:
+
+- **`tcp` is confirmed tape-bound: 44 % of its ticks were the tape** (0.563×), the
+  largest single-change tick win measured on any program here. What blocks it is
+  area, not the memory. `tcp` is the program to revisit if the buffer ever moves into
+  a STREAM ring the way `snake-ring` moved the snake's body — at `n ≤ 15` this tier
+  would then be free *and* keep the win.
+- **Multi-column grids do not rescue it.** `build_grid` puts the collector strip on
+  the *bottom* so answers cannot overtake, so a host's response would have to climb
+  ~250 cells back to the corridor — at one tick per cell (§7.4b) that is the whole
+  saving handed back. The one-column chain (router | decoder | cell | collector, answer
+  leaving north) is the only shape whose answer pipe is short, and it is 67 cells even
+  so — **already twice the memory's own 31**.
+- The `~5n` ignition (the spawner walking south handing each band its address) is
+  charged **once per case** and never showed up; it is not what makes this lose.
+
+**The rotating tape stays the default.** This is a negative result on the tier, not on
+the hardware: the man-memory is the right answer to the `memory` *problem* (§8.4) and
+the wrong one to a CPU that has to stand next to it.
+
 **The rule holds but this formula understates it badly, and the mechanism is the
 ring's phase.** Measured end-to-end on generated machines, one extra slot costs
 **~999 ticks per case on `tcp`** and ~114 on `brackets` (`tcp` at 52/70/90 slots:
@@ -755,6 +805,34 @@ the engine (4×4 and 8×8 panels, single-stepped, frames dumped at every commit)
   written on a tick *is* in the frame committed on that tick. Unequal pipe lengths
   reorder writes — plan latency, not send order. Values still in flight are processed
   after the last man halts.
+- **The write cursor is 0 at power-on**, before any `ADDR` is ever sent. Probed with a
+  grid that has *no ADDR pipe at all*: three `DATA` colours land in cells 0, 1, 2
+  row-major. `ADDR ← 0` and `SWAP ← 0` re-home the cursor; neither *initialises* it.
+  So a 256-cell board fill needs no `ADDR` word, and — with the previous point — that
+  fill can be interrupted by any number of `SWAP ← 1` commits without re-homing.
+- **The port-order constraint is on arrival ticks, not on pipe lengths.** A value sent on
+  tick `T` into an `L`-cell pipe is consumed during `T + (L-1)`, and within one tick the
+  panel processes ADDR → DATA → SWAP. So the conditions are
+  `ta + (La-1) <= td + (Ld-1)` and `ts + (Ls-1) >= td + (Ld-1)`, and **equality is safe in
+  both**. Measured: `swap == data` lands the pixel in the right frame; a SWAP pipe two
+  cells shorter but sent two ticks later is fine; an ADDR pipe eight cells shorter but sent
+  eight ticks later is fine. The failure was demonstrated too — SWAP length 2 against DATA
+  length 6 sends the commit two ticks later and it *still* arrives first, so the frame comes
+  out blank and the pixel appears one frame late. `snake_unit.py`'s `addr == data` /
+  `swap >= data` are therefore **sufficient, not minimal**; they are a safe special case of
+  the inequalities above, for arms that send on consecutive ticks.
+- **A stray `|` one cell behind a bend's arrowhead deletes the whole pipe, silently.** No
+  load error; `analyze` simply reports one pipe fewer, and the `s` that meant to use it
+  binds a *sibling* pipe, so the machine runs to completion doing the wrong thing. This is
+  the §2.7 family again ("counting the pipes the engine finds against the number drawn
+  catches the whole family in one line") and it is the reason that count belongs in every
+  block builder's assertions, not just in the machine's.
+
+  Probes: `examples/panel-cursor-poweron.man`, `panel-cursor-interleaved-commits.man`,
+  `panel-latency-swap-overtakes.man`, `panel-latency-swap-equal.man`,
+  `panel-latency-swap-shorter-but-later.man`, `panel-latency-addr-shorter-same-tick.man`,
+  with the readings in `examples/panel-probes.md`. All six verified by the engine's own
+  `frameJudge`.
 - **Range faults are fatal on the arrival tick**, each with its own reason:
   `display-value` for `DATA` outside 0–15, `display-addr` for `ADDR` outside
   `0 … w*h-1`, `display-swap` for anything but 0/1.
@@ -1242,7 +1320,75 @@ those sum to `collector − centre`, a **constant**; for `row < centre` they sum
 `collector + centre − 2·row`, which *decreases* as the row moves down. So rows
 above the trie centre are strictly worse than rows below it, and the only
 profitable ordering rule is to keep hot opcodes at or below centre — which needs
-dynamic opcode frequencies, not static lane geometry. Untested.
+dynamic opcode frequencies, not static lane geometry.
+
+#### Tested, and it is worth a few percent — `LANE_ORDER`
+
+The paragraph above was right about the mechanism and wrong that nothing was left.
+Weighting each lane by **how often its opcode actually executes** (counted on the
+emulator over the public cases) and minimising
+
+    walk(lane) = (drop_x − lane_end) + (collector − row) + (drop_x − 1)
+
+pays, because it resolves a genuine two-sided tension the length rule cannot see: a
+**hot** lane wants to sit low — `− row` and `2·drop_x` both improve at once, since
+`drop_x` is the suffix maximum of the extents at or below it — while a **long** lane
+wants to sit high, because every lane above it pays for its extent. Length-descending
+optimises the second force alone. Measured on the reference engine at identical tick
+granularity (`scratch/lane_order_search.py`):
+
+| | footprint | ticks | score |
+|---|---|---|---|
+| `brackets` | 9,025 → 9,025 | 26,000 → **25,111** | **0.966×** |
+| `gradebook` | 12,996 → **12,769** | 301,571 → **298,571** | **0.973×** |
+| `matmul` | 8,100 → 8,100 | 120,714 → **118,638** | **0.988×** |
+| `sudoku-validity` | 6,889 → 6,889 | 434,667 → **432,167** | **0.994×** |
+
+Four things this exercise established that outlive the numbers:
+
+- **Width has to be a constraint, not a term.** The order picks `mem_pad`, which sets
+  the memory lanes' length, which sets the CPU's width, which is *squared*. The first
+  unconstrained search "won" 16% of walked cells and lost on score by widening the CPU
+  three columns. Note this **contradicts the paragraph above**: lane order *can* move
+  the box. It moved `gradebook`'s the good way too — 114 → 113 columns, a footprint win
+  the length rule had left on the table, and one `ROM_ROWS[gradebook]`'s own comment had
+  already assumed.
+- **Modelled cells over-predict ticks by ~3×.** `brackets` lost 16% of its walked cells
+  and 1.6% of its ticks. Walking that sits in front of a blocked memory `r` is free —
+  the man waits at the `r` either way — so the model ranks candidates correctly but must
+  never be read as a tick estimate.
+- **A pinned-tick test failing is not evidence of a wrong answer, and reading it that
+  way cost a real result.** `test_lm1_matmul` asserts each case's *exact* settle tick —
+  "the recorded tick is enough, and one tick fewer is not" — so a **faster** grid fails
+  it, with a message indistinguishable from a wrong product. `matmul` was struck from
+  `LANE_ORDER` on that evidence, and restored after checking the outputs directly:
+  correct on all seven public cases, on the reference engine, at every case's new lower
+  tick. The pin is a good test; it just answers a different question than it appears to.
+  Confirm *which half* of such an assertion broke before concluding anything.
+- **A public-case pass is still not proof of correctness**, independently of the above:
+  nine cases is thin cover for a stack machine, and a reordered grid is *different
+  hardware* running the same ISA. `brackets` therefore gets random and boundary inputs
+  past its public set, and the search grew `--extra-problem` for programs with thin
+  data. Note also that **`optimize.verify` defaults to the fast in-memory engine**, so a
+  check whose job is to catch a hardware bug must pass `lm=Littleman()`.
+
+`tcp` and `snake-ring` were searched over three seeds each and kept their defaults — no
+candidate that held the footprint beat them.
+
+Two follow-ups were run on top of the new orders and both came back empty, which is
+worth recording so they are not re-run:
+
+- **The ROM fold is at its optimum and the curve is flat.** Full sweeps (not `romopt`'s
+  ±1 neighbourhood) put `brackets` on 9,025 for *every* fold from 5 to 21 rows — width
+  is binding at 95 — with ticks falling monotonically by a total of 0.15% across that
+  whole range, and `gradebook` on 12,769 from 31 rows up, gaining 0.04%. Both are
+  therefore free to spend height on anything that wants it: `brackets` has 25 spare
+  rows under its own width, `gradebook` 12.
+- **`matmul` still cannot take the short return path.** Retested after the reorder,
+  because the recorded verdict was measured with the old lane order and the reorder moves
+  every drop column: it fails identically, `'.'` vs `'v'` at (22, 1), for every fold from
+  3 to 11 rows. That is one deterministic collision rather than a search that ran out of
+  room, so `_LONG_RETURN` stays as it is and the fix is a layout change, not a pad.
 
 Two other footprint facts fell out of the same measurement:
 
@@ -1338,6 +1484,159 @@ Two rules the build produced, both of which generalise beyond `snake`:
   three pipe *lengths* can be asserted against each other (`addr` = `data`, `swap` ≥
   `data`, or a commit overtakes the pixels it commits), and the drawing fuses into the
   ring commands — `GROW` appends *and* paints *and* commits.
+
+### 8.3 `pathfinder`: bitwise ops change the algorithm, and the CPU still loses by 13x
+
+**Solved bespoke, not by LM-1** — `tasks/solutions/pathfinder_grid.man`, a dedicated
+dataflow machine, passes **18/18** at 84×175 and avg 362,323 ticks for a score of
+**11,096,155,486**. The LM-1 build below passes **17/18** and so scores nothing; had it
+passed it would have scored ~1.7e11. That is §1's trade again, and the widest margin yet
+recorded on one problem: **13x on score, and the CPU version does not even finish.**
+
+Both arrived at the same core idea independently, which is the useful part — the algorithm
+is forced by the hardware, not by the tier:
+
+| | LM-1 (`pathfinder.asm`) | bespoke (`pathfinder_grid.py`) |
+|---|---|---|
+| board | four 64-bit words in the tape | the same four words, in a ring |
+| BFS | from the flag, level per round | from the flag, distance **mod 3** in three label planes |
+| distance storage | four direction masks, 16 slots | none — roles rotate as planes re-enter the ring |
+| tie-break | order the directions consume `avail` | falls out of neighbour order |
+| grid | 180×184 = 33,856 | **84×175 = 30,625** |
+| avg ticks (judge) | — (17/18) | **362,323** |
+| score | — | **11,096,155,486** |
+
+Two ideas the bespoke machine has that the CPU version does not, and both are the kind that
+only a dataflow grid can spend: **distance mod 3** works because the grid is bipartite, so
+three planes suffice and *pushing them back into the ring in a different order is the
+rotation* — free. And **g = 255 − p**, a 180° rotation of the board, keeps every plane word
+non-negative, which makes the bit tests branch-free. The LM-1 version needs neither because
+it pays a tape read for everything anyway.
+
+#### Where the 15x actually comes from, measured on both grids
+
+Both machines were run through `tools/display-frames.mjs` on the same seven public cases
+and fitted the same way. The result is not what the `snake` comparison would predict:
+
+| | LM-1 | bespoke | ratio |
+|---|---|---|---|
+| footprint | 33,856 | 30,625 | **1.11x** |
+| fixed cost per case | 1,680,572 | **51,842** | **32.4x** |
+| per move | 61,159 | **4,154** | **14.7x** |
+| the 15M cap is reached at | 218 moves | **3,598 moves** | 16.5x |
+
+**Footprint is a tie.** Both grids are ~175-184 tall and the score bills only the taller
+side, so the entire 15x is ticks. That inverts §8.0's lesson (where the coprocessor got
+*bigger* and won on ticks) and §2.6's (where bespoke won on both): here bespoke wins on
+ticks *only*, and the CPU's 180 columns of ROM are free because they hide under the height
+the panel and the lane band already cost.
+
+**The fixed cost is 32x, and the reason is one register.** Both fold the 256 input cells
+with `w = 2*w + bit`. The bespoke machine keeps `w` in **B** across the input read, because
+`ri` only clobbers A — eight glyphs and ~10 ticks per cell, no memory at all. LM-1 cannot:
+its accumulator *is* B, and every instruction fetch clobbers A, so `IN` destroys any second
+live value and the recurrence must spill to the tape at ~415 ticks a read. That is §5.1's
+"three registers are not enough" showing up as a 32x constant rather than as a percentage,
+and it is inherent to having a fetch at all — no amount of ISA work removes it.
+
+**The per-move 15x is two independent savings.** About 58 % of LM-1's 61,159 is blocked tape
+latency (§8.3's profile: `LD` 24.1 %, `ADD` 6.1 %, and the hottest cell of each is the
+mem-response `r`); the rest is fetch, trie, lane walk and return path. The bespoke machine
+has none of those: a BFS level is one 18-word ring lap, and there is no fetch, no decode and
+no return.
+
+On top of that it stores strictly less. **Distance mod 3 in three label planes** works
+because the board is bipartite, so three residues are enough to say closer / here / farther,
+and *pushing the planes back into the ring in a different order is the rotation* — relabeling
+is free. `free = NB | S1 | S2 | S3` derives the wall mask instead of storing it, so there is
+no fifth plane. Against that, LM-1 keeps FREE, AVAIL, SAVE and four direction masks — 28
+slots it must also read back during the walk. **The bespoke machine stores no path at all**;
+every robot move is a local test against the three residues.
+
+Two ideas worth stealing regardless of tier:
+
+- **`g = 255 - p` as a board rotation.** Both builds needed the packing loop's first cell to
+  land in the *top* bit; LM-1 wrote it as a reversed bit index, the grid as a 180-degree
+  rotation of the board. Same map, but the rotation framing makes the consequence obvious —
+  the board is symmetric, so only the tie-break's test order flips, and nothing else moves.
+- **Put every pipe anchor on one wall and ties become arithmetically impossible.** With all
+  eight anchors on the north wall the distance from any interior cell is `|x - col| + y + 2`,
+  the `y` term is common, and nearest-pipe collapses to *nearest anchor column* — a 1-D rule
+  that holds at every row and so can be asserted on all 327 pipe ops instead of hoped for.
+  Anchors are then spaced so each adjacent pair's columns sum to an **odd** number, which
+  makes `|x-c1| == |x-c2|` unsolvable in integers: the §2.7 tie that "loses silently" cannot
+  occur by construction. LM-1 instead pads the CPU (`mem_pad`) and route-checks afterwards.
+
+The rest of this section is the LM-1 measurement, kept because it prices the tier on a
+problem where both were built — the same service §8.0 does for `snake`.
+
+The language has `&`, `|`, `~`, `{`, `}` (`SPEC.md`), which none of the earlier problems
+needed. That turns a 16x16 board from a 256-cell array into **four 64-bit words**, so one
+BFS level is ~16 word operations instead of a queue over 256 tape cells. `MULI`/`DIVI` by
+powers of two serve as the shifts, which is sound only because of one invariant:
+
+> **Bit 63 of every bitset is clear.** Bit 63 of word `w` is cell `64w` — row `4w`,
+> column 0 — and the spec guarantees every border cell is a wall. So every word is
+> non-negative and a floor-divide really is a *logical* shift. `MULI` is a wrapping
+> multiply and needs no such caveat.
+
+Bit order is **reversed** (bit `b` is cell `64w + (63 - b)`), which is not cosmetic: it is
+what lets setup fold the input stream with `acc = 2*acc + v`. The natural order needs a
+`1 << 63` literal, which the ROM cannot encode as a positive word, and it would drive the
+accumulator negative and break the invariant above.
+
+**The tie-break costs nothing.** Take the four directions as up, right, down, left and
+*consume* the unreached set as each is taken; a cell reachable two ways at one level keeps
+only the first. That is exactly the spec's preference order — no priority masks, no
+complements. Confirmed against the contest's own expected frames, which `pathfinder.json`
+ships per round and `pathfinder_sim` reproduces byte for byte on all seven public cases.
+
+| | measured |
+|---|---|
+| grid | 180x184 = 33,856 |
+| public avg ticks (engine) | 5,000,658 |
+| judge | **17/18** — a full pass is required, so it scores nothing |
+| cost model (engine, 7 cases) | `1,680,572 + 61,159 x moves`, max residual 248k |
+| the 15M cap is reached at | **~218 total moves** |
+
+The spec bounds each path at 64 moves but places **no bound on the number of rounds**, so
+~10 long rounds exceed the cap. The 18th case is a *ticks* failure, not a wrong answer.
+
+Where the ticks go (gated to the scored tick, CPU runner pinned by hand — `critical_runner`
+picks the tape's man on this machine, §4.1's first profiler trap, and reports `tape 100%`):
+
+| bucket | share | note |
+|---|---|---|
+| **lanes** | **43.7 %** | `LD` alone is 24.1 % and `ADD` 6.1 %, and the hottest cell of each is the mem-response `r` — this is blocked tape latency, not work |
+| slabs | 23.5 % | `JMPF` 17.9 %, `BRZ` 5.6 % — the ROM lap a backward jump pays |
+| return | 13.6 % | pure walking |
+| trie | 8.8 % | depth **5**, because the CPU paints the panel itself |
+| fetch | 1.0 % | |
+
+Three things that follow, and the third is the one that matters:
+
+- **More unrolling is nearly spent.** Per move the jump cost is
+  `(P - LEVELS*b_level)/LEVELS + (P - WALKS*b_walk)/WALKS` words, and going from
+  (2,4) to (4,8) to (8,16) copies moves that from ~1,174 to ~807 to ~638 words, i.e.
+  ~5 % of the per-move cost for a P that nearly triples. The 23.5 % slab share is mostly
+  the *setup* loop, which is fixed cost and does not touch the slope.
+- **Sixteen opcodes was the obvious next move, and it was abandoned as pointless.** The
+  three display opcodes force depth 5; a write-only coprocessor spends one `SND` instead,
+  and `pathfinder-unit.asm` is that program at exactly 16, verified in the emulator against
+  the model on all seven cases (`PathUnit`, `tests/test_path_unit_model.py`). Its *hardware
+  block is unfinished* and will stay that way: `snake`'s identical 17->16 step measured
+  -19 % ticks and -41 % footprint, which here would give ~1.4e11 against the bespoke
+  machine's 1.1e10. The variant is kept as the measured comparison, not as a candidate.
+- **The slope is tape reads and nothing else.** ~89 reads a move at ~415 ticks is ~58 % of
+  the 61,159. Shrinking the tape helps at ~1.9 ticks per slot per access (§8.1), i.e. a few
+  percent. Halving the *count* needs the level step itself in hardware — `snake` measured
+  24x on exactly that move (§8.0) — and a unit that computes levels must also walk and
+  paint, because it cannot answer back.
+
+One measured negative worth keeping, because it looked obvious: **guarding a word's block
+on an empty frontier loses.** A word can only be skipped when its own frontier *and both
+neighbours'* are empty, since the cross-word terms feed it, and the frontier occupies ~1.9
+of 4 words *contiguously* — so the guard almost never fires. 4.99M -> 5.06M, i.e. worse.
 
 ### 8.1 `plotter` was 6 % over the step cap, and the fix was tape accesses per pixel
 

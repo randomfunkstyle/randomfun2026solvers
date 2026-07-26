@@ -44,7 +44,7 @@ node_required = pytest.mark.skipif(
 
 # ── the two flags ────────────────────────────────────────────────────────────
 def test_an_atom_is_rigid_but_still_mobile_by_default() -> None:
-    """"Do not touch this 2x2" is two claims, and only one is usually meant.
+    """ "Do not touch this 2x2" is two claims, and only one is usually meant.
 
     An atom's *bytes* are sacred (``rigid_content``); its *address* is not. Being
     able to move a block we refuse to rewrite is most of what compaction does.

@@ -1,0 +1,16 @@
+# brackets — submission 9cf57a99-e290-4e72-922c-9169f092f583
+
+verdict      done: 26/26 cases, area2 8836, avgTicks 47,474, score 419,478,905
+submitted    2026-07-26T05:36:46+0300
+grid         94x69
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  8a01472e34c7f5a738a413f3abe283b4159d759986a123f872ba0563a424e336
+commit       0ac03c6
+local        brackets: 9/9 public cases, avg 24,628 ticks
+source       tasks/compacted/brackets_laneorder_ast10.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+LANE_ORDER (opcode-frequency lane order) + AST10 drop-col 40, drop-row 59; 94x69, public ticks 25,497 -> 24,628

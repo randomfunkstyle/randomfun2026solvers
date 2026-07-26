@@ -68,3 +68,45 @@ def test_program_to_grid_from_blocks() -> None:
         rooms=[{"id": 0, "min": (0, 0), "max": (2, 2), "content": ["+-+", "|@|", "+-+"]}],
     )
     assert prog.to_grid() == ["+-+", "|@|", "+-+"]
+
+
+def test_display_panel_round_trips_via_to_grid() -> None:
+    # Pure model test (no Node): a display the analyser reports as bare geometry
+    # (min/max + captured content) must be repainted by to_grid. Dropping it once
+    # corrupted plotter/snake — a pipe feeding the panel then "ends without
+    # reaching another room" and the round-tripped grid no longer loads.
+    prog = Program(
+        width=5,
+        height=3,
+        displays=[
+            {"min": [0, 0], "max": [4, 2], "content": ["+===+", ":   :", "+===+"]}
+        ],
+    )
+    assert prog.to_grid() == ["+===+", ":   :", "+===+"]
+
+
+# The best archived plotter/snake solutions carry a display panel the analyser
+# reports as bare geometry rather than as a room; before the to_grid fix these
+# were dropped on the reparse optimize() does up front, so the grid no longer
+# loaded and the portfolio capped at 6/8. Pin the byte-exact round-trip.
+_SOLUTIONS = REPO / "solutions"
+DISPLAY_ARCHIVES = ["plotter", "snake"]
+
+
+def _lowest_archive(slug: str) -> Path | None:
+    d = _SOLUTIONS / slug
+    files = sorted(d.glob("*.man")) if d.is_dir() else []
+    return files[0] if files else None
+
+
+@node_required
+@pytest.mark.parametrize("slug", DISPLAY_ARCHIVES)
+def test_display_archive_round_trip_byte_exact(slug: str) -> None:
+    path = _lowest_archive(slug)
+    if path is None:
+        pytest.skip(f"no archived {slug} solution checked in")
+    # bind=False: pipe-op bindings don't affect to_grid output and cost one engine
+    # call per instruction cell, so skip them to keep this in the fast tier.
+    prog = parse_program(path, bind=False)
+    assert prog.displays, f"{slug} archive should expose a display panel"
+    assert prog.to_grid() == _canonical(path)

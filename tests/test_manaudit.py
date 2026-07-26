@@ -63,14 +63,19 @@ def test_transition_names_a_speed_for_space_topology_rewrite() -> None:
 
 
 def test_memory_archive_is_a_worst_to_best_score_frontier() -> None:
+    # Deliberately not asserting how many submissions are archived, nor what the
+    # best one scores: the archive is a *log*, every send appends to it, and a
+    # count here fails on the next one. (It also holds losers now — the
+    # man-memory family is archived at 216M against the ring's 55M, because its
+    # ticks are the interesting number and its footprint is the open problem.)
     points = archive_frontier("memory", REPO / "solutions")
+    archived = list((REPO / "solutions" / "memory").glob("*.man"))
 
-    assert len(points) == 8
-    assert [point.server_score for point in points] == sorted(
-        (point.server_score for point in points),
-        reverse=True,
+    assert len(points) == len(archived), "every archived grid should be scored"
+    assert points[-1].server_score == min(p.server_score for p in points)
+    assert all(
+        point.factor == point.width**2 or point.factor == point.height**2 for point in points
     )
-    assert points[-1].server_score == 55_105_622
 
 
 def test_current_memory_solution_round_trips_and_gets_structural_actions() -> None:

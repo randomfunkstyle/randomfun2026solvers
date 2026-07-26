@@ -144,9 +144,7 @@ def test_the_structural_read_agrees_with_the_engine_on_a_real_grid(program) -> N
     # partition: no glyph in two blocks, none missed
     owned = [c for b in s.blocks for c in b.cells]
     assert len(owned) == len(set(owned)), "a cell belongs to at most one block"
-    live = {
-        c for c, i in s.cells.items() if i.room is not None and i.kind not in DEAD_KINDS
-    }
+    live = {c for c, i in s.cells.items() if i.room is not None and i.kind not in DEAD_KINDS}
     assert set(owned) == live
 
     # an IO room's shape is SPEC's, not ours
@@ -165,9 +163,7 @@ def test_capacity_hints_turn_a_frozen_pipe_shrinkable(program) -> None:
     assert bare.pipe_slack() == 0
 
     longest = max(bare.pipes, key=lambda p: p.length)
-    hinted = analyze_structure(
-        program, capacity=[CapacityHint((longest.id,), 1, note="test hint")]
-    )
+    hinted = analyze_structure(program, capacity=[CapacityHint((longest.id,), 1, note="test hint")])
     target = next(p for p in hinted.pipes if p.id == longest.id)
     assert target.freedom is Freedom.SHRINKABLE
     assert target.slack == longest.length - 1

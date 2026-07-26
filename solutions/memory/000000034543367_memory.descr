@@ -1,0 +1,16 @@
+# memory — submission 022eb5a5-23e0-4fed-8190-a0f611ea7f3c
+
+verdict      done: 24/24 cases, area2 19600, avgTicks 1,762, score 34,543,367
+submitted    2026-07-26T02:48:30+0300
+grid         140x107
+problem id   d0b34a23-67c1-4087-b88e-90a74404d50e
+fingerprint  00b734b8f4459915136a790efff7bb8a5a10e91e164871e1414e120b80f3520c
+commit       e3b2dbb
+local        memory: 7/7 public cases, avg 536 ticks
+source       tasks/solutions/memory_men_grid.man
+
+runner output:
+Passed 24/24 test cases
+
+notes:
+memory_men_grid 4x25, narrower: repeater ring 5x3 -> 2x6 (the @ goes below the ring, not beside it) and each column's base literal snakes east-then-west instead of running 7 rows down. 152x114 -> 140x107, footprint 23,104 -> 19,600. Ticks unchanged: the pacer is the router's 16-cell lap.

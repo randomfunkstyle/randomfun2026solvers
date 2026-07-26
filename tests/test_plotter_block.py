@@ -61,11 +61,20 @@ def check(x0: int, y0: int, x1: int, y1: int) -> None:
 
 # ── the cases that break a line drawer ────────────────────────────────────────
 DEGENERATE = [
-    (0, 0, 0, 0), (31, 23, 31, 23), (5, 7, 5, 7),        # single point: M = 0
-    (0, 0, 0, 23), (31, 23, 31, 0),                       # vertical: m = 0
-    (0, 0, 31, 0), (31, 23, 0, 23),                       # horizontal: m = 0
-    (0, 0, 23, 23), (23, 23, 0, 0), (0, 23, 23, 0),        # exact diagonal: m = M
-    (0, 0, 2, 1), (2, 1, 0, 0), (0, 0, 1, 2), (1, 2, 0, 0),  # the exact-half tie
+    (0, 0, 0, 0),
+    (31, 23, 31, 23),
+    (5, 7, 5, 7),  # single point: M = 0
+    (0, 0, 0, 23),
+    (31, 23, 31, 0),  # vertical: m = 0
+    (0, 0, 31, 0),
+    (31, 23, 0, 23),  # horizontal: m = 0
+    (0, 0, 23, 23),
+    (23, 23, 0, 0),
+    (0, 23, 23, 0),  # exact diagonal: m = M
+    (0, 0, 2, 1),
+    (2, 1, 0, 0),
+    (0, 0, 1, 2),
+    (1, 2, 0, 0),  # the exact-half tie
 ]
 CORNERS = [
     (a, b, c, d)
@@ -196,7 +205,10 @@ def test_every_worker_send_and_receive_binds_to_the_pipe_it_means():
     boundary, moves one of these totals.
     """
     from randomfun2026solvers.plotter_block import (
-        PAINT_MIN, PUSH_MAX, _nearer_input, build_worker,
+        PAINT_MIN,
+        PUSH_MAX,
+        _nearer_input,
+        build_worker,
     )
 
     rows = build_worker().rows()
@@ -241,19 +253,26 @@ def test_the_worker_grid_matches_the_model_on_the_reference_interpreter():
     with tempfile.TemporaryDirectory() as td:
         man = Path(td) / "worker.man"
         man.write_text("\n".join(build_worker_probe()) + "\n")
-        for seg in [(0, 0, 31, 23), (31, 23, 0, 0), (0, 23, 31, 0),
-                    (5, 5, 5, 20), (3, 7, 29, 7), (0, 0, 0, 0)]:
+        for seg in [
+            (0, 0, 31, 23),
+            (31, 23, 0, 0),
+            (0, 23, 31, 0),
+            (5, 5, 5, 20),
+            (3, 7, 29, 7),
+            (0, 0, 0, 0),
+        ]:
             m = OpModel(list(seg))
             worker_round(m)
             # The worker never halts — it loops waiting for the next segment — so
             # tick a bound instead of running to completion.
             out = subprocess.run(
-                [node, str(lm), "tick", str(man), "12000",
-                 "--input", " ".join(map(str, seg))],
-                capture_output=True, text=True, check=True, timeout=120,
+                [node, str(lm), "tick", str(man), "12000", "--input", " ".join(map(str, seg))],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=120,
             ).stdout
-            got = next(ln[len("output:"):] for ln in out.splitlines()
-                       if ln.startswith("output:"))
+            got = next(ln[len("output:") :] for ln in out.splitlines() if ln.startswith("output:"))
             assert got.split() == [str(v) for v in m.paint], seg
 
 
@@ -273,7 +292,14 @@ def test_the_engine_agrees_with_the_layout_about_every_worker_binding():
     from pathlib import Path
 
     from randomfun2026solvers.plotter_block import (
-        _PATHS, _WX, _WY, PUSH_MAX, WH, WW, _nearer_input, build_block,
+        _PATHS,
+        _WX,
+        _WY,
+        PUSH_MAX,
+        WH,
+        WW,
+        _nearer_input,
+        build_block,
     )
 
     root = Path(__file__).resolve().parents[1]
@@ -297,13 +323,21 @@ def test_the_engine_agrees_with_the_layout_about_every_worker_binding():
                 checked += 1
                 out = subprocess.run(
                     [node, str(lm), "route", str(man), str(gx), str(gy)],
-                    capture_output=True, text=True, check=True, timeout=60)
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=60,
+                )
                 got = tuple(json.loads(out.stdout)["cells"][0])
-                want = ("i_out" if _nearer_input(ix, iy) else "r_out") if ch == "r" \
+                want = (
+                    ("i_out" if _nearer_input(ix, iy) else "r_out")
+                    if ch == "r"
                     else ("fwd" if ix <= PUSH_MAX else "pnt")
+                )
                 assert got == head[want], (
                     f"{ch!r} at interior {(ix, iy)}: layout says {want}, engine "
-                    f"routes it to the pipe starting at {got}")
+                    f"routes it to the pipe starting at {got}"
+                )
     assert checked == 68, f"expected 68 pipe glyphs in the worker, found {checked}"
 
 
@@ -334,8 +368,13 @@ def test_the_assembled_block_draws_every_public_plotter_case():
     with tempfile.TemporaryDirectory() as td:
         man = Path(td) / "block.man"
         man.write_text("\n".join(build_block()) + "\n")
-        out = subprocess.run([node, str(tool), str(man), str(problem)],
-                             capture_output=True, text=True, check=True, timeout=600)
+        out = subprocess.run(
+            [node, str(tool), str(man), str(problem)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=600,
+        )
         got = json.loads(out.stdout)["cases"]
 
     assert len(got) == len(want)

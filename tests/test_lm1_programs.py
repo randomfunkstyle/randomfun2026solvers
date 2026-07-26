@@ -70,12 +70,14 @@ BLOCKED = {
 }
 
 #: Problems graded on committed frames rather than on program output.
-DISPLAY_PROBLEMS = {"plotter", "palette", "snake"}
+DISPLAY_PROBLEMS = {"plotter", "palette", "snake", "pathfinder", "little-little-man"}
 
-#: Programs whose *emulated* tick estimate exceeds ``TICK_CAP`` on the largest
-#: public case. Empty since ``matmul`` moved onto the STREAM block: every program
-#: here fits now, on the estimate *and* on the real engine.
-OVER_TICK_CAP: set[str] = set()
+#: Programs whose *emulated* tick estimate exceeds the default ``TICK_CAP`` on the
+#: largest public case. A problem may state its own cap, and the two here do:
+#: ``little-little-man``'s is 50,000,000 (``tickCap`` in its JSON), against which
+#: the shipped machine measures 22.3M average and 35.0M worst *on the engine* —
+#: see ``tests/test_llm_lm1.py`` for the assertion that holds it there.
+OVER_TICK_CAP: set[str] = {"little-little-man"}
 
 PROGRAMS = sorted(available())
 CASES = [
@@ -100,6 +102,8 @@ def test_the_expected_programs_exist() -> None:
         "sudoku-validity",
         "matmul",
         "snake",
+        "pathfinder",
+        "little-little-man",
     }
 
 
@@ -168,6 +172,13 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # whole trie level to every instruction plus ~32 lane rows.
         "plotter": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
+        # little-little-man interprets a 2D language, so its extensions are what an
+        # interpreter needs: the three ports, `LDA`/`MOVA` to reach the program grid at
+        # the address a man happens to stand on, and `DIVI`/`MODI` to split a cell word
+        # into the colour a repaint wants and the class a dispatch wants. Nineteen
+        # opcodes, so a depth-5 trie — see `littleman/LLM-DESIGN.md` on what folding
+        # the three ports into one `SND` would buy.
+        "little-little-man": {"DIVI", "MODI", "LDA", "MOVA", "DSPA", "DSPD", "DSPS"},
         "triangle-closed": {"MUL", "DIVI"},
         # DIVI/MODI extract one bit of a unit's digit mask; LDP/STP reach the mask
         # through a cursor slot in 2 tape accesses instead of LDA/MOVA's 6. Both
@@ -192,6 +203,32 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # `IN`, because a seventeenth costs a trie level plus its lane rows (measured:
         # 158x167 against 121x136).
         "snake-ring": {"DIV", "INCM", "MODI", "SND"},
+        # pathfinder is a bitset program, so its extensions are the bitwise pair plus
+        # what a bitset needs to be addressed by: `AND`/`OR` intersect and merge the
+        # neighbour masks, `MODI` splits a cell index into (word, bit), and `LDA`
+        # indexes the four direction masks by the robot's word — the one indexed read
+        # left once the board stops being an array. `DIVI`/`NEG` are the shifts and the
+        # subtract idiom.
+        #
+        # `DSPA`/`DSPD`/`DSPS` are three opcodes where a write-only coprocessor spends
+        # one `SND`, which is what puts this program at 18 and so on a depth-5 trie.
+        # `pathfinder-unit` is that same program with the coprocessor interface, at
+        # exactly 16 — but its hardware block is UNFINISHED and the whole variant is
+        # superseded: a bespoke dataflow machine (`pathfinder_grid.py`) passes 18/18 at
+        # score 11,096,155,486, against ~1.4e11 for anything on this tier. Kept as the
+        # measured comparison, not as a candidate. See ARCH §8.3.
+        "pathfinder": {
+            "AND",
+            "DIVI",
+            "DSPA",
+            "DSPD",
+            "DSPS",
+            "LDA",
+            "MODI",
+            "NEG",
+            "OR",
+        },
+        "pathfinder-unit": {"AND", "DIVI", "LDA", "MODI", "NEG", "OR", "SND"},
         "snake": {
             "DECM",
             "DIV",
@@ -289,9 +326,7 @@ def test_plotter_draws_exactly_bresenham_on_every_public_case() -> None:
     prog = load("plotter")
     for i in range(0, len(segments), 20):  # 20 rounds is the constraints' limit
         chunk = segments[i : i + 20]
-        res = Emulator(prog).run(
-            [Round(input=s) for s in chunk], max_instructions=MAX_INSTRUCTIONS
-        )
+        res = Emulator(prog).run([Round(input=s) for s in chunk], max_instructions=MAX_INSTRUCTIONS)
         got = frames_from_writes(res.display_writes, width=width, height=height)
         assert len(got) == len(chunk), res.reason
         for segment, frame in zip(chunk, got, strict=True):

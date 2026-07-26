@@ -94,20 +94,20 @@ def _worker(m: int) -> tuple[Circuit, int]:
     c.set(0, 0, ">")
     c.run(1, 0, "@")
     c.horizontal(0, 1, 7)
-    c.run(7, 0, "rb")                        # A = L from input, BP = L
+    c.run(7, 0, "rb")  # A = L from input, BP = L
     c.set(9, 0, "v")
     c.set(9, 1, " ")
-    assert c.counted_loop(9, 2, "rs")[0] == 11        # LOAD
+    assert c.counted_loop(9, 2, "rs")[0] == 11  # LOAD
     c.route((11, 2), E, [(11, 6)], (1, 6), S)
     c.set(1, 7, ">")
-    c.run(2, 7, "rb")                        # A = N from input, BP = N
+    c.run(2, 7, "rb")  # A = N from input, BP = N
     c.set(9, 7, "v")
     c.horizontal(7, 3, 9)
-    c.counted_ring(9, 8, "rs" * m)           # ROT: 2m values per lap, BP per m
+    c.counted_ring(9, 8, "rs" * m)  # ROT: 2m values per lap, BP per m
     tail = 10 + 2 * m
     c.set(11, 8, "v")
     c.vertical(11, 8, tail)
-    for col in (11, 8):                      # both counted_ring exits, then merge west
+    for col in (11, 8):  # both counted_ring exits, then merge west
         c.set(col, tail, "v")
         c.set(col, tail + 1, "r")
         c.set(col, tail + 2, "<")
@@ -136,8 +136,9 @@ def probe(m: int, relay_art: list[str], relay_h: int) -> tuple[list[str], int]:
     ry = wy + 4
     stamp(g, east + 1, ry, relay_art)
     fwd = draw_pipe(g, [(east, wy + FWD_ROW), (east + 3, wy + FWD_ROW), (east + 3, ry - 1)])
-    ret = draw_pipe(g, [(east + 3, ry + relay_h + 2), (east + 3, wy + ret_row),
-                        (east, wy + ret_row)])
+    ret = draw_pipe(
+        g, [(east + 3, ry + relay_h + 2), (east + 3, wy + ret_row), (east, wy + ret_row)]
+    )
     return [r.rstrip() for r in g.rows() if r.strip()], fwd + ret + 2
 
 
@@ -146,7 +147,9 @@ def _output_len(man: Path, n: int, inp: str, cache: dict[int, int]) -> int:
     if n not in cache:
         proc = subprocess.run(
             ["node", str(LM_MJS), "tick", str(man), str(n), "--input", inp, "--json"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         snap = json.loads(proc.stdout)
         assert snap.get("fatal") is None, f"fatal at tick {n}: {snap['fatal']}"
@@ -176,8 +179,7 @@ def first_output_tick(man: Path, inp: str, cap: int = 4_000_000) -> int:
     return lo
 
 
-def measure_ticks_per_rotation(tmp_path: Path, m: int, relay_art: list[str],
-                               relay_h: int) -> float:
+def measure_ticks_per_rotation(tmp_path: Path, m: int, relay_art: list[str], relay_h: int) -> float:
     rows, capacity = probe(m, relay_art, relay_h)
     assert capacity >= PROBE_L + 2, (
         f"ring holds {capacity} words, needs >= {PROBE_L + 2} or it deadlocks silently"
@@ -213,10 +215,10 @@ def test_a_relay_needs_a_perimeter_to_walk() -> None:
 
 def test_the_cost_model_is_the_worse_of_the_two_laps() -> None:
     """A ring is worker-bound or relay-bound, and the fix differs in each case."""
-    assert ticks_per_rotation(1, 8, 6) == pytest.approx(5.0)     # worker-bound
-    assert ticks_per_rotation(9, 4, 3) == pytest.approx(5.0)     # relay-bound
-    assert ticks_per_rotation(3, 6, 4) == pytest.approx(3.2)     # relay-bound
-    assert ticks_per_rotation(3, 8, 6) == pytest.approx(3.0)     # worker-bound
+    assert ticks_per_rotation(1, 8, 6) == pytest.approx(5.0)  # worker-bound
+    assert ticks_per_rotation(9, 4, 3) == pytest.approx(5.0)  # relay-bound
+    assert ticks_per_rotation(3, 6, 4) == pytest.approx(3.2)  # relay-bound
+    assert ticks_per_rotation(3, 8, 6) == pytest.approx(3.0)  # worker-bound
 
 
 # ── engine-measured, the reason any of the above is quotable ──────────────────
