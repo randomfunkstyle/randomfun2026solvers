@@ -1504,7 +1504,7 @@ TAPE_RELAY_SIZE = (8, 6)
 #: Monotonic in the bank size once every hot slot fits, so 53 — one spare above the
 #: 52 used — is the optimum. 52 exactly is a *fault*, not merely a tight fit; see
 #: the guard in :func:`build_asm`.
-HOT = (1, 54)
+HOT = (4, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 

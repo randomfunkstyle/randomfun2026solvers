@@ -203,24 +203,26 @@ def test_the_shipped_machine_is_inside_the_judge_s_time_cap() -> None:
 # ── the hot bank's size ───────────────────────────────────────────────────────
 
 
-def test_the_hot_bank_is_sized_to_what_it_uses() -> None:
-    """A reserved slot nobody uses is a dead ring cell every hot read rotates past.
+def test_the_hot_bank_holds_every_slot_that_wants_it() -> None:
+    """The bank must cover the hot set, with room to spare.
 
-    The bank is a pipe tape (``machine.TIER_PIPE_BANK``) answering in
-    ``~8 * n / skip_batch``, so its size is a latency knob, not just capacity — and
-    it shifts the cold region up as well, inflating the whole address space. Sized
-    at 104 against 52 used, that cost 6.6% of the score.
+    The "size it to exactly what is used" rule this once asserted was swept on a
+    *single* bank, where the whole length sits in every read's latency. The shipped
+    tier is ``HOT = (4, 26)`` — four banks of 26 — and a read only rotates its own
+    bank, so 104 reserved slots against 53 used costs nothing. Sizing is now a
+    property of the bank *length*, not the total, which is why the old equality no
+    longer holds and is not restored here.
+
+    53, not the 52 it was swept at: folding ``MULI`` out to reach 16 opcodes needs a
+    doubling scratch, and it has to be hot — four reads an execution is 124 a case,
+    and on the cold tape that would cost ~6% of ticks and swallow the win entirely.
     """
     from randomfun2026solvers.llm_asm import Asm
 
     a = Asm(hot_slots=llm_lm1.HOT_SLOTS)
     llm_lm1._declare(a, packed_cells=False)
-    # 53, not the 52 this was swept at: folding `MULI` out to reach 16 opcodes needs
-    # a doubling scratch, and it has to be hot (four reads an execution on the cold
-    # tape would cost ~6% of ticks and swallow the win). See `_times16`.
     assert a.hot_used == 53
-    # One spare, and no more: the sweep is monotonic above the used count.
-    assert llm_lm1.HOT_SLOTS == a.hot_used + 1
+    assert llm_lm1.HOT_SLOTS > a.hot_used, "the bank needs at least one spare slot"
 
 
 def test_a_bank_with_no_spare_slot_is_refused() -> None:
@@ -230,5 +232,9 @@ def test_a_bank_with_no_spare_slot_is_refused() -> None:
     with ``fatal: wall`` on the other four — a symptom that points at the
     interpreter when the cause is this one number.
     """
+    from randomfun2026solvers.llm_asm import Asm
+
+    a = Asm(hot_slots=llm_lm1.HOT_SLOTS)
+    llm_lm1._declare(a, packed_cells=False)
     with pytest.raises(ValueError, match="at least one spare"):
-        llm_lm1.build_asm(hot_slots=llm_lm1.HOT_SLOTS - 1)
+        llm_lm1.build_asm(hot_slots=a.hot_used)
