@@ -1,0 +1,16 @@
+# brackets — submission 7d6b84bc-c28d-4ee4-a92d-0a3a0d6915a8
+
+verdict      done: 26/26 cases, area2 4356, avgTicks 2,299, score 10,015,449
+submitted    2026-07-26T02:32:00+0300
+grid         66x19
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  d6e93b9bc5e9bc244e6dac09397d87d5aeab002d3f480b6c6d6c81d35c99b4e4
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 1,246 ticks
+source       tasks/solutions/brackets_compact.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+Tightened compact AST parser: worker reduced from 54x26 to 49x17, full grid 66x19 with no empty outer margins. Arithmetic classifier, shared push/pop, base-3 stack ring. 34 fast/exhaustive/boundary tests and reference validator pass.

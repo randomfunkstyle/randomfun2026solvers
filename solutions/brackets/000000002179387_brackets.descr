@@ -1,0 +1,16 @@
+# brackets — submission 4228e8cc-4dc3-4271-baad-6780b7e145a9
+
+verdict      done: 26/26 cases, area2 1024, avgTicks 2,128, score 2,179,387
+submitted    2026-07-26T03:32:15+0300
+grid         32x32
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  dbdd0a17e7139f340fa9a01dc614a1c790ca396608c7c01ff858d6dc3f3d8752
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 1,207 ticks
+source       tasks/solutions/brackets_snake.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+AST-generated 32x32 snake parser; output above and input below remove left I/O strip; exhaustive/bounds and Node/WASM validated

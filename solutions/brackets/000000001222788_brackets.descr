@@ -1,0 +1,16 @@
+# brackets — submission 8784079e-4f56-4c3f-a9cc-f69695ff3883
+
+verdict      done: 26/26 cases, area2 625, avgTicks 1,956, score 1,222,788
+submitted    2026-07-26T04:19:19+0300
+grid         25x25
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  91705962a13cab165a890c4f82917c5f40499c0897114fcec7bed9a58367210d
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 1,096 ticks
+source       tasks/solutions/brackets_goal25.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+AST-generated 25x25 brackets parser; U-based 4x2 relay, folded west pop, no removable rows/cols; exhaustive/bounds and Node/WASM validated

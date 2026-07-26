@@ -16,11 +16,11 @@ walk is about a third of our score**.
 Igniters in different rooms run **at the same time**. So cut the memory into ``M``
 columns of ``N`` and the fixed cost falls from ``7n`` to ``7N``.
 
-    [I] -> [ router strip                     ]   broadcasts addr, op, value
-             |          |          |              one pipe down per column
-          [rep][dec][cell][coll]  x M            rep fans the words into its column
-             |          |          |              one pipe down per column
-          [ collector strip                   ] -> [O]
+    [I] -> [ router strip               ]   broadcasts addr, op, value
+             |        |        |             one pipe down per column
+          [rep][dec][cell]  x M              rep fans the words into its column
+             |        |        |             ONE answer pipe out of each column
+          [ collector strip            ] -> [O]
 
 **Nothing about a cell changes.** The column's decoders hold *global* addresses —
 its igniter is handed a base and counts up from it — so the thing at the head of a
@@ -29,10 +29,22 @@ repeating the router's words into its own column. That is why ``M`` and ``N`` ar
 both free: no bit-alignment, no division, no power-of-two stride, and
 ``DECODER_TILE`` and ``CELL_TILE`` are the same text they were.
 
-The base is a zero-padded literal read walking *south* (big literals work in any
-direction). A column is its own room, so it can simply carry its number — no
-igniter-of-igniters and no ignition pipes, and every column starts at tick 0
-rather than waiting its turn.
+The base is a zero-padded literal. A column is its own room, so it can simply
+carry its number — no igniter-of-igniters and no ignition pipes, and every column
+starts at tick 0 rather than waiting its turn.
+
+That literal is written along row 0 of the decoder room, and for two digits
+``@ 1M`dd` v`` is *exactly* the room's eight columns — so a grid whose last column
+started at 100 or more used to raise ``IndexError`` out of ``band_room``, which
+capped the whole family near 110 cells (``10x11`` built, ``6x20`` did not). Three
+digits now buy exactly one more column, so a grid past a hundred cells is
+``28 * M`` wide instead of ``27 * M`` and everything below a hundred is
+byte-identical — the shipped 4x25 ``memory`` solution included.
+
+**A column needs no collector of its own.** Exactly one decoder speaks per
+operation, so at most one cell ever reaches its ``s``: the whole room sends
+through a single pipe out of its south wall, and the strip's ``R`` takes it from
+there.
 
 Router strip on top, collector strip on the bottom, deliberately: broadcast pipes
 then never have to cross answer pipes, and every column's answer travels exactly
@@ -62,6 +74,7 @@ from .memory_men import (
     draw_pipe,
 )
 from .memory_men_addr import (
+    _BASE_DIGITS,
     BAND,
     CELL_TILE,
     DECODER_TILE,
@@ -69,10 +82,11 @@ from .memory_men_addr import (
     _init_height,
     band_room,
     build_addr,
+    preamble_width,
     tile_x0,
 )
 
-__all__ = ["REPEATER", "COLLECTOR", "Grid", "build_grid", "shapes_for"]
+__all__ = ["REPEATER", "ROUTER_FLAT", "Grid", "build_grid"]
 
 #: The head of a column: take one word, shout it at the whole column, three times.
 #:
@@ -86,20 +100,6 @@ REPEATER: tuple[str, ...] = (
     "Sr",
     "rS",
     "Sr",
-    ">^",
-    "@^",
-)
-
-#: A column's collector, narrowed the same way as the repeater.
-#:
-#: `R` takes from any of the column's ``N`` answer pipes and `s` puts it down the
-#: one pipe to the collector strip, so the whole program is two glyphs and the
-#: room is only as wide as a loop containing them: a 2x3 ring, entered from the
-#: ``@`` below it. Six ticks a lap, exactly as when it was 4x2 — two columns off
-#: every column of memory.
-COLLECTOR: tuple[str, ...] = (
-    "v<",
-    "sR",
     ">^",
     "@^",
 )
@@ -122,23 +122,11 @@ ROUTER_FLAT: tuple[str, ...] = (
 _REP_W = max(len(r) for r in REPEATER)
 _DEC_W = tile_x0(True) + max(len(r) for r in DECODER_TILE)
 _CELL_W = tile_x0(False) + max(len(r) for r in CELL_TILE)
-_COLL_W = max(len(r) for r in COLLECTOR)
 
 #: Interior columns between two rooms: wall, two cells of pipe, wall.
 _GAP = 4
 #: Blank columns between one column of memory and the next.
 _COL_GAP = 2
-
-
-def shapes_for(n: int) -> list[tuple[int, int]]:
-    """Every ``(cols, rows)`` that covers ``n`` addresses without a gap.
-
-    ``rows`` divides the address space into contiguous runs, so a column's
-    decoders are ``base .. base+rows-1`` and the last column may be short. Any
-    ``rows`` works — the head does no arithmetic — so this is just the divisors
-    worth measuring.
-    """
-    return [(-(-n // rows), rows) for rows in range(1, n + 1) if rows <= n]
 
 
 @dataclass(frozen=True)
@@ -189,7 +177,13 @@ def build_grid(cols: int, rows: int) -> Grid:
 
     init_h = _init_height(0)  # every column carries a base literal, zero included
     col_h = init_h + BAND * rows
-    col_w = _REP_W + _GAP + _DEC_W + _GAP + _CELL_W
+    # A column's base literal is as wide as the *last* column's number, and every
+    # column carries the same width so their bands stay level.  Past 99 that makes
+    # the decoder room a column wider, which is the whole cost of allowing a grid
+    # bigger than ~110 cells.
+    digits = max(_BASE_DIGITS, len(str((cols - 1) * rows)))
+    dec_w = max(_DEC_W, preamble_width(digits))
+    col_w = _REP_W + _GAP + dec_w + _GAP + _CELL_W
 
     # ── vertical plan ─────────────────────────────────────────────────────────
     # I room, its pipe, the router strip, its pipes, the columns, their pipes,
@@ -212,7 +206,7 @@ def build_grid(cols: int, rows: int) -> Grid:
         base = x0 + j * (col_w + _COL_GAP)
         rep = base
         dec = rep + _REP_W + _GAP
-        cell = dec + _DEC_W + _GAP
+        cell = dec + dec_w + _GAP
         return {"rep": rep, "dec": dec, "cell": cell, "end": cell + _CELL_W}
 
     def spanned(body: Sequence[str], iw: int, h: int) -> list[str]:
@@ -271,12 +265,14 @@ def build_grid(cols: int, rows: int) -> Grid:
     for j in range(cols):
         cx = column_x(j)
         base = j * rows
-        dec_body, mains = band_room(rows, DECODER_TILE, increment=True, base=base)
+        dec_body, mains = band_room(
+            rows, DECODER_TILE, increment=True, base=base, base_digits=digits
+        )
         cell_body, cell_mains = band_room(rows, CELL_TILE, increment=False, init_h=init_h)
         assert mains == cell_mains, "both rooms of a column must band identically"
 
         _room(grid, cx["rep"], col_y, spanned(REPEATER, _REP_W, col_h))
-        _room(grid, cx["dec"], col_y, spanned(dec_body, _DEC_W, col_h))
+        _room(grid, cx["dec"], col_y, spanned(dec_body, dec_w, col_h))
         _room(grid, cx["cell"], col_y, spanned(cell_body, _CELL_W, col_h))
 
         # router strip -> this column's repeater, down two cells into its north wall
@@ -292,7 +288,7 @@ def build_grid(cols: int, rows: int) -> Grid:
         for main in mains:
             y = col_y + main
             draw_pipe(grid, [(x, y) for x in range(cx["rep"] + _REP_W + 1, cx["dec"])])
-            draw_pipe(grid, [(x, y) for x in range(cx["dec"] + _DEC_W + 1, cx["cell"])])
+            draw_pipe(grid, [(x, y) for x in range(cx["dec"] + dec_w + 1, cx["cell"])])
 
         dbg.region(
             f"column {j}: addr {base}-{base + rows - 1}",

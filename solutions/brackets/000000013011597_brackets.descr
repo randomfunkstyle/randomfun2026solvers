@@ -1,0 +1,16 @@
+# brackets — submission cb9abefc-18bb-4cee-a5ec-033d26086fd7
+
+verdict      done: 26/26 cases, area2 5041, avgTicks 2,581, score 13,011,597
+submitted    2026-07-26T02:25:01+0300
+grid         71x28
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  d5250cb656b443baa148772662559442e078c3ac24411e06331e75c50221bb58
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 1,386 ticks
+source       tasks/solutions/brackets_compact.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+Compact AST-generated direct parser. Replaces six-ASCII staircase with one arithmetic classifier (char/32 plus remainder), shared push/pop handlers, and base-3 packed depth-32 stack ring. Fast and reference validators plus exhaustive length<=4 and exact n=64 bounds pass.

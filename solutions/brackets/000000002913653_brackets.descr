@@ -1,0 +1,16 @@
+# brackets — submission 93261365-c67d-4554-b4a6-acb8435ea177
+
+verdict      done: 26/26 cases, area2 1369, avgTicks 2,128, score 2,913,653
+submitted    2026-07-26T03:26:16+0300
+grid         37x27
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  0f72602d387f6e76851c1d1ed3702902d17fc331be1c5302b7669cb13f93768d
+commit       2d4afb7
+local        brackets: 9/9 public cases, avg 1,207 ticks
+source       tasks/solutions/brackets_snake.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+AST-generated 37x27 snake-folded arithmetic parser; fast exhaustive/bounds and Node/WASM public+bounds validated

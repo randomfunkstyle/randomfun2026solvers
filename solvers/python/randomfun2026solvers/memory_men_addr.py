@@ -97,8 +97,8 @@ def tile_x0(increment: bool) -> int:  # noqa: ARG001 - kept for call-site clarit
 #: exactly one man. ``X`` turns on that: straight round the ring is mine (``r`` the
 #: op, ``s`` it on, ``r`` the value, ``s`` it on), clockwise is everyone else, who
 #: cuts across the middle swallowing both words in 8 ticks. Both paths rejoin at
-#: the west side, which is also where the ``Y`` puts the man — born facing east
-#: onto a ``^``, he turns straight into the ring.
+#: the west side. West of the ring again is the ``W`` the ``Y`` puts the man on:
+#: he swaps his inherited address into ``B`` there, once, and never returns to it.
 DECODER_TILE: tuple[str, ...] = (
     " >r~Xv",
     "W^rr<r",
@@ -158,10 +158,21 @@ ROUTER_ROWS: tuple[str, ...] = (
 )
 
 
-#: Digits in a column's zero-padded base literal. Fixed width so every column of
-#: a grid puts its bands on the same rows whatever number it starts at, and two
-#: because `1M`dd`` plus its turn is exactly the room's eight columns.
+#: Digits in a column's zero-padded base literal. Fixed *within a grid* so every
+#: column puts its bands on the same rows whatever number it starts at, and two by
+#: default because `1M`dd`` plus its turn is exactly the room's eight columns.
+#:
+#: Three digits therefore need a ninth column: the preamble is `@`, `1M`, the two
+#: backticks, the digits and the turn glyph, and it is written along row 0 of a
+#: room whose width otherwise comes from the tile.  Before that was allowed, a
+#: grid whose last column started at 100 or more raised `IndexError` out of `put`
+#: — which capped the whole family at ~110 cells (`10x11` built, `6x20` did not).
 _BASE_DIGITS = 2
+
+
+def preamble_width(digits: int) -> int:
+    """Interior columns the igniter's preamble occupies: ``@ 1M`d..d` v``."""
+    return 6 + digits
 
 #: Rows the igniter's preamble needs above the first band: read the literal east,
 #: turn back west into the `Y` column.
@@ -180,6 +191,7 @@ def band_room(
     increment: bool,
     base: int | None = None,
     init_h: int = 1,
+    base_digits: int = _BASE_DIGITS,
 ) -> tuple[list[str], list[int]]:
     """``n`` copies of ``tile`` in one room, one per three-row band.
 
@@ -192,11 +204,10 @@ def band_room(
     ``^`` and turns straight into the ring while the west child loops back into
     the ``Y`` column in time for the next band.
 
-    With ``increment`` that westward walk is ``+`` ``M`` ``1``: the spawner keeps
-    ``A = 1``, so ``+`` makes ``A = 1 + B``, ``M`` writes it back to ``B`` and
-    ``1`` restores ``A``. Cell ``j`` is therefore born holding ``j``. Those three
-    glyphs are the only reason the decoder room is a column wider than the cell
-    room: without them the child's turn-around fits in two columns.
+    With ``increment`` that walk carries a single ``+``, because the counter is in
+    ``A`` and ``B`` is pinned at 1 by the ``1 M`` in the preamble. Cell ``j`` is
+    born holding ``j`` in ``A`` and swaps it into ``B`` with the ``W`` on his birth
+    cell. Both rooms' igniters therefore turn around in two columns.
     """
     if n < 1:
         raise ValueError("a memory needs at least one cell")
@@ -204,6 +215,9 @@ def band_room(
     ycol = x0 - 1  # the `Y`, so that its east child lands on the tile
     tile_w = max(len(r) for r in tile)
     iw = x0 + tile_w
+    if increment:
+        # The preamble is written along row 0 and can be wider than the tile.
+        iw = max(iw, preamble_width(base_digits))
     # at least one row on top: a man spawns facing east and has to be turned south
     # before he can enter the first `Y` heading south. `base` and `init_h` buy more
     # rows for a starting address and for keeping two rooms' bands level.
@@ -225,7 +239,7 @@ def band_room(
         # free, because he is born west of his ring and never steps there again.
         #
         # `1 M` pins B, then the base literal loads the counter, read walking east.
-        literal = f"1M`{base or 0:0{_BASE_DIGITS}d}`"
+        literal = f"1M`{base or 0:0{base_digits}d}`"
         for dx, glyph in enumerate(literal):
             put(1 + dx, 0, glyph)
         turn = 1 + len(literal)
