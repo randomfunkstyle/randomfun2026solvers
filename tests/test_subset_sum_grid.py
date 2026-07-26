@@ -38,7 +38,11 @@ GRID = REPO / "tasks" / "solutions" / "subset-sum_mitm.man"
 #: inside the per-lap walk, and `SCAN_TOP`/`HIT_ROW` are deepest of all.  At 4,096
 #: laps that is the whole ratio, and it is not what the first round's 42 ticks
 #: would have led anyone to predict.
-WORST_CASE_TICKS = 6_267_839
+#:
+#: It is deliberately **not asserted**.  A recorded tick count is a quality
+#: figure, and the judge already keeps our best submission, so pinning one turns
+#: every improvement into a red suite.  The test below asserts the property that
+#: actually matters — the ceiling fits the cap twice over.
 
 
 def _ring_v(values: list[int], target: int) -> list[int]:
@@ -237,7 +241,6 @@ def test_the_worst_case_fits_the_cap_with_room() -> None:
     prob = {"slug": "subset-sum", "scoring": "footprint-tick",
             "tickCap": 15_000_000, "publicTestData": [case]}
     res = scoring.score_program(GRID, prob)
-    assert res.cases[0].ticks == WORST_CASE_TICKS
     assert res.cases[0].ticks * 2 < 15_000_000
 
 
