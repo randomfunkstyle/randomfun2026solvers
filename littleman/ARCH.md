@@ -1,27 +1,60 @@
 # LM-1 — a general-purpose computer written in littleman
 
-**Status: Semesters 1 and 2 are complete — 11 of the 16 graded problems are
-solved**, every one passing all its public cases on the reference interpreter, and
-`snake` opens Semester 4 by passing all **17** the judge actually runs. It is also the
-first problem solved on a *third* tier — a coprocessor that holds the data structure
-the program iterates and owns the display (§8.0, `lm1/snake_unit.py`), which took it
-from 15.9bn to **3.37bn**.
+**Status: 15 of the 16 graded problems are scored by the judge**, across all four
+semesters. Only `little-little-little-man` is outstanding, and it fails one public
+case. `little-little-man` — an interpreter for the contest's own 2D language,
+running on a generated CPU — is the largest thing here at 28/28.
 
-| set | problem | grid | score | how |
-|---|---|---|---|---|
-| 1 | `triangle` | 8×8 | **960** | bespoke |
-| 1 | `memory` | 31×31 | 55,105,622 server | bespoke (pipe tape) |
-| 1 | `reverse-a-list` | 18×18 | 328,131 | bespoke (AST value ring) |
-| 1 | `sort-numbers` | 25×25 | 2,083,304 | bespoke (value ring) |
-| 2 | `history-lesson` | 97×90 | **9,409** | bespoke (base-128 ROM) |
-| 2 | `brackets` | 98×75 | 308,880,647 | LM-1 |
-| 2 | `tcp` | 112×77 | 1,195,367,936 | LM-1 |
-| 2 | `plotter` | 112×116 | 2,749,462,237 | LM-1 + display |
-| 3 | `sudoku-validity` | 98×91 | 12,712,904,437 | LM-1 |
-| 3 | `gradebook` | 112×103 | 8,714,479,872 | LM-1 |
-| 4 | `snake` | 121×136 | **3,369,020,288** | LM-1 + body-ring coprocessor (17/17, judged) |
-| 4 | `pathfinder` | 84×175 | **11,096,155,486** | bespoke dataflow, bit-parallel BFS (18/18, judged) |
-| — | `palette` | 98×98 | 1,451,615,788 | LM-1 + display (ungraded) |
+Three tiers are in play: the generated LM-1 CPU, a *coprocessor* that holds the
+data structure a program iterates and owns the display (§8.0,
+`lm1/snake_unit.py`), and bespoke hand-built grids. The bespoke grids win by
+orders of magnitude wherever someone has written one, which is why LM-1 stays the
+safety net rather than the plan of record (§1).
+
+Every score below is the **judge's**, taken from the best `.descr` in
+`solutions/<slug>/`, not a local estimate.
+
+| set | problem | grid | judged score | cases | how |
+|---|---|---|---|---|---|
+| 1 | `triangle` | 8×8 | **960** | 19/19 | bespoke |
+| 1 | `reverse-a-list` | 18×18 | **513,410** | 20/20 | bespoke (AST value ring) |
+| 1 | `sort-numbers` | 25×25 | **3,273,525** | 25/25 | bespoke (value ring) |
+| 1 | `memory` | 108×107 | 19,973,628 | 24/24 | bespoke (man-memory grid) |
+| 2 | `history-lesson` | 90×90 | **8,100** | 1/1 | bespoke (serpentine base-N ROM), footprint-only |
+| 2 | `brackets` | 25×25 | **1,222,788** | 26/26 | bespoke |
+| 2 | `plotter` | 44×56 | 22,774,730 | 20/20 | bespoke |
+| 2 | `tcp` | 103×67 | 1,463,308,918 | 20/20 | LM-1 |
+| 3 | `matmul` | 85×86 | 1,137,402,365 | 20/20 | LM-1 + STREAM tier |
+| 3 | `sudoku-validity` | 77×77 | 2,384,422,055 | 20/20 | LM-1 |
+| 3 | `gradebook` | 107×96 | 8,062,853,492 | 20/20 | LM-1 |
+| 3 | `subset-sum` | 81×253 | 51,103,406,206 | 20/20 | LM-1 + STREAM-ring MITM |
+| 4 | `snake` | 102×102 | 1,782,079,128 | 17/17 | bespoke |
+| 4 | `pathfinder` | 82×173 | 10,636,538,807 | 18/18 | bespoke dataflow, bit-parallel BFS |
+| 4 | `little-little-man` | 192×194 | **363,025,672,731** | 28/28 | LM-1 interpreter + banked store |
+| 4 | `little-little-little-man` | 159×222 | *never submitted* | 9/10 local | bespoke ring — **not** LM-1 |
+
+**15 of the 16 graded problems are scored.** `little-little-little-man` has a
+solution — `tasks/solutions/little-little-little-man_ring.man`, a bespoke ring
+that owes nothing to the CPU generator — but it has never been sent, and it
+currently passes 9 of its 10 public cases, failing `victory lap`. A partial pass
+scores *nothing*, so it is worth zero until that case passes. It is the only
+remaining graded problem and the only one where the work is ring work rather than
+generator work.
+
+Four more problems exist and are **not** worth solving: `palette`, `atoi`,
+`hello-world` and `max-element` are `Practice Problems (Ungraded)`. The API
+refuses them outright — `SubmitError: palette is a practice problem and rejects
+submissions` — so a working solution earns nothing. Check `problemSetName` /
+`status` in `tasks/problems/<slug>.json` before treating an unsubmitted problem as
+an opportunity.
+
+**Not every problem is scored the same way.** `history-lesson` is
+**footprint-only**: its verdict comes back `done: 1/1 cases, area2 22801,
+footprint-only, score 22,801`, with no tick term at all. Choosing its 151×124 ROM
+grid over the 97×90 one because it was 6× faster in ticks was therefore a pure
+loss, and cost a submission slot to discover. On a footprint-only problem ticks
+are free: pick the smallest grid that passes and spend everything on compression.
+Read the problem's `scoring` field before optimising for the wrong axis.
 
 `lm1/machine.py` takes an assembled program and emits the whole machine — looping
 ROM + CPU (depth-`k` trie, one lane per used opcode, a structures band for jumps
@@ -1354,6 +1387,76 @@ table; pick empirically.
 Footprint, for a 60-word program: ROM ≈ 300 cells (~20×15), ring ≈ 62 cells,
 CPU ≈ 40×24, STORE stub small. Bounding box ~70×50 → `footprint ≈ 4900`, so a
 250k-tick run scores ~1.2e9. Ugly, and expected (§1).
+
+### 7.3b The optimum machine is square, and the fold is how you get there
+
+Score is `max(w, h)^2 × avgTicks`. Only the **larger** side is charged, so every
+unit the smaller side falls short is area we are paying for and not using. The
+ROM fold trades width for height monotonically — more `rom_rows` is narrower and
+taller — so its optimum is not "minimum width", it is **wherever the two sides
+cross**. Swept on `little-little-man`:
+
+| `rom_rows` | box | area² |
+|---|---|---|
+| 88 | 197×192 | 38,809 |
+| 89 | 196×193 | 38,416 |
+| **90** | **192×194** | **37,636** |
+| 91 | 190×195 | 38,025 |
+
+90 is the last fold at which width still exceeds height, and it is the minimum.
+This is worth ~3% of the score, and `ROM_ROWS` has now been swept against three
+different geometries and come out **88, 89, 90** — the single-tape CPU, the same
+CPU after `height = bottom - 1` was reverted, and the banked store. **Any change
+to the CPU, ROM, store or tape invalidates it**, and nothing else in the suite
+fails when it silently drifts, which is why
+`test_footprint_is_what_the_fold_sweep_found` pins it.
+
+#### The corollary: a fold sweep that flatlines means something else sets the width
+
+Sweeping the fold on `tcp` (rom_rows 2–40), `gradebook` (30–70) and
+`sudoku-validity` (20–45) moved *only* the height. Width sat at 103 / 107 / 77
+for the entire range. Dumping `Machine.regions` explains it — in all four
+CPU-generated machines the easternmost region was the **same fixed 33×34 store
+tape block**, and `tape east == width` exactly:
+
+| slug | box | tape x-range | next constraint east |
+|---|---|---|---|
+| tcp | 103×57 | 70..103 | adapter at 71 |
+| matmul | 85×86 | 52..85 | rom at 73 |
+| sudoku-validity | 77×77 | 44..77 | rom at 75 |
+| gradebook | 107×85 | 74..107 | rom at 106 |
+
+The tape is 33 columns wide for `tape_n` of 16, 31 and 32 alike: it is not sized
+to its contents, the serpentine already grows *rows* for capacity. So the ROM was
+folding narrower and narrower **behind a wall the tape had already set** — the
+sweeps were not at an optimum, they were against a floor. Moving the memory
+subsystem off the east chain (`MEM_PLACE`, `mem_offset`/`store_offset`) took tcp
+to 80×80 (10,609 → 6,400) and gradebook to 95×93 (11,449 → 9,025), and the fold
+then came back to life in both (tcp 3→2, gradebook 32→40).
+
+**Read the regions before sweeping anything.** A sweep that returns a flat line
+is not evidence that a dimension is optimal; it is evidence that the thing you
+are sweeping is not what sets it.
+
+#### And the trade only exists where there is height budget
+
+The budget is `width - height`, and it is very unevenly distributed:
+
+| slug | box | binding side | budget |
+|---|---|---|---|
+| tcp | 103×57 | width | **+46 rows** |
+| gradebook | 107×85 | width | +22 rows |
+| little-little-man | 192×194 | height | ~0 |
+| sudoku-validity | 77×77 | tie | 0 |
+| matmul | 85×86 | **height** | −1 |
+
+`matmul` is charged `86²` from its *height* (the stream `ring:A` bottoms out at
+y=86), so narrowing its width from 85 to 71 is worth exactly zero, and dropping
+the memory below it would make it strictly worse. `sudoku-validity` is already
+square; the same restructure was swept for it and the best reachable was 78×76 =
+6,084, worse than the 5,929 it has. Both were correctly left alone. A
+restructure that buys width is only a win on a machine that is *wider than it is
+tall*.
 
 ### 7.6 The lane-order shortcut is already spent — measured, not argued
 
