@@ -1,17 +1,19 @@
 # Four-way tape skips: measured design and implementation handoff
 
-Status: researched on 2026-07-26, after the parameterized two-value worker was
-merged. This is an implementation handoff, not a claim that batch 4 is already
-available through the LM-1 STORE API.
+Status: implemented and task-benchmarked on 2026-07-26. Batch 4 is available
+through the LM-1 STORE API; Pathfinder and Little-Little-Man use it by default.
 
 ## Current baseline
 
-The production choices are:
+The production choices are now:
 
 - `tape_skip_batch=1`: the compact one-value counted loop, 8 worker ticks per
   skipped word.
 - `tape_skip_batch=2`: `memory_tape.worker_v2_jump`, a two-sided counted ring,
-  5 worker ticks per skipped word.
+  5 worker ticks per skipped word. Its default 4×3 alternating relay has the
+  same exterior dimensions as the old relay and removes the old six-tick cap.
+- `tape_skip_batch=4`: `memory_tape.worker_v2_jump4`, exact two-bit cleanup plus
+  a four-word bulk ring.
 - `tape_skip_batch=None`: choose batch 2 at or above
   `tape_jump_threshold`, otherwise batch 1.
 
@@ -21,10 +23,13 @@ The size-200 boundary/parity probe writes and reads addresses
 | batch | grid | ticks | output |
 |---:|---:|---:|---|
 | 1 | 84×61 | 22,211 | `11 22 33 44 55 66` |
-| 2 | 96×61 | 16,392 | `11 22 33 44 55 66` |
+| 2, old relay | 96×61 | 16,392 | `11 22 33 44 55 66` |
+| 2, 4×3 relay | 96×61 | 15,617 | `11 22 33 44 55 66` |
+| 4, 6×4 relay | 111×61 | 12,403 | `11 22 33 44 55 66` |
+| 4, 8×6 relay | 111×61 | 11,431 | `11 22 33 44 55 66` |
 
-Batch 2 is 26.2% faster on that probe, but its wider block is why it remains
-opt-in.
+The exact debug bundle for batch 4 is
+`littleman/examples/memory-tape-jump4-200.{man,html,json}`.
 
 ## What one `r`/`s` transfer costs
 
@@ -57,7 +62,7 @@ points:
 The old minimal relay is a six-cell, one-word cycle, so it caps every worker at
 6.0. A wider worker behind that relay cannot improve sustained throughput.
 
-## Recommended next implementation: power-of-two batch 4
+## Implemented design: power-of-two batch 4
 
 Batch 3 looks slightly smaller, but arbitrary counts require
 `q, r = divmod(count, 3)`. The `/` instruction puts the quotient in A and the
@@ -92,8 +97,7 @@ so its routing cost is a fixed intercept rather than a per-slot slope.
 
 ## Relay candidates and parameters
 
-Do not hardcode one relay before measuring whole-machine score. Implement at
-least these two candidates:
+Both relay candidates are parameterized and measured:
 
 | batch | relay interior | modelled/measured slope | reason to keep |
 |---:|---:|---:|---|
@@ -105,7 +109,7 @@ An 8×6 relay walks 24 perimeter cells and transfers 9 words per lap
 walks 16 cells and transfers 5 words, so it caps the same worker at 3.2. Because
 score squares the longest grid side, the smaller 6×4 candidate may still win.
 
-Preserve the current API and extend it explicitly:
+The API is:
 
 ```
 tape_skip_batch: 1 | 2 | 4 | None
@@ -113,13 +117,13 @@ tape_relay_size: tuple[int, int] | None
 tape_jump_threshold: int
 ```
 
-Suggested semantics:
+Semantics:
 
 - explicit batch values select the algorithm, never a heuristic;
 - `tape_relay_size=None` selects the smallest relay registered for that batch;
 - an explicit relay size must be validated against the generated worker;
-- keep `None` auto-selection conservative until full-machine benchmarks show
-  size thresholds where batch 4 wins score, not merely ticks.
+- `None` auto-selection remains conservative at batch 1/2;
+- `build_for(..., tape_skip_batch="task")` uses measured per-task choices.
 
 The generator/report/debug sidecars must print the resolved batch and relay
 dimensions. Do not overload `jump_threshold` with relay selection.
@@ -157,22 +161,37 @@ an 8×6 relay at exactly 2.75 ticks/word.
 This is also a production warning: do not infer bindings from visual proximity.
 Assert every pipe-op binding after placing each worker/relay candidate.
 
-## Concrete implementation sequence
+## Whole-task results
 
-1. Add a reusable `counted_ring_power2(..., bits=2)` or a tape-local equivalent
-   that emits the two exact bit-peel arms and the `m=4` bulk ring.
-2. Build `worker_v2_jump4(n, relay_size=...)` without changing the request
-   protocol, target behavior, or stored tape representation.
-3. Parameterize `_tape_worker_spec` and `_tape_shell` with the relay art and all
-   wall anchors; remove the current assumption that every tape uses
-   `memory_tape.RELAY`.
-4. Generate both 6×4 and 8×6 relay layouts and assert:
-   ring capacity is at least `n+1`; every request read binds to request; every
-   tape read/send binds to the ring; output sends bind to output.
-5. Emit `.man`, `.html`, and `.json` together for a size-200 debug example.
-6. Add fast generator/shape/binding tests. Keep the real reference simulation
-   slow.
-7. Benchmark whole machines, not an isolated worker, before changing auto mode.
+All scores below are local `max(width,height)² × public avg ticks`; every listed
+candidate passed every public output/frame with the independent native validator.
+
+| task | legacy/previous | batch 2 + 4×3 relay | best batch 4 | selected |
+|---|---:|---:|---:|---|
+| Pathfinder | 147,140,354,273 | 128,783,668,267 | **127,813,359,906** | batch 4, 6×4 |
+| TCP | **568,891,733** | 640,800,976 | 866,425,973 | batch 1 |
+| Snake | 8,693,241,406 | **7,332,602,688** | 7,864,634,700 | existing task build |
+| Gradebook | **2,476,096,263** | 2,966,282,550 | not routable in current placement | batch 1 |
+| Sudoku Validity | **2,343,268,274** | 2,854,317,828 | 4,083,535,733 | batch 1 |
+| Little-Little-Man | 281,603,173,417 | 281,603,173,417 | **259,324,223,311** | batch 4, 8×6 |
+
+For Little-Little-Man, the “previous” column is already the improved same-box
+batch-2 relay. Batch 4 reduces public average ticks from 7,482,282 to 6,890,324
+at the identical 192×194 footprint. Pathfinder remains 177×176 in every mode;
+6×4 and 8×6 have identical task ticks, so the smaller relay is selected.
+
+TCP, Gradebook, and Sudoku demonstrate why batch 4 is not the global default:
+their tick reductions cannot repay a wider squared footprint. Snake is the
+middle case—batch 4 is faster, but batch 2 has the better score.
+
+## Implemented file map
+
+- `memory_tape.py`: `_bit_tail_horizontal`, `worker_v2_jump4`.
+- `lm1/machine.py`: batch/relay resolution, task configuration and layout.
+- `dataflow_relay.py`: scalable FIFO relay art and measured cost model.
+- `tape_jump_debug.py`: synchronized size-200 debug bundle.
+- `tests/test_memory_tape_jump.py`: exact boundary/remainder behavior.
+- `tests/test_dataflow_relay.py`: reference-engine slope measurements.
 
 The first behavioral cases must cover counts
 `0, 1, 2, 3, 4, 5, N-2, N-1` on both P1 and P2, for READ and WRITE. Include
@@ -181,14 +200,16 @@ sizes around routing seams (`107/108`) and selection thresholds
 capacity, bindings, and a relative improvement over a same-run baseline.
 Do not pin a footprint, score, or exact application tick count in tests.
 
-## Files to reuse
+## Further work
 
-- `memory_tape.py`: `worker_v2_jump`, relay placement, tape protocol.
-- `circuit.py`: `counted_ring`, `counted_ring_horizontal`.
-- `dataflow_relay.py`: scalable FIFO relay art and throughput model.
-- `tests/test_dataflow_relay.py`: reference-engine slope probe.
-- `tests/test_memory_tape_jump.py`: size-200 behavior and relative benchmark.
-- `tape_jump_debug.py`: generator-owned sidecar pattern.
+- Compact the 49×24 worker before reconsidering TCP/Sudoku; it needs to recover
+  at least the footprint columns shown in the table, not merely save more ticks.
+- Give two-tier stores separate hot/cold relay parameters. Little-Little-Man
+  currently uses the same 8×6 relay for both; a smaller hot-bank relay might
+  preserve ticks while simplifying its internal floorplan.
+- Sweep Pathfinder’s ROM fold jointly with batch 4. Its current 177×176 crossing
+  already hides STORE, so any win must come from a new global fold, not tape
+  compaction alone.
 
 The independent `manatom.unrolled(v)` gadget costs `4 + 4/v` and requires a
 divisible count. It is not the same as the two-sided `counted_ring`, whose cost

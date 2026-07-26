@@ -284,6 +284,40 @@ V2_JUMP_IW, V2_JUMP_IH = 34, 18
 V2_JUMP_FWD_ROW = 7
 V2_JUMP_RET_COL = 21
 
+# The four-value worker peels BP's low two bits before a four-word bulk loop.
+# Keeping all tape operations in the east half makes their nearest-pipe binding
+# strict even though the room is taller than v2.
+V2_JUMP4_IW, V2_JUMP4_IH = 49, 24
+V2_JUMP4_FWD_ROW = 7
+V2_JUMP4_RET_COL = 25
+
+
+def _bit_tail_horizontal(c: Circuit, x: int, y: int, pairs: int) -> tuple[int, int]:
+    """Peel one BP bit, conditionally moving ``pairs`` tape words.
+
+    Enter heading east at ``(x, y)``. ``x`` turns clockwise/south for a set bit
+    and counter-clockwise/north for a clear bit. The lower arm performs
+    ``"rs" * pairs``; both arms rejoin heading east, then ``]`` shifts BP so the
+    next bit becomes visible. B is untouched throughout.
+
+    Returns the first cell after the shift, still heading east.
+    """
+    if pairs < 1:
+        raise ValueError(f"bit-tail pairs must be positive, got {pairs}")
+    merge_x = x + 2 * pairs + 1
+    c.set(x, y, "x")
+
+    c.turn(x, y - 1, E)
+    c.route((x, y - 1), E, [], (merge_x, y - 1), S)
+
+    c.turn(x, y + 1, E)
+    c.run(x + 1, y + 1, "rs" * pairs)
+    c.route((x + 2 * pairs + 1, y + 1), E, [], (merge_x, y + 1), N)
+
+    c.turn(merge_x, y, E)
+    c.set(merge_x + 1, y, "]")
+    return merge_x + 2, y
+
 
 def worker_v2(
     n: int,
@@ -547,6 +581,105 @@ def worker_v2_jump(n: int) -> Circuit:
         p2_exit,
         S,
         [(23, 17), (GUT, 17), (GUT, 1)],
+        (0, 1),
+        S,
+    )
+    return c
+
+
+def worker_v2_jump4(n: int) -> Circuit:
+    """A four-word tape skip with exact 0..3 tails and a live operation tag.
+
+    P1 enters with BP=addr and B=+-(N-addr). Two :func:`_bit_tail_horizontal`
+    diamonds move ``addr % 4`` values using BP's low bits, and leave
+    ``floor(addr / 4)`` in BP for ``counted_ring_horizontal("rs" * 4)``.
+    None of those instructions changes B, so the existing READ/WRITE dispatch
+    remains valid. P2 applies the same exact decomposition after the target.
+    """
+    c = Circuit(V2_JUMP4_IW, V2_JUMP4_IH)
+    L = lit(n)
+    GUT = V2_JUMP4_IW - 1
+
+    # INIT: a compact vertical loop in the north-east corner. Its exit owns the
+    # east gutter back to MAIN; the steady-state P2 path joins that gutter lower.
+    init_end, _ = c.run(1, 0, "@" + L + "b")
+    c.route((init_end, 0), E, [], (46, 0), E)
+    fill, _ = c.counted_loop(46, 0, "0s")
+    assert fill == 48
+    c.route(
+        (fill, 0),
+        E,
+        [(GUT, 4), (45, 4), (45, 1)],
+        (0, 1),
+        W,
+    )
+    c.turn(0, 2, E)
+
+    # MAIN: identical request protocol and signed remaining-distance tag to v2.
+    c.run(1, 2, "rX")
+    rx, _ = c.run(3, 2, "rbM" + L + "-M")
+    c.turn(2, 3, E)
+    wx, _ = c.run(3, 3, "rbM" + L + "-NM")
+    c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
+    c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+
+    # P1: peel 1 and 2 values, then move four per BP unit. Both bulk exits
+    # converge by re-entering the top-right test with BP=0.
+    c.turn(10, 4, S)
+    c.turn(10, 5, E)
+    c.horizontal(5, 10, 24)
+    tail = _bit_tail_horizontal(c, 24, 5, 1)
+    tail = _bit_tail_horizontal(c, *tail, 2)
+    assert tail == (36, 5)
+    c.route(tail, E, [], (46, 5), S)
+    p1_exit, p1_other = c.counted_ring_horizontal(36, 6, "rs" * 4)
+    assert p1_other == tail
+    c.turn(*p1_other, E)
+    c.route(p1_exit, S, [(46, 8), (33, 8), (33, 10)], (33, 10), S)
+
+    # Dispatch and target access. Moving the target block east keeps every
+    # ring-facing r/s strictly nearer to the tape pipes than to request/output.
+    c.turn(33, 10, E)
+    c.run(34, 10, "WX")
+
+    c.turn(35, 11, E)
+    c.run(36, 11, "bmrS")
+    read_exit = (40, 11)
+
+    c.turn(35, 9, E)
+    c.run(36, 9, "Nbm")
+    write_target_exit = (39, 9)
+
+    c.route(write_target_exit, E, [(45, 9), (45, 12)], (3, 12), W)
+    c.run(2, 12, "r", d=W)
+    c.route((1, 12), W, [(0, 12), (0, 13)], (31, 13), E)
+    c.run(31, 13, "sr")
+    write_exit = (33, 13)
+
+    # Both target arms join above P2, then approach its bit diamonds from the
+    # west without crossing either conditional arm.
+    c.route(read_exit, E, [(40, 14)], (23, 14), W)
+    c.route(write_exit, E, [(33, 14)], (23, 14), W)
+    p2_tail = _bit_tail_horizontal(c, 24, 16, 1)
+    # Enter the first diamond from the shared merge without crossing its upper arm.
+    c.route((23, 14), W, [(22, 14), (22, 16)], (23, 16), E)
+    p2_tail = _bit_tail_horizontal(c, *p2_tail, 2)
+    assert p2_tail == (36, 16)
+    c.route(p2_tail, E, [], (46, 16), S)
+    p2_exit, p2_other = c.counted_ring_horizontal(36, 17, "rs" * 4)
+    assert p2_other == p2_tail
+    c.turn(*p2_other, E)
+
+    c.route(
+        p2_exit,
+        S,
+        [
+            (46, 21),
+            (GUT, 21),
+            (GUT, 4),
+            (45, 4),
+            (45, 1),
+        ],
         (0, 1),
         S,
     )

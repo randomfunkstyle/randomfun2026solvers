@@ -8,10 +8,13 @@ from pathlib import Path
 
 from randomfun2026solvers.lm1.machine import (
     _resolve_tape_skip_batch,
+    _resolve_tape_relay,
     tape_block,
 )
 from randomfun2026solvers.man_debug import DebugMap
 from randomfun2026solvers.memory_tape import (
+    V2_JUMP4_IH,
+    V2_JUMP4_IW,
     V2_JUMP_IH,
     V2_JUMP_IW,
 )
@@ -22,13 +25,16 @@ def build_debug(
     *,
     skip_batch: int | None = 2,
     jump_threshold: int = 128,
+    relay_size: tuple[int, int] | None = None,
 ) -> tuple[list[str], DebugMap]:
     """Build one tape block and a coordinate-accurate explanatory overlay."""
     resolved = _resolve_tape_skip_batch(cells, skip_batch, jump_threshold)
+    resolved_relay = _resolve_tape_relay(resolved, relay_size)[1]
     tape = tape_block(
         cells,
         skip_batch=skip_batch,
         jump_threshold=jump_threshold,
+        relay_size=relay_size,
     )
     rows = [
         "".join(tape.cells.get((x, y), " ") for x in range(tape.width)).rstrip()
@@ -36,13 +42,14 @@ def build_debug(
     ]
     debug = DebugMap(
         f"LM-1 tape STORE — cells={cells}, skip_batch={resolved}, "
-        f"jump_threshold={jump_threshold}, capacity={tape.slots}"
+        f"relay={resolved_relay}, jump_threshold={jump_threshold}, "
+        f"capacity={tape.slots}"
     )
 
     # Both worker variants are placed at the same block origin.
     wx, wy = 8, 8
-    worker_w = V2_JUMP_IW if resolved == 2 else 22
-    worker_h = V2_JUMP_IH if resolved == 2 else 18
+    worker_w = {1: 22, 2: V2_JUMP_IW, 4: V2_JUMP4_IW}[resolved]
+    worker_h = {1: 18, 2: V2_JUMP_IH, 4: V2_JUMP4_IH}[resolved]
     debug.region(
         "worker",
         wx,
@@ -151,6 +158,82 @@ def build_debug(
             note="single P2 exit returns through the east gutter to MAIN",
             color="#ec4899",
         )
+    elif resolved == 4:
+        debug.region(
+            "init",
+            wx + 45,
+            wy,
+            4,
+            5,
+            note=f"one-time fill of {cells} zero values",
+            color="#64748b",
+        )
+        debug.region(
+            "request-decode",
+            wx,
+            wy + 2,
+            16,
+            4,
+            note="READ/WRITE setup; B preserves ±(N−addr)",
+            color="#60a5fa",
+        )
+        debug.region(
+            "P1-bit-tail",
+            wx + 24,
+            wy + 4,
+            12,
+            3,
+            note="x/] peels BP bits 0 and 1; conditionally advances 1 then 2 words",
+            color="#84cc16",
+        )
+        debug.region(
+            "P1-four-value-skip",
+            wx + 36,
+            wy + 6,
+            11,
+            2,
+            note="bulk floor(addr/4) loop; four rs pairs per BP unit",
+            color="#22c55e",
+        )
+        debug.region(
+            "target-access",
+            wx + 31,
+            wy + 9,
+            16,
+            6,
+            note="READ sends target to output+tape; WRITE replaces target",
+            color="#f59e0b",
+        )
+        debug.region(
+            "P2-bit-tail",
+            wx + 22,
+            wy + 14,
+            14,
+            4,
+            note="exact cleanup for (N−1−addr) mod 4",
+            color="#06b6d4",
+        )
+        debug.region(
+            "P2-four-value-skip",
+            wx + 36,
+            wy + 17,
+            11,
+            2,
+            note="bulk floor((N−1−addr)/4) loop; restores tape alignment",
+            color="#14b8a6",
+        )
+        debug.lane(
+            "main-return",
+            [
+                (wx + 46, wy + 19),
+                (wx + 46, wy + 21),
+                (wx + 48, wy + 21),
+                (wx + 48, wy + 4),
+            ],
+            kind="control",
+            expect="P2 and initializer share the proven return path to MAIN",
+            color="#ec4899",
+        )
     return rows, debug
 
 
@@ -159,9 +242,10 @@ def main() -> None:
     parser.add_argument("--cells", type=int, default=200)
     parser.add_argument(
         "--skip-batch",
-        choices=("1", "2", "auto"),
+        choices=("1", "2", "4", "auto"),
         default="2",
     )
+    parser.add_argument("--relay", help="relay interior WxH, for example 6x4 or 8x6")
     parser.add_argument("--jump-threshold", type=int, default=128)
     parser.add_argument("--man", type=Path, required=True)
     parser.add_argument("--html", type=Path, required=True)
@@ -169,10 +253,18 @@ def main() -> None:
     args = parser.parse_args()
 
     batch = None if args.skip_batch == "auto" else int(args.skip_batch)
+    relay_size = None
+    if args.relay:
+        try:
+            rw, rh = args.relay.lower().split("x", 1)
+            relay_size = (int(rw), int(rh))
+        except (TypeError, ValueError) as exc:
+            parser.error(f"--relay must be WxH, got {args.relay!r}: {exc}")
     rows, debug = build_debug(
         args.cells,
         skip_batch=batch,
         jump_threshold=args.jump_threshold,
+        relay_size=relay_size,
     )
     args.man.write_text("\n".join(rows) + "\n", encoding="utf-8")
     debug.write_html(rows, args.html)

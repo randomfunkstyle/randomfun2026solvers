@@ -722,7 +722,7 @@ Further variants, in rough order of payoff:
   BP test and one `rs,m` body on each side, so it advances two words per lap at
   ~5 ticks/value instead of 8. Its odd exit re-enters with BP=0 and converges on
   the normal exit, so it never speculatively consumes another word. The LM-1
-  STORE API exposes `tape_skip_batch=1|2`, or `None` plus a configurable
+  STORE API exposes `tape_skip_batch=1|2|4`, or `None` plus a configurable
   `tape_jump_threshold`; batch 1 remains the byte-identical default because the
   batch-2 block is 45 rather than 33 columns wide. On a 200-slot six-write,
   six-read boundary/parity probe it measured 16,392 versus 22,211 ticks
@@ -730,7 +730,7 @@ Further variants, in rough order of payoff:
 - **A still larger pass-through ring** can amortise more of the fixed
   corner/test/decrement cost, but it needs an exact cleanup path for arbitrary
   tails. The measured batch-4 design, its power-of-two remainder path, relay
-  choices, binding hazard, and implementation checklist are in
+  choices, binding hazard, implementation, and whole-task results are in
   [`TAPE-SKIP-ROADMAP.md`](TAPE-SKIP-ROADMAP.md).
 - **Banking** — k rings, address = (bank, offset), ~N/k per access at k× the
   pipe area. Superseded for `matmul` by its sequential-access STREAM block, but

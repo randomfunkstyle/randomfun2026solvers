@@ -1338,13 +1338,13 @@ def _resolve_tape_skip_batch(
     skip_batch: int | None,
     jump_threshold: int,
 ) -> int:
-    """Resolve explicit batch 1/2 or auto-select by STORE size."""
+    """Resolve explicit batch 1/2/4 or auto-select by STORE size."""
     if jump_threshold < 1:
         raise ValueError(f"jump_threshold must be positive, got {jump_threshold}")
     if skip_batch is None:
         return 2 if n >= jump_threshold else 1
-    if skip_batch not in (1, 2):
-        raise ValueError(f"skip_batch must be 1, 2, or None, got {skip_batch}")
+    if skip_batch not in (1, 2, 4):
+        raise ValueError(f"skip_batch must be 1, 2, 4, or None, got {skip_batch}")
     return skip_batch
 
 
@@ -1356,6 +1356,10 @@ def _tape_worker_spec(skip_batch: int):
         V2_IN_ROW,
         V2_IW,
         V2_JUMP_FWD_ROW,
+        V2_JUMP4_FWD_ROW,
+        V2_JUMP4_IH,
+        V2_JUMP4_IW,
+        V2_JUMP4_RET_COL,
         V2_JUMP_IH,
         V2_JUMP_IW,
         V2_JUMP_RET_COL,
@@ -1363,6 +1367,7 @@ def _tape_worker_spec(skip_batch: int):
         V2_RET_COL,
         worker_v2,
         worker_v2_jump,
+        worker_v2_jump4,
     )
 
     if skip_batch == 1:
@@ -1385,7 +1390,38 @@ def _tape_worker_spec(skip_batch: int):
             V2_JUMP_FWD_ROW,
             V2_JUMP_RET_COL,
         )
-    raise ValueError(f"skip_batch must be 1 or 2, got {skip_batch}")
+    if skip_batch == 4:
+        return (
+            worker_v2_jump4,
+            V2_JUMP4_IW,
+            V2_JUMP4_IH,
+            V2_IN_ROW,
+            V2_OUT_COL,
+            V2_JUMP4_FWD_ROW,
+            V2_JUMP4_RET_COL,
+        )
+    raise ValueError(f"skip_batch must be 1, 2, or 4, got {skip_batch}")
+
+
+def _resolve_tape_relay(
+    skip_batch: int,
+    relay_size: tuple[int, int] | None,
+) -> tuple[list[str], tuple[int, int] | None]:
+    """Return relay art and its reported interior dimensions.
+
+    Batch 1 retains the byte-identical legacy relay unless explicitly tuned.
+    Batch 2 gets the two-word relay with the same 4x3 interior/exterior size;
+    batch 4 defaults to the engine-pinned 8x6 relay.
+    """
+    from ..memory_tape import RELAY
+    from ..dataflow_relay import relay
+
+    if relay_size is None:
+        if skip_batch == 1:
+            return RELAY, None
+        relay_size = (4, 3) if skip_batch == 2 else (8, 6)
+    w, h = relay_size
+    return relay(w, h), (w, h)
 
 
 def _tape_shell(
@@ -1495,6 +1531,7 @@ def tape_block(
     *,
     skip_batch: int | None = 1,
     jump_threshold: int = 128,
+    relay_size: tuple[int, int] | None = None,
 ) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
 
@@ -1534,9 +1571,10 @@ def tape_block(
     it never consumes a speculative extra word.  Excess ring capacity only delays
     the first value of a lap; in both modes the worker remains the bottleneck.
     """
-    from ..memory_tape import RELAY, _draw_pipe
+    from ..memory_tape import _draw_pipe
 
     skip_batch = _resolve_tape_skip_batch(n, skip_batch, jump_threshold)
+    relay_art, _resolved_relay_size = _resolve_tape_relay(skip_batch, relay_size)
 
     (
         _worker,
@@ -1559,11 +1597,13 @@ def tape_block(
         b_fwd = bottom_y + 6
         r_a, r_b, r_c = bottom_y + 4, bottom_y + 3, bottom_y + 2
         relay_y = bottom_y + 3
-        for i, row in enumerate(RELAY):
+        relay_h = len(relay_art) - 2
+        for i, row in enumerate(relay_art):
             for j, ch in enumerate(row):
                 g.set(1 + j, relay_y + i, ch)
-        relay_wall = len(RELAY[0])
+        relay_wall = len(relay_art[0])
         adj = relay_wall + 1
+        b_fwd = relay_y + relay_h
 
         n_fwd = _draw_pipe(
             g,
@@ -1589,7 +1629,7 @@ def tape_block(
         if n_fwd + n_ret < n + 1:
             continue
         return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
-    return _serpentine_tape(n, skip_batch=skip_batch)
+    return _serpentine_tape(n, skip_batch=skip_batch, relay_art=relay_art)
 
 
 #: Columns the big ring reserves under the worker, in block coordinates.
@@ -1606,7 +1646,12 @@ _SNAKE_WEST = 10
 _SNAKE_TOP = 4
 
 
-def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
+def _serpentine_tape(
+    n: int,
+    *,
+    skip_batch: int = 1,
+    relay_art: list[str] | None = None,
+) -> _Tape:
     """The same ring, with the forward pipe snaked so capacity scales with area.
 
     Two L-shaped pipes give a *perimeter* of capacity and the band under the worker
@@ -1641,6 +1686,9 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
     """
     from ..memory_tape import RELAY, _draw_pipe
 
+    relay_art = relay_art or RELAY
+    relay_h = len(relay_art) - 2
+
     (
         _worker,
         worker_width,
@@ -1663,11 +1711,13 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
     for rows in range(5, 82, 2):
         g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch)
         last = top + rows - 1  # the final, relay-bound westbound leg
-        relay_y = last - 3  # so `last` is the relay's bottom interior row
-        for i, row in enumerate(RELAY):
+        relay_y = last - relay_h  # so `last` is the relay's bottom interior row
+        for i, row in enumerate(relay_art):
             for j, ch in enumerate(row):
                 g.set(1 + j, relay_y + i, ch)
-        adj = len(RELAY[0]) + 1  # first column east of the relay's wall
+        adj = len(relay_art[0]) + 1  # first column east of the relay's wall
+        snake_climb = max(_SNAKE_CLIMB, adj + 1)
+        snake_west = max(_SNAKE_WEST, snake_climb + 2)
 
         snake: list[tuple[int, int]] = [
             (WX + worker_width + 1, fy),
@@ -1679,7 +1729,7 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
             if i == rows - 1:
                 snake.append((adj, y))  # into the relay
             elif i % 2 == 0:
-                snake += [(_SNAKE_WEST, y), (_SNAKE_WEST, y + 1)]
+                snake += [(snake_west, y), (snake_west, y + 1)]
             else:
                 snake += [(east, y), (east, y + 1)]
         n_fwd = _draw_pipe(g, snake)
@@ -1687,8 +1737,8 @@ def _serpentine_tape(n: int, *, skip_batch: int = 1) -> _Tape:
             g,
             [
                 (adj, relay_y + 1),
-                (_SNAKE_CLIMB, relay_y + 1),
-                (_SNAKE_CLIMB, bottom_y + 2),
+                (snake_climb, relay_y + 1),
+                (snake_climb, bottom_y + 2),
                 (ret_col, bottom_y + 2),
                 (ret_col, bottom_y + 1),
             ],
@@ -1744,6 +1794,7 @@ class Machine:
     rom_rows: int
     mem_pad: int
     tape_skip_batch: int = 1
+    tape_relay_size: tuple[int, int] | None = None
     stream_pad: int = 0
     display: tuple[int, int] | None = None
     #: Where each display band's ``s`` glyph ended up, in *grid* coordinates — the
@@ -1802,7 +1853,7 @@ class Machine:
             "adapter": "expands one sign-biased request word into the tape's `op addr [value]`",
             "tape": (
                 f"rotating pipe tape, N={self.tape_n}, "
-                f"skip_batch={self.tape_skip_batch}"
+                f"skip_batch={self.tape_skip_batch}, relay={self.tape_relay_size}"
             ),
             "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
             "display": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -1851,6 +1902,7 @@ class Machine:
             f"footprint {self.footprint}, {len(self.plan.number)} opcodes "
             f"(depth {self.plan.k}), P={self.program.P} words on {self.rom_rows} ROM rows, "
             f"tape N={self.tape_n}, skip_batch={self.tape_skip_batch}, "
+            f"relay={self.tape_relay_size}, "
             f"mem_pad={self.mem_pad}{stream}{panel}{routes}"
             f"{placement}"
         )
@@ -1876,6 +1928,7 @@ def build(
     short_return: bool | None = None,
     store: str = "tape",
     tape_skip_batch: int | None = 1,
+    tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     middle_order: Sequence[str] | None = None,
     rom_buffer: int | None = None,
@@ -1908,9 +1961,10 @@ def build(
     LM-75's interior ``(width, height)`` and is required by any program using a
     ``DSP*`` opcode — the panel resolution is the problem's, not the program's.
 
-    ``tape_skip_batch`` selects the tape worker: ``1`` is the compact legacy loop
-    and ``2`` is the wider two-word counted ring. Pass ``None`` to choose batch 2
-    when ``tape_n >= tape_jump_threshold`` and batch 1 below it.
+    ``tape_skip_batch`` selects the tape worker: ``1`` is the compact legacy loop,
+    ``2`` the wider two-word counted ring, and ``4`` the exact power-of-two worker
+    with a configurable fat relay. Pass ``None`` to choose batch 2 when
+    ``tape_n >= tape_jump_threshold`` and batch 1 below it.
 
     ``tape_n`` is a **slot count**, so the usable addresses are ``1 .. tape_n - 1``:
     slot 0 is sign-ambiguous (see the module docstring) and slot ``tape_n`` does not
@@ -1936,9 +1990,9 @@ def build(
         raise MachineError(
             f"unknown store tier {store!r}; expected one of {', '.join(map(repr, STORE_TIERS))}"
         )
-    if tape_skip_batch not in (None, 1, 2):
+    if tape_skip_batch not in (None, 1, 2, 4):
         raise MachineError(
-            f"tape_skip_batch must be 1, 2, or None, got {tape_skip_batch}"
+            f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}"
         )
     if tape_jump_threshold < 1:
         raise MachineError(
@@ -1946,6 +2000,8 @@ def build(
         )
     if store != "tape" and tape_skip_batch != 1:
         raise MachineError("tape_skip_batch applies only to store='tape'")
+    if store != "tape" and tape_relay_size is not None:
+        raise MachineError("tape_relay_size applies only to store='tape'")
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
     p = plan(program, middle_order=middle_order)
@@ -1998,6 +2054,7 @@ def build(
                     mem_offset[1],
                     hot,
                     tape_skip_batch=effective_skip_batch,
+                    tape_relay_size=tape_relay_size,
                 )
             except MachineError as exc:
                 last = exc
@@ -2044,6 +2101,7 @@ def build(
                     0,
                     hot,
                     tape_skip_batch=effective_skip_batch,
+                    tape_relay_size=tape_relay_size,
                 )
             except MachineError:
                 continue
@@ -2112,6 +2170,7 @@ def _assemble(
     mem_dy: int = 0,
     hot: tuple[int, int] | None = None,
     tape_skip_batch: int = 1,
+    tape_relay_size: tuple[int, int] | None = None,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
@@ -2241,6 +2300,7 @@ def _assemble(
             tape_n,
             hot,
             tape_skip_batch=tape_skip_batch,
+            tape_relay_size=tape_relay_size,
         )
         extra_regions = seam.regions
         req_row, resp_row = seam.req_row, seam.resp_row
@@ -2305,7 +2365,11 @@ def _assemble(
         elif store == "grid":
             tape = grid_block(tape_n)
         elif store == "tape":
-            tape = tape_block(tape_n, skip_batch=tape_skip_batch)
+            tape = tape_block(
+                tape_n,
+                skip_batch=tape_skip_batch,
+                relay_size=tape_relay_size,
+            )
         else:
             raise MachineError(
                 f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
@@ -2522,6 +2586,7 @@ def _assemble(
         rom_rows=romlay.rows_used,
         mem_pad=mem_pad,
         tape_skip_batch=tape_skip_batch,
+        tape_relay_size=_resolve_tape_relay(tape_skip_batch, tape_relay_size)[1],
         stream_pad=stream_pad,
         display=display if dsp_touches else None,
         dsp_glyphs={
@@ -2875,6 +2940,7 @@ def _two_tier(
     hot: tuple[int, int],
     *,
     tape_skip_batch: int = 1,
+    tape_relay_size: tuple[int, int] | None = None,
 ) -> _Seam:
     """Place a range-routing adapter, a hot man-memory tier, the tape, and a merger.
 
@@ -2914,7 +2980,11 @@ def _two_tier(
         # grader's wall clock is spent on, not the ticks.
         hot_top = cols * rows_
         tier = _PipeBank(
-            tape_block(hot_top, skip_batch=tape_skip_batch),
+            tape_block(
+                hot_top,
+                skip_batch=tape_skip_batch,
+                relay_size=tape_relay_size,
+            ),
             hot_top,
         )
     else:
@@ -2931,7 +3001,11 @@ def _two_tier(
             f"{tape_n}-slot store; drop the tier or grow the program"
         )
     adapter = two_tier_adapter(hot_top)
-    tape = tape_block(tape_n, skip_batch=tape_skip_batch)
+    tape = tape_block(
+        tape_n,
+        skip_batch=tape_skip_batch,
+        relay_size=tape_relay_size,
+    )
     # One column further east than the one-tier adapter: the request pipe drops
     # down a corridor column and has to turn east *before* the west wall, so it
     # needs a cell between its descent and the room.
@@ -3301,6 +3375,14 @@ TAPE_SIZE = {
     "pathfinder-unit": 52,
 }
 
+#: Task-level tape choices that beat the compact default on full public-case score.
+#: They are deliberately per task: the batch-4 worker saves ticks everywhere but its
+#: wider room loses on a width-bound machine. Pathfinder's 177x176 ROM/CPU box hides
+#: the whole STORE, and its smaller 6x4 relay ties 8x6 on ticks.
+TASK_TAPE_CONFIG: dict[str, tuple[int, tuple[int, int] | None]] = {
+    "pathfinder": (4, (6, 4)),
+}
+
 #: Ring capacities per problem: ``(A, B, accumulator)`` in *values*, from the
 #: constraint box rather than the public cases. ``matmul`` allows N, M, K <= 16, so
 #: A and B hold 256 entries each and a row of C holds 16; one spare value each,
@@ -3544,7 +3626,8 @@ def build_for(
     slug: str,
     *,
     store: str = "tape",
-    tape_skip_batch: int | None = 1,
+    tape_skip_batch: int | None | str = "task",
+    tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     compact: bool = False,
 ) -> Machine:
@@ -3560,6 +3643,14 @@ def build_for(
 
     if slug not in TAPE_SIZE:
         raise MachineError(f"no tape size recorded for {slug!r}; have {sorted(TAPE_SIZE)}")
+    if tape_skip_batch == "task":
+        tape_skip_batch, task_relay = TASK_TAPE_CONFIG.get(slug, (1, None))
+        if tape_relay_size is None:
+            tape_relay_size = task_relay
+    elif not isinstance(tape_skip_batch, (int, type(None))):
+        raise MachineError(
+            f"tape_skip_batch must be 1, 2, 4, None, or 'task', got {tape_skip_batch!r}"
+        )
     return build(
         programs.load(slug),
         tape_n=TAPE_SIZE[slug],
@@ -3568,6 +3659,7 @@ def build_for(
         stream=STREAM_SIZE.get(slug),
         store=store,
         tape_skip_batch=tape_skip_batch,
+        tape_relay_size=tape_relay_size,
         tape_jump_threshold=tape_jump_threshold,
         middle_order=LANE_ORDER.get(slug),
         rom_buffer=ROM_BUFFER.get(slug),
@@ -3597,9 +3689,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--tape-skip-batch",
-        choices=("1", "2", "auto"),
-        default="1",
-        help="tape values advanced per counted skip lap, or auto by size (default: 1)",
+        choices=("1", "2", "4", "auto", "task"),
+        default="task",
+        help="tape skip strategy; task uses the measured per-task choice (default: task)",
+    )
+    ap.add_argument(
+        "--tape-relay",
+        metavar="WxH",
+        help="fat relay interior, for example 6x4 or 8x6 (default by skip batch)",
     )
     ap.add_argument(
         "--tape-jump-threshold",
@@ -3609,9 +3706,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
+    relay_size = None
+    if args.tape_relay:
+        try:
+            rw, rh = args.tape_relay.lower().split("x", 1)
+            relay_size = (int(rw), int(rh))
+        except (TypeError, ValueError) as exc:
+            ap.error(f"--tape-relay must be WxH, got {args.tape_relay!r}: {exc}")
+    if args.tape_skip_batch == "task":
+        skip_batch: int | None | str = "task"
+    elif args.tape_skip_batch == "auto":
+        skip_batch = None
+    else:
+        skip_batch = int(args.tape_skip_batch)
     m = build_for(
         args.slug,
-        tape_skip_batch=None if args.tape_skip_batch == "auto" else int(args.tape_skip_batch),
+        tape_skip_batch=skip_batch,
+        tape_relay_size=relay_size,
         tape_jump_threshold=args.tape_jump_threshold,
         compact=args.compact,
     )
