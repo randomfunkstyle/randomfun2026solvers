@@ -1454,7 +1454,17 @@ def build_asm(*, packed_cells: bool = False) -> tuple[str, int]:
 #: packed structures band (stacked slab entry rows, 20 rows -> 10) and main's
 #: compact whole-machine routing.  Rows the CPU gives up only pay once the fold
 #: converts them into width, so the sweep has to be redone whenever either moves.
-ROM_ROWS = 88
+#:
+#: The sweep's minimum is not a coincidence and is worth stating as a rule: score is
+#: ``max(w, h)^2``, so only the *larger* side is charged and every unit the smaller
+#: side falls short is free area we are not using.  The fold trades width for height
+#: monotonically, so the optimum is wherever the two cross — the **square** machine.
+#: Swept on the merged generator: 87 -> 196x191 (38,416), 88 -> 195x192 (38,025),
+#: **89 -> 192x193 (37,249)**, 90 -> 190x194 (37,636), 91 -> 189x195 (38,025).  89 is
+#: the crossing: it is the last fold where width still exceeds height.  Re-sweep after
+#: any geometry change — an earlier sweep put the minimum at 192x192/36,864 because it
+#: predated the revert of ``height = bottom - 1``, which gives every machine a row back.
+ROM_ROWS = 89
 
 
 def build_machine(*, packed_cells: bool = False, rom_rows: int = ROM_ROWS):

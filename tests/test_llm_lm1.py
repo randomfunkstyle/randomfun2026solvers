@@ -112,6 +112,24 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
     assert GRID.read_text() == "\n".join(machine.rows) + "\n"
 
 
+@pytest.mark.slow
+def test_footprint_is_what_the_fold_sweep_found(built) -> None:
+    """``ROM_ROWS`` is a swept constant, not a default; this is what it bought.
+
+    Score is ``max(w, h)^2``, so only the larger side is charged and the fold's
+    optimum is where width and height cross.  ``rom_rows=89`` is the last fold at
+    which width still exceeds height: 88 gives 195x192 (38,025) and 90 gives
+    190x194 (37,636), against this build's 192x193 (37,249).
+
+    Pinned because the sweep is invalidated by *any* geometry change anywhere in
+    the generator — the CPU, the ROM and the tape all move the crossing — and a
+    silently drifted fold costs footprint without failing anything else.
+    """
+    machine, _program = built
+    assert (machine.width, machine.height) == (192, 193)
+    assert max(machine.width, machine.height) ** 2 == 37_249
+
+
 def test_the_tape_is_sized_to_the_program_not_the_public_cases(program) -> None:
     program, slots = program
     # 4 <= W, H <= 16, so the grid is 256 cells whatever the case holds.
