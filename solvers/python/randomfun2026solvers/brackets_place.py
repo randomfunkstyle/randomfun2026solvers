@@ -250,7 +250,8 @@ DIRS = {"N": (0, -1), "S": (0, 1), "W": (-1, 0), "E": (1, 0)}
 
 
 def route_pipe(blocked: set, w: int, h: int, attach: tuple[int, int], out: tuple[int, int],
-               goal: tuple[int, int], goal_in: tuple[int, int]) -> list[tuple[int, int]] | None:
+               goal: tuple[int, int], goal_in: tuple[int, int],
+               borders: set | None = None) -> list[tuple[int, int]] | None:
     """A rectilinear pipe from one room wall to another, over free cells only.
 
     `attach` is the source room's wall cell and `out` the direction away from it;
@@ -259,12 +260,23 @@ def route_pipe(blocked: set, w: int, h: int, attach: tuple[int, int], out: tuple
     behind its first arrowhead and one that turns immediately is not found at all
     — the grid loads with the pipe silently missing.
 
+    `borders` is every room border cell in the grid, and it is what keeps the
+    rule from working in reverse.  A pipe is found by looking *behind* each
+    arrowhead: any cell whose outgoing direction has a room wall behind it is the
+    start of a pipe leaving that room.  A corridor that merely turns south
+    against the underside of a wall therefore mints a **second** pipe out of that
+    room — the grid still loads, `analyze` still reports the pipes the author
+    drew, and the room's `s` glyphs then split across two queues by nearest
+    column.  That is what put `brackets`' classifier tokens into three different
+    FIFOs and made the worker read them out of order.
+
     `goal` is the destination wall cell and `goal_in` the direction the pipe must
     be travelling when it enters it.  Cost is cells, with a small turn penalty so
     a tie is broken towards the straighter run; pipes never share a cell.
     """
     import heapq
 
+    borders = borders or set()
     start = (attach[0] + out[0], attach[1] + out[1])
     second = (start[0] + out[0], start[1] + out[1])
     last = (goal[0] - goal_in[0], goal[1] - goal_in[1])
@@ -273,6 +285,10 @@ def route_pipe(blocked: set, w: int, h: int, attach: tuple[int, int], out: tuple
             return None
     if second == last:
         return [start, second]
+
+    def mints_a_pipe(cell, nd) -> bool:
+        """Would an arrowhead at `cell` pointing `nd` be read as a pipe start?"""
+        return (cell[0] - nd[0], cell[1] - nd[1]) in borders
 
     dist = {(second, out): 2.0}
     prev: dict = {(second, out): (start, out)}
@@ -285,12 +301,20 @@ def route_pipe(blocked: set, w: int, h: int, attach: tuple[int, int], out: tuple
         for nd in DIRS.values():
             if nd == (-d[0], -d[1]):
                 continue
+            # `nd` is the direction `cell` is *left* with, so it is `cell` whose
+            # arrowhead would be read backwards into a wall, not `nxt`.
+            if mints_a_pipe(cell, nd):
+                continue
             nxt = (cell[0] + nd[0], cell[1] + nd[1])
             if not (0 <= nxt[0] < w and 0 <= nxt[1] < h) or nxt in blocked:
                 continue
             c = cost + 1.0 + (0.3 if nd != d else 0.0)
             if nxt == last:
-                if nd == goal_in and (best is None or c < best[0]):
+                # The terminal arrowhead may itself be the final bend, so `last`
+                # may be entered from any side; what it may not do is have a wall
+                # behind the direction it points into the goal, which would make
+                # it the mouth of a pipe out of *that* room as well.
+                if not mints_a_pipe(last, goal_in) and (best is None or c < best[0]):
                     best = (c, (cell, d))
                 continue
             if c < dist.get((nxt, nd), float("inf")):

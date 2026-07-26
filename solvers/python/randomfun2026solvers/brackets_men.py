@@ -28,13 +28,29 @@ Three facts shape every room here:
 
 ## The rooms
 
-`CLASS` is 7x6, `WORK` 15x8 and `COUNT` 12x7, and the whole machine is 24x25 —
-the same footprint as the hand-built single-room parser it replaces, at a fifth
-of its ticks: 214 average against 1,096, so 1.44e5 against 6.85e5.
+`CLASS` is 7x6, `WORK` 15x8 and `COUNT` 12x7, and the whole machine is 23x25 —
+side 25, the same as the hand-built single-room parser it replaces, at 310
+average reference ticks against 1,096: 1.94e5 against 6.85e5.
 
 Only `COUNT` has a pipe-binding question to answer, because it alone sends on
 two pipes; its `sw` and `so` attach cells sit at the two ends of the same wall,
 so the split is the column midpoint and every `s` is checked against it.
+
+## The bug that shipped, and the check that now catches it
+
+The first version of this grid was wrong on any input that mixed bracket types
+past four characters, and neither an exhaustive `FastLittleman` sweep nor a clean
+`score_program` saw it.  The cause was not in the rooms: two cells of the routed
+`tok` corridor turned south directly under `CLASS`'s south wall, and **an
+arrowhead with a room wall behind it is the mouth of a pipe out of that room**.
+The runtime therefore built seven pipes where `analyze` reported five, `CLASS`'s
+four `s` glyphs bound three different queues by nearest column, and the worker
+read the tokens out of order.
+
+:func:`check_no_phantom_pipes` counts mouths the way the runtime does and refuses
+any grid with more than the five that were drawn; :func:`route_pipe` will not lay
+a corridor cell that would become one.  `tests/test_pipe_mouths.py` pins the
+underlying engine divergence in nine lines.
 
 ## What stops it going smaller
 
@@ -201,6 +217,57 @@ def check_bindings() -> None:
         raise Collision("COUNT's `s` glyphs moved; re-derive the binding split")
 
 
+ARROW = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}
+
+
+def pipe_mouths(rows: list[str], inside: set) -> list[tuple[tuple[int, int], str]]:
+    """Every cell the engine will read as the **start** of a pipe.
+
+    A pipe is found by looking behind an arrowhead: if the cell a `v` points away
+    from is a room border, that `v` is the mouth of a pipe leaving that room.
+    Nothing says the author meant it — a corridor that turns south against the
+    underside of a wall mints a pipe just as surely as one drawn on purpose, the
+    grid loads, and `lm.mjs analyze` still reports the pipes that were drawn.
+
+    That is the bug that shipped: two corridor cells sat under `CLASS`'s south
+    wall, so the room had **three** outgoing pipes, its four `s` glyphs split
+    across them by nearest column, and the worker read the tokens out of order.
+    `analyze` said five pipes; the runtime made seven.
+    """
+    grid = {(x, y): ch for y, r in enumerate(rows) for x, ch in enumerate(r)}
+    walls, cells = inside
+    return [(c, ch) for c, ch in grid.items()
+            if ch in ARROW and c not in cells
+            and (c[0] - ARROW[ch][0], c[1] - ARROW[ch][1]) in walls]
+
+
+def wall_cells(boxes) -> tuple[set, set]:
+    """(every room's border, every room's interior), from the boxes themselves.
+
+    Derived from the floor plan rather than from the glyphs, because `|` and `-`
+    are a *pipe's* body as well as a room's wall and there is no telling them
+    apart in the finished grid — which is exactly the confusion that lets a
+    phantom pipe hide.
+    """
+    borders, cells = set(), set()
+    for bx, by, bw, bh in boxes:
+        borders |= {(x, by) for x in range(bx, bx + bw)}
+        borders |= {(x, by + bh - 1) for x in range(bx, bx + bw)}
+        borders |= {(bx, y) for y in range(by, by + bh)}
+        borders |= {(bx + bw - 1, y) for y in range(by, by + bh)}
+        cells |= {(x, y) for x in range(bx + 1, bx + bw - 1)
+                  for y in range(by + 1, by + bh - 1)}
+    return borders, cells
+
+
+def check_no_phantom_pipes(rows: list[str], boxes, expect: int = 5) -> None:
+    mouths = pipe_mouths(rows, wall_cells(boxes))
+    if len(mouths) != expect:
+        raise Collision(
+            f"{len(mouths)} pipe mouths, wanted {expect}: "
+            + ", ".join(f"{ch!r}@{c}" for c, ch in sorted(mouths)))
+
+
 # ── the floor plan ────────────────────────────────────────────────────────────
 #
 #     +---+  +--CLASS--+  +--COUNT--+          rows 0..TOP: the input room
@@ -213,7 +280,7 @@ def check_bindings() -> None:
 # whole of the plan: a pipe that has to reach round a room is a pipe that does
 # not fit.  `CLASS` and `COUNT` are **bottom**-aligned so the band below them is
 # one rectangle, and the taller of the two decides where the band starts.
-TOP, MID, MARGIN, GAPX, IX = 5, 2, 0, 1, 0
+TOP, MID, MARGIN, GAPX, IX = 5, 2, 0, 0, 0
 
 
 def _origins():
@@ -247,6 +314,11 @@ def build_grid(seed: int = 0):
     boxes.update({n: (x - 1, y - 1, 3, 3) for n, (x, y) in io.items()})
     blocked = {(x, y) for bx, by, bw, bh in boxes.values()
                for x in range(bx, bx + bw) for y in range(by, by + bh)}
+    # Every wall cell of every room.  A pipe cell whose arrowhead has one of
+    # these behind it is read as a *new* pipe leaving that room, which is how a
+    # corridor that merely turns under a wall silently splits a room's sends
+    # across two queues.
+    borders, _cells = wall_cells(boxes.values())
 
     ends = {}
     for (key, man), (c, r, face) in ATTACH.items():
@@ -262,7 +334,8 @@ def build_grid(seed: int = 0):
         taken, paths = set(blocked), {}
         for key, src, dst in order:
             (sa, sd), (da, dd) = ends[(key, src)], ends[(key, dst)]
-            path = route_pipe(taken, width, height, sa, sd, da, (-dd[0], -dd[1]))
+            path = route_pipe(taken, width, height, sa, sd, da, (-dd[0], -dd[1]),
+                              borders)
             if path is None:
                 break
             paths[key] = (path, da)
@@ -286,6 +359,7 @@ def build_grid(seed: int = 0):
     rows = [r.rstrip() for r in g.rows()]
     while rows and not rows[-1]:
         rows.pop()
+    check_no_phantom_pipes(rows, boxes.values())
 
     dbg = DebugMap("brackets — three men over a one-register base-3 stack")
     notes = {

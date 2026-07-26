@@ -23,6 +23,9 @@ from randomfun2026solvers.brackets_men import (
     build,
     build_grid,
     check_bindings,
+    check_no_phantom_pipes,
+    pipe_mouths,
+    wall_cells,
 )
 from randomfun2026solvers.fast_littleman import FastLittleman
 from randomfun2026solvers.man_debug import render_html
@@ -39,6 +42,9 @@ DEBUG_JSON = ROOT / "littleman" / "examples" / "brackets-stack.debug.json"
 #: `max(w,h)^2` and five times the ticks.
 SIDE = 25
 GOAL25_SCORE = 685_278
+#: Room boxes, for the checks that need to tell a wall from a pipe's body.
+BOXES = [(0, 0, 3, 3), (0, 5, 9, 8), (0, 15, 17, 10), (9, 4, 14, 9),
+         (20, 17, 3, 3)]
 
 
 def public_cases() -> list[dict]:
@@ -64,16 +70,33 @@ def test_the_sidecars_are_current() -> None:
 def test_the_footprint_is_the_one_the_score_was_measured_at() -> None:
     rows = build()
     w, h = max(map(len, rows)), len(rows)
-    assert (w, h) == (24, 25)
+    assert (w, h) == (23, 25)
     assert max(w, h) == SIDE
 
 
 # ── the shape of the grid, before anything is run ─────────────────────────────
 def test_five_rooms_and_five_pipes(machine: FastLittleman) -> None:
     """A pipe that fails to parse leaves the grid loading and the `s` silently
-    rebound, so the count is asserted rather than assumed."""
+    rebound, so the count is asserted rather than assumed.
+
+    `FastLittleman`'s count is **not** sufficient — see `test_pipe_mouths`: it
+    misses pipes the reference engine makes.  `test_exactly_five_pipe_mouths` is
+    the check that would have caught what shipped.
+    """
     assert len(machine.pipes) == 5
     assert len(machine.rooms) == 5
+
+
+def test_exactly_five_pipe_mouths() -> None:
+    """Count the pipes the way the *runtime* does: one per arrowhead with a room
+    wall behind it.  The grid that shipped drew five and the engine made seven,
+    because two corridor cells turned south under `CLASS`'s south wall, and the
+    classifier's four sends then split across three queues.
+    """
+    rows = build()
+    mouths = pipe_mouths(rows, wall_cells(BOXES))
+    assert len(mouths) == 5, sorted(mouths)
+    check_no_phantom_pipes(rows, BOXES)
 
 
 def test_no_pipe_op_is_left_without_a_pipe(machine: FastLittleman) -> None:
@@ -149,26 +172,64 @@ def test_every_string_through_length_four(machine: FastLittleman) -> None:
     assert checked == 1_555
 
 
-# ── the slow tier: the reference engine, and the score it scores ──────────────
+# ── the slow tier: the REFERENCE engine, which is the only oracle here ───────
+#
+# `FastLittleman` gets this program wrong -- see `test_pipe_mouths` -- so the
+# fast-tier engine cases above are a smoke test and nothing more.  Correctness is
+# whatever `LM_VALIDATOR=reference optimize.verify` says, and that is the check
+# that failed on the grid that shipped while a 9,331-string `FastLittleman` sweep
+# and a clean `score_program` both said it passed.
 @pytest.mark.slow
-def test_every_string_through_length_five(machine: FastLittleman) -> None:
-    for size in (5,):
-        for chars in itertools.product(sorted(LEGAL), repeat=size):
-            text = "".join(chars)
-            result = machine.run(encoded(text), expected=[expected_answer(text)],
-                                 max_ticks=8_000)
-            assert result.passed, (text, result.fatal, result.output)
+def test_the_reference_engine_passes_every_public_case() -> None:
+    from randomfun2026solvers import optimize
+
+    os.environ["LM_VALIDATOR"] = "reference"
+    result = optimize.verify(SOLUTION, "brackets")
+    failed = [c for c in result.cases if not c.passed]
+    assert result.passed, [(c.name, c.detail) for c in failed]
+
+
+def sweep(texts) -> None:
+    """Judge `texts` on the reference engine, the way the contest does.
+
+    `Littleman.run` is no use here: the classifier ends every case blocked on a
+    dry input pipe rather than halted, so `run` always reaches its tick cap.
+    `verify` uses engine-side round gating, which settles on the output instead.
+    """
+    from randomfun2026solvers import optimize
+
+    os.environ["LM_VALIDATOR"] = "reference"
+    problem = {"publicTestData": [
+        {"name": t or "<empty>", "in": [str(v) for v in encoded(t)],
+         "out": [str(expected_answer(t))]} for t in texts]}
+    result = optimize.verify(SOLUTION, problem)
+    assert result.passed, [(c.name, c.detail) for c in result.cases if not c.passed]
 
 
 @pytest.mark.slow
-def test_the_reference_engine_agrees_and_the_score_beats_the_goal25_parser() -> None:
-    """The score is `max(w,h)^2 x mean ticks`, measured on the bundled reference
-    interpreter — the same one the contest scores with."""
+def test_the_reference_engine_agrees_on_every_string_through_length_three() -> None:
+    """An exhaustive sweep is only worth the engine it is run against.  Lengths
+    four and five, and every nesting shape to 64 characters, were swept the same
+    way by hand; three is what fits a test run."""
+    sweep("".join(c) for size in range(4)
+          for c in itertools.product(sorted(LEGAL), repeat=size))
+
+
+@pytest.mark.slow
+def test_the_reference_engine_agrees_on_the_bound_cases() -> None:
+    """Depth 32, length 64, and the corners either side of both."""
+    sweep(case.text for case in CASES)
+
+
+@pytest.mark.slow
+def test_the_score_beats_the_goal25_parser() -> None:
+    """`score_program` compares output *content* as of `22a081d`; before that it
+    only matched output *length*, which is how `[35]` scored as clean."""
     from randomfun2026solvers.littleman import Littleman
     from randomfun2026solvers.scoring import score_program
 
-    os.environ.setdefault("LM_VALIDATOR", "reference")
+    os.environ["LM_VALIDATOR"] = "reference"
     result = score_program(SOLUTION, "brackets", lm=Littleman())
-    assert (result.width, result.height) == (24, 25)
+    assert (result.width, result.height) == (23, 25)
     assert result.area2 == SIDE ** 2
-    assert result.score < GOAL25_SCORE / 4, result.score
+    assert result.score < GOAL25_SCORE / 3, result.score
