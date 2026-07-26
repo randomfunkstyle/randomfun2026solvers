@@ -121,7 +121,59 @@ the same bound :mod:`dataflow_relay` measures for a `counted_ring`.
 :func:`walk` counts ring words moved and branch steps and turns them into ticks
 with :data:`TICKS`.  The bound that matters is the product
 `2^hL * (2^hR + 1)`, which is `2^20 + 2^12` for `n = 20` however adversarial the
-input; at 5 ticks a word that is 5.25M, and the per-lap overhead adds ~1.8M.
+input; at 5 ticks a word that is 5.26M, and the per-lap overhead adds ~1.3M.
+
+`TICKS["scan"] = 5` is **not** a model.  ``subset_sum_scan_probe`` is the same
+gadget as a standalone grid, and moving the hit down a 100-word ring gives
+5.000 ticks a word at every one of five spacings on the reference engine.
+
+## What is built, and what is not
+
+Built and checked in: this model, and `tasks/solutions/subset-sum_scan_probe.man`
+— the scan station, its ring, and the measurement above.
+
+**Not built: the solver grid.** The remaining machine is one worker room with the
+same north-wall column-band discipline the probe uses (I/O west, ring V in the
+middle, ring B east), plus two turnaround rooms.  The blocks, in order, with the
+register conventions each one relies on:
+
+``INIT``
+    `r`(in) `M` `8` `W` `-` gives `hL = n - 8` in A; `b` parks it in BP for the
+    left-value loop; `M` `1` `{` gives `GL = 1 << hL`.  Then five sends build the
+    header: `1`, `GL`, `GL`, `256`, `256` — the counter and its guard are the same
+    word twice on each side, which is why no literal longer than a digit is ever
+    needed and the grid holds **no backticks at all**, so the vertical-pairing
+    load error cannot arise.  Two more sends start ring B at `[1, -1]`.
+
+``LEFTVALS`` / ``RIGHTVALS``
+    `d`-counted loops.  The right one carries the ring-B doubling pass in its
+    body: `r`(B), `X` on the sign — a stored word is biased so it is `>= 1`, and
+    only the sentinel is negative — then `s`, `+`, `s` on the element lane and a
+    lone `s` on the sentinel lane.  BP is untouched by `r`/`s`/`+`/`X`, so the
+    outer count survives the inner pass without a second counter.
+
+``TAIL``
+    `r`(in) is `t`; send `-(t+1)`, then `2`, then `0` for `MT`, `MR`, `RR`.
+    `MR` starts at 2 and the ``TOTALR`` lap turns it into `totalR + 2` by reading
+    it with `B = totalR` already in hand and one `+`.
+
+``PHASE2`` (the hot block, `2^hL` laps)
+    prologue over `ONE, C, G, CR, GR`; the guarded bit reversal (`d` to test, `{`,
+    `x`, `+`, `]`); the peel over the values, ending on `MB`; the rotate to `MT`;
+    then `+` `N` for `r + 1`, the two `b`/`d` range tests, the `RR` write, and the
+    scan.  A, B and BP carry the ring word, the running sum and the mask, in that
+    order, and nothing else is ever live.
+
+``PHASE3`` / ``EMIT``
+    the same lap shape with `CR` driving it, then four laps that count the bits of
+    each half, emit `k`, and emit the two halves' chosen values in turn — left
+    before right *is* increasing index order, which is why no combined mask and no
+    output buffer are needed.
+
+The two things to get right are the ones that killed the earlier attempts: every
+`r`/`s` must sit in its column band (check with `route-check.mjs` and assert the
+pipe **count**), and each ring's pipes must be strictly longer than their
+contents or a send blocks behind its own backlog and deadlocks in silence.
 """
 
 from __future__ import annotations
