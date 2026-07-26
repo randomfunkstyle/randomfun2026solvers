@@ -15,19 +15,18 @@ where a rotation costs the two glyphs that perform it instead of a tape
 revolution. See ``programs/matmul.asm`` for the loop order that makes matmul a
 streaming problem, and ``tests/test_lm1_stream.py`` for the block itself.
 
-Measured on the reference interpreter, 86x90 (footprint 8100), tape N=16:
+Measured on the validator, 84x85 (footprint 7225), tape N=16:
 
     case                   settles at    vs 5M cap   instructions   MACs
-    2x2 warm up                13,524       0.003x             98      8
-    non-square 2x3x2           17,136       0.003x            116     12
-    identity (4x4x4)           35,472       0.007x            216     64
-    negative heavy (5x6x4)     60,884       0.012x            347    120
-    skinny 16x2x16             66,024       0.013x            420    512
-    max magnitude 7x5x9        70,220       0.014x            402    315
-    16x16x16 full size        470,568       0.094x          2,436  4,096
+    2x2 warm up                13,389       0.003x             98      8
+    non-square 2x3x2           17,057       0.003x            116     12
+    identity (4x4x4)           35,445       0.007x            216     64
+    negative heavy (5x6x4)     61,135       0.012x            347    120
+    skinny 16x2x16             65,077       0.013x            420    512
+    max magnitude 7x5x9        70,383       0.014x            402    315
+    16x16x16 full size        475,893       0.095x          2,436  4,096
 
-**7/7 public cases on the real engine**, worst case 10.6x inside the cap, and
-``scoring.score_program`` returns 8100 x 104,832.57 = **849,143,828.57**.
+**7/7 public cases**, worst case 10.5x inside the cap.
 
 The instruction column is the one to watch. A parallel measurement put the
 engine's non-memory instruction at ~46 ticks, which makes instruction *issue* a
@@ -75,13 +74,13 @@ slow = pytest.mark.skipif(
 #: are scoring reference points; the engine assertions use them as correctness
 #: upper bounds, so a future speedup does not require a test edit.
 REAL_TICKS = {
-    "2x2 warm up": 13_524,
-    "non-square 2x3x2": 17_136,
-    "identity": 35_472,
-    "negative heavy": 60_884,
-    "skinny 16x2x16": 66_024,
-    "max magnitude 7x5x9": 70_220,
-    "16x16x16 full size": 470_568,
+    "2x2 warm up": 13_389,
+    "non-square 2x3x2": 17_057,
+    "identity": 35_445,
+    "negative heavy": 61_135,
+    "skinny 16x2x16": 65_077,
+    "max magnitude 7x5x9": 70_383,
+    "16x16x16 full size": 475_893,
 }
 
 #: ``(instructions, multiply-accumulates)`` per case, from the emulator. The ratio
@@ -306,8 +305,8 @@ def test_the_checked_in_grid_matches_the_generator() -> None:
 def test_the_checked_in_machine_is_the_recorded_size() -> None:
     """Fast score/plan pin; the expensive generator equality check is in slow."""
     rows = GRID.read_text(encoding="utf-8").rstrip("\n").splitlines()
-    assert (max(map(len, rows)), len(rows)) == (86, 90)
-    assert max(max(map(len, rows)), len(rows)) ** 2 == 8100
+    assert (max(map(len, rows)), len(rows)) == (84, 85)
+    assert max(max(map(len, rows)), len(rows)) ** 2 == 7225
     assert machine.plan(programs.load(SLUG)).k == 3
     assert machine.TAPE_SIZE[SLUG] == 16
     assert machine.ROM_ROWS[SLUG] == 5
@@ -374,15 +373,7 @@ def test_the_score_is_real() -> None:
     from randomfun2026solvers.scoring import score_program
 
     got = score_program(GRID, SLUG)
-<<<<<<< HEAD
-    # 8100, not the 9216 this pinned for a while: 96² was the shape before the ROM
-    # packing landed, and because the assertion is gated behind LM1_SLOW it went stale
-    # unnoticed. `matmul` is 86x90 and is the one program `ADAPTER_TAPE_GAP` did *not*
-    # move (it is pinned to 6 by `ADAPTER_TAPE_GAP_FOR`), so this is the same number it
-    # has been for some time — it agrees with the shape pinned at the top of this file.
-=======
->>>>>>> b016681 (Compact LM-1 jump read loops)
-    assert got.area2 == 8100
+    assert got.area2 == 7225
     assert abs(got.avg_ticks - sum(REAL_TICKS.values()) / 7) < 500
     assert 0.75e9 < got.score < 1.0e9
     assert max(c.ticks for c in got.cases) < TICK_CAP

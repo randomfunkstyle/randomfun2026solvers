@@ -76,7 +76,7 @@ def test_the_cpu_build_is_left_alone() -> None:
     """
     cpu = ROOT / "tasks" / "solutions" / "tcp_cpu.man"
     rows = cpu.read_text().rstrip("\n").split("\n")
-    assert (max(len(r) for r in rows), len(rows)) == (104, 73)
+    assert (max(len(r) for r in rows), len(rows)) == (103, 67)
 
 
 def test_footprint_does_not_regress() -> None:

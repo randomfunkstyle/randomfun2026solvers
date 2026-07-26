@@ -59,7 +59,7 @@ def test_every_pinned_order_is_a_permutation_of_that_programs_unpinned_lanes() -
 
 @pytest.mark.parametrize(
     ("slug", "footprint"),
-    [("brackets", 90**2), ("gradebook", 108**2), ("sudoku-validity", 80**2)],
+    [("brackets", 89**2), ("gradebook", 107**2), ("sudoku-validity", 77**2)],
 )
 @pytest.mark.slow
 def test_the_pinned_order_does_not_cost_footprint(slug: str, footprint: int) -> None:

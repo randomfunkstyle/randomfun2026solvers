@@ -51,8 +51,8 @@ node_required = pytest.mark.skipif(
 
 #: The shape and score this grid was submitted at, so a regression in either
 #: dimension is a failing test rather than a quietly worse score.
-EXPECTED_SHAPE = (123, 128)
-EXPECTED_FOOTPRINT = 16_384
+EXPECTED_SHAPE = (123, 123)
+EXPECTED_FOOTPRINT = 15_129
 
 #: The cheapest public case that ends in a loss — 5 rounds, ~73k engine ticks. A
 #: mis-bound port or an inverted wall test both show up here.
@@ -340,8 +340,8 @@ def test_a_unit_that_answers_nothing_places_where_one_that_answers_cannot(
 # that proves the CPU can do this unaided, and it is what the coprocessor's numbers are
 # measured against.
 RING_GRID = REPO / "tasks" / "solutions" / "snake-ring_cpu.man"
-RING_SHAPE = (121, 135)
-RING_FOOTPRINT = 18_225
+RING_SHAPE = (121, 130)
+RING_FOOTPRINT = 16_900
 
 
 @lru_cache(maxsize=1)

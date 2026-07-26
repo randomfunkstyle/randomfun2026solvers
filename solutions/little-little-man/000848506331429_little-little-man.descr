@@ -1,0 +1,16 @@
+# little-little-man — submission 3cd2e2dc-ce4f-4abd-a7e2-518cb8910272
+
+verdict      done: 28/28 cases, area2 40000, avgTicks 21,212,658, score 848,506,331,429
+submitted    2026-07-26T14:04:18+0300
+grid         200x199
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  2a0a66ff6a93f2bf3590180c5a0b03d8e24bc7d18092e0df65c35a06796f6d1b
+commit       8933b26
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+generator-level compact CPU routing applied to archived CPU baseline

@@ -60,9 +60,8 @@ def test_display_frames_are_judged_in_memory() -> None:
         frames=_expected_frames(case),
     )
     assert result.passed
-    # The adapter corridor and two-read jump loop improvements compose: 105,580
-    # before either change, 105,270 after the corridor, and 104,940 with both.
-    assert result.step == 104_940
+    # Exact checked-in-grid pin: route compaction and the shallower ROM fold.
+    assert result.step == 104_779
     assert result.output == []
 
 

@@ -1,0 +1,16 @@
+# brackets — submission 1a645153-96f1-4b56-87fa-109d8e51973f
+
+verdict      done: 26/26 cases, area2 7921, avgTicks 43,117, score 341,530,366
+submitted    2026-07-26T13:58:18+0300
+grid         89x63
+problem id   5977822a-7bab-4fc5-9fe8-f79583113072
+fingerprint  0049b101cde5a00c220e5b3ce11f5a029ea6d285c58b378bad3006cf1f6915de
+commit       8933b26
+local        brackets: 9/9 public cases, avg 22,344 ticks
+source       tasks/solutions/brackets_cpu.man
+
+runner output:
+Passed 26/26 test cases
+
+notes:
+compact CPU routing: tight ROM/CPU/memory placement
