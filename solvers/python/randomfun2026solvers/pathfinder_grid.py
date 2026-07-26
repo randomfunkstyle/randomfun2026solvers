@@ -85,12 +85,10 @@ east still has to pay for.
 Backticks pair on rows **and columns independently**, and a non-digit caught
 between a vertical pair is a *load* error — the reference engine says
 ``expected a digit or a space between backticks``.  The program needs 20
-multi-digit literals, so 40 backticks, and the only rule that is checkable
-without a global fixpoint is **one backtick per grid column**: the generator
-keeps the set of columns that already hold one and slides the cursor east a
-blank at a time until both delimiters land in fresh ones, dropping to the next
-row if the row runs out.  ``4w = 48`` code columns is what makes that always
-satisfiable, and it is the floor on the band width for that reason alone.
+multi-digit literals, so the generator remembers the row of the most recent
+backtick in every column.  It reuses a column only when every already-emitted
+cell since that delimiter is a digit or blank, exactly rechecking the loader's
+rule rather than imposing the older and costlier one-backtick-per-column rule.
 
 Digits are emitted in *walk* order, so a literal laid down on a westbound row
 reads correctly for the man and backwards in the file.  That is fine: the load
@@ -141,8 +139,7 @@ __all__ = [
 ]
 
 # ── worker geometry ───────────────────────────────────────────────────────────
-#: Columns per band.  4w must be wide enough that the program's 40 backticks can
-#: each own a column; 48 leaves eight spare.
+#: Columns per band.  The current literal and pipe-band placement needs 12.
 BAND_W = 12
 #: West-channel columns.  Every wire runs here; the widest row of the block
 #: graph has ten live wires crossing it, plus the shared entry column.
@@ -375,7 +372,7 @@ class Placer:
     its left.
     """
 
-    def __init__(self, circ: Circuit, backticks: set[int]) -> None:
+    def __init__(self, circ: Circuit, backticks: dict[int, int]) -> None:
         self.c = circ
         self.backticks = backticks
         self.x = self.y = 0
@@ -444,16 +441,26 @@ class Placer:
         """```nnn```, placed so neither delimiter shares a column with another.
 
         Backticks pair vertically as well as horizontally and a live glyph
-        caught between a vertical pair is a load error, so one backtick per grid
-        column is the only rule that is checkable without a global fixpoint.
+        caught between a vertical pair is a load error.  A column may be reused
+        only when every already-emitted cell since its previous delimiter is a
+        digit or blank, which is exactly the loader's rule.
         """
         span = len(digits) + 2
         for _ in range(3):
             while self.ahead >= span + 1:
                 a = self.x
                 b = self.x + (span - 1) * self.dx
-                if a not in self.backticks and b not in self.backticks:
-                    self.backticks |= {a, b}
+                safe_a = a not in self.backticks or all(
+                    self.c.get(a, y).isdigit() or self.c.get(a, y) == " "
+                    for y in range(self.backticks[a] + 1, self.y)
+                )
+                safe_b = b not in self.backticks or all(
+                    self.c.get(b, y).isdigit() or self.c.get(b, y) == " "
+                    for y in range(self.backticks[b] + 1, self.y)
+                )
+                if safe_a and safe_b:
+                    self.backticks[a] = self.y
+                    self.backticks[b] = self.y
                     self.emit("`")
                     for ch in digits:
                         self.emit(ch)
@@ -546,7 +553,7 @@ def worker() -> tuple[Circuit, list[_Block], DebugMap]:
     supers, succ = _superblocks()
     _check_order(succ)
     c = Circuit(IW, 4096, strict_corridors=True)
-    backticks: set[int] = set()
+    backticks: dict[int, int] = {}
     p = Placer(c, backticks)
 
     # ── pass 1: pour the code, one block per row run ─────────────────────────

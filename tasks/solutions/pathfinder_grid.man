@@ -74,7 +74,7 @@
 |                    vMs        {1Ms   <                    |
 |                    >  r~v                                 |
 |                 vs0s0s  <                                 |
-|                 >     rM `64`+    smv                     |
+|                 >     rM`64`+     smv                     |
 |          v                          <                     |
 |         >>v                                               |
 |       vd  <                                               |
@@ -121,13 +121,13 @@
 |        v<         >   r           s-v                     |
 |      v  X                           <                     |
 |       >  >                        rrv                     |
-|     x             b}W`23`     Msrs  <                     |
-|     >    >            rsM    `15`W}bv                     |
-|    x                                <                     |
+|     x                 b}W`23` Msrs  <                     |
+|     >    >            rsM`15`W}bv                         |
+|    x                            <                         |
 |    >     >            rsbv                                |
 |   x                      <                                |
-|   >      >            rsM      `17`W}bv                   |
-|  x                                    <                   |
+|   >      >            rsM   `17`W}bv                      |
+|  x                                 <                      |
 |  >       >            r           rv                      |
 |       v         b4srsr             <                      |
 |     >    >rsM    `48`W}           sv                      |
@@ -140,8 +140,8 @@
 |       v                  <                                |
 |     >    >r           ssssssrsrM1W{v                      |
 |                 v{W`61`     Mrs}rs <                      |
-|                 >     sr}srM       `48`W{v                |
-|                    vM|rM|rM|rMrsrs       <                |
+|                 >     sr}srM `48`W{v                      |
+|                    vM|rM|rM|rMrsrs <                      |
 |                    >  r|M         r|Mv                    |
 |                     vr               <                    |
 |                     > s&Mv                                |
