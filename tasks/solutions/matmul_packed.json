@@ -1,0 +1,356 @@
+{
+  "title": "matmul -- a dataflow ring machine",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "worker",
+      "x": 1,
+      "y": 16,
+      "w": 61,
+      "h": 79,
+      "note": "32 blocks laid by Room",
+      "color": "#f59e0b",
+      "tags": []
+    },
+    {
+      "name": "band:io",
+      "x": 29,
+      "y": 16,
+      "w": 6,
+      "h": 79,
+      "note": "io: r binds col 32, s binds col 31",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:x",
+      "x": 53,
+      "y": 16,
+      "w": 9,
+      "h": 79,
+      "note": "x: r binds col 58, s binds col 57",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:k",
+      "x": 20,
+      "y": 16,
+      "w": 10,
+      "h": 79,
+      "note": "k: r binds col 27, s binds col 26",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:s",
+      "x": 35,
+      "y": 16,
+      "w": 6,
+      "h": 79,
+      "note": "s: r binds col 38, s binds col 37",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:b",
+      "x": 40,
+      "y": 16,
+      "w": 6,
+      "h": 79,
+      "note": "b: r binds col 43, s binds col 42",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:c",
+      "x": 46,
+      "y": 16,
+      "w": 8,
+      "h": 79,
+      "note": "c: r binds col 49, s binds col 48",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:q",
+      "x": 5,
+      "y": 16,
+      "w": 16,
+      "h": 79,
+      "note": "q: r binds col 14, s binds col 13",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "ring:s",
+      "x": 35,
+      "y": 0,
+      "w": 6,
+      "h": 16,
+      "note": "4 cells, holds 1 words",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "ring:q",
+      "x": 11,
+      "y": 0,
+      "w": 6,
+      "h": 16,
+      "note": "6 cells, holds 4 words",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "ring:k",
+      "x": 24,
+      "y": 0,
+      "w": 6,
+      "h": 16,
+      "note": "8 cells, holds 6 words",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "ring:c",
+      "x": 46,
+      "y": 0,
+      "w": 6,
+      "h": 16,
+      "note": "10 cells, holds 8 words",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "ring:x",
+      "x": 55,
+      "y": 0,
+      "w": 6,
+      "h": 16,
+      "note": "360 cells, holds 256 words",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "ring:b",
+      "x": 40,
+      "y": 0,
+      "w": 6,
+      "h": 16,
+      "note": "412 cells, holds 96 words",
+      "color": "#0ea5e9",
+      "tags": []
+    },
+    {
+      "name": "chain:HEAD",
+      "x": 5,
+      "y": 16,
+      "w": 57,
+      "h": 11,
+      "note": "HEAD LOADA_GO LOADB_HEAD",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:BGRP_END",
+      "x": 5,
+      "y": 27,
+      "w": 57,
+      "h": 1,
+      "note": "BGRP_END",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:BGRP_GO",
+      "x": 5,
+      "y": 30,
+      "w": 57,
+      "h": 3,
+      "note": "BGRP_GO BL1 BL1_Z",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:BL1_R",
+      "x": 5,
+      "y": 33,
+      "w": 57,
+      "h": 1,
+      "note": "BL1_R",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:BL2",
+      "x": 5,
+      "y": 35,
+      "w": 57,
+      "h": 1,
+      "note": "BL2 BL2_Z",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:BL2_R",
+      "x": 5,
+      "y": 38,
+      "w": 57,
+      "h": 1,
+      "note": "BL2_R",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:BROW",
+      "x": 5,
+      "y": 40,
+      "w": 57,
+      "h": 18,
+      "note": "BROW BLOAD_DONE CFILL_GO QBUILD",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:BROW_GO",
+      "x": 5,
+      "y": 58,
+      "w": 57,
+      "h": 1,
+      "note": "BROW_GO",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:E1",
+      "x": 5,
+      "y": 60,
+      "w": 57,
+      "h": 1,
+      "note": "E1",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:E2",
+      "x": 5,
+      "y": 62,
+      "w": 57,
+      "h": 1,
+      "note": "E2",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:GEND",
+      "x": 5,
+      "y": 64,
+      "w": 57,
+      "h": 1,
+      "note": "GEND",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:GG2",
+      "x": 5,
+      "y": 67,
+      "w": 57,
+      "h": 3,
+      "note": "GG2 LN2",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:GRP_GO",
+      "x": 5,
+      "y": 72,
+      "w": 57,
+      "h": 7,
+      "note": "GRP_GO GG1 LN1",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:ROW",
+      "x": 5,
+      "y": 81,
+      "w": 57,
+      "h": 1,
+      "note": "ROW FIN",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:ROW_GO",
+      "x": 5,
+      "y": 83,
+      "w": 57,
+      "h": 2,
+      "note": "ROW_GO",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:TBODY",
+      "x": 5,
+      "y": 85,
+      "w": 57,
+      "h": 8,
+      "note": "TBODY MAC TTAIL EMIT_SET",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:TNEXT",
+      "x": 5,
+      "y": 93,
+      "w": 57,
+      "h": 1,
+      "note": "TNEXT",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    }
+  ],
+  "circles": [],
+  "scenarios": [],
+  "lanes": []
+}

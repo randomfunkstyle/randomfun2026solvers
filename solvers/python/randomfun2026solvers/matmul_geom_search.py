@@ -40,10 +40,11 @@ def geometry(order: tuple[str, ...], widths: tuple[int, ...]) -> G.Geometry:
     return G.Geometry(order, order, w, dict(w))
 
 
-def evaluate(geom: G.Geometry, traces) -> tuple[float, int, int, float] | None:
+def evaluate(geom: G.Geometry, traces, *,
+             trim: bool = True) -> tuple[float, int, int, float] | None:
     """``(score, width, height, mean ticks)`` for one geometry, or None if it fails."""
     try:
-        room = G.build_room(G.plan(geom))
+        room = G.build_room(G.plan(geom), trim=trim)
         G.check_room(room)
     except (Collision, RecursionError):
         return None
