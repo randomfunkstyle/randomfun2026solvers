@@ -204,7 +204,10 @@ def _route(c: Circuit, nch: int, edges, glyph_ys, claims: _Claims) -> int:
         target_y = glyph_ys[dst][0]
         step = 1 if target_y > lane_row else -1
         drop = "v" if step > 0 else "^"
-        for ch in range(nch):
+        # East first: a man pays `(start - ch) + (nch - ch)` cells to get out of
+        # the code and back in again, so the *closest* channel to the code is the
+        # cheapest one, and the walk is what the tick count is made of.
+        for ch in reversed(range(nch)):
             leg = [(x, lane_row) for x in range(ch + 1, start)]
             spine = [(ch, yy) for yy in range(lane_row + step, target_y, step)]
             run = [(x, target_y) for x in range(ch + 1, nch)]
@@ -231,12 +234,14 @@ def _route(c: Circuit, nch: int, edges, glyph_ys, claims: _Claims) -> int:
     return used
 
 
-def build_room(worker=WORKER_L, code_w: int = 34, entry: str = "INIT") -> Room:
+def build_room(worker=WORKER_L, code_w: int = 34, entry: str = "INIT",
+               order: list[str] | None = None) -> Room:
     """Lay every block out, then route every edge; widen the bank until it fits."""
     last: Exception | None = None
+    chosen = order
     for nch in range(4, 25):
         geo = geometry(nch, code_w)
-        order = block_order(worker, entry)
+        order = chosen or block_order(worker, entry)
         plans = plan_blocks(order, worker, geo)
         bands, ih = _bands(worker, order, plans)
         glyph_ys = {n: b.ys for n, b in bands.items()}
@@ -291,7 +296,7 @@ def build_room(worker=WORKER_L, code_w: int = 34, entry: str = "INIT") -> Room:
 #     room's north wall on a riser and only ever travelling *east* from it.
 #
 # `audit_bindings` then checks the finished grid rather than the intention.
-BAND_H = 10          # rows above the worker: the relay, and the risers
+BAND_H = 9           # rows above the worker: the relay, and the risers
 WX, WY = 1, BAND_H + 1
 RELAY_X, RELAY_Y = 4, 0
 RING_MIN = 14        # the ring holds 12 words at rest; leave real slack
@@ -339,6 +344,8 @@ def build_grid(code_w: int = 34) -> tuple[list[str], DebugMap, dict[str, object]
         "out_RING": [(ring_out, north - 1), (ring_out, relay_s + 1)],
         # A pipe's first cell must point *away* from its room or it parses as a
         # loose pipe the relay's `s` cannot see, and the machine still loads.
+        # ...and its eastward reach is bounded by the IO band: a return leg that
+        # got any closer would be the nearest incoming pipe to `ri` in INIT.
         "in_RING": [(ring_in + 5, relay_s + 1), (ring_in + 5, relay_s + 2),
                     (ring_in, relay_s + 2), (ring_in, north - 1)],
         "in_IO": [(inp, 3), (inp, north - 1)],
