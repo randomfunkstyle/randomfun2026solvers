@@ -224,10 +224,36 @@ reads a case.  A 3x14 tier is 81x74 and fits the dead space east of the CPU band
 moving those reads off a 3,416-tick tape onto a ~220-tick tier is ~6M ticks, i.e.
 ~30% of the machine, and the biggest single number left anywhere in this document.
 
-Two things block it, both known and neither architectural: `build_grid` raises
-`IndexError` for most shapes (`memory_men_addr.py:214`, a width assumption in the
-band room), and the CPU has exactly one store seam — a second tier needs the
-adapter to route on an address *range* rather than only on the sign.
+The builder's shape limit is now **fixed** (a column base past 99 needed a ninth
+column for its third digit), so the block builds and answers on the engine at any
+size this needs — 7x61 = 427 cells round-trips its highest address.  And its cost
+is measured, by `judge` at one read against nine:
+
+| shape | cells | first read | marginal read |
+|---|---|---|---|
+| 3x14 | 42 | **118** | 15 |
+| 4x25 | 100 | 173 | 15 |
+| 7x61 | 427 | 355 | 15 |
+
+The marginal cost is **15 ticks whatever the size** — it pipelines — but a CPU read
+*blocks*, so what it would pay is the first-read latency: ~118 ticks against the
+tape's **3,416**.  Which gives two designs, and only one of them is worth building:
+
+| | reads a case | avg ticks | footprint | score |
+|---|---|---|---|---|
+| today, 427-slot tape | 10.9M | 20.3M | 41,616 | 8.44e11 |
+| **A: 3x14 hot tier + tape** | 1.6M | **11.0M** | **41,616** (81x74 fits the free space east of the CPU) | **4.6e11** |
+| B: whole store as 7x61 | 1.3M | 10.7M | ~73,984 (the block is 196x215) | 7.9e11 |
+
+B replaces the tape and pays for it in width; **A keeps the tape for the cold
+256-cell grid and puts only the ~40 hot scalars in men**, which is free on
+footprint because the machine already has a 93x111 hole east of the CPU band.
+
+What A needs is the one thing the CPU does not have: **a second store seam**.  The
+adapter routes on the *sign* of the request word today (`+a` read, `-a` write); a
+second tier means routing on its *range* as well, plus `machine.py` placing the
+block and binding four more pipes.  That is the whole remaining job, and it is
+worth ~45% of the score.
 
 The version of the idea that *would* pay is `snake-ring`'s: not swapping the
 store, but taking the big structure *out* of it.  The 256-cell grid in a
