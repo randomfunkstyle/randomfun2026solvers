@@ -943,6 +943,20 @@ def build_cpu(
         )
 
     width = ret_x + 1
+    # ``bottom`` is one *past* the deepest slab's last glyph row, so on most layouts
+    # this row is blank — it holds nothing but the two side walls, and `height =
+    # bottom - 1` renders and binds on every registered machine.  It was worth a row
+    # on `little-little-man` (195x197 -> 195x196, area2 38,809 -> 38,416, judged at
+    # 817,968,537,932) while that machine was height-bound.
+    #
+    # It is not blank everywhere, and it is not worth taking now.  Measured against
+    # this generator, with the whole-machine route compaction in: the row is free on
+    # ten of the eleven machines and changes *no* footprint, because compaction
+    # already put every one of them under its width — including the LLM, which is
+    # 195x192 either way.  On `matmul` it is load-bearing: the memory-response pipe
+    # routes through it, `mem_pad` 0..4 stop binding without it ("'r' at (22, 11)
+    # must bind 'mem_resp'"), and the pad search escapes two columns east to
+    # 87x85 — area2 7,396 -> 7,569, a 2.3% loss and the only footprint it moves.
     height = bottom
     mem_rows = sorted(
         r

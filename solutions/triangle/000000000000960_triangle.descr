@@ -1,0 +1,16 @@
+# triangle — submission fde43da6-35f8-4e56-af40-c7a37af0b536
+
+verdict      done: 19/19 cases, area2 64, avgTicks 15, score 960
+submitted    2026-07-26T15:26:55+0300
+grid         8x8
+problem id   d82d7d2f-4be9-47ad-a3cd-7deb763a76a9
+fingerprint  5c9137cf3d64115969ebabf85ca6262ec74310f44e6ab75e8b93c522bdc9d982
+commit       03f2e49
+local        triangle: 6/6 public cases, avg 15 ticks
+source       tasks/solutions/triangle_hand.man
+
+runner output:
+Passed 19/19 test cases
+
+notes:
+First triangle submission — the problem scored zero until now. Hand-built 8x8 grid (area2 64), 6/6 public cases on the engine at 15 ticks average. The generated LM-1 CPU build (triangle_cpu.man, 36x31, 364 ticks, score ~471,744) also passes 6/6 but is 491x worse, which is the price of generality.
