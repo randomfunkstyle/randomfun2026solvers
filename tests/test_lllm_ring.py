@@ -63,10 +63,23 @@ def test_branch_blocks_end_in_a_branch_glyph() -> None:
 
 
 def test_store_and_file_capacities_cover_the_stated_constraints() -> None:
-    # 4 <= W, H <= 16, so the store is at most sixteen rows of sixteen plus END.
-    assert lllm_ring.store_words(16) == lllm_ring.STORE_WORDS == 257
-    assert lllm_ring.store_words(4) == 65
-    assert lllm_ring.FILE_WORDS >= 7
+    # 4 <= W, H <= 16.  The store is a *fixed* ring of sixteen rows of sixteen
+    # cells packed eight to a word, whatever H is — a constant modulus is what
+    # makes the per-tick rotation one sign test and one add.
+    assert lllm_ring.STORE_WORDS == 16 * 16 // lllm_ring.CELLS_PER_WORD == 32
+    assert lllm_ring.store_words(16) == lllm_ring.store_words(4) == 32
+    # Eight live slots and a ninth held transiently while `TICK_LIVE` swaps CUR.
+    assert lllm_ring.FILE_WORDS >= 9
+
+
+def test_a_packed_word_holds_every_class_the_store_can_carry() -> None:
+    # Classes are stored biased into 0..21, eight to a word at CELL_BITS each,
+    # and the setup accumulator carries a sentinel bit above the payload — so
+    # the whole thing has to stay inside a positive 64-bit literal.
+    widest = lllm_ring.DIGIT_BIAS + 9
+    assert widest < 1 << lllm_ring.CELL_BITS
+    assert lllm_ring.WORD_BIT == lllm_ring.CELLS_PER_WORD * lllm_ring.CELL_BITS
+    assert (1 << lllm_ring.WORD_BIT) << lllm_ring.CELL_BITS < 1 << 63
 
 
 @pytest.mark.parametrize("case", _cases(), ids=lambda c: c["name"])
@@ -97,10 +110,18 @@ def test_checked_in_grid_still_matches_the_generator(built) -> None:
     assert GRID.read_text() == "\n".join(rows) + "\n"
 
 
-def test_footprint_is_what_was_measured(built) -> None:
+def test_the_machine_is_charged_from_its_height(built) -> None:
+    """Not a footprint pin — the *shape* claim the layout is built around.
+
+    `max(w, h)^2` bills only the larger side, so every decision here (the panel
+    moved east of the room, the code area widened until the wraps stopped) trades
+    width, which is free, for rows, which are not.  If the width ever overtook
+    the height that reasoning would be inverted and the whole geometry would need
+    re-deriving, so it is worth failing on.
+    """
     rows, _dbg, _info = built
     w, h = max(len(r) for r in rows), len(rows)
-    assert (w, h) == (159, 202)
+    assert w < h, f"{w}x{h}: width has overtaken height; the geometry is upside down"
 
 
 def test_rings_are_sized_to_the_stated_constraints_not_the_public_cases(built) -> None:

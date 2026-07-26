@@ -64,8 +64,23 @@ CLS_DIR0 = 16  # ^ > v <   DIR = cls - 16   colour 3   (16=N 17=E 18=S 19=W)
 CLS_WALL = 20  # room wall  halt            colour 4
 CLS_AT = 21  # @           like space, but marks the spawn; stored as CLS_SPACE
 
+#: What a wall row's bytes are biased by before they are hashed.
+#:
+#: Rows 0 and `H-1` are entirely room wall, so their `+` and `-` are walls and
+#: everywhere else they are arithmetic — the one thing about a cell the byte does
+#: not say.  The old machine answered it with a per-cell branch on a `WALL` file
+#: slot, which cost a whole block visit on every one of the 256 cells.  Biasing
+#: the byte instead folds the question **into the hash**: the row flag is stored
+#: as 0 or `WALL_BIAS`, one `+` adds it, and `+`/`-` in a wall row land on their
+#: own two table entries.  `(c * 915) >> 8 & 15` is injective over the union;
+#: found by sweeping `(K, S)` over the twelve real glyphs and then sweeping the
+#: bias for two free nibbles.
+WALL_BIAS = 53
+
 #: ASCII -> (class, colour) for every non-digit glyph the decoder can meet.
 GLYPHS: dict[int, tuple[int, int]] = {
+    43 + WALL_BIAS: (CLS_WALL, 4),  # `+` in a wall row
+    45 + WALL_BIAS: (CLS_WALL, 4),  # `-` in a wall row
     32: (CLS_SPACE, 0),  # space
     43: (CLS_ADD, 10),  # +
     45: (CLS_SUB, 10),  # -
@@ -83,10 +98,11 @@ GLYPHS: dict[int, tuple[int, int]] = {
     124: (CLS_WALL, 4),  # |
 }
 
-#: `(c * 29) >> 6 & 15` is injective over :data:`GLYPHS`.  Found by exhaustive
-#: search over `(c * K) >> S & 15` for K < 512, S < 20; there are five such
-#: (K, S) and this is the smallest.
-HASH_MUL, HASH_SHIFT = 29, 6
+#: `(c * 915) >> 8 & 15` is injective over :data:`GLYPHS`, wall-biased entries
+#: included.  Found by sweeping `(K, S)` for injectivity over the twelve plain
+#: glyphs (474 pairs do that) and then sweeping :data:`WALL_BIAS` for a pair that
+#: also lands `+` and `-` on two nibbles nobody else uses.
+HASH_MUL, HASH_SHIFT = 915, 8
 
 
 def hash_index(code: int) -> int:
