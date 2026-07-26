@@ -1399,6 +1399,10 @@ class Machine:
     dsp_glyphs: dict[str, tuple[int, int]] = field(default_factory=dict)
     #: The placed STREAM block, when the program uses one (see ``stream.py``).
     stream: object | None = None
+    #: Cells in the ROM -> CPU corridor, which by ``SPEC.md`` is also its capacity in
+    #: words. The straight corridor is incidental (~30); anything more is ROM-PLUS
+    #: buffering bought on purpose (see :data:`ROM_BUFFER`).
+    rom_capacity: int = 0
     #: Named boxes in grid coordinates: ``name -> (x, y, w, h)``. The generator is
     #: the only thing that knows what any cell *means* — the grid carries no
     #: comments — so it records that here for ``man_debug`` overlays and for
@@ -1490,6 +1494,7 @@ def build(
     short_return: bool | None = None,
     store: str = "tape",
     middle_order: Sequence[str] | None = None,
+    rom_buffer: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -1573,6 +1578,7 @@ def build(
                     packed_rom,
                     short_return,
                     store,
+                    rom_buffer,
                 )
             except MachineError as exc:
                 last = exc
@@ -1622,6 +1628,7 @@ def _assemble(
     packed_rom: bool = True,
     short_return: bool = True,
     store: str = "tape",
+    rom_buffer: int | None = None,
 ) -> Machine:
     cpu = build_cpu(program, p, mem_pad=mem_pad, stream_pad=stream_pad, short_return=short_return)
     W, H = cpu.width, cpu.height
@@ -1654,7 +1661,17 @@ def _assemble(
     # The west margin carries two pipes that must not cross: the ROM corridor runs
     # down column 1, west of the I room, and only turns east on the fetch row —
     # which is far below the I room, so the two never meet.
-    CX, CY = 9, rom_bottom + 6
+    #
+    # ROM-PLUS (``ROM_BUFFER``) buys its queue in the band between the ROM's bottom
+    # wall and the CPU's top, which is otherwise five dead rows. Those rows are above
+    # everything except the ROM, so the snake collides with nothing; it is held inside
+    # the CPU's own columns so it can never be what sets the machine's width, and the
+    # rows it adds push the CPU *down* — free on any machine whose box is set by width.
+    CX = 9
+    band_rows = 0
+    if rom_buffer:
+        band_rows = rom_corridor_rows(rom_buffer, (CX + W + 1) - 1)
+    CY = rom_bottom + 6 + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
     g.blit(CX, CY, cpu.cells)
 
@@ -1662,7 +1679,17 @@ def _assemble(
     # Down the corridor west of the CPU, then east into the wall. The ROM has a
     # single outgoing pipe, so which of its `s` glyphs is nearest does not matter.
     fetch_y = CY + cpu.centre
-    g.draw_pipe([(1, rom_bottom + 1), (1, fetch_y), (CX - 1, fetch_y)])
+    rom_capacity = g.draw_pipe(
+        rom_corridor(
+            want=rom_buffer or 0,
+            x_lo=1,
+            x_hi=CX + W + 1,
+            y_top=rom_bottom + 1,
+            rows=band_rows,
+            fetch_y=fetch_y,
+            wall_x=CX - 1,
+        )
+    )
 
     # ── I room -> CPU west wall at the IN lane's row ─────────────────────────
     # The input pipe goes on the *west* wall too, far from every memory glyph: that
@@ -1860,6 +1887,7 @@ def _assemble(
             band: (CX + x, CY + y) for x, y, _glyph, band in cpu.pipe_glyphs if band in DSP_BANDS
         },
         stream=blk,
+        rom_capacity=rom_capacity,
     )
 
 
@@ -2239,6 +2267,71 @@ ROM_ROWS = {
 }
 
 
+#: **ROM-PLUS**: programs whose ROM corridor is widened into a buffer, and how many
+#: words of it to ask for. Opt-in per slug — an ordinary ROM keeps the straight
+#: corridor, which is two turns and costs nothing.
+#:
+#: The reasoning, which is `rom.py`'s and `ARCH.md` §5.3's: a jump discards
+#: ``2 * ((t - k - 1) mod n)`` words (:func:`rom_words`) — **mod n**, always forward —
+#: so a backward edge makes the CPU wait out the rest of the ROM man's lap, and that
+#: wait is 20-53% of these programs' ticks. Halving the ROM's cells halved it once
+#: already; the man walks 3.46 cells per word on `gradebook` and 2.67 on `tcp`, so a
+#: word arrives roughly every three ticks.
+#:
+#: A pipe is "a FIFO whose capacity equals its length" (``SPEC.md``), so a *long*
+#: corridor is a queue of words already in flight. The CPU spends ~47% of its time in
+#: the memory lanes, and the ROM man refills that queue throughout — so when a backward
+#: jump lands, the discard loop drains a pre-filled buffer at its own speed instead of
+#: pacing the man. Nothing else changes: the corridor still attaches to the CPU's west
+#: wall on the fetch row, and :func:`check_bindings` measures the *attachment point*,
+#: not the route, so a snake binds exactly as the straight run did.
+#:
+#: This is a buffer, not a ring. A true code ring (the ``LOOP`` room of ``ARCH.md``
+#: §3's diagram) would make the CPU re-send every word it reads or the ring drains,
+#: which costs an ``s`` per discarded word and gives back much of the win.
+ROM_BUFFER: dict[str, int] = {}
+
+
+def rom_corridor(
+    *, want: int, x_lo: int, x_hi: int, y_top: int, rows: int, fetch_y: int, wall_x: int
+) -> list[tuple[int, int]]:
+    """Waypoints for a ROM->CPU corridor that buffers ``want`` words.
+
+    ``rows`` boustrophedon rows across ``[x_lo, x_hi]``, then a descent in ``x_lo`` to
+    ``fetch_y`` and one leg east into the CPU wall at ``wall_x``. ``rows`` is even so
+    the snake ends back in ``x_lo`` with the descent column already under it; an odd
+    count would strand it at ``x_hi``, which is over the CPU room.
+
+    **The first cell is always a southward stub at** ``(x_lo, y_top)``, and the snake
+    starts on the row below it. A pipe attaches to the room its first arrow points
+    *away* from, so a corridor that opened by running east would leave that cell
+    pointing along the ROM's bottom wall instead of out of it — the ROM's ``s`` then
+    binds nothing and the machine dies ``no-pipe`` in its first few dozen ticks. With
+    ``rows=0`` this degenerates to exactly the straight corridor.
+    """
+    if rows % 2:
+        raise MachineError(f"rom corridor needs an even row count, got {rows}")
+    pts: list[tuple[int, int]] = [(x_lo, y_top)]
+    for i in range(rows):
+        y = y_top + 1 + i
+        pts += [(x_lo, y), (x_hi, y)] if i % 2 == 0 else [(x_hi, y), (x_lo, y)]
+    pts += [(x_lo, fetch_y), (wall_x, fetch_y)]
+    return pts
+
+
+def rom_corridor_rows(want: int, span: int) -> int:
+    """Even row count whose boustrophedon holds ``want`` words across ``span`` columns.
+
+    Sized from the snake alone and not from the descent it shares with the plain
+    corridor, so the corridor comes out at least ``want`` and usually a little over.
+    Over-provisioning is the safe direction: the buffer is only ever as useful as it
+    is full.
+    """
+    if span < 2:
+        raise MachineError(f"a ROM corridor needs at least 2 columns, got {span}")
+    return 2 * -(-want // (2 * span))
+
+
 #: Slugs that must keep the old, long return path. Letting a simple lane drop early
 #: narrows the CPU, and ``matmul``'s STREAM wiring does not survive that: every one of
 #: 3,600 (fold, mem_pad, stream_pad) combinations fails to place its pipes, all of them
@@ -2281,6 +2374,7 @@ def build_for(slug: str, *, store: str = "tape") -> Machine:
         stream=STREAM_SIZE.get(slug),
         store=store,
         middle_order=LANE_ORDER.get(slug),
+        rom_buffer=ROM_BUFFER.get(slug),
     )
 
 
