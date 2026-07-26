@@ -2,8 +2,8 @@
 
 **Status: shipped and passing.** `tasks/solutions/little-little-little-man_ring.man`
 
-    w x h = 159 x 213     area2 = 45,369     avg_ticks = 1,425,943.50
-    score = 6.47e10       10 / 10 public cases on the engine, worst 5,070,139 ticks
+    w x h = 159 x 204     area2 = 41,616     avg_ticks = 1,387,994.30
+    score = 5.78e10       10 / 10 public cases on the engine, worst 4,932,048 ticks
 
 | piece | where | state |
 |---|---|---|
@@ -349,3 +349,34 @@ So the 14 wraps are **not worth 14 rows**. Each has to be evaluated end to end o
 the built room, not counted, and the first one tried came out negative. That does
 not prove the other 13 all do, but it does mean the lead is worth much less than
 its row count suggests, and each candidate costs a build to price.
+
+## A fall-through that lands east costs nothing
+
+The straight-lane row was 57 of the room's 101 overhead rows, and it exists for one
+reason: to walk the man back **west** to the target's entry at `NC`. A west leg
+reserves the row from the channel bank out to wherever he stopped, which is why
+those rows can never be shared — every horizontal run in this room touches the west
+bank, so one row carries one leg.
+
+But the detour is only needed to *reach* the entry. When the straight successor is
+the next block in order **and** its first glyph stands east of where the predecessor
+stopped, the man does not need the entry at all: he drops one row at his own column
+and keeps walking east into the glyphs. The row is never claimed, so the successor
+moves up into it.
+
+Both conditions carry weight. "Next in order" is what makes the target adjacent once
+the row is skipped; "east of" is what lets him arrive by continuing rather than
+doubling back over glyphs he has already run. 12 of the 40 unconditional edges
+qualify, and 9 of those target `MOVE`, so adjacency decides which ones actually pay.
+
+    159x213, 45,369, 1,425,943.50   ->   159x204, 41,616, 1,387,994.30
+    6.47e10 -> 5.78e10, -10.7%
+
+Ticks improved 2.7%, the same way the dead-lane slice did: a row that is not
+allocated is also a row the returning man does not walk. Live-man count is
+unchanged, so `men x ticks` stays out of play; worst case 4,932,048 against the 15M
+cap. Cumulatively against the shipped 159x222 the two slices are **-19.8%**.
+
+`_droppable` is deliberately a separate pass over `(order, plans)` rather than a
+condition inside the allocator: whether a drop is possible depends on the *target's*
+column, which the allocator does not know while it is still deciding rows.

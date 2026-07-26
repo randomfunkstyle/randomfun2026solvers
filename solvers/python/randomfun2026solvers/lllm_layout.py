@@ -327,9 +327,40 @@ class Room:
     channels: int
 
 
+def _first_col(plan: Plan) -> int:
+    """The column a block's entry walk has to reach before it does anything."""
+    return plan.rows[0].cells[0][0] if plan.rows[0].cells else CODE0
+
+
+def _droppable(order: list[str], plans: dict[str, Plan], worker) -> dict[str, str]:
+    """Fall-throughs that need no straight-lane row, because they fall *east*.
+
+    A straight edge normally costs a whole row: the man walks west from the end of
+    the block to the channel bank, and a west leg reserves the row from the bank
+    out to wherever he started. That is 57 of this room's 101 overhead rows.
+
+    But the detour only exists to get him back to the target's entry at ``NC``. When
+    the target is the very next block *and* its first glyph stands east of where he
+    stopped, he does not need the entry at all — he drops one row at his own column
+    and keeps walking east into it. The row is never claimed, so the successor moves
+    up into it.
+
+    Both conditions matter. "Next in order" is what makes the target's first glyph
+    row adjacent once the row is skipped; "east of" is what lets him reach the
+    glyphs by continuing rather than doubling back.
+    """
+    drop: dict[str, str] = {}
+    for i, name in enumerate(order[:-1]):
+        target = _straight_target(plans[name], worker[name][1])
+        if target == order[i + 1] and plans[name].rows[-1].end < _first_col(plans[target]):
+            drop[name] = target
+    return drop
+
+
 def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, read top to bottom
     order = block_order(worker)
     plans = plan_blocks(order, worker)
+    dropped = _droppable(order, plans, worker)
 
     glyph_ys: dict[str, list[int]] = {}
     south_y: dict[str, int] = {}
@@ -346,7 +377,7 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
         # depends on the walk direction of the last glyph row, so decide both here
         # exactly as the edge loop below will.
         needs_n = needs_s = False
-        needs_st = _straight_target(p, worker[name][1]) is not None
+        needs_st = _straight_target(p, worker[name][1]) is not None and name not in dropped
         if p.branch:
             turns = set(_turn_keys(p.branch).values())
             east = p.rows[-1].east
@@ -396,6 +427,8 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
                 lanes.append((turn, succ[lane]))
         for kind, target in lanes:
             if kind == "straight":
+                if dropped.get(name) == target:
+                    continue  # falls east into the next block; no lane, no channel
                 row = straight_y[name]
                 if glyph_ys[target][0] == row + 1 and target not in chained.values():
                     chained[name] = target
@@ -442,7 +475,17 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
     for name in order:
         p, ys = plans[name], glyph_ys[name]
         last_y, last_row = ys[-1], p.rows[-1]
-        if name in has_straight:  # drop out of the row onto the straight lane
+        if name in dropped:  # falls east: straight down its own column, then on
+            target_y = glyph_ys[dropped[name]][0]
+            c.set(last_row.end, last_y, "v")
+            for yy in range(last_y + 1, target_y):
+                if not c.free(last_row.end, yy):
+                    raise Collision(
+                        f"{name}: drop to {dropped[name]} blocked at "
+                        f"({last_row.end},{yy}) by {c.get(last_row.end, yy)!r}"
+                    )
+            c.set(last_row.end, target_y, ">")
+        elif name in has_straight:  # drop out of the row onto the straight lane
             c.set(last_row.end, last_y, "v")
             if last_y + 1 != straight_y[name] and not c.free(last_row.end, last_y + 1):
                 raise Collision(f"{name}: straight lane blocked below the run")

@@ -50,7 +50,7 @@
       "x": 1,
       "y": 31,
       "w": 26,
-      "h": 181,
+      "h": 172,
       "note": "25 vertical corridors carrying every routed edge",
       "color": "#94a3b8",
       "tags": []
@@ -60,7 +60,7 @@
       "x": 28,
       "y": 31,
       "w": 15,
-      "h": 181,
+      "h": 172,
       "note": "ST pipe ops must stand here; nearest column binds",
       "color": "#1f2937",
       "tags": []
@@ -70,7 +70,7 @@
       "x": 49,
       "y": 31,
       "w": 25,
-      "h": 181,
+      "h": 172,
       "note": "FI pipe ops must stand here; nearest column binds",
       "color": "#1f2937",
       "tags": []
@@ -80,7 +80,7 @@
       "x": 76,
       "y": 31,
       "w": 77,
-      "h": 181,
+      "h": 172,
       "note": "IO pipe ops must stand here; nearest column binds",
       "color": "#1f2937",
       "tags": []
@@ -124,7 +124,7 @@
     {
       "name": "block:ROUND",
       "x": 28,
-      "y": 42,
+      "y": 41,
       "w": 130,
       "h": 2,
       "note": "ri M L2 * sp rq W sq rq sq rq sq rq sq rq sq rq sq",
@@ -136,7 +136,7 @@
     {
       "name": "block:TICK",
       "x": 28,
-      "y": 46,
+      "y": 45,
       "w": 130,
       "h": 1,
       "note": "rq X",
@@ -148,7 +148,7 @@
     {
       "name": "block:ROUND_END",
       "x": 28,
-      "y": 49,
+      "y": 48,
       "w": 130,
       "h": 1,
       "note": "sq rq sq rq sq rq sq rq sq rq sq",
@@ -160,7 +160,7 @@
     {
       "name": "block:TICK_GO",
       "x": 28,
-      "y": 52,
+      "y": 51,
       "w": 130,
       "h": 1,
       "note": "M L1 W - sq rq sq X",
@@ -172,7 +172,7 @@
     {
       "name": "block:TICK_LIVE",
       "x": 28,
-      "y": 55,
+      "y": 54,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq sq rq sq b",
@@ -184,7 +184,7 @@
     {
       "name": "block:SEEK",
       "x": 28,
-      "y": 57,
+      "y": 56,
       "w": 130,
       "h": 1,
       "note": "d",
@@ -196,7 +196,7 @@
     {
       "name": "block:READ",
       "x": 28,
-      "y": 60,
+      "y": 59,
       "w": 130,
       "h": 1,
       "note": "rr sr M",
@@ -208,7 +208,7 @@
     {
       "name": "block:REST",
       "x": 28,
-      "y": 63,
+      "y": 62,
       "w": 130,
       "h": 1,
       "note": "rr X",
@@ -220,7 +220,7 @@
     {
       "name": "block:REST_PUSH",
       "x": 28,
-      "y": 66,
+      "y": 65,
       "w": 130,
       "h": 1,
       "note": "sr",
@@ -232,7 +232,7 @@
     {
       "name": "block:REST_END",
       "x": 28,
-      "y": 68,
+      "y": 67,
       "w": 130,
       "h": 1,
       "note": "sr W",
@@ -244,7 +244,7 @@
     {
       "name": "block:DISPATCH",
       "x": 28,
-      "y": 71,
+      "y": 70,
       "w": 130,
       "h": 1,
       "note": "M L12 W - X",
@@ -256,7 +256,7 @@
     {
       "name": "block:L_DIGIT",
       "x": 28,
-      "y": 74,
+      "y": 73,
       "w": 130,
       "h": 1,
       "note": "M rq sq rq sq rq sq rq W sq rq b sq rq M L8 W",
@@ -268,7 +268,7 @@
     {
       "name": "block:MOVE",
       "x": 28,
-      "y": 77,
+      "y": 75,
       "w": 130,
       "h": 1,
       "note": "sp W sp W x",
@@ -280,7 +280,7 @@
     {
       "name": "block:MV_H",
       "x": 28,
-      "y": 80,
+      "y": 78,
       "w": 130,
       "h": 1,
       "note": "] x",
@@ -292,7 +292,7 @@
     {
       "name": "block:MV_W",
       "x": 28,
-      "y": 82,
+      "y": 80,
       "w": 130,
       "h": 1,
       "note": "M L1 N +",
@@ -304,7 +304,7 @@
     {
       "name": "block:MV_END",
       "x": 28,
-      "y": 84,
+      "y": 82,
       "w": 130,
       "h": 2,
       "note": "M sp L9 sp W sq",
@@ -316,7 +316,7 @@
     {
       "name": "block:MV_E",
       "x": 28,
-      "y": 87,
+      "y": 85,
       "w": 130,
       "h": 1,
       "note": "M L1 +",
@@ -328,7 +328,7 @@
     {
       "name": "block:MV_V",
       "x": 28,
-      "y": 90,
+      "y": 88,
       "w": 130,
       "h": 1,
       "note": "] x",
@@ -340,7 +340,7 @@
     {
       "name": "block:MV_S",
       "x": 28,
-      "y": 92,
+      "y": 90,
       "w": 130,
       "h": 1,
       "note": "M L16 +",
@@ -352,7 +352,7 @@
     {
       "name": "block:MV_N",
       "x": 28,
-      "y": 94,
+      "y": 92,
       "w": 130,
       "h": 1,
       "note": "M L16 N +",
@@ -364,7 +364,7 @@
     {
       "name": "block:J_TREE",
       "x": 28,
-      "y": 97,
+      "y": 95,
       "w": 130,
       "h": 1,
       "note": "+ M L5 W - X",
@@ -376,7 +376,7 @@
     {
       "name": "block:L_HALT",
       "x": 28,
-      "y": 100,
+      "y": 97,
       "w": 130,
       "h": 2,
       "note": "rq sq rq L1 sq rq sq rq sq rq sq rq M sp L9 sp W sp W sp W sq",
@@ -388,7 +388,7 @@
     {
       "name": "block:J_LOW",
       "x": 28,
-      "y": 104,
+      "y": 101,
       "w": 130,
       "h": 1,
       "note": "+ X",
@@ -400,7 +400,7 @@
     {
       "name": "block:L_SPACE",
       "x": 28,
-      "y": 107,
+      "y": 103,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq sq rq sq rq b sq rq M L0 W",
@@ -412,7 +412,7 @@
     {
       "name": "block:J_1234",
       "x": 28,
-      "y": 110,
+      "y": 106,
       "w": 130,
       "h": 1,
       "note": "b x",
@@ -424,7 +424,7 @@
     {
       "name": "block:J_13",
       "x": 28,
-      "y": 113,
+      "y": 109,
       "w": 130,
       "h": 1,
       "note": "] x",
@@ -436,7 +436,7 @@
     {
       "name": "block:L_SUB",
       "x": 28,
-      "y": 115,
+      "y": 111,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq M sq rq - sq rq b sq rq M L10 W",
@@ -448,7 +448,7 @@
     {
       "name": "block:L_M",
       "x": 28,
-      "y": 117,
+      "y": 113,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq rq sq sq rq b sq rq M L12 W",
@@ -460,7 +460,7 @@
     {
       "name": "block:J_24",
       "x": 28,
-      "y": 120,
+      "y": 116,
       "w": 130,
       "h": 1,
       "note": "] x",
@@ -472,7 +472,7 @@
     {
       "name": "block:L_ADD",
       "x": 28,
-      "y": 122,
+      "y": 118,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq M sq rq + sq rq b sq rq M L10 W",
@@ -484,7 +484,7 @@
     {
       "name": "block:L_X",
       "x": 28,
-      "y": 125,
+      "y": 121,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq sq rq sq X",
@@ -496,7 +496,7 @@
     {
       "name": "block:LX_0",
       "x": 28,
-      "y": 128,
+      "y": 124,
       "w": 130,
       "h": 1,
       "note": "rq b sq rq M L3 W",
@@ -508,7 +508,7 @@
     {
       "name": "block:LX_P",
       "x": 28,
-      "y": 130,
+      "y": 126,
       "w": 130,
       "h": 1,
       "note": "rq M L1 + M L3 W & b sq rq M L3 W",
@@ -520,7 +520,7 @@
     {
       "name": "block:LX_N",
       "x": 28,
-      "y": 132,
+      "y": 128,
       "w": 130,
       "h": 1,
       "note": "rq M L1 N + M L3 W & b sq rq M L3 W",
@@ -532,7 +532,7 @@
     {
       "name": "block:J_HIGH",
       "x": 28,
-      "y": 135,
+      "y": 131,
       "w": 130,
       "h": 1,
       "note": "M L5 W - X",
@@ -544,7 +544,7 @@
     {
       "name": "block:J_DIR",
       "x": 28,
-      "y": 138,
+      "y": 134,
       "w": 130,
       "h": 1,
       "note": "M L4 + M",
@@ -556,7 +556,7 @@
     {
       "name": "block:L_DIR",
       "x": 28,
-      "y": 140,
+      "y": 135,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq sq rq sq rq W b sq rq M L3 W",
@@ -568,7 +568,7 @@
     {
       "name": "block:SEEK_STEP",
       "x": 28,
-      "y": 142,
+      "y": 137,
       "w": 130,
       "h": 1,
       "note": "rr sr m",
@@ -580,7 +580,7 @@
     {
       "name": "block:TICK_PAD",
       "x": 28,
-      "y": 144,
+      "y": 139,
       "w": 130,
       "h": 2,
       "note": "rq sq rq sq rq sq rq M sp L9 sp W sp W sp W sq",
@@ -592,7 +592,7 @@
     {
       "name": "block:ROW_GO",
       "x": 28,
-      "y": 147,
+      "y": 142,
       "w": 130,
       "h": 1,
       "note": "M L1 W - sq rq b sq rq sq rq sq",
@@ -604,7 +604,7 @@
     {
       "name": "block:REAL_LOOP",
       "x": 28,
-      "y": 149,
+      "y": 144,
       "w": 130,
       "h": 1,
       "note": "d",
@@ -616,7 +616,7 @@
     {
       "name": "block:PAD_SET",
       "x": 28,
-      "y": 152,
+      "y": 146,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq sq rq sq rq b sq rq sq",
@@ -628,7 +628,7 @@
     {
       "name": "block:PAD_LOOP",
       "x": 28,
-      "y": 154,
+      "y": 148,
       "w": 130,
       "h": 1,
       "note": "d",
@@ -640,7 +640,7 @@
     {
       "name": "block:ROW_END",
       "x": 28,
-      "y": 158,
+      "y": 151,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq sq M L1 W - X",
@@ -652,7 +652,7 @@
     {
       "name": "block:RE_WALL",
       "x": 28,
-      "y": 161,
+      "y": 154,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq L1 sq",
@@ -664,7 +664,7 @@
     {
       "name": "block:RE_NORM",
       "x": 28,
-      "y": 163,
+      "y": 156,
       "w": 130,
       "h": 1,
       "note": "rq sq rq sq rq L0 sq",
@@ -676,7 +676,7 @@
     {
       "name": "block:PAD_CELL",
       "x": 28,
-      "y": 165,
+      "y": 158,
       "w": 130,
       "h": 5,
       "note": "rq sp M L1 + sq L0 sp L0 sr rq sq rq sq rq sq rq sq rq sq m",
@@ -688,7 +688,7 @@
     {
       "name": "block:CELL",
       "x": 28,
-      "y": 171,
+      "y": 164,
       "w": 130,
       "h": 3,
       "note": "rq sp M L1 + sq rq sq rq sq rq sq rq sq rq sq X",
@@ -700,7 +700,7 @@
     {
       "name": "block:REAL_CELL",
       "x": 28,
-      "y": 176,
+      "y": 168,
       "w": 130,
       "h": 1,
       "note": "ri",
@@ -712,7 +712,7 @@
     {
       "name": "block:DEC",
       "x": 28,
-      "y": 179,
+      "y": 171,
       "w": 130,
       "h": 1,
       "note": "M L48 W - X",
@@ -724,7 +724,7 @@
     {
       "name": "block:DEC_D0",
       "x": 28,
-      "y": 182,
+      "y": 174,
       "w": 130,
       "h": 1,
       "note": "L12 sr L8 sp",
@@ -736,7 +736,7 @@
     {
       "name": "block:CELL_TAIL",
       "x": 28,
-      "y": 185,
+      "y": 177,
       "w": 130,
       "h": 1,
       "note": "M L9 W - X",
@@ -748,7 +748,7 @@
     {
       "name": "block:AT_FIX",
       "x": 28,
-      "y": 188,
+      "y": 179,
       "w": 130,
       "h": 1,
       "note": "rq sq M L1 W - M rq W sq rq sq rq sq rq sq rq sq m",
@@ -760,7 +760,7 @@
     {
       "name": "block:CELL_ROT",
       "x": 28,
-      "y": 190,
+      "y": 181,
       "w": 130,
       "h": 1,
       "note": "m",
@@ -772,7 +772,7 @@
     {
       "name": "block:DEC_ASC",
       "x": 28,
-      "y": 192,
+      "y": 183,
       "w": 130,
       "h": 1,
       "note": "+",
@@ -784,7 +784,7 @@
     {
       "name": "block:DEC_TAB",
       "x": 28,
-      "y": 194,
+      "y": 185,
       "w": 130,
       "h": 3,
       "note": "M L29 * M L6 W } M L15 & M L4 * W L51674891514224901 } M L15 & sr M L4 * W L162947623267008 } M L15 & sp",
@@ -796,7 +796,7 @@
     {
       "name": "block:DEC_HI",
       "x": 28,
-      "y": 199,
+      "y": 190,
       "w": 130,
       "h": 1,
       "note": "M L9 W - X",
@@ -808,7 +808,7 @@
     {
       "name": "block:DEC_DIG",
       "x": 28,
-      "y": 202,
+      "y": 193,
       "w": 130,
       "h": 3,
       "note": "+ M L12 + sr L8 sp",
@@ -820,7 +820,7 @@
     {
       "name": "block:DEC_ASC2",
       "x": 28,
-      "y": 206,
+      "y": 197,
       "w": 130,
       "h": 1,
       "note": "+ M L48 +",
@@ -832,7 +832,7 @@
     {
       "name": "block:WALL_CELL",
       "x": 28,
-      "y": 208,
+      "y": 199,
       "w": 130,
       "h": 2,
       "note": "ri L4 sp L10 sr m",
