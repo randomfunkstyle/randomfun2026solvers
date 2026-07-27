@@ -67,6 +67,23 @@ Room B's phase 3 and emit rotate ring V, and a ring only turns if every room on
 it is turning it, so room A forwards for ever.  That is sound because the judge
 stops counting at the final correct output value and **the program need not
 halt** (`littleman/GRADING.md`).
+
+## What it measures
+
+    one room    92x128   area2 16,384   avg 267,010   local 4,374,691,840
+    two rooms   80x 84   area2  7,056   avg 262,399   local 1,851,489,360
+
+x0.423, and the ticks improve rather than trade: `_nosol` stops being a walk to
+the bottom of the grid.  The heat says the same thing from the other side —
+room A's man is 2% stalled and lives in the ring-B scan station, while room B's
+forwarding loop is **83% stalled** and ring B's relay 90%.  Neither turnaround
+is anywhere near the critical path, which is why the relay sweep found nothing.
+
+**Room B sets the charged side, so rows in room B are the only thing left worth
+buying.**  Room A is 60 rows against room B's 74 and the grid is 80 wide against
+84 tall: four rows off room B is `area2` 7,056 -> 6,400, and every one of them
+has to come out of the phase-3-and-emit stack, which is the one part of this
+machine that has already been greedily compacted once.
 """
 
 from __future__ import annotations
@@ -229,7 +246,7 @@ def room_a(stage: str = "full") -> Circuit:
 # The `v` band and the `io` band come out the same as room A's, which is why
 # every block moves across unaltered; the baton gets a band of its own in the
 # east, where `q` and the one `r` that reads it cannot reach ring V.
-B_IW, B_IH = 33, 76
+B_IW, B_IH = 33, 74
 B_ANCHORS = {
     "in": {"v": ssg.VRET_COL, "bat": 31},
     "out": {"io": ssg.OUT_COL, "v": ssg.VFWD_COL},
@@ -247,19 +264,22 @@ B_LOOP_LO, B_LOOP_HI = 14, 25
 #: constants and is drawn through a :class:`~subset_sum_grid._Shifted` canvas, so
 #: six blocks and nine lanes go on agreeing about `P3_HEAD`, `E1_HEAD` and the
 #: rest without a second set of numbers to drift against.
-#: Room B's prologue, row by row.  Every lane gets a row of its own: the `_rot`'s
-#: entry corridor is the one thing three paths all want to reach, and a lane that
-#: drops onto it anywhere but its own merge cell is re-steered in silence.
+#: Room B's prologue, row by row:
 #:
 #:     0,1  the forwarding loop, with the `q` poll and the `a` that leaves it
 #:     2,3  read the baton and branch: `1` walks west into the whole of `_nosol`
-#:     4    found — walk west and drop down column 12
-#:     5    which marker was it?  `M 1 + N` then one `X`
-#:     6,7  the alignment `_rot`, entered along row 6 from column 12
-#:     8    it was `MT`: take `RR` off the ring and drop to phase 3
-#:     9    it was `MB`: climb column 13 and go round the `_rot` again
-B_LOOP_TOP, B_TAKE, B_FOUND, B_TEST, B_ALIGN, B_MT, B_MB = 0, 2, 4, 5, 6, 8, 9
-B_SHIFT = -44                                   # P3_HEAD 54 -> row 10
+#:     4    which marker was it?  `M 1 + N` then one `X`
+#:     5,6  the alignment `_rot`
+#:     7    it was `MT`: take `RR` off the ring and drop to phase 3
+#:
+#: **Three lanes reach the `_rot` and none of them needs a row.**  It already has
+#: a return lane — the one its own `X` takes on a positive word — running west
+#: along row 6 into the `^` that climbs back to its entry, so the arrival from
+#: the baton and the `MB` retry both merge onto that instead of routing around
+#: to the entry cell.  That is the whole of the two rows this prologue lost, and
+#: it is why the entry corridor along row 6 has gone.
+B_LOOP_TOP, B_TAKE, B_TEST, B_ALIGN, B_MT = 0, 2, 4, 5, 7
+B_SHIFT = -46                                   # P3_HEAD 54 -> row 8
 
 
 def room_b(stage: str = "full") -> Circuit:
@@ -279,14 +299,10 @@ def room_b(stage: str = "full") -> Circuit:
     ssg.out(c, 6, B_TAKE + 1)                   # the whole of `_nosol`
     c.set(5, B_TAKE + 1, "H")
 
-    # ── found: walk west and drop into the alignment `_rot` ──────────────────
-    c.set(take, B_FOUND, "<")
-    c.horizontal(B_FOUND, take, 12)
-    c.set(12, B_FOUND, "v")
-    c.vertical(12, B_FOUND, B_ALIGN)
-    c.set(12, B_ALIGN, ">")
-    c.horizontal(B_ALIGN, 12, ssg.VRET_COL - 1)
-    c.set(13, B_ALIGN, ">")                     # where the `MB` retry rejoins
+    # ── found: drop past the test row and turn in along the `_rot`'s own lane ─
+    c.vertical(take, B_TAKE + 1, B_ALIGN + 1)
+    c.set(take, B_ALIGN + 1, "<")
+    c.horizontal(B_ALIGN + 1, take, ssg.VRET_COL + 3)
     ssg._rot(c, ssg.VRET_COL, B_ALIGN)          # on to the first negative word
 
     # `_rot`'s `X` has a **third** exit and this is the one room where it can be
@@ -307,11 +323,8 @@ def room_b(stage: str = "full") -> Circuit:
     c.run(23, B_TEST, "M1+N")
     c.set(27, B_TEST, "X")
     c.set(28, B_TEST, "v")                      # A == 0: that was `MB`
-    c.vertical(28, B_TEST, B_MB)
-    c.set(28, B_MB, "<")
-    c.horizontal(B_MB, 28, 13)
-    c.set(13, B_MB, "^")                        # climb back into the `_rot` entry
-    c.vertical(13, B_MB, B_ALIGN)
+    c.vertical(28, B_TEST, B_ALIGN + 1)
+    c.set(28, B_ALIGN + 1, "<")                 # onto the `_rot`'s return lane
 
     c.vertical(27, B_TEST, B_MT)                # A > 0: that was `MT`
     c.set(27, B_MT, "<")
@@ -376,7 +389,7 @@ GW, GH = 80, BAND + B_IH + 1
 #: contents blocks a send behind its own backlog and deadlocks in silence.
 V_CAP, B_CAP = ssg.V_CAP, ssg.B_CAP
 
-RELAY_X, RELAY_Y = 36, 74                       # ring B's turnaround, in the void
+RELAY_X, RELAY_Y = 20, 73                       # ring B's turnaround, in the void
 
 
 def _boxes() -> list[tuple[int, int, int, int]]:
@@ -450,9 +463,20 @@ def build(stage: str = "full") -> list[str]:
     stamp(g, RELAY_X, RELAY_Y, relay(6, 4))
     m = draw_pipe(g, [(a_bf, wall), (a_bf, 6), (GAP_FWD, 6), (GAP_FWD, RELAY_Y - 2),
                       (RELAY_X + 3, RELAY_Y - 2), (RELAY_X + 3, RELAY_Y - 1)])
-    ret = [(RELAY_X - 1, RELAY_Y + 2), (1, RELAY_Y + 2), (1, 81)]
-    ret += ssg._serpentine(1, GAP_RET - 1, [81, 83, 85])[1:]
-    ret += [(GAP_RET, 85), (GAP_RET, 5), (a_br, 5), (a_br, wall)]
+    if RELAY_Y - 2 <= BAND + A_IH:
+        raise ValueError("ring B's approach runs along room A's south wall")
+    # An **odd** number of serpentine rows, so the last one ends in the east and
+    # the climb back up the gap continues the way it was already going; an even
+    # count leaves it in the west and the return leg crosses its own last row.
+    # The relay is well west of the gap and well north of the serpentine for the
+    # same reason column 48 was reserved in the one-room build: a bend whose
+    # backward cell is a room border is a pipe **the runtime builds and nothing
+    # else reports**.  A first draft put it at the void's south-east corner and
+    # `_mouths` counted eight.
+    rows_b = [GH - 4, GH - 3, GH - 2]
+    ret = [(RELAY_X - 1, RELAY_Y + 2), (1, RELAY_Y + 2), (1, rows_b[0])]
+    ret += ssg._serpentine(1, GAP_RET - 2, rows_b)[1:]
+    ret += [(GAP_RET, rows_b[-1]), (GAP_RET, 5), (a_br, 5), (a_br, wall)]
     m += draw_pipe(g, ret)
     if m < B_CAP:
         raise ValueError(f"ring B holds {m} words, need >= {B_CAP}")
