@@ -36,8 +36,12 @@ COMBOS = ((True, False), (False, True), (True, True))
 
 
 def test_both_registries_default_empty() -> None:
-    """Every checked-in machine stays byte-identical until a slug opts in."""
-    assert machine.TRIM_DEAD_LANES == set()
+    """Every checked-in machine stays byte-identical unless its slug opts in.
+
+    deadman-3d opted into the trim once the taped tier landed (band 63 -> 41,
+    -13.6% on the gate); everything else stays flag-off.
+    """
+    assert machine.TRIM_DEAD_LANES == {"deadman-3d"}
     assert machine.TOP_RETURN_BUS == set()
 
 

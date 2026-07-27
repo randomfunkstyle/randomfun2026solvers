@@ -4285,7 +4285,7 @@ INPUT_NORTH: set[str] = {"deadman-3d"}
 #: for the horizontal ``]`` shifts). Every instruction's decode descent, return
 #: drop and riser shorten with the band. Opt-in per slug so every other
 #: machine's checked-in grid stays byte-identical.
-TRIM_DEAD_LANES: set[str] = set()
+TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the gate
 
 #: Slugs whose CPU gets a **second return bus above the band**: a simple lane
 #: returns over whichever bus is cheaper — the classic drop to the collector

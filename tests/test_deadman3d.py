@@ -659,7 +659,7 @@ def test_the_taped_machine_census_dims_and_first_round_gate() -> None:
     and the frames still judge pixel-clean on the native engine."""
     m = machine.build_for("deadman-3d", store="taped")
     src = "\n".join(m.rows)
-    assert (max(len(r) for r in m.rows), len(m.rows)) == (307, 233)
+    assert (max(len(r) for r in m.rows), len(m.rows)) == (307, 216)
     assert src.count("@") == 20  # no births: static men ARE the census
     from randomfun2026solvers.fast_littleman import FastLittleman
 
