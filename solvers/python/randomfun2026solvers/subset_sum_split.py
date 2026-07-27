@@ -229,7 +229,7 @@ def room_a(stage: str = "full") -> Circuit:
 # The `v` band and the `io` band come out the same as room A's, which is why
 # every block moves across unaltered; the baton gets a band of its own in the
 # east, where `q` and the one `r` that reads it cannot reach ring V.
-B_IW, B_IH = 33, 78
+B_IW, B_IH = 33, 76
 B_ANCHORS = {
     "in": {"v": ssg.VRET_COL, "bat": 31},
     "out": {"io": ssg.OUT_COL, "v": ssg.VFWD_COL},
@@ -259,7 +259,7 @@ B_LOOP_LO, B_LOOP_HI = 14, 25
 #:     8    it was `MT`: take `RR` off the ring and drop to phase 3
 #:     9    it was `MB`: climb column 13 and go round the `_rot` again
 B_LOOP_TOP, B_TAKE, B_FOUND, B_TEST, B_ALIGN, B_MT, B_MB = 0, 2, 4, 5, 6, 8, 9
-B_SHIFT = -42                                   # P3_HEAD 54 -> row 12
+B_SHIFT = -44                                   # P3_HEAD 54 -> row 10
 
 
 def room_b(stage: str = "full") -> Circuit:
