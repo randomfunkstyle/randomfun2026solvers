@@ -65,13 +65,20 @@ __all__ = ["EAST", "WEST", "main_room"]
 # ring-vs-ring rule still holds: `a_ret` stays above `b_ret`.
 FILL_TOP, IN, A_FWD, A_RET = 2, 3, 4, 6
 B_RET, B_FWD, SPARE, PROD = 8, 9, 10, 11
-# Registers spaced four apart: each pair's relay room must span both of its rows.
-RN_RET, RN_FWD = 14, 15
-RM_RET, RM_FWD = 18, 19
-RK_RET, RK_FWD = 22, 23
-CMD = 26
-BAND_T, BAND_B = 1, 27
-IW, IH = 92, 27   # interior row 28 was never used: the band ends at BAND_B
+# Registers spaced four apart: each pair's relay room must span both of its rows, and
+# the topmost room's wall must clear `prod`'s row, since `prod`'s leg runs east over
+# these columns. **rK goes first**, directly under the drive loop's shift run — it is
+# the only register the hot loop touches, and every row between the two is a tick.
+RK_RET, RK_FWD = 18, 19
+RN_RET, RN_FWD = 13, 14
+RM_RET, RM_FWD = 22, 23
+# `cmd` sits directly under the last register pair, and the band ends one row below
+# it. Every row of the band is walked twice by every serpentine turn, and the whole
+# machine's height is MAIN's height plus two fixed bands, so this is two rows off
+# both terms of the score at once.
+CMD = 24
+BAND_T, BAND_B = 1, 25
+IW, IH = 92, 25
 SENTINEL_BUILD = "2M******"          # A = 128 with no backtick literal
 
 WEST = {"in": IN, "b_ret": B_RET, "a_ret": A_RET,
@@ -157,8 +164,14 @@ def main_room() -> tuple[Circuit, int]:
     # The marker test may only touch A and BP, because B is holding the scalar the
     # MAC loop is about to multiply by. `b` copies A into BP and seven `]` shift it
     # arithmetically: 128>>7 is 1 while 99>>7 is 0 and -99>>7 is -1, so `d` turns
-    # for the marker and nothing else. The shifts ride a horizontal run because
-    # nine glyphs will not fit below row 8 inside the band.
+    # for the marker and nothing else.
+    #
+    # The whole fetch is **one column**, and that is what makes it cheap. This loop
+    # runs N*M times and its overhead is a third of the hot case's ticks, so every
+    # cell of it is paid for 256 times: the shifts go *down* the column on their way
+    # to ring rK rather than along a horizontal run that then has to be walked back,
+    # and ring rK's ports sit directly under them (which is why `RK_*` is the topmost
+    # register pair). 88 ticks of walking became 46, and MAIN lost seven columns.
     d0 = w.x + 2
     c.set(d0, BAND_T, "v")
     for y in range(BAND_T + 1, A_RET):
@@ -167,29 +180,23 @@ def main_room() -> tuple[Circuit, int]:
     c.set(d0, A_RET, "r")                      # the scalar
     c.set(d0, A_RET + 1, "M")                  # ... parked in B
     c.set(d0, A_RET + 2, "b")                  # BP = scalar
-    for y in range(A_RET + 3, CMD):
-        c.set(d0, y, " ")
-    c.set(d0, CMD, ">")
-    c.run(d0 + 1, CMD, "]]]]]]]", d=(1, 0))
-    test = d0 + 8
-    c.set(test, CMD, "d")                      # marker -> south into H
-    c.set(test, BAND_B, "H")
+    c.run(d0, A_RET + 3, "]" * 7, d=S)
+    test = A_RET + 10
+    c.set(d0, test, "d")                       # marker -> clockwise off south, west
+    c.set(d0 - 1, test, "H")
 
-    # not the marker: BP = K off its ring, then the MAC loop
-    c.set(test + 1, CMD, "^")
-    c.set(test + 1, CMD - 1, " ")
-    c.set(test + 1, RK_RET, "r")
-    c.set(test + 1, RK_RET - 1, ">")
-    c.set(test + 2, RK_RET - 1, "v")
-    c.set(test + 2, RK_RET, " ")
-    c.set(test + 2, RK_FWD, "s")
-    c.set(test + 2, CMD, "b")
-    c.set(test + 2, BAND_B, ">")
-    c.set(test + 3, BAND_B, "^")
-    for y in range(B_RET, BAND_B):
-        c.set(test + 3, y, " ")
-    c.set(test + 3, B_RET - 1, ">")
-    mx, my = c.counted_loop(test + 4, B_RET - 1, "rs*s")
+    # not the marker: BP = K off its ring, straight on down the same column
+    for y in range(test + 1, RK_RET):
+        c.set(d0, y, " ")
+    c.set(d0, RK_RET, "r")
+    c.set(d0, RK_FWD, "s")
+    c.set(d0, RK_FWD + 1, "b")
+    c.set(d0, RK_FWD + 2, ">")
+    c.set(d0 + 1, RK_FWD + 2, "^")
+    for y in range(B_RET, RK_FWD + 2):
+        c.set(d0 + 1, y, " ")
+    c.set(d0 + 1, B_RET - 1, ">")
+    mx, my = c.counted_loop(d0 + 2, B_RET - 1, "rs*s")
 
     # back-edge: over the top of everything, west, and down to the fetch again.
     # It has to climb all the way to the band's top row, because that is the row the

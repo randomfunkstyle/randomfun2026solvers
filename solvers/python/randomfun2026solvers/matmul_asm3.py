@@ -78,7 +78,7 @@ def serp(sx, sy, rise, foot, legs, step, lo, hi, endx, endy):
     return pts
 
 
-def build(*, legs=5, band_foot=7, verbose=False):
+def build(*, legs=5, legs_b=4, band_foot=7, verbose=False):
     g = _Grid()
     main, _ = mm.main_room()
     live = {k: v for k, v in main.cell.items() if v != " "}
@@ -152,9 +152,9 @@ def build(*, legs=5, band_foot=7, verbose=False):
     # Ring B's band starts one row under the O room and the relay sits one row under
     # the band's last leg — the original spacing left nine empty rows, and height is
     # the binding side of max(w, h).
-    foot_b = oy + 4
+    foot_b = oy + 3
 
-    def ring(name, fwd_row, ret_row, foot, step, endy, wall_side):
+    def ring(name, fwd_row, ret_row, foot, step, endy, wall_side, n_legs=legs):
         """Rise column and relay position are chosen together, with rollback.
 
         A ring's relay must sit **east of its own rise column**: the forward leg
@@ -169,7 +169,7 @@ def build(*, legs=5, band_foot=7, verbose=False):
                     probe.room(rx, endy - 1, rx + RW - 1, endy + RH - 2)
                     probe.blit(rx, endy - 1, RELAY)
                     f = probe.draw_pipe(serp(east + 1, MY + fwd_row, rise, foot,
-                                             legs, step, lo, hi, rx - 1, endy))
+                                             n_legs, step, lo, hi, rx - 1, endy))
                     wall = endy + RH - 2 if wall_side > 0 else endy - 1
                     r = None
                     for col in range(rx + 1, rx + RW - 1):
@@ -194,7 +194,7 @@ def build(*, legs=5, band_foot=7, verbose=False):
 
     caps["a_fwd"], caps["a_ret"] = ring("A", mm.A_FWD, mm.A_RET, band_foot, -1, 1, +1)
     caps["b_fwd"], caps["b_ret"] = ring("B", mm.B_FWD, mm.B_RET, foot_b, +1,
-                                        foot_b + legs + 1, -1)
+                                        foot_b + legs_b + 1, -1, legs_b)
     return g, caps
 
 
