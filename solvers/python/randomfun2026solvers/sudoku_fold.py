@@ -36,6 +36,15 @@ ROUND is written *upside down* -- generated entering at the top and then
 mirrored -- so that its entry lands at the bottom-left where OK's return and
 INIT's return both arrive, and its exit lands at the top-right next to the
 rotation loop.  That is what removes the return corridor: it is one cell.
+
+**This machine is walking-bound with no stall left.**  Sampled every tick over
+the 81-round case (``littleman/tools/heatmap.mjs``), the worker is *0% stalled*
+and its occupancy is flat across 172 cells; the two relay men stall 55% and 88%
+of the time, which is free because they are waiting on the worker rather than
+the other way round.  So neither ring capacity nor pipe latency is on the
+critical path, and the only remaining lever is cells walked a round: ~146, of
+which 96 are glyphs.  See :data:`REJECTED` for the two redesigns that were
+priced against that and lost.
 """
 
 from __future__ import annotations
@@ -299,6 +308,59 @@ def build() -> list[str]:
 def build_grid():
     rows = build()
     return rows, None, {"grid": (max(len(r) for r in rows), len(rows))}
+
+
+# ═══════════════════════════════════════════════════════ priced and rejected ═
+#
+# Both alternatives below are *correct* -- the packed one was run at the op
+# level over all six public cases and agreed on every verdict.  They are
+# rejected on cost, and the cost is recorded here because both look like
+# obvious wins from the outside and neither one is.
+#
+# A. TWO VALUES A WORD.  The store is 9 words of 27 bits = 243 bits and a word
+#    is 64, so two values fit in one (halves at bits 0-26 and 32-58, with 27-31
+#    a guard gap nothing ever writes, so a carry out of bit 26 dies in the gap
+#    instead of reaching the other value's row field).  Five slots instead of
+#    nine, and a delta-rotation over five averages two pops against four: 8 op
+#    ticks a round saved.  It costs 21 glyphs -- `M L2 W /` to split v into
+#    word and half, a mod-5 delta instead of mod-9, one more live value cycling
+#    through the scratch FIFO, and the dance that lifts P into its half at the
+#    end (park P, recycle the word index, pop the half, `M L5 W {`, pop P,
+#    `{`).  Net **+13 op ticks a round**, and the same serpentine search that
+#    sizes ROUND here puts the bigger round at **13 rows against 9** -- side 24
+#    against 20.  Both axes move the wrong way.
+#
+#    It pays on `little-little-little-man` and not here because of where the
+#    cost sits.  There, packing removed *lapping*: 184 word-moves a tick became
+#    6.6.  Here phase tracking already cut the ring to ~17 of 96 op ticks a
+#    round -- 18% -- while ROUND's arithmetic is 71%.  Packing buys down the
+#    cheap term with the expensive one.
+#
+# B. ONE ROOM PER VALUE, systolic.  Nine PE rooms, each holding its own 27-bit
+#    word, operands hopping between neighbours.  The smallest room whose
+#    perimeter walk can carry an `r` and an `s` is 6x4 = 24 cells, so nine are
+#    216 cells before a single compute glyph -- in a grid that is 400 cells
+#    whole -- and each needs pipes on two sides, so they cannot abut.  The hops
+#    do not pay for it either: routing a cell to PE `v` is data-dependent, so
+#    it walks the chain to its own room, averaging 4.5 hops at ~4 ticks a hop
+#    against the ~20 ticks the rotation it replaces already costs.  Dominated
+#    on area, level on ticks.
+REJECTED: dict[str, dict[str, object]] = {
+    "A: two values a word, 5-slot ring": {
+        "round_glyphs": 89,          # against 68
+        "op_ticks_per_round": 108,   # against 95
+        "round_rows": 13,            # against 9, same serpentine search
+        "side": 24,                  # against 20
+        "correct": True,
+    },
+    "B: one room per value, operands hopping": {
+        "rooms": 9,
+        "room_cells_each": 24,
+        "cells_before_any_glyph": 216,
+        "mean_hops_to_the_right_room": 4.5,
+        "correct": True,
+    },
+}
 
 
 if __name__ == "__main__":  # pragma: no cover
