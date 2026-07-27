@@ -72,9 +72,11 @@ Geometry: the same three rules as path_unit, all asserted
 The sprite arms and the backtick discipline
 -------------------------------------------
 
-The pistol arms are chains of one descent column per sprite row run —
-``path_unit``'s MOVE pattern — with colours derived, not spelled: B holds 8
-for the whole arm, so ``3~`` is 11 and ``7~`` is 15 (the engine-verified
+The pistol arms bake the Freedoom-derived sprites (``deadman3d.GUN_IDLE`` /
+``GUN_FIRE`` — see that module's art credits) as chains of one descent column
+per sprite run — ``path_unit``'s MOVE pattern — with colours derived, not
+spelled: B holds 8 for the whole arm, so a digit loads 0..9 and ``(c-8)~``
+loads a..f, e.g. ``3~`` is 11 and ``7~`` is 15 (the engine-verified
 workaround for the backtick pairing traps). The engine also pairs backticks
 **along each row**, and a pair swallows everything between as one numeric
 literal — which is why every sprite descent opens its address literal on the
@@ -169,13 +171,16 @@ TRIE_COL = LEAF0 + LEAF_PITCH * ((1 << TRIE_BITS) - 1) // 2  # 73
 #: code is 0 (the CPU's per-column send is a bare ``MULI 8``) and because its
 #: loop machinery spills ten columns east, and RUN must sit west of HUD so the
 #: serpentine field east of HUD's descent clears RUN's loop columns. Leaves
-#: 4..6 are spare — headroom for later arms (textures, the gun sprite).
+#: 2 and 5 are spare — headroom for later arms (GUN moved from leaf 2 to 1
+#: when the Freedoom-derived sprite's 12 runs outgrew the ten columns before
+#: CURS; each arm's run chain may ride east over a spare leaf, which has no
+#: machinery below the trie's leaf row).
 #: RUN sits on an EASTERN leaf: its literal-free ``/16`` parks the argument in
 #: ring 1 and takes it back with an ``r``, and rule 2 only lets an ``r`` beat
 #: the cmd pipe's north-wall distance from the far-east columns. The sprite
 #: arms fill the west instead (their chains are ``s``-only).
 ARM_LEAF: dict[str, int] = {
-    "COMMIT": 0, "GUN": 2, "CURS": 3, "GUNF": 4, "RUN": 6, "COL": 7,
+    "COMMIT": 0, "GUN": 1, "CURS": 3, "GUNF": 4, "RUN": 6, "COL": 7,
 }
 ARMS: tuple[str, ...] = tuple(ARM_LEAF)
 
@@ -191,6 +196,20 @@ FLOOR = 8
 #: drops the bright variant to the dark shade), and push the mask back — the
 #: FIFO is the rotation. Register flow: A carries the working value, B parks
 #: the one being held across a glyph, the two rings hold everything else.
+#:
+#: Why the mask alphabet is exactly {7, 15} (measured against Freedoom's
+#: STARTAN-family patches, sw17_*/sw19_*, for a richer tile): a mask that
+#: clears any LOW bit changes hue (7 & 11 = 3 turns white walls brown), and a
+#: mask touching bit 3 alone (8, 0) turns far walls — all-dark ``t`` columns —
+#: into black scanlines. So each lap row can only express {seam, keep}, and
+#: the (7,15,15,15) ring + the CPU's parity stripes already ARE the patches'
+#: downscaled character (thin dark seams over alternating panels). The next
+#: step up, a lit bevel row (bright on BOTH stripe columns), needs
+#: ``(c & 7) ^ 8`` — two masks per row — and cannot be scheduled: A+B is the
+#: whole register file (BP is the lap counter, ring 1 carries the packed
+#: cursor), a packed mask pair needs B=16 while B holds the colour, and a
+#: push-back-free circulating ring cannot re-anchor the seam phase at each
+#: column's wall top (the per-command reseed below is what anchors it).
 BAND_BODY = "rM`1024`+sM`16`W/ sWM rW&sW" + " " * 10 + "s"
 #: Floor lap: addr += 64, back to the ring, ADDR, then the baked colour 8.
 FLOOR_BODY = "r+s" + " " * 15 + "s8" + " " * 8 + "s"
@@ -245,12 +264,16 @@ def word(code: int, arg: int) -> int:
 def _pixel_tokens(colors: str) -> list[str]:
     """Colour loads and bare DATA sends for one contiguous sprite run.
 
-    B holds 8 for the whole arm, so the two non-glyph colours are derived:
-    ``b`` (11) is ``3~`` and ``f`` (15) is ``7~`` — no literals, which keeps
-    the sprite columns free of backtick-pairing traps. A repeated colour is a
-    bare send (the panel cursor advances itself).
+    B holds 8 for the whole arm, so every colour is a literal-free load —
+    a bare digit for 0..9 and ``(c-8)~`` (XOR the parked 8) for a..f, e.g.
+    ``b`` (11) is ``3~`` and ``f`` (15) is ``7~`` — which keeps the sprite
+    columns free of backtick-pairing traps. A repeated colour is a bare send
+    (the panel cursor advances itself).
     """
-    loads = {"0": ["0"], "7": ["7"], "8": ["8"], "b": ["3", "~"], "f": ["7", "~"]}
+    loads = {
+        **{"%x" % c: ["%d" % c] for c in range(10)},
+        **{"%x" % c: ["%d" % (c - 8), "~"] for c in range(10, 16)},
+    }
     toks: list[str] = []
     cur = None
     for ch in colors:
@@ -368,7 +391,10 @@ def unit_interior() -> Unit:
     # path_unit's MOVE pattern like the old FLASH arm, generated straight from
     # deadman3d's sprite tables: `addr` -> ADDR, then the run's colour loads
     # and sends walked down the DATA window, linked by blank climb columns.
-    def sprite_arm(x0: int, runs: tuple[tuple[int, int, str], ...]) -> None:
+    def sprite_arm(x0: int, runs: tuple[tuple[int, int, str], ...], bound: int) -> None:
+        """One descent per sprite run, chained east; the chain (and each run's
+        climb column) must stay strictly west of ``bound`` — the next arm's
+        leaf column."""
         a = x0
         for k, (row, col0, colors) in enumerate(runs):
             lit = f"`{row * PANEL_W + col0}`"
@@ -405,13 +431,15 @@ def unit_interior() -> Unit:
                 a += 2
             else:
                 c.vertical(a, y_end - 1, R_COLLECT)
-        if a >= col["COL"] - 1:
-            raise DoomUnitError(f"sprite arm at {x0} spills into column {a}")
+        if a + 1 >= bound:
+            raise DoomUnitError(
+                f"sprite arm at {x0} spills to column {a}, into the arm at {bound}"
+            )
 
     from ..deadman3d import GUN_FIRE, GUN_IDLE
 
-    sprite_arm(col["GUN"], tuple(GUN_IDLE))
-    sprite_arm(col["GUNF"], tuple(GUN_FIRE))
+    sprite_arm(col["GUN"], tuple(GUN_IDLE), bound=col["CURS"])
+    sprite_arm(col["GUNF"], tuple(GUN_FIRE), bound=col["RUN"])
 
     # ── COL: unpack, seed the mask ring, the banded wall loop, the interlude,
     # the floor loop, the drains ─────────────────────────────────────────────

@@ -531,10 +531,12 @@ class DoomUnit:
     #: arm -> command code, read off the 3-bit trie's geometry (a west branch
     #: is a set bit; ``d3_unit.arm_codes`` derives these and the tests pin the
     #: two tables). COL is 0 so the CPU's per-column send is a bare
-    #: ``MULI 8; SND`` with no ``ADDI`` for the code; 2 and 3 are the two
+    #: ``MULI 8; SND`` with no ``ADDI`` for the code; 5 and 2 are the two
     #: spare leaves. RUN lives on an eastern leaf (its arm's ``r`` must beat
-    #: the cmd pipe — rule 2), the write-only sprite arms fill the west.
-    CODES = {"COL": 0, "CURS": 1, "RUN": 4, "GUN": 5, "GUNF": 6, "COMMIT": 7}
+    #: the cmd pipe — rule 2), the write-only sprite arms fill the west —
+    #: GUN on leaf 1 since V5 (code 3): the Freedoom-derived sprite's 12 runs
+    #: outgrew leaf 2's ten columns of headroom before CURS.
+    CODES = {"COL": 0, "CURS": 1, "RUN": 4, "GUN": 3, "GUNF": 6, "COMMIT": 7}
 
     #: One-line contract per arm, quoted into the generated asm's ``.equ C_*`` notes.
     ARM_NOTES = {
@@ -549,18 +551,20 @@ class DoomUnit:
     #: The pistol sprites, (row, first column, hex colours) per contiguous
     #: run — duplicated from ``deadman3d.GUN_IDLE``/``GUN_FIRE`` (the tests
     #: pin the tables equal) to keep this module free of the display model.
+    #: V5: derived from Freedoom's pisga0/pisfa0 (see deadman3d's credits).
     GUN_IDLE = (
-        (30, 30, "0770"), (31, 29, "07f770"), (32, 29, "077770"),
-        (33, 28, "00777700"), (34, 27, "0777777770"), (35, 27, "07788770"),
-        (36, 28, "00778770"), (37, 30, "077870"), (38, 30, "07770"),
-        (39, 31, "0770"),
+        (30, 32, "7"), (31, 31, "770"), (32, 30, "77770"),
+        (33, 29, "7700007"), (34, 29, "710101"), (34, 35, "7"),
+        (35, 29, "7777770"), (36, 28, "77000077"), (37, 28, "33088033"),
+        (38, 27, "0333333338"), (39, 27, "033333388"), (39, 36, "0"),
     )
     GUN_FIRE = (
-        (25, 32, "bb"), (26, 31, "bffb"), (27, 30, "bffffb"), (28, 31, "bffb"),
-        (29, 30, "0770"), (30, 29, "07f770"), (31, 29, "077770"),
-        (32, 28, "00777700"), (33, 27, "0777777770"), (34, 27, "07788770"),
-        (35, 28, "00778770"), (36, 30, "077870"), (37, 30, "07770"),
-        (38, 31, "0770"),
+        (25, 31, "9bb9"), (26, 30, "bffffb"), (27, 29, "3bffff"),
+        (27, 35, "b3"), (28, 31, "9ff9"),
+        (29, 32, "7"), (30, 31, "770"), (31, 30, "77770"),
+        (32, 29, "7700007"), (33, 29, "710101"), (33, 35, "7"),
+        (34, 29, "7777770"), (35, 28, "77000077"), (36, 28, "33088033"),
+        (37, 27, "0333333338"), (38, 27, "033333388"), (38, 36, "0"),
     )
 
     #: ``display.py``'s port numbers, repeated rather than imported to keep this

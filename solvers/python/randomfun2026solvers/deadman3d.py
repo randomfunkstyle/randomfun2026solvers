@@ -176,6 +176,19 @@ the 64x64 grid); 50 words, spelled ``WALK_CHORDS``.
 ``deadman3d_source()`` emits the LM-1 assembly lowered from this model;
 ``tape_slots()`` is its ``.equ`` table (the docstring's slot map plus the
 scalars, numbered consecutively from 296).
+
+Art credits
+-----------
+The pistol sprites (:data:`GUN_IDLE`, :data:`GUN_FIRE`) are derived from the
+**Freedoom** project (https://github.com/freedoom/freedoom, also
+https://freedoom.github.io/) — ``sprites/pisga0.png`` (pistol, idle) and
+``sprites/pisfa0.png`` (muzzle flash), fetched at commit ``d14dbbe``,
+quantized to the ANSI-16 palette at 11x10.  Freedoom content is distributed
+under its BSD-style licence (see the project's COPYING.adoc), which permits
+use and modification with attribution; this credit also rides the generated
+machine's debug sidecar (the ``stream:unit`` region note).  No assets from
+the original DOOM game are used anywhere in this demo — the map and title
+screen are hand-made homages, and the gun is Freedoom's.
 """
 from __future__ import annotations
 
@@ -475,30 +488,40 @@ def fire_bit(cmd: int) -> bool:
     return sign_mod(div(cmd, 16), 2) == 1
 
 
-#: The pistol (V4) — original chunky pixel work, our own homage style: one
-#: contiguous run per sprite row, ``(viewport row, first column, colours)``
-#: with colours as hex digits (0 outline, 7 gray body, 8 shade, f highlight,
-#: b muzzle yellow). The DOOM unit's GUN arm bakes exactly these runs and the
-#: CPU sends ONE command word per frame; ``GUN_FIRE`` is the recoil variant —
-#: the gun a row higher with the muzzle flash blooming above it — sent when
-#: FIRE is held (it replaced V1's bare 8-pixel diamond).
+#: The pistol (V5) — derived from the **Freedoom** project's pistol sprites
+#: (https://github.com/freedoom/freedoom, commit d14dbbe: ``sprites/pisga0.png``
+#: for the idle gun, ``sprites/pisfa0.png`` for the muzzle flash; BSD-style
+#: licence, see the module credits below), hand-quantized into the ANSI-16
+#: palette with the title screen's block-Lab method at 11x10 and tone-flipped
+#: for the panel (the floor is colour 8, so the slide body maps to 7 with its
+#: dark face 8/0 *inside* the outline). Encoding: ``(viewport row, first
+#: column, colours)`` runs of hex digits — 0 outline/openings, 7 slide, 8
+#: shade/grip, 1 the three red detail dots, 3 the tan hand, 9/b/f the muzzle
+#: bloom — a busy row splits into two runs so each fits the GUN arm's descent
+#: windows (d3_unit's lead/body limits). The DOOM unit bakes exactly these
+#: runs and the CPU sends ONE command word per frame; ``GUN_FIRE`` is the
+#: recoil variant — the gun a row higher with the pisfa0 bloom above it —
+#: sent when FIRE is held.
 GUN_IDLE: list[tuple[int, int, str]] = [
-    (30, 30, "0770"),
-    (31, 29, "07f770"),
-    (32, 29, "077770"),
-    (33, 28, "00777700"),
-    (34, 27, "0777777770"),
-    (35, 27, "07788770"),
-    (36, 28, "00778770"),
-    (37, 30, "077870"),
-    (38, 30, "07770"),
-    (39, 31, "0770"),
+    (30, 32, "7"),
+    (31, 31, "770"),
+    (32, 30, "77770"),
+    (33, 29, "7700007"),
+    (34, 29, "710101"),
+    (34, 35, "7"),
+    (35, 29, "7777770"),
+    (36, 28, "77000077"),
+    (37, 28, "33088033"),
+    (38, 27, "0333333338"),
+    (39, 27, "033333388"),
+    (39, 36, "0"),
 ]
 GUN_FIRE: list[tuple[int, int, str]] = [
-    (25, 32, "bb"),
-    (26, 31, "bffb"),
-    (27, 30, "bffffb"),
-    (28, 31, "bffb"),
+    (25, 31, "9bb9"),
+    (26, 30, "bffffb"),
+    (27, 29, "3bffff"),
+    (27, 35, "b3"),
+    (28, 31, "9ff9"),
 ] + [(r - 1, c, colors) for r, c, colors in GUN_IDLE]
 
 #: The live HUD's scalars (V4): ammo starts full and drops one per shot down

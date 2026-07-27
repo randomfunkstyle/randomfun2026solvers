@@ -1991,7 +1991,10 @@ class Machine:
             notes["stream:unit"] = (
                 "the DOOM column painter (lm1/d3_unit.py): one command word per "
                 "viewport column / RLE run / cursor move / gun sprite / COMMIT, "
-                "8*arg + code"
+                "8*arg + code. The baked pistol sprites are derived from the "
+                "Freedoom project (https://github.com/freedoom/freedoom, "
+                "sprites/pisga0+pisfa0, BSD-style licence) — see "
+                "deadman3d.py's art credits."
             )
         for name, (x, y, w, h) in sorted(self.regions.items()):
             kind = name.split(":", 1)[0]

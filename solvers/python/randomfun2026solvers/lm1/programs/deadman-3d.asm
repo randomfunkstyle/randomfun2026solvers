@@ -88,7 +88,7 @@
 .equ C_COL    0            ; arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor
 .equ C_RUN    4            ; arg=count*16+colour: count pixels at the panel's own cursor
 .equ C_CURS   1            ; arg=addr: reposition the panel cursor (the RLE painter's ADDR)
-.equ C_GUN    5            ; arg=0: the baked idle pistol sprite (rows 30..39)
+.equ C_GUN    3            ; arg=0: the baked idle pistol sprite (rows 30..39)
 .equ C_GUNF   6            ; arg=0: the recoil pistol + muzzle flash (rows 25..38)
 .equ C_COMMIT 7            ; arg=0: SWAP 0 — commit the frame, clear next, reset the cursor
 
