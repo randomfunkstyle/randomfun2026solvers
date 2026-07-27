@@ -51,3 +51,16 @@ def test_a_local_average_alone_would_call_a_tie_a_win() -> None:
     assert 18 * 18 * 220 < 118_401  # the optimistic reading
     assert judge_score(18, 220) > 100_000  # what the judge would actually say
     assert judge_score(16, 220) < 118_401  # the first side worth submitting
+
+
+def test_at_sign_is_a_walkable_nop() -> None:
+    """A man who walks back onto his own spawn cell keeps going.
+
+    `@` is absent from the interpreter's `validOps`, so the only way to know
+    whether a restart corridor may run through it is to ask the engine: the man
+    crosses `@` heading north and dies on the wall beyond it, not on `@`.
+    """
+    from randomfun2026solvers.fast_littleman import FastLittleman
+
+    result = FastLittleman("+---+\n|@ v|\n|^ <|\n+---+").run([], max_ticks=50)
+    assert result.fatal == "wall", result.fatal

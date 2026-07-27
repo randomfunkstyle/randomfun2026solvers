@@ -19,12 +19,18 @@ The ring carries its own header: its head slot holds `V`, the number of values
 still stored.  One emit step is
 
     r          V            read the header
-    b m m      BP = V-2     rotations for this step
+    X          V == 0 ends the round
     -          A = V-2      (B = 2)
+    b          BP = A       `b` does not disturb A, so one subtraction serves
+                            both the counter and the branch
     X          three-way branch on V-2
     s          re-send the header
     <rotate>   BP times { r ; s }
     r s r s    read the surfaced pair and send both to the output pipe
+
+`- b` in that order is the whole counter setup: subtract first and `b` copies
+the result into `BP` for free.  The obvious `b m m -` — load `V`, decrement
+twice, then subtract for the branch — is four glyphs for the same state.
 
 `V` walks `n, n-2, …` down to `2` (even `n`) or `1` (odd `n`), and the step
 leaves the ring exactly where it found it — nothing is ever rotated back to a
@@ -133,6 +139,35 @@ is exactly why the odd value must not be sent straight to the output: it goes
 into the ring as the first group instead.  :func:`zone_map` computes the bands
 for any anchor set — moving one anchor off the east wall makes the `x` term stop
 cancelling and turns the bands into quadrants.
+
+## `@` is a walkable nop, so a lane may re-enter its own spawn cell
+
+Measured on **both** engines: a man who walks onto an `@` executes it as a nop
+and keeps his heading (a grid whose only exit past `@` is a wall dies `wall`,
+not `bad-op`).  `@` is not in the interpreter's `validOps`, so this had to be
+probed rather than read.  It matters for layout: a round-restart corridor may
+run *through* the spawn cell instead of needing a separate turn glyph beside it,
+which is otherwise the standard `@` + `>` pair the shipped machine uses.
+
+## What is not built: the placement
+
+The control graph above is verified by hand on `n = 1, 2, 4, 5` and every block
+has a legal band, but it does **not** fit the shipped 10x11 worker interior.
+The binding constraint is the emit region, rows 5-10:
+
+* `EBODY`'s three-way `X` needs free cells north, south *and* west of it;
+* `SINGLE` needs an `s` at `cy <= 8` (the new header) *and* an `s` at
+  `cy >= 9` (the value), so it has to cross a band boundary and come back;
+* `ROTATE`'s exit and `EMITPAIR`'s four cells and the loop-back to the `ETOP`
+  lane all want the same two rows, and `EBODY` cuts row 9 in half.
+
+Every arrangement tried collides on one of those four. Two extra columns
+(`IW = 12`) resolve it, but that is a 20-wide grid, and `judge_score(20, 220)`
+is 137,544 against the live 118,401 — so widening is not a way out. The next
+attempt should either shrink the program further (the `- b` fold above is one
+such win, and removing the `SINGLE` arm entirely would be another) or move a
+pipe anchor off the east wall to turn the bands into quadrants and give the
+emit region two independent axes instead of one.
 """
 
 from __future__ import annotations
