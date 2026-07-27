@@ -146,7 +146,7 @@ BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)
 #: Worker interior.  ``IH`` is set by :data:`NOSOL_ROW` — the deepest thing in the
 #: room is the no-solution emit, and everything below the last code block is the
 #: corridor that reaches it.  One row of slack past that row is all it needs.
-IW, IH = 46, 125
+IW, IH = 46, 121
 
 
 #: Bands used by the block currently being drawn, so :func:`_turned` can refuse
@@ -416,7 +416,7 @@ def _east_to_west(c: Circuit, x: int, y: int, drop: int, height: int, x_entry: i
     return y + height
 
 
-def _south_to_east(c: Circuit, x: int, y: int, x_entry: int) -> int:
+def _south_to_east(c: Circuit, x: int, y: int, x_entry: int, drop: int = 1) -> int:
     """A turned :func:`_rot` leaves heading **south**, so it needs its own turn.
 
     Eastbound, `_rot` exits on the row *above* its body and every caller has to
@@ -427,9 +427,10 @@ def _south_to_east(c: Circuit, x: int, y: int, x_entry: int) -> int:
     c.set(x, y, "<")
     c.horizontal(y, x, WEST_COL)
     c.set(WEST_COL, y, "v")
-    c.set(WEST_COL, y + 1, ">")
-    c.horizontal(y + 1, WEST_COL, x_entry)
-    return y + 1
+    c.vertical(WEST_COL, y, y + drop)
+    c.set(WEST_COL, y + drop, ">")
+    c.horizontal(y + drop, WEST_COL, x_entry)
+    return y + drop
 
 
 def _west_to_east(c: Circuit, x: int, y: int, x_entry: int, drop: int = 1) -> int:
@@ -1038,7 +1039,7 @@ def _scan(c: Circuit) -> None:
 #: with ring V threaded through both, which needs a baton word and an idle relay
 #: loop in whichever room is not the active phase.  Width is free either way:
 #: the grid is 92 wide against a 153 side.
-NOSOL_COL, NOSOL_ROW = 44, 124
+NOSOL_COL, NOSOL_ROW = 44, 120
 
 
 def _nosol(c: Circuit) -> None:
@@ -1132,8 +1133,8 @@ def _phase3(c: Circuit) -> None:
 #: chosen values, then the right half's.  Left before right **is** increasing
 #: index order, which is why no combined mask and no output buffer are needed.
 E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 75, 79, 80, 85, 89
-E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 89, 93, 94, 98, 103, 107
-E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 110, 114, 116, 121
+E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 89, 93, 94, 98, 102, 104
+E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 107, 111, 114, 117
 
 
 def _emit(c: Circuit) -> None:
@@ -1209,10 +1210,15 @@ def _emit(c: Circuit) -> None:
     vs(c, 17, y)
     _link(c, (18, y), E, E2_PEEL - 3, (18, E2_PEEL))
     _peel_emit(c, VRET_COL, E2_PEEL, OUT_COL)
-    _link(c, (22, E2_PEEL - 1), N, E2_MT - 2, (19, E2_MT))
-    _rot(c, VRET_COL, E2_MT)                # on to MT
-    _link(c, (22, E2_MT - 1), N, E2_RR - 2, (14, E2_RR))
-    y = E2_RR
+    # `_peel_emit` cannot be turned — it holds the `v` band's `r` and the `io`
+    # band's `s`, and rotating swaps them — so it stays eastbound and its exit is
+    # still on the row above.  The `_rot` after it is turned, and drops past the
+    # peel's three rows on the way down.
+    c.set(22, E2_PEEL - 1, ">")
+    row = _east_to_west(c, 22, E2_PEEL - 1, 30, 5, 25)
+    _turned(c, 44, row, _rot, VRET_COL, 0)  # on to MT
+    y = _south_to_east(c, 22, row + 1, 14)
+    assert y == E2_RR, (row, y)
     vr(c, 14, y)                            # RR, rotated
     vs(c, 15, y)
     _link(c, (16, y), E, E3_HEAD - 2, (14, E3_HEAD))
@@ -1233,10 +1239,15 @@ def _emit(c: Circuit) -> None:
     row = _east_to_west(c, 30, y, 30, 4, 29)
     _turned(c, 46, row, _bits, 20, 0, shift=True)
     c.run(25, row, "}b", d=W)               # BP = the right mask
-    y = _west_to_east(c, 23, row, 19, drop=2)
-    assert (row, y) == (E3_MASK, E3_SKIP), (row, y)
-    _rot(c, VRET_COL, E3_SKIP)              # skip the left values, stop on MB
-    _link(c, (22, E3_SKIP - 1), N, E3_PEEL - 3, (18, E3_PEEL))
+    # Two turned blocks in a row cannot be chained: this one leaves heading west
+    # at column 23 and the next one is entered heading west at column 25, which
+    # is behind him.  So he goes back east for a row and turns around again.
+    y = _west_to_east(c, 23, row, 30)
+    row = _east_to_west(c, 30, y, 30, 2, 25)
+    _turned(c, 44, row, _rot, VRET_COL, 0)  # skip the left values, stop on MB
+    # `_peel_emit`'s marker exit halts on the row above it, so leave that row.
+    y = _south_to_east(c, 22, row + 1, 18, drop=2)
+    assert (row, y) == (E3_SKIP, E3_PEEL), (row, y)
     _peel_emit(c, VRET_COL, E3_PEEL, OUT_COL)
     c.set(22, E3_PEEL - 1, "H")             # MT: every chosen value is out
 
