@@ -738,3 +738,40 @@ def test_adder2_binds_every_op_with_all_ports_on_one_wall() -> None:
             got = min(pool, key=lambda k: (abs(y - pool[k]), pool[k]))
             assert pool[got] == y, f"{ch!r} at row {y} binds {got!r} on row {pool[got]}"
     assert ops == 10, f"expected 10 pipe ops across three phases, got {ops}"
+
+
+# ── the pipe router ──────────────────────────────────────────────────────────
+def test_bfs_router_finds_a_gap_and_reports_impossibility() -> None:
+    """Routing by search, because hand-derivation does not converge.
+
+    Nine crossing constraints in this build were each found by placing pipes and
+    reading the collision, and a six-pipe test harness was still unsolvable by hand:
+    every pair imposes "A's column must be west of B's" and the conditions contradict
+    in combination.
+
+    `layout.py`'s `AStarRouter` cannot be substituted — it *minimises* pipe length,
+    and a pipe's capacity **is** its length, so it works against rings A and B needing
+    257 cells each. But the pipes left after the rings are placed have no capacity
+    requirement, and a plain search answers exactly the right question: is there a
+    route, and if not, say so.
+    """
+    from randomfun2026solvers.manroute2 import route
+
+    wall = {(5, y): "|" for y in range(0, 9) if y != 4}       # one gap, at row 4
+    path = route(wall, (1, 1), (9, 1), (12, 12))
+    assert path is not None and path[0] == (1, 1) and path[-1] == (9, 1)
+    assert any(y == 4 for _x, y in path), "did not go through the only gap"
+
+    sealed = {(5, y): "|" for y in range(0, 12)}
+    assert route(sealed, (1, 1), (9, 1), (12, 12)) is None, "claimed a route through a wall"
+
+    # a ring must not be shortened below its capacity, so a too-short route is refused
+    assert route({}, (1, 1), (3, 1), (12, 12), min_len=50) is None
+
+
+def test_bfs_router_returns_corners_not_cells() -> None:
+    """`draw_pipe` wants corners; a cell-by-cell path would make every cell a bend."""
+    from randomfun2026solvers.manroute2 import route
+
+    path = route({}, (1, 1), (6, 1), (12, 12))
+    assert path == [(1, 1), (6, 1)], f"straight run not collapsed: {path}"
