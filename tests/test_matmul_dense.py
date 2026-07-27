@@ -149,7 +149,7 @@ def test_the_drawn_room_executes_the_cfg(b: D.Bands) -> None:
 
     room = D.build_room(b)
     G.check_room(room)
-    assert (room.iw, room.ih) == (53, 147)
+    assert (room.iw, room.ih) == (53, 145)
 
 
 def test_the_room_has_exactly_one_spawn(b: D.Bands) -> None:
@@ -270,4 +270,4 @@ def test_every_chain_lays_in_its_own_box(b: D.Bands) -> None:
         assert box.cells
         assert all(0 <= x < D.IW for x, _ in box.cells)
         laid += 1
-    assert laid == 17
+    assert laid == 16

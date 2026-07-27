@@ -10,19 +10,79 @@
       "x": 1,
       "y": 16,
       "w": 64,
-      "h": 81,
-      "note": "32 blocks in 17 fall-through chains",
+      "h": 79,
+      "note": "32 blocks laid by Room",
       "color": "#f59e0b",
       "tags": []
     },
     {
-      "name": "channels",
-      "x": 1,
+      "name": "band:io",
+      "x": 30,
       "y": 16,
-      "w": 9,
-      "h": 81,
-      "note": "8 corridors carrying 28 routed lanes",
-      "color": "#94a3b8",
+      "w": 7,
+      "h": 79,
+      "note": "io: r binds col 34, s binds col 33",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:x",
+      "x": 55,
+      "y": 16,
+      "w": 10,
+      "h": 79,
+      "note": "x: r binds col 60, s binds col 59",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:k",
+      "x": 21,
+      "y": 16,
+      "w": 10,
+      "h": 79,
+      "note": "k: r binds col 27, s binds col 26",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:s",
+      "x": 37,
+      "y": 16,
+      "w": 6,
+      "h": 79,
+      "note": "s: r binds col 40, s binds col 39",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:b",
+      "x": 42,
+      "y": 16,
+      "w": 6,
+      "h": 79,
+      "note": "b: r binds col 45, s binds col 44",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:c",
+      "x": 48,
+      "y": 16,
+      "w": 8,
+      "h": 79,
+      "note": "c: r binds col 51, s binds col 50",
+      "color": "#1f2937",
+      "tags": []
+    },
+    {
+      "name": "band:q",
+      "x": 10,
+      "y": 16,
+      "w": 12,
+      "h": 79,
+      "note": "q: r binds col 16, s binds col 15",
+      "color": "#1f2937",
       "tags": []
     },
     {
@@ -71,7 +131,7 @@
       "y": 0,
       "w": 6,
       "h": 16,
-      "note": "370 cells, holds 256 words",
+      "note": "362 cells, holds 256 words",
       "color": "#0ea5e9",
       "tags": []
     },
@@ -81,7 +141,7 @@
       "y": 0,
       "w": 6,
       "h": 16,
-      "note": "422 cells, holds 96 words",
+      "note": "414 cells, holds 96 words",
       "color": "#0ea5e9",
       "tags": []
     },
@@ -266,24 +326,12 @@
       ]
     },
     {
-      "name": "chain:TBODY",
+      "name": "chain:TNEXT",
       "x": 10,
       "y": 87,
       "w": 55,
       "h": 8,
-      "note": "TBODY MAC TTAIL EMIT_SET",
-      "color": "#22c55e",
-      "tags": [
-        "block"
-      ]
-    },
-    {
-      "name": "chain:TNEXT",
-      "x": 10,
-      "y": 95,
-      "w": 55,
-      "h": 1,
-      "note": "TNEXT",
+      "note": "TNEXT TBODY MAC TTAIL EMIT_SET",
       "color": "#22c55e",
       "tags": [
         "block"
