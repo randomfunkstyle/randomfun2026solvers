@@ -4,8 +4,9 @@
 ;   from randomfun2026solvers.lm1.programs import PROGRAM_DIR
 ;   (PROGRAM_DIR / "deadman-3d.asm").write_text(deadman3d_source())
 ;
-; lodev.org's raycaster_flat.cpp on the LM-1: DOOM's E1M1, quantized to a
-; 64x64 grid, walked first person at 64x48 on the LM-75 — one frame per input
+; lodev.org's raycaster_flat.cpp on the LM-1: Freedoom Phase 1's E1M1 (real
+; level geometry, imported from levels/e1m1.wad @ d14dbbe by wadimport.py),
+; walked first person at 64x48 on the LM-75 — one frame per input
 ; word, and each word is a MUX of the keys held that frame: bit0 (1) W fwd,
 ; bit1 (2) S back, bit2 (4) A left, bit3 (8) D right, bit4 (16) space FIRE
 ; (muzzle-flash overlay); 0 idle, higher bits ignored. Turn first (A/D
@@ -156,11 +157,11 @@ boot:   IN                  ; the next preamble word
         ST  PLANEY
 
 
-; ── title: the DOOM-homage title screen — round 0's one frame ────────────────
-; The next 968 input words are PRE-ENCODED unit commands (title_words():
+; ── title: Freedoom's title art (titlepic @ d14dbbe) — round 0's one frame ───
+; The next 429 input words are PRE-ENCODED unit commands (title_words():
 ; one RUN word per RLE run of TITLE_HEX_ROWS, 8*(count*16 + colour) + C_RUN),
 ; so the CPU forwards each word untouched — IN; SND, 8 pairs per counted
-; lap (121 laps) — and the unit paints the runs at the panel's
+; lap (53 laps + 5 straight-line pairs) — and the unit paints the runs at the panel's
 ; own auto-advancing cursor, concurrently. One COMMIT ends round 0.
         LDI 0
         ST  PTR             ; PTR now counts title laps
@@ -182,8 +183,18 @@ title:  IN                  ; the next pre-encoded RUN word
         SND
         INCM PTR
         LD  PTR
-        SUBI 121
-        BRN title           ; keep looping while PTR < 121
+        SUBI 53
+        BRN title           ; keep looping while PTR < 53
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
         LDI C_COMMIT
         SND                 ; commit: the title screen is round 0's frame
         LDI 50
@@ -257,6 +268,9 @@ turn0:  LD  BA
         ST  DIRX
 
 ; ── then move, along the NEW heading: s = W - S, cancelling when both held ───
+; A move is 2 cells, so each axis checks TWO cells — the half-way cell
+; (delta DIVI 2, floored like the model's div) and the destination — real level
+; geometry has one-cell walls, and a destination-only check would tunnel.
 mvchk:  LD  BW
         SUB BS
         BRZ render          ; no net move: just render
@@ -264,10 +278,11 @@ mvchk:  LD  BW
         LD  DIRX
         MUL TMP
         MULI 2
-        DIVI 1              ; floor(dirX * s * 2 / 1) — the two-cell step
+        DIVI 1              ; deltaX = floor(dirX * s * 2 / 1)
+        DIVI 2
         ADD POSX
-        ST  NEWX            ; newX
-        ; collision X: map_cell(newX / 1024, posY / 1024), inlined
+        ST  NEWX            ; midX = posX + deltaX/2, the half-way cell
+        ; collision X (half-way): map_cell(midX / 1024, posY / 1024), inlined
         LD  POSY
         DIVI 1024
         ST  TMP2            ; mapY (ST preserves ACC)
@@ -283,7 +298,24 @@ mvchk:  LD  BW
         MULI 4
         ADD TMP2
         ADDI MAPB
-        LDA                 ; the packed quarter-column of newX's cell
+        LDA                 ; the packed quarter-column of midX's cell
+        DIV PW
+        MODI 16
+        BRZ okx             ; half-way open -> check the destination
+        JMP movey           ; wall -> posX unchanged
+okx:    LD  DIRX
+        MUL TMP
+        MULI 2
+        DIVI 1
+        ADD POSX
+        ST  NEWX            ; newX = posX + deltaX
+        ; collision X (destination): map_cell(newX / 1024, posY / 1024)
+        LD  NEWX
+        DIVI 1024
+        MULI 4
+        ADD TMP2            ; PW and the selector still hold posY's row
+        ADDI MAPB
+        LDA
         DIV PW
         MODI 16
         BRZ comx            ; empty -> commit posX
@@ -293,10 +325,39 @@ comx:   LD  NEWX
 movey:  LD  DIRY
         MUL TMP
         MULI 2
+        DIVI 1              ; deltaY
+        DIVI 2
+        ADD POSY
+        ST  NEWY            ; midY = posY + deltaY/2
+        ; collision Y (half-way): map_cell(posX / 1024, midY / 1024) — the UPDATED posX
+        LD  NEWY
+        DIVI 1024
+        ST  TMP2
+        MODI 16
+        ADDI POWB
+        LDA
+        ST  PW
+        LD  TMP2
+        DIVI 16
+        ST  TMP2
+        LD  POSX
+        DIVI 1024
+        MULI 4
+        ADD TMP2
+        ADDI MAPB
+        LDA
+        DIV PW
+        MODI 16
+        BRZ oky
+        JMP render
+oky:    LD  DIRY
+        MUL TMP
+        MULI 2
         DIVI 1
         ADD POSY
-        ST  NEWY            ; newY
-        ; collision Y: map_cell(posX / 1024, newY / 1024) — the UPDATED posX
+        ST  NEWY            ; newY = posY + deltaY
+        ; collision Y (destination): map_cell(posX / 1024, newY / 1024) — PW/selector
+        ; must be newY's own row, so the whole lookup is redone
         LD  NEWY
         DIVI 1024
         ST  TMP2

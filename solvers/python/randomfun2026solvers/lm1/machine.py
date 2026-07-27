@@ -2168,10 +2168,11 @@ class Machine:
             notes["stream:unit"] = (
                 "the DOOM column painter (lm1/d3_unit.py): one command word per "
                 "viewport column / RLE run / cursor move / gun sprite / COMMIT, "
-                "8*arg + code. The baked pistol sprites are derived from the "
-                "Freedoom project (https://github.com/freedoom/freedoom, "
-                "sprites/pisga0+pisfa0, BSD-style licence) — see "
-                "deadman3d.py's art credits."
+                "8*arg + code. The map, the title screen and the baked pistol "
+                "sprites are all derived from the Freedoom project "
+                "(https://github.com/freedoom/freedoom @ d14dbbe: levels/e1m1.wad "
+                "+ its textures, graphics/titlepic, sprites/pisga0+pisfa0; "
+                "BSD-style licence) — see deadman3d.py's art credits."
             )
         for name, (x, y, w, h) in sorted(self.regions.items()):
             kind = name.split(":", 1)[0]
@@ -4119,10 +4120,14 @@ ROM_ROWS = {
     # deadman-3d: re-swept jointly with :data:`STORE_SHAPE` for min max(w, h)
     # (the viewer holds the machine's full bounding rectangle, so squareness is
     # the demo's objective). With the 8x42 store the width floor is the
-    # CPU+adapter+store chain at 307 columns; 42 is the shallowest fold whose
-    # ROM fits inside it (41 rows -> 312 wide, rom-bound), and every deeper
-    # fold only adds height. Full sweep table in scratch/deadman3d-opt/METRICS.md.
-    "deadman-3d": 42,
+    # CPU+adapter+store chain at 307 columns; 44 is the shallowest fold whose
+    # ROM fits inside it since the M6 move arm grew the ROM (the midpoint
+    # collision checks: 42 rows -> 316 wide, 43 -> 310, both rom-bound), and
+    # every deeper fold only adds height. Historic 42-row sweep table in
+    # scratch/deadman3d-opt/METRICS.md; M6 re-sweep: rom_rows 42..46 x
+    # store_dy 0..6, min max(w, h) = 307 at (44, dy 1) and (45, dy 0), the
+    # exact square at (44, dy 1).
+    "deadman-3d": 44,
 }
 
 
@@ -4243,11 +4248,13 @@ MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "gradebook": ((0, 26), (-12, -26)),
     # deadman-3d: each row of store_dy shortens the serial adapter->store
     # request route by one cell (~19.7k reads/frame pay it), and each row costs
-    # one row of machine height. 3 is where height meets the 307-column width
-    # exactly — the machine is 307x307, and rows past that would break the
-    # square for ~20k ticks each (measured: dy 0/3/10 -> 11.567M/11.508M/11.371M
-    # on the frame gate; squareness is this demo's objective, so 3).
-    "deadman-3d": ((0, 0), (0, 3)),
+    # one row of machine height. The M6 asm's deeper 44-row ROM fold moved the
+    # height meeting point from 3 to 1: dy 1 is where height meets the
+    # 307-column width exactly — the machine is 307x307 — and rows past that
+    # would break the square (historic dy sweep at the 42-row fold: dy 0/3/10
+    # -> 11.567M/11.508M/11.371M on the frame gate; squareness is this demo's
+    # objective).
+    "deadman-3d": ((0, 0), (0, 1)),
 }
 
 
@@ -4401,6 +4408,7 @@ def build_for(
     compact: bool = False,
     trim_dead: bool | None = None,
     top_bus: bool | None = None,
+    program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
 
@@ -4410,7 +4418,9 @@ def build_for(
     variable the generator may shrink. ``store=None`` takes the slug's registered
     tier from :data:`STORE_TIER` (default ``"tape"``); pass one explicitly to
     override. Pass ``compact=True`` for the opt-in constraint-placement pass;
-    default generation remains the checked-in layout.
+    default generation remains the checked-in layout. ``program`` overrides the
+    checked-in ``.asm`` (deadman-3d's ``--wad`` mode builds a locally imported
+    level's machine without touching the program directory).
     """
     from . import programs
 
@@ -4427,7 +4437,7 @@ def build_for(
             f"tape_skip_batch must be 1, 2, 4, None, or 'task', got {tape_skip_batch!r}"
         )
     return build(
-        programs.load(slug),
+        program if program is not None else programs.load(slug),
         tape_n=TAPE_SIZE[slug],
         rom_rows=ROM_ROWS.get(slug),
         mem_pad=MEM_PAD.get(slug),

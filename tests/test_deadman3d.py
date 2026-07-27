@@ -1,7 +1,8 @@
-"""The ``deadman-3d`` golden model: the 64x64 E1M1 map data, the packed heading
-table, the Q10 raycaster, the HUD, the demo walk, the cases-file shape — and
-the generated asm: generator/registry pins plus emulator runs pixel-equal to
-the golden model.
+"""The ``deadman-3d`` golden model: the imported Freedoom E1M1 map data (real
+level geometry, ``wadimport``-generated), the packed heading table, the Q10
+raycaster, the HUD, the demo walk, the cases-file shape — and the generated
+asm: generator/registry pins plus emulator runs pixel-equal to the golden
+model.
 
 Fast tier: the pure-integer model tests (milliseconds) plus a short emulator
 run (~250k instructions, <1s). Slow tier: the full demo walk and the seeded
@@ -59,19 +60,21 @@ def test_wall_types_stay_in_1_to_7() -> None:
         assert d3.map_cell(i, 63) > 0 and d3.map_cell(63, i) > 0
 
 
-def test_the_map_is_e1m1s_landmarks() -> None:
-    """The homage's fixed points: spawn, exit door, pedestal, platforms."""
-    # Spawn: the corridor between the two entry alcoves, facing north.
-    assert (d3.SPAWN.posX, d3.SPAWN.posY, d3.SPAWN.heading) == (43520, 4608, 4)
-    assert d3.map_cell(42, 4) == 0
-    # The RED exit door in the exit room's west wall, gray posts around it.
-    assert all(d3.map_cell(3, y) == 1 for y in (9, 10, 11))
-    assert d3.map_cell(3, 12) == 7 and d3.map_cell(3, 8) == 7
-    # The blue armor pedestal in the courtyard, behind the north window slits.
-    assert d3.map_cell(46, 34) == d3.map_cell(47, 35) == 4
-    assert all(d3.map_cell(x, 31) == 0 for x in (44, 47, 50))
-    # The hangar's two raised side platforms flanking its east end.
-    assert d3.map_cell(53, 14) == d3.map_cell(53, 26) == 3
+def test_the_map_is_freedoom_e1m1s_landmarks() -> None:
+    """The imported level's fixed points: spawn, hall, waterfall, slime fall."""
+    # Spawn: Freedoom E1M1's real player-1 start — the west start hall,
+    # facing east (heading 0), the hall open ten steps ahead.
+    assert (d3.SPAWN.posX, d3.SPAWN.posY, d3.SPAWN.heading) == (5632, 27136, 0)
+    assert all(d3.map_cell(x, 26) == 0 for x in range(5, 26))
+    assert d3.map_cell(3, 26) == 7  # the gray wall at the player's back
+    # The blue WFALL waterfall running down the south nukage room's west wall.
+    assert d3.map_cell(17, 12) == d3.map_cell(25, 18) == 4
+    # The green slime fall / MCSTAT screens on the cavern's north rim — the
+    # walk's finale target — and its gold-brown ZIMMER flank to the west.
+    assert d3.map_cell(45, 49) == d3.map_cell(46, 48) == 2
+    assert d3.map_cell(40, 48) == d3.map_cell(41, 49) == 3
+    # The walk's finale cell is open, the fall one cell beyond it.
+    assert d3.map_cell(45, 46) == 0 and d3.map_cell(45, 48) == 0
 
 
 # ── the heading table ────────────────────────────────────────────────────────
@@ -131,8 +134,9 @@ def test_walk_is_its_chords_and_keys_encodes_the_mux() -> None:
     assert (d3.KEY_FWD, d3.KEY_BACK, d3.KEY_LEFT, d3.KEY_RIGHT, d3.KEY_FIRE) == (
         1, 2, 4, 8, 16)
     assert d3.keys("wa ") == 21 and d3.keys(".") == 0 and d3.keys("ww") == 1
-    # The FIRE beats: at the pedestal, chorded with the last step, at the door.
-    assert [i for i, c in enumerate(d3.WALK) if d3.fire_bit(c)] == [10, 48, 49]
+    # The FIRE beats: at the cavern's south rim, chorded with the last step
+    # toward the slime fall, and standing before it.
+    assert [i for i, c in enumerate(d3.WALK) if d3.fire_bit(c)] == [29, 48, 49]
     assert d3.WALK[48] == d3.keys("w ") == 17  # fire while moving: the MUX
 
 
@@ -158,60 +162,58 @@ def test_walk_stays_inside_open_cells() -> None:
         state = d3.step(state, cmd)
         cx, cy = d3.div(state.posX, d3.UNITS), d3.div(state.posY, d3.UNITS)
         assert d3.map_cell(cx, cy) == 0, f"walk entered wall cell {(cx, cy)}"
-    # And the finale is where the demo promises: in the exit room, facing
-    # the red exit door in its west wall.
-    assert state.heading == 8
+    # And the finale is where the demo promises: on the cavern's north rim,
+    # facing the bright green slime fall.
+    assert state.heading == 4
     cx, cy = d3.div(state.posX, d3.UNITS), d3.div(state.posY, d3.UNITS)
-    assert (cx, cy) == (8, 10)
-    assert d3.map_cell(cx - 5, cy) == 1
+    assert (cx, cy) == (45, 46)
+    assert d3.map_cell(cx, cy + 3) == 2
 
 
 # ── pinned frames (hand-checked against the scratchpad PNGs) ─────────────────
-#: The spawn view (WALK[0] is a no-op): up the spawn corridor, the near
-#: alcove wall flanking left in striped white/gray panels with their seam
-#: rows (V3), the octagon's north wall ahead beyond NEAR_D — all dark '7' —
-#: with the window slits, the blue armor pedestal '4' dots in them *right* of
-#: centre (east of the spawn column: the no-mirror evidence, risk R10), and
-#: the raised side platform at the right edge.
+#: The spawn view (WALK[0] is a no-op): east down Freedoom E1M1's start hall,
+#: the striped white/gray BASE2 panels flanking both sides with their seam
+#: rows (V3), the hall receding to the junction beyond NEAR_D — dark '7' —
+#: with the brown '3' concrete accent at the hall's end.
 SPAWN_FRAME = [
     "0000000000000000000000000000000000000000000000000000000000000000",
     "0000000000000000000000000000000000000000000000000000000000000000",
     "0000000000000000000000000000000000000000000000000000000000000000",
-    "7700000000000000000000000000000000000000000000000000000000000000",
-    "ff70000000000000000000000000000000000000000000000000000000000000",
-    "fff7700000000000000000000000000000000000000000000000000000000000",
-    "fff7777000000000000000000000000000000000000000000000000000000000",
-    "77f7777770000000000000000000000000000000000000000000000000000000",
-    "ff77777777700000000000000000000000000000000000000000000000000000",
-    "fff7777777770000000000000000000000000000000000000000000000000000",
-    "fff7777777770000000000000000000000000000000000000000000000000000",
-    "77f7777777770000000000000000000000000000000000000000000000000000",
-    "ff77777777770000000000000000000000000000000000000000000000000000",
-    "fff7777777770000000000000000000000000000000000000000000000000000",
-    "fff7777777770000000000000000000000000000000000000000000000000000",
-    "77f7777777770000000000000000000000000000000000000000000000000000",
-    "ff77777777770000000000000000000000000000000000000000000000000000",
-    "fff7777777770000000000000000000000000000000000000000000000000000",
-    "fff7777777770000000000000000000000000000000000000000033333333333",
-    "77f7777777777777777777777777777777700077740077000333333333333333",
-    "ff77777777777777777777777777777777777777747777777333333333333333",
-    "fff7777777777777777777777777777777788877748877888333333333333333",
-    "fff7777777778888888888888888888888888888888888888888833333333333",
-    "77f7777777778888888888888888888888888888888888888888888888888888",
-    "ff77777777778888888888888888888888888888888888888888888888888888",
-    "fff7777777778888888888888888888888888888888888888888888888888888",
-    "fff7777777778888888888888888888888888888888888888888888888888888",
-    "77f7777777778888888888888888888888888888888888888888888888888888",
-    "ff77777777778888888888888888888888888888888888888888888888888888",
-    "fff7777777778888888888888888888888888888888888888888888888888888",
-    "fff7777777778888888888888888888878888888888888888888888888888888",
-    "77f7777777778888888888888888888770888888888888888888888888888888",
-    "ff77777777788888888888888888887777088888888888888888888888888888",
-    "fff7777778888888888888888888877000078888888888888888888888888888",
-    "fff7777888888888888888888888871010178888888888888888888888888888",
-    "77f7788888888888888888888888877777708888888888888888888888888888",
-    "ff78888888888888888888888888770000778888888888888888888888888888",
-    "ff88888888888888888888888888330880338888888888888888888888888888",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "7770000000000000000000000000000000000000000000000000000000000077",
+    "fff77000000000000000000000000000000000000000000000000000000077ff",
+    "fff77770000000000000000000000000000000000000000000000000007777ff",
+    "fff77777700000000000000000000000000000000000000000000000777777ff",
+    "7777777777700000000000000000000000000000000000000000007777777777",
+    "fff77777777700000000000000000000000000000000000000007777777777ff",
+    "fff7777777777700000000000000000000000000000000000007f777777777ff",
+    "fff777777777ff7700000000000000000000000000000000077ff777777777ff",
+    "777777777777ffff000000000000000000000000000000000ffff77777777777",
+    "fff777777777ffff000000000000000000000000000000000fff7777777777ff",
+    "fff77777777777ff000000000000000000000000000000000ff7f777777777ff",
+    "fff777777777ff7770000000000000000000000000000000077ff777777777ff",
+    "777777777777fffff77700000000000000000000000000000ffff77777777777",
+    "fff777777777ffffff7777700000000000000000000000000fff7777777777ff",
+    "fff77777777777ffff77f7f77300000000000000077777777ff7f777777777ff",
+    "fff777777777ff777f77f7f77337777777777777777777f7f77ff777777777ff",
+    "777777777777fffff777f7f77337777777777777777777f7fffff77777777777",
+    "fff777777777ffffff7777777337777777777777777777f7ffff7777777777ff",
+    "fff77777777777ffff77f7f77388888888888888877777777ff7f777777777ff",
+    "fff777777777ff777f77f7f8888888888888888888888888877ff777777777ff",
+    "777777777777fffff77788888888888888888888888888888ffff77777777777",
+    "fff777777777fffff88888888888888888888888888888888fff7777777777ff",
+    "fff77777777777ff888888888888888888888888888888888ff7f777777777ff",
+    "fff777777777ff7788888888888888888888888888888888877ff777777777ff",
+    "777777777777ffff888888888888888888888888888888888ffff77777777777",
+    "fff777777777ffff888888888888888888888888888888888fff7777777777ff",
+    "fff7777777777788888888888888888878888888888888888887f777777777ff",
+    "fff7777777778888888888888888888770888888888888888888f777777777ff",
+    "7777777777788888888888888888887777088888888888888888887777777777",
+    "fff77777788888888888888888888770000788888888888888888888777777ff",
+    "fff77778888888888888888888888710101788888888888888888888887777ff",
+    "fff77888888888888888888888888777777088888888888888888888888877ff",
+    "7778888888888888888888888888770000778888888888888888888888888877",
+    "8888888888888888888888888888330880338888888888888888888888888888",
     "8888888888888888888888888880333333338888888888888888888888888888",
     "8888888888888888888888888880333333880888888888888888888888888888",
     "7777777777777777777777777777777777777777777777777777777777777777",
@@ -224,50 +226,51 @@ SPAWN_FRAME = [
     "8888888888888888888888888888888888888888888888888888888888888888",
 ]
 
-#: The doorway half-look (WALK[31], heading 7 at cell (12, 20)): the zigzag
-#: room's near sawtooth spur filling the right half in striped/banded brown
-#: and bright-yellow panels (V3), the channel receding left into the dark.
-ZIGZAG_LOOK_FRAME = [
-    "0000000000000000000000000000000000000000000000000000333333333333",
-    "00000000000000000000000000000000000000000000000000333bbbbbbbbbbb",
-    "00000000000000000000000000000000000000000000000033333bbbbbbbbbbb",
-    "00000000000000000000000000000000000000000000003333333bbbbbbbbbbb",
-    "0000000000000000000000000000000000000000000033333333333333333333",
-    "00000000000000000000000000000000000000000033333333333bbbbbbbbbbb",
-    "00000000000000000000000000000000000000003333333333333bbbbbbbbbbb",
-    "00000000000000000000000000000000000000003333333333333bbbbbbbbbbb",
-    "0000000000000000000000000000000000000000333333333333333333333333",
-    "00000000000000000000000000000000000000003333333333333bbbbbbbbbbb",
-    "00000000000000000000000000000000000000003333333333333bbbbbbbbbbb",
-    "00000000000000000000000000000000000000003333333333333bbbbbbbbbbb",
-    "0000000000000000000000000000000000000000333333333333333333333333",
-    "00000000000000000000000000000000000000003333333333333bbbbbbbbbbb",
-    "00000000000000000000000000000000000000003333333333333bbbbbbbbbbb",
-    "77777777777777700000000000000000000000003333333333333bbbbbbbbbbb",
-    "ff7777777ffffff7777777777777777777777777333333333333333333333333",
-    "ff7777777fffffff777777fffff77777fffff7773333333333333bbbbbbbbbbb",
-    "ff7777777fffffff777777fffff77777fffff7773333333333333bbbbbbbbbbb",
-    "777777777777777f777777fffff77777fffff7773333333333333bbbbbbbbbbb",
-    "ff7777777ffffff7777777777777777777777777333333333333333333333333",
-    "ff7777777fffffff777777fffff77777fffff7773333333333333bbbbbbbbbbb",
-    "ff7777777fffffff777777fffff77777fffff7773333333333333bbbbbbbbbbb",
-    "777777777777777f777777fffff77777fffff7773333333333333bbbbbbbbbbb",
-    "ff7777777ffffff7777777777777777777777777333333333333333333333333",
-    "ff7777777ffffff88888888888888888888888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "8888888888888888888888888888888888888888333333333333333333333333",
-    "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888888788888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888887708888883333333333333bbbbbbbbbbb",
-    "8888888888888888888888888888887777088888333333333333333333333333",
-    "88888888888888888888888888888770000788883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888710101788883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888777777088888833333333333bbbbbbbbbbb",
-    "8888888888888888888888888888770000778888888833333333333333333333",
-    "88888888888888888888888888883308803388888888883333333bbbbbbbbbbb",
-    "88888888888888888888888888803333333388888888888833333bbbbbbbbbbb",
-    "88888888888888888888888888803333338808888888888888333bbbbbbbbbbb",
+#: The cavern half-look (WALK[38] holds after the ``d`` turn: heading 15 at
+#: cell (41, 40)): the great cavern's north-east rim — the green MCSTAT
+#: screens and gold-brown ZIMMER cliffs banded across the horizon, the
+#: cavern floor sweeping to the dark distance.
+CAVERN_LOOK_FRAME = [
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "2222200000000000000000000000000000000000000000000000000007777777",
+    "aaaa200000000000000000000000000000000000000000222222222277777fff",
+    "aaaa2333333333333333333322222222222222222222222aa222222277777fff",
+    "aaaa2333333333333bb333332aaa222aaaa22222aaaaa22aa222222277777fff",
+    "22222333333333333bb333332aaa222aaaa22222aaaaa22aa222222277777777",
+    "aaaa2333333333333bb333332aaa222aaaa22222aaaaa2222222222277777fff",
+    "aaaa2333333333333333333322222222222222222222222aa222222277777fff",
+    "aaaa2888888888888888888888888888888888888888882aa222222277777fff",
+    "2222288888888888888888888888888888888888888888888888888887777777",
+    "8888888888888888888888888888888888888888888888888888888888888888",
+    "8888888888888888888888888888888888888888888888888888888888888888",
+    "8888888888888888888888888888888888888888888888888888888888888888",
+    "8888888888888888888888888888888888888888888888888888888888888888",
+    "8888888888888888888888888888888888888888888888888888888888888888",
+    "8888888888888888888888888888888878888888888888888888888888888888",
+    "8888888888888888888888888888888770888888888888888888888888888888",
+    "8888888888888888888888888888887777088888888888888888888888888888",
+    "8888888888888888888888888888877000078888888888888888888888888888",
+    "8888888888888888888888888888871010178888888888888888888888888888",
+    "8888888888888888888888888888877777708888888888888888888888888888",
+    "8888888888888888888888888888770000778888888888888888888888888888",
+    "8888888888888888888888888888330880338888888888888888888888888888",
+    "8888888888888888888888888880333333338888888888888888888888888888",
+    "8888888888888888888888888880333333880888888888888888888888888888",
     "7777777777777777777777777777777777777777777777777777777777777777",
     "88889999999999999999999999999888888888888888888888ccccccccc88888",
     "88889999999999999999999999999888888888888888888888ccccccccc88888",
@@ -283,18 +286,19 @@ def test_pinned_spawn_frame() -> None:
     assert d3.frames_for_commands(d3.WALK)[0] == SPAWN_FRAME
 
 
-def test_pinned_zigzag_look_frame() -> None:
-    assert d3.WALK[31] == d3.KEY_RIGHT, "the pin is the frame after the doorway half-look"
-    assert d3.frames_for_commands(d3.WALK)[31] == ZIGZAG_LOOK_FRAME
+def test_pinned_cavern_look_frame() -> None:
+    assert d3.WALK[37] == d3.KEY_RIGHT, "the pin is the held frame of the half-look"
+    assert d3.WALK[38] == 0
+    assert d3.frames_for_commands(d3.WALK)[38] == CAVERN_LOOK_FRAME
 
 
 def test_pinned_fire_frame() -> None:
-    """WALK[10] FIREs at the armor pedestal: the recoil sprite, the muzzle
-    flash blooming above it, and the ammo bar one round shorter."""
-    assert d3.WALK[10] == d3.KEY_FIRE == 16
-    fire = d3.frames_for_commands(d3.WALK)[10]
+    """WALK[29] FIREs at the cavern's sunlit south rim: the recoil sprite,
+    the muzzle flash blooming above it, and the ammo bar one round shorter."""
+    assert d3.WALK[29] == d3.KEY_FIRE == 16
+    fire = d3.frames_for_commands(d3.WALK)[29]
     state = d3.SPAWN
-    for cmd in d3.WALK[:11]:
+    for cmd in d3.WALK[:30]:
         state = d3.step(state, cmd)
     # The frame is exactly the fired render at the post-shot ammo count …
     assert fire == d3.render(state, fire=True, ammo=49, health=100)
@@ -337,7 +341,9 @@ def test_title_words_are_pre_encoded_run_commands() -> None:
 
     words = d3.title_words()
     runs = d3.title_runs()
-    assert len(words) == len(runs) == 968
+    # The Freedoom titlepic RLEs to 429 runs (the old homage art took 968:
+    # round 0's input SHRANK when the real art landed).
+    assert len(words) == len(runs) == 429
     run = DoomUnit.CODES["RUN"]
     assert words == [8 * (n * 16 + c) + run for c, n in runs]
     # Replayed through the unit model, the words paint exactly the title frame.
@@ -356,9 +362,11 @@ def test_preamble_is_the_documented_tape_order() -> None:
     assert pre[0:256] == d3.map_words()                  # MAPB, slots 1..256
     assert pre[256:272] == [16 ** k for k in range(16)]  # POWB, slots 257..272
     assert pre[272:288] == d3.heading_table()            # HDGB, slots 273..288
-    # Spawn scalars, slots 289..295: cell (42, 4), heading 4 = north.
-    assert pre[288:] == [43520, 4608, 4, 0, 1024, 676, 0]
-    assert all(w >= 0 for w in pre)  # the E1M1 spawn happens to need no negatives
+    # Spawn scalars, slots 289..295: cell (5, 26), heading 0 = east.
+    assert pre[288:] == [5632, 27136, 0, 1024, 0, 0, -676]
+    # planeY = -676 (east spawn) is the preamble's ONE negative word — legal,
+    # because the preamble rides input, never ROM literals.
+    assert [w for w in pre if w < 0] == [-676]
     assert d3.input_words(d3.WALK) == pre + d3.title_words() + d3.WALK
 
 
@@ -433,9 +441,9 @@ def test_registry_pins() -> None:
     assert machine.STORE_TIER["deadman-3d"] == "men-v3"
     # … as the 8x42 multi-column block: the one-column strip was 681x999 and set
     # BOTH dimensions of the old 756x1197 bbox; 8x42 (336 >= 330 cells) is the
-    # shape that, jointly with the 42-row ROM fold, makes the machine an exact
-    # 307x307 square — the viewer holds the full bounding rectangle, so
-    # squareness is this demo's objective.
+    # shape that, jointly with the 44-row ROM fold (deepened for the M6 move
+    # arm), makes the machine an exact 307x307 square — the viewer holds the
+    # full bounding rectangle, so squareness is this demo's objective.
     assert machine.STORE_SHAPE["deadman-3d"] == (8, 42)
     # The router is the SINGLE looping block (v2's footprint): the CPU issues
     # reads ~1k ticks apart, so the walk home happens while the router idles —
@@ -448,9 +456,10 @@ def test_registry_pins() -> None:
     # The frame-1 tick levers, all opt-in so other machines stay byte-identical:
     assert "deadman-3d" in machine.INPUT_NORTH
     assert "deadman-3d" in machine.STORE_TELEPORT
-    # store_dy 3: each row shortens the serial request route one cell; 3 is
-    # where height meets the 307-column width exactly (the 307x307 square).
-    assert machine.MEM_PLACE["deadman-3d"] == ((0, 0), (0, 3))
+    # store_dy 1: each row shortens the serial request route one cell; with
+    # the 44-row M6 fold, 1 is where height meets the 307-column width exactly
+    # (the 307x307 square).
+    assert machine.MEM_PLACE["deadman-3d"] == ((0, 0), (0, 1))
 
 
 def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
@@ -466,7 +475,7 @@ def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
 
 @slow
 def test_the_full_demo_walk_is_pixel_equal_to_golden() -> None:
-    """The title plus all 35 WALK commands."""
+    """The title plus all 50 WALK commands."""
     assert _emulator_frames(d3.WALK) == [d3.title_frame()] + d3.frames_for_commands(d3.WALK)
 
 
@@ -511,7 +520,7 @@ def test_the_machine_synthesizes_with_the_men_v3_store() -> None:
     # exactly one display room, 64x48 plus its walls.
     _px, _py, pw, ph = m.regions["display"]
     assert (pw, ph) == (d3.WIDTH + 2, d3.HEIGHT + 2) == (66, 50)
-    # The whole point of the 8x42 STORE_SHAPE + 42-row fold + store_dy 3: the
+    # The whole point of the 8x42 STORE_SHAPE + 44-row fold + store_dy 1: the
     # machine is an exact square (down from 756x1197), because the viewer holds
     # its full bounding rectangle.
     assert (max(len(r) for r in m.rows), len(m.rows)) == (307, 307)
@@ -652,14 +661,25 @@ def test_checked_in_taped_man_matches_the_machine_builder() -> None:
     assert machine.build_for("deadman-3d", store="taped").rows == rows
 
 
+def test_m6_taped_artifact_copies_match_the_taped_files() -> None:
+    """littleman/examples/deadman-3d_m6_taped.* are clearly-named byte-identical
+    copies of the taped artifacts — the M6 Freedoom level in the 20-man form
+    the web-editor workflow watches, shipped as its own family from day one."""
+    for stem in ("man", "debug.html", "debug.json"):
+        taped = (REPO / "littleman" / "examples" / f"deadman-3d_taped.{stem}").read_bytes()
+        m6 = (REPO / "littleman" / "examples" / f"deadman-3d_m6_taped.{stem}").read_bytes()
+        assert m6 == taped, f"deadman-3d_m6_taped.{stem} drifted from the taped file"
+
+
 @slow
 def test_the_taped_machine_census_dims_and_first_round_gate() -> None:
     """The variant's whole reason: ~20 little men (the visualizer's metric)
-    against the men-v3 store's ~700, in the same 307-wide bounding class —
-    and the frames still judge pixel-clean on the native engine."""
+    against the men-v3 store's ~700, in a smaller bounding box than the
+    canonical square — and the frames still judge pixel-clean on the native
+    engine."""
     m = machine.build_for("deadman-3d", store="taped")
     src = "\n".join(m.rows)
-    assert (max(len(r) for r in m.rows), len(m.rows)) == (307, 216)
+    assert (max(len(r) for r in m.rows), len(m.rows)) == (304, 216)
     assert src.count("@") == 20  # no births: static men ARE the census
     from randomfun2026solvers.fast_littleman import FastLittleman
 

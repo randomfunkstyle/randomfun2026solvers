@@ -8,17 +8,21 @@ integer transliteration of lodev.org's ``raycaster_flat.cpp``
 must match this model **pixel for pixel**; every constant, table, and
 expression here is written the way the asm computes it.
 
-The map is **DOOM's E1M1** (Hangar), hand-quantized to a 64x64 grid — a
-recognizable homage rather than a survey: the hangar start room (the octagon,
-entered from a spawn corridor flanked by the two entry alcoves, its east end
-flanked by the two raised side platforms), the courtyard with the armor bonus
-behind three window slits to the north-east, the computer area west (a
-corridor between green computer banks, with a block in the recess behind
-them), the zigzag nukage room beyond it with its alternating sawtooth spurs,
-and the exit room at that room's south end, the red exit door set between
-gray posts in its west wall.  Walls render two cells tall (``WALL_H``) and a
-move is two cells (``MOVE_NUM``): the finer grid keeps the 32x32 demo's
-proportions and pace.
+The map is **Freedoom Phase 1's E1M1** — real level geometry, not a homage:
+``randomfun2026solvers/wadimport.py`` parses the map's WAD lumps
+(github.com/freedoom/freedoom at commit ``d14dbbe``, BSD licence), supercovers
+every long one-sided linedef onto the 64x64 grid, closes the map watertight,
+and colours each wall cell from its dominant sidedef texture (see the credits
+section and ``wadimport``'s own docstring for the pipeline).  The player
+spawns at the level's real THINGS start in the west start hall facing east,
+walks the striped BASE2 hall, turns north up the brown concrete corridor into
+the great central cavern with its green MCSTAT screens and slime fall; the
+south wing holds the tiled corridors, the blue WFALL waterfall and the
+big-door exit lobby.  Walls render two cells tall (``WALL_H``) and a move is
+two cells (``MOVE_NUM``): the finer grid keeps the 32x32 demo's proportions
+and pace.  The same importer builds a **local** premium map from a retail
+DOOM shareware IWAD (``--wad``; outputs stay in the git-ignored
+``littleman/examples/local/`` — nothing IWAD-derived is committed).
 
 Numeric contract
 ----------------
@@ -41,7 +45,7 @@ exactly the asm's value.
 Map and orientation (plan risk R10 — the mirror decision)
 ---------------------------------------------------------
 ``MAP_STR`` is printed like a conventional map: **north at the top**.  The
-printed row ``p`` holds the cells with ``y = 31 - p``, i.e. ``map_cell(x, y)``
+printed row ``p`` holds the cells with ``y = 63 - p``, i.e. ``map_cell(x, y)``
 uses x east, y north (y grows *up* the printed page).  Headings are
 ``h * 22.5``° counterclockwise from east: ``dirX = round(1024*cos)``,
 ``dirY = round(1024*sin)`` — heading 0 = east, 4 = north, so ``+1`` heading is
@@ -54,13 +58,12 @@ is dir rotated -90°: ``(dy, -dx)``.  Hence
     planeX = round(675.84 * sin(h * 22.5°))     # 675.84 = 0.66 * 1024
     planeY = round(-675.84 * cos(h * 22.5°))
 
-Evidence this is the non-mirrored sign, exactly as in E1M1: the player spawns
-facing **north** (heading 4), and the courtyard window slits in the octagon's
-north wall (x 44..51) sit *east* of the spawn column x=42 — the player's
-right — and render in the **right** half of the frame, blue armor pedestal
-behind them; the zigzag nukage room is west and sweeps in from the screen's
-left during the turn toward it.  Flipping the plane sign mirrors both (that is
-R10's failure mode).
+Evidence this is the non-mirrored sign, exactly as in Freedoom's E1M1: the
+walk's finale stands at (45, 46) facing **north** at the slime fall, and the
+ZIMMER gold-brown rock west of the fall (cells (40..41, 48..49), family 3) —
+the player's *left* — renders in the **left** half of the frame, the bright
+green fall filling the centre-right (the finale pin).  Flipping the plane
+sign mirrors it (that is R10's failure mode).
 
 Wall types and the display palette
 ----------------------------------
@@ -70,18 +73,18 @@ map word under 2**63).  Shading: a side==0 (x-side, sunlit) hit paints
 ceiling 0 (black).
 
 The LM-75 palette in this repo is the **ANSI** 16-colour set (see
-``lambda_deadman.py`` and ``PALETTE`` below), *not* CGA, and the wall types
-are the ANSI indices of each area's intended colour:
+``lambda_deadman.py`` and ``PALETTE`` below), *not* CGA, and each wall type is
+the quantized hue of the cell's dominant Freedoom texture (``wadimport``'s
+family step — gray under the CIELAB chroma gate, else the nearest ANSI hue):
 
-    7 hangar, vestibule + alcoves, courtyard (gray / bright white)
-    2 computer-area corridor walls + block, green armor platform (green)
-    6 / 3 zigzag nukage room: alternating sawtooth spurs (cyan / brown);
-          3 is also the hangar's two raised side platforms
-    4 blue armor-bonus pedestal in the courtyard (blue)
-    1 the RED exit door, set in the west wall between gray posts
+    7 gray metal and concrete (BASE2, the AQMETL set, STARGR, SHAWN, COMP*)
+    3 brown rock and tile (ZIMMER3, BROWN*, AQCONC05, AQTILE01, MCSTAT8)
+    2 green: the MCSTAT computer screens and the SFALL slime fall
+    4 blue: the WFALL waterfall in the south nukage room
 
-The HUD block colours are ANSI too: ammo red = 9, face yellow = 11, armor
-blue = 12.
+Families 1, 5 and 6 are unused by Freedoom E1M1's texture set but remain
+legal wall types (a ``--wad`` import may produce them).  The HUD block
+colours are ANSI too: ammo red = 9, face yellow = 11, armor blue = 12.
 
 Tape slot map (the asm's .equ table; slot 0 is scratch)
 -------------------------------------------------------
@@ -93,11 +96,11 @@ Tape slot map (the asm's .equ table; slot 0 is scratch)
     HDGB  273..288  packed headings, one word per heading h:
                     (dirX+1024)*2^36 + (dirY+1024)*2^24
                     + (planeX+1024)*2^12 + (planeY+1024)   (48 bits, positive)
-    POSX  289       spawn posX = 43520  (cell 42, Q10 centre)
-    POSY  290       spawn posY = 4608   (cell 4)
-    HDG   291       spawn heading = 4   (north — E1M1's real facing)
-    DIRX  292       spawn dirX  = 0         DIRY  293   spawn dirY   = 1024
-    PLANEX 294      spawn planeX = 676      PLANEY 295  spawn planeY = 0
+    POSX  289       spawn posX = 5632   (cell 5, Q10 centre)
+    POSY  290       spawn posY = 27136  (cell 26)
+    HDG   291       spawn heading = 0   (east — Freedoom E1M1's real facing)
+    DIRX  292       spawn dirX  = 1024      DIRY  293   spawn dirY   = 0
+    PLANEX 294      spawn planeX = 0        PLANEY 295  spawn planeY = -676
 
 The cell lookup is ``floor(MAPW[4x + y/16] / 16**(y mod 16)) mod 16`` —
 ``slot = MAPB + 4*mapX + (mapY / 16)``, divisor ``POWB + (mapY mod 16)`` —
@@ -116,9 +119,13 @@ with the CPU's next raycast.
 
 The title screen (round 0)
 --------------------------
-The demo opens on a DOOM-homage **title screen**: :data:`TITLE_HEX_ROWS`, the
-64x48 hand-quantized homage to a certain 1993 shooter's title art (the same
-block-Lab pipeline as ``lambda_deadman.HEX_ROWS``, at the full panel size).
+The demo opens on **Freedoom's own title art**: :data:`TITLE_HEX_ROWS` is
+``graphics/titlepic/titlepic.png`` (commit ``d14dbbe`` — the serpent-demon
+mascot and the armored fighter under a red sky) quantized to 64x48 by
+``wadimport.quantize_title`` — the repo's block-Lab method (per target block,
+the ANSI-16 colour minimizing the summed CIELAB distance, as
+``lambda_deadman.HEX_ROWS`` was made) after a fixed x1.6 brightness lift for
+the dark source, plus one isolated-dot despeckle pass.
 It travels as its own row-major RLE — :func:`title_runs` — and each run is ONE
 pre-encoded command word for the DOOM unit's RUN arm (:func:`title_words`,
 ``8*(count*16 + colour) + C_RUN``): the CPU forwards each word untouched
@@ -159,19 +166,16 @@ played live (chords remain reachable by script).
 
 The demo walk (``WALK``)
 ------------------------
-Spawn view (no-op) at E1M1's start: up the spawn corridor into the octagon.
-Eight steps north, the window slits, the blue armor pedestal behind them and
-the two raised side platforms growing ahead; a half-look right at the
-pedestal (turn right, FIRE, turn left); four left turns to face west,
-sweeping the platforms and the octagon's walls; then straight west — down
-the computer-area corridor between its green banks, into the zigzag nukage
-room, where a second half-look sweeps the cyan/brown sawtooth spurs; five
-left turns on round to south and five steps down the walkway into the exit
-room, four right turns back to west on the way — ending before the red exit
-door set between gray posts.  FIRE at the dramatic beats: at the armor
-pedestal, then *while stepping* up to the door (the ``"w "`` chord — the MUX
-at work), and once more standing before it.  Two-cell steps (DOOM's run on
-the 64x64 grid); 50 words, spelled ``WALK_CHORDS``.
+Spawn view (no-op) at Freedoom E1M1's real start: east down the striped
+start hall.  Ten steps east; a 90° left turn and seven steps north up the
+brown concrete corridor into the great cavern's south-west lobe; back right
+to east and two steps onto the cavern floor, where a half-look right FIREs
+at the sunlit south rim; six steps east across the cavern, the ZIMMER cliffs
+and green MCSTAT screens growing ahead; a quiet half-look right at the north
+rim; two steps on, a 90° left turn to north, and two steps toward the slime
+fall — then a *firing* step (the ``"w "`` chord — the MUX at work) and one
+last FIRE standing before the bright green fall.  Two-cell steps (DOOM's run
+on the 64x64 grid); 50 words, spelled ``WALK_CHORDS``.
 
 ``deadman3d_source()`` emits the LM-1 assembly lowered from this model;
 ``tape_slots()`` is its ``.equ`` table (the docstring's slot map plus the
@@ -179,16 +183,38 @@ scalars, numbered consecutively from 296).
 
 Art credits
 -----------
-The pistol sprites (:data:`GUN_IDLE`, :data:`GUN_FIRE`) are derived from the
+The level, the title screen and the pistol are all derived from the
 **Freedoom** project (https://github.com/freedoom/freedoom, also
-https://freedoom.github.io/) — ``sprites/pisga0.png`` (pistol, idle) and
-``sprites/pisfa0.png`` (muzzle flash), fetched at commit ``d14dbbe``,
-quantized to the ANSI-16 palette at 11x10.  Freedoom content is distributed
-under its BSD-style licence (see the project's COPYING.adoc), which permits
-use and modification with attribution; this credit also rides the generated
-machine's debug sidecar (the ``stream:unit`` region note).  No assets from
-the original DOOM game are used anywhere in this demo — the map and title
-screen are hand-made homages, and the gun is Freedoom's.
+https://freedoom.github.io/), fetched at commit ``d14dbbe``:
+
+* the map — Phase 1's ``levels/e1m1.wad`` imported by
+  ``randomfun2026solvers/wadimport.py`` (geometry supercovered onto the
+  64x64 grid; wall families are the quantized hues of the level's own
+  sidedef textures, composited from ``lumps/textures/textures.cfg`` +
+  ``patches/*.png``);
+* the title screen — ``graphics/titlepic/titlepic.png`` quantized to the
+  ANSI-16 palette at 64x48 (block-Lab, x1.6 brightness lift, despeckle);
+* the pistol sprites (:data:`GUN_IDLE`, :data:`GUN_FIRE`) —
+  ``sprites/pisga0.png`` (idle) and ``sprites/pisfa0.png`` (muzzle flash),
+  quantized at 11x10.
+
+Freedoom content is distributed under its BSD-style licence (see the
+project's COPYING.adoc), which permits use and modification with
+attribution; this credit also rides the generated machine's debug sidecar
+(the ``stream:unit`` region note).  No assets from the original DOOM game
+are committed anywhere in this demo — the committed art stack is entirely
+Freedoom-derived plus procedural rendering.
+
+``--wad`` (Mode B, local only) imports a locally owned retail IWAD's E1M1 and
+TITLEPIC instead; everything derived from it stays in the git-ignored
+``littleman/examples/local/`` and no test depends on the IWAD existing::
+
+    # build the full local artifact set (level bundle, asm, men-v3 + taped
+    # machines with sidecars, cases, input, PNGs) into littleman/examples/local/
+    python -m randomfun2026solvers.deadman3d --wad ~/DOOM1.WAD --build
+
+    # play the real E1M1 live on the machine (or --golden for the model)
+    python -m randomfun2026solvers.deadman3d --wad ~/DOOM1.WAD --play
 """
 from __future__ import annotations
 
@@ -278,18 +304,21 @@ def div(a: int, b: int) -> int:
     return floor_div(a, b)[0]
 
 
-# ── the map (E1M1 at 64x64, north at the top; see the module docstring) ──────
+# ── the map (Freedoom Phase 1 E1M1 at 64x64, north at the top) ───────────────
 MAP_SIZE = 64
 #: ``.`` = empty, hex nibble = wall type 1..7.  Printed row p is y = 63 - p.
-#: West to east: the zigzag nukage room (sawtooth spurs 6/3 alternating off its
-#: west and east walls, green armor platform 2 at the north end, the exit room
-#: at the south end with the RED door 1 set between gray posts in its west
-#: wall), the computer area (a corridor between green computer banks 2, with a
-#: recess and a green block behind the north bank), the hangar octagon with the
-#: two raised side platforms 3 flanking its east end, the south spawn corridor
-#: with its two entry alcoves (spawn between them at x=42), and the courtyard
-#: (east strip + NE outdoor area, blue armor pedestal 4) behind three window
-#: slits in the hangar's north wall.
+#: GENERATED by ``randomfun2026solvers/wadimport.py`` from Freedoom's
+#: ``levels/e1m1.wad`` at commit ``d14dbbe`` (real level geometry: every
+#: one-sided linedef >= 32 map units supercovered onto the grid, unreachable
+#: cells filled solid; see that module for the whole pipeline).  The rooms,
+#: west to east: the start hall at y 25..27 (striped BASE2 metal, 7), the
+#: north-west computer wing with its four-pillared hall above it, the brown
+#: concrete corridor at x=25 north into the great central cavern (ZIMMER rock
+#: 3 and gray metal 7 rimmed with green MCSTAT screens 2), the slime fall 2 on
+#: its north rim, and the south wing below: tiled corridors, the blue
+#: waterfall 4 (WFALL1) down the nukage room's west wall, and the big-door
+#: exit lobby at the south edge.  Wall families are the textures' quantized
+#: hues — the table rides ``wadimport``'s ``families.txt`` output.
 MAP_STR = """\
 7777777777777777777777777777777777777777777777777777777777777777
 7777777777777777777777777777777777777777777777777777777777777777
@@ -297,62 +326,62 @@ MAP_STR = """\
 7777777777777777777777777777777777777777777777777777777777777777
 7777777777777777777777777777777777777777777777777777777777777777
 7777777777777777777777777777777777777777777777777777777777777777
-7777............777777777777777777777777777777777777777777777777
-7777.2222.......777777777777777777777777777777777777777777777777
-7777.2222.......777777777777777777777777777777777777777777777777
-7777.2222.......777777777777777777777777777777777777777777777777
-7777............777777777777777777777777777777777777777777777777
-7777............777777777777777777777777777777777777777777777777
-7777............777777777777777777777777777777777777777777777777
-7777............777777777777777777777777777777777777777777777777
-7777666666......777777777777777777777777777777777777777777777777
-7777666666......777777777777777777777777777777777777777777777777
-7777666666......777777777777777777777777777777777777777777777777
-7777666666......777777777777777777777777......................77
-7777............777777777777777777777777......................77
-7777............777777777777777777777777......................77
-7777............777777777777777777777777......................77
-7777............777777777777777777777777......................77
-7777......333333777777777777777777777777......................77
-7777......333333777777777777777777777777......................77
-7777......333333777777777777777777777777......................77
-7777......333333777777777777777777777777......................77
-7777............777777777777777777777777......................77
-7777............777777777777777777777777......................77
-7777............777777777777777777777777......44..............77
-7777............777777777777777777777777......44..............77
-7777666666......777777777777777777777777......................77
-7777666666......7777777777777777777777777777..7..7..777777....77
-7777666666......7777777777777777777777777777..7..7..777777....77
-7777666666......7777777777777777777777...............77777....77
-7777............777777777777777777777.................7777....77
-7777............77777777777777777777...............3333377....77
-7777............7777........7777777................3333377....77
-7777............7777..2222..777777.................33333.7....77
-7777......3333337777..2222..777777.................33333.7....77
-7777......3333332222........222277.................33333.7....77
-7777......3333332222........222277.......................7....77
-7777......333333.........................................7....77
-7777.....................................................7....77
-7777.....................................................7....77
-7777.....................................................7777777
-7777.....................................................7777777
-7777666666......222222222222222277.......................7777777
-7777666666......222222222222222277.................33333.7777777
-777766666.......777777777777777777.................33333.7777777
-777766666.......777777777777777777.................33333.7777777
-7777.........7777777777777777777777................3333377777777
-77777........77777777777777777777777...............3333377777777
-7771.........777777777777777777777777.................7777777777
-7771.........7777777777777777777777777...............77777777777
-7771.........777777777777777777777..................777777777777
-7777.........777777777777777777777..................777777777777
-7777.........7777777777777777777777777777....7777777777777777777
-7777.........777777777777777777777777...7....7...777777777777777
-7777777777777777777777777777777777777...7....7...777777777777777
-7777777777777777777777777777777777777...7....7...777777777777777
-77777777777777777777777777777777777777777....7777777777777777777
-77777777777777777777777777777777777777777....7777777777777777777
+77777777777777777777777777777777777777777777777777777777.....777
+77777777777.777.777.777.777777777777777777777777777377........77
+77777777777.777.777.777.7777777777777777777777733333..........77
+77777777777.777.777.777.777777777777777777773333..............77
+77777777...................777777777777777333.................77
+77777777...................7777777777777773.....333333........77
+77777777...................7777777777777733...233777733.......77
+77777777...77777....777....777777777777773....2777777733......77
+7777777777.777777777777....777777337777733...22777777773......37
+7777777..........333777....77777333333333.....2773323773......37
+7777777.............777....777772.............2273..3773......37
+7777777.............777....77777...............233.33773.....337
+7777777......777....77737.373777...................37773.....377
+7777777777777777....777.....3.....................337733.....377
+7777777777777777...37.......3.....................22223......377
+777777777777773..33373......3.......................22......3377
+777777777777773..333737.....................................3777
+777777777777773.....777....................................33777
+777777777777777.....73.....................................37777
+777777777777777...........................................337777
+777777777777773.....73...................................3377777
+777777777777773.....737.................................22777777
+77777777777777777777777.................................27777777
+777777777777777777777.......3...........................27777777
+777777777777777777777.......3..........................227777777
+77777777777777777777777.....3.........................2277777777
+7777777777777777777777733.333777.............7.77..2222777777777
+7777777777777777777777777.777777.............7.77.22777777777777
+7777777777...777777777.33.3.7777..........222....227777777777777
+77777...77..................7777722333....2722..2277777777777777
+77777.......................77..77777333..37722.2777777777777777
+77777...........................777777733337772.2777777777777777
+77777...........................77777777777777777777777777777777
+77777...77......................77777777777777.....7777777777777
+77777777777.................77..77777777777777.....7777777777777
+7777777777777777.......7777.777777777777777777.....7777777777777
+777777777777777777777777777.7777777777777.7777.....7777777777777
+777777777777777777777777777.7777777777777.7777.....7777777777777
+777777777777777777777777777.7777333377777.7777.....7777777777777
+77777777777777777774444444.............37.7777.....7777777777777
+77777777777777777744.....7.........................7777777777777
+7777777777777777774................................7777777777777
+7777777777777777744................................7777777777777
+777777777777777774.................................7777777777777
+777777777777777774.................................7777777777777
+777777777777777774.....................37.7777777777777777777777
+77777777777777777477...................37.7777777777777777777777
+7777777777777777777777.................37.7777777777777777777777
+7777777777777777777777.................3777777777777777777777777
+7777777777777777777777..7..........77733777777777777777777777777
+7777777777777777777777..7..........77777777777777777777777777777
+7777777777777777777777..7.77777777777777777777777777777777777777
+7777777777777777777777777777777777777777777777777777777777777777
+7777777777777777777777777777777777777777777777777777777777777777
+7777777777777777777777777777777777777777777777777777777777777777
+7777777777777777777777777777777777777777777777777777777777777777
 7777777777777777777777777777777777777777777777777777777777777777
 7777777777777777777777777777777777777777777777777777777777777777
 """
@@ -447,9 +476,9 @@ class State:
     heading: int
 
 
-#: E1M1's start: the spawn corridor south of the octagon, between the two
-#: entry alcoves, facing north — cell (42, 4), heading 4.
-SPAWN = State(posX=43520, posY=4608, heading=4)
+#: Freedoom E1M1's real player-1 start (THINGS type 1: map units (-416, 256),
+#: angle 0): the west start hall, facing east — cell (5, 26), heading 0.
+SPAWN = State(posX=5632, posY=27136, heading=0)
 
 
 def step(state: State, cmd: int) -> State:
@@ -474,11 +503,21 @@ def step(state: State, cmd: int) -> State:
     if s != 0:
         dirX, dirY, _, _ = unpack_heading(_HDG_WORDS[heading])
         # lodev's per-axis collision: X first, then Y against the updated posX.
-        newX = posX + div(dirX * s * MOVE_NUM, MOVE_DEN)
-        if map_cell(div(newX, UNITS), div(posY, UNITS)) == 0:
+        # A move is two cells (MOVE_NUM), so each axis checks the HALF-way cell
+        # too — real level geometry has one-cell walls, and a destination-only
+        # check would tunnel straight through them (the asm mirrors this:
+        # ``DIVI 2`` on the axis delta, the same inlined lookup twice).
+        deltaX = div(dirX * s * MOVE_NUM, MOVE_DEN)
+        newX = posX + deltaX
+        midX = posX + div(deltaX, 2)
+        if map_cell(div(midX, UNITS), div(posY, UNITS)) == 0 \
+                and map_cell(div(newX, UNITS), div(posY, UNITS)) == 0:
             posX = newX
-        newY = posY + div(dirY * s * MOVE_NUM, MOVE_DEN)
-        if map_cell(div(posX, UNITS), div(newY, UNITS)) == 0:
+        deltaY = div(dirY * s * MOVE_NUM, MOVE_DEN)
+        newY = posY + deltaY
+        midY = posY + div(deltaY, 2)
+        if map_cell(div(posX, UNITS), div(midY, UNITS)) == 0 \
+                and map_cell(div(posX, UNITS), div(newY, UNITS)) == 0:
             posY = newY
     return State(posX, posY, heading)
 
@@ -688,20 +727,22 @@ def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START) -> list[str]:
 
 # ── the demo walk ────────────────────────────────────────────────────────────
 #: One chord per frame, each encoded by :func:`keys`.  The beats: hold the
-#: spawn view up the spawn corridor; eight ``w`` north into the octagon, the
-#: window slits and both raised side platforms growing ahead; ``d`` half-look
-#: right at the armor pedestal behind the slits and FIRE at it; five ``a``
-#: back and round to west, sweeping the platforms and walls; fifteen ``w``
-#: across the octagon and down the computer-area corridor into the zigzag
-#: nukage room; ``d``, hold, ``a`` — the half-look up the sawtooth spurs; five
-#: ``a`` on round to south and five ``w`` down the walkway into the exit room
-#: (four ``d`` back to west on the way in); a step and a *firing* step at the
-#: red door (``"w "`` — the MUX at work); and FIRE once more, standing before
-#: it.
+#: spawn view down the start hall; ten ``w`` east along it, the striped BASE2
+#: columns sliding by; four ``a`` to face north and seven ``w`` up the brown
+#: concrete corridor at x=25 (three of them past its mouth into the cavern's
+#: south-west lobe); four ``d`` back to east and two ``w`` into the great
+#: cavern proper; ``d``, FIRE, ``a`` — a half-look right at the sunlit south
+#: rim, the shot lighting the muzzle; six ``w`` east across the cavern floor,
+#: the ZIMMER cliffs and green MCSTAT screens far ahead; ``d``, hold, ``a`` —
+#: the quiet half-look at the north rim; two ``w`` on to x=45, four ``a``
+#: round to north, two ``w`` toward the slime fall, then a *firing* step
+#: (``"w "`` — the MUX at work) and one last FIRE standing before the bright
+#: green fall.  Two-cell steps on the 64x64 grid; 50 words, spelled
+#: ``WALK_CHORDS``.
 WALK_CHORDS: list[str] = (
-    ["."] + ["w"] * 8 + ["d", " ", "a"] + ["a"] * 4
-    + ["w"] * 15 + ["d", ".", "a"] + ["a"] * 4 + ["w"] * 5 + ["d"] * 4
-    + ["w", "w "] + [" "]
+    ["."] + ["w"] * 10 + ["a"] * 4 + ["w"] * 7 + ["d"] * 4 + ["w"] * 2
+    + ["d", " ", "a"] + ["w"] * 6 + ["d", ".", "a"] + ["w"] * 2 + ["a"] * 4
+    + ["w"] * 2 + ["w ", " "]
 )
 
 #: The command words the demo feeds the machine: ``WALK_CHORDS`` encoded.
@@ -709,59 +750,60 @@ WALK: list[int] = [keys(ch) for ch in WALK_CHORDS]
 
 
 # ── the title screen (round 0) ───────────────────────────────────────────────
-#: The 64x48 DOOM-homage title screen, hand-quantized from the same source as
-#: ``lambda_deadman.HEX_ROWS`` (doomwiki's Doom-1-.gif) with the block-optimal
-#: Lab-distance method at the full panel size, plus a 37-pixel isolated-dot
-#: despeckle. One hex digit per pixel (ANSI palette index), row-major.
+#: Freedoom's own title art: ``graphics/titlepic/titlepic.png`` at commit
+#: ``d14dbbe``, GENERATED by ``wadimport.quantize_title`` — the block-optimal
+#: Lab-distance method at the full panel size (as ``lambda_deadman.HEX_ROWS``
+#: was made) after a x1.6 brightness lift, plus one isolated-dot despeckle
+#: pass. One hex digit per pixel (ANSI palette index), row-major.
 TITLE_HEX_ROWS: list[str] = [
-    "1811118111111111111111111111111111111111111111111111111111111111",
-    "11111118c77777778111115888888111118888881178c8885115888c51111111",
-    "1111111110000000011110000000011110000000015800000141000011111111",
-    "1111111110000000001010000000001100000000001800000400000011111111",
-    "1991339110000000003030000000003304000000003330000300000011111111",
-    "1199991810003330003830003330003304033330003330000330000011111111",
-    "8811918810000030003830003030003304030030003330000034000011111111",
-    "0488884810003030003330003830003300030830003330000000000011111111",
-    "8544441130003830003330003830003300038830003330000000040031111111",
-    "1888881130003830003334003830003300038334003330030000040031111111",
-    "1111111130003830083338003330003304433330833338030000440031111111",
-    "8111111134003830883338803330003300433338833333830004040011111111",
-    "8111111134003338883333803330003300433333333333333004000011111111",
-    "1001111130003338883333303330003300033333333333333380880011111111",
-    "1111111130003338883333333330003300033333333333333338780011111111",
-    "111111113088383833b3b333333880b3083333333333333bb333b80011111111",
-    "11111111b8883b333377773337b388bb333b33333333333b8333b380b1111111",
-    "11111111b88833333887777333b333f7333b33333b33333b8b333383b1111111",
-    "11111111b88833388888888833b3bb33333333bb3b83333b3b333333b1111111",
-    "11111111b38333388088888773b3b3333bb333333333333b3b333333b1111111",
-    "11111111b3333338808888877b8bb33333bbb3bb313333bb33b33333b1111111",
-    "11111111b333333880888877888882333333bb331111333b33b33333b1111111",
-    "11111111b33333888888888788888823133333111111133883833333b1111111",
-    "11111111b333bb388888888888888882111831111111111083833333b1118811",
-    "11111111b33333300888088888288882811111111111111000883b33b1188811",
-    "11111111b33333800008088882228888311111111111110001883b3330888111",
-    "11111111bb333800000000088822208773111111111111000183333800081111",
-    "1111011333338000080008808822283373111111111001000000388000111111",
-    "1100001183380882280888808822228333311111110000000008888081111111",
-    "1100001113180888820088880888828333331111100000000088888881111111",
-    "1100001111080888882088880000882883337110000000000888800000111011",
-    "1100011110020888888808888882882888333700000000000880000000000011",
-    "1111111000020008833700088888882288833330000000000000000110000011",
-    "1111111000008088333f80083333800018883338800000000000000010000001",
-    "1111111100008088333330033333880811388388800000000000111110000000",
-    "1111111110008830883330033333888881108800000000000011111110000001",
-    "1111111110011138883377888338888888100000000800000011111484440880",
-    "11111111110001118883377888888888881088000081000001111118b000bbb0",
-    "111111111110001118833338888888888880800011111100111111108888bbb0",
-    "1111101111100011118833388888888888280011111111111111111bbbbbbbb0",
-    "11111011111000111188838888888888882801111111111111111118b8b48bb0",
-    "11111111111000113288800888888888882811111111111111111118b8b08bb0",
-    "11111111111100128888800888888888782211111111111111111118b8b08bb0",
-    "11111111111103288888300888888888772b3333111111111111111bbbbbbbb3",
-    "1111111110010888888888088008888877ffb773811111111111111888888880",
-    "000111100011880888888008000888787ffffff7801111111111111888080000",
-    "0001111000018800000800080088887ffffffff7731110001111111131133300",
-    "0011111111008000000800000888887fffffffbbb31110010111911111131000",
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "1111111111111144111111111111111111111111111111111111111111111111",
+    "1111111111111114111111111111111111111111111111111111111111111111",
+    "1111111111111115411111111111111111111111111111111111111111111111",
+    "1111111451333333441111111111111111111111111111111111111111111111",
+    "1111111443333333441111111111111111111111111111111111111111111111",
+    "1111113444333333848111111111111111111111111111111111111111111111",
+    "1111133344833333388811111111111111111111111111111111111111111111",
+    "1111133344833883388811111111111111111111111111111111111119991111",
+    "1111333384838bb8838311111111111111111111111111111111111119999911",
+    "1111338483338bb8838411111111111111111111111111111111111111111911",
+    "1111334443388833380441111111111111111111111111111111111111111111",
+    "1111334483333333800149111111118888111111111111111111111111111111",
+    "1111338383388308101194991111188888811111111111111111111111111111",
+    "111118844488110011199419111888c444881111111111111111111111111111",
+    "1111111444001111111114191888888448888881111111111111111111111111",
+    "1111113440811111111111111882828888888888111111199111111111111111",
+    "1111111848311111111111118882222882888888811111111911111111111111",
+    "1111111840811111111111118882222222288888871111111911991111111111",
+    "1111111980811111111111111888222222288888881111119911191111111111",
+    "1111111938011111111111111388222222888888811111111111111111111111",
+    "1111111911011111111111111138828822881833331111111111111111111111",
+    "1111111111111111111111111133888888881133333111111111111111111111",
+    "1111111111111111111111111773888888881133333111111111111111111111",
+    "1111111111111111111113317778888888881113383111111111111111111111",
+    "1111111111111111888119333788822888822118883111111111111111111111",
+    "1111111111111118888883333881222288822238881111111111111111111111",
+    "1111111111111118888888888111322888882233881111111111111111111111",
+    "1111111111111111888888811111328883888333318111111111119999911111",
+    "1111011111111111118888811111188881118833318111111111199991111111",
+    "1100011111111111111881111111188881111888118111111111999991111111",
+    "1100011111111111111111111111188881118888118111111119999111111111",
+    "1110011111111801111111111111188881118888118111111111991111111111",
+    "1110011111111001111111111111188888118888118111111111111111111111",
+    "1110011111111101111111111111188888338888111111111111111111111111",
+    "1118011111111081133331131113888888888888111111111119911111111111",
+    "1110111111111138333111383388888888888888131111111199911111111111",
+    "1110101111118881113133888888888888888888888811111119911111111111",
+    "1110101111118883818388888888888888888888888883111111911111111111",
+    "1111101111188888838888888888888888888888888883311111111111111111",
+    "1111101111188888888888888888888888888888888888811111111111111111",
+    "1111110133888888888888880888888888888888888888831331111111111111",
+    "1111118388888888888888880088888888888888888888888888883111111111",
 ]
 assert len(TITLE_HEX_ROWS) == HEIGHT and all(len(r) == WIDTH for r in TITLE_HEX_ROWS)
 
@@ -973,8 +1015,9 @@ def deadman3d_source() -> str:
         ";   from randomfun2026solvers.lm1.programs import PROGRAM_DIR",
         ';   (PROGRAM_DIR / "deadman-3d.asm").write_text(deadman3d_source())',
         ";",
-        "; lodev.org's raycaster_flat.cpp on the LM-1: DOOM's E1M1, quantized to a",
-        "; 64x64 grid, walked first person at 64x48 on the LM-75 — one frame per input",
+        "; lodev.org's raycaster_flat.cpp on the LM-1: Freedoom Phase 1's E1M1 (real",
+        "; level geometry, imported from levels/e1m1.wad @ d14dbbe by wadimport.py),",
+        "; walked first person at 64x48 on the LM-75 — one frame per input",
         "; word, and each word is a MUX of the keys held that frame: bit0 (1) W fwd,",
         "; bit1 (2) S back, bit2 (4) A left, bit3 (8) D right, bit4 (16) space FIRE",
         "; (muzzle-flash overlay); 0 idle, higher bits ignored. Turn first (A/D",
@@ -1048,7 +1091,7 @@ def deadman3d_source() -> str:
     rem_note = f" + {title_rem} straight-line pairs" if title_rem else ""
     lines += f"""
 
-; ── title: the DOOM-homage title screen — round 0's one frame ────────────────
+; ── title: Freedoom's title art (titlepic @ d14dbbe) — round 0's one frame ───
 ; The next {n_title} input words are PRE-ENCODED unit commands (title_words():
 ; one RUN word per RLE run of TITLE_HEX_ROWS, 8*(count*16 + colour) + C_RUN),
 ; so the CPU forwards each word untouched — IN; SND, {title_unroll} pairs per counted
@@ -1147,6 +1190,9 @@ turn0:  LD  BA
         ST  DIRX
 
 ; ── then move, along the NEW heading: s = W - S, cancelling when both held ───
+; A move is {MOVE_NUM} cells, so each axis checks TWO cells — the half-way cell
+; (delta DIVI 2, floored like the model's div) and the destination — real level
+; geometry has one-cell walls, and a destination-only check would tunnel.
 mvchk:  LD  BW
         SUB BS
         BRZ render          ; no net move: just render
@@ -1154,10 +1200,11 @@ mvchk:  LD  BW
         LD  DIRX
         MUL TMP
         MULI {MOVE_NUM}
-        DIVI {MOVE_DEN}              ; floor(dirX * s * {MOVE_NUM} / {MOVE_DEN}) — the two-cell step
+        DIVI {MOVE_DEN}              ; deltaX = floor(dirX * s * {MOVE_NUM} / {MOVE_DEN})
+        DIVI 2
         ADD POSX
-        ST  NEWX            ; newX
-        ; collision X: map_cell(newX / 1024, posY / 1024), inlined
+        ST  NEWX            ; midX = posX + deltaX/2, the half-way cell
+        ; collision X (half-way): map_cell(midX / 1024, posY / 1024), inlined
         LD  POSY
         DIVI {UNITS}
         ST  TMP2            ; mapY (ST preserves ACC)
@@ -1173,7 +1220,24 @@ mvchk:  LD  BW
         MULI 4
         ADD TMP2
         ADDI MAPB
-        LDA                 ; the packed quarter-column of newX's cell
+        LDA                 ; the packed quarter-column of midX's cell
+        DIV PW
+        MODI 16
+        BRZ okx             ; half-way open -> check the destination
+        JMP movey           ; wall -> posX unchanged
+okx:    LD  DIRX
+        MUL TMP
+        MULI {MOVE_NUM}
+        DIVI {MOVE_DEN}
+        ADD POSX
+        ST  NEWX            ; newX = posX + deltaX
+        ; collision X (destination): map_cell(newX / 1024, posY / 1024)
+        LD  NEWX
+        DIVI {UNITS}
+        MULI 4
+        ADD TMP2            ; PW and the selector still hold posY's row
+        ADDI MAPB
+        LDA
         DIV PW
         MODI 16
         BRZ comx            ; empty -> commit posX
@@ -1183,10 +1247,39 @@ comx:   LD  NEWX
 movey:  LD  DIRY
         MUL TMP
         MULI {MOVE_NUM}
+        DIVI {MOVE_DEN}              ; deltaY
+        DIVI 2
+        ADD POSY
+        ST  NEWY            ; midY = posY + deltaY/2
+        ; collision Y (half-way): map_cell(posX / 1024, midY / 1024) — the UPDATED posX
+        LD  NEWY
+        DIVI {UNITS}
+        ST  TMP2
+        MODI 16
+        ADDI POWB
+        LDA
+        ST  PW
+        LD  TMP2
+        DIVI 16
+        ST  TMP2
+        LD  POSX
+        DIVI {UNITS}
+        MULI 4
+        ADD TMP2
+        ADDI MAPB
+        LDA
+        DIV PW
+        MODI 16
+        BRZ oky
+        JMP render
+oky:    LD  DIRY
+        MUL TMP
+        MULI {MOVE_NUM}
         DIVI {MOVE_DEN}
         ADD POSY
-        ST  NEWY            ; newY
-        ; collision Y: map_cell(posX / 1024, newY / 1024) — the UPDATED posX
+        ST  NEWY            ; newY = posY + deltaY
+        ; collision Y (destination): map_cell(posX / 1024, newY / 1024) — PW/selector
+        ; must be newY's own row, so the whole lookup is redone
         LD  NEWY
         DIVI {UNITS}
         ST  TMP2
@@ -1585,6 +1678,73 @@ def _write_pngs(frames: list[list[str]], out_dir: Path, scale: int = 8) -> None:
             img.resize((WIDTH * scale, HEIGHT * scale), Image.NEAREST).save(path)
 
 
+# ── --wad: a locally imported IWAD level (Mode B; commit NOTHING from it) ────
+#: True once :func:`install_level` swapped in an imported level; the emulator
+#: helpers then assemble the asm from THIS module state instead of loading the
+#: checked-in ``deadman-3d.asm`` (whose title-loop constants are the committed
+#: Freedoom art's).
+_WAD_INSTALLED = False
+
+
+def install_level(map_rows: list[str], spawn_cell: tuple[int, int], heading: int,
+                  title_rows: list[str]) -> None:
+    """Swap the module onto an imported level (``wadimport`` output).
+
+    Everything downstream — :func:`map_cell`, :func:`preamble_words`,
+    :func:`render`, :func:`title_words`, :func:`deadman3d_source` — reads the
+    module globals at call time, so the swap makes the whole model, generator
+    and player follow the imported level.
+    """
+    global MAP_STR, _PRINTED_ROWS, _MAP_WORDS, SPAWN, TITLE_HEX_ROWS, _WAD_INSTALLED
+    assert len(map_rows) == MAP_SIZE and all(len(r) == MAP_SIZE for r in map_rows)
+    assert len(title_rows) == HEIGHT and all(len(r) == WIDTH for r in title_rows)
+    MAP_STR = "\n".join(map_rows) + "\n"
+    _PRINTED_ROWS = list(map_rows)
+    _MAP_WORDS = map_words()
+    x, y = spawn_cell
+    assert map_cell(x, y) == 0, f"imported spawn cell {spawn_cell} is a wall"
+    SPAWN = State(posX=x * UNITS + UNITS // 2, posY=y * UNITS + UNITS // 2,
+                  heading=heading % HEADINGS)
+    TITLE_HEX_ROWS = list(title_rows)
+    _WAD_INSTALLED = True
+
+
+def _current_program():
+    """The checked-in program — or, once a level is installed, the asm
+    regenerated from the module state (same slots, new title-loop constants)."""
+    from randomfun2026solvers.lm1 import programs
+    from randomfun2026solvers.lm1.asm import assemble
+
+    if _WAD_INSTALLED:
+        return assemble(deadman3d_source(), name="deadman-3d")
+    return programs.load("deadman-3d")
+
+
+def _local_build(out_dir: Path, cmds: list[int]) -> None:
+    """The full local artifact set for an installed --wad level: asm, the
+    men-v3 machine AND the taped machine (the web-editor workflow runs on
+    taped) with debug sidecars, the cases file, the flat input, PNGs."""
+    from randomfun2026solvers.lm1 import machine
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    src = deadman3d_source()
+    (out_dir / "deadman-3d_local.asm").write_text(src, encoding="utf-8")
+    prog = _current_program()
+    for suffix, kwargs in (("", {}), ("_taped", {"store": "taped"})):
+        m = machine.build_for("deadman-3d", program=prog, **kwargs)
+        stem = f"deadman-3d_local{suffix}"
+        (out_dir / f"{stem}.man").write_text("\n".join(m.rows) + "\n", encoding="utf-8")
+        m.debug_map().write_html(m.rows, out_dir / f"{stem}.debug.html")
+        m.debug_map().write_json(out_dir / f"{stem}.debug.json")
+        print(f"wrote {out_dir / stem}.man ({m.width}x{m.height})")
+    (out_dir / "deadman-3d_local.cases.json").write_text(
+        json.dumps(cases_json(cmds)) + "\n", encoding="utf-8")
+    (out_dir / "deadman-3d_local.input.txt").write_text(
+        " ".join(str(w) for w in preamble_words() + list(cmds)) + "\n", encoding="utf-8")
+    _write_pngs([title_frame()] + frames_for_commands(cmds), out_dir / "frames")
+    print(f"wrote {out_dir}/deadman-3d_local.cases.json, .input.txt, frames/")
+
+
 # ── --play: the machine, played live ─────────────────────────────────────────
 class _MachinePlayer:
     """The checked-in asm on ONE persistent emulator: one frame per keypress.
@@ -1598,11 +1758,10 @@ class _MachinePlayer:
     """
 
     def __init__(self) -> None:
-        from randomfun2026solvers.lm1 import programs
         from randomfun2026solvers.lm1.display import frames_from_writes
         from randomfun2026solvers.lm1.emulator import Emulator, Round
 
-        self._em = Emulator(programs.load("deadman-3d"))
+        self._em = Emulator(_current_program())
         self._words: list[int] = list(preamble_words()) + title_words()
         # Round 0: boot + the title screen, up to the first blocking IN.
         res = self._em.run(
@@ -1712,9 +1871,17 @@ def _play(golden: bool) -> None:
         print("\x1b[0m")
 
 
+def _parse_walk(walk: str) -> list[int]:
+    """One key per frame — or, with commas, one CHORD per frame ("w, ,w " holds
+    W, fires, then does both at once)."""
+    return [keys(ch) for ch in (walk.split(",") if "," in walk else walk)]
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--walk", help='one key per frame, e.g. ".wwa d" (default: WALK)')
+    parser.add_argument("--walk", help='one key per frame, e.g. ".wwa d", or '
+                                       'comma-separated chords, e.g. ".,w,w " '
+                                       '(default: WALK)')
     parser.add_argument("--cases", type=Path, help="write cases_json(WALK) here")
     parser.add_argument("--png", type=Path, help="dump preview PNGs to this directory")
     parser.add_argument("--play", action="store_true",
@@ -1723,14 +1890,40 @@ def main(argv: list[str] | None = None) -> None:
                         help="with --play/--play-script: golden model, instant frames")
     parser.add_argument("--play-script", metavar="KEYS",
                         help='render KEYS as --play would, non-interactively')
+    parser.add_argument("--wad", type=Path, metavar="IWAD",
+                        help="import a local retail IWAD's level+TITLEPIC first "
+                             "(Mode B; outputs are local-only, commit nothing)")
+    parser.add_argument("--wad-map", default="E1M1", metavar="NAME",
+                        help="map marker for --wad (default E1M1)")
+    parser.add_argument("--build", action="store_true",
+                        help="with --wad: write the full local artifact set "
+                             "(asm, men-v3 + taped .man + sidecars, cases, "
+                             "input, PNGs) into littleman/examples/local/")
     args = parser.parse_args(argv)
+    if args.wad:
+        from randomfun2026solvers import wadimport
+
+        level = wadimport.load_iwad(args.wad, args.wad_map)
+        install_level(level.map_rows, level.spawn, level.heading, level.title_rows)
+        print(f"installed {level.stats['source']}: spawn {level.spawn} "
+              f"heading {level.heading}, {level.stats['wall_cells']} wall cells, "
+              f"{level.stats['title_runs']} title runs")
+        if args.build:
+            local = Path(__file__).resolve().parents[3] / "littleman" / "examples" / "local"
+            wadimport.emit(level, local)
+            cmds = _parse_walk(args.walk) if args.walk else WALK
+            _local_build(local, cmds)
+            return
+    elif args.build:
+        parser.error("--build needs --wad (the committed artifacts are regenerated "
+                     "from the module, not the CLI)")
     if args.play_script is not None:
         _play_script(args.play_script, args.golden)
         return
     if args.play:
         _play(args.golden)
         return
-    cmds = [keys(ch) for ch in args.walk] if args.walk else WALK
+    cmds = _parse_walk(args.walk) if args.walk else WALK
     if args.cases:
         args.cases.write_text(json.dumps(cases_json(cmds)) + "\n")
         print(f"wrote {args.cases}")
