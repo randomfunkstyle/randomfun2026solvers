@@ -72,16 +72,19 @@ B_RET, B_FWD, SPARE, PROD = 6, 7, 8, 9
 # the topmost room's wall must clear `prod`'s row, since `prod`'s leg runs east over
 # these columns. **rK goes first**, directly under the drive loop's shift run — it is
 # the only register the hot loop touches, and every row between the two is a tick.
-RK_RET, RK_FWD = 17, 18
+# rK sits **immediately** below the marker test's `d`, which is the tightest the
+# three 4-row relay rooms pack: rN above the shift run, rK straddling the row the
+# test lands on, rM under it. One row of MAIN is one row of the machine.
+RK_RET, RK_FWD = 16, 17
 RN_RET, RN_FWD = 11, 12
-RM_RET, RM_FWD = 21, 22
+RM_RET, RM_FWD = 20, 21
 # `cmd` sits directly under the last register pair, and the band ends one row below
 # it. Every row of the band is walked twice by every serpentine turn, and the whole
 # machine's height is MAIN's height plus two fixed bands, so this is two rows off
 # both terms of the score at once.
-CMD = 23
-BAND_T, BAND_B = 1, 24
-IW, IH = 92, 24
+CMD = 22
+BAND_T, BAND_B = 1, 23
+IW, IH = 92, 23
 SENTINEL_BUILD = "2M******"          # A = 128 with no backtick literal
 
 WEST = {"in": IN, "b_ret": B_RET, "a_ret": A_RET,

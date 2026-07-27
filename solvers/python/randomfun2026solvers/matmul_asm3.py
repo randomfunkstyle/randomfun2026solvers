@@ -135,7 +135,7 @@ def build(*, legs=5, legs_b=4, band_foot=7, verbose=False):
                                (ae + 2, AY + a3.CIN), (ae + 1, AY + a3.CIN)])
     ring_c = caps["cout"] + caps["cin"]
     assert ring_c >= 20, f"ring C holds {ring_c}, needs 17 for K=16"
-    ox, oy = ae + 8, AY + a3.OUT + 2
+    ox, oy = ae + 8, AY + a3.OUT + 1
     g.room(ox, oy, ox + 2, oy + 2)
     g.put(ox + 1, oy + 1, "O")
     caps["out"] = g.draw_pipe([(ae + 1, AY + a3.OUT), (ae + 2, AY + a3.OUT),
@@ -161,8 +161,8 @@ def build(*, legs=5, legs_b=4, band_foot=7, verbose=False):
         runs along the foot of the band out to the rise, so a relay west of it is
         fenced in by the ring's own pipe.
         """
-        for rise in range(c_prod + 2, c_prod + 40, 1):
-            for gap in (3, 4, 5, 6, 8, 10):
+        for rise in range(c_prod + 1, c_prod + 40, 1):
+            for gap in (2, 3, 4, 5, 6, 8, 10):
                 probe = copy.deepcopy(g)
                 rx = rise + gap
                 try:

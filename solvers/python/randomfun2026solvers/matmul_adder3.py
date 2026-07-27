@@ -44,15 +44,26 @@ __all__ = ["CIN", "CMD", "COUT", "IH", "IW", "OUT", "PHASES", "PORTS_IN", "PORTS
 
 CMD, PROD, CIN, COUT, OUT = 1, 4, 6, 8, 9
 READ = 2                       # the row every riser reads `cmd` from
-SPINE, RET = 11, 12
-IH = 12
+# The emit loop's bottom row **is** the spine. The spine is only ever walked from one
+# phase's drop column to the next phase's riser, and those are adjacent columns, so
+# the loop's two turn glyphs on that row are never stepped on. That is a row off the
+# ADDER, and the ADDER's bottom is what the O room and ring B's band sit under.
+SPINE, RET = 10, 11
+IH = 11
 
 PORTS_IN = {"cmd": CMD, "prod": PROD, "cin": CIN}
 PORTS_OUT = {"cout": COUT, "out": OUT}
 
 #: (name, loop top row, body). Each body walks down its own column, one glyph per
 #: row, so every glyph binds the port on its row.
-PHASES = (("seed", 3, "r   s"), ("accumulate", 3, "rMr+s"), ("emit", 5, "r  s"))
+#: Bodies are derived from the port rows: a body's length **is** the span it covers,
+#: and its cycle is 2*(len+2) ticks. `out` directly under `cin` is what makes the emit
+#: body two glyphs instead of four — 8 ticks per output value rather than 12.
+PHASES = (
+    ("seed", PROD - 1, "r" + " " * (COUT - PROD - 1) + "s"),
+    ("accumulate", PROD - 1, "rMr+s"),
+    ("emit", CIN - 1, "r" + " " * (OUT - CIN - 1) + "s"),
+)
 
 IW = 2 + 5 * len(PHASES)       # '@' column plus five per phase
 
