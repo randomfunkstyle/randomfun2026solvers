@@ -146,8 +146,8 @@ def default_split(order: list[str], frac: float = 0.7) -> dict[str, str]:
 ORDER = [
     "INIT", "FR_BODY", "FR_END", "FR2_BODY", "FR2_END", "G_LOOP",
     "G_BODY", "G_END", "T_GROW", "MAIN", "TICK", "T_H", "T_V_OK",
-    "T_H_OK", "DEAD_PAINT", "DC_A_PIX", "DEAD_HV", "DEAD_V", "T_V",
-    "DEAD_DONE", "M_END", "M_BODY", "M_LOOP", "M_CMP", "DEAD_C", "DC_A",
+    "T_H_OK", "DEAD_PAINT", "DC_A_PIX", "DEAD_HV", "DEAD_C", "T_V",
+    "DEAD_DONE", "M_END", "M_BODY", "M_LOOP", "M_CMP", "DEAD_V", "DC_A",
     "FRUIT", "DC_MARK", "DC_B_PIX", "DC_B", "T_MOVE", "HALT", "DEAD_PIX",
     "T_F", "DIR", "DIR_V", "DIR_NEG", "DIR_H", "DIR_SET", "ROT_BODY",
 ]
