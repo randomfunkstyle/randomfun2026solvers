@@ -342,12 +342,17 @@ ATTEMPTS = 150
 #: bank shape, and this order was found under a shape the sweep no longer starts
 #: from.  ``--sweep`` therefore measures it against fresh candidates instead of
 #: reproducing it, which is the useful question anyway.
+#: **Found on measured ticks, not on the corridor proxy.**  The proxy exists
+#: because `build_room` costs 4.8s; but `optimize.verify` on the fast engine costs
+#: **0.05s**, so the proxy was shortlisting for a decider that is 1% of its price.
+#: Searching ``area2 x avg_ticks`` directly instead moved this order off the one
+#: the proxy sweep settled on and took 2,446 corridor cells to 2,287 and 16,496
+#: ticks to 15,510 -- 6.0%, at the same 70 columns.
 ORDER = [
-    "INIT", "A_END", "ROUND", "OP", "REST_E", "OP_GO", "SET", "GET",
-    "S_SKIP", "S_L", "S_TEST", "FOUND", "G_HIT", "REST_B", "REST", "S_HIT",
-    "A_ADD", "A_L", "AVG", "D34", "TOP", "T_END", "T_MSK", "T_L", "T_MID",
-    "T_X", "T_SET", "T_CMP", "PHASE", "ROSTER", "CELL", "STU", "HORN_B",
-    "HORN", "PAD_B", "PAD", "PADSET",
+    "INIT", "A_END", "ROUND", "OP", "OP_GO", "SET", "GET", "S_LOOP",
+    "S_L", "S_TEST", "FOUND", "G_HIT", "REST", "T_SET", "T_END", "A_L",
+    "AVG", "TOP", "T_CMP", "T_L", "T_MID", "T_X", "PHASE", "CELL", "STU",
+    "ROSTER", "HORN", "PAD_B", "S_HIT", "PADSET", "D34",
 ]
 
 
@@ -366,9 +371,17 @@ def build_room(banks=BANKS, zones=ZONES, order=None, home=None,
 
 
 # ── the north band: three turnaround rooms, two I/O rooms, eight pipes ────────
-#: Turnaround interior height.  3 is the shortest a perimeter walk may be, and
-#: every row of the north band is charged against the room's height.
-RELAY_H = 3
+#: Turnaround interior height.
+#:
+#: **2, not 3, and the difference is a row of the room's height.**  3 was the
+#: shortest a *perimeter* walk may be -- `dataflow_relay.relay` runs a rectangle
+#: whose two long sides must not touch -- but a turnaround does not have to be a
+#: rectangle walk.  `dataflow_relay.flat_relay` is the two-row shape `snake_ring`
+#: has used all along: east along the top, west along the bottom.  It carries
+#: ``w-3`` words a lap against the perimeter walk's ``w-2`` at the same width, so
+#: at 13 columns it is 2.60 ticks a word against 2.55 -- and it hands back a row
+#: of :data:`BAND_H`, which is ~2.7% of the score.
+RELAY_H = 2
 
 #: First row a riser may use: the relays occupy ``0 .. RELAY_H + 1``.
 RISER_TOP = RELAY_H + 2
@@ -384,7 +397,10 @@ RISER_TOP = RELAY_H + 2
 #: instead lets a riser cross :data:`REACH` columns in a single row, and then the
 #: only floors left are the relay's five rows and the three a riser needs to
 #: leave the relay, turn along a row, and drop to its anchor.
-BAND_H = 8
+#:
+#: 7 now rather than 8: :data:`RELAY_H` dropped to 2, so the risers start a row
+#: higher and the same three riser rows fit under a band one shorter.
+BAND_H = 7
 
 #: How far a riser reaches sideways from its band's centre.  Columns are free and
 #: rows are not, so the capacity a ring needs is bought here rather than in
@@ -465,13 +481,14 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0,
                ) -> tuple[list[str], DebugMap, dict[str, object]]:
     """The worker room, three turnaround rooms, both I/O rooms and eight pipes."""
     from randomfun2026solvers.circuit import Circuit
-    from randomfun2026solvers.dataflow_relay import relay
+    from randomfun2026solvers.dataflow_relay import flat_relay
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.plotter_block import pipe
     from randomfun2026solvers.value_ring import stamp, walls
 
     room = build_room(banks, zones, order, home, seed, attempts)
     walked_cells_all_hold_a_glyph(room)
+    B.walks_are_the_program(room, WORKER)
     geo, _banks = layout(banks, zones)
     iw, ih = geo.iw, room.height
     wx, wy = 1, BAND_H + 1
@@ -510,7 +527,7 @@ def build_grid(banks=BANKS, zones=ZONES, order=None, home=None, seed: int = 0,
         if not all(rx < p < rx + RELAY_W + 1 for p in ports):
             raise Collision(f"relay {z} spans {rx}..{rx + RELAY_W + 1}, "
                             f"the risers want ports at {ports}")
-        stamp(g, rx, 0, relay(RELAY_W, RELAY_H))
+        stamp(g, rx, 0, flat_relay(RELAY_W))
         cap[z] = RELAY_HOLDS \
             + draw(f"in_{z}", legs["in"], into=(cin, north)) \
             + draw(f"out_{z}", legs["out"], into=(legs["out"][-1][0], RELAY_H + 1))

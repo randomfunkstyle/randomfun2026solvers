@@ -49,6 +49,8 @@ if str(PKG) not in sys.path:
 from randomfun2026solvers.circuit import Circuit, E, S, W  # noqa: E402
 from randomfun2026solvers.dataflow_relay import (  # noqa: E402
     ROTATION_MODEL,
+    flat_relay,
+    flat_relay_words,
     relay,
     relay_words,
     ticks_per_rotation,
@@ -210,6 +212,33 @@ def test_the_relay_geometry_is_what_sets_its_throughput() -> None:
         interior = "".join(row[1:-1] for row in art[1:-1])
         assert interior.count("r") == interior.count("s") == words
         assert interior.count("@") == 1
+
+
+def test_the_flat_relay_never_reaches_an_s_it_has_no_word_for() -> None:
+    """Two rows cannot be a perimeter walk, so the pairing is the whole proof.
+
+    ``2w-5`` cells alternate after the four turns and the spawn, which is always
+    odd, so exactly one is blank -- and if the blank falls in the wrong place the
+    walk sends before it receives.  Walked in order, every ``r`` must be followed
+    by its own ``s``, at every width and both parities.
+    """
+    for w in range(5, 20):
+        art = flat_relay(w)
+        assert len(art) == 4
+        assert all(len(row) == w + 2 for row in art)
+        # the man's cycle: east along the top, down, west along the bottom, up
+        top, bot = art[1][1:-1], art[2][1:-1]
+        walk = top[1:] + bot[::-1]
+        seen = [c for c in walk if c in "rs"]
+        assert seen == list("rs" * flat_relay_words(w)), (w, walk)
+        assert (top + bot).count("@") == 1
+
+
+def test_the_flat_relay_is_the_shape_snake_already_ships() -> None:
+    """`snake_ring.FLAT_RELAY` is `flat_relay(10)`, so this is a lift, not a rewrite."""
+    from randomfun2026solvers.snake_ring import FLAT_RELAY
+
+    assert flat_relay(10) == FLAT_RELAY
 
 
 def test_a_relay_needs_a_perimeter_to_walk() -> None:

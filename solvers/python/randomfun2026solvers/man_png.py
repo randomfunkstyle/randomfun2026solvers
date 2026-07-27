@@ -229,6 +229,32 @@ def wall_mask(rows: list[str]) -> set[tuple[int, int]]:
     return out
 
 
+#: Which way an arrowhead points.  A pipe is found by looking *behind* one.
+_BEHIND = {">": (-1, 0), "<": (1, 0), "v": (0, -1), "^": (0, 1)}
+
+
+def pipe_mouths(rows: list[str]) -> list[tuple[tuple[int, int], str]]:
+    """Every cell the **runtime** will read as the start of a pipe.
+
+    `route-check.mjs` and ``lm.mjs analyze`` report the pipes that were *drawn*.
+    The runtime does something else: it looks behind each arrowhead, and if the
+    cell it points away from is a room's border then that arrowhead is a mouth --
+    whether or not anyone meant it.  A corridor that turns south against the
+    underside of a wall mints a pipe, the grid loads, and `analyze` says nothing.
+    That has now been the live bug on `brackets` (five reported, seven built) and
+    on `sudoku`.  `brackets_men.check_no_phantom_pipes` is this count against a
+    hand-written floor plan; this one reads the rooms off the grid, so it needs
+    no plan and works on any machine.
+    """
+    grid = {(x, y): ch for y, r in enumerate(rows) for x, ch in enumerate(r)}
+    inside = {(x, y) for y, row in enumerate(room_mask(rows))
+              for x, v in enumerate(row) if v}
+    walls = wall_mask(rows)
+    return sorted((c, ch) for c, ch in grid.items()
+                  if ch in _BEHIND and c not in inside
+                  and (c[0] - _BEHIND[ch][0], c[1] - _BEHIND[ch][1]) in walls)
+
+
 def density(rows: list[str]) -> tuple[int, int, float]:
     """`(glyphs, interior cells, ratio)` -- how full the rooms actually are."""
     mask = room_mask(rows)

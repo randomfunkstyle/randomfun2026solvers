@@ -328,6 +328,50 @@ def block_zones(worker, name: str, token_zone: dict[str, str]) -> set[str]:
     return {token_zone[t] for t in worker[name][0] if t in token_zone}
 
 
+def token_glyphs(token: str) -> str:
+    """The grid cells one CFG token compiles to, **read off the token itself**.
+
+    Deliberately re-derived here rather than taken from anything the pen emitted.
+    A `matmul` machine cost six sessions verifying clean and computing wrong
+    values because its checker compared the walked glyphs against an expansion of
+    *the pen's own output*: both sides agreed by construction, so four constant
+    runs the pen had dropped were invisible.  A checker is only worth running if
+    it can disagree with the builder.
+    """
+    if token.startswith("L") and token[1:].isdigit():
+        d = token[1:]
+        return d if len(d) == 1 else f"`{d}`"
+    if len(token) == 2 and token[0] in "rs":
+        return token[0]                 # `rr`/`sq`/`st`/`so`/... are bare r or s
+    return token
+
+
+def block_glyphs(worker, name: str) -> str:
+    """Every cell of one block's program, in walking order, from the CFG."""
+    return "".join(token_glyphs(t) for t in worker[name][0])
+
+
+def walks_are_the_program(room: "Room", worker) -> None:
+    """Every block must **walk the whole program it was compiled from**.
+
+    The companion check -- that each walked cell still holds the glyph its plan
+    put there -- compares the grid against the plan and so catches a corridor
+    that ate a glyph.  It cannot catch a plan that never had the glyph.  This
+    one compares the plan against :data:`worker`, which is the source, so a run
+    the pen dropped fails here even though the grid matches its plan perfectly.
+    """
+    for name, p in room.placed.items():
+        # Blanks are dropped, not compared: a plan may pad a row with cells the
+        # man walks over doing nothing (`Field.walk`), which is how a branch
+        # column gets aligned.  A *missing* glyph still shifts the sequence.
+        walked = "".join(
+            "".join(g for _c, g in sorted(row.cells, reverse=not row.east))
+            for row in p.plan.rows).replace(" ", "")
+        want = block_glyphs(worker, name)
+        if walked != want:
+            raise Collision(f"{name} walks {walked!r}, its program is {want!r}")
+
+
 # ── one block's rows and exits ────────────────────────────────────────────────
 def lanes_of(worker, name: str, plan):
     """(lane kind, target) for every edge leaving a block, in glyph order.

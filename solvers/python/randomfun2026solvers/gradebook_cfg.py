@@ -142,8 +142,11 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
 
     # Horner in subject order; `*` and `+` leave B, so the accumulator rides the
     # whole loop in B and the file is never touched.
-    "HORN": (["d"], {"pos": "HORN_B", "zero": "PADSET"}),
-    "HORN_B": (["L2048", "*", "M", "ri", "+", "M", "m"], "HORN"),
+    # Body first, test last: `1 <= K <= 4` is a rule of the problem, so the loop
+    # always runs at least once and the guarding test was a block visit -- 39
+    # ticks of corridor -- spent to check something the rules already promise.
+    "HORN": (["L2048", "*", "M", "ri", "+", "M", "m", "d"],
+             {"pos": "HORN", "zero": "PADSET"}),
 
     # K < 4 packs the grades too far right; `4 - K` more Horner steps with an
     # implicit zero grade slide subject 1 up to bit 51.
@@ -160,9 +163,11 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
         "rt", "st",                        # A = T;     FILE = [packed, cnt-1, K, T]
         "rt",                              # A = packed; FILE = [cnt-1, K, T]
         "M",                               # B = packed
-    ], "PAD"),
-    "PAD": (["d"], {"pos": "PAD_B", "zero": "CELL"}),
-    "PAD_B": (["L2048", "*", "M", "m"], "PAD"),
+        "d",                               # `4 - K` may be zero, so guard first
+    ], {"pos": "PAD_B", "zero": "CELL"}),
+    # ... but the guard is `PADSET`'s own last glyph, because `PAD_B` retests for
+    # itself: the back edge, and with it the separate test block, is gone.
+    "PAD_B": (["L2048", "*", "M", "m", "d"], {"pos": "PAD_B", "zero": "CELL"}),
 
     # ══ CELL: packed << 18 | T, into the ring ═════════════════════════════════
     "CELL": ([
@@ -193,9 +198,14 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     # rides B untouched: `q`, `r`, `s`, `-` and `X` all leave B alone.
     "GET": (["L0", "st", "ri", "M"], "S_L"),
     "SET": (["L1", "st", "ri", "M"], "S_L"),
-    "S_L": (["rq", "sq", "X"], {"pos": "S_TEST", "zero": "S_TEST", "neg": "S_SKIP"}),
-    "S_TEST": (["-", "X"], {"zero": "FOUND", "pos": "S_SKIP", "neg": "S_SKIP"}),
-    "S_SKIP": (["rr", "sr"], "S_L"),
+    # Two branches a slot, so the loop cannot collapse to one block -- but the
+    # *third* block was only ever `S_SKIP` handing the cell back and returning to
+    # the read.  Rotated into `S_LOOP`, which is `S_SKIP` and `S_L` end to end:
+    # `S_L` is now just the entry `GET`/`SET` arrive at.
+    "S_L": (["rq", "sq", "X"], {"pos": "S_TEST", "zero": "S_TEST", "neg": "S_LOOP"}),
+    "S_TEST": (["-", "X"], {"zero": "FOUND", "pos": "S_LOOP", "neg": "S_LOOP"}),
+    "S_LOOP": (["rr", "sr", "rq", "sq", "X"],
+               {"pos": "S_TEST", "zero": "S_TEST", "neg": "S_LOOP"}),
     "FOUND": (["rt", "X"], {"zero": "G_HIT", "pos": "S_HIT", "neg": "G_HIT"}),
 
     # ══ GET: one shift and one mask ═══════════════════════════════════════════
@@ -234,9 +244,14 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     # the moment an operation is a full column scan.  A search stops where it
     # likes; this walks the rest of the lap so AVG and TOP always start aligned.
     # Both rings advance together, which is the invariant the search relies on.
-    "REST": (["rr", "X"], {"pos": "REST_B", "zero": "REST_B", "neg": "REST_E"}),
-    "REST_B": (["sr", "rq", "sq"], "REST"),
-    "REST_E": (["sr", "rq", "sq"], "OP"),
+    # One block, not three: both arms did the identical `sr rq sq`, so the whole
+    # lap fits before the branch if the word being tested is parked in B across
+    # the two ring moves and swapped back out.  See `_FUSED`.
+    "REST": (["rr", "M",                   # A = cell, B = cell
+              "sr",                        # the cell goes back (`sr` leaves A)
+              "rq", "sq",                  # the id ring advances in lockstep
+              "W", "X"],                   # A = cell again; branch on it
+             {"pos": "REST", "zero": "REST", "neg": "OP"}),
 
     # ══ AVG: one lap of raw cells; the sentinel it stops on is the divisor ═════
     "AVG": ([
@@ -244,9 +259,14 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
         "M", "L62", "W", "N", "+",         # A = sh
         "st",                              # FILE = [sh]
         "L0", "M",                         # B = running sum
+        "rr",                              # the lap's first cell, read here
     ], "A_L"),
-    "A_L": (["rr", "X"], {"pos": "A_ADD", "zero": "A_ADD", "neg": "A_END"}),
-    "A_ADD": (["sr", "+", "M"], "A_L"),
+    # Body first again: `4 <= N`, so a lap always has a cell before its sentinel
+    # and the guard was a visit spent on a promise.  The read moves to the top of
+    # the preheader and the test to the bottom of the body, so `A_END` still
+    # arrives holding the unsent sentinel in A and the sum in B.
+    "A_L": (["sr", "+", "M", "rr", "X"],
+            {"pos": "A_L", "zero": "A_L", "neg": "A_END"}),
     "A_END": ([
         "sr",                              # the sentinel goes back
         "W", "st",                         # FILE = [sh, sum]
@@ -269,10 +289,14 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
         "M", "L2047", "{",                 # A = 2047 << sh
         "M", "L16383", "|",                # A = mask (bits 14..17 are always 0)
         "M",                               # B = mask
+        "rr", "sr",                        # the lap's first cell, read and returned
     ], "T_L"),
-    "T_L": (["rr", "X"], {"pos": "T_MSK", "zero": "T_MSK", "neg": "T_MID"}),
-    "T_MSK": (["sr", "&", "st"], "T_L"),
-    "T_MID": (["sr", "L1", "N", "st", "L0", "M"], "T_X"),
+    # Body first, as `A_L`.  `&` and `st` leave B, so the mask still rides the
+    # whole lap; the cell is sent back at the *end* of the body, which is why
+    # `T_MID` no longer has to do it.
+    "T_L": (["&", "st", "rr", "sr", "X"],
+            {"pos": "T_L", "zero": "T_L", "neg": "T_MID"}),
+    "T_MID": (["L1", "N", "st", "L0", "M"], "T_X"),
     "T_X": (["rt", "X"], {"pos": "T_CMP", "zero": "T_CMP", "neg": "T_END"}),
     "T_CMP": (["-", "X"], {"pos": "T_SET", "zero": "T_X", "neg": "T_X"}),
     "T_SET": (["+", "M"], "T_X"),
