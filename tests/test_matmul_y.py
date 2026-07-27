@@ -706,3 +706,35 @@ def test_both_storage_rings_close_and_every_pipe_is_anchored(tmp_path) -> None:
               if p["src"] < 0 or p["dst"] < 0]
     assert not orphan, f"pipes not anchored to two rooms: {orphan}"
     assert len(info["pipes"]) == 10, f"expected 10 pipes, got {len(info['pipes'])}"
+
+
+def test_adder2_binds_every_op_with_all_ports_on_one_wall() -> None:
+    """The re-derived ADDER: five ports on one wall, so binding is by row.
+
+    The first ADDER split its ports west/east, which left `prod` and `cmd` unable to
+    reach it from the side they arrive on — and mirroring it is not available, since
+    flipping an arrowhead reverses its pipe's flow and `@` always spawns east.
+
+    With one wall, a `counted_loop` body walking down a column has each glyph bind
+    the port on its own row, so the accumulate phase `r(prod) M r(cin) + s(cout)`
+    pins the entire row map.
+    """
+    from randomfun2026solvers import matmul_adder2 as a2
+    from randomfun2026solvers.circuit import Circuit
+
+    assert a2.PROD < a2.CIN < a2.COUT, "the accumulate body is not in row order"
+    assert a2.CIN - a2.PROD >= 2 and a2.COUT - a2.CIN >= 2, "no spare row for M or +"
+
+    c = Circuit(a2.IW + 2, a2.IH + 2)
+    for (x, y), ch in a2.cells().items():
+        c.set(x, y, ch)
+    ops = 0
+    for y, row in enumerate(c.rows()):
+        for x, ch in enumerate(row):
+            if ch not in "rs":
+                continue
+            ops += 1
+            pool = a2.PORTS_IN if ch == "r" else a2.PORTS_OUT
+            got = min(pool, key=lambda k: (abs(y - pool[k]), pool[k]))
+            assert pool[got] == y, f"{ch!r} at row {y} binds {got!r} on row {pool[got]}"
+    assert ops == 10, f"expected 10 pipe ops across three phases, got {ops}"
