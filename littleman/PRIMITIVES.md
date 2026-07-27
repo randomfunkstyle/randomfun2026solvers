@@ -174,3 +174,34 @@ So **the delay ring can never be tighter than the spawn loop** unless the two
 `Y`s get exit paths of different lengths. With the ladder above, `c = 4`, so
 `s ≥ 5` with equal paths, or `s ≥ 4` if the two families' paths differ by one.
 Total ticks are then `≈ s·n`, which is the whole budget.
+
+## Transparent stations — a corner that only one man can exit at
+
+On the delay ring a `d` corner fires only for a man whose backpack has reached
+zero, and the backpack only moves at an `m`. So **a `d` with no `m` between it
+and the previous `d` can never fire** for anyone who passed that previous test:
+the value it reads is the value that just passed. Such a corner behaves exactly
+like a plain turn arrow for every man on the ring — except for a man who *joins*
+the ring between the two, carrying `BP = 0`.
+
+That gives a station reachable by exactly one kind of man. On the 22-cell 8×5
+ring with tests at idx 0, 11, 18 and decrements at idx 1 and 19, carriers
+entering at idx 6 exit only at 0 and 11 (verified: their exit distances are 5,
+16, 27, 38 — a clean 11 apart), and **idx 18 is free**. A man dropped onto the
+bottom edge between 11 and 18 with an empty backpack leaves there and nowhere
+else, so it can have its own exit path — one `s` instead of `s W s`.
+
+This is the hook for odd `n`: the leftover value is a single, not a pair, and a
+single cannot share the `s W s` exits. Reading it *after* the ring, on that
+private exit path, works too — the value sits in the input pipe untouched, and
+the man that fetches it emits first, which is exactly where an odd list's last
+element belongs.
+
+What is still unsolved is who becomes that man. The loop keeper is the only
+candidate that knows the list is exhausted (`q` reads the pipe's remaining count
+and `d`/`a` branches on it), but it is also the man that must walk the init
+chain to re-arm the next round, so it has to `Y` — and a `Y` splits
+unconditionally, which on even `n` leaves a spare man blocking on a read that
+never comes and swallowing the next round's first value. The 8×5 ring's three
+interior rows leave two free cells, one short of what the guarded split needs.
+
