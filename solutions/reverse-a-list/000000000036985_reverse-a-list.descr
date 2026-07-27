@@ -1,0 +1,16 @@
+# reverse-a-list — submission 5b93805e-5c6e-40f9-bac9-8dd8015a98dd
+
+verdict      done: 20/20 cases, area2 196, avgTicks 189, score 36,985
+submitted    2026-07-27T10:52:54+0300
+grid         14x14
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  edac49361ee899c6c02674558c9a3ffaf6c1b5cc215b93937b2a7a33a614c1d0
+commit       63bb6c7
+local        reverse-a-list: 8/8 public cases, avg 143 ticks
+source       ../../../../../../../../private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers--claude-worktrees-sort-numbers-ring/8d6fb213-c37a-4fac-896b-a6b9363874f1/scratchpad/rev_v7.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+14x14: 32-cell ring folded into a 10x7 box with a 2-cell tooth, 4 m/d stations, spacings 9/6/11/6 with tuned exit-path lengths
