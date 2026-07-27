@@ -1,0 +1,16 @@
+# snake — submission 71c547d7-4cf5-4373-a891-f7655e03a075
+
+verdict      done: 17/17 cases, area2 4900, avgTicks 17,945, score 87,930,788
+submitted    2026-07-27T13:44:19+0300
+grid         70x68
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  7a131826463ce659f07a30f3ce604032893c97429335292a916318c69409f915
+commit       0af9bbb
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_reroute.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Tighter 70x68 snake lineage (area2 4900 vs 5184) plus a corridor reroute pass. The reroute only found 3 moves / 0.24% here: this grid's corridors were already at shortest-path under the router's constraints — global rip-up saved 0 cells, it could only repack. That is the signal that node placement and entry-direction freedom, not corridor length, are what is left on this grid. Local 58,041,480 -> 57,900,360, avg 11,845 -> 11,816, 5/5 on both engines.
