@@ -140,7 +140,7 @@ def test_footprint_is_what_the_fold_sweep_found(built) -> None:
     geometries.
     """
     machine, _program = built
-    assert (machine.width, machine.height) == (192, 193)
+    assert (machine.width, machine.height) == (193, 193)
     assert max(machine.width, machine.height) ** 2 == 37_249
 
 
@@ -230,14 +230,15 @@ def test_the_shipped_machine_is_inside_the_judge_s_time_cap() -> None:
 
 
 def test_the_hot_bank_holds_every_slot_that_wants_it() -> None:
-    """The bank must cover the hot set, with room to spare.
+    """The bank must cover the hot set, with room to spare — and nothing more.
 
-    The "size it to exactly what is used" rule this once asserted was swept on a
-    *single* bank, where the whole length sits in every read's latency. The shipped
-    tier is ``HOT = (4, 26)`` — four banks of 26 — and a read only rotates its own
-    bank, so 104 reserved slots against 53 used costs nothing. Sizing is now a
-    property of the bank *length*, not the total, which is why the old equality no
-    longer holds and is not restored here.
+    ``HOT`` is a *shape* only in the constant: ``machine._two_tier`` multiplies it
+    out to ``hot_top`` and builds one ``tape_block`` of that many cells, so there
+    are no banks to rotate independently and the second number buys nothing. The
+    length is the latency: at ``(4, 26)`` every hot read walked past 51 empty cells
+    and the machine measured 5,024,446 ticks a case against 4,722,811 at ``(2, 27)``.
+
+    So the rule is the tight one after all — cover the hot set, keep one spare, stop.
 
     53, not the 52 it was swept at: folding ``MULI`` out to reach 16 opcodes needs a
     doubling scratch, and it has to be hot — four reads an execution is 124 a case,
@@ -249,6 +250,8 @@ def test_the_hot_bank_holds_every_slot_that_wants_it() -> None:
     llm_lm1._declare(a, packed_cells=False)
     assert a.hot_used == 53
     assert llm_lm1.HOT_SLOTS > a.hot_used, "the bank needs at least one spare slot"
+    # Every cell above the spare is one more the ring rotates past on every hot read.
+    assert llm_lm1.HOT_SLOTS <= a.hot_used + 4, "the bank has drifted wider than it is used"
 
 
 def test_a_bank_with_no_spare_slot_is_refused() -> None:

@@ -1524,7 +1524,24 @@ TAPE_RELAY_SIZE = (8, 6)
 #: "The four-word tape and the re-sized bank"; this one reaches 237,555,126,848 by
 #: shrinking the decode instead, so the two were never combined and this constant is
 #: the fold's, not that sweep's.
-HOT = (4, 26)
+#:
+#: **Only the product matters, and it had drifted to twice what is used.**
+#: ``machine._two_tier`` computes ``hot_top = cols * rows`` and hands it to one
+#: :func:`~lm1.machine.tape_block`; ``(4, 26)`` is *not* four banks of 26, it is a
+#: single 104-cell ring, so every hot read rotated past 51 cells that hold nothing.
+#: Re-measured over all 14 public cases at an unchanged fold, the shape is inert and
+#: the length is not:
+#:
+#:     (4, 26) = 104   avg 5,024,446
+#:     (4, 20) =  80   avg 4,859,743
+#:     (4, 16) =  64   avg 4,772,159
+#:     (3, 20) =  60   avg 4,752,785
+#:     (2, 28) =  56   avg 4,733,387
+#:     (2, 27) =  54   avg 4,722,811   <- 53 used, one spare
+#:
+#: -6.0 % of ticks, and it also took the machine from 192 to 190 columns because the
+#: shorter ring is a narrower block — which is what invalidated the fold below.
+HOT = (2, 27)
 HOT_SLOTS = HOT[0] * HOT[1]
 
 
@@ -1591,8 +1608,22 @@ def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tupl
 #: History, one value per geometry it was swept against: 88 (single tape), 89
 #: (after ``height = bottom - 1`` was reverted), 90 (banked store), 89 again
 #: (``HOT`` 104 -> 53, where the sixteen-opcode fold left it square at 193x193),
-#: 83 (buffered corridor, pre-fold), 85 (corridor + sixteen-opcode fold).
-ROM_ROWS = 85
+#: 83 (buffered corridor, pre-fold), 85 (corridor + sixteen-opcode fold), 83 again
+#: (the hot bank re-sized to 54, which narrowed the machine by two columns).
+#:
+#: The joint sweep, with the corridor counted in the *rows* it actually costs
+#: (``h = 98 + rom_rows + corridor_rows``, ``corridor_rows`` even):
+#:
+#:     corridor rows   best fold   box       area2    avg ticks   score
+#:      6              86          190x190   36,100   ~5,177k     186.9e9
+#:      8              85          190x191   36,481   ~4,854k     177.1e9
+#:     10              84          192x192   36,864    4,743k     174.8e9
+#:     12              83          193x193   37,249    4,657k     173.5e9   <-
+#:     14              83          193x195   38,025   ~4,620k     175.7e9
+#:
+#: The corridor's marginal value falls off faster than its rows do, so the optimum
+#: is a shallow interior one rather than "as deep as fits".
+ROM_ROWS = 83
 
 #: Cells of ROM->CPU corridor, which is a FIFO and therefore a *buffer*
 #: (``SPEC.md``: capacity equals length). The ROM man makes 0.20 words a tick and
@@ -1609,7 +1640,13 @@ ROM_ROWS = 85
 #: same corridor measures **+2.1%** — the buffer removes the producer as the
 #: binding stage, and then ``max(drain, producer)`` selects the drain, so buying
 #: the corridor's rows without also fixing the consumer is a net loss.
-ROM_BUFFER = 1800
+#:
+#: This number is a *request*: :func:`~lm1.machine.rom_corridor_rows` rounds it up to
+#: an even row count across the whole grid span, so what it really selects is rows —
+#: 2,200 words over a 193-column span is 12 of them. The curve is steep to ten rows
+#: and flat after, which is why the joint optimum with :data:`ROM_ROWS` is an
+#: interior point rather than "as deep as it fits".
+ROM_BUFFER = 2200
 
 
 def build_machine(
