@@ -281,3 +281,53 @@ def test_more_men_on_one_cycle_is_strictly_faster(tmp_path) -> None:
         ticks[men] = t
     assert ticks[2] < ticks[1] * 0.6, ticks
     assert ticks[4] < ticks[2] * 0.6, ticks
+
+
+# ── line relocation ──────────────────────────────────────────────────────────
+def test_relocation_only_offers_placements_into_free_cells() -> None:
+    """Every candidate must be a real grid: no glyph landing on another.
+
+    The move is "delete a line and put its blockers back somewhere legal", and the
+    engine is what decides whether a placement is *correct*. But a placement that
+    overwrites a live cell is not even well-formed, and would silently delete an
+    instruction rather than fail a case — so that is checked here rather than left
+    to a case to notice.
+    """
+    from randomfun2026solvers import manrelocate
+
+    rows = [
+        "+--------+",
+        "|@>>>v   |",
+        "|    v   |",
+        "|  r <   |",
+        "+--------+",
+    ]
+    for cand, how in manrelocate.candidates(rows, 2):
+        assert len(cand) == len(rows) - 1, how
+        joined = "".join(cand)
+        # the blockers are re-placed, never doubled up or lost without being dropped
+        assert joined.count("@") == 1, how
+        for line in cand:
+            assert len(line) <= max(len(r) for r in rows), how
+
+
+def test_relocation_preserves_every_instruction_glyph() -> None:
+    """A relocation may drop a *direction* glyph but never an instruction.
+
+    Dropping a redundant `v` is the whole point; dropping an `r` would change what
+    the program computes while still, possibly, passing the small cases.
+    """
+    from randomfun2026solvers import manrelocate
+
+    rows = [
+        "+------+",
+        "|@r  s |",
+        "|  v   |",
+        "|  <   |",
+        "+------+",
+    ]
+    instr = set("rsSRUqMW+-*/%&|~{}Nbm]HYxXda0123456789")
+    want = sum(ch in instr for r in rows for ch in r if ch not in "<>^v|-+")
+    for cand, how in manrelocate.candidates(rows, 2):
+        got = sum(ch in instr for r in cand for ch in r if ch not in "<>^v|-+")
+        assert got == want, f"{how} lost an instruction: {got} vs {want}"

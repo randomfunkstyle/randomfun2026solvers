@@ -1,0 +1,16 @@
+# matmul — submission 0242d80c-79f7-49d6-bf25-abc52ee940fc
+
+verdict      done: 20/20 cases, area2 7744, avgTicks 36,913, score 285,857,370
+submitted    2026-07-27T03:23:40+0300
+grid         73x88
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  1e4446a8df25fbd9912deaf0c30964af5cea4fb0f49e7bd45d9f2230ca19e0d7
+commit       4195a67
+local        matmul: 7/7 public cases, avg 30,016 ticks
+source       tasks/solutions/matmul-compacted.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+73x88 (footprint 7744), alternating row/column corridor relocation; local avg ticks 30,016
