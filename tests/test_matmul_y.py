@@ -676,3 +676,33 @@ def test_the_partial_v1_assembly_loads(tmp_path) -> None:
     assert len(info["rooms"]) == 4, f"rooms: {info['rooms']}"
     assert len(info["pipes"]) == 6, f"pipes: {len(info['pipes'])}"
     assert all(len(p["path"]) == 2 for p in info["pipes"]), "a register hop is not 2 cells"
+
+
+@node_required
+@pytest.mark.slow
+def test_both_storage_rings_close_and_every_pipe_is_anchored(tmp_path) -> None:
+    """Ten pipes, each with a room at both ends, and both rings over capacity.
+
+    `analyze` reports `src: -1` for a pipe whose opening arrowhead does not have a
+    room wall as its backward cell — and the grid still *parses*, so a pipe that
+    anchors to nothing is invisible without this check. Two of mine did exactly that:
+    they left a relay's south wall but ran east on their first leg.
+
+    Ring A and ring B must each hold N*M and M*K at the maximum, so 257 cells.
+    """
+    from randomfun2026solvers import matmul_asm2
+
+    g, caps, _east, _reg = matmul_asm2.build()
+    assert caps["a_fwd"] + caps["a_ret"] >= 257, f"ring A too short: {caps}"
+    assert caps["b_fwd"] + caps["b_ret"] >= 257, f"ring B too short: {caps}"
+
+    path = tmp_path / "asm2.man"
+    path.write_text("\n".join(g.rows()) + "\n", encoding="utf-8")
+    out = subprocess.run(["node", "lm.mjs", "analyze", str(path), "--json"],
+                         cwd=LM, capture_output=True, text=True, check=False)
+    assert out.returncode == 0, f"does not load: {out.stderr[:300]}"
+    info = json.loads(out.stdout)
+    orphan = [(i, p["src"], p["dst"]) for i, p in enumerate(info["pipes"])
+              if p["src"] < 0 or p["dst"] < 0]
+    assert not orphan, f"pipes not anchored to two rooms: {orphan}"
+    assert len(info["pipes"]) == 10, f"expected 10 pipes, got {len(info['pipes'])}"
