@@ -54,6 +54,12 @@ struct Runner {
   Dir dir{1, 0};
   i64 a{}, b{}, bp{};
   bool halted{}, blocked{};
+  // Sleeping is a pure scheduling device: a runner blocked on a pipe op is
+  // parked until an event that could change the retry's outcome (see the
+  // wait-list comments in Machine).  Original semantics retry every tick with
+  // no side effects on failure, so extra wake-ups are harmless and missed
+  // wake-ups are impossible by construction.
+  bool asleep{};
 };
 struct LiteralKey {
   Pos p{};
@@ -74,11 +80,17 @@ struct Program {
   std::vector<unsigned char> grid;
   std::vector<Room> rooms;
   std::vector<Pipe> pipes;
-  std::unordered_map<Pos, std::vector<int>, PosHash> bindings;
+  // Pipe-op bindings resolved per cell: binding_at is a flat grid of indices
+  // into binding_lists (-1 when the cell has no binding).
+  std::vector<std::vector<int>> binding_lists;
+  std::vector<std::int32_t> binding_at;
   std::unordered_map<LiteralKey, i64, LiteralHash> literals;
   char at(Pos p) const {
     if (p.x < 0 || p.y < 0 || p.x >= width || p.y >= height) return ' ';
     return static_cast<char>(grid[static_cast<std::size_t>(p.y) * width + p.x]);
+  }
+  std::size_t flat(Pos p) const {
+    return static_cast<std::size_t>(p.y) * width + p.x;
   }
 };
 
@@ -125,18 +137,28 @@ bool parse_request(const char* raw, Program& p, Case& c, std::string& error) {
     if (!(in >> pipe.length >> pipe.src >> pipe.dst >> pipe.dst_side.x >> pipe.dst_side.y)) {
       error = "truncated pipes"; return false;
     }
+    // The language requires length >= 2 (the parser enforces it).  The sparse
+    // scheduler relies on it: front and back cells must be distinct so pipe
+    // reads/writes cannot create wake events outside the shift phase.
+    if (pipe.length < 2) { error = "pipe shorter than 2"; return false; }
   }
   int nbindings;
   if (!readv(in, nbindings) || nbindings < 0) { error = "bad binding count"; return false; }
+  p.binding_at.assign(static_cast<std::size_t>(p.width) * p.height, -1);
+  p.binding_lists.reserve(nbindings);
   for (int i = 0; i < nbindings; ++i) {
     Pos pos;
     int count;
     if (!(in >> pos.x >> pos.y >> count) || count < 0) {
       error = "bad binding"; return false;
     }
-    auto& ids = p.bindings[pos];
-    ids.resize(count);
+    if (pos.x < 0 || pos.y < 0 || pos.x >= p.width || pos.y >= p.height) {
+      error = "binding outside grid"; return false;
+    }
+    std::vector<int> ids(count);
     for (int& id : ids) if (!readv(in, id)) { error = "truncated binding"; return false; }
+    p.binding_at[p.flat(pos)] = static_cast<std::int32_t>(p.binding_lists.size());
+    p.binding_lists.push_back(std::move(ids));
   }
   int nliterals;
   if (!readv(in, nliterals) || nliterals < 0) { error = "bad literal count"; return false; }
@@ -210,13 +232,48 @@ struct Result {
 struct Display {
   int room{}, width{}, height{}, cursor{};
   std::vector<unsigned char> current, next;
+  int pid[3]{-1, -1, -1};  // 0 top/ADDR, 1 left/DATA, 2 bottom/SWAP.
 };
 
+// Performance notes.  The tick loop is exactly the reference semantics
+// (shift pipes, io, execute, displays, move) but scheduled sparsely:
+//  * Pipe values never overtake one another, so a pipe is a deque of values
+//    (destination-most first) plus a run-length list of the occupied cells.
+//    The per-tick shift moves whole runs: every run advances one cell unless
+//    it is jammed against the destination, and adjacent runs merge.  A busy
+//    pipe costs O(runs), an empty pipe costs nothing.
+//  * A runner blocked on a pipe op sleeps until an event that could change
+//    the retry outcome.  A failed retry has no side effects, so sleeping is
+//    observationally identical as long as wake-ups are never missed:
+//      - r/R/U succeed when a destination (back) cell is occupied.  With all
+//        pipes length >= 2, the back cell becomes occupied only in the shift
+//        phase (writes go to the front cell; io fills only the input pipe's
+//        front, which no runner can bind).
+//      - s/S succeed when source (front) cells are free.  The front cell
+//        becomes free only in the shift phase (reads take the back cell).
+//    Spurious wake-ups are harmless — the reference retries every tick.
+//  * Runner occupancy lives in a flat grid (only maintained when the program
+//    contains Y), so execute/move need no per-tick hash maps.
 class Machine {
  public:
   Machine(const Program& program, const Case& test) : p(program), c(test) {
-    values.reserve(p.pipes.size());
-    for (const auto& pipe : p.pipes) values.emplace_back(pipe.length);
+    std::size_t npipes = p.pipes.size();
+    vals.resize(npipes);
+    runs.resize(npipes);
+    plen.reserve(npipes);
+    for (const auto& pipe : p.pipes) plen.push_back(pipe.length);
+    in_nonempty.assign(npipes, 0);
+    back_waiters.resize(npipes);
+    front_waiters.resize(npipes);
+    if (p.input_room >= 0)
+      for (std::size_t i = 0; i < npipes; ++i)
+        if (p.pipes[i].src == p.input_room) { in_pipe = static_cast<int>(i); break; }
+    if (p.output_room >= 0)
+      for (std::size_t i = 0; i < npipes; ++i)
+        if (p.pipes[i].dst == p.output_room) {
+          if (out_pipe < 0) out_pipe = static_cast<int>(i);
+          out_pipes.push_back(static_cast<int>(i));
+        }
     std::vector<std::size_t> spawn_rooms;
     for (std::size_t rid = 0; rid < p.rooms.size(); ++rid) {
       const auto& room = p.rooms[rid];
@@ -226,7 +283,10 @@ class Machine {
         displays.push_back(
             {static_cast<int>(rid), width, height, 0,
              std::vector<unsigned char>(width * height),
-             std::vector<unsigned char>(width * height)});
+             std::vector<unsigned char>(width * height),
+             {display_pipe(static_cast<int>(rid), 0),
+              display_pipe(static_cast<int>(rid), 1),
+              display_pipe(static_cast<int>(rid), 2)}});
       }
     }
     // Initial creation order follows the @ cells in row-major order, not room
@@ -242,6 +302,21 @@ class Machine {
           {static_cast<int>(runners.size()), static_cast<int>(rid), {room.sx, room.sy}});
     }
     next_id = static_cast<int>(runners.size());
+    live = static_cast<int>(runners.size());
+    active.reserve(runners.size());
+    for (std::size_t i = 0; i < runners.size(); ++i)
+      active.push_back(static_cast<int>(i));
+    dest_of.assign(runners.size(), Pos{});
+    mover_stamp.assign(runners.size(), 0);
+    touched_stamp.assign(runners.size(), 0);
+    std::size_t cells = static_cast<std::size_t>(p.width) * p.height;
+    if (p.can_split) {
+      runner_at.assign(cells, -1);
+      arrival_stamp.assign(cells, 0);
+      arrival_first.assign(cells, -1);
+      for (std::size_t i = 0; i < runners.size(); ++i)
+        runner_at[p.flat(runners[i].pos)] = static_cast<std::int32_t>(i);
+    }
     if (!c.has_expected && !c.has_frames) {
       for (const auto& round : c.inputs) for (i64 v : round) input.push_back(v);
     } else if (!c.inputs.empty()) {
@@ -268,9 +343,7 @@ class Machine {
         return finish("output-settled", true, output.empty());
       if (!c.has_frames && c.has_expected && output.size() >= expected.size())
         return finish("output-settled", true, true);
-      bool active = false;
-      for (const auto& r : runners) active |= !r.halted;
-      if (!active && !output_in_flight()) {
+      if (live == 0 && !output_in_flight()) {
         bool known = c.has_expected;
         bool pass = !known || output == expected;
         return finish("done", known, pass);
@@ -283,11 +356,23 @@ class Machine {
  private:
   const Program& p;
   const Case& c;
-  std::vector<std::vector<i64>> values;  // INT64_MIN is empty; real values may be MIN, so separate occupancy.
-  std::vector<std::vector<unsigned char>> occupied;
-  std::vector<Runner> runners;
+  std::vector<std::deque<i64>> vals;  // per pipe, destination-most value first
+  std::vector<std::vector<std::pair<int, int>>> runs;  // occupied [start,end] runs, ascending, gap >= 1
+  std::vector<int> plen;
+  std::vector<unsigned char> in_nonempty;
+  std::vector<int> nonempty;       // pipes with pcount > 0 (lazily compacted)
+  std::vector<std::vector<int>> back_waiters, front_waiters;
+  std::deque<Runner> runners;      // deque: stable references while spawning
+  std::vector<int> active;         // non-halted, non-sleeping runners, ascending
+  std::vector<int> woken, merged, movers, touched;
+  std::vector<Pos> dest_of;
+  std::vector<std::uint64_t> mover_stamp, touched_stamp;
+  std::vector<std::int32_t> runner_at;   // live runner index per cell (Y only)
+  std::vector<std::uint64_t> arrival_stamp;
+  std::vector<std::int32_t> arrival_first;
   std::vector<Display> displays;
-  int next_id{};
+  int next_id{}, live{}, in_pipe{-1}, out_pipe{-1};
+  std::vector<int> out_pipes;
   std::deque<i64> input;
   std::vector<i64> output, expected;
   std::vector<std::vector<unsigned char>> expected_frames;
@@ -298,71 +383,114 @@ class Machine {
   std::string fatal;
   Pos fatal_pos{-1, -1};
 
-  // Lazily create occupancy after values sizes are known.
-  void ensure_occupancy() {
-    if (!occupied.empty()) return;
-    occupied.reserve(values.size());
-    for (const auto& pipe : values) occupied.emplace_back(pipe.size(), 0);
-  }
   Result finish(std::string reason, bool known, bool pass) {
     bool halted = true;
     for (const auto& r : runners) halted &= r.halted;
     return {output, step, halted, known, pass, std::move(reason), fatal, fatal_pos};
   }
-  bool output_in_flight() {
-    ensure_occupancy();
-    if (p.output_room < 0) return false;
-    for (std::size_t pid = 0; pid < p.pipes.size(); ++pid)
-      if (p.pipes[pid].dst == p.output_room)
-        for (auto bit : occupied[pid]) if (bit) return true;
+  bool output_in_flight() const {
+    for (int pid : out_pipes) if (!vals[pid].empty()) return true;
     return false;
   }
   void die(const char* why, Pos pos) { fatal = why; fatal_pos = pos; }
-  void tick() {
-    ensure_occupancy();
-    ++step;
-    for (std::size_t pid = 0; pid < values.size(); ++pid) {
-      auto& vals = values[pid];
-      auto& occ = occupied[pid];
-      for (std::size_t i = vals.size(); i-- > 1;) {
-        if (!occ[i] && occ[i - 1]) {
-          vals[i] = vals[i - 1]; occ[i] = 1; occ[i - 1] = 0;
-        }
+
+  bool front_occupied(int pid) const {
+    return !runs[pid].empty() && runs[pid].front().first == 0;
+  }
+  bool back_occupied(int pid) const {
+    return !runs[pid].empty() && runs[pid].back().second == plen[pid] - 1;
+  }
+  void put_front(int pid, i64 v) {
+    vals[pid].push_back(v);
+    auto& rs = runs[pid];
+    if (!rs.empty() && rs.front().first == 1) rs.front().first = 0;
+    else rs.insert(rs.begin(), {0, 0});
+    if (!in_nonempty[pid]) {
+      in_nonempty[pid] = 1;
+      nonempty.push_back(pid);
+    }
+  }
+  i64 take_back(int pid) {
+    i64 v = vals[pid].front();
+    vals[pid].pop_front();
+    auto& rs = runs[pid];
+    auto& last = rs.back();
+    if (last.first == last.second) rs.pop_back();
+    else --last.second;
+    return v;
+  }
+  void drain_waiters(std::vector<int>& waiters) {
+    for (int idx : waiters) {
+      Runner& r = runners[idx];
+      if (r.asleep) {
+        r.asleep = false;
+        if (!r.halted) woken.push_back(idx);
       }
     }
+    waiters.clear();
+  }
+  void shift_pipes() {
+    for (std::size_t n = 0; n < nonempty.size();) {
+      int pid = nonempty[n];
+      auto& rs = runs[pid];
+      if (rs.empty()) {
+        in_nonempty[pid] = 0;
+        nonempty[n] = nonempty.back();
+        nonempty.pop_back();
+        continue;
+      }
+      int len = plen[pid];
+      bool back_was = rs.back().second == len - 1;
+      bool front_was = rs.front().first == 0;
+      int prev = len;  // (already shifted) start of the run ahead; wall sentinel
+      for (int i = static_cast<int>(rs.size()) - 1; i >= 0; --i) {
+        auto& run = rs[i];
+        if (run.second + 1 < prev) { ++run.first; ++run.second; }
+        if (static_cast<std::size_t>(i + 1) < rs.size() && run.second + 1 == rs[i + 1].first) {
+          rs[i + 1].first = run.first;
+          rs.erase(rs.begin() + i);
+          prev = rs[i].first;
+        } else {
+          prev = run.first;
+        }
+      }
+      if (!back_was && rs.back().second == len - 1) drain_waiters(back_waiters[pid]);
+      if (front_was && rs.front().first != 0) drain_waiters(front_waiters[pid]);
+      ++n;
+    }
+  }
+  void tick() {
+    ++step;
+    shift_pipes();
     io();
     if (!fatal.empty()) return;
+    if (!woken.empty()) {
+      std::sort(woken.begin(), woken.end());
+      merged.clear();
+      std::merge(active.begin(), active.end(), woken.begin(), woken.end(),
+                 std::back_inserter(merged));
+      active.swap(merged);
+      woken.clear();
+    }
     execute();
     if (!fatal.empty()) return;
     execute_displays();
     if (!fatal.empty()) return;
     move();
   }
-  int input_pipe() const {
-    if (p.input_room < 0) return -1;
-    for (std::size_t i = 0; i < p.pipes.size(); ++i)
-      if (p.pipes[i].src == p.input_room) return static_cast<int>(i);
-    return -1;
-  }
-  int output_pipe() const {
-    if (p.output_room < 0) return -1;
-    for (std::size_t i = 0; i < p.pipes.size(); ++i)
-      if (p.pipes[i].dst == p.output_room) return static_cast<int>(i);
-    return -1;
-  }
   void io() {
-    int out = output_pipe();
-    if (out >= 0 && occupied[out].back()) {
-      i64 v = values[out].back(); occupied[out].back() = 0; output.push_back(v);
+    if (out_pipe >= 0 && back_occupied(out_pipe)) {
+      i64 v = take_back(out_pipe);
+      output.push_back(v);
       if (c.has_expected) {
         std::size_t i = output.size() - 1;
         if (i >= expected.size() || v != expected[i]) { die("wrong-output", {-1, -1}); return; }
         release_satisfied();
       }
     }
-    int in = input_pipe();
-    if (in >= 0 && !input.empty() && !occupied[in][0]) {
-      values[in][0] = input.front(); input.pop_front(); occupied[in][0] = 1;
+    if (in_pipe >= 0 && !input.empty() && !front_occupied(in_pipe)) {
+      put_front(in_pipe, input.front());
+      input.pop_front();
     }
   }
   void release_satisfied() {
@@ -375,7 +503,6 @@ class Machine {
   }
   int display_pipe(int room, int side) const {
     // 0 top/ADDR, 1 left/DATA, 2 bottom/SWAP.
-    const auto& r = p.rooms[room];
     for (std::size_t i = 0; i < p.pipes.size(); ++i) {
       const auto& pipe = p.pipes[i];
       if (pipe.dst != room) continue;
@@ -388,26 +515,25 @@ class Machine {
     return -1;
   }
   bool take_display(int pid, i64& value) {
-    if (pid < 0 || !occupied[pid].back()) return false;
-    value = values[pid].back();
-    occupied[pid].back() = 0;
+    if (pid < 0 || !back_occupied(pid)) return false;
+    value = take_back(pid);
     return true;
   }
   void execute_displays() {
     for (auto& display : displays) {
       i64 value;
-      if (take_display(display_pipe(display.room, 0), value)) {
+      if (take_display(display.pid[0], value)) {
         if (value < 0 || value >= display.width * display.height) {
           die("display-address", {-1, -1}); return;
         }
         display.cursor = static_cast<int>(value);
       }
-      if (take_display(display_pipe(display.room, 1), value)) {
+      if (take_display(display.pid[1], value)) {
         if (value < 0 || value > 15) { die("display-color", {-1, -1}); return; }
         display.next[display.cursor] = static_cast<unsigned char>(value);
         display.cursor = (display.cursor + 1) % static_cast<int>(display.next.size());
       }
-      if (take_display(display_pipe(display.room, 2), value)) {
+      if (take_display(display.pid[2], value)) {
         if (value != 0 && value != 1) { die("display-swap", {-1, -1}); return; }
         display.current = display.next;
         if (value == 0) {
@@ -434,60 +560,69 @@ class Machine {
   static i64 wrap_mul(i64 a, i64 b) {
     return static_cast<i64>(static_cast<std::uint64_t>(a) * static_cast<std::uint64_t>(b));
   }
-  const std::vector<int>* binding(Pos pos) const {
-    auto it = p.bindings.find(pos);
-    return it == p.bindings.end() ? nullptr : &it->second;
+  void sleep_on_backs(Runner& r, int idx, const std::vector<int>& ids) {
+    r.blocked = true;
+    r.asleep = true;
+    for (int pid : ids) back_waiters[pid].push_back(idx);
   }
-  void pipe_op(Runner& r, char op) {
-    const auto* ids = binding(r.pos);
+  void sleep_on_fronts(Runner& r, int idx, const std::vector<int>& ids) {
+    r.blocked = true;
+    r.asleep = true;
+    for (int pid : ids) front_waiters[pid].push_back(idx);
+  }
+  void pipe_op(Runner& r, int idx, char op) {
+    std::int32_t bidx = p.binding_at[p.flat(r.pos)];
+    const std::vector<int>* ids = bidx < 0 ? nullptr : &p.binding_lists[bidx];
     if (!ids || ids->empty() || (*ids)[0] < 0) { die("no-pipe", r.pos); return; }
     if (op == 'q') {
-      int pid = (*ids)[0]; i64 count = 0;
-      for (auto bit : occupied[pid]) count += bit != 0;
-      r.bp = count; return;
+      r.bp = static_cast<i64>(vals[(*ids)[0]].size());
+      return;
     }
     if (op == 's') {
       int pid = (*ids)[0];
-      if (occupied[pid][0]) r.blocked = true;
-      else { values[pid][0] = r.a; occupied[pid][0] = 1; }
+      if (front_occupied(pid)) sleep_on_fronts(r, idx, *ids);
+      else put_front(pid, r.a);
       return;
     }
     if (op == 'S') {
-      for (int pid : *ids) if (occupied[pid][0]) { r.blocked = true; return; }
-      for (int pid : *ids) { values[pid][0] = r.a; occupied[pid][0] = 1; }
+      for (int pid : *ids) if (front_occupied(pid)) { sleep_on_fronts(r, idx, *ids); return; }
+      for (int pid : *ids) put_front(pid, r.a);
       return;
     }
     int pid = -1;
     if (op == 'r') pid = (*ids)[0];
-    else for (int candidate : *ids) if (occupied[candidate].back()) { pid = candidate; break; }
-    if (pid < 0 || !occupied[pid].back()) { r.blocked = true; return; }
-    r.a = values[pid].back(); occupied[pid].back() = 0;
+    else for (int candidate : *ids) if (back_occupied(candidate)) { pid = candidate; break; }
+    if (pid < 0 || !back_occupied(pid)) { sleep_on_backs(r, idx, *ids); return; }
+    r.a = take_back(pid);
     if (op == 'U') r.dir = p.pipes[pid].dst_side;
   }
+  void cell_clear(Pos pos) {
+    if (p.can_split) runner_at[p.flat(pos)] = -1;
+  }
+  void birth(int child_idx) {
+    Runner& child = runners[child_idx];
+    const auto& room = p.rooms[child.room];
+    if (room.border(child.pos) || !room.contains(child.pos)) {
+      die("wall", child.pos); return;
+    }
+    std::int32_t& cell = runner_at[p.flat(child.pos)];
+    if (cell >= 0 && !runners[cell].halted) {
+      runners[cell].halted = true;
+      child.halted = true;
+      cell = -1;
+      live -= 2;
+    } else {
+      cell = child_idx;
+    }
+  }
   void execute() {
-    std::vector<Runner> spawned;
-    spawned.reserve(runners.size());
-    std::unordered_map<Pos, Runner*, PosHash> occupied;
-    int live = 0;
-    for (auto& r : runners) if (!r.halted) { occupied[r.pos] = &r; ++live; }
-    auto birth = [&](Runner& child) {
-      const auto& room = p.rooms[child.room];
-      if (room.border(child.pos) || !room.contains(child.pos)) {
-        die("wall", child.pos); return;
-      }
-      auto it = occupied.find(child.pos);
-      if (it != occupied.end() && !it->second->halted) {
-        it->second->halted = true;
-        child.halted = true;
-        occupied.erase(it);
-        live -= 2;
-      } else {
-        occupied[child.pos] = &child;
-      }
-    };
-    for (auto& r : runners) {
-      r.blocked = false;
+    std::size_t n0 = active.size();
+    std::size_t keep = 0;
+    for (std::size_t k = 0; k < n0; ++k) {
+      int idx = active[k];
+      Runner& r = runners[idx];
       if (r.halted) continue;
+      r.blocked = false;
       char op = p.at(r.pos);
       if (op == '@') op = ' ';
       if (op >= '0' && op <= '9') r.a = op - '0';
@@ -541,32 +676,45 @@ class Machine {
         case 'x': r.dir = (r.bp & 1) ? cw(r.dir) : ccw(r.dir); break;
         case 'Y': {
           Dir old = r.dir; Pos origin = r.pos;
-          occupied.erase(origin);
+          cell_clear(origin);
           r.dir = cw(old); r.pos = add(origin, r.dir); r.blocked = true;
           Dir nd = ccw(old);
-          spawned.push_back(
+          int child_idx = static_cast<int>(runners.size());
+          runners.push_back(
               {next_id++, r.room, add(origin, nd), nd, r.a, r.b, r.bp, false, true});
+          dest_of.emplace_back();
+          mover_stamp.push_back(0);
+          touched_stamp.push_back(0);
+          active.push_back(child_idx);  // beyond n0: first executes next tick
           ++live;
-          birth(spawned.back()); if (!fatal.empty()) return;
-          birth(r); if (!fatal.empty()) return;
+          birth(child_idx); if (!fatal.empty()) return;
+          birth(idx); if (!fatal.empty()) return;
           if (live > 65536) { die("too-many-runners", origin); return; }
           break;
         }
-        case 'H': r.halted = true; occupied.erase(r.pos); --live; break;
+        case 'H': r.halted = true; cell_clear(r.pos); --live; break;
         case 's': case 'S': case 'r': case 'R': case 'U': case 'q':
-          pipe_op(r, op); if (!fatal.empty()) return; break;
+          pipe_op(r, idx, op); if (!fatal.empty()) return; break;
         default: die("bad-op", r.pos); return;
       }
+      if (r.halted || r.asleep) continue;
+      active[keep++] = idx;
     }
-    runners.insert(runners.end(), spawned.begin(), spawned.end());
+    // Compact: drop halted/sleeping runners, keep this tick's spawns (they sit
+    // in active[n0..] already, in ascending index order).
+    if (keep < n0) {
+      std::size_t tail = active.size() - n0;
+      for (std::size_t t = 0; t < tail; ++t) active[keep + t] = active[n0 + t];
+      active.resize(keep + tail);
+    }
   }
   void move() {
-    // Every checked-in solver currently has one runner per compute room and no
-    // Y.  Rooms are disjoint, so those runners can never touch one another.
-    // Avoid constructing three hash tables on every tick in this overwhelmingly
-    // common validation path.
+    // No Y in the grid: runners can never split, so the reference engine skips
+    // collision detection entirely on this path (rooms hold one runner each in
+    // every checked-in solver).  Mirror that exactly.
     if (!p.can_split) {
-      for (auto& r : runners) {
+      for (int idx : active) {
+        Runner& r = runners[idx];
         if (r.halted || r.blocked) continue;
         r.pos = add(r.pos, r.dir);
         const auto& room = p.rooms[r.room];
@@ -574,48 +722,53 @@ class Machine {
       }
       return;
     }
-    std::unordered_map<Pos, std::vector<int>, PosHash> arrivals;
-    std::unordered_map<Pos, int, PosHash> current;
-    std::vector<Pos> dest(runners.size());
-    std::vector<unsigned char> moving(runners.size());
-    for (std::size_t i = 0; i < runners.size(); ++i)
-      if (!runners[i].halted) current[runners[i].pos] = static_cast<int>(i);
-    for (std::size_t i = 0; i < runners.size(); ++i) {
-      auto& r = runners[i];
-      if (!r.halted && !r.blocked) {
-        moving[i] = 1;
-        dest[i] = add(r.pos, r.dir);
-        arrivals[dest[i]].push_back(static_cast<int>(i));
-      }
+    movers.clear();
+    for (int idx : active) {
+      Runner& r = runners[idx];
+      if (r.halted || r.blocked) continue;
+      dest_of[idx] = add(r.pos, r.dir);
+      mover_stamp[idx] = step;
+      movers.push_back(idx);
     }
-    std::vector<unsigned char> touching(runners.size());
-    for (const auto& [pos, ids] : arrivals) {
-      if (ids.size() > 1) for (int id : ids) touching[id] = 1;
-      auto it = current.find(pos);
-      if (it != current.end()) {
-        int occupant = it->second;
-        if (!moving[occupant]) {
-          touching[occupant] = 1;
-          for (int id : ids) touching[id] = 1;
-        } else {
-          for (int id : ids) {
-            if (dest[occupant] == runners[id].pos) {
-              touching[occupant] = 1;
-              touching[id] = 1;
-            }
-          }
+    touched.clear();
+    auto touch = [&](int i) {
+      if (touched_stamp[i] != step) { touched_stamp[i] = step; touched.push_back(i); }
+    };
+    for (int idx : movers) {
+      std::size_t f = p.flat(dest_of[idx]);
+      if (arrival_stamp[f] == step) {
+        touch(arrival_first[f]);
+        touch(idx);
+      } else {
+        arrival_stamp[f] = step;
+        arrival_first[f] = idx;
+      }
+      std::int32_t occupant = runner_at[f];
+      if (occupant >= 0) {
+        if (mover_stamp[occupant] != step) {
+          touch(occupant); touch(idx);          // stationary occupant
+        } else if (dest_of[occupant] == runners[idx].pos) {
+          touch(occupant); touch(idx);          // head-on swap
         }
       }
     }
-    for (std::size_t i = 0; i < runners.size(); ++i)
-      if (touching[i]) runners[i].halted = true;
-    for (std::size_t i = 0; i < runners.size(); ++i) {
-      auto& r = runners[i];
-      if (!moving[i]) continue;
-      r.pos = dest[i];
+    for (int i : touched) {
+      Runner& r = runners[i];
+      r.halted = true;
+      --live;
+      if (mover_stamp[i] != step) runner_at[p.flat(r.pos)] = -1;
+    }
+    for (int idx : movers) {
+      std::size_t f = p.flat(runners[idx].pos);
+      if (runner_at[f] == idx) runner_at[f] = -1;
+    }
+    for (int idx : movers) {
+      Runner& r = runners[idx];
+      r.pos = dest_of[idx];
       if (r.halted) continue;
       const auto& room = p.rooms[r.room];
       if (room.border(r.pos) || !room.contains(r.pos)) { die("wall", r.pos); return; }
+      runner_at[p.flat(r.pos)] = idx;
     }
   }
 };

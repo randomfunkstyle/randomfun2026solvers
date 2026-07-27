@@ -71,6 +71,25 @@ def test_wrong_expected_output_is_rejected_immediately() -> None:
     assert result.output == [7]
 
 
+def test_native_matches_python_on_a_splitting_machine() -> None:
+    # memory_men_addr uses Y: runner splits, runner-runner collisions, and
+    # store men that block on pipe ops for most of their life.  This pins the
+    # native engine's sparse scheduling (sleep/wake, flat occupancy grid) to
+    # the straightforward Python engine, tick for tick.
+    machine = FastLittleman(REPO / "tasks" / "solutions" / "memory_men_addr.man")
+    problem = scoring.load_problem("memory")
+    for case in problem["publicTestData"][:3]:
+        kwargs = {
+            "input": scoring._case_input(case),
+            "expected": _expected_string(case),
+        }
+        native = machine.run(**kwargs)
+        python = machine.run(**kwargs, native=False)
+        assert native.output == python.output
+        assert native.step == python.step
+        assert native.passed is python.passed is True
+
+
 def test_load_error_does_not_fall_through_to_node() -> None:
     with pytest.raises(FastLittlemanError, match="no rooms"):
         FastLittleman("not a room\n")
