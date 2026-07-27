@@ -123,6 +123,26 @@ def test_every_pipe_cell_lies_above_the_worker_room() -> None:
             assert all(py < gp.BAND_H for _px, py in cs), (d, z)
 
 
+def test_no_loop_pays_two_block_visits_an_iteration() -> None:
+    """The shape that costs, measured: **89% of this grid's ticks are corridor**.
+
+    2,496 block visits against 322 glyph cells over the seven public cases, and
+    15,510 grid ticks against the op model's 1,726 -- a block visit is ~39 ticks
+    and a glyph is 1.  So a loop whose body is a block of its own, entered only
+    from its test and returning only to it, is paying a second 39-tick corridor
+    walk an iteration to save nothing.  Every such loop is fused; this refuses a
+    new one, whatever it computes.
+    """
+    preds: dict[str, set[str]] = {}
+    for n, (_t, succ) in WORKER.items():
+        for target in ([succ] if isinstance(succ, str) else succ.values()):
+            preds.setdefault(target, set()).add(n)
+    bodies = [n for n, (_t, succ) in WORKER.items()
+              if isinstance(succ, str) and preds.get(n) == {succ}
+              and not isinstance(WORKER[succ][1], str)]
+    assert bodies == [], f"{bodies} are loop bodies their own test could carry"
+
+
 def test_no_edge_of_the_cfg_could_have_been_a_free_fall_through() -> None:
     """`blockplace` routes every edge as a corridor, which is only a loss when a
     block's successor could have been laid immediately after it -- the trap that
