@@ -1,0 +1,92 @@
+"""The systolic MAC chain: bindings, mouths, and the one-stage machine's answer."""
+from __future__ import annotations
+
+import pytest
+
+from randomfun2026solvers import matmul_systolic as ms
+from randomfun2026solvers.circuit import Collision
+
+
+# ── the pieces ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("f", range(16))
+def test_every_stage_solves_its_bindings(f: int) -> None:
+    """A stage's feeder must exist for every position in a 16-long chain.
+
+    `loadf_room` raises rather than emitting a room whose `s` glyphs would bind
+    the wrong pipe, so simply building all sixteen is the assertion.
+    """
+    room = ms.loadf_room(f"L{f}", f)
+    assert set(room.ports) >= {"chain_in", "ring_out", "mul_out"}
+    assert ("chain_out" in room.ports) == (f > 0)
+
+
+def test_mul_north_wall_order_is_forced() -> None:
+    """a_in west of ring_out west of ring_in — the fact the floor plan turns on.
+
+    MUL's first `r` reads the weight and sits west of the `r` that reads the
+    ring, so the weight mouth can only ever be the western one. Everything about
+    where TURN may stand follows from this.
+    """
+    ports = ms.mul_room("M").ports
+    assert ports["a_in"][0] == ports["ring_out"][0] == ports["ring_in"][0] == "N"
+    assert ports["a_in"][1] < ports["ring_out"][1] < ports["ring_in"][1]
+
+
+def test_add_splits_its_two_north_mouths_by_column() -> None:
+    ports = ms.add_room("A", first=False).ports
+    assert ports["psum_in"][0] == ports["prod_in"][0] == "N"
+    assert ports["psum_in"][1] < ports["prod_in"][1]
+
+
+def test_solver_refuses_an_unsatisfiable_room() -> None:
+    """Two ops that want opposite mouths from the same cell cannot be placed."""
+    with pytest.raises(Collision):
+        ms.solve_ports(
+            4, 2,
+            [ms.PortSpec("a", "in"), ms.PortSpec("b", "in")],
+            [((1, 0), "r", "a"), ((1, 0), "r", "b")],
+        )
+
+
+def test_no_backticks_anywhere() -> None:
+    """Backticks pair by column as well as by row; one in a generated room could
+    pair with one in another room and swallow a wall glyph at load time."""
+    text, _ = ms.probe(1, [[3], [4]], [[5, 6]])
+    assert "`" not in text
+
+
+# ── the stream the array wants ───────────────────────────────────────────────
+
+
+def test_stream_is_blocks_then_zero_padded_rows() -> None:
+    a = [[1, 2], [3, 4]]
+    b = [[5, 6], [7, 8]]
+    assert ms.stream_for(a, b, 2) == [2, 5, 6, 2, 7, 8, 1, 2, 3, 4]
+    # a stage past M gets an all-zero b-block and a zero weight
+    assert ms.stream_for([[3], [4]], [[5, 6]], 2) == [2, 5, 6, 2, 0, 0, 3, 0, 4, 0]
+
+
+def test_expected_matches_the_definition() -> None:
+    assert ms.expected([[1, 2], [3, 4]], [[5, 6], [7, 8]]) == [19, 22, 43, 50]
+
+
+# ── the machine ──────────────────────────────────────────────────────────────
+
+
+def test_one_stage_machine_builds_with_the_pipes_it_declared() -> None:
+    """`probe` runs `check_mouths`, which counts arrowheads-against-a-wall the
+    way the runtime does — an extra one raises here rather than at judging."""
+    text, expect = ms.probe(1, [[3], [4]], [[5, 6]])
+    assert expect == [15, 18, 20, 24]
+    assert text.count("|O|") == 1
+
+
+@pytest.mark.slow
+def test_one_stage_machine_computes_the_product() -> None:
+    from randomfun2026solvers.littleman import Littleman
+
+    text, expect = ms.probe(1, [[3], [4]], [[5, 6]])
+    snap = Littleman().tick(text, 400)
+    assert [int(v) for v in snap.output] == expect
