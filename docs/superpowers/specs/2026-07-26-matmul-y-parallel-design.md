@@ -466,3 +466,90 @@ options are:
 
 The third is the cheapest and is what to try next: it keeps eleven ports on one
 wall and moves exactly the two pipes that cannot get out.
+
+---
+
+## The machine runs (2026-07-27): 58x58, 14,043 ticks, score 47.2M
+
+Stage 1 is built and passes all seven public cases on the reference wasm.
+`matmul_asm3.build()` emits it from `matmul_main` + `matmul_adder3` + five rings.
+
+    2x2  1,442   2x3x2  1,526   4x4x4  2,585   16x16x16  68,308
+    16x2x16  13,047   5x6x4  4,014   7x5x9  7,378        avg 14,042.86
+
+against the 70x76 / 34,182-tick machine it replaces (197,437,831).
+
+### The routing block dissolved, and the eleven constraints collapse to two
+
+Sixty ADDER alignments could not route `prod` and `cmd` out of the same wall. The
+reason was not the wall's bandwidth. It was that **up-pipes and down-pipes never
+interact at all**, which none of the earlier rules said:
+
+> A pipe leaving MAIN's east wall runs along its own row to its turn column and then
+> *away* from that row. So a down-pipe's vertical can only cross rows **below** its
+> own, and an up-pipe's only rows **above** its own. With every up row above every
+> down row — which `matmul_main`'s map already had — the two families cannot meet,
+> and the only remaining conditions are *within* a family: of two down-pipes the
+> upper turns further east; of two up-pipes, the lower does.
+
+What actually blocked `prod` was the register relays, pushed nine columns clear of
+MAIN so `prod` could descend past them. That made their six legs eight cells long and
+fenced the strip at six separate rows. **Hugging the wall** (two-cell legs) opens
+everything from `reg_x + 6` east, and `prod` descends there in one straight line.
+
+The third piece: `cmd` leaves MAIN *below* `prod`, so it descends *west* of it, and
+its westward approach to the ADDER crosses `prod`'s vertical unless it arrives
+**above** where that vertical stops. So `cmd` is the ADDER's **top** port, read from
+the row below it by every riser.
+
+### Seven faults that all passed `analyze`
+
+The grid loaded, all sixteen pipes anchored, no `src: -1`, and all thirty-four of
+MAIN's pipe ops bound to the pipe they were meant to. It computed nothing. In order
+of discovery:
+
+1. **`@` spawns east; the serpentine's first column is walked south.** With no turn
+   glyph at the entry the man sails along the band's top row and drops into whichever
+   column has the first `v` — entering the program in the middle.
+2. **A counted loop's exit must not sit under its own `d`.** Turning north there
+   walks the man back into the loop; `d` with `BP == 0` passes him through to the `v`
+   above, which turns him south again. Two cells, infinite.
+3. **`counted_loop` must be entered from directly above its `>`.** Its two columns
+   are the body and the *return* leg, and the return leg carries the `m`. A man who
+   arrives from below crosses `m` before he has met the `d`, and the loop runs one
+   iteration short — which lost the last scalar of every matrix.
+4. **`counted_loop_horizontal` has the same asymmetry**, on its top row. Entering
+   from the west costs one decrement, so the body runs `BP - 1` times. Paid for in
+   the count (`BP = N + 1`), because re-entering from above costs seven columns of
+   MAIN's width and width is squared.
+5. **A relay's `@` is a nop.** A six-cell cycle is a 3x2 perimeter with all four
+   corners turning, which leaves nowhere for `@` — so the man walks back onto his
+   spawn cell, keeps his heading, and hits the wall behind it. Relays are 4x2.
+6. **A bend whose backward cell lands on another room's wall parses as a second pipe
+   out of that room.** It ends at the same destination cell and wins the `r` by
+   reading order, so the real pipe is never read. Loads clean, analyses clean,
+   deadlocks. Assert the pipe *count*.
+7. **Capacity is not just the two storage rings.** Ring C holds K accumulators (17,
+   not the 7 a short hop gives) and **`cmd` buffers 3N words** — MAIN sends all
+   forty-eight before it fills a single ring, so a 38-cell L-route deadlocks at
+   N = 16 and nowhere else.
+
+### Where the ticks are, and what moved them
+
+At K = 16 the drive loop's *walking* was 88 ticks per (i, t) against 192 of actual
+multiplying. Three changes took it to 46 and MAIN from 49 columns to 40:
+
+* the marker test's seven `]` go **down** the fetch column instead of along a
+  horizontal run — the column was already on its way to ring rK;
+* **rK is the topmost register pair**, immediately below the test's `d`. It is the
+  only register the hot loop reads;
+* the fill bodies and the ADDER's phase bodies are **derived from the port rows**.
+  A body's length *is* the span between its two ports, and the cycle is
+  `2*(len + 2)` ticks — so `a_ret` pressed up against `a_fwd` shortens fill B by 4
+  ticks per value of B, and hard-coding a body is how a tightened row map silently
+  binds the neighbouring ring instead.
+
+What is left is the MAC itself: 12 ticks x N*M*K, 49k of the 16³ case's 68k. Both
+cycles are already minimal for one man — `counted_ring` cannot help, because its
+left column walks the body *upward* and the MAC's two sends would have to bind
+`b_fwd` and `prod` from the same row. That is what stage 2 (`Y`) is for.
