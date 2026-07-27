@@ -111,90 +111,100 @@ placement exists the build raises rather than emitting a plausible grid.
 `check_mouths` additionally counts arrowheads-against-a-wall the way the
 *runtime* does (`lm.mjs analyze` under-reports these) and refuses a surprise.
 
-WHAT IS BUILT AND WHAT IT MEASURED  (2026-07-27)
-================================================
-
-`probe(1, [[3],[4]], [[5,6]])` builds a **complete one-stage machine** — SRC,
-LOADF, TURN, ring, MUL, ADD, O, seven pipes, every binding solved — and the
-reference engine runs it to ``15 18 20 24``, which is exactly
-``[[3],[4]] x [[5,6]]``.  So the mechanism is proven end to end: the K-prefixed
-ring, the `R` turnaround, the weight handoff, the multiply with the weight
-parked in B, and the psum relay.
-
-Measured on that grid (45 x 68, 29% dense):
-
-    output 1 at tick 163   output 2 at 175   output 3 at 307   output 4 at 319
-
-**The beat is 12 ticks** (163->175 and 307->319).  That is the number the whole
-projection rests on and it is better than the 12-16 that was assumed.  The
-132-tick gap between rows is *not* architectural: the probe's TURN->MUL leg is
-serpentined to ~60 cells, and with only K+1 = 3 values in it the multiplier
-waits a full revolution at every row boundary.  A production ring wants
-``L ~= K + 4`` (>= 18 cells, so 17 values fit while loading, and no longer),
-which makes a row cost ``max((K+1)*12, L)`` = ``(K+1)*12`` for every K >= 2.
-
-Projected for the real 16-stage machine:
-
-    compute   N*K beats x 12 ticks         16x16x16 -> 3,072
-    b-load    LOADF_0 relays (P-1)(K+1)    16x16x16 -> ~1,500
-    total                                  16x16x16 -> ~5,000 ticks
-
-against the serial machine's 123,254 on that case — a **25x tick win** — and an
-average across the seven local cases somewhere near 2,000-3,000 against 29,097.
-
-That is what makes the area budget generous.  At avg 3,000 ticks the machine
-beats the 197,437,831 live score (at the measured 1.506 judged ratio) for any
-side under **209**; at side 100 it lands at 3.0e7 local / 4.5e7 judged, 4.4x
-better than the bar.  Summed room area is ~9,000 cells (LOADF ~250 avg x 16,
-MUL 132 x 16, TURN 28 x 16, ADD 40 x 15, rings 20 x 16, front end ~1,500), so a
-side of 100-130 is the realistic target and the build is worth finishing.
-
-WHAT BLOCKED P >= 2, EXACTLY
-============================
-
-The stage rooms and their bindings are all solved and general in `p`.  What is
-not solved is the **floor plan**, and the obstruction is specific:
-
-1. MUL's north-wall column order is *forced* to ``a_in < ring_out < ring_in``.
-   MUL's first `r` (the weight) sits west of its second (the ring), so the
-   a-mouth must be the western one; the L4 body's `r` sits further east still,
-   which pins ring_in east of both.  Verified by exhaustion in `solve_ports`.
-2. Therefore the ring partner (TURN) has to sit **east** of the stage: its two
-   pipes then nest *outside* the weight pipe, which drops straight down from
-   LOADF.  Put TURN west and the serpentine has to cross the weight column at a
-   row where that column is live, and no row assignment exists.
-3. But LOADF's `s` cells put the ring writes (INIT head, LA) at the **west** end
-   of its INIT row and the chain writes (LB, LC) at the **east** end, so
-   `solve_ports` can only ever put ``ring_out`` north/west and ``chain_out``
-   east.  The ring-fill pipe then has to travel east *over* LOADF to reach TURN
-   while the chain pipe also has to leave eastward, and the two cannot be
-   nested: whichever turns higher is crossed by the other's riser.  Every row
-   assignment tried collides, and the collision is a hard `Circuit.set` error,
-   not a silent one.
-
-THE FIX, FOR WHOEVER PICKS THIS UP
+WHAT IS BUILT, AND WHAT IT MEASURES
 ==================================
 
-Make LOADF's INIT row run **right to left**.  Lay it with ``Circuit.run(..., d=W)``
-and a mirrored counted loop so that LA (the ring writes) ends up at the *east*
-end and LB/LC (the chain writes) at the *west* end.  `solve_ports` will then put
-``ring_out`` on the east wall facing TURN and ``chain_out`` on the west wall
-facing a chain channel, and the two pipes never share a corridor.
-`Circuit.counted_loop` only builds an east-entered loop, so add a westward
-variant (it is the same five glyphs mirrored) or place those twelve cells by
-hand.
+The **array is finished and verified**.  `probe(P, A, B)` builds a complete
+P-stage machine with a source room standing in for the front end, and the
+reference engine agrees at every scale tried:
 
-The cheaper alternative, if the mirror is awkward: **split LOADF into two
-rooms** — LOAD (INIT only: chain in, chain out, ring out) and FEED (MAIN only:
-chain in, chain out, mul out).  Each then has at most two outgoing pipes and the
-three-way `s` split disappears entirely.  It costs 16 more rooms but they are
-small, and it also shortens the widest room (the f=15 INIT row is 26 wide, which
-is what sets `lw` and therefore the strip pitch).
+    probe(1,  [[3],[4]], [[5,6]])          -> 15 18 20 24        (ring + multiply)
+    probe(2,  [[1,2],[3,4]], [[5,6],[7,8]])-> 19 22 43 50        (adder chain)
+    probe(16, <the 16x16x16 public case>)  -> all 256 values      (every stage live)
 
-After that the remaining work is: the front end (see the stream section above —
-GATE / A-padder / B-blocker plus a ~256-cell delay line, because A arrives
-before B but B is what has to be resident), and packing the 16 stages into a
-4x4 or 2x8 arrangement instead of the probe's single column.
+Ticks, measured:
+
+    16x16x16   first output 4,483   settles 8,563   beat 16 ticks/value
+    serial machine on the same case                123,254
+
+**14.4x on the hardest case.**  The beat is 16 ticks and the fill is 4,483, so
+the fill dominates every small case (a 2x16x2 case settles at 2,873, of which
+2,683 is fill).  Expect an average near 3,500 across the seven local cases
+against the serial machine's 29,097 — call it **8x on ticks**.
+
+WHAT IS NOT BUILT, AND WHAT IT COSTS
+====================================
+
+Two things stand between this and a scoring `.man`.
+
+**1. The front end.**  `probe` hard-codes the case in a source room.  A real
+machine has to turn ``N M K A B`` into the stream the chain wants.  Design
+below — it is now only five small rooms, because of the countdown protocol.
+
+**2. Packing.**  The stages are stacked in one column, so the grid is 72 x 1055
+and the score would be absurd.  Room area is only 538 cells per band (LOADF
+26x13, MUL 12x11, TURN 7x4, ADD 10x4) but the band as laid out is 53 x 59 =
+3,127 — 17% dense.  Tightening it (TURN into the gap beside MUL rather than
+east of LOADF; per-stage LOADF widths instead of one pitch; the trailing slack
+rows) gets a band to roughly 34 x 48, so 16 of them pack into about side 162.
+
+Which gives the honest arithmetic, and it is worth stating plainly:
+
+    area 26,000 x avg 3,500 ticks = 9.1e7 local -> 1.37e8 judged
+    against the 197,437,831 bar                    ~1.4x better
+
+So this architecture wins, but by less than the tick number suggests: sixteen
+stages of four rooms is a lot of area, and `score = area x ticks` charges both.
+The remaining headroom is in the **fill**, not the beat — 4,483 ticks of fill on
+the big case and 2,683 on a small one, against a beat that only costs 16.  The
+fill is the b-block cascade (LOADF_0 relays 15(K+1) values at ~7 ticks each) plus
+the a-phase forwarding plus the psum chain filling.  Halving it would be worth
+more than any plausible packing win.
+
+THE FRONT END, SPECIFIED
+========================
+
+The obvious design needs a ~256-cell delay line, because A arrives before B but
+B is what has to be resident.  **The countdown protocol removes it**, and lets
+the front end run in input order with no buffering at all.
+
+Prepend each padded A row with the number of rows still to come:
+
+    [N] [row_0 padded to 16] [N-1] [row_1] ... [1] [row_{N-1}] [0]
+    [block_0] ... [block_15]        block_p = K, B[p][0..K-1]
+
+LOADF's MAIN then reads the countdown, forwards it, and branches on `X`:
+nonzero means take a weight and forward F values (BP is free, so `<F>` works for
+F >= 10); zero means fall through to the b-block phase.  No delay line, no
+sentinel arithmetic, no nested counter — the outer loop is data-driven and the
+inner one is the only user of BP.  A does not have to be resident, because each
+stage's N weights simply queue in its LOADF->MUL pipe (make it >= 16 cells).
+
+Five rooms, each with at most two pipes per direction, plus three one-room ring
+turnarounds:
+
+  GATE   r->N ; s(a: N) ; M ; r->M ; s(a: M) ; * ; b ; W ; N M 9 + M 7 + ;
+         s(a: 16-M) ; s(b: M) ; r->K ; s(b: K) ; [N*M x {r ; s(a)}] ;
+         [forever {r ; s(b)}]
+         `N M 9 + M 7 +` is 16-M built from A=M with B as scratch, which is the
+         one arithmetic trick the front end needs: there is no way to load 16
+         into A without touching B, and B is live everywhere it matters.
+  APAD   ring [N, M, 16-M].  forever { r(ring)->c ; s(out: c) ;
+         M ; 1 ; N ; + ; s(ring: c-1) ; r(ring)->M ; s(ring) ; b ;
+         [M x {r(in) ; s(out)}] ; r(ring)->16-M ; s(ring) ; b ;
+         [x {0 ; s(out)}] }
+  BZERO  ring [M, K].  forwards M*K real values, then emits (16-M)*K zeros.
+  BPAD   ring [K].  forever { r(ring) ; s(ring) ; s(out: K) ; b ;
+         [K x {r(in) ; s(out)}] } — one [K, B row] block per lap.
+  MERGE  forever { r(a)->c ; s(out) ; X ; nonzero -> 16 x {r(a) ; s(out)} } ;
+         then forever { r(b) ; s(out) }.  MERGE is the only room that has to
+         know where A ends, and the countdown tells it.
+
+APAD keeps looping and blocking after it emits the 0; MERGE has already switched
+to the b path and never reads it again, so the stall is harmless.
+
+`solve_ports` will place all of these — every one has at most two incoming and
+two outgoing pipes, which is the regime it solves comfortably.
 """
 from __future__ import annotations
 
@@ -690,7 +700,7 @@ def check_mouths(grid: Grid, expect: int) -> None:
 # ── the probe: a P-stage chain fed by a hard-coded source room ───────────────
 
 
-GAP = 16                 # rows between LOADF and MUL: the ring serpentine lives here
+GAP = 13                 # rows between LOADF and MUL: the ring serpentine lives here
 
 
 def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
@@ -745,7 +755,6 @@ def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
         L, T, M_, A = loadf[i], turns[i], muls[i], adds[i]
         r_a, r_ring, r_ser = muly - 12, muly - 10, muly - 8
         east2 = X0 + lw + 6
-        east3 = X0 + lw + 20
         mx0, my0 = L.mouth("mul_out")
         ax, ay = M_.mouth("a_in")
         g.pipe([(mx0, my0), (mx0, r_a), (ax, r_a), (ax, ay)])
@@ -757,9 +766,11 @@ def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
         g.pipe([(fx, fy), (tx, fy), (tx, ty)])
         ox, oy = T.mouth("out")
         ix, iy = M_.mouth("ring_in")
-        g.pipe([(ox, oy), (ox, r_ser), (east3, r_ser), (east3, r_ser + 2),
-                (ix + 1, r_ser + 2), (ix + 1, r_ser + 4), (east3, r_ser + 4),
-                (east3, r_ser + 6), (ix, r_ser + 6), (ix, iy)])
+        # The TURN->MUL leg has to hold K+1 <= 17 values while the array is
+        # still loading (MUL is not reading yet), and no more: every cell beyond
+        # that is a tick of revolution latency at each row boundary.  Going
+        # straight west from TURN is already ~30 cells, so it needs no serpentine.
+        g.pipe([(ox, oy), (ox, r_ser), (ix, r_ser), (ix, iy)])
         px, py = M_.mouth("prod_out")
         qx, qy = A.mouth("prod_in")
         g.pipe([(px, py), (px, py + 2), (qx, py + 2), (qx, qy)])

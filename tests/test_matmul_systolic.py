@@ -128,3 +128,37 @@ def test_the_mirrored_feeder_unblocks_the_floor_plan() -> None:
          ((14, 5), "s", "mul_out")],
     )
     assert ports["ring_out"][0] == "E" and ports["chain_out"][0] == "W"
+
+
+def _public_case(name: str):
+    import json
+    from pathlib import Path
+    probs = Path(__file__).resolve().parents[1] / "tasks" / "problems" / "matmul.json"
+    case = next(c for c in json.loads(probs.read_text())["publicTestData"]
+                if name in c["name"])
+    vals = [int(v) for v in case["rounds"][0]["in"]]
+    n, m, k = vals[:3]
+    a = [vals[3 + i * m: 3 + (i + 1) * m] for i in range(n)]
+    off = 3 + n * m
+    b = [vals[off + t * k: off + (t + 1) * k] for t in range(m)]
+    return a, b, [int(v) for v in case["rounds"][0]["out"]]
+
+
+def test_stream_and_expectation_match_the_hardest_public_case() -> None:
+    """The 16-stage chain's own arithmetic, checked against the judge's data."""
+    a, b, out = _public_case("16x16x16")
+    assert ms.expected(a, b) == out
+    # 16 blocks of K+1, then N rows of P, all of it oblivious to the case's shape
+    assert len(ms.stream_for(a, b, 16)) == 16 * (len(b[0]) + 1) + len(a) * 16
+
+
+@pytest.mark.slow
+def test_sixteen_stages_compute_the_hardest_public_case() -> None:
+    """Every stage live, M = 16 so none of them is a zero-weight passenger."""
+    from randomfun2026solvers.littleman import Littleman
+
+    a, b, out = _public_case("16x16x16")
+    text, expect = ms.probe(16, a, b)
+    assert expect == out
+    snap = Littleman().tick(text, 12000)
+    assert [int(v) for v in snap.output] == out
