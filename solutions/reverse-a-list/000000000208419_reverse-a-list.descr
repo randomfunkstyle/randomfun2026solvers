@@ -1,0 +1,16 @@
+# reverse-a-list — submission c1406853-aa37-4846-a42b-c93cac215d40
+
+verdict      done: 20/20 cases, area2 169, avgTicks 1,233, score 208,419
+submitted    2026-07-27T05:48:56+0300
+grid         13x13
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  0dd21b43258a60b4508ec3d3a2b6d582c8d0626c819df6d611d13a0a1205abdc
+commit       1f7c550
+local        reverse-a-list: 8/8 public cases, avg 756 ticks
+source       tasks/solutions/reverse-a-list_pack.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+13x13 compact ring: area2 169 vs 324, local avg 756 vs 1013
