@@ -146,7 +146,7 @@ BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)
 #: Worker interior.  ``IH`` is set by :data:`NOSOL_ROW` — the deepest thing in the
 #: room is the no-solution emit, and everything below the last code block is the
 #: corridor that reaches it.  One row of slack past that row is all it needs.
-IW, IH = 46, 135
+IW, IH = 46, 130
 
 
 #: Bands used by the block currently being drawn, so :func:`_turned` can refuse
@@ -816,12 +816,12 @@ LOOP_COL = 11
 
 #: Phase 2's rows.  Named because six blocks and nine lanes have to agree about
 #: them and an off-by-one row is a silently re-steered man, not a crash.
-P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 23, 29, 35, 40, 44
+P2_HEAD, P2_MASK, P2_PEEL, P2_ROT, P2_TEST = 23, 31, 33, 38, 42
 #: The scan gets a band of its own, forty rows clear of everything else.  The
 #: four lanes it fans out into were what defeated the first attempt at a tight
 #: layout; there is no area pressure on this problem, so they get room.
-SCAN_TOP, SCAN_SOUTH, SCAN_NORTH = 50, 35, 34
-MISS_ROW, HIT_ROW, HIT_COL, P3_HEAD = 46, 55, 12, 56
+SCAN_TOP, SCAN_SOUTH, SCAN_NORTH = 48, 35, 34
+MISS_ROW, HIT_ROW, HIT_COL, P3_HEAD = 44, 53, 12, 54
 
 
 def _phase2(c: Circuit) -> None:
@@ -860,11 +860,11 @@ def _phase2(c: Circuit) -> None:
     vr(c, 18, y + 4)
     vs(c, 19, y + 4)
     c.run(20, y + 4, "1M0")                 # A = 0, B = 1: the reversal's state
-    _link(c, (23, y + 4), E, P2_MASK - 1, (17, P2_MASK))
-
-    _bits(c, 20, P2_MASK, shift=True)
-    c.run(21, P2_MASK, "}b0M")              # BP = the mask, A = 0, B = 0
-    _link(c, (25, P2_MASK), E, P2_PEEL - 2, (18, P2_PEEL))
+    row = _east_to_west(c, 23, y + 4, 30, 4, 29)
+    _turned(c, 46, row, _bits, 20, 0, shift=True)
+    c.run(25, row, "}b0M", d=W)             # BP = the mask, A = 0, B = 0
+    y = _west_to_east(c, 21, row, 18, drop=2)
+    assert (row, y) == (P2_MASK, P2_PEEL), (row, y)
 
     _peel_sum(c, VRET_COL, P2_PEEL)         # B = the left half's sum, A = MB
     _link(c, (22, P2_PEEL - 1), N, P2_ROT - 2, (19, P2_ROT))
@@ -1022,7 +1022,7 @@ def _scan(c: Circuit) -> None:
 #: with ring V threaded through both, which needs a baton word and an idle relay
 #: loop in whichever room is not the active phase.  Width is free either way:
 #: the grid is 92 wide against a 153 side.
-NOSOL_COL, NOSOL_ROW = 44, 134
+NOSOL_COL, NOSOL_ROW = 44, 129
 
 
 def _nosol(c: Circuit) -> None:
@@ -1056,7 +1056,7 @@ def _hit_probe(c: Circuit) -> None:
 
 #: Phase 3's rows.  It is phase 2's lap with `CR` driving it, so it reuses every
 #: block; only the prologue and the final comparison differ.
-P3_MASK, P3_SKIP, P3_PEEL, P3_TEST = 61, 67, 71, 76
+P3_MASK, P3_SKIP, P3_PEEL, P3_TEST = 60, 62, 66, 71
 
 
 def _phase3(c: Circuit) -> None:
@@ -1084,11 +1084,11 @@ def _phase3(c: Circuit) -> None:
     vr(c, 22, y + 2)                        # A = GR = 256
     vs(c, 23, y + 2)                        # GR goes straight back
     c.run(24, y + 2, "+b1M0")               # BP = cr + 256, A = 0, B = 1
-    _link(c, (29, y + 2), E, P3_MASK - 2, (17, P3_MASK))
-
-    _bits(c, 20, P3_MASK, shift=True)
-    c.run(21, P3_MASK, "}b")                # BP = the mask; B is already 1
-    _link(c, (23, P3_MASK), E, P3_SKIP - 2, (19, P3_SKIP))
+    row = _east_to_west(c, 29, y + 2, 30, 4, 29)
+    _turned(c, 46, row, _bits, 20, 0, shift=True)
+    c.run(25, row, "}b", d=W)               # BP = the mask; B is already 1
+    y = _west_to_east(c, 23, row, 19, drop=2)
+    assert (row, y) == (P3_MASK, P3_SKIP), (row, y)
 
     _rot(c, VRET_COL, P3_SKIP)              # skip the left values, stop on MB
     _link(c, (22, P3_SKIP - 1), N, P3_PEEL - 2, (18, P3_PEEL))
@@ -1115,9 +1115,9 @@ def _phase3(c: Circuit) -> None:
 #: Emit's rows.  Three laps: count the bits and answer `k`, then the left half's
 #: chosen values, then the right half's.  Left before right **is** increasing
 #: index order, which is why no combined mask and no output buffer are needed.
-E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 80, 84, 85, 90, 94
-E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 99, 103, 104, 108, 113, 117
-E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 120, 124, 126, 131
+E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 75, 79, 80, 85, 89
+E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 94, 98, 99, 103, 108, 112
+E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 115, 119, 121, 126
 
 
 def _emit(c: Circuit) -> None:
