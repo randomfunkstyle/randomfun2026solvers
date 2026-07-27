@@ -84,6 +84,35 @@ For odd `n` the leftover value is the *last* one read, so it belongs to the
 last-spawned man, which is also the man that emits *first*; `x` (turn on BP's
 low bit) can branch on the parity of `n` before the `]`.
 
+## Pair reader loop — ⌈n/2⌉ carriers, each holding one pair
+
+```
+init:  @ r b ] m r M r          then walk into the `^`
+
+loop:  Y r M v
+       ^ m r d
+```
+
+The 4×2 loop runs clockwise from the `Y`. `Y` (corner) splits off a carrier,
+`r`/`M` take the first half of the next pair, `v` turns, `d` (corner) tests the
+backpack, `r` takes the second half, `m` decrements, `^` (corner) turns and is
+also the **merge point** the init man walks in on. The two `d`-free corners are
+plain arrows because a corner only has to turn; only the corners that also
+*test* need `d`.
+
+A carrier born at `Y` inherits the pair read on the previous lap, so it leaves
+holding `A = v₂ᵢ₊₁`, `B = v₂ᵢ` and emits them with `s W s` — reversed. The init
+reads its own first pair before joining, so the very first split is already
+loaded.
+
+`r b ] m` is the whole length calculation: `b` loads `n`, `]` halves it, `m`
+turns it into the loop count. Verified: `n = 2, 4, 6, 16` all spawn exactly
+`n/2` carriers with correctly ordered, correctly paired values.
+
+Period 8 with a single `Y`, so **`c = 8`** and by the coupling law the delay
+ring needs `s ≥ 9` — one station spacing wider than the ring the current
+solution runs. Half as many men at 9 ticks each beats sixteen at 8.
+
 ## The parity wall — why the delay ring cannot be small
 
 Two `Y`s sitting on one closed loop `k` cells apart spawn workers whose birth
