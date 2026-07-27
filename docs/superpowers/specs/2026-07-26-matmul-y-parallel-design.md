@@ -193,3 +193,45 @@ stage 4 to land as well.
 Tests assert behaviour, never a recorded score (`AGENTS.md`): outputs correct
 round by round, every pipe binds, the checked-in `.man` matches its generator,
 and an optimiser candidate beats the baseline from the same run.
+
+
+---
+
+## Correction (2026-07-27): pipes belong on the **top** wall, not the sides
+
+This design put every incoming pipe on MAIN's west wall and every outgoing on its
+east, so that "nearest" collapses to "nearest row" and a glyph binds correctly
+wherever it sits horizontally. MAIN was built that way and its 34 pipe ops all
+bind correctly. **It is still the wrong shape**, and working the assembly is what
+showed it.
+
+A ring has to return to the room it left. With the ports on the side walls, every
+ring must **wrap around** the room. Costing the five rings MAIN needs — A, B and
+three registers — with a nesting discipline that guarantees planarity (upper east
+terminal → further east turn column → further south corridor → further west
+riser) gives a bounding box of roughly **95x75**. That is worse than the 70x76
+machine it was meant to replace, before a single instruction runs.
+
+Every working matmul grid does the opposite. `matmul-c9920b5f.man` attaches
+**all fourteen** of its pipes to the big room's top wall, and eight of them are
+2–6 cells long because their relay rooms sit directly above:
+
+    pipe  3 len   2  TOP at x=38        pipe  9 len 246  TOP at x=42
+    pipe  7 len   2  TOP at x=31        pipe 11 len 212  TOP at x=57
+    pipe  2 len   3  TOP at x=32        pipe 13 len 106  TOP at x=43
+    ...                                 pipe 12 len  72  TOP at x=58
+
+Only the four storage rings are long; the register rings cost almost nothing.
+
+The consequence for layout is the mirror of the rule this design was built on.
+With ports on the top wall the vertical term `(y - top)` is the same for every
+glyph deep in the room, so **binding is by column**, and a loop body has to run
+*horizontally* with blanks padding each glyph onto its own pipe's column —
+`circuit.counted_loop_horizontal`, not `counted_loop`. That is also the reason the
+existing machine's inner multiply loop has gaps in it, and why those gaps are
+load-bearing: each `r`/`s` sits at the column its pipe attaches at.
+
+So a rebuild wants: ports on the top wall, relay rooms in a band directly above,
+horizontal counted loops with column-ordered bodies, and the two long rings
+serpentined below. MAIN as committed in `matmul_main.py` keeps its program, its
+register discipline and its marker test, but its geometry has to be transposed.
