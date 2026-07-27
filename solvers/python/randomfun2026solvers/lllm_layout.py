@@ -111,6 +111,49 @@ def _turn_keys(glyph: str) -> dict[str, str]:
     return {"pos": "cw"}
 
 
+def _order_channels(routed, glyph_ys, spans, channel):  # noqa: ANN001, ANN201
+    """Permute the channel columns so no lane's entry run crosses a live channel.
+
+    A routed edge turns east out of its channel on the target's first glyph row
+    and runs to the entry at ``NC``.  Any *other* channel column standing east of
+    it and occupied on that row blocks the run, and the packer — which only knows
+    about vertical overlap — has no reason to avoid it.
+
+    The repair is a topological sort of the packed column groups: whenever a
+    group is busy on some edge's arrival row, that group has to sit **west** of
+    the edge's own column.  Ties keep the packer's order, so the long-span-first
+    packing still decides everything the constraint leaves free.  A cycle would
+    mean two groups each needing to be west of the other; it does not arise here
+    and the packer's order is kept if it ever does.
+    """
+    n = len(spans)
+    before: list[set[int]] = [set() for _ in range(n)]
+    for i, (_src, dst, _row, _kind) in enumerate(routed):
+        arrive = glyph_ys[dst][0]
+        mine = channel[i]
+        for g, taken in enumerate(spans):
+            if g != mine and any(a <= arrive <= b for a, b in taken):
+                before[mine].add(g)
+    # A lane's walk is `end - ch` west plus `NC - ch` east, so **every** edge is
+    # cheaper the further east its channel sits.  The ones that can go east are
+    # the short spans — a long span crossed by many arrival rows is forced west
+    # by the constraint above — so among the groups the sort is free to place
+    # next, take the longest first and leave the short hot self-loops for the
+    # columns nearest the entry.
+    reach = [sum(b - a + 1 for a, b in taken) for taken in spans]
+    order: list[int] = []
+    placed: set[int] = set()
+    for _ in range(n):
+        ready = [g for g in range(n) if g not in placed and before[g] <= placed]
+        if not ready:  # pragma: no cover - no cycle on the shipped machine
+            return channel
+        nxt = max(ready, key=lambda g: (reach[g], -g))
+        placed.add(nxt)
+        order.append(nxt)
+    col_of = {g: k for k, g in enumerate(order)}
+    return {i: col_of[c] for i, c in channel.items()}
+
+
 @dataclass
 class Row:
     """One walked row of a block: a direction and the glyphs poured along it."""
@@ -133,28 +176,33 @@ class Plan:
 
 # ── column geometry ───────────────────────────────────────────────────────────
 #: Channel columns west of the code.  Sized generously; `build_room` asserts.
-NC = 26
+NC = 29
 CODE0 = NC + 1
 
 #: Pipe columns on the north wall.  The store pair is deliberately *spread* —
 #: its ring is the long one and its two pipes have to pass each other in the
 #: band above the room, which they cannot do if they start next to each other.
+#: The pairs sit **together** now.  They used to be spread because the store's
+#: 257-word ring had to snake the whole band and its two pipes crossed; a packed
+#: store is a short loop, so the pairs can be adjacent — and a band that starts
+#: 12 columns from the entry instead of 21 is nine ticks off every block visit,
+#: which is where this machine's time actually goes.
 PIPE_COL = {
-    "store_out": CODE0,
-    "store_in": CODE0 + 13,
-    "file_in": CODE0 + 28,
-    "file_out": CODE0 + 29,
-    "input": CODE0 + 64,
-    "painter": CODE0 + 65,
+    "store_out": CODE0 + 2,
+    "store_in": CODE0 + 3,
+    "file_in": CODE0 + 20,
+    "file_out": CODE0 + 21,
+    "input": CODE0 + 55,
+    "painter": CODE0 + 56,
 }
 #: Usable column range per band, kept clear of the midpoints so that the
 #: incoming and outgoing nearest-column rules agree everywhere inside it.
 ZONE_COLS = {
-    "ST": (CODE0, CODE0 + 14),
-    "FI": (CODE0 + 21, CODE0 + 45),
-    "IO": (CODE0 + 48, CODE0 + 124),
+    "ST": (CODE0, CODE0 + 11),
+    "FI": (CODE0 + 12, CODE0 + 37),
+    "IO": (CODE0 + 39, CODE0 + 84),
 }
-IW = CODE0 + 130
+IW = CODE0 + 90
 
 
 @dataclass(frozen=True)
@@ -180,6 +228,10 @@ class Geometry:
     #: at ``code0``, so starting east empties that row and the entry has nothing
     #: to point at.
     start_at_first_zone: bool = False
+    #: Cells a literal is assumed to need beyond its digits.  10 is the slack
+    #: `lllm` and the band layouts were tuned with; 0 means "work it out", which
+    #: is exact and lets a bank be as narrow as its widest literal really is.
+    lit_slack: int = 10
 
     def binds(self, x: int, token: str) -> str:
         """Which band's pipe an op at column `x` reaches: nearest, ties westward."""
@@ -277,6 +329,16 @@ class _Pen:
             self.wrap()
         raise Collision(f"cannot reach band [{lo},{hi}] from column {self.x}")
 
+    def lit_width(self, digits: str) -> int:
+        """Exactly the cells `literal` will spend, backticks already spent included."""
+        step, x, n = self._step(), self.x, 0
+        while x in self.backticks:
+            x, n = x + step, n + 1
+        x, n = x + step * (1 + len(digits)), n + 1 + len(digits)
+        while x in self.backticks:
+            x, n = x + step, n + 1
+        return n + 1
+
     def literal(self, digits: str) -> None:
         step = self._step()
         while self.x in self.backticks:
@@ -314,9 +376,18 @@ def _start_col(toks: list[str], geo: Geometry) -> int:
     return max(geo.code0, min(geo.zone_cols[z][0] for z in zones))
 
 
-def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM) -> dict[str, Plan]:
-    backticks: set[int] = set()
+def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM,
+                backticks: set[int] | None = None) -> dict[str, Plan]:
+    # backticks pair down columns as well as along rows, so the set of columns
+    # already spent is a property of the *room*: a caller planning one bank at a
+    # time passes its own set in and keeps them unique across all of them.
+    backticks = set() if backticks is None else backticks
     plans: dict[str, Plan] = {}
+    # Planning order is layout order, and it was worth checking: handing the
+    # backtick columns out **widest literal first** does shorten the decode
+    # block's walk (-1.8% ticks, the skipping it stops doing), but it reshapes
+    # every other block's rows and the room came out four rows taller — +3.9% on
+    # a squared footprint.  Measured 7.85e9 against 7.69e9, so it is not done.
     for name in order:
         toks, succ = worker[name]
         branch = toks[-1] if isinstance(succ, dict) else None
@@ -335,7 +406,8 @@ def plan_blocks(order: list[str], worker=WORKER, geo: Geometry = LLLM) -> dict[s
                 if kind == "lit":
                     # +8 of slack: the backtick columns are globally unique, so
                     # both ends may have to step past columns already spent.
-                    pen.ensure(len(str(payload)) + 10)
+                    pen.ensure(pen.lit_width(str(payload)) if geo.lit_slack == 0
+                               else len(str(payload)) + geo.lit_slack)
                     pen.literal(str(payload))
                 else:
                     pen.ensure(2)
@@ -501,9 +573,19 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
                 row = last_y - 1 if last_row.east else south_y[name]
             routed.append((name, target, row, kind))
 
+    # Pack the vertical legs into columns, longest first.  Column *order* is not
+    # free: a lane leaves its channel heading east and runs to the entry at `NC`,
+    # so no channel east of it may be occupied on that row.  Packing the long
+    # spans westward is what makes that hold — a short span nested inside a long
+    # one gets a column east of it, and the long one's own endpoints lie outside
+    # the short one by construction.  `_order_channels` then repairs whatever
+    # that heuristic still leaves crossing.
     spans: list[list[tuple[int, int]]] = []
     channel: dict[int, int] = {}
-    for i, (_src, dst, row, _kind) in enumerate(routed):
+    by_length = sorted(range(len(routed)),
+                       key=lambda i: -abs(routed[i][2] - glyph_ys[routed[i][1]][0]))
+    for i in by_length:
+        _src, dst, row, _kind = routed[i]
         lo, hi = sorted((row, glyph_ys[dst][0]))
         for col, taken in enumerate(spans):
             if all(hi + 1 < a or b + 1 < lo for a, b in taken):
@@ -515,6 +597,7 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
             channel[i] = len(spans) - 1
     if len(spans) > NC:
         raise Collision(f"{len(spans)} channels needed, only {NC} columns")
+    channel = _order_channels(routed, glyph_ys, spans, channel)
 
     # ── draw ──────────────────────────────────────────────────────────────────
     c = Circuit(IW, ih)
@@ -574,8 +657,12 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
             if not c.free(ch, yy):
                 raise Collision(f"channel {ch} blocked at row {yy} ({src}->{dst})")
         c.set(ch, target_y, ">")
+        # Two channels may arrive on the same row: the second one's `>` sits in
+        # the first one's entry run, and an eastbound man walking over `>` just
+        # re-reads the heading he already has.  Only a turn out of the row — a
+        # `v`/`^` starting some other channel — is fatal.
         for x in range(ch + 1, NC):
-            if not c.free(x, target_y):
+            if not c.free(x, target_y) and c.get(x, target_y) != ">":
                 raise Collision(f"entry run to {dst} blocked at ({x},{target_y})")
 
     return Room(c, order, plans, glyph_ys, straight_y, len(spans))
@@ -588,7 +675,12 @@ def build_room(worker=WORKER) -> Room:  # noqa: PLR0912, PLR0915 - one pass, rea
 RELAY = ["+----+", "|>@rv|", "|^.s<|", "+----+"]
 RELAY_IW, RELAY_IH = 4, 2
 
-BAND_H = 30  # rows above the worker, for the panel, rings and I/O
+#: Rows above the worker, for the two ring relays and the input room.  It used
+#: to be 30 because the 26-row panel stood *in* the band; the panel now stands
+#: **east** of the worker instead, where the room's columns run out long before
+#: its rows do.  Score is `max(w, h)^2` and this machine is charged from its
+#: height, so a row moved into the width is a row that costs nothing.
+BAND_H = 8
 WX, WY = 1, BAND_H + 1
 
 
@@ -614,7 +706,10 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
 
     room = build_room()
     iw, ih = IW, room.circuit.h
-    g = Circuit(WX + iw + 1, WY + ih + 1)
+    # the painter + panel stand east of the worker, so the grid is as wide as
+    # they reach and only as tall as the band plus the room.
+    px, py = WX + iw + 3, 1
+    g = Circuit(max(WX + iw + 1, px + panel.PANEL_W + 4), WY + ih + 1)
 
     for y, line in enumerate(room.circuit.rows()):
         for x, ch in enumerate(line):
@@ -624,21 +719,20 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
     north = WY - 1  # the worker's north wall row
     col = {k: WX + v for k, v in PIPE_COL.items()}
 
-    # ── the panel, top right ─────────────────────────────────────────────────
-    px, py = 100, 1
+    # ── the panel, east of the worker ────────────────────────────────────────
     stamp(g, px, py, panel.painter().rows())
     walls(g, px, py, panel.PAINTER_IW, panel.PAINTER_IH)
     lens = panel.attach_panel(g, px, py, px + 1, py + 6)
-    # painter feed: straight up its own column, then east into the painter's
-    # west wall, one column clear of the input pipe's riser.
+    # painter feed: straight up its own column, then east along the band's second
+    # row into the painter's west wall, clear of everything the band holds.
     pipe(
         g,
         [(col["painter"], north - 1), (col["painter"], py + 1), (px - 2, py + 1)],
         into=(px - 1, py + 1),
     )
 
-    # ── input room ───────────────────────────────────────────────────────────
-    ix, iy = 80, 22
+    # ── input room, in the band's top rows ───────────────────────────────────
+    ix, iy = col["input"] - 16, 0
     stamp(g, ix, iy, ["+-+", "|I|", "+-+"])
     pipe(
         g,
@@ -646,50 +740,41 @@ def build_grid() -> tuple[list[str], DebugMap, dict[str, object]]:
         into=(col["input"], north),
     )
 
-    # ── the store ring ───────────────────────────────────────────────────────
-    # 257 words have to be resident, so the forward pipe snakes the whole
-    # north-west quarter; the return takes the free column east of the snake.
-    stamp(g, 2, 6, RELAY)
-    fwd = pipe(
-        g,
-        [
-            (col["store_out"], north - 1),
-            (col["store_out"], north - 2),
-            *_serpentine(2, 38, north - 2, 10),
-            (5, 10),
-        ],
-        into=(5, 9),
-    )
-    # A pipe's first cell must point *away* from its room, so both returns leave
-    # their relay heading north before they may bend.
-    ret = pipe(
-        g,
-        [(4, 5), (4, 4), (col["store_in"], 4), (col["store_in"], north - 1)],
-        into=(col["store_in"], north),
-    )
-    if fwd + ret < STORE_WORDS + 2:
-        raise Collision(f"store ring holds {fwd + ret}, needs {STORE_WORDS + 2}")
+    # ── the two rings ────────────────────────────────────────────────────────
+    # Both are the same shape now: a relay tucked under the north band with the
+    # forward pipe entering its south wall and the return leaving its north.
+    # The store used to snake the whole north-west quarter for 257 residents; a
+    # packed store holds **32**, so it is a short loop like the file's, and a
+    # short loop is worth having — its latency is paid on every rotation.
+    def ring(relay_x: int, out_col: int, in_col: int) -> int:
+        stamp(g, relay_x, north - 6, RELAY)
+        fwd = pipe(
+            g,
+            [(out_col, north - 1), (out_col, north - 2), (relay_x + 1, north - 2)],
+            into=(relay_x + 1, north - 3),
+        )
+        # A pipe's first cell must point *away* from its room, so a return leaves
+        # its relay heading north before it may bend.
+        ret = pipe(
+            g,
+            [
+                (relay_x + 2, north - 7),
+                (relay_x + 2, north - 8),
+                (in_col, north - 8),
+                (in_col, north - 1),
+            ],
+            into=(in_col, north),
+        )
+        return fwd + ret
 
-    # ── the register file: six slots, and a *short* loop, because its latency
-    # is paid on every rotation and there are about thirty a tick.
-    stamp(g, 58, north - 6, RELAY)
-    ffwd = pipe(
-        g,
-        [(col["file_out"], north - 1), (col["file_out"], north - 2), (59, north - 2)],
-        into=(59, north - 3),
-    )
-    fret = pipe(
-        g,
-        [
-            (60, north - 7),
-            (60, north - 8),
-            (col["file_in"], north - 8),
-            (col["file_in"], north - 1),
-        ],
-        into=(col["file_in"], north),
-    )
-    if ffwd + fret < FILE_WORDS + 2:
-        raise Collision(f"file ring holds {ffwd + fret}, needs {FILE_WORDS + 2}")
+    store_ring = ring(10, col["store_out"], col["store_in"])
+    if store_ring < STORE_WORDS + 2:
+        raise Collision(f"store ring holds {store_ring}, needs {STORE_WORDS + 2}")
+    file_ring = ring(col["file_out"] + 2, col["file_out"], col["file_in"])
+    if file_ring < FILE_WORDS + 2:
+        raise Collision(f"file ring holds {file_ring}, needs {FILE_WORDS + 2}")
+    fwd = ret = store_ring // 2
+    ffwd = fret = file_ring // 2
 
     rows = [r.rstrip() for r in g.rows()]
     while rows and not rows[-1]:

@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from .asm import assemble_file
 from .emulator import Emulator, Round
 from .isa import DEFAULT_ISA, LM1_V1
-from .programs import available, load, problem_of, rounds_for_problem
+from .programs import DEMOS, available, load, problem_of, rounds_for_problem
 
 MAX_INSTRUCTIONS = 3_000_000
 
@@ -83,7 +83,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"# {res.instructions} instructions, ~{res.ticks} ticks ({res.reason})")
         return 0
 
-    stems = args.program or list(available())
+    # Demos have no public cases under their borrowed slug (see programs.DEMOS);
+    # grading one against them is meaningless, so the default list skips them.
+    # Naming a demo explicitly still grades it, garbage-in and all.
+    stems = args.program or [s for s in available() if s not in DEMOS]
     failures = 0
     for stem in stems:
         passed, total, ticks, skip_ticks = _grade(stem)

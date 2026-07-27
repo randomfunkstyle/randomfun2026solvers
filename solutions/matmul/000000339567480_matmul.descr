@@ -1,0 +1,34 @@
+# matmul — submission 81b25795-db00-4bf5-8210-78dee388e9db
+
+verdict      done: 20/20 cases, area2 8836, avgTicks 38,430, score 339,567,480
+submitted    2026-07-27T00:21:25+0000
+grid         85x94
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  3b552b78f78f2d6e5a8c8765de4571d395f01de9c18aa8412abf963526d0b0c7
+commit       53e31b6
+local        7/7 public cases on LM_VALIDATOR=reference, avg 31,082 ticks, score 274,638,027
+source       tasks/solutions/matmul_packed.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+The north band was never fitted: matmul_grid.NB = 15 because 15 was the first height that laid
+the first band geometry. Two rows are slack under the tuned one, and height was binding at 96
+against a width of 85 — so both came straight off max(w,h). fit_nb searches it, gated on the
+*engine's* parse rather than the pen: one row below the floor the art draws with no collision and
+then refuses to load, because a return pipe reaches back into the turnaround room it left.
+85x96 -> 85x94, local 2.865e8 -> 2.746e8.
+
+Also fixed this session (in matmul_dense, not this grid): BL2's pos lane landed on BL2_R's first
+cell heading south while BL2_R is written to be read east, so the man ran the one glyph under him
+and walked out through the blanks into HEAD's box. _route_edges skipped drawing a corridor when
+the man already falls through, and _follows_to answered which block while saying nothing about
+which way he faced. walk_blocks now refuses a lane whose arrival heading disagrees with its
+target's — shared, so it covers matmul_grid's layouts too.
+
+NOT OUR BEST. Submitted without reading the board first: our live matmul was already
+222,267,325 from a parallel effort, so this 339,567,480 was discarded by the server (best is
+kept). It is 1.043x better than the 354,244,608 the *archive* recorded, which was stale.
+The band fit itself is real and merged; it just needs applying to whatever generator produced
+the 222M grid, which is not in the repo. Use scripts/submit_guarded.sh in future.

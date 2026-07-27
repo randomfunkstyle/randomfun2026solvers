@@ -1,0 +1,23 @@
+# little-little-little-man — submission c229f34c-4e90-4fca-b00d-ada2943e3538
+
+verdict      done: 21/21 cases, area2 40804, avgTicks 196,974, score 8,037,334,868
+submitted    2026-07-26T23:07:44+0000
+grid         144x202
+problem id   d91edb43-4e94-4541-b8f7-9c79ba8c8331
+fingerprint  4b0fca488648d08ab5887547b3e9ad907bbee8da3ca9f3cd8e75a5ce9e6b3461
+commit       e7936f1
+local        10/10 public cases on LM_VALIDATOR=reference, avg 181,238 ticks, score 7,395,247,593
+source       tasks/solutions/little-little-little-man_ring.man
+
+runner output:
+Passed 21/21 test cases
+
+notes:
+Packed store: 8 classes per 64-bit word at 5 bits, fixed 32-word ring, POS/8 yields index and
+offset in one glyph. The key move is holding the current word in the register file and leaving a
+hole in the ring where it came from — pushing it straight back advances the head, making "the same
+word again" (53% of ticks) cost a whole lap. 6.6 word-moves a tick against 184; store loop 92% of
+block visits -> 2% of ticks. Panel moved east out of the charged dimension, band 30 rows -> 8.
+Pipe pairs closed up (file band 12 columns from entry, not 21). Wall-row flag added to the byte
+before hashing rather than branched on, deleting a branch, a block and the whole WALL_CELL path.
+Previous: 60,264,480,732 (rank 23/57). This: 7.50x better, clears #10 (1.17e10).

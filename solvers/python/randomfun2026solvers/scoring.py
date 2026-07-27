@@ -196,6 +196,21 @@ def _ticks_for_case(
             hi = mid
         else:
             lo = mid + 1
+
+    # Length is not correctness. A program emitting the wrong value emits the *same
+    # number* of values, so the search above cannot tell `[0]` from `[35]` — and a
+    # score reported for a wrong grid reads exactly like a score for a right one.
+    # `brackets_stack.man` was submitted on the strength of such a score and came
+    # back 20/26, failing a *public* case. Scoring a grid asserts it passes, so
+    # check the values here rather than leaving it to whoever calls this.
+    snap = lm.tick(path, lo, input=inp)
+    want = [str(v) for r in _rounds(case) for v in (r.get("out", []) or [])]
+    got = [str(v) for v in snap.output][: len(want)]
+    if got != want:
+        raise ScoringError(
+            f"output {got} != expected {want} at tick {lo} "
+            "(cannot score — the program does not pass this case)"
+        )
     return lo, False
 
 

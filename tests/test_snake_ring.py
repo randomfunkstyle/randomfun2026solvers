@@ -74,9 +74,21 @@ def test_the_worker_program_commits_every_public_frame(cases: list[dict]) -> Non
         assert got == expected(case), case["name"]
 
 
-def test_the_worker_program_is_251_glyph_cells_over_43_blocks() -> None:
-    """The budget the layout has to fit; a rewrite that grows it should say so."""
-    assert (worker_glyph_cells(), len(WORKER)) == (251, 43)
+def test_no_block_is_a_lap_that_could_have_carried_its_own_send() -> None:
+    """A ring lap must not cost two block visits a word.
+
+    A block visit is ~33 ticks of corridor and a glyph is 1, so the shape to
+    refuse is a one-glyph body block whose only job is to hand the word back and
+    return to the test that read it: `sr` leaves A alone, so it belongs *in* the
+    test.  This is the check, not a pinned glyph count -- fusing a loop changes
+    the count and that is the improvement, not a regression.
+    """
+    for name, (toks, succ) in WORKER.items():
+        if not isinstance(succ, str) or len(toks) > 1:
+            continue
+        target = WORKER[succ][0] if succ in WORKER else []
+        assert not (toks == ["sr"] and target and target[0] == "rr"), \
+            f"{name} is a lap's send that {succ} could have carried"
 
 
 def test_every_branch_lane_names_a_block_that_exists() -> None:

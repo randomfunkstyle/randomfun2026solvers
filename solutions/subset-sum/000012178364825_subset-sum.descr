@@ -1,0 +1,38 @@
+# subset-sum — submission a83ada37-7085-4b83-8e84-7852d58b65be
+
+verdict      done: 20/20 cases, area2 16384, avgTicks 743,308, score 12,178,364,826
+submitted    2026-07-27T08:46:38+0000
+grid         92x128
+problem id   b5e48adc-317d-480d-88a4-e2edc659453a
+fingerprint  9a9aa83936ab004c9bcaa663b6f938dbdde8cb1eefc4ec38d22b5d6d5458ae66
+commit       a6d96f6
+local        7/7 public on LM_VALIDATOR=reference, avg 267,010 ticks, score 4,374,691,840
+             slow tier 18/18; guard projected 11.96e9 against a live 13,590,095,198
+source       tasks/solutions/subset-sum_mitm.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Boustrophedon: seven blocks turned (five _bits, four _rot), 92x153 -> 92x128.
+Area x0.700, ticks x0.925, score x0.647 — both axes, because a row that stops existing is also a
+row nobody walks. Ticks fell 7.4% on the phase-2/3 pair alone since those rows are inside the
+per-lap walk and there are 4,096 laps; emit's rows are walked once and were near-pure area.
+
+A westbound block is the eastbound block rotated 180 degrees, not mirrored: X/x/d/a keep their
+chirality (relative to heading) and only > < ^ v swap. Three constraints the substrate charged:
+  - The rotation axis is PER BLOCK. _bits touches no pipe so any axis draws it; _rot reads and
+    writes ring V, and rotating it about 46 put those ops on columns 25-26, one past the v band's
+    east edge, where they bind to ring B. A mis-bound ring op is invisible in the grid and in the
+    answer's shape — only its value is wrong. _op now refuses it at build time.
+  - Two-band blocks are unturnable (io-band ops move east, v-band ops west, rotation swaps them):
+    _init, _leftvals, _rightvals, _tail, _peel_emit, _nosol.
+  - Two turned blocks cannot be chained: one leaves heading west at column 23, the next is entered
+    heading west at column 25, which is behind him. E3 pays a row going back east to turn again.
+
+This finally beats the live 13,590,095,198, whose grid was never committed and could not be found
+in any branch or worktree. Our subset-sum is now reproducible from the repo.
+Remaining: ~10-14 more rows of the same transform (P2_ROT, P3_SKIP, _peel_sum at P2_PEEL/P3_PEEL,
+seven v-only head rows) -> ~92x115, ~9.5e9. Sorted ring B is NOT worth it: its +14 rows are a
+fixed cost, so a shorter room makes it a larger relative penalty (x0.845 at 153 rows, x0.874 at
+128) — it never stops being eaten.

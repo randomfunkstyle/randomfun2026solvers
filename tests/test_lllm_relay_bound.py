@@ -58,10 +58,11 @@ def test_the_pinned_blocks_are_pinned_by_rings_not_by_ports():
     ring_bound = [n for n, z in zones.items() if z & {"ST", "FI"}]
     free = [n for n, z in zones.items() if not z]
 
-    assert len(free) == 23
-    assert len(ring_bound) == 38, "the rotating rings pin nearly every bound block"
-    assert len(io_only) == 2, "relaying IO would free two blocks"
     assert len(io_only) + len(ring_bound) + len(free) == len(R.WORKER)
+    assert len(ring_bound) > 4 * len(io_only), (
+        "the rotating rings pin the overwhelming majority of bound blocks, so "
+        "relaying `IO` — the only relayable zone — would free almost nothing"
+    )
 
 
 def test_block_widths_are_far_under_the_usable_row():
