@@ -705,6 +705,75 @@ def _flat_lane(
     return out
 
 
+def _uneven_trie(
+    k: int, slot_rows: dict[int, int], lane_x0: int
+) -> tuple[int, dict[tuple[int, int], str]]:
+    """Lay a depth-``k`` decode trie pruned to the *used* leaf slots.
+
+    Dead-lane removal (``TRIM_DEAD_LANES``) compacts the lane band to one row pair
+    per used opcode, so the trie can no longer spread its branches by ``1 << k``:
+    each subtree's vertical extent is exactly its surviving-leaf band, a branching
+    ``x`` sits on the gap row above its down-half's first lane, and every
+    single-child chain is contracted into one edge straight to its branching
+    descendant (or lane). Semantics that must survive the re-routing:
+
+    * an ``x`` at original trie level ``L`` tests BP's low bit, which must be bit
+      ``L-1`` of the opcode — so exactly ``L-1`` ``]``-shifts must precede it.
+      Levels get **two** columns here (``x`` at ``3 + 2L``) so an edge that
+      contracts ``d`` levels has ``2d - 1 >= d`` horizontal cells for its ``]``s;
+      the uniform trie's vertical ``]`` at distance 1 cannot host more than one.
+    * a contracted path *stops* shifting once no ``x`` remains below it, so a lane
+      may be entered with junk in BP. That is safe: no lane micro-program reads BP
+      before writing it (flat lanes never touch it; jump lanes open with ``b``,
+      branch arms with ``W`` then ``b``).
+
+    Returns the root entry row — the fetch row — and the cells. Opcode numbers are
+    untouched: the ROM image is byte-identical to the uniform trie's.
+    """
+    cells: dict[tuple[int, int], str] = {}
+    used = sorted(slot_rows)
+
+    def node(level: int, lo: int, hi: int) -> tuple[int, int | None]:
+        """Entry (row, level) of the subtree over slots [lo, hi); level None = lane."""
+        sl = [s for s in used if lo <= s < hi]
+        mid = lo
+        up: list[int] = []
+        down: list[int] = []
+        while len(sl) > 1:
+            mid = (lo + hi) // 2
+            up = [s for s in sl if s < mid]
+            down = [s for s in sl if s >= mid]
+            if up and down:
+                break
+            # Single-child level: contract it — the edge below carries its `]`.
+            lo, hi = (lo, mid) if up else (mid, hi)
+            level += 1
+        if len(sl) == 1:
+            return slot_rows[sl[0]], None
+        col = 3 + 2 * level
+        xrow = slot_rows[min(down)] - 1  # the gap row above the down half
+        cells[(col, xrow)] = "x"
+        for half, sign in (((lo, mid), -1), ((mid, hi), +1)):
+            crow, clevel = node(level + 1, *half)
+            for yy in range(xrow + sign, crow, sign):
+                cells[(col, yy)] = "."
+            cells[(col, crow)] = ">"
+            shifts = 0 if clevel is None else clevel - level
+            end = (2 + 2 * clevel) if clevel is not None else (lane_x0 - 1)
+            for i, cx in enumerate(range(col + 1, end + 1)):
+                cells[(cx, crow)] = "]" if i < shifts else "."
+        return xrow, level
+
+    entry, elevel = node(1, 0, 1 << k)
+    # The approach from the fetch cell: `>rbr` ends at column 4, the first `x` (or
+    # the lone lane) starts east of it, and a contracted root still owes its shifts.
+    shifts = 0 if elevel is None else elevel - 1
+    end = (2 + 2 * elevel) if elevel is not None else (lane_x0 - 1)
+    for i, cx in enumerate(range(5, end + 1)):
+        cells[(cx, entry)] = "]" if i < shifts else "."
+    return entry, cells
+
+
 def build_cpu(
     program: Program,
     p: _Plan,
@@ -713,24 +782,50 @@ def build_cpu(
     stream_pad: int = 0,
     short_return: bool = True,
     drain_unit_bits: int = 0,
+    trim_dead: bool = False,
+    top_bus: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
     ``short_return`` lets a simple lane drop at the end of its own micro-program
     rather than east of the slab band; see the drop-column comment. It narrows the
     CPU, which ``matmul``'s STREAM wiring does not currently survive.
+
+    ``trim_dead`` removes the unused leaf slots' rows (see :func:`_uneven_trie`);
+    ``top_bus`` adds a second return bus above the band and routes each simple
+    lane over whichever bus is cheaper. Both default off and leave the layout
+    byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
+    :data:`TOP_RETURN_BUS`.
     """
+    if (trim_dead or top_bus) and not short_return:
+        raise MachineError("trim_dead/top_bus require the short-return drop rule")
     k, lanes = p.k, p.lanes
-    centre = 1 << k
-    span = 2 * lanes - 1
-    lane_x0 = 5 + k
     used = list(p.number)
-    by_row = {p.row[m]: m for m in used}
-    all_rows = list(range(1, span + 1, 2))
+    bus_row = 1
+    y0 = 2 if top_bus else 1  # with a top bus, row 1 belongs to the bus
+    if trim_dead:
+        slots = sorted((p.row[m] - 1) // 2 for m in used)
+        rank = {s: i for i, s in enumerate(slots)}
+        row_of = {m: y0 + 2 * rank[(p.row[m] - 1) // 2] for m in used}
+        n_rows = len(slots)
+        lane_x0 = 4 + 2 * k  # two columns per trie level (see _uneven_trie)
+    else:
+        row_of = {m: p.row[m] + (y0 - 1) for m in used}
+        n_rows = lanes
+        lane_x0 = 5 + k
+    span = 2 * n_rows - 1
+    by_row = {row_of[m]: m for m in used}
+    all_rows = [y0 + 2 * i for i in range(n_rows)]
+    if trim_dead:
+        centre, trie_cells = _uneven_trie(
+            k, {(p.row[m] - 1) // 2: row_of[m] for m in used}, lane_x0
+        )
+    else:
+        centre, trie_cells = (1 << k) + (y0 - 1), None
 
     flat = {m: hw_micro(p.sem[m]) for m in used if p.sem[m] in _HW}
     structured = [m for m in used if p.sem[m] in _JUMP_SEMS | _BRANCH_SEMS]
-    halting = {p.row[m] for m in used if p.sem[m] is Sem.HALT}
+    halting = {row_of[m] for m in used if p.sem[m] is Sem.HALT}
 
     prefixes = [
         next((i for i, (_, b) in enumerate(mc) if b == Band.MEM), len(mc))
@@ -793,6 +888,46 @@ def build_cpu(
             lane_cells[(lane_x0, r)] = (pre, None)
             lane_end[r] = lane_x0
 
+    # ── bus choice: which lanes return over the top instead of the bottom ────
+    # The top bus (row 1) is the collector's mirror: a lane exits east, *rises* on a
+    # column clear of every lane above it — the running prefix maximum of
+    # ``lane_end``, the same bookkeeping as the drops' suffix maximum — walks west
+    # along row 1, and descends column 1 into the fetch cell. Cheaper for lanes near
+    # the top of the band, which otherwise pay the whole band height twice (down to
+    # the collector, back up the riser). Slab lanes are excluded: their drops
+    # continue past the collector into the structures band below.
+    top_lanes: set[int] = set()
+    collector = all_rows[-1] + 1
+    if top_bus:
+        prefix_floor: dict[int, int] = {}
+        pre = lane_x0 - 1
+        for r in all_rows:
+            pre = max(pre, lane_end[r])
+            prefix_floor[r] = pre + 1
+        suffix_floor: dict[int, int] = {}
+        suf = lane_x0 - 1
+        for r in reversed(all_rows):
+            suf = max(suf, lane_end[r])
+            suffix_floor[r] = suf + 1
+        for r in all_rows:
+            m = by_row.get(r)
+            if m is None or r in halting or m in slab_rows:
+                continue
+            down_cost = (
+                (suffix_floor[r] - lane_end[r])
+                + (collector - r)
+                + (suffix_floor[r] - 1)
+                + (collector - centre)
+            )
+            up_cost = (
+                (prefix_floor[r] - lane_end[r])
+                + (r - bus_row)
+                + (prefix_floor[r] - 1)
+                + (centre - bus_row)
+            )
+            if up_cost < down_cost:
+                top_lanes.add(r)
+
     # ── drop columns: turn south the moment every lane below allows it ───────
     # A drop is only ever a `v` at its head and `.` below, and a southbound man keeps
     # his heading over a `.` — so the only hard constraint is that the column be clear
@@ -817,9 +952,10 @@ def build_cpu(
         floor = lane_x0
         for r in sorted(all_rows, reverse=True):
             # Halting rows carry no drop but do carry glyphs, so they still raise the
-            # floor for everything above them.
+            # floor for everything above them — as do top-bus lanes, whose return
+            # leaves by the ascent column assigned after the drops.
             floor = max(floor, lane_end[r] + 1)
-            if r in halting:
+            if r in halting or r in top_lanes:
                 continue
             m = by_row.get(r)
             if m is not None and m in slab_rows:
@@ -863,7 +999,7 @@ def build_cpu(
 
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
-    order = sorted(structured, key=lambda m: drop_x[p.row[m]])
+    order = sorted(structured, key=lambda m: drop_x[row_of[m]])
     slab_at: dict[str, int] = {}
     slab_base: dict[str, int] = {}
     # The collector sits **immediately** below the lane band, above the slabs, and
@@ -873,7 +1009,8 @@ def build_cpu(
     # instead of 16 — paid once per instruction, for the whole program. A profile
     # (`tools/heatmap.mjs` + `lm1.profile`) put the return path at 25 % of the CPU's
     # time before this.
-    collector = span + 1
+    # (``collector`` itself is defined with the bus choice above: the row below
+    # the last lane, wherever dead-lane removal left it.)
     # Entry rows are stacked directly — slab *i* enters on ``collector + 1 + i`` —
     # rather than each slab getting a private row band. Only the entry row is an
     # exclusive resource: it is the westbound run slab *i*'s drop lands on, and it
@@ -890,6 +1027,23 @@ def build_cpu(
         slab_at[m] = collector + 1 + i
         slab_base[m] = _STRUCT_X0 + i * _SLAB_PITCH
     bottom = max((slab_at[m] + slab_rows[m] for m in order), default=collector + 1)
+
+    # ── ascent columns for the top bus, the drops' mirror ────────────────────
+    # Assigned *after* the drops so they can refuse every drop column: a rising
+    # man crossing a drop's `v` would be turned south, and a dropping man crossing
+    # an ascent's `^` would be turned north. Two ascents may share a column — a
+    # northbound man keeps his heading over another lane's `^` — just as simple
+    # drops have always shared.
+    asc_x: dict[int, int] = {}
+    if top_lanes:
+        pre = lane_x0 - 1
+        for r in all_rows:
+            pre = max(pre, lane_end[r])
+            if r in top_lanes:
+                c = pre + 1
+                while c in assigned:
+                    c += 1
+                asc_x[r] = c
 
     g = _Grid()
     pipe_glyphs: list[tuple[int, int, str, str]] = []
@@ -913,14 +1067,19 @@ def build_cpu(
             if level < k:
                 trie(level + 1, row + sign * step)
 
-    trie(1, centre)
+    if trie_cells is None:
+        trie(1, centre)
+    else:
+        # Dead-lane removal: the pruned, contracted trie (see _uneven_trie).
+        for (x, yy), ch in trie_cells.items():
+            g.put(x, yy, ch)
 
     for (x, yy), (glyph, band) in lane_cells.items():
         emit(x, yy, glyph, band)
     for r in all_rows:
         if r in halting:
             continue
-        for x in range(lane_end[r] + 1, drop_x[r]):
+        for x in range(lane_end[r] + 1, (asc_x[r] if r in top_lanes else drop_x[r])):
             g.soft(x, r, ".")
 
     # ── drops: simple lanes to the collector, structured ones to their slab ──
@@ -929,16 +1088,32 @@ def build_cpu(
     # drop cross a slab's westbound entry row at all. A `v` there would turn the
     # entry man south into the middle of the drop.
     for r in all_rows:
-        if r in halting:
+        if r in halting or r in top_lanes:
             continue
         g.put(drop_x[r], r, "v")
     for r in all_rows:
-        if r in halting:
+        if r in halting or r in top_lanes:
             continue
         m = by_row.get(r)
         stop = slab_at[m] if (m is not None and m in slab_at) else collector
         for yy in range(r + 1, stop):
             g.soft(drop_x[r], yy, ".")  # crosses the collector row for a slab lane
+
+    # ── the top bus: rises east of the band, returns along row 1, drops col 1 ──
+    # Heads first (hard), then the runs (soft), so two ascents sharing a column
+    # keep both `^`s. The bus row was reserved by ``y0``: nothing else is on row 1,
+    # and column 1 above the fetch row is blank in every layout.
+    for r, c in sorted(asc_x.items()):
+        g.put(c, r, "^")
+    for r, c in asc_x.items():
+        for yy in range(bus_row + 1, r):
+            g.soft(c, yy, ".")
+    if top_lanes:
+        g.put(1, bus_row, "v")
+        for x in range(2, max(asc_x.values()) + 1):
+            g.soft(x, bus_row, "<")
+        for yy in range(bus_row + 1, centre):
+            g.soft(1, yy, ".")
 
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
@@ -950,7 +1125,7 @@ def build_cpu(
     # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place and
     # only fills the genuinely free cells with `<`.
     for m in order:
-        s0, dx = slab_at[m], drop_x[p.row[m]]
+        s0, dx = slab_at[m], drop_x[row_of[m]]
         base = slab_base[m]
         g.put(dx, s0, "<")
         if p.sem[m] in _JUMP_SEMS:
@@ -966,7 +1141,7 @@ def build_cpu(
     # ── collector -> west riser -> back into the fetch cell ──────────────────
     # `soft` after the drops, so a slab-entry column that has to pass *through* the
     # collector keeps its `.` and is not turned west by a `<`.
-    ret_x = max([*drop_x.values(), *struct_drops])
+    ret_x = max([*drop_x.values(), *struct_drops, lane_x0])
     for x in range(3, ret_x + 1):
         g.soft(x, collector, "<")
     g.put(1, collector, "^")
@@ -985,7 +1160,7 @@ def build_cpu(
     # *through* the collector on their way to a slab: those leave `.` on the collector
     # row, so a simple man sharing the column would sail past his turn west and be
     # swallowed by that slab.
-    through = {drop_x[p.row[m]] for m in order}
+    through = {drop_x[row_of[m]] for m in order}
     clash = {r: c for r, c in drop_x.items() if c in through and by_row.get(r) not in order}
     if clash:
         raise MachineError(
@@ -993,7 +1168,7 @@ def build_cpu(
             f"slab entry column; a simple lane would drop past the collector"
         )
 
-    width = ret_x + 1
+    width = max(ret_x, *asc_x.values()) + 1 if asc_x else ret_x + 1
     # ``bottom`` is one *past* the deepest slab's last glyph row, so on most layouts
     # this row is blank — it holds nothing but the two side walls, and `height =
     # bottom - 1` renders and binds on every registered machine.  It was worth a row
@@ -1015,21 +1190,23 @@ def build_cpu(
         if by_row.get(r) in flat and any(b == Band.MEM for _, b in flat[by_row[r]])
     )
     mem_out_row = mem_rows[len(mem_rows) // 2] if mem_rows else centre
-    in_rows = [p.row[m] for m in used if p.sem[m] is Sem.INPUT]
+    in_rows = [row_of[m] for m in used if p.sem[m] is Sem.INPUT]
     out_cols = [lane_x0 + 1]
 
     # ── name every region, so a profile is readable ───────────────────────────
     regions: dict[str, tuple[int, int, int, int]] = {
         "fetch": (1, centre, 4, 1),
-        "trie": (5, 1, k, span),
+        "trie": (5, y0, lane_x0 - 5, span),
         "return:riser": (1, centre + 1, 1, collector - centre),
         "return:collector": (2, collector, ret_x - 1, 1),
     }
+    if asc_x:
+        regions["return:topbus"] = (1, bus_row, max(asc_x.values()), 1)
     for r in all_rows:
         m = by_row.get(r)
         if m is None:
             continue
-        end = drop_x.get(r, lane_end[r])
+        end = asc_x.get(r, drop_x.get(r, lane_end[r]))
         regions[f"lane:{m}"] = (lane_x0, r, max(1, end - lane_x0 + 1), 1)
     for m in order:
         regions[f"slab:{m}"] = (slab_base[m], slab_at[m], _SLAB_PITCH, slab_rows[m])
@@ -1312,7 +1489,7 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3", "taped")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -1430,7 +1607,7 @@ def adapter_tape_gap(program_name: str, store: str) -> int:
     own column 0, where its inlet stub lives.
     """
     gap = ADAPTER_TAPE_GAP_FOR.get(program_name, ADAPTER_TAPE_GAP)
-    if store == "men-v3":
+    if store in ("men-v3", "taped"):
         gap = max(gap, 6)
     return max(gap, ADAPTER_TAPE_GAP_BY_STORE.get(store, 0))
 
@@ -2070,6 +2247,8 @@ def build(
     store_offset: tuple[int, int] = (0, 0),
     in_north: bool = False,
     store_teleport: bool = False,
+    trim_dead: bool = False,
+    top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
@@ -2149,8 +2328,8 @@ def build(
         raise MachineError(f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}")
     if tape_jump_threshold < 1:
         raise MachineError(f"tape_jump_threshold must be positive, got {tape_jump_threshold}")
-    if store != "tape" and tape_skip_batch != 1:
-        raise MachineError("tape_skip_batch applies only to store='tape'")
+    if store not in ("tape", "taped") and tape_skip_batch != 1:
+        raise MachineError("tape_skip_batch applies only to the tape tiers")
     if store != "tape" and tape_relay_size is not None:
         raise MachineError("tape_relay_size applies only to store='tape'")
     if short_return is None:
@@ -2208,6 +2387,8 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    trim_dead=trim_dead,
+                    top_bus=top_bus,
                     store_shape=store_shape,
                 )
             except MachineError as exc:
@@ -2258,6 +2439,8 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    trim_dead=trim_dead,
+                    top_bus=top_bus,
                     store_shape=store_shape,
                 )
             except MachineError:
@@ -2330,6 +2513,8 @@ def _assemble(
     tape_relay_size: tuple[int, int] | None = None,
     in_north: bool = False,
     store_teleport: bool = False,
+    trim_dead: bool = False,
+    top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
 ) -> Machine:
     cpu = build_cpu(
@@ -2339,6 +2524,8 @@ def _assemble(
         stream_pad=stream_pad,
         short_return=short_return,
         drain_unit_bits=DRAIN_UNIT_BITS.get(program.name, 0),
+        trim_dead=trim_dead,
+        top_bus=top_bus,
     )
     W, H = cpu.width, cpu.height
 
@@ -2563,6 +2750,18 @@ def _assemble(
                 tape = v3_store_grid_block(v3_cols, v3_rows, ops=v3_ops)
             else:
                 tape = v3_store_block(tape_n, ops=v3_ops)
+        elif store == "taped":
+            from ..memory_taped import taped_store_block
+
+            tape = taped_store_block(
+                tape_n,
+                TAPED_BANKS.get(program.name, 4),
+                skip_batch=(
+                    tape_skip_batch
+                    if tape_skip_batch != 1
+                    else TAPED_SKIP_BATCH.get(program.name, 1)
+                ),
+            )
         elif store == "tape":
             tape = tape_block(
                 tape_n,
@@ -2831,10 +3030,11 @@ def _assemble(
     # walls, which is exactly why the extra decoder hop is nearly free.
     if hot is None:
         _STORE_PIPES = {
-            "men-y": None, "men-v3": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2,
+            "men-y": None, "men-v3": None, "taped": None,
+            "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2,
         }
         store_pipes = (
-            tape.pipes if store in ("men-y", "men-v3") else _STORE_PIPES[store]
+            tape.pipes if store in ("men-y", "men-v3", "taped") else _STORE_PIPES[store]
         ) + 1 + tele_pipes
     _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
     return Machine(
@@ -3000,7 +3200,7 @@ def two_tier_adapter(hot_top: int) -> _Adapter2:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3", "taped")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -4080,6 +4280,25 @@ MEM_PAD: dict[str, int] = {"deadman-3d": 17}
 #: grid stays byte-identical.
 INPUT_NORTH: set[str] = {"deadman-3d"}
 
+#: Slugs whose CPU removes the decode trie's **dead leaf rows**: only used
+#: opcodes get a lane pair, the trie is re-routed over the compacted band with
+#: pruned branches and contracted chains (:func:`_uneven_trie`), and the band
+#: shrinks by two rows per unused leaf slot. The opcode numbering — and so the
+#: ROM image — is untouched. Costs ``k - 1`` extra trie columns (two per level,
+#: for the horizontal ``]`` shifts). Every instruction's decode descent, return
+#: drop and riser shorten with the band. Opt-in per slug so every other
+#: machine's checked-in grid stays byte-identical.
+TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the gate
+
+#: Slugs whose CPU gets a **second return bus above the band**: a simple lane
+#: returns over whichever bus is cheaper — the classic drop to the collector
+#: below, or an ascent to row 1 and a walk west into a column-1 drop onto the
+#: fetch row. Upper lanes otherwise pay the whole band height twice (down to
+#: the collector, back up the riser). Costs one row of height and moves every
+#: lane down by it, so it must re-prove every pipe binding. Opt-in per slug so
+#: every other machine's checked-in grid stays byte-identical.
+TOP_RETURN_BUS: set[str] = set()
+
 #: Slugs whose STORE **response** comes home through two teleport rooms (an L
 #: above the store's north wall and a U down the CPU's east side) instead of a
 #: long pipe. ``R`` has no distance term, so each room is crossed in one
@@ -4126,6 +4345,28 @@ STORE_OPS: dict[str, int] = {"deadman-3d": 1}
 #: is in scratch/deadman3d-opt/METRICS.md.
 STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (8, 42)}
 
+#: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
+#: 330 slots as banked pipe tapes behind a gate chain. This tier exists for the
+#: *little-man census* — a bank is two men (worker + relay) and a gate one,
+#: against the man-memory's ~two per slot — so the visualizer renders ~20 men
+#: instead of ~700. The price is the ring tax (~5-8 ticks per slot per read),
+#: which is why the canonical deadman-3d machine stays on men-v3; build the
+#: taped variant with ``build_for("deadman-3d", store="taped")``.
+#:
+#: The plan is a tuple of bank sizes in address order (an int means uniform).
+#: deadman-3d's is traffic-shaped, swept on the native frame gate: the high
+#: addresses are the hot ones (POWB 257..272, HDG 273..288, then POSX and the
+#: per-frame scalars up to PTR at 329), so they get two SMALL rings — bank
+#: locals, and so the ring tax, stay tiny where the traffic is — and the 256
+#: map words split across two 128s. Uniform 4x83 measured 23.7M ticks on
+#: rounds 0..1; this plan 18.6M at the same men, width and height.
+TAPED_BANKS: dict[str, int | tuple[int, ...]] = {"deadman-3d": (128, 128, 40, 33)}
+
+#: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
+#: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
+#: and measured -13% on the frame gate; the machine still fits the 307 width.
+TAPED_SKIP_BATCH: dict[str, int] = {"deadman-3d": 2}
+
 
 def display_for(slug: str) -> tuple[int, int] | None:
     """The problem's LM-75 resolution, or ``None`` when it has no display.
@@ -4158,6 +4399,8 @@ def build_for(
     tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     compact: bool = False,
+    trim_dead: bool | None = None,
+    top_bus: bool | None = None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
 
@@ -4201,6 +4444,8 @@ def build_for(
         store_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[1],
         in_north=slug in INPUT_NORTH,
         store_teleport=slug in STORE_TELEPORT,
+        trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
+        top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
     )
 
@@ -4217,6 +4462,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--man", "--out", dest="man", type=_Path, help="write the grid here")
     ap.add_argument("--html", type=_Path, help="write a labelled debug overlay here")
     ap.add_argument("--json", type=_Path, help="write the debug region sidecar here")
+    ap.add_argument(
+        "--store",
+        choices=STORE_TIERS,
+        help="override the slug's registered STORE tier (e.g. deadman-3d's taped variant)",
+    )
     ap.add_argument("--report", action="store_true", help="print the size report to stderr")
     ap.add_argument(
         "--compact",
@@ -4257,6 +4507,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_batch = int(args.tape_skip_batch)
     m = build_for(
         args.slug,
+        store=args.store,
         tape_skip_batch=skip_batch,
         tape_relay_size=relay_size,
         tape_jump_threshold=args.tape_jump_threshold,

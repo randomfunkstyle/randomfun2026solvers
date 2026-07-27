@@ -356,7 +356,7 @@
     {
       "name": "display",
       "x": 170,
-      "y": 255,
+      "y": 164,
       "w": 66,
       "h": 50,
       "note": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -392,7 +392,7 @@
     {
       "name": "stream:panel",
       "x": 170,
-      "y": 255,
+      "y": 164,
       "w": 66,
       "h": 50,
       "note": "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -404,7 +404,7 @@
     {
       "name": "stream:relay",
       "x": 162,
-      "y": 234,
+      "y": 143,
       "w": 5,
       "h": 5,
       "note": "",
@@ -416,7 +416,7 @@
     {
       "name": "stream:relay2",
       "x": 162,
-      "y": 276,
+      "y": 185,
       "w": 5,
       "h": 5,
       "note": "",
@@ -428,10 +428,10 @@
     {
       "name": "stream:unit",
       "x": 1,
-      "y": 207,
+      "y": 116,
       "w": 158,
       "h": 84,
-      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / RLE run / cursor move / gun sprite / COMMIT, 8*arg + code. The baked pistol sprites are derived from the Freedoom project (https://github.com/freedoom/freedoom, sprites/pisga0+pisfa0, BSD-style licence) \u2014 see deadman3d.py's art credits.",
+      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / RLE run / cursor move / gun sprite / COMMIT, 8*arg + code",
       "color": "#f59e0b",
       "tags": [
         "stream"
@@ -440,7 +440,7 @@
     {
       "name": "stream:unit:COL",
       "x": 143,
-      "y": 212,
+      "y": 121,
       "w": 12,
       "h": 78,
       "note": "",
@@ -452,7 +452,7 @@
     {
       "name": "stream:unit:COMMIT",
       "x": 3,
-      "y": 212,
+      "y": 121,
       "w": 20,
       "h": 78,
       "note": "",
@@ -464,7 +464,7 @@
     {
       "name": "stream:unit:CURS",
       "x": 63,
-      "y": 212,
+      "y": 121,
       "w": 20,
       "h": 78,
       "note": "",
@@ -475,8 +475,8 @@
     },
     {
       "name": "stream:unit:GUN",
-      "x": 23,
-      "y": 212,
+      "x": 43,
+      "y": 121,
       "w": 20,
       "h": 78,
       "note": "",
@@ -488,7 +488,7 @@
     {
       "name": "stream:unit:GUNF",
       "x": 83,
-      "y": 212,
+      "y": 121,
       "w": 20,
       "h": 78,
       "note": "",
@@ -500,7 +500,7 @@
     {
       "name": "stream:unit:RUN",
       "x": 123,
-      "y": 212,
+      "y": 121,
       "w": 20,
       "h": 78,
       "note": "",
@@ -512,7 +512,7 @@
     {
       "name": "stream:unit:main",
       "x": 2,
-      "y": 208,
+      "y": 117,
       "w": 73,
       "h": 1,
       "note": "",
@@ -524,7 +524,7 @@
     {
       "name": "stream:unit:trie",
       "x": 4,
-      "y": 209,
+      "y": 118,
       "w": 141,
       "h": 3,
       "note": "",
@@ -537,8 +537,8 @@
       "name": "tape",
       "x": 75,
       "y": 54,
-      "w": 232,
-      "h": 150,
+      "w": 224,
+      "h": 59,
       "note": "rotating pipe tape, N=330, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [
@@ -549,7 +549,7 @@
       "name": "teleport:L",
       "x": 65,
       "y": 49,
-      "w": 241,
+      "w": 58,
       "h": 4,
       "note": "",
       "color": "#64748b",
