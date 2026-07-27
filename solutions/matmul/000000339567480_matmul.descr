@@ -27,4 +27,8 @@ the man already falls through, and _follows_to answered which block while saying
 which way he faced. walk_blocks now refuses a lane whose arrival heading disagrees with its
 target's — shared, so it covers matmul_grid's layouts too.
 
-Previous: 354,244,608 (rank 37/74). This: 1.043x better.
+NOT OUR BEST. Submitted without reading the board first: our live matmul was already
+222,267,325 from a parallel effort, so this 339,567,480 was discarded by the server (best is
+kept). It is 1.043x better than the 354,244,608 the *archive* recorded, which was stale.
+The band fit itself is real and merged; it just needs applying to whatever generator produced
+the 222M grid, which is not in the repo. Use scripts/submit_guarded.sh in future.
