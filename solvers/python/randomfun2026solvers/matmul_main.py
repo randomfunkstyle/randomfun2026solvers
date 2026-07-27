@@ -52,10 +52,17 @@ from .matmul_y import Serpentine
 
 __all__ = ["EAST", "WEST", "main_room"]
 
+# The first seven rows are forced by the loop bodies: fill A is `rs` on 2,3, fill B
+# is `r  s` on 2..5, and the MAC is `rs*s` on 4..7 with row 6 spare for the `*`.
 IN, A_FWD, B_RET, B_FWD, SPARE, PROD, A_RET = 2, 3, 4, 5, 6, 7, 8
-RN_RET, RN_FWD, RM_RET, RM_FWD, RK_RET, RK_FWD, CMD = 9, 10, 11, 12, 13, 14, 15
-BAND_T, BAND_B = 1, 16
-IW, IH = 92, 17
+# The register rows are free, and are spaced four apart so each pair's relay room
+# (which must span both of its rows) clears its neighbour's.
+RN_RET, RN_FWD = 10, 11        # relay room spans rows 9..12
+RM_RET, RM_FWD = 14, 15        # ... 13..16
+RK_RET, RK_FWD = 18, 19        # ... 17..20
+CMD = 22
+BAND_T, BAND_B = 1, 23
+IW, IH = 92, 24
 SENTINEL_BUILD = "2M******"          # A = 128 with no backtick literal
 
 WEST = {"in": IN, "b_ret": B_RET, "a_ret": A_RET,

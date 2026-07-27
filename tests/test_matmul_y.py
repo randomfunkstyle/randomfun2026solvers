@@ -645,3 +645,34 @@ def test_main_binds_by_row_with_every_port_on_one_wall() -> None:
                 "an op must sit exactly on its own port's row"
             )
     assert ops >= 30, f"only {ops} pipe ops"
+
+
+# ── v1 assembly (in progress) ────────────────────────────────────────────────
+@node_required
+@pytest.mark.slow
+def test_the_partial_v1_assembly_loads(tmp_path) -> None:
+    """MAIN plus its three register rings must parse on the real loader.
+
+    This is the first part of the build validated by the loader rather than by my
+    own distance arithmetic, and it is what confirms the one-wall port geometry: a
+    ring whose two legs land on the same wall needs no wrap, so each register hop
+    comes out at 2 cells — the minimum a pipe may be.
+
+    It does not compute anything yet, and it cannot: seven of MAIN's thirteen ports
+    have no pipe. Bindings are unverifiable until they all exist.
+    """
+    from randomfun2026solvers import matmul_asm
+
+    grid, caps = matmul_asm.build()
+    assert all(v >= 2 for v in caps.values()), f"a pipe is under length: {caps}"
+    assert len(caps) == 6, f"expected the three register rings, got {sorted(caps)}"
+
+    path = tmp_path / "asm.man"
+    path.write_text(grid, encoding="utf-8")
+    out = subprocess.run(["node", "lm.mjs", "analyze", str(path), "--json"],
+                         cwd=LM, capture_output=True, text=True, check=False)
+    assert out.returncode == 0, f"partial assembly does not load: {out.stderr[:300]}"
+    info = json.loads(out.stdout)
+    assert len(info["rooms"]) == 4, f"rooms: {info['rooms']}"
+    assert len(info["pipes"]) == 6, f"pipes: {len(info['pipes'])}"
+    assert all(len(p["path"]) == 2 for p in info["pipes"]), "a register hop is not 2 cells"
