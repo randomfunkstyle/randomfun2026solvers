@@ -18,12 +18,15 @@ The unit owns
 The CPU only ever *sends* (§7.1: a replying unit cannot coexist with ``JMPF`` —
 measured on ``snake``), so every command carries what its drawing needs.
 
-Four commands, one word each, ``8 * arg + code`` (:func:`arm_codes` reads the
-codes off the trie; ``store.DoomUnit.CODES`` and the generated asm's ``.equ
-C_*`` are pinned against it)::
+Five commands, one word each, ``8 * arg + code`` (:func:`arm_codes` reads the
+codes off the trie — three levels now, so the codes are the 3-bit west-branch
+masks; ``store.DoomUnit.CODES`` and the generated asm's ``.equ C_*`` are
+pinned against it)::
 
     COL    seed*64 + n   paint one viewport column; no commit.
                          seed = (top*64 + col)*16 + colour - 1024, n = wall px.
+    RUN    count*16 + c  count pixels of colour c at the panel's own cursor
+                         (row-major auto-advance) — the title screen's RLE.
     FLASH  0             the baked 8-pixel muzzle diamond; no commit.
     HUD    0             the baked 512-pixel HUD strip; no commit.
     COMMIT 0             SWAP 0 — commit the frame, clear next, reset cursor.
@@ -109,22 +112,24 @@ class DoomUnitError(RuntimeError):
 
 # ── the unit's row map ───────────────────────────────────────────────────────
 R_MAIN = 1
-R_TRIE = 2  # rows 2..3
-R_ARG = 4  # COL's `M8W/`; the other arms ignore the word
-R_LOOP = 26  # the corridor row every COL loop is entered on, heading east
-R_RET = 27  # east wall, in: the value ring's return
-R_RING = 29  # east wall, out: into the value ring
-R_ADDR = 37  # east wall, out: panel ADDR
-R_DATA = 47  # east wall, out: panel DATA
-R_SWAP = 67  # east wall, out: panel SWAP — far below, so DATA's window is deep
-R_COLLECT = 69  # every arm rejoins here and walks back to MAIN
+R_TRIE = 2  # rows 2..4 (TRIE_BITS levels)
+R_ARG = 5  # COL's and RUN's `M8W/`; the other arms ignore the word
+R_LOOP = 27  # the corridor row every counted loop is entered on, heading east
+R_RET = 28  # east wall, in: value ring 1's return
+R_RING = 30  # east wall, out: into value ring 1
+R_ADDR = 46  # east wall, out: panel ADDR
+R_DATA = 56  # east wall, out: panel DATA
+R_RET2 = 66  # east wall, in: the mask ring's return (V3 banding)
+R_RING2 = 68  # east wall, out: into the mask ring
+R_SWAP = 80  # east wall, out: panel SWAP — far below, so DATA's window is deep
+R_COLLECT = 82  # every arm rejoins here and walks back to MAIN
 
-#: The DATA window: rows strictly nearer R_DATA than R_ADDR or R_SWAP. The HUD
+#: The DATA window: rows strictly nearer R_DATA than R_ADDR or R_RING2. The HUD
 #: serpentine and every arm's DATA send must stay inside it.
-WIN_TOP = (R_ADDR + R_DATA) // 2 + 1  # 43
-WIN_BOT = (R_DATA + R_SWAP) // 2 - 1  # 56
+WIN_TOP = (R_ADDR + R_DATA) // 2 + 1  # 52
+WIN_BOT = (R_DATA + R_RING2) // 2 - 1  # 61
 
-UNIT_IW = 98
+UNIT_IW = 156
 UNIT_IH = R_COLLECT
 
 #: The command port's column on the north wall (near MAIN, far from every deep
@@ -138,26 +143,32 @@ BANDS: dict[str, tuple[str, int]] = {
     "ring": ("east", R_RING),
     "addr": ("east", R_ADDR),
     "data": ("east", R_DATA),
+    "ring2_ret": ("east", R_RET2),
+    "ring2": ("east", R_RING2),
     "swap": ("east", R_SWAP),
 }
 
-#: Trie geometry: four leaves at ``LEAF0 + LEAF_PITCH*i``, entry column midway.
+#: Trie geometry: eight leaves at ``LEAF0 + LEAF_PITCH*i``, entry column midway.
 #: The pitch is what buys the HUD field its width: the serpentine lives between
-#: the FLASH arm's last column and the COL arm's leaf.
+#: the RUN arm's columns and the COL arm's leaf, riding over the three spare
+#: leaves (spares have no machinery below the trie's leaf row).
 LEAF0 = 3
-LEAF_PITCH = 28
-TRIE_BITS = 2
-TRIE_COL = LEAF0 + LEAF_PITCH * ((1 << TRIE_BITS) - 1) // 2  # 45
+LEAF_PITCH = 20
+TRIE_BITS = 3
+TRIE_COL = LEAF0 + LEAF_PITCH * ((1 << TRIE_BITS) - 1) // 2  # 73
 
-#: The four arms, **west to east**. Not free: this order is what makes
-#: :func:`arm_codes` come out ``COL 0, FLASH 1, HUD 2, COMMIT 3`` (COL must be
-#: 0 so the CPU's per-column send is a bare ``MULI 8``), and COL must be the
-#: easternmost leaf because its loop machinery spills ten columns east.
-ARMS: tuple[str, ...] = ("COMMIT", "FLASH", "HUD", "COL")
+#: Which leaf each arm hangs from, **west to east**. Not free: the leaves fix
+#: :func:`arm_codes` (a west branch is a set bit), COL must be leaf 7 so its
+#: code is 0 (the CPU's per-column send is a bare ``MULI 8``) and because its
+#: loop machinery spills ten columns east, and RUN must sit west of HUD so the
+#: serpentine field east of HUD's descent clears RUN's loop columns. Leaves
+#: 4..6 are spare — headroom for later arms (textures, the gun sprite).
+ARM_LEAF: dict[str, int] = {"COMMIT": 0, "FLASH": 1, "RUN": 2, "HUD": 3, "COL": 7}
+ARMS: tuple[str, ...] = tuple(ARM_LEAF)
 
 #: The HUD field: the serpentine's columns (edges are turn lanes).
-FIELD_W = LEAF0 + LEAF_PITCH + 6  # 37 — east of FLASH's five columns
-FIELD_E = LEAF0 + 3 * LEAF_PITCH - 2  # 85 — west of COL's leaf
+FIELD_W = LEAF0 + 2 * LEAF_PITCH + 6  # 49 — east of the RUN arm's loop columns
+FIELD_E = LEAF0 + 7 * LEAF_PITCH - 2  # 141 — west of COL's leaf
 
 #: The panel (``machine.DISPLAY_OVERRIDE["deadman-3d"]``).
 PANEL_W, PANEL_H = 64, 48
@@ -173,10 +184,18 @@ FLASH_RUNS: tuple[tuple[int, tuple[int, ...]], ...] = (
 )
 
 #: The COL arm's two counted-loop bodies (rows R_RET..; sends on their bands).
-#: Wall lap: v += 1024, back to the ring, then one `/` splits addr | colour.
-WALL_BODY = "r+sM`16`W/sW" + " " * 8 + "s`1024`M"
+#: The banded wall lap (V3): pop v from ring 1, v += 1024, push it back; split
+#: addr | colour with one `/`; send ADDR; pop this row's mask from the mask
+#: ring, send DATA = colour & mask (every 4th row's mask is 7 — the seam that
+#: drops the bright variant to the dark shade), and push the mask back — the
+#: FIFO is the rotation. Register flow: A carries the working value, B parks
+#: the one being held across a glyph, the two rings hold everything else.
+BAND_BODY = "rM`1024`+sM`16`W/ sWMrW&sW" + " " * 9 + "s"
 #: Floor lap: addr += 64, back to the ring, ADDR, then the baked colour 8.
-FLOOR_BODY = "r+s" + " " * 7 + "s8" + " " * 8 + "s"
+FLOOR_BODY = "r+s" + " " * 15 + "s8" + " " * 8 + "s"
+#: RUN lap: one bare DATA send of the colour parked in A (the panel's cursor
+#: advances itself); the blanks put the ``s`` on the DATA window's first row.
+RUN_BODY = " " * (WIN_TOP - R_LOOP - 1) + "s"
 
 
 def _bit_of(level: int) -> int:
@@ -205,14 +224,16 @@ def arm_codes() -> dict[str, int]:
 
     walk(1, TRIE_COL, 0)
     leaves = sorted(codes)
-    if len(leaves) != len(ARMS):
-        raise DoomUnitError(f"trie has {len(leaves)} leaves for {len(ARMS)} arms")
-    return {arm: codes[col] for arm, col in zip(ARMS, leaves, strict=True)}
+    if len(leaves) != (1 << TRIE_BITS) or max(ARM_LEAF.values()) >= len(leaves):
+        raise DoomUnitError(f"trie has {len(leaves)} leaves for arms at {ARM_LEAF}")
+    if ARM_LEAF["COL"] != len(leaves) - 1:
+        raise DoomUnitError("COL must be the easternmost leaf (its loops spill east)")
+    return {arm: codes[leaves[leaf]] for arm, leaf in ARM_LEAF.items()}
 
 
 def arm_columns() -> dict[str, int]:
     """Interior column of each arm's leaf, west to east."""
-    return {arm: LEAF0 + LEAF_PITCH * i for i, arm in enumerate(ARMS)}
+    return {arm: LEAF0 + LEAF_PITCH * leaf for arm, leaf in ARM_LEAF.items()}
 
 
 def word(code: int, arg: int) -> int:
@@ -256,11 +277,12 @@ class Unit:
 
 #: Which band an ``s`` on a given row belongs to: the nearest band row wins
 #: (the east-wall term is shared and cancels — rule 1).
-_S_BANDS = ("ring", "addr", "data", "swap")
+_S_BANDS = ("ring", "addr", "data", "ring2", "swap")
 
 
 def _send_band(row: int) -> str:
-    rows = {"ring": R_RING, "addr": R_ADDR, "data": R_DATA, "swap": R_SWAP}
+    rows = {"ring": R_RING, "addr": R_ADDR, "data": R_DATA,
+            "ring2": R_RING2, "swap": R_SWAP}
     return min(_S_BANDS, key=lambda b: abs(row - rows[b]))
 
 
@@ -277,10 +299,12 @@ def unit_interior() -> Unit:
     def body_glyphs(x: int, y0: int, body: str) -> None:
         """Register a counted-loop body's ``r``/``s`` against their bands."""
         for i, ch in enumerate(body):
+            row = y0 + 1 + i
             if ch == "r":
-                glyphs.append((x + 1, y0 + 1 + i, ch, "ring_ret"))
+                band = "ring_ret" if abs(row - R_RET) <= abs(row - R_RET2) else "ring2_ret"
+                glyphs.append((x + 1, row, ch, band))
             elif ch == "s":
-                glyphs.append((x + 1, y0 + 1 + i, ch, _send_band(y0 + 1 + i)))
+                glyphs.append((x + 1, row, ch, _send_band(row)))
 
     # ── MAIN: the command arrives from the north, BP decodes it ──────────────
     c.set(1, R_MAIN, ">")
@@ -314,8 +338,8 @@ def unit_interior() -> Unit:
     # Each run is its own descent column (ADDR sends must all stand on R_ADDR),
     # linked by blank climb columns — path_unit's MOVE pattern.
     x = col["FLASH"]
-    c.run(x, 5, "`2271`", d=S)
-    c.vertical(x, 10, R_ADDR)
+    c.run(x, R_ARG + 1, "`2271`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
+    c.vertical(x, R_ARG + 6, R_ADDR)
     pipe(x, R_ADDR, "s", "addr")
     c.run(x, R_ADDR + 1, "8M3~", d=S)  # B = 8 for the whole arm; A = 11
     c.vertical(x, R_ADDR + 4, WIN_TOP)
@@ -327,8 +351,8 @@ def unit_interior() -> Unit:
     c.set(x + 1, R_ARG - 1, ">")
     x2 = x + 2
     c.set(x2, R_ARG - 1, "v")
-    c.run(x2, 5, "`2334`", d=S)
-    c.vertical(x2, 10, R_ADDR)
+    c.run(x2, R_ARG + 1, "`2334`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
+    c.vertical(x2, R_ARG + 6, R_ADDR)
     pipe(x2, R_ADDR, "s", "addr")
     c.run(x2, R_ADDR + 1, "3~", d=S)  # A = 11 again (the literal clobbered it)
     c.vertical(x2, R_ADDR + 2, WIN_TOP)
@@ -344,8 +368,8 @@ def unit_interior() -> Unit:
     c.set(x2 + 1, R_ARG - 1, ">")
     x3 = x + 4
     c.set(x3, R_ARG - 1, "v")
-    c.run(x3, 5, "`2399`", d=S)
-    c.vertical(x3, 10, R_ADDR)
+    c.run(x3, R_ARG + 1, "`2399`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
+    c.vertical(x3, R_ARG + 6, R_ADDR)
     pipe(x3, R_ADDR, "s", "addr")
     c.run(x3, R_ADDR + 1, "3~", d=S)  # A = 11
     c.vertical(x3, R_ADDR + 2, WIN_TOP)
@@ -353,10 +377,30 @@ def unit_interior() -> Unit:
     pipe(x3, WIN_TOP + 1, "s", "data")
     c.vertical(x3, WIN_TOP + 1, R_COLLECT)
 
+    # ── RUN: colour run at the panel's own cursor (the title screen's RLE) ───
+    # arg = count*16 + colour: split it, park the colour in A (d/m only touch
+    # BP, so it survives every lap), BP = count, then a counted loop of one
+    # bare DATA send per lap — the cursor advances itself, so consecutive RUNs
+    # paint the panel row-major exactly like deadman3d.title_runs().
+    x = col["RUN"]
+    c.run(x, R_ARG, "M8W/", d=S)  # A = arg, B = the code (dead)
+    c.set(x, R_ARG + 4, "M")  # B = arg
+    c.run(x, R_ARG + 5, "`16`", d=S)
+    c.run(x, R_ARG + 9, "W/", d=S)  # A = count, B = colour
+    c.set(x, R_ARG + 11, "b")  # BP = count
+    c.set(x, R_ARG + 12, "W")  # A = colour, B = count (dead)
+    c.vertical(x, R_ARG + 12, R_LOOP)
+    c.set(x, R_LOOP, ">")
+    c.counted_loop(x + 1, R_LOOP, RUN_BODY)
+    body_glyphs(x + 1, R_LOOP, RUN_BODY)
+    rx = x + 3  # counted_loop's exit cell, heading east
+    c.set(rx, R_LOOP, "v")
+    c.vertical(rx, R_LOOP, R_COLLECT)
+
     # ── HUD: one ADDR reposition, then the serpentine of bare DATA sends ─────
     x = col["HUD"]
-    c.run(x, 5, "`2560`", d=S)
-    c.vertical(x, 10, R_ADDR)
+    c.run(x, R_ARG + 1, "`2560`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
+    c.vertical(x, R_ARG + 6, R_ADDR)
     pipe(x, R_ADDR, "s", "addr")
     c.run(x, R_ADDR + 1, "8M", d=S)  # B = 8: 11 is 3~, 12 is 4~
     c.vertical(x, R_ADDR + 2, WIN_TOP - 1)
@@ -390,21 +434,32 @@ def unit_interior() -> Unit:
     c.set(end, ty, "v")
     c.vertical(end, ty, R_COLLECT)
 
-    # ── COL: unpack, the wall loop, the interlude, the floor loop, the drain ─
+    # ── COL: unpack, seed the mask ring, the banded wall loop, the interlude,
+    # the floor loop, the drains ─────────────────────────────────────────────
     x = col["COL"]
     c.run(x, R_ARG, "M8W/", d=S)  # A = arg, B = the code
-    c.set(x, 8, "M")  # B = arg
-    c.run(x, 9, "`64`", d=S)
-    c.run(x, 13, "W/W", d=S)  # A = n_wall, B = seed
-    c.set(x, 16, "b")  # BP = n_wall
-    c.set(x, 17, "W")  # A = seed
-    pipe(x, 18, "s", "ring")  # the ring holds [seed]
-    c.run(x, 19, "`1024`", d=S)
-    c.set(x, 25, "M")  # B = 1024, the wall lap's constant
-    c.set(x, R_LOOP, ">")
-    c.counted_loop(x + 1, R_LOOP, WALL_BODY)
-    body_glyphs(x + 1, R_LOOP, WALL_BODY)
-    wx = x + 3  # counted_loop's exit cell (x+2 of its own x), heading east
+    c.set(x, R_ARG + 4, "M")  # B = arg
+    c.run(x, R_ARG + 5, "`64`", d=S)
+    c.run(x, R_ARG + 9, "W/W", d=S)  # A = n_wall, B = seed
+    c.set(x, R_ARG + 12, "b")  # BP = n_wall
+    c.set(x, R_ARG + 13, "W")  # A = seed
+    pipe(x, R_ARG + 14, "s", "ring")  # ring 1 holds [seed]
+    # seed the mask ring for THIS command — [7, 15, 15, 15], so the banding
+    # seam anchors at the wall run's top row — then climb back to the loop
+    c.vertical(x, R_ARG + 14, R_RING2 - 6)
+    c.set(x, R_RING2 - 6, "7")  # A = 7 (the seam mask)
+    pipe(x, R_RING2 - 5, "s", "ring2")
+    c.run(x, R_RING2 - 4, "`15`", d=S)  # A = 15 (the no-op mask)
+    pipe(x, R_RING2, "s", "ring2")
+    pipe(x, R_RING2 + 1, "s", "ring2")
+    pipe(x, R_RING2 + 2, "s", "ring2")
+    c.set(x, R_RING2 + 3, ">")
+    c.set(x + 1, R_RING2 + 3, "^")
+    c.vertical(x + 1, R_RING2 + 3, R_LOOP)
+    c.set(x + 1, R_LOOP, ">")
+    c.counted_loop(x + 2, R_LOOP, BAND_BODY)
+    body_glyphs(x + 2, R_LOOP, BAND_BODY)
+    wx = x + 4  # counted_loop's exit cell (x+2 of its own x), heading east
 
     # the interlude: v_last -> the floor seed and count (see the docstring)
     c.set(wx, R_LOOP, "v")
@@ -439,8 +494,11 @@ def unit_interior() -> Unit:
     body_glyphs(fx, R_LOOP, FLOOR_BODY)
     dx = fx + 2
     c.set(dx, R_LOOP, "v")
-    pipe(dx, R_RET, "r", "ring_ret")  # drain: the ring must end empty
-    c.vertical(dx, R_RET, R_COLLECT)
+    pipe(dx, R_RET, "r", "ring_ret")  # drain ring 1: it must end empty
+    c.vertical(dx, R_RET, R_RING2 - 8)
+    for yy in range(R_RING2 - 8, R_RING2 - 4):  # drain the four masks too
+        pipe(dx, yy, "r", "ring2_ret")
+    c.vertical(dx, R_RING2 - 5, R_COLLECT)
 
     if dx >= UNIT_IW:
         raise DoomUnitError(f"the COL arm reaches column {dx}, past the {UNIT_IW}-wide interior")
@@ -492,7 +550,7 @@ def binding_margins(unit: Unit | None = None) -> dict[tuple[int, int], int]:
         rivals = {
             b: (UNIT_IW + 1 - gx) + abs(gy - r) if w == "east" else abs(gx - r) + gy
             for b, (w, r) in BANDS.items()
-            if (b in ("ring_ret", "cmd")) == (glyph == "r")
+            if (b in ("ring_ret", "ring2_ret", "cmd")) == (glyph == "r")
         }
         mine = rivals.pop(band)
         out[(gx, gy)] = min(rivals.values()) - mine
@@ -517,18 +575,22 @@ class DoomBlock:
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
 
-# Placement. The relay sits just east of the ring rows so the value ring is
-# short (its latency bounds a paint lap); the panel hangs further east with its
-# three descent columns in the order SWAP < DATA < panel <= ADDR, which is what
-# keeps the three routes planar with SWAP leaving on the *lowest* band row.
+# Placement. The relays sit just east of their ring rows so both value rings
+# are short (ring 1's latency bounds a paint lap; the mask ring must beat the
+# ~72-tick lap walk); the panel hangs further east with its three descent
+# columns in the order SWAP < DATA < panel <= ADDR, which is what keeps the
+# routes planar with SWAP leaving on the *lowest* band row. DATA's descent
+# runs east of RELAY2 (cols EAST+3..EAST+7) so it cannot cross the mask
+# ring's pipes at rows R_RET2/R_RING2.
 UX, UY = 0, 1  # the unit room's north-west wall corner
 EAST = UX + UNIT_IW + 2  # first free column east of its east wall
-RELAY_AT = (EAST + 3, UY + R_RET - 1)  # the ring's turnaround room
+RELAY_AT = (EAST + 3, UY + R_RET - 1)  # ring 1's turnaround room
+RELAY2_AT = (EAST + 3, UY + R_RET2 - 1)  # the mask ring's turnaround (V3)
 SWAP_COL = EAST + 2
-DATA_COL = EAST + 4
-PANEL_AT = (EAST + 6, UY + R_SWAP + 4)
-ADDR_COL = EAST + 8  # inside the panel's column span (ARCH §4.4)
-SWAP_UP_COL = EAST + 9  # where SWAP comes back north into the bottom wall
+DATA_COL = EAST + 9
+PANEL_AT = (EAST + 11, UY + R_SWAP + 4)
+ADDR_COL = EAST + 13  # inside the panel's column span (ARCH §4.4)
+SWAP_UP_COL = EAST + 14  # where SWAP comes back north into the bottom wall
 DATA_ROW = 12  # which interior row of the panel DATA enters; tuned so len == addr
 #: The probe's own two anchors (see :func:`build_probe`).
 FEED_AT = (0, 1)
@@ -549,12 +611,19 @@ def build_doom() -> DoomBlock:
     def pipe(band: str, points: list[tuple[int, int]]) -> None:
         lengths[band] = g.draw_pipe(points)
 
-    # ── the value ring: east wall -> relay -> east wall, kept short ──────────
+    # ── the value rings: east wall -> relay -> east wall, kept short ─────────
     rx, ry = RELAY_AT
     g.room(rx, ry, rx + RELAY_IW + 1, ry + RELAY_IH + 1)
     g.blit(rx, ry, relay_cells())
     pipe("ring", [(EAST, UY + R_RING), (rx - 1, UY + R_RING)])
     pipe("ring_ret", [(rx - 1, UY + R_RET), (EAST, UY + R_RET)])
+    # the mask ring (V3): same relay, lower band rows; its capacity (two 2-cell
+    # pipes + the relay man's hand) holds the four masks in rotation
+    rx2, ry2 = RELAY2_AT
+    g.room(rx2, ry2, rx2 + RELAY_IW + 1, ry2 + RELAY_IH + 1)
+    g.blit(rx2, ry2, relay_cells())
+    pipe("ring2", [(EAST, UY + R_RING2), (rx2 - 1, UY + R_RING2)])
+    pipe("ring2_ret", [(rx2 - 1, UY + R_RET2), (EAST, UY + R_RET2)])
 
     # ── the panel and its three ports ────────────────────────────────────────
     px, py = PANEL_AT
@@ -613,7 +682,7 @@ def build_doom() -> DoomBlock:
     regions = {
         "unit": (UX, UY, UNIT_IW + 2, UNIT_IH + 2),
         "unit:main": (UX + 1, UY + R_MAIN, TRIE_COL, 1),
-        "unit:trie": (UX + LEAF0, UY + R_TRIE, LEAF_PITCH * 3 + 1, TRIE_BITS),
+        "unit:trie": (UX + LEAF0, UY + R_TRIE, LEAF_PITCH * 7 + 1, TRIE_BITS),
         **{
             f"unit:{arm}": (UX + x - 1, UY + R_ARG, LEAF_PITCH, R_COLLECT - R_ARG + 1)
             for arm, x in arm_columns().items()
@@ -623,6 +692,7 @@ def build_doom() -> DoomBlock:
         "unit:hud-field": (UX + FIELD_W, UY + WIN_TOP, FIELD_E - FIELD_W + 1,
                            WIN_BOT - WIN_TOP + 1),
         "relay": (rx, ry, RELAY_IW + 2, RELAY_IH + 2),
+        "relay2": (rx2, ry2, RELAY_IW + 2, RELAY_IH + 2),
         "panel": (px, py, PANEL_W + 2, PANEL_H + 2),
     }
     blk = DoomBlock(

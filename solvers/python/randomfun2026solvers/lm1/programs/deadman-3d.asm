@@ -5,15 +5,15 @@
 ;   (PROGRAM_DIR / "deadman-3d.asm").write_text(deadman3d_source())
 ;
 ; lodev.org's raycaster_flat.cpp on the LM-1: DOOM's E1M1, quantized to a
-; 32x32 grid, walked first person at 64x48 on the LM-75 — one frame per input
+; 64x64 grid, walked first person at 64x48 on the LM-75 — one frame per input
 ; word, and each word is a MUX of the keys held that frame: bit0 (1) W fwd,
 ; bit1 (2) S back, bit2 (4) A left, bit3 (8) D right, bit4 (16) space FIRE
 ; (muzzle-flash overlay); 0 idle, higher bits ignored. Turn first (A/D
 ; cancel), then move along the new heading (W/S cancel), then render.
 ; An ungraded demo — the slug borrows plotter's problem JSON for nothing
 ; but registration; its 64x48 panel belongs to the DOOM unit (.unit doom,
-; lm1/d3_unit.py), its input is its own, and its 134-slot STORE rides the
-; grid_block man-memory (STORE_TIER), ~31 ticks an access.
+; lm1/d3_unit.py), its input is its own, and its 328-slot STORE rides the
+; men-v3 man-memory (STORE_TIER), ~11 ticks an access.
 ;
 ; The CPU never touches the display: each viewport column is ONE command
 ; word to the write-only column-painter unit — 8*arg + code, code COL=0,
@@ -23,70 +23,73 @@
 ; 512-pixel strip) and COMMIT (SWAP 0) are one command word each; the
 ; ceiling stays black because COMMIT clears the next buffer.
 ;
-; Round 0's input carries the whole data preamble (64 packed map half-columns,
+; Round 0's input carries the whole data preamble (256 packed map quarter-columns,
 ; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())
-; followed by the first command: tables ride on INPUT because every ROM word
-; taxes every backward jump by 8 ticks forever. The pixel contract is
-; deadman3d.render(): every expression below is that model's, in its exact
-; operation order.
+; followed by the title screen's RLE (deadman3d.title_words(): one pre-encoded
+; RUN command word per run, forwarded IN/SND and committed as round 0's one
+; frame): tables and art ride on INPUT because every ROM word taxes every
+; backward jump by 8 ticks forever. The pixel contract is deadman3d.render()
+; (and TITLE_HEX_ROWS for the title): every expression below is that model's,
+; in its exact operation order.
 ;
-; The map-cell lookup floor(MAPW[2x + y/16] / 16**(y mod 16)) mod 16 is
+; The map-cell lookup floor(MAPW[4x + y/16] / 16**(y mod 16)) mod 16 is
 ; inlined at its three sites (no stack, no calls): the two move-collision
 ; tests and the DDA hit test.
 
-; ── tape slots (deadman3d.tape_slots(); slots 1..103 are the boot data) ──────
-.equ MAPB   1            ; ..64  packed map half-columns: word 2x+(y/16), nibble y mod 16
-.equ POWB   65           ; ..80  16**k — the nibble-extraction divisors
-.equ HDGB   81           ; ..96  packed headings: base-4096 digits dirX dirY planeX planeY, biased +1024
-.equ POSX   97           ; player x, Q10 (lodev posX)
-.equ POSY   98           ; player y, Q10 (lodev posY)
-.equ HDG    99           ; heading 0..15 (22.5 deg steps, CCW from east)
-.equ DIRX   100          ; lodev dirX
-.equ DIRY   101          ; lodev dirY
-.equ PLANEX 102          ; lodev planeX
-.equ PLANEY 103          ; lodev planeY
-.equ CMD    104          ; this round's command word
-.equ XCOL   105          ; the column being rendered (lodev x)
-.equ CAMX   106          ; lodev cameraX, Q10
-.equ RDX    107          ; lodev rayDirX
-.equ RDY    108          ; lodev rayDirY
-.equ SDX    109          ; lodev sideDistX
-.equ SDY    110          ; lodev sideDistY
-.equ DDX    111          ; lodev deltaDistX
-.equ DDY    112          ; lodev deltaDistY
-.equ S2X    113          ; 2*stepX: the word address moves +-2 per x-step
-.equ STPY   114          ; lodev stepY (the sign picks the PW shift arm)
-.equ PERP   115          ; lodev perpWallDist
-.equ HALFH  116          ; lodev lineHeight / 2
-.equ DSTART 117          ; lodev drawStart
-.equ DEND   118          ; lodev drawEnd
-.equ COLOR  119          ; the wall type t, then the shaded colour
-.equ PW     120          ; 16**(mapY mod 16), maintained incrementally across DDA steps
-.equ WADDR  121          ; MAPB + 2*mapX + mapY/16, maintained incrementally too
-.equ FRACX  122          ; posX mod 1024, hoisted per frame
-.equ FRACY  123          ; posY mod 1024
-.equ PW0    124          ; PW's per-frame seed (the player's own cell)
-.equ WADDR0 125          ; WADDR's per-frame seed
-.equ TMP    126          ; scratch (s, frac, packed word)
-.equ TMP2   127          ; scratch (the cell lookup's half-column selector)
-.equ NEWX   128          ; the candidate posX
-.equ NEWY   129          ; the candidate posY
-.equ BW     130          ; key bit 0 (1): W, forward
-.equ BS     131          ; key bit 1 (2): S, backward
-.equ BA     132          ; key bit 2 (4): A, turn left
-.equ BD     133          ; key bit 3 (8): D, turn right
-.equ FIRE   134          ; key bit 4 (16): space held — paint FLASH over this frame
-.equ PTR    135          ; the boot loop's tape cursor
+; ── tape slots (deadman3d.tape_slots(); slots 1..295 are the boot data) ──────
+.equ MAPB   1            ; ..256 packed map quarter-columns: word 4x+(y/16), nibble y mod 16
+.equ POWB   257          ; ..272 16**k — the nibble-extraction divisors
+.equ HDGB   273          ; ..288 packed headings: base-4096 digits dirX dirY planeX planeY, biased +1024
+.equ POSX   289          ; player x, Q10 (lodev posX)
+.equ POSY   290          ; player y, Q10 (lodev posY)
+.equ HDG    291          ; heading 0..15 (22.5 deg steps, CCW from east)
+.equ DIRX   292          ; lodev dirX
+.equ DIRY   293          ; lodev dirY
+.equ PLANEX 294          ; lodev planeX
+.equ PLANEY 295          ; lodev planeY
+.equ CMD    296          ; this round's command word
+.equ XCOL   297          ; the column being rendered (lodev x)
+.equ CAMX   298          ; lodev cameraX, Q10
+.equ RDX    299          ; lodev rayDirX
+.equ RDY    300          ; lodev rayDirY
+.equ SDX    301          ; lodev sideDistX
+.equ SDY    302          ; lodev sideDistY
+.equ DDX    303          ; lodev deltaDistX
+.equ DDY    304          ; lodev deltaDistY
+.equ S4X    305          ; 4*stepX: the word address moves +-4 per x-step
+.equ STPY   306          ; lodev stepY (the sign picks the PW shift arm)
+.equ PERP   307          ; lodev perpWallDist
+.equ HALFH  308          ; lodev lineHeight / 2
+.equ DSTART 309          ; lodev drawStart
+.equ DEND   310          ; lodev drawEnd
+.equ COLOR  311          ; the wall type t, then the shaded colour
+.equ PW     312          ; 16**(mapY mod 16), maintained incrementally across DDA steps
+.equ WADDR  313          ; MAPB + 4*mapX + mapY/16, maintained incrementally too
+.equ FRACX  314          ; posX mod 1024, hoisted per frame
+.equ FRACY  315          ; posY mod 1024
+.equ PW0    316          ; PW's per-frame seed (the player's own cell)
+.equ WADDR0 317          ; WADDR's per-frame seed
+.equ TMP    318          ; scratch (s, frac, packed word)
+.equ TMP2   319          ; scratch (the cell lookup's quarter-column selector)
+.equ NEWX   320          ; the candidate posX
+.equ NEWY   321          ; the candidate posY
+.equ BW     322          ; key bit 0 (1): W, forward
+.equ BS     323          ; key bit 1 (2): S, backward
+.equ BA     324          ; key bit 2 (4): A, turn left
+.equ BD     325          ; key bit 3 (8): D, turn right
+.equ FIRE   326          ; key bit 4 (16): space held — paint FLASH over this frame
+.equ PTR    327          ; the boot loop's tape cursor
 
 ; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────
 .unit doom
 .equ C_COL    0            ; arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor
-.equ C_FLASH  1            ; arg=0: the baked 8-pixel muzzle diamond (rows 35..37)
-.equ C_HUD    2            ; arg=0: the baked 512-pixel HUD strip (rows 40..47)
-.equ C_COMMIT 3            ; arg=0: SWAP 0 — commit the frame, clear next, reset the cursor
+.equ C_RUN    5            ; arg=count*16+colour: count pixels at the panel's own cursor
+.equ C_FLASH  3            ; arg=0: the baked 8-pixel muzzle diamond (rows 35..37)
+.equ C_HUD    1            ; arg=0: the baked 512-pixel HUD strip (rows 40..47)
+.equ C_COMMIT 7            ; arg=0: SWAP 0 — commit the frame, clear next, reset the cursor
 
-; ── boot: round 0's data preamble -> tape slots 1..103, the loop unrolled 8x ──
-; (a backward jump costs 8*(P - loop) ticks, so 12 laps beat 103; the last
+; ── boot: round 0's data preamble -> tape slots 1..295, the loop unrolled 8x ──
+; (a backward jump costs 8*(P - loop) ticks, so 36 laps beat 295; the last
 ; 7 slots are loaded straight-line at their own addresses)
         LDI 1
         ST  PTR
@@ -131,8 +134,8 @@ boot:   IN                  ; the next preamble word
         MOVA TMP            ; store[PTR] = the word
         INCM PTR
         LD  PTR
-        SUBI 97
-        BRN boot            ; keep looping while PTR < 97
+        SUBI 289
+        BRN boot            ; keep looping while PTR < 289
         IN
         ST  POSX
         IN
@@ -147,6 +150,38 @@ boot:   IN                  ; the next preamble word
         ST  PLANEX
         IN
         ST  PLANEY
+
+
+; ── title: the DOOM-homage title screen — round 0's one frame ────────────────
+; The next 968 input words are PRE-ENCODED unit commands (title_words():
+; one RUN word per RLE run of TITLE_HEX_ROWS, 8*(count*16 + colour) + C_RUN),
+; so the CPU forwards each word untouched — IN; SND, 8 pairs per counted
+; lap (121 laps) — and the unit paints the runs at the panel's
+; own auto-advancing cursor, concurrently. One COMMIT ends round 0.
+        LDI 0
+        ST  PTR             ; PTR now counts title laps
+title:  IN                  ; the next pre-encoded RUN word
+        SND
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
+        IN
+        SND
+        INCM PTR
+        LD  PTR
+        SUBI 121
+        BRN title           ; keep looping while PTR < 121
+        LDI C_COMMIT
+        SND                 ; commit: the title screen is round 0's frame
 
 
 ; ── round: one key-bitmask word in, exactly one committed frame out ──────────
@@ -215,7 +250,8 @@ mvchk:  LD  BW
         ST  TMP             ; s = +1 forward, -1 backward
         LD  DIRX
         MUL TMP
-        DIVI 1              ; floor(dirX * s * 1 / 1) — the whole-cell step
+        MULI 2
+        DIVI 1              ; floor(dirX * s * 2 / 1) — the two-cell step
         ADD POSX
         ST  NEWX            ; newX
         ; collision X: map_cell(newX / 1024, posY / 1024), inlined
@@ -228,13 +264,13 @@ mvchk:  LD  BW
         ST  PW              ; 16**(mapY mod 16)
         LD  TMP2
         DIVI 16
-        ST  TMP2            ; the half-column selector, mapY / 16
+        ST  TMP2            ; the quarter-column selector, mapY / 16
         LD  NEWX
         DIVI 1024
-        MULI 2
+        MULI 4
         ADD TMP2
         ADDI MAPB
-        LDA                 ; the packed half-column of newX's cell
+        LDA                 ; the packed quarter-column of newX's cell
         DIV PW
         MODI 16
         BRZ comx            ; empty -> commit posX
@@ -243,6 +279,7 @@ comx:   LD  NEWX
         ST  POSX
 movey:  LD  DIRY
         MUL TMP
+        MULI 2
         DIVI 1
         ADD POSY
         ST  NEWY            ; newY
@@ -259,7 +296,7 @@ movey:  LD  DIRY
         ST  TMP2
         LD  POSX
         DIVI 1024
-        MULI 2
+        MULI 4
         ADD TMP2
         ADDI MAPB
         LDA
@@ -274,8 +311,8 @@ comy:   LD  NEWY
 ; ── render: lodev's per-column raycast, columns 0..63 ──────────────────────
 ; The per-frame prologue: everything that depends only on the player's position
 ; is computed once — the fractional position, and the cell-lookup seeds PW0 (the
-; nibble divisor 16**(mapY mod 16)) and WADDR0 (the packed half-column's slot,
-; MAPB + 2*mapX + mapY/16). The DDA then maintains PW/WADDR *incrementally*, so
+; nibble divisor 16**(mapY mod 16)) and WADDR0 (the packed quarter-column's slot,
+; MAPB + 4*mapX + mapY/16). The DDA then maintains PW/WADDR *incrementally*, so
 ; the per-step lookup is LDA/DIV/MODI instead of the full 16-instruction unpack.
 render: LD  POSX
         MODI 1024
@@ -292,13 +329,13 @@ render: LD  POSX
         ST  PW0             ; 16**(mapY mod 16)
         LD  TMP
         DIVI 16
-        ST  TMP2            ; the half-column selector, mapY / 16
+        ST  TMP2            ; the quarter-column selector, mapY / 16
         LD  POSX
         DIVI 1024
-        MULI 2
+        MULI 4
         ADD TMP2
         ADDI MAPB
-        ST  WADDR0          ; the packed half-column's tape slot
+        ST  WADDR0          ; the packed quarter-column's tape slot
         LDI 0
         ST  XCOL
 colset: LD  XCOL
@@ -347,11 +384,11 @@ ddyinf: LDI 1073741824
         ST  DDY
         ; stepX / sideDistX from the fractional position (lodev's two arms);
         ; stepX itself is only ever used to move the word address, so the arm
-        ; records S2X = 2*stepX instead of stepX
+        ; records S4X = 4*stepX instead of stepX
 sidex:  LD  RDX
         BRN sxneg
-        LDI 2
-        ST  S2X             ; stepX = 1 -> the half-column slot moves +2
+        LDI 4
+        ST  S4X             ; stepX = 1 -> the quarter-column slot moves +4
         LDI 1024
         SUB FRACX
         MUL DDX
@@ -359,8 +396,8 @@ sidex:  LD  RDX
         ST  SDX             ; sideDistX = (1024 - fracX) * deltaDistX / 1024
         JMP sidey
 sxneg:  LDI 0
-        SUBI 2
-        ST  S2X             ; stepX = -1 -> -2
+        SUBI 4
+        ST  S4X             ; stepX = -1 -> -4
         LD  FRACX
         MUL DDX
         DIVI 1024
@@ -382,8 +419,8 @@ syneg:  LDI 0
         MUL DDY
         DIVI 1024
         ST  SDY
-        ; the DDA, unrolled 8x: a backward jump costs 8*(P - loop) ticks on
-        ; this machine, so only every 8th empty step pays a full lap; a
+        ; the DDA, unrolled 16x: a backward jump costs 8*(P - loop) ticks on
+        ; this machine, so only every 16th empty step pays a full lap; a
         ; sideDist tie goes to the Y arm (lodev's else — risk R5)
 
 dda0:   LD  SDX
@@ -406,16 +443,16 @@ yneg0:  LD  PW
         JMP hity0
 ywru0:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity0
 ywrd0:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity0
 hity0:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
         BRZ dda1            ; empty -> the next unrolled step
@@ -424,8 +461,8 @@ xarm0:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -453,16 +490,16 @@ yneg1:  LD  PW
         JMP hity1
 ywru1:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity1
 ywrd1:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity1
 hity1:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
         BRZ dda2            ; empty -> the next unrolled step
@@ -471,8 +508,8 @@ xarm1:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -500,16 +537,16 @@ yneg2:  LD  PW
         JMP hity2
 ywru2:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity2
 ywrd2:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity2
 hity2:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
         BRZ dda3            ; empty -> the next unrolled step
@@ -518,8 +555,8 @@ xarm2:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -547,16 +584,16 @@ yneg3:  LD  PW
         JMP hity3
 ywru3:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity3
 ywrd3:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity3
 hity3:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
         BRZ dda4            ; empty -> the next unrolled step
@@ -565,8 +602,8 @@ xarm3:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -594,16 +631,16 @@ yneg4:  LD  PW
         JMP hity4
 ywru4:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity4
 ywrd4:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity4
 hity4:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
         BRZ dda5            ; empty -> the next unrolled step
@@ -612,8 +649,8 @@ xarm4:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -641,16 +678,16 @@ yneg5:  LD  PW
         JMP hity5
 ywru5:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity5
 ywrd5:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity5
 hity5:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
         BRZ dda6            ; empty -> the next unrolled step
@@ -659,8 +696,8 @@ xarm5:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -688,16 +725,16 @@ yneg6:  LD  PW
         JMP hity6
 ywru6:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity6
 ywrd6:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity6
 hity6:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
         BRZ dda7            ; empty -> the next unrolled step
@@ -706,8 +743,8 @@ xarm6:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -735,26 +772,402 @@ yneg7:  LD  PW
         JMP hity7
 ywru7:  LDI 1
         ST  PW
-        INCM WADDR          ; mapY crossed into the upper half-column word
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
         JMP hity7
 ywrd7:  LDI 1152921504606846976
         ST  PW
         LD  WADDR
         SUBI 1
-        ST  WADDR           ; mapY crossed into the lower half-column word
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
         JMP hity7
 hity7:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
-        LDA                 ; the packed half-column word at (mapX, mapY)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
-        BRZ dda0            ; empty -> the backward lap
+        BRZ dda8            ; empty -> the next unrolled step
         JMP why             ; a y-side wall: t is dark
 xarm7:  LD  SDX
         ADD DDX
         ST  SDX
         LD  WADDR
-        ADD S2X
-        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda8            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda8:   LD  SDX
+        SUB SDY
+        BRN xarm8           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg8
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru8           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity8
+yneg8:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd8           ; ... and 1/16 floors to 0
+        JMP hity8
+ywru8:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity8
+ywrd8:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity8
+hity8:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda9            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm8:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda9            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda9:   LD  SDX
+        SUB SDY
+        BRN xarm9           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg9
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru9           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity9
+yneg9:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd9           ; ... and 1/16 floors to 0
+        JMP hity9
+ywru9:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity9
+ywrd9:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity9
+hity9:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda10            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm9:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda10            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda10:   LD  SDX
+        SUB SDY
+        BRN xarm10           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg10
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru10           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity10
+yneg10:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd10           ; ... and 1/16 floors to 0
+        JMP hity10
+ywru10:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity10
+ywrd10:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity10
+hity10:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda11            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm10:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda11            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda11:   LD  SDX
+        SUB SDY
+        BRN xarm11           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg11
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru11           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity11
+yneg11:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd11           ; ... and 1/16 floors to 0
+        JMP hity11
+ywru11:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity11
+ywrd11:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity11
+hity11:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda12            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm11:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda12            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda12:   LD  SDX
+        SUB SDY
+        BRN xarm12           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg12
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru12           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity12
+yneg12:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd12           ; ... and 1/16 floors to 0
+        JMP hity12
+ywru12:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity12
+ywrd12:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity12
+hity12:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda13            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm12:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda13            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda13:   LD  SDX
+        SUB SDY
+        BRN xarm13           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg13
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru13           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity13
+yneg13:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd13           ; ... and 1/16 floors to 0
+        JMP hity13
+ywru13:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity13
+ywrd13:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity13
+hity13:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda14            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm13:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda14            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda14:   LD  SDX
+        SUB SDY
+        BRN xarm14           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg14
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru14           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity14
+yneg14:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd14           ; ... and 1/16 floors to 0
+        JMP hity14
+ywru14:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity14
+ywrd14:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity14
+hity14:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda15            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm14:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda15            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda15:   LD  SDX
+        SUB SDY
+        BRN xarm15           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg15
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru15           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity15
+yneg15:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd15           ; ... and 1/16 floors to 0
+        JMP hity15
+ywru15:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word
+        JMP hity15
+ywrd15:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity15
+hity15:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed quarter-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda0            ; empty -> the backward lap
+        JMP why             ; a y-side wall: t is dark
+xarm15:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S4X
+        ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
         LD  WADDR
         LDA                 ; the x-side hit test
         DIV PW
@@ -762,24 +1175,50 @@ xarm7:  LD  SDX
         BRZ dda0            ; empty -> the backward lap
         JMP whx             ; an x-side wall: t is sunlit
 
-; Which arm found the wall picks the whole tail: no per-step side flag needed.
-; x-side (sunlit): the bright variant t + 8; perp = sideDistX - deltaDistX.
-whx:    ADDI 8
-        ST  COLOR
+; Which arm found the wall picks the whole tail — and, since V3, the texture
+; stripe: the parity of the map coordinate ALONG the wall face, read straight
+; off the incremental lookup state. x-side: mapY & 1 is (PW % 17) / 16
+; (16 = -1 mod 17, so 16^k % 17 is 1 or 16), inverted so a sunlit face and a
+; neighbouring shadow face keep their corner contrast.
+whx:    ST  COLOR           ; the wall type t — the dark base
+        LD  PW
+        MODI 17
+        DIVI 16
+        ST  TMP             ; mapY & 1
+        LDI 1
+        SUB TMP
+        ST  TMP             ; stripe = 1 - (mapY & 1)
         LD  SDX
         SUB DDX
         ST  PERP
         JMP pclip
-why:    ST  COLOR           ; y-side: the dark variant, perp from the y pair
+why:    ST  COLOR           ; y-side: stripe = mapX & 1 = (WADDR - 1) / 4 % 2
+        LD  WADDR
+        SUBI 1
+        DIVI 4
+        MODI 2
+        ST  TMP
         LD  SDY
         SUB DDY
         ST  PERP
 pclip:  SUBI 1              ; ST preserved ACC = perpWallDist
         BRN pone
-        JMP lineh
+        JMP nearck
 pone:   LDI 1
         ST  PERP
-lineh:  LDI 40960
+; distance shading + the panel stripe (V3): COLOR steps up to the bright
+; variant t + 8 exactly when the wall is NEAR (perp < 16384) and this
+; column's stripe bit is set; a far wall keeps the dark base whatever its face
+nearck: LD  PERP
+        SUBI 16384
+        BRN strck
+        JMP lineh           ; far: the dark base stands
+strck:  LD  TMP
+        BRZ lineh           ; the dark panel of the stripe pair
+        LD  COLOR
+        ADDI 8
+        ST  COLOR
+lineh:  LDI 81920
         DIV PERP            ; lineHeight = h / perpWallDist -> (40*1024) / perp
         DIVI 2
         ST  HALFH

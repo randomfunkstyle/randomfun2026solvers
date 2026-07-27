@@ -499,7 +499,7 @@ class DoomUnit:
       has no display lanes at all — its paint loops, FLASH block and 512-pixel HUD
       unroll all collapse into one command word each per column / per frame.
 
-    Four commands (codes read off the trie; ``tests/test_deadman3d.py`` pins them
+    Five commands (codes read off the trie; ``tests/test_deadman3d.py`` pins them
     against the CPU's ``.equ C_*`` constants so the tables cannot drift)::
 
         COL    seed*64 + n, where seed = (top*64 + col)*16 + color - 1024 and
@@ -511,6 +511,10 @@ class DoomUnit:
                through its value ring, adding 1024 (one row) per lap, so the
                argument is that packed word pre-biased by one lap, and one
                floored ``/ 64`` recovers both fields (seed may be negative).
+        RUN    count*16 + colour: ``count`` bare DATA writes of ``colour`` at
+               the panel's own cursor (row-major auto-advance) — the title
+               screen is ~1k of these, one word per RLE run, and no ADDR at
+               all because COMMIT reset the cursor to the panel's top-left.
         FLASH  0   the 8-pixel muzzle flash (three ADDR repositions, cursor
                auto-advance inside each run).
         HUD    0   rows 40..47: one ADDR (2560), then 512 row-major DATA writes.
@@ -520,13 +524,17 @@ class DoomUnit:
     construction — the unit bakes both patterns, which is the whole point.
     """
 
-    #: arm -> command code. COL is 0 so the CPU's per-column send is a bare
-    #: ``MULI 8; SND`` with no ``ADDI`` for the code.
-    CODES = {"COL": 0, "FLASH": 1, "HUD": 2, "COMMIT": 3}
+    #: arm -> command code, read off the 3-bit trie's geometry (a west branch
+    #: is a set bit; ``d3_unit.arm_codes`` derives these and the tests pin the
+    #: two tables). COL is 0 so the CPU's per-column send is a bare
+    #: ``MULI 8; SND`` with no ``ADDI`` for the code; 2, 4 and 6 are the three
+    #: spare leaves.
+    CODES = {"COL": 0, "HUD": 1, "FLASH": 3, "RUN": 5, "COMMIT": 7}
 
     #: One-line contract per arm, quoted into the generated asm's ``.equ C_*`` notes.
     ARM_NOTES = {
         "COL": "arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor",
+        "RUN": "arg=count*16+colour: count pixels at the panel's own cursor",
         "FLASH": "arg=0: the baked 8-pixel muzzle diamond (rows 35..37)",
         "HUD": "arg=0: the baked 512-pixel HUD strip (rows 40..47)",
         "COMMIT": "arg=0: SWAP 0 — commit the frame, clear next, reset the cursor",
@@ -552,6 +560,8 @@ class DoomUnit:
         code, arg = word & 7, word >> 3
         if code == self.CODES["COL"]:
             self._col(arg)
+        elif code == self.CODES["RUN"]:
+            self._run(arg)
         elif code == self.CODES["FLASH"]:
             self._flash()
         elif code == self.CODES["HUD"]:
@@ -566,27 +576,45 @@ class DoomUnit:
         raise StoreError("DOOM: the unit answers nothing; a program with RCV cannot bind")
 
     # ── arms ─────────────────────────────────────────────────────────────────
+    #: The banded wall loop's mask ring (V3): every 4th painted row is ANDed
+    #: down to the dark shade — the horizontal seam of a wall panel. The real
+    #: unit circulates these four masks through its second value ring, reseeded
+    #: per command so the seam phase anchors at the wall run's top row.
+    MASKS = (7, 15, 15, 15)
+
     def _col(self, arg: int) -> None:
         """One viewport column, computed exactly as the unit's own loops do.
 
         The wall loop circulates ``v = addr*16 + colour`` and adds 1024 (one row
-        of 64 cells, times 16) per lap *before* painting; the floor loop then
-        continues from the last wall address with the baked colour 8.
+        of 64 cells, times 16) per lap *before* painting; each painted colour is
+        ANDed with the lap's mask from :data:`MASKS` (the banding seam); the
+        floor loop then continues from the last wall address with the baked
+        colour 8.
         """
         n_wall = arg % 64  # floored like the unit's `/ 64`: 0..63 even for seed < 0
         v = arg // 64  # seed = first wall pixel's addr*16+colour, one lap early
         if n_wall < 1:
             raise StoreError(f"DOOM: COL with an empty wall run (arg {arg})")
         addr = 0
-        for _ in range(n_wall):
+        for i in range(n_wall):
             v += 1024
             addr, colour = v // 16, v % 16
             if not 0 <= addr < self.WIDTH * self.H3D:
                 raise StoreError(f"DOOM: COL wall pixel {addr} is outside the viewport")
-            self._paint(addr, colour)
+            self._paint(addr, colour & self.MASKS[i % 4])
         for _ in range(self.H3D - 1 - addr // self.WIDTH):
             addr += self.WIDTH
             self._paint(addr, self.FLOOR)
+
+    def _run(self, arg: int) -> None:
+        """One RLE run at the panel's own cursor, exactly as the unit's loop
+        does it: BP = count laps of one bare DATA write of the colour."""
+        count, colour = arg // 16, arg % 16
+        if count < 1:
+            raise StoreError(f"DOOM: RUN with an empty run (arg {arg})")
+        for _ in range(count):
+            self._write(self.DATA, colour)
+            self.pixels += 1
 
     def _flash(self) -> None:
         """The baked muzzle flash: three cursor runs (deadman3d.FLASH)."""

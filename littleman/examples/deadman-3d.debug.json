@@ -8,7 +8,7 @@
     {
       "name": "adapter",
       "x": 57,
-      "y": 224,
+      "y": 63,
       "w": 14,
       "h": 6,
       "note": "expands one sign-biased request word into the tape's `op addr [value]`",
@@ -20,7 +20,7 @@
     {
       "name": "cpu:fetch",
       "x": 9,
-      "y": 242,
+      "y": 81,
       "w": 4,
       "h": 1,
       "note": ">rbr \u2014 opcode into BP, then the operand into A (fixed-width 2 words)",
@@ -32,8 +32,8 @@
     {
       "name": "cpu:lane:ADD",
       "x": 18,
-      "y": 229,
-      "w": 24,
+      "y": 68,
+      "w": 23,
       "h": 1,
       "note": "opcode 18 \u2014 ADD",
       "color": "#3b82f6",
@@ -44,8 +44,8 @@
     {
       "name": "cpu:lane:ADDI",
       "x": 18,
-      "y": 219,
-      "w": 25,
+      "y": 58,
+      "w": 24,
       "h": 1,
       "note": "opcode 4 \u2014 ADDI",
       "color": "#3b82f6",
@@ -56,7 +56,7 @@
     {
       "name": "cpu:lane:BRN",
       "x": 18,
-      "y": 245,
+      "y": 84,
       "w": 35,
       "h": 1,
       "note": "opcode 17 \u2014 BRN",
@@ -68,7 +68,7 @@
     {
       "name": "cpu:lane:BRZ",
       "x": 18,
-      "y": 247,
+      "y": 86,
       "w": 34,
       "h": 1,
       "note": "opcode 9 \u2014 BRZ",
@@ -80,8 +80,8 @@
     {
       "name": "cpu:lane:DIV",
       "x": 18,
-      "y": 225,
-      "w": 25,
+      "y": 64,
+      "w": 24,
       "h": 1,
       "note": "opcode 28 \u2014 DIV",
       "color": "#3b82f6",
@@ -92,7 +92,7 @@
     {
       "name": "cpu:lane:DIVI",
       "x": 18,
-      "y": 237,
+      "y": 76,
       "w": 4,
       "h": 1,
       "note": "opcode 22 \u2014 DIVI",
@@ -104,8 +104,8 @@
     {
       "name": "cpu:lane:IN",
       "x": 18,
-      "y": 211,
-      "w": 28,
+      "y": 50,
+      "w": 27,
       "h": 1,
       "note": "opcode 0 \u2014 IN",
       "color": "#3b82f6",
@@ -116,8 +116,8 @@
     {
       "name": "cpu:lane:INCM",
       "x": 18,
-      "y": 217,
-      "w": 28,
+      "y": 56,
+      "w": 27,
       "h": 1,
       "note": "opcode 24 \u2014 INCM",
       "color": "#3b82f6",
@@ -128,7 +128,7 @@
     {
       "name": "cpu:lane:JMPF",
       "x": 18,
-      "y": 249,
+      "y": 88,
       "w": 33,
       "h": 1,
       "note": "opcode 25 \u2014 JMPF",
@@ -140,8 +140,8 @@
     {
       "name": "cpu:lane:LD",
       "x": 18,
-      "y": 233,
-      "w": 23,
+      "y": 72,
+      "w": 22,
       "h": 1,
       "note": "opcode 26 \u2014 LD",
       "color": "#3b82f6",
@@ -152,8 +152,8 @@
     {
       "name": "cpu:lane:LDA",
       "x": 18,
-      "y": 223,
-      "w": 25,
+      "y": 62,
+      "w": 24,
       "h": 1,
       "note": "opcode 12 \u2014 LDA",
       "color": "#3b82f6",
@@ -164,7 +164,7 @@
     {
       "name": "cpu:lane:LDI",
       "x": 18,
-      "y": 243,
+      "y": 82,
       "w": 4,
       "h": 1,
       "note": "opcode 1 \u2014 LDI",
@@ -176,7 +176,7 @@
     {
       "name": "cpu:lane:MODI",
       "x": 18,
-      "y": 235,
+      "y": 74,
       "w": 4,
       "h": 1,
       "note": "opcode 6 \u2014 MODI",
@@ -188,8 +188,8 @@
     {
       "name": "cpu:lane:MOVA",
       "x": 18,
-      "y": 215,
-      "w": 28,
+      "y": 54,
+      "w": 27,
       "h": 1,
       "note": "opcode 8 \u2014 MOVA",
       "color": "#3b82f6",
@@ -200,8 +200,8 @@
     {
       "name": "cpu:lane:MUL",
       "x": 18,
-      "y": 221,
-      "w": 25,
+      "y": 60,
+      "w": 24,
       "h": 1,
       "note": "opcode 20 \u2014 MUL",
       "color": "#3b82f6",
@@ -212,7 +212,7 @@
     {
       "name": "cpu:lane:MULI",
       "x": 18,
-      "y": 241,
+      "y": 80,
       "w": 4,
       "h": 1,
       "note": "opcode 30 \u2014 MULI",
@@ -224,8 +224,8 @@
     {
       "name": "cpu:lane:NEG",
       "x": 18,
-      "y": 213,
-      "w": 28,
+      "y": 52,
+      "w": 27,
       "h": 1,
       "note": "opcode 16 \u2014 NEG",
       "color": "#3b82f6",
@@ -236,7 +236,7 @@
     {
       "name": "cpu:lane:SND",
       "x": 18,
-      "y": 273,
+      "y": 112,
       "w": 4,
       "h": 1,
       "note": "opcode 31 \u2014 SND",
@@ -248,8 +248,8 @@
     {
       "name": "cpu:lane:ST",
       "x": 18,
-      "y": 231,
-      "w": 24,
+      "y": 70,
+      "w": 23,
       "h": 1,
       "note": "opcode 10 \u2014 ST",
       "color": "#3b82f6",
@@ -260,8 +260,8 @@
     {
       "name": "cpu:lane:SUB",
       "x": 18,
-      "y": 227,
-      "w": 25,
+      "y": 66,
+      "w": 24,
       "h": 1,
       "note": "opcode 2 \u2014 SUB",
       "color": "#3b82f6",
@@ -272,7 +272,7 @@
     {
       "name": "cpu:lane:SUBI",
       "x": 18,
-      "y": 239,
+      "y": 78,
       "w": 4,
       "h": 1,
       "note": "opcode 14 \u2014 SUBI",
@@ -284,7 +284,7 @@
     {
       "name": "cpu:return:collector",
       "x": 10,
-      "y": 274,
+      "y": 113,
       "w": 43,
       "h": 1,
       "note": "every lane funnels west along here",
@@ -296,7 +296,7 @@
     {
       "name": "cpu:return:riser",
       "x": 9,
-      "y": 243,
+      "y": 82,
       "w": 1,
       "h": 32,
       "note": "up to the fetch row \u2014 paid once per instruction",
@@ -308,7 +308,7 @@
     {
       "name": "cpu:slab:BRN",
       "x": 36,
-      "y": 277,
+      "y": 116,
       "w": 13,
       "h": 8,
       "note": "BRN: discard loop / X fan-out (2-D, so not a lane)",
@@ -320,7 +320,7 @@
     {
       "name": "cpu:slab:BRZ",
       "x": 23,
-      "y": 276,
+      "y": 115,
       "w": 13,
       "h": 8,
       "note": "BRZ: discard loop / X fan-out (2-D, so not a lane)",
@@ -332,7 +332,7 @@
     {
       "name": "cpu:slab:JMPF",
       "x": 10,
-      "y": 275,
+      "y": 114,
       "w": 13,
       "h": 4,
       "note": "JMPF: discard loop / X fan-out (2-D, so not a lane)",
@@ -344,7 +344,7 @@
     {
       "name": "cpu:trie",
       "x": 13,
-      "y": 211,
+      "y": 50,
       "w": 5,
       "h": 63,
       "note": "depth-5 backpack trie; leaves are bit-reversed",
@@ -355,8 +355,8 @@
     },
     {
       "name": "display",
-      "x": 107,
-      "y": 711,
+      "x": 170,
+      "y": 1139,
       "w": 66,
       "h": 50,
       "note": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -368,10 +368,10 @@
     {
       "name": "io:I",
       "x": 17,
-      "y": 205,
+      "y": 44,
       "w": 3,
       "h": 3,
-      "note": "Round 0: the 103-word data preamble (deadman3d.preamble_words()) then the first command; each later round is ONE command word, a bitmask of the keys held this frame: 1=W fwd, 2=S back, 4=A left, 8=D right, 16=space FIRE; 0 renders idle, higher bits are ignored, opposing keys cancel. Turn first, then move, then render: exactly one committed frame per round, no program output. keys('wa ')==21 walks, turns and fires at once; the demo walk is WALK_CHORDS.",
+      "note": "Round 0: the 295-word data preamble (deadman3d.preamble_words()) then the title screen's RLE (title_words(): one pre-encoded RUN command word per run), committing the title frame; each later round is ONE command word, a bitmask of the keys held this frame: 1=W fwd, 2=S back, 4=A left, 8=D right, 16=space FIRE; 0 renders idle, higher bits are ignored, opposing keys cancel. Turn first, then move, then render: exactly one committed frame per round, no program output. keys('wa ')==21 walks, turns and fires at once; the demo walk is WALK_CHORDS.",
       "color": "#94a3b8",
       "tags": [
         "io"
@@ -381,9 +381,9 @@
       "name": "rom",
       "x": 0,
       "y": 0,
-      "w": 45,
-      "h": 205,
-      "note": "looping ROM: 1348 words, 201 rows, re-emitted forever",
+      "w": 304,
+      "h": 44,
+      "note": "looping ROM: 2143 words, 40 rows, re-emitted forever",
       "color": "#a855f7",
       "tags": [
         "rom"
@@ -391,8 +391,8 @@
     },
     {
       "name": "stream:panel",
-      "x": 107,
-      "y": 711,
+      "x": 170,
+      "y": 1139,
       "w": 66,
       "h": 50,
       "note": "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -403,8 +403,20 @@
     },
     {
       "name": "stream:relay",
-      "x": 104,
-      "y": 666,
+      "x": 162,
+      "y": 1082,
+      "w": 5,
+      "h": 5,
+      "note": "",
+      "color": "#f59e0b",
+      "tags": [
+        "stream"
+      ]
+    },
+    {
+      "name": "stream:relay2",
+      "x": 162,
+      "y": 1120,
       "w": 5,
       "h": 5,
       "note": "",
@@ -416,10 +428,10 @@
     {
       "name": "stream:unit",
       "x": 1,
-      "y": 640,
-      "w": 100,
-      "h": 71,
-      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / FLASH / HUD / COMMIT, 8*arg + code",
+      "y": 1055,
+      "w": 158,
+      "h": 84,
+      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / title RLE run / FLASH / HUD / COMMIT, 8*arg + code",
       "color": "#f59e0b",
       "tags": [
         "stream"
@@ -427,10 +439,10 @@
     },
     {
       "name": "stream:unit:COL",
-      "x": 87,
-      "y": 644,
+      "x": 143,
+      "y": 1060,
       "w": 12,
-      "h": 66,
+      "h": 78,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -440,9 +452,9 @@
     {
       "name": "stream:unit:COMMIT",
       "x": 3,
-      "y": 644,
-      "w": 28,
-      "h": 66,
+      "y": 1060,
+      "w": 20,
+      "h": 78,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -451,10 +463,10 @@
     },
     {
       "name": "stream:unit:FLASH",
-      "x": 31,
-      "y": 644,
-      "w": 28,
-      "h": 66,
+      "x": 23,
+      "y": 1060,
+      "w": 20,
+      "h": 78,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -463,10 +475,22 @@
     },
     {
       "name": "stream:unit:HUD",
-      "x": 59,
-      "y": 644,
-      "w": 28,
-      "h": 66,
+      "x": 63,
+      "y": 1060,
+      "w": 20,
+      "h": 78,
+      "note": "",
+      "color": "#f59e0b",
+      "tags": [
+        "stream"
+      ]
+    },
+    {
+      "name": "stream:unit:RUN",
+      "x": 43,
+      "y": 1060,
+      "w": 20,
+      "h": 78,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -475,10 +499,10 @@
     },
     {
       "name": "stream:unit:hud-field",
-      "x": 38,
-      "y": 683,
-      "w": 49,
-      "h": 14,
+      "x": 50,
+      "y": 1107,
+      "w": 93,
+      "h": 10,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -488,8 +512,8 @@
     {
       "name": "stream:unit:main",
       "x": 2,
-      "y": 641,
-      "w": 45,
+      "y": 1056,
+      "w": 73,
       "h": 1,
       "note": "",
       "color": "#f59e0b",
@@ -500,9 +524,9 @@
     {
       "name": "stream:unit:trie",
       "x": 4,
-      "y": 642,
-      "w": 85,
-      "h": 2,
+      "y": 1057,
+      "w": 141,
+      "h": 3,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -512,10 +536,10 @@
     {
       "name": "tape",
       "x": 75,
-      "y": 220,
-      "w": 36,
-      "h": 417,
-      "note": "rotating pipe tape, N=136, skip_batch=1, relay=None",
+      "y": 59,
+      "w": 681,
+      "h": 993,
+      "note": "rotating pipe tape, N=328, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [
         "tape"
@@ -524,8 +548,8 @@
     {
       "name": "teleport:L",
       "x": 65,
-      "y": 215,
-      "w": 46,
+      "y": 54,
+      "w": 691,
       "h": 4,
       "note": "",
       "color": "#64748b",
@@ -536,7 +560,7 @@
     {
       "name": "teleport:U",
       "x": 57,
-      "y": 213,
+      "y": 52,
       "w": 6,
       "h": 10,
       "note": "",

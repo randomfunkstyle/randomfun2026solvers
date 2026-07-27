@@ -1311,7 +1311,7 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -1424,9 +1424,13 @@ def adapter_tape_gap(program_name: str, store: str) -> int:
     """Blank columns between the adapter and the STORE block, for one build.
 
     The wider of the two constraints wins: a program's own override (``matmul``'s
-    STREAM rings) and the floor its store tier needs to bind at all.
+    STREAM rings) and the floor its store tier needs to bind at all. ``men-v3``
+    keeps the request route's jog column (``ax_out + 2``) clear of the block's
+    own column 0, where its inlet stub lives.
     """
     gap = ADAPTER_TAPE_GAP_FOR.get(program_name, ADAPTER_TAPE_GAP)
+    if store == "men-v3":
+        gap = max(gap, 6)
     return max(gap, ADAPTER_TAPE_GAP_BY_STORE.get(store, 0))
 
 
@@ -1985,7 +1989,7 @@ class Machine:
             notes["stream:panel"] = "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP"
             notes["stream:unit"] = (
                 "the DOOM column painter (lm1/d3_unit.py): one command word per "
-                "viewport column / FLASH / HUD / COMMIT, 8*arg + code"
+                "viewport column / title RLE run / FLASH / HUD / COMMIT, 8*arg + code"
             )
         for name, (x, y, w, h) in sorted(self.regions.items()):
             kind = name.split(":", 1)[0]
@@ -2536,6 +2540,10 @@ def _assemble(
             tape = y_men_block(tape_n)
         elif store == "grid":
             tape = grid_block(tape_n)
+        elif store == "men-v3":
+            from ..memory_men_v3 import v3_store_block
+
+            tape = v3_store_block(tape_n)
         elif store == "tape":
             tape = tape_block(
                 tape_n,
@@ -2544,7 +2552,7 @@ def _assemble(
             )
         else:
             raise MachineError(
-                f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
+                f"unknown store tier {store!r}; expected one of {STORE_TIERS!r}"
             )
         TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
         TY = CY + mem_dy + store_dy
@@ -2624,7 +2632,13 @@ def _assemble(
             from ..memory_men import teleport, teleport_v
 
             ux = CX + W + 4  # U hugs the CPU's east wall
-            u_top = min(CY + 3, resp_row - 6)
+            lx0 = ux + _TELE_W + 4
+            lx1 = tout_x + 2
+            l_y1 = tout_y - 3  # L's south wall: two stub cells below it reach tout
+            l_y0 = l_y1 - _TELE_H - 1
+            # U spans from just above L's hand-off row down to the response row,
+            # wherever the store's outlet put L (men-v3's is at the block's top).
+            u_top = min(CY + 3, resp_row - 6, l_y0)
             u_bot = resp_row + 1
             if u_bot - u_top < 3:
                 raise MachineError("teleport U has no interior: resp_row too high")
@@ -2632,10 +2646,6 @@ def _assemble(
             g.room(ux, u_top, ux + _TELE_W + 1, u_bot)
             for kk, row in enumerate(u_rows):
                 g.text(ux + 1, u_top + 1 + kk, row.replace(" ", "\0"))
-            lx0 = ux + _TELE_W + 4
-            lx1 = tout_x + 2
-            l_y1 = tout_y - 3  # L's south wall: two stub cells below it reach tout
-            l_y0 = l_y1 - _TELE_H - 1
             if lx1 - lx0 < 8 or l_y0 <= 1:
                 raise MachineError("teleport L has no room between the CPU and the STORE")
             l_rows, _ = teleport(lx1 - lx0 - 1)
@@ -2801,8 +2811,12 @@ def _assemble(
     # cell->collector — and every one of them is a two-cell stub between facing
     # walls, which is exactly why the extra decoder hop is nearly free.
     if hot is None:
-        _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
-        store_pipes = (tape.pipes if store == "men-y" else _STORE_PIPES[store]) + 1 + tele_pipes
+        _STORE_PIPES = {
+            "men-y": None, "men-v3": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2,
+        }
+        store_pipes = (
+            tape.pipes if store in ("men-y", "men-v3") else _STORE_PIPES[store]
+        ) + 1 + tele_pipes
     _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -2967,7 +2981,7 @@ def two_tier_adapter(hot_top: int) -> _Adapter2:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -3714,13 +3728,13 @@ TAPE_SIZE = {
     # board still lives in the CPU's four bitset words, unlike snake-ring, where the
     # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
     "pathfinder-unit": 52,
-    # deadman-3d (the E1M1 raycaster demo) boot-loads 103 data slots (64 packed
-    # map half-columns for the 32x32 grid, POW16, 16 packed heading words, spawn
+    # deadman-3d (the E1M1 raycaster demo) boot-loads 295 data slots (256 packed
+    # map quarter-columns for the 64x64 grid, POW16, 16 packed heading words, spawn
     # state) and runs 32 scalars after them, so the highest address is PTR = 135
     # — see `deadman3d.tape_slots()`, which the tests pin this against. Highest
     # address + 1, as everywhere: an exactly-sized tape stalls silently rather
     # than faulting.
-    "deadman-3d": 136,
+    "deadman-3d": 328,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -3882,6 +3896,12 @@ ROM_ROWS = {
     "pathfinder": 73,  # 177x179
     # The command arms are not complete and no checked-in grid exists yet.
     "pathfinder-unit": 72,
+    # deadman-3d: re-swept on native round 0 after the 64x64 map grew P to
+    # 1,383 (12 -> 2.749M, 24 -> 2.692M, 40 -> 2.666M, 56/72 flat within
+    # 0.2%): the machine is height-bound by the 328-slot men-v3 store, so the
+    # deeper fold narrows the box (312 -> 190 wide) and shortens every lane
+    # walk; 40 is the plateau knee.
+    "deadman-3d": 40,
 }
 
 
@@ -4018,11 +4038,12 @@ DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
 #: Per-slug ``mem_pad`` for machines whose pad the default search should not (or
 #: cannot) pick: :func:`build` searches ``range(0, 40)`` and takes the best pad
 #: that binds every pipe. ``deadman-3d``'s is recorded to pin the checked-in grid
-#: and skip the search. (It was 36 when the CPU owned the panel; the DOOM unit
-#: took the display lanes with it, so the memory block no longer fights the
-#: panel for columns.) Consulted by :func:`build_for` like :data:`ROM_ROWS`;
-#: absent slugs keep the search.
-MEM_PAD: dict[str, int] = {"deadman-3d": 18}
+#: and skip the search. (36 when the CPU owned the panel; 18 under the 32x32
+#: program; re-searched to 17 — the smallest that binds under the real
+#: INPUT_NORTH + teleport + MEM_PLACE config — after the 64x64 map and the
+#: men-v3 store, which tie every pad on footprint.) Consulted by
+#: :func:`build_for` like :data:`ROM_ROWS`; absent slugs keep the search.
+MEM_PAD: dict[str, int] = {"deadman-3d": 17}
 
 #: Slugs whose ``I`` room attaches to the CPU's **north** wall instead of the
 #: west. On the west wall the input pipe rivals every memory ``r`` a few rows
@@ -4044,11 +4065,15 @@ INPUT_NORTH: set[str] = {"deadman-3d"}
 STORE_TELEPORT: set[str] = {"deadman-3d"}
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
-#: ``deadman-3d``'s 136-slot store is far past the rotating tape's ~103-slot
+#: ``deadman-3d``'s 328-slot store is far past the rotating tape's ~103-slot
 #: practical cap (and a ring that size would cost ~1,100 ticks a read anyway),
 #: so it rides :func:`grid_block`, the address-carrying man-memory: ~31 ticks an
 #: access flat, paid for in rows — which an ungraded demo does not count.
-STORE_TIER: dict[str, str] = {"deadman-3d": "grid"}
+#: ``men-v3`` is the unrolled-router man-memory (``memory_men_v3``): ~11 ticks
+#: an access against the grid store's ~31, flat in the address, at the price of
+#: area — which an ungraded demo does not count. Measured on deadman-3d's
+#: ~14.3k accesses per frame it is worth ~0.3M ticks over ``grid``.
+STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:
