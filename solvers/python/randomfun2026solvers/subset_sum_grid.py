@@ -161,13 +161,35 @@ def _op(c, x: int, y: int, glyph: str, band: str) -> None:
     asked for: under :class:`_Turned` those differ, and it is the physical column
     that decides which pipe the op binds to.
     """
-    lo, hi = BANDS[band]
     px = c.col(x) if hasattr(c, "col") else x
-    if not lo <= px <= hi:
-        raise ValueError(
-            f"{glyph!r} at ({px},{y}) is outside the {band!r} band {lo}..{hi}; "
-            "it would bind to another pipe"
+    anchors = getattr(c, "anchors", None)
+    if anchors is None:
+        lo, hi = getattr(c, "bands", BANDS)[band]
+        if not lo <= px <= hi:
+            raise ValueError(
+                f"{glyph!r} at ({px},{y}) is outside the {band!r} band {lo}..{hi}; "
+                "it would bind to another pipe"
+            )
+    else:
+        # Exact, not a band: every pipe hangs off the north wall, so "nearest by
+        # Manhattan distance" is "nearest column", and the intended anchor has to
+        # win it **strictly** — a tie is broken by reading order, which is not
+        # something a block may depend on.  A hand-written band got this wrong
+        # once (room A's idle loop sent ring V's words down the baton pipe, which
+        # is invisible in the grid and invisible in the answer's shape), so the
+        # table is derived here instead of trusted.
+        side = anchors["in" if glyph in "rqRU" else "out"]
+        want = side[band]
+        rival = min(
+            ((abs(px - col), name) for name, col in side.items() if name != band),
+            default=(1 << 30, None),
         )
+        if abs(px - want) >= rival[0]:
+            raise ValueError(
+                f"{glyph!r} at ({px},{y}) is {abs(px - want)} from the {band!r} "
+                f"anchor at {want} and {rival[0]} from {rival[1]!r}; it would bind "
+                "to the wrong pipe"
+            )
     _BANDS_USED.append(band)
     c.set(x, y, glyph)
 
@@ -195,6 +217,16 @@ class _Turned:
     def __init__(self, c: Circuit, ax: int, ay: int) -> None:
         self.c, self.ax, self.ay = c, ax, ay      # (x, y) -> (ax - x, ay - y)
 
+    @property
+    def bands(self) -> dict[str, tuple[int, int]]:
+        """The *underlying room's* table, so a turned block is checked against
+        the room it is being drawn into rather than against the module's."""
+        return getattr(self.c, "bands", BANDS)
+
+    @property
+    def anchors(self):
+        return getattr(self.c, "anchors", None)
+
     def col(self, x: int) -> int:
         return self.ax - x
 
@@ -218,6 +250,63 @@ class _Turned:
 
     def vertical(self, x: int, y0: int, y1: int) -> None:
         self.c.vertical(self.ax - x, self.ay - y0, self.ay - y1)
+
+
+class _Shifted:
+    """A :class:`Circuit` façade that adds `dy` to every row it is given.
+
+    The phase blocks address rows by the module-level constants they were laid
+    out against, and those constants encode a *stack* — `P3_HEAD` is 54 because
+    phase 2 ends at 53.  Splitting the stack across two rooms moves phase 3 to the
+    top of its own room without moving it relative to emit, which is a shift of
+    the whole tail and nothing else.  So shift the canvas, not the constants: the
+    blocks keep the row arithmetic they were verified with, and there is no
+    second set of numbers for six blocks and nine lanes to disagree about.
+    """
+
+    def __init__(self, c: Circuit, dy: int) -> None:
+        self.c, self.dy = c, dy
+
+    @property
+    def bands(self) -> dict[str, tuple[int, int]]:
+        return getattr(self.c, "bands", BANDS)
+
+    @property
+    def east_col(self) -> int:
+        return getattr(self.c, "east_col", EAST_COL)
+
+    @property
+    def anchors(self):
+        return getattr(self.c, "anchors", None)
+
+    def set(self, x: int, y: int, ch: str) -> None:
+        self.c.set(x, y + self.dy, ch)
+
+    def free(self, x: int, y: int) -> bool:
+        return self.c.free(x, y + self.dy)
+
+    def get(self, x: int, y: int) -> str:
+        return self.c.get(x, y + self.dy)
+
+    def run(self, x: int, y: int, ops: str, d=E) -> tuple[int, int]:
+        for ch in ops:
+            self.set(x, y, ch)
+            x, y = x + d[0], y + d[1]
+        return x, y
+
+    def horizontal(self, y: int, x0: int, x1: int) -> None:
+        self.c.horizontal(y + self.dy, x0, x1)
+
+    def vertical(self, x: int, y0: int, y1: int) -> None:
+        self.c.vertical(x, y0 + self.dy, y1 + self.dy)
+
+    def route(self, start, enter, corners, end, exit_) -> None:
+        d = self.dy
+        self.c.route(
+            (start[0], start[1] + d), enter,
+            [(x, y + d) for x, y in corners],
+            (end[0], end[1] + d), exit_,
+        )
 
 
 def _turned(c: Circuit, ax: int, ay: int, draw, *args, **kw):
@@ -395,6 +484,12 @@ def _peel_emit(c: Circuit, xr: int, y: int, xout: int) -> tuple[int, int]:
 # block's own row, which is the mistake that silently re-steers a man.
 
 EAST_COL, WEST_COL = 38, 13
+
+
+def _east(c) -> int:
+    """The room's turn-around column.  Per-room, for the same reason the bands
+    are: a narrower room has a nearer east column and nothing else changes."""
+    return getattr(c, "east_col", EAST_COL)
 
 
 def _east_to_west(c: Circuit, x: int, y: int, drop: int, height: int, x_entry: int) -> int:
@@ -585,10 +680,11 @@ def _link(
     """Route a man leaving `frm` with `heading` into the entry cell `to`."""
     x0, y0 = frm
     xt, yt = to
+    east = _east(c)
     c.route(
         (x0, y0),
         heading,
-        [(EAST_COL, y0), (EAST_COL, y_link), (WEST_COL, y_link)],
+        [(east, y0), (east, y_link), (WEST_COL, y_link)],
         (WEST_COL, yt),
         E,
     )

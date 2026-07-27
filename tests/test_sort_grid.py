@@ -29,7 +29,7 @@ GRID = ROOT / "tasks" / "solutions" / "sort-numbers_network.man"
 PROBLEM = ROOT / "tasks" / "problems" / "sort-numbers.json"
 
 FOOTPRINT = (14, 14)
-PINNED_SCORE = 291_844.0  # area2 196 x avg 1489.0 ticks, judged-gated
+PINNED_SCORE = 258_188.0  # area2 196 x avg 1317.3 ticks, judged-gated
 
 
 def _cases() -> list[dict]:
@@ -76,6 +76,34 @@ def test_public_case_passes_under_the_round_gate(case):
     assert got == want
 
 
+@pytest.mark.parametrize(
+    "cell,pipe",
+    [
+        ((4, 6), "fwd"),   # comparator, A > 0 lane: push vi
+        ((5, 8), "fwd"),   # comparator, A < 0 lane: push the old carry
+        ((7, 12), "fwd"),  # BODY: the new header
+        ((3, 9), "out"),   # EMIT: the pass minimum
+        ((3, 11), "out"),  # the last pass: the survivor
+    ],
+)
+def test_every_send_binds_to_the_pipe_it_was_meant_for(cell, pipe):
+    """Ask the engine's nearest-pipe oracle, do not re-derive the arithmetic.
+
+    Binding is by Manhattan distance to the pipe segment touching the room, and
+    two of these clear their rival by exactly **one** cell -- EMIT's `s` reaches
+    the output pipe at 7 against the ring's 8. Nothing in the grid says so, and
+    an emit that quietly went back into the ring would still produce output of
+    the right *length*. `route` is the same oracle the runtime uses.
+    """
+    want = {"out": [[1, 4], [1, 3]], "fwd": [[6, 4], [6, 3], [7, 3]]}[pipe]
+    proc = subprocess.run(
+        ["node", str(ROOT / "littleman" / "lm.mjs"), "route", str(GRID),
+         str(cell[0]), str(cell[1])],
+        capture_output=True, text=True, check=True,
+    )
+    assert json.loads(proc.stdout)["cells"] == want
+
+
 def test_score_is_not_worse_than_pinned():
     total = sum(_judge(c)[0] for c in _cases())
     avg = total / len(_cases())
@@ -94,3 +122,35 @@ def test_ungated_feed_is_not_a_regression():
 
     with pytest.raises(scoring.ScoringError, match="does not pass this case"):
         scoring.score_program(GRID, "sort-numbers")
+
+
+def test_the_profiler_sees_this_machine_only_when_it_gates():
+    """`heatmap.mjs --expected` is not a convenience; without it the tool lies.
+
+    Ungated, the relay pulls every round's input into a ring sized for one
+    round, both `s` glyphs jam against a full pipe, and the profile reports
+    97-99% stalled -- the missing flag, presented as the machine's bottleneck.
+    Gated, the worker is a few percent stalled and the comparator dominates.
+    Both numbers are asserted so the tool cannot regress to reporting the first.
+    """
+    case = next(c for c in _cases() if c["name"] == "long case")
+    inp = " / ".join(" ".join(map(str, r["in"])) for r in case["rounds"])
+    exp = " / ".join(" ".join(map(str, r["out"])) for r in case["rounds"])
+    tool = str(ROOT / "littleman" / "tools" / "heatmap.mjs")
+
+    def worker_stall(extra):
+        out = subprocess.run(
+            ["node", tool, str(GRID), "--input", inp, "--cap", "20000",
+             "--stride", "1", "--top", "0", *extra],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        line = [ln for ln in out.splitlines() if "runner 1:" in ln][0]
+        return int(line.split("% stalled")[0].split()[-1]), out
+
+    ungated, _ = worker_stall([])
+    gated, out = worker_stall(["--expected", exp])
+    assert ungated > 90, "the ungated jam is the thing --expected exists to avoid"
+    assert gated < 15, f"gated profile still looks jammed: {gated}%"
+    # and it must say so, not leave the reader to notice
+    assert "no --expected" in worker_stall([])[1]
+    assert "(settled)" in out, "a gated profile's window ends where the score does"
