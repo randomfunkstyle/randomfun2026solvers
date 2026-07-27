@@ -116,6 +116,7 @@ __all__ = [
     "MEM_PAD",
     "MEMORY_SEMS",
     "ROM_ROWS",
+    "STORE_TIER",
     "STREAM_SEM_BAND",
     "STREAM_SIZE",
     "TAPE_SIZE",
@@ -3610,12 +3611,13 @@ TAPE_SIZE = {
     # board still lives in the CPU's four bitset words, unlike snake-ring, where the
     # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
     "pathfinder-unit": 52,
-    # deadman-3d (the raycaster demo) boot-loads 71 data slots (map rows, POW16,
-    # heading tables, spawn state) and runs 26 scalars after them, so the highest
-    # address is PTR = 97 — see `deadman3d.tape_slots()`, which the tests pin this
-    # against. Highest address + 1, as everywhere: an exactly-sized tape stalls
-    # silently rather than faulting.
-    "deadman-3d": 98,
+    # deadman-3d (the E1M1 raycaster demo) boot-loads 103 data slots (64 packed
+    # map half-columns for the 32x32 grid, POW16, 16 packed heading words, spawn
+    # state) and runs 32 scalars after them, so the highest address is PTR = 135
+    # — see `deadman3d.tape_slots()`, which the tests pin this against. Highest
+    # address + 1, as everywhere: an exactly-sized tape stalls silently rather
+    # than faulting.
+    "deadman-3d": 136,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -3891,13 +3893,20 @@ MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
 #: appear here, because for them the panel size is the judge's, not ours.
 DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
 
-#: Per-slug ``mem_pad`` for machines the default pad search cannot place:
-#: :func:`build` searches ``range(0, 40)``, and ``deadman-3d``'s 64x48 panel
-#: (a 66-wide interior on a 122x145 machine) needs the memory block pushed
-#: further east than that — measured: pad 45 binds every pipe, every pad <= 40
-#: fails ("SWAP's east corridor collides with the adapter"). Consulted by
-#: :func:`build_for` like :data:`ROM_ROWS`; absent slugs keep the search.
-MEM_PAD: dict[str, int] = {"deadman-3d": 45}
+#: Per-slug ``mem_pad`` for machines whose pad the default search should not (or
+#: cannot) pick: :func:`build` searches ``range(0, 40)`` and takes the first pad
+#: that binds every pipe. ``deadman-3d``'s is recorded to pin the checked-in grid
+#: (and to skip the failing prefix of the search: its 64x48 panel pushes the
+#: memory block east). Consulted by :func:`build_for` like :data:`ROM_ROWS`;
+#: absent slugs keep the search.
+MEM_PAD: dict[str, int] = {"deadman-3d": 36}
+
+#: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
+#: ``deadman-3d``'s 136-slot store is far past the rotating tape's ~103-slot
+#: practical cap (and a ring that size would cost ~1,100 ticks a read anyway),
+#: so it rides :func:`grid_block`, the address-carrying man-memory: ~31 ticks an
+#: access flat, paid for in rows — which an ungraded demo does not count.
+STORE_TIER: dict[str, str] = {"deadman-3d": "grid"}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:
@@ -3926,7 +3935,7 @@ def display_for(slug: str) -> tuple[int, int] | None:
 def build_for(
     slug: str,
     *,
-    store: str = "tape",
+    store: str | None = None,
     tape_skip_batch: int | None | str = "task",
     tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
@@ -3937,13 +3946,17 @@ def build_for(
     Everything not derivable from the ``.asm`` comes from the registry above, except
     the panel size, which comes from the problem JSON: a display-judged problem
     requires *exactly one* display at the stated resolution, so it is not a free
-    variable the generator may shrink. Pass ``compact=True`` for the opt-in
-    constraint-placement pass; default generation remains the checked-in layout.
+    variable the generator may shrink. ``store=None`` takes the slug's registered
+    tier from :data:`STORE_TIER` (default ``"tape"``); pass one explicitly to
+    override. Pass ``compact=True`` for the opt-in constraint-placement pass;
+    default generation remains the checked-in layout.
     """
     from . import programs
 
     if slug not in TAPE_SIZE:
         raise MachineError(f"no tape size recorded for {slug!r}; have {sorted(TAPE_SIZE)}")
+    if store is None:
+        store = STORE_TIER.get(slug, "tape")
     if tape_skip_batch == "task":
         tape_skip_batch, task_relay = TASK_TAPE_CONFIG.get(slug, (1, None))
         if tape_relay_size is None:

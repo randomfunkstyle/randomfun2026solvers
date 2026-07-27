@@ -360,6 +360,30 @@ REJECTED: dict[str, dict[str, object]] = {
         "mean_hops_to_the_right_room": 4.5,
         "correct": True,
     },
+    # The relays look like they are on the wrong loops: the scratch FIFO carries
+    # 22 words a round through `relay2(4)` (6-cell lap, one r/s pair, 6.00
+    # ticks/word) while the ring carries ~5 through `relay2(6)` (10-cell lap,
+    # three pairs, 3.33).  Both halves of the trade fail.
+    "C: widen the scratch relay to relay2(6)": {
+        # The ring's return pipe must leave the relay's south wall *west* of the
+        # column its forward pipe climbs (OG[2]+1 = 14), or the two cross on the
+        # only two pipe rows.  So the ring relay's interior must reach column 13
+        # and its outer edge starts at <= 12; O (3 cols), the scratch relay and I
+        # (3 cols) all fit west of that, which caps the scratch relay at 6 outer
+        # columns -- independent of GW, so widening the grid does not buy it.
+        "scratch_relay_outer_columns_max": 6,
+        "at_8_wide": "analyze reports both ring pipes src=-1; run dies no-pipe on tick 4",
+        "correct": False,
+    },
+    "D: 4x3 scratch relay (8-cell lap, 2 pairs, 4.00 t/w) in the same 6 columns": {
+        # Buys the throughput without the geometry, at one extra band row.  But
+        # the worker is 0% stalled, so relay throughput is not on the critical
+        # path at all: the whole 6.00 -> 4.00 move is worth ONE tick.
+        "avg_ticks": 6936.83,        # against 6937.83
+        "area2": 441,                # against 400, from BAND 6 -> 7
+        "score": 3059143,            # against 2775133 -- 10% worse
+        "correct": True,
+    },
 }
 
 
