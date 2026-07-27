@@ -1,0 +1,31 @@
+# sudoku-validity — submission 698de852-f4c6-4ac2-b2d6-cafaf57ca9bd
+
+verdict      done: 20/20 cases, area2 400, avgTicks 7,038, score 2,815,180 (uberStrict passed)
+submitted    2026-07-26T23:26:12+0000
+grid         20x20
+problem id   f66c928f-3369-4870-9153-8b20cafc2ecd
+fingerprint  50431b4aa95e691bda439638e5e6505ec7ed6cffbf2c91caa548dff2e77f0321
+commit       667bc1e
+local        6/6 public cases on LM_VALIDATOR=reference, avg 6,938 ticks, score 2,775,133
+source       tasks/solutions/sudoku-validity_fold.man   (generator solvers/python/randomfun2026solvers/sudoku_fold.py)
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+27x27 -> 20x20, 11,913 -> 6,938 local ticks. Three changes:
+1. Track the ring phase rather than restoring it. ROT2 is gone; the ring is left where ACCESS
+   left it and the next round rotates (v'-1-v) mod 9 — five pops a round instead of nine, one
+   fewer block. Phase rides in the scratch FIFO; "rq M L8 - M" turns last round's v into K = 8-v
+   in B, where it survives three ri/sq pairs untouched, and "M L9 W %" is the whole modulus.
+2. Overlap the pipe bands. Incoming at 7/5/11, outgoing at 3/1/13 keeps the round's rq/sq chatter
+   in the middle: 69 glyphs in 9 rows of 11 columns. Ring ops pushed east free the east strip for
+   the rotation loop, its exit corridor and ACCESS, none of which then costs a row.
+3. Mirror the round — generated top-down and flipped, so entry lands bottom-left where OK's and
+   INIT's returns arrive and exit lands top-right beside the rotation loop. Return corridor is
+   one cell. INIT shares BAD's row since A is 0 throughout INIT.
+
+Side 13 proved unreachable on cell count: aux is 85 cells minimum (I 9 + O 9 + two turnarounds 48
++ pipes 19) and the 69-glyph round needs an 11x9 outer at unreachable density — 184 > 169.
+The 27x27 build (sudoku-validity_ring.man) is untouched and remains as a second solution.
+Previous: 8,821,556 (rank 38/84). This: 3.13x better.

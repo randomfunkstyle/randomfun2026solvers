@@ -249,6 +249,7 @@ def _declare(a: Asm, *, packed_cells: bool) -> None:
     a.slot("PX0", "unpacked x0 of a candidate room", hot=True)
     a.slot("PX1", "unpacked x1 of a candidate room")
     a.slot("FCLS", "the final class the pipe walk writes for the cell it is on")
+    a.slot("MUL16", "x16 scratch — `MULI` is folded out to reach 16 opcodes", hot=True)
     a.slot("CP0", "packed cell access scratch — never touched by callers")
     a.slot("CP1")
     a.slot("CP2")
@@ -305,6 +306,24 @@ def _declare(a: Asm, *, packed_cells: bool) -> None:
         )
     else:
         a.array("CELL", PANEL * PANEL, "the program grid, one class a cell")
+
+
+def _times16(a: Asm) -> None:
+    """``ACC *= 16`` without ``MULI`` — the third opcode removed to reach 16.
+
+    ``ST`` preserves ACC and ``ADD`` adds a slot to it, so ``ST t; ADD t`` doubles
+    ACC and four pairs give x16. Eight instructions where one stood, but ``MULI``
+    executes **31 times a case, 0.31% of instructions**, so this costs ~0.4% of
+    ticks and ~112 ROM words — against a decode trie one level shallower, which is
+    32 rows off the charged dimension.
+
+    The scratch is ``hot=True`` deliberately: four reads per execution is 124 reads
+    a case, and on the cold tape at ~3,400 ticks each that would cost ~6% of ticks
+    and swallow the win whole.
+    """
+    for _ in range(4):
+        a.st("MUL16")
+        a.op("ADD", "MUL16")
 
 
 # ── leaf helpers ──────────────────────────────────────────────────────────────
@@ -368,12 +387,12 @@ def _cell_write(a: Asm, addr: str, val: str, note: str = "", *, packed: bool) ->
 def _paint(a: Asm, addr: str, colour: str | int) -> None:
     """One pixel: ADDR then DATA.  The panel is 16x16, so an address *is* a cell."""
     a.ld(addr)
-    a.op("DSPA")
+    a.op("DSP", 0)
     if isinstance(colour, int):
         a.ldi(colour)
     else:
         a.ld(colour)
-    a.op("DSPD")
+    a.op("DSP", 1)
 
 
 def _emit_colour_of(a: Asm, cls: str, out: str) -> None:
@@ -431,7 +450,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.zero(["NMEN", "NP", "NROOM", "NRUN", "NSRC", "STOP", "NHALT", "CZ", "CA", "CY"])
     a.set_slot("C20", enc(CLS_WALL))
     a.ld("H", "LIMIT = 16 * H: one past the last live display address")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("LIMIT")
     for d, delta in enumerate((-PANEL, 1, PANEL, -1)):
         a.set_slot(a.at("DTAB", d), delta, f"DTAB[{d}]" if d == 0 else "")
@@ -446,7 +465,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
         )
 
     a.ldi(0, "home the cursor: pass 1 paints in address order, so DATA advances it")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.label("p1_row")
     a.set_slot("CX", 0)
     a.set_slot("PLUSX", -1, "no '+' seen in this row yet")
@@ -465,7 +484,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.label("p1_keep")
     a.ld("CLS", "the glyph's own colour; walls and pipe cells are repainted later")
     a.op("DIVI", CELL_SHIFT)
-    a.op("DSPD")
+    a.op("DSP", 1)
     _cell_write(a, "CA", "CLS", packed=packed)
     a.inc("CA")
     a.inc("CX")
@@ -475,7 +494,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.label("p1_row_end")
     a.inc("CY")
     a.ld("CY", "the next row starts at 16y, whatever W is")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("CA")
     a.ld("CY")
     a.op("SUB", "H")
@@ -483,7 +502,7 @@ def _emit_pass1(a: Asm, *, packed: bool) -> None:
     a.jmp("p1_done")
     a.label("p1_next_row")
     a.ld("CA")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.jmp("p1_row")
 
 
@@ -583,9 +602,9 @@ def _emit_classify(a: Asm) -> None:
     a.op("SUBI", MAX_RUNS)
     a.brz(skip, "run table full")
     a.ld("CY", "RUN = (y * 16 + x0) * 16 + x1")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "PLUSX")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "CX")
     a.st("T0")
     a.store_at("RUN", "NRUN", "T0")
@@ -680,7 +699,7 @@ def _emit_rooms(a: Asm, *, packed: bool) -> None:
     a.jmp("pr_accept")
     a.label("pr_val_go")
     a.ld("T3", "left column of the candidate")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("T4")
     a.op("ADD", "PX0")
     a.st("VAL")
@@ -739,11 +758,11 @@ def _emit_rooms(a: Asm, *, packed: bool) -> None:
     a.load_at("RY1", "IDX")
     a.st("T3")
     a.ld("T1", "VAL walks the top wall, T4 the bottom")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "T0")
     a.st("VAL")
     a.ld("T3")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.op("ADD", "T0")
     a.st("T4")
     a.copy("JDX", "T0")
@@ -767,7 +786,7 @@ def _emit_rooms(a: Asm, *, packed: bool) -> None:
 
     a.label("st_side_init")
     a.ld("T1", "VAL walks the left wall, T4 the right")
-    a.op("MULI", PANEL)
+    _times16(a)
     a.st("VAL")
     a.op("ADD", "T2")
     a.st("T4")
@@ -834,14 +853,14 @@ def _emit_men_paint(a: Asm) -> None:
     a.jmp("pm_done")
     a.label("pm_go")
     a.load_at("MPOS", "IDX")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_MAN)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.inc("IDX")
     a.jmp("pm_loop")
     a.label("pm_done")
     a.ldi(1, "commit the opening frame; SWAP 1 keeps both buffers, so it is a base")
-    a.op("DSPS")
+    a.op("DSP", 2)
     a.jmp("round")
 
 
@@ -1037,7 +1056,7 @@ def _emit_round(a: Asm, *, packed: bool) -> None:
 
     a.label("commit")
     a.ldi(1, "SWAP 1: commit, keep both buffers, so the next frame is a delta")
-    a.op("DSPS")
+    a.op("DSP", 2)
     a.jmp("round")
 
 
@@ -1084,13 +1103,13 @@ def _emit_shift(a: Asm, p: int) -> None:
     a.store_at("OCC", "VAL", "T0")
     a.store_at("OCC", "T4", "CZ")
     a.load_at("PCA", "T4", "the vacated cell goes back to plain pipe")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_PIPE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("PCA", "VAL")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_VALUE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.ld("IDX")
     a.op("ADDI", 1)
     a.st("T1")
@@ -1247,9 +1266,9 @@ def _emit_man(a: Asm, i: int, *, packed: bool) -> None:
     a.st("VAL")
     a.store_at("OCC", "T4", "VAL")
     a.load_at("PCA", "T4")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_VALUE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("PCNT", "BEST")
     a.st("T0")
     a.op("ADDI", 1)
@@ -1297,9 +1316,9 @@ def _emit_man(a: Asm, i: int, *, packed: bool) -> None:
     a.st(ra)
     a.store_at("OCC", "T4", "CZ")
     a.load_at("PCA", "T4")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_PIPE)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("PCNT", "BEST")
     a.op("SUBI", 1)
     a.st("T1")
@@ -1308,18 +1327,18 @@ def _emit_man(a: Asm, i: int, *, packed: bool) -> None:
 
     a.label(move)
     a.ld(pos, "repaint the cell he leaves with the colour of the class under it")
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ld(cls)
     a.op("DIVI", CELL_SHIFT)
-    a.op("DSPD")
+    a.op("DSP", 1)
     a.load_at("DTAB", dr)
     a.st("T0")
     a.ld(pos)
     a.op("ADD", "T0")
     a.st(pos)
-    a.op("DSPA")
+    a.op("DSP", 0)
     a.ldi(COLOUR_MAN)
-    a.op("DSPD")
+    a.op("DSP", 1)
     _cell_read(a, pos, "CLS", packed=packed)
     a.ld("CLS", "keep it for the next tick's dispatch, and test it for a wall")
     a.st(cls)
@@ -1442,6 +1461,28 @@ def _emit_pick(a: Asm, sites: int) -> None:
 #:     | tape only      |    41,616 | 20,275,186 | 31,809,643 | 8.44e11 |
 #:     | + 52-slot tier |    41,616 |  8,605,207 | 13,676,774 | 3.58e11 |
 #:
+#: **Swept independently under ``skip_batch=4`` on the nineteen-opcode machine**, which
+#: moved that machine's optimum a long way down. A bigger hot bank captures more of the
+#: traffic but lengthens the lap every one of those reads waits on, and batch 4 made
+#: short laps much cheaper — so its best size fell from 104 to 56. Measured there over
+#: all 14 public cases, identical men and area:
+#:
+#:     52 slots   avg 6,172,291   FAILS 4 cases (too few hot slots: the TAPE_SIZE trap)
+#:     54 slots   avg 6,623,568
+#:     56 slots   avg 6,612,776   <- the floor of a very flat basin
+#:     58 slots   avg 6,622,432
+#:     60 slots   avg 6,632,415   judged    274,555,216,799
+#:     66 slots   avg 6,677,012
+#:     90 slots   avg 6,731,201
+#:    104 slots   avg 6,890,324   judged    284,219,348,749
+#:
+#: The basin is flat from 54 to 60 and the floor is shallow — 56 beats 60 by 0.3% — so
+#: read that as "small, just above the cliff at 52", not as a tuned constant. **Those
+#: numbers describe the nineteen-opcode machine and are kept as reference, not as this
+#: machine's setting**: the sixteen-opcode fold shrinks the decode instead and reaches
+#: 237,555,126,848, and ``Asm.hot_used`` is 53 here rather than 52, so that sweep's
+#: cliff sits one slot lower than ours. The two were never combined.
+#:
 #: **This is now the default, and the hot bank is a pipe tape, not a man-memory.**
 #: The man-memory version of this tier was judged ``11/28`` at 10 slots and ``4/28``
 #: at 52 — refused on wall clock, because every slot of it is a live little man and
@@ -1464,6 +1505,25 @@ def _emit_pick(a: Asm, sites: int) -> None:
 TAPE_SKIP_BATCH = 4
 TAPE_RELAY_SIZE = (8, 6)
 
+#: The hot bank, as ``(cols, rows)`` — but :data:`lm1.machine.TIER_PIPE_BANK` makes
+#: it a pipe tape, and a tape only cares about the product.
+#:
+#: **Size it to what is used, not to a round shape.** ``Asm.hot_used`` reports what is
+#: actually handed out — 53 under the sixteen-opcode fold, because ``MUL16`` joined the
+#: hot set. Anything above that is dead ring cells every hot read still rotates past,
+#: because a tape answers in ``~8 * n / skip_batch``. The reserved size also shifts the
+#: cold region up, so an oversized bank inflates the whole address space.
+#:
+#: Sizing it to *exactly* the used count is a **fault**, not a tight fit: it builds,
+#: passes ten of the fourteen public cases and kills the runner with ``fatal: wall`` on
+#: the rest. One spare is the rule; see the guard in :func:`build_asm`.
+#:
+#: An alternative line of work re-swept this against ``skip_batch=4`` on the
+#: *nineteen*-opcode machine and landed on 56 (``HOT = (2, 28)``), a flat basin from 54
+#: to 60 — judged 273,750,329,271. That machine is recorded in LLM-DESIGN.md under
+#: "The four-word tape and the re-sized bank"; this one reaches 237,555,126,848 by
+#: shrinking the decode instead, so the two were never combined and this constant is
+#: the fold's, not that sweep's.
 HOT = (4, 26)
 HOT_SLOTS = HOT[0] * HOT[1]
 
@@ -1479,6 +1539,15 @@ def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tupl
     """
     a = Asm(hot_slots=hot_slots)
     _declare(a, packed_cells=packed_cells)
+    if hot_slots and a.hot_used >= hot_slots:
+        # A bank with no spare slot builds, passes ten of the fourteen public cases,
+        # and kills the runner with `fatal: wall` on the other four. Measured at
+        # `hot_slots=52` against `hot_used=52`; one spare is enough. Caught here
+        # because the symptom points at the program and the cause is this number.
+        raise ValueError(
+            f"the hot bank holds {hot_slots} slots and {a.hot_used} are used; it "
+            "needs at least one spare or the machine faults on a wall"
+        )
     a.jmp("setup", "the ROM starts here; setup runs once and falls into round")
     _emit_round(a, packed=packed_cells)
     _emit_pick(a, 2 * MAX_MEN)
@@ -1514,7 +1583,33 @@ def build_asm(*, packed_cells: bool = False, hot_slots: int = HOT_SLOTS) -> tupl
 #: was reverted, 90 under the banked store).  Treat any change to the CPU, the ROM, the
 #: store or the tape as invalidating it, and re-sweep: the fold is worth ~3% of the score
 #: and nothing else in the suite fails when it drifts.
-ROM_ROWS = 90
+#: Re-swept for the **buffered corridor** (:data:`ROM_BUFFER`), which changed the
+#: trade: a deeper fold narrows the ROM and lengthens the machine, and a longer
+#: corridor only lengthens it, so the two constants have to be swept *together*
+#: against ``max(w, h)^2``. Re-measure both after any geometry change.
+#:
+#: History, one value per geometry it was swept against: 88 (single tape), 89
+#: (after ``height = bottom - 1`` was reverted), 90 (banked store), 89 again
+#: (``HOT`` 104 -> 53, where the sixteen-opcode fold left it square at 193x193),
+#: 83 (buffered corridor, pre-fold), 85 (corridor + sixteen-opcode fold).
+ROM_ROWS = 85
+
+#: Cells of ROM->CPU corridor, which is a FIFO and therefore a *buffer*
+#: (``SPEC.md``: capacity equals length). The ROM man makes 0.20 words a tick and
+#: this CPU averages 0.12, so the producer always had 40% of headroom -- it was
+#: only the **burst**, a backward jump wanting ~3,470 words at once against a
+#: 39-cell corridor, that ever stalled the machine. A corridor deep enough to
+#: absorb one burst is served at the drain's rate and refills in the gaps.
+#:
+#: Re-swept against the sixteen-opcode fold, which shrank the machine to 184x183
+#: and so made the corridor's rows a *larger* share of it. ``(85, 1800)`` measures
+#: 192x193 and -13.5% of score; ``(85, 1200)`` -12.0%, ``(84, 2400)`` -12.0%.
+#:
+#: The drain is no longer optional here. Without ``machine.DRAIN_UNIT_BITS`` the
+#: same corridor measures **+2.1%** — the buffer removes the producer as the
+#: binding stage, and then ``max(drain, producer)`` selects the drain, so buying
+#: the corridor's rows without also fixing the consumer is a net loss.
+ROM_BUFFER = 1800
 
 
 def build_machine(
@@ -1524,6 +1619,7 @@ def build_machine(
     hot: tuple[int, int] | None = HOT,
     tape_skip_batch: int = TAPE_SKIP_BATCH,
     tape_relay_size: tuple[int, int] | None = TAPE_RELAY_SIZE,
+    rom_buffer: int | None = ROM_BUFFER,
 ):
     """Assemble the interpreter and emit the whole machine — CPU, ROM, tape, panel.
 
@@ -1548,6 +1644,7 @@ def build_machine(
         hot=hot,
         tape_skip_batch=tape_skip_batch,
         tape_relay_size=tape_relay_size,
+        rom_buffer=rom_buffer,
     )
     return built, program, text
 

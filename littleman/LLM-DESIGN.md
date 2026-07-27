@@ -2,15 +2,34 @@
 
 **Status: judged, 28/28 cases.** `tasks/solutions/little-little-man_cpu.man`
 
-    w x h = 203 x 204     area2 = 41,616     avgTicks = 22,258,080
-    score = 926,292,239,445        14 public + 14 private cases, all passing
+    w x h = 184 x 183     area2 = 33,856     avgTicks = 6,389,522
+    local score = 216,323,661,669       judged = 237,555,126,848
+
+This build folds the program to 16 opcodes, which takes the decode trie from depth
+5 to 4 and the lane band from 63 rows to 31: **-16.6% on local score**, with ticks
+improving 7.3% as well because a shallower trie makes every instruction cheaper to
+issue. 10 live men against a 12 bound; `men x ticks` 63.9M against the 700M floor.
+The judged number came in 0.2% above the `x1.096` estimate of 237.1e9, the fourth
+consecutive submission that factor has predicted.
+
+**A parallel line of work reached 273,750,329,271 by a different route** — the
+four-word-per-lap tape worker (`TAPE_SKIP_BATCH = 4`) plus a hot bank re-swept
+against it, landing on 56 slots. That machine is nineteen opcodes and 192x194; this
+one is ahead because it shrinks the decode rather than the store, and the two have
+never been combined. Its measurements are kept where they were written — the
+`HOT` and `TAPE_SKIP_BATCH` docstrings in `llm_lm1.py`, and "Banking the *tape*
+instead" below — marked as that machine's rather than this one's, because they are
+a real result and the next person should be able to read what it did. Note its
+sweep found the size cliff at 52 where ours is at 53: `Asm.hot_used` counts the
+`MUL16` scratch this fold introduced.
 
 | piece | where | state |
 |---|---|---|
 | LLM reference interpreter | `llm_sim.py`, `tests/test_llm_sim.py` | all 14 public cases byte-exact |
-| the interpreter program | `llm_lm1.py` -> `lm1/programs/little-little-man.asm` | 1,757 instructions, 3,377 ROM words |
-| the assembler front end | `llm_asm.py` | slots, labels, indexed load/store |
-| the machine | `lm1/machine.py` (`build`, `tape_n=427`, `display=(16,16)`) | 203x204, ROM folded to 84 rows |
+| the interpreter program | `llm_lm1.py` -> `lm1/programs/little-little-man.asm` | 16 opcodes, P=3,538 ROM words on 89 rows |
+| the assembler front end | `llm_asm.py` | slots, labels, indexed load/store, `hot_used` |
+| the display fan-out | `lm1/dsprelay.py` | one `DSP` behind a relay, engine-proven 15/15 |
+| the machine | `lm1/machine.py` (`build`, `tape_n=479`, `display=(16,16)`) | 184x183, ROM folded to 89 rows |
 
 ## Why a CPU and not a dataflow ring
 
@@ -415,9 +434,168 @@ to bind by nearest column.
   recirculates ~1,900 ROM words. Two ROMs — one for setup, one for the tick loop —
   would roughly halve that (~9.2M ticks of the 22.2M), and `two-roms.man` already
   proves the hardware. It needs a second fetch site in `build_cpu`.
-* **Sixteen opcodes.** At 19 the decode trie is depth 5, which costs 32 CPU rows
-  and ~43% on every instruction's issue cost. Folding `DSPA`/`DSPD`/`DSPS` into
-  one `SND` to a paint-only coprocessor, and dropping `MULI`, would land exactly
-  on 16.
+* **Sixteen opcodes — measured at −26% of `area2`, not ~6% of ticks.** See
+  "The sixteen-opcode cliff" below. This entry used to price the fold by its
+  effect on instruction issue, which is why it was never done; issue is now a
+  fifth of the machine and that framing undersells it by a factor of four.
 * **Setup is ~1,500 of the 3,395 ROM words**, and every one of them is paid by
   every taken branch in the tick loop.
+
+## The sixteen-opcode cliff
+
+The CPU's lane band is `2 * (1 << k) - 1` rows, and `machine.py` sizes it from the
+opcode *count* alone:
+
+    k = max(1, (len(used) - 1).bit_length())
+
+At 19 opcodes `k = 5`: the trie has **32 leaf slots and 13 stand empty**, and the
+band is 63 rows for 19 lanes. The emptiness is not spread out — `plan()` pins the
+LM-75 lanes to the bottom of the band, so it collects into one visible 28-row gap
+between `cpu:lane:JMPF` at row 124 and `cpu:lane:DSPD` at row 152.
+
+**The empty leaves cannot be reclaimed without changing `k`.** The trie is drawn
+by a recursive `trie(level, row)` whose fan-out is `1 << (k - level)`, so leaf
+spacing is a property of the depth. Reclaiming them means an unbalanced trie,
+which is a different decoder, not a tighter one.
+
+**There is no partial credit.** `(len(used) - 1).bit_length()` steps at powers of
+two, so 19, 18 and 17 opcodes all give `k = 5` and the identical 63-row band. Only
+**16 or fewer** reaches `k = 4` and 31 rows. Any route to the fold pays its whole
+cost before a single row appears — which is the main reason to price it before
+starting.
+
+Measured on a geometry-only stand-in (three mnemonics rewritten onto others so the
+*count* is 16; the machine computes nonsense, its dimensions are exact):
+
+| | opcodes | k | box | `area2` |
+|---|---|---|---|---|
+| shipped | 19 | 5 | 193x193 | 37,249 |
+| 16-opcode geometry, same fold | 16 | 4 | 163x168 | 28,224 |
+| 16-opcode geometry, re-folded `rom_rows=88` | 16 | 4 | **166x166** | **27,556** |
+
+The band goes 63 → 31 rows, and that is 25 rows off the *height*. The machine then
+flips width-bound, so the ROM fold — which trades width into height — has room to
+work again, and the crossing point moves from 89 to **88**. Total **−26.0%**, and
+score is `area2 x avgTicks`, so it carries straight through if ticks hold.
+
+### Which three opcodes, and what each costs
+
+Every `MULI`/`DIVI`/`MODI` site in the program is a power of two (`MULI 16`;
+`DIVI 32/16/256`; `MODI 32/16/4/256`), which makes them the natural candidates.
+
+* **`MULI` (8 sites, all `x16`) — removable in the assembler alone.** `ST tmp;
+  ADD tmp` doubles ACC (`ST` leaves B intact, `ADD` reads the slot back and adds),
+  so four pairs give `x16`: 8 instructions where there was 1. About **+112 ROM
+  words**, which a taken branch then recirculates — price that against the rows.
+* **`DIVI` + `MODI` → one `DIVMOD`, −1 opcode.** `DIVI`'s micro is `(RING_READ,
+  SWAP, DIV, MOV)` and SPEC's `/` already leaves **quotient in A and remainder in
+  B** — the trailing `MOV` is what destroys the remainder. An opcode without it
+  serves every `MODI` site unchanged (ACC is B, so ACC = remainder, exactly what
+  `MODI` yields) and every `DIVI` site with one extra instruction to move the
+  quotient into ACC.
+* **`DSPA`/`DSPD`/`DSPS` → one `DSP`, −2 opcodes.** The doc's original route, and
+  still the only one that removes two at once. Needs a routing relay downstream:
+  the three ports are three physical pipes and an `s` binds to one of them
+  statically, so a single opcode can only reach them through a room that fans out
+  — `U` receive, three-way `X` on the word's sign, one arm per port, exactly the
+  shape of `_ADAPTER`. It adds a live man and must respect the rule that the `O`
+  room, the LM-75 ports and the STREAM block own the south corridor one at a time.
+
+Minimum viable pair is therefore **`DSP` fold (−2) plus `MULI` (−1)**, or
+**`MULI` + `DIVMOD` + the `DSP` fold** (−4, landing on 15, which is still `k = 4`).
+
+### The fold changes one generator, not eleven
+
+`DSPA`/`DSPD`/`DSPS` and `MULI` appear in the checked-in `.asm` for `plotter`,
+`palette`, `snake`, `pathfinder`, `brackets`, `snake-ring`, `pathfinder-unit` and
+`gradebook`, which makes the fold look like an ISA amputation with ten machines
+downstream of it. It is not, because **`k` is computed per program, not per ISA**:
+
+```python
+codes = {i.code for i in self.instrs}        # asm.py, Program.ops_used
+used  = [op.mnemonic for op in program.ops_used]
+k     = max(1, (len(used) - 1).bit_length()) # machine.py:480
+```
+
+`ops_used` is the set of codes *present in this program*. So `DSP` is **added**
+alongside the existing opcodes, `llm_lm1.py` alone stops emitting the three it
+replaces, and every other generator keeps the ops it always had with its machine
+byte-identical. The blast radius is one file, and the ISA grows rather than
+shrinks — which is the opposite of how the entry has read since it was written.
+
+### Built, and what it actually measured
+
+The forecast above is a geometry-only stand-in; this is the machine:
+
+| | opcodes | k | band | box | `area2` | avg ticks |
+|---|---|---|---|---|---|---|
+| judged | 19 | 5 | 63 rows | 192x194 | 37,636 | 6,890,324 |
+| **built** | **16** | **4** | **31 rows** | **184x183** | **33,856** | **6,389,522** |
+
+**-16.6% on local score**, not the -26% the stand-in predicted, and the gap is the
+relay's own footprint: it is a 38x13 room in the corridor under the CPU, and the
+panel hangs below *it*, so ~15 rows come back. The stand-in had no relay to place.
+Ticks fell 7.3% for free — a depth-4 trie is a shorter walk on every instruction.
+
+**The ROM fold did not move.** The obvious expectation was that 32 rows off the
+height would push the crossing wider; swept 78..99, it did not — 89 and 90 tie at
+33,856 and 89 stays the pick. Pinned in `test_footprint_is_what_the_fold_sweep_found`
+as a measured non-move, because the next person will guess the same thing.
+
+`MULI` was chosen over `DIVMOD` for the third removal on risk, not on cost: it is
+assembler-only, needing no ISA or emulator change. It executes **31 times a case,
+0.31% of instructions**, so eight-for-one costs ~0.4% of ticks. Its doubling
+scratch is `hot=True` deliberately — four reads an execution is 124 a case, and on
+the cold tape at ~3,400 ticks each that alone would have cost ~6% of ticks.
+
+**`DSP p` did not need adding.** It has been in the v1 table at code 14 since the
+beginning, with a working emulator handler. What made it "impossible" was its
+*micro*, which sent one word and so left a relay no way to learn the port; it now
+sends two. The ISA did not grow at all.
+
+### The failure that a build cannot catch
+
+The first placed relay was `dsprelay.py`'s probe, arms ending on `H`. Every pipe
+bound, `check_bindings` passed, the machine built at exactly the right size — and
+drew **0/14**, stalling to the tick cap on every case. A probe serves one request;
+a room serving every display op the program executes must return its man to the
+read. The relay is a closed circuit for that reason, spawn and return converging on
+the same `>` so there is one path through it.
+
+That is the third time in this file's history that a clean build has meant nothing
+about correctness, and it is why the arms are verified on the engine rather than
+inspected.
+
+### The relay is built and proven
+
+`lm1/dsprelay.py`, verified on the engine across all three ports and five values:
+each port takes its own arm and the value survives the branch. The arms emit
+different tags on purpose, so a pass cannot be a run where the branch did nothing.
+
+Two details the "three-way `X` on the word's sign" sketch above leaves out, both
+found by building it:
+
+* **The selector cannot carry a sign.** `rom.digit_width` rejects a negative
+  literal, so a ROM operand is non-negative and `X` has nothing to test. The relay
+  makes the sign itself — `M`, `` `1` ``, `W`, `-` gives `p - 1` as −1/0/+1 — which
+  costs three glyphs in one room rather than a wider word in every ROM literal.
+* **The middle arm is reached by zero**, so all three of `X`'s exits carry traffic.
+  A two-way branch would have had to leave `p = 1` to luck.
+
+Port codes are the emulator's own (0 ADDR, 1 DATA, 2 SWAP), so nothing translates
+between the lane, the relay and `display_writes`.
+
+What remains is placement: the relay's three `s` glyphs each have to bind to their
+own outgoing pipe (§7.1), and `_display` currently routes ADDR/DATA/SWAP from the
+*CPU's* south wall. The clean decomposition is to leave that routing alone and have
+it source its three columns from the relay's south wall instead of `cpu.dsp_cols` —
+the relay then presents exactly the interface the CPU used to.
+
+### One route that looks free and is not
+
+`SUBI n` is arithmetically `ADDI (2**64 - n)` — `wrap` is signed 64-bit two's
+complement, so the identity holds. It would remove an opcode with no extra
+instructions at all. **It cannot be used.** `rom.digit_width` takes the maximum
+over *every* word and `group_cells` pads them all to it, so a single 20-digit
+literal widens all ~3,400 ROM words from 4 digits to 20 and roughly triples the
+ROM's cells. The ROM already sets the machine's width.

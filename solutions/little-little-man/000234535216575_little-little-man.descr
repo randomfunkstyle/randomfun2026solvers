@@ -1,0 +1,16 @@
+# little-little-man — submission 816e8bad-3bc9-4d78-9e4c-915d37bec1b8
+
+verdict      done: 28/28 cases, area2 42849, avgTicks 5,473,528, score 234,535,216,575
+submitted    2026-07-26T21:40:27+0300
+grid         205x207
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  779a17511010e97725f31ea32c52e2f5e1135a6428c45aee4cb14e72f66f310d
+commit       7e6ce73
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+205x207: buffered ROM corridor (2400 cells, full-grid span) + ladder drain, refolded to 83

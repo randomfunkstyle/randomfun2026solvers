@@ -1,0 +1,16 @@
+# little-little-man — submission 6393b509-925d-475a-88fe-65a7e1bfe49f
+
+verdict      done: 28/28 cases, area2 37636, avgTicks 7,295,016, score 274,555,216,799
+submitted    2026-07-26T20:40:09+0300
+grid         190x194
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  8bc2db10a46751172855b5776eed19adb5a6badaf51b573d7287f584f7605694
+commit       0936d06
+local        little-little-man: all public frame cases match (emulator)
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+hot bank re-sized under skip_batch=4: 104 -> 60 slots. Batch 4 made short laps much cheaper, so the best bank is smaller than the one tuned under batch 1 - a bigger bank captures more traffic but lengthens the lap every one of those reads waits on. avg 6,890,324 -> 6,632,415 at identical men and area.

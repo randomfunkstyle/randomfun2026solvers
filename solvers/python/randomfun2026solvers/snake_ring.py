@@ -260,9 +260,13 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     "DIR_NEG": (["N"], "DIR_SET"),
     "DIR_SET": (["M", "rr", "W", "sr",
                  "rr", "sr", "rr", "sr", "rr", "sr"], "ROT_BODY"),
-    "ROT_BODY": (["rr", "X"], {"neg": "ROT_END", "zero": "ROT_PUSH", "pos": "ROT_PUSH"}),
-    "ROT_PUSH": (["sr"], "ROT_BODY"),
-    "ROT_END": (["sr"], "MAIN"),
+    # One block, not three.  `s` sends A and *leaves* it, and both arms of the
+    # old test pushed the word back, so `rr sr X` is the whole lap: the sentinel
+    # goes home on the way out exactly as `ROT_END` used to send it.  A lap is a
+    # block visit a word instead of two, and a block visit is ~33 ticks of
+    # corridor against the 2 ticks the glyphs cost.
+    "ROT_BODY": (["rr", "sr", "X"],
+                 {"neg": "MAIN", "zero": "ROT_BODY", "pos": "ROT_BODY"}),
 
     # `1 fx fy`: two laps, because the f slot precedes the body
     "FRUIT": ([
@@ -270,14 +274,14 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
         "ri", "M", "L4", "W", "{", "M",               # B = 16*fy
         "rr", "sr", "rr", "sr", "rr", "sr", "rr", "sr",
     ], "FR_BODY"),
-    "FR_BODY": (["rr", "X"], {"neg": "FR_END", "zero": "FR_PUSH", "pos": "FR_PUSH"}),
-    "FR_PUSH": (["sr"], "FR_BODY"),
-    "FR_END": (["sr", "rr", "+", "M",                 # fx arrives; B = f'
+    "FR_BODY": (["rr", "sr", "X"],
+                {"neg": "FR_END", "zero": "FR_BODY", "pos": "FR_BODY"}),
+    "FR_END": (["rr", "+", "M",                       # fx arrives; B = f'
                 "rr", "sr", "rr", "sr", "rr", "sr",
                 "rr", "W", "sr", "M"], "FR2_BODY"),
-    "FR2_BODY": (["rr", "X"], {"neg": "FR2_END", "zero": "FR2_PUSH", "pos": "FR2_PUSH"}),
-    "FR2_PUSH": (["sr"], "FR2_BODY"),
-    "FR2_END": (["sr", "W", "sp", "L9", "sp", "L1", "N", "sp"], "MAIN"),
+    "FR2_BODY": (["rr", "sr", "X"],
+                 {"neg": "FR2_END", "zero": "FR2_BODY", "pos": "FR2_BODY"}),
+    "FR2_END": (["W", "sp", "L9", "sp", "L1", "N", "sp"], "MAIN"),
 
     # one lap; B carries n, the new head's display address, throughout
     "TICK": (["rr", "sr", "b", "x"], {"one": "T_H", "zero": "T_V"}),
@@ -291,14 +295,22 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
 
     "T_GROW": (["L256", "sr",
                 "W", "M", "sp", "L10", "sp", "L1", "N", "sp"], "G_BODY"),
-    "G_BODY": (["rr", "X"], {"neg": "G_END", "zero": "G_PUSH", "pos": "G_PUSH"}),
-    "G_PUSH": (["sr"], "G_BODY"),
+    # `G_END` pushes a word in *front* of the sentinel, so the send cannot move
+    # ahead of the branch the way `ROT_BODY`'s did.  Rotated instead: the entry
+    # test keeps a block of its own and the loop carries the previous word's send.
+    "G_BODY": (["rr", "X"], {"neg": "G_END", "zero": "G_LOOP", "pos": "G_LOOP"}),
+    "G_LOOP": (["sr", "rr", "X"],
+               {"neg": "G_END", "zero": "G_LOOP", "pos": "G_LOOP"}),
     "G_END": (["W", "sr", "W", "sr"], "MAIN"),
 
     "T_MOVE": (["+", "sr", "rr", "sp"], "M_BODY"),
     "M_BODY": (["rr", "X"], {"neg": "M_END", "zero": "M_CMP", "pos": "M_CMP"}),
-    "M_CMP": (["-", "X"], {"zero": "DEAD_C", "pos": "M_KEEP", "neg": "M_KEEP"}),
-    "M_KEEP": (["+", "sr"], "M_BODY"),
+    "M_CMP": (["-", "X"], {"zero": "DEAD_C", "pos": "M_LOOP", "neg": "M_LOOP"}),
+    # `M_KEEP` and `M_BODY` fused.  The move lap is **32% of every block visit
+    # the machine makes**, and it was costing three a body segment; this makes it
+    # two.  The entry test stays separate because `T_MOVE` arrives mid-lap.
+    "M_LOOP": (["+", "sr", "rr", "X"],
+               {"neg": "M_END", "zero": "M_CMP", "pos": "M_CMP"}),
     "M_END": (["L0", "sp",
                "W", "M", "sp", "L10", "sp", "L1", "N", "sp",
                "W", "sr", "W", "sr"], "MAIN"),
@@ -308,17 +320,23 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     "DEAD_HV": (["rr", "sr"], "DEAD_V"),
     "DEAD_V": (["rr"], "DEAD_PAINT"),
     "DEAD_PAINT": (["rr", "X"], {"neg": "DEAD_DONE", "zero": "DEAD_PIX", "pos": "DEAD_PIX"}),
-    "DEAD_PIX": (["sp", "L9", "sp"], "DEAD_PAINT"),
+    # Each paint lap retests for itself; the guard block is entered once, not
+    # once a pixel.  Guarded rather than rotated because a one-segment snake may
+    # have no pixel to paint at all.
+    "DEAD_PIX": (["sp", "L9", "sp", "rr", "X"],
+                 {"neg": "DEAD_DONE", "zero": "DEAD_PIX", "pos": "DEAD_PIX"}),
     "DEAD_DONE": (["L1", "N", "sp"], "HALT"),
 
     # a self-collision owes the tail its colour, and the survivors already pushed
     # sit *behind* END, so a fresh marker goes in and the ring is walked twice.
     "DEAD_C": (["L9", "sp", "W", "sp", "L9", "sp"], "DC_A"),
     "DC_A": (["rr", "X"], {"neg": "DC_MARK", "zero": "DC_A_PIX", "pos": "DC_A_PIX"}),
-    "DC_A_PIX": (["sp", "L9", "sp"], "DC_A"),
+    "DC_A_PIX": (["sp", "L9", "sp", "rr", "X"],
+                 {"neg": "DC_MARK", "zero": "DC_A_PIX", "pos": "DC_A_PIX"}),
     "DC_MARK": (["sr", "rr", "rr", "rr", "rr"], "DC_B"),
     "DC_B": (["rr", "X"], {"neg": "DEAD_DONE", "zero": "DC_B_PIX", "pos": "DC_B_PIX"}),
-    "DC_B_PIX": (["sp", "L9", "sp"], "DC_B"),
+    "DC_B_PIX": (["sp", "L9", "sp", "rr", "X"],
+                 {"neg": "DEAD_DONE", "zero": "DC_B_PIX", "pos": "DC_B_PIX"}),
 }
 
 

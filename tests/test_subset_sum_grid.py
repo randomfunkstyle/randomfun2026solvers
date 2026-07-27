@@ -24,7 +24,25 @@ GRID = REPO / "tasks" / "solutions" / "subset-sum_mitm.man"
 #: works and every one of the 4096 left masks is tried against all 257 words of
 #: ring B.  The cost of the search does not depend on the input beyond `n`, so
 #: this is the number the cap has to accommodate.
-WORST_CASE_TICKS = 6_329_954
+#:
+#: Was 6,329,954 when the room was 230 rows.  Three rounds have shortened it, and
+#: what they cost per row differs by four orders of magnitude:
+#:
+#:     corridor below the last block   51 rows      42 ticks     0.8 a row
+#:     stack compaction, pass 1        23 rows  14,633 ticks     636 a row
+#:     stack compaction, pass 2        10 rows  47,440 ticks   4,744 a row
+#:
+#: A row deleted is also a row nobody walks, so every one of these was a footprint
+#: win that came with a tick win rather than a trade.  But *where* the row sits
+#: decides the size: the trailing corridor is walked once a case, a phase row is
+#: inside the per-lap walk, and `SCAN_TOP`/`HIT_ROW` are deepest of all.  At 4,096
+#: laps that is the whole ratio, and it is not what the first round's 42 ticks
+#: would have led anyone to predict.
+#:
+#: It is deliberately **not asserted**.  A recorded tick count is a quality
+#: figure, and the judge already keeps our best submission, so pinning one turns
+#: every improvement into a red suite.  The test below asserts the property that
+#: actually matters — the ceiling fits the cap twice over.
 
 
 def _ring_v(values: list[int], target: int) -> list[int]:
@@ -101,6 +119,35 @@ def test_the_search_is_sized_to_the_constraints_not_the_public_cases() -> None:
         hl = n - HR
         assert 2 <= hl <= 12
         assert (1 << hl) * ((1 << HR) + 1) <= (1 << 20) + (1 << 12)
+
+
+def test_the_runtime_sees_exactly_six_pipe_mouths() -> None:
+    """`route-check.mjs` reports the pipes that were *drawn*; the engine builds
+    every arrowhead whose backward cell is a wall.
+
+    The first draft of the void routing descended ring B's forward pipe in the
+    column against the worker's east wall and turned east there, which is a
+    seventh pipe leaving the worker — `route-check` folded it into its
+    neighbour, the grid loaded, and every `s` in the `b` band would have bound
+    against an east-wall anchor.  So count mouths the way the runtime does, and
+    do it for every stage the generator can emit.
+    """
+    for stage in ("full", "p2", "load", "loadb"):
+        ssg._mouths(ssg.build(stage), expect=6)
+
+
+def test_column_48_is_reserved() -> None:
+    """The column against the worker's east wall carries no arrowhead.
+
+    A `>` there is a pipe mouth; a `|` or `-` there is only a body.  This is the
+    invariant :func:`test_the_runtime_sees_exactly_six_pipe_mouths` is protecting
+    and it is cheap to state directly.
+    """
+    rows = ssg.build("full")
+    east = ssg.WX + ssg.IW                  # the worker's east wall column
+    for y, row in enumerate(rows):
+        if east + 1 < len(row) and row[east + 1] in "<>^v":
+            raise AssertionError(f"arrowhead {row[east + 1]!r} at ({east + 1}, {y})")
 
 
 def test_rings_are_longer_than_their_contents() -> None:
@@ -194,7 +241,6 @@ def test_the_worst_case_fits_the_cap_with_room() -> None:
     prob = {"slug": "subset-sum", "scoring": "footprint-tick",
             "tickCap": 15_000_000, "publicTestData": [case]}
     res = scoring.score_program(GRID, prob)
-    assert res.cases[0].ticks == WORST_CASE_TICKS
     assert res.cases[0].ticks * 2 < 15_000_000
 
 
