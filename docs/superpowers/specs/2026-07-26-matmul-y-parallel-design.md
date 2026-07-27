@@ -358,3 +358,35 @@ All three conditions together, and a map satisfying them:
 
 MAIN stays 43x28 with all 34 pipe ops bound. `a_ret` is read only in the drive loop,
 never in a counted body, so moving it costs nothing.
+
+### The escape order is global: up-pipes above down-pipes
+
+`prod` would not route, and the collision was the same cell every time —
+`(46, 49)`, which is `b_fwd`'s horizontal leg. That is not a column-choice problem,
+it is a **river-routing** constraint over all thirteen of MAIN's wall pipes at once.
+
+Split them by which way they leave the wall:
+
+* **up** — into the band above: `a_fwd`, `a_ret`, and (as placed) `prod`, `cmd`
+* **down** — into the band below: `b_fwd`, `b_ret`
+* the three register rings are two cells long and have no vertical run at all
+
+Within one direction the rule is the familiar one: of two up-pipes the one with the
+**lower** terminal turns further east; of two down-pipes, the **upper** one does.
+Across directions there is a second condition, and it is the one that bit: an
+up-pipe's horizontal leg runs from the wall out to its turn column, crossing every
+down-pipe's column, and a down-pipe's vertical spans from its own row downwards. So
+**every up-pipe's row must lie above every down-pipe's row.**
+
+With the ADDER above MAIN that fails: `prod`@11 and `cmd`@26 go up, but `b_ret`@8
+and `b_fwd`@9 go down and sit above them. No column assignment exists, which is
+exactly what 110 candidates reported.
+
+**Put the ADDER below MAIN**, alongside ring B's band. Then
+
+    up   = a_fwd 4, a_ret 6
+    down = b_ret 8, b_fwd 9, prod 11, cmd 26
+
+and every up row is above every down row. The condition holds, the columns are
+free again, and ring C's relay and the O room go in the same lower band as the
+ADDER — which also keeps `out` short.
