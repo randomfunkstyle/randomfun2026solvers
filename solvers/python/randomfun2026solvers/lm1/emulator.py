@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .asm import Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
-from .store import DictStore, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
+from .store import DictStore, DoomUnit, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
 
 __all__ = [
     "Round",
@@ -152,7 +152,7 @@ class Emulator:
         self.words = list(program.words)
         self.store: Store = store if store is not None else DictStore()
         self.spill = spill if spill is not None else SpillRing()
-        self._stream: StreamUnit | SnakeUnit | PathUnit | None = None
+        self._stream: StreamUnit | SnakeUnit | PathUnit | DoomUnit | None = None
         self.tick_model = ticks
 
         self.a = 0
@@ -292,7 +292,7 @@ class Emulator:
 
     # ── STREAM: created on first use, since it owns the I and O rooms ────────
     @property
-    def stream(self) -> StreamUnit | SnakeUnit | PathUnit:
+    def stream(self) -> StreamUnit | SnakeUnit | PathUnit | DoomUnit:
         """The coprocessor the program named with ``.unit``, wired to this run.
 
         Lazily built because a unit *is* part of the machine's I/O on a program that
@@ -309,6 +309,10 @@ class Emulator:
                 )
             elif self.program.unit == "path":
                 self._stream = PathUnit(
+                    lambda port, value: self.display_writes.append((port, value))
+                )
+            elif self.program.unit == "doom":
+                self._stream = DoomUnit(
                     lambda port, value: self.display_writes.append((port, value))
                 )
             else:

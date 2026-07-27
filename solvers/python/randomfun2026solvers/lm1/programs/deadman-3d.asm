@@ -11,9 +11,17 @@
 ; (muzzle-flash overlay); 0 idle, higher bits ignored. Turn first (A/D
 ; cancel), then move along the new heading (W/S cancel), then render.
 ; An ungraded demo — the slug borrows plotter's problem JSON for nothing
-; but registration; its 64x48 panel is DISPLAY_OVERRIDE's, its input is its
-; own, and its 136-slot STORE rides the grid_block man-memory (STORE_TIER),
-; ~31 ticks an access.
+; but registration; its 64x48 panel belongs to the DOOM unit (.unit doom,
+; lm1/d3_unit.py), its input is its own, and its 134-slot STORE rides the
+; grid_block man-memory (STORE_TIER), ~31 ticks an access.
+;
+; The CPU never touches the display: each viewport column is ONE command
+; word to the write-only column-painter unit — 8*arg + code, code COL=0,
+; arg = ((drawStart*64 + drawEnd)*64 + x)*16 + colour — and the unit paints
+; the wall run and the floor run (stride 64) while the CPU raycasts the
+; next column. FLASH (the baked 8-pixel muzzle diamond), HUD (the baked
+; 512-pixel strip) and COMMIT (SWAP 0) are one command word each; the
+; ceiling stays black because COMMIT clears the next buffer.
 ;
 ; Round 0's input carries the whole data preamble (64 packed map half-columns,
 ; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())
@@ -42,23 +50,23 @@
 .equ CAMX   106          ; lodev cameraX, Q10
 .equ RDX    107          ; lodev rayDirX
 .equ RDY    108          ; lodev rayDirY
-.equ MAPX   109          ; lodev mapX
-.equ MAPY   110          ; lodev mapY
-.equ SDX    111          ; lodev sideDistX
-.equ SDY    112          ; lodev sideDistY
-.equ DDX    113          ; lodev deltaDistX
-.equ DDY    114          ; lodev deltaDistY
-.equ STPX   115          ; lodev stepX
-.equ STPY   116          ; lodev stepY
-.equ SIDE   117          ; lodev side (0 = x-side hit)
-.equ PERP   118          ; lodev perpWallDist
-.equ HALFH  119          ; lodev lineHeight / 2
-.equ DSTART 120          ; lodev drawStart
-.equ DEND   121          ; lodev drawEnd
-.equ COLOR  122          ; the wall type t, then the shaded colour
-.equ ADDRV  123          ; the paint cursor, row*64 + XCOL
-.equ AEND   124          ; the paint loop's last address
-.equ PW     125          ; 16**(mapY mod 16) during a cell lookup
+.equ SDX    109          ; lodev sideDistX
+.equ SDY    110          ; lodev sideDistY
+.equ DDX    111          ; lodev deltaDistX
+.equ DDY    112          ; lodev deltaDistY
+.equ S2X    113          ; 2*stepX: the word address moves +-2 per x-step
+.equ STPY   114          ; lodev stepY (the sign picks the PW shift arm)
+.equ PERP   115          ; lodev perpWallDist
+.equ HALFH  116          ; lodev lineHeight / 2
+.equ DSTART 117          ; lodev drawStart
+.equ DEND   118          ; lodev drawEnd
+.equ COLOR  119          ; the wall type t, then the shaded colour
+.equ PW     120          ; 16**(mapY mod 16), maintained incrementally across DDA steps
+.equ WADDR  121          ; MAPB + 2*mapX + mapY/16, maintained incrementally too
+.equ FRACX  122          ; posX mod 1024, hoisted per frame
+.equ FRACY  123          ; posY mod 1024
+.equ PW0    124          ; PW's per-frame seed (the player's own cell)
+.equ WADDR0 125          ; WADDR's per-frame seed
 .equ TMP    126          ; scratch (s, frac, packed word)
 .equ TMP2   127          ; scratch (the cell lookup's half-column selector)
 .equ NEWX   128          ; the candidate posX
@@ -70,7 +78,16 @@
 .equ FIRE   134          ; key bit 4 (16): space held — paint FLASH over this frame
 .equ PTR    135          ; the boot loop's tape cursor
 
-; ── boot: round 0's data preamble -> tape slots 1..103 ───────────────────────
+; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────
+.unit doom
+.equ C_COL    0            ; arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor
+.equ C_FLASH  1            ; arg=0: the baked 8-pixel muzzle diamond (rows 35..37)
+.equ C_HUD    2            ; arg=0: the baked 512-pixel HUD strip (rows 40..47)
+.equ C_COMMIT 3            ; arg=0: SWAP 0 — commit the frame, clear next, reset the cursor
+
+; ── boot: round 0's data preamble -> tape slots 1..103, the loop unrolled 8x ──
+; (a backward jump costs 8*(P - loop) ticks, so 12 laps beat 103; the last
+; 7 slots are loaded straight-line at their own addresses)
         LDI 1
         ST  PTR
 boot:   IN                  ; the next preamble word
@@ -78,9 +95,59 @@ boot:   IN                  ; the next preamble word
         LD  PTR
         MOVA TMP            ; store[PTR] = the word
         INCM PTR
+        IN
+        ST  TMP
         LD  PTR
-        SUBI 104
-        BRN boot            ; keep loading while PTR < 104
+        MOVA TMP            ; store[PTR] = the word
+        INCM PTR
+        IN
+        ST  TMP
+        LD  PTR
+        MOVA TMP            ; store[PTR] = the word
+        INCM PTR
+        IN
+        ST  TMP
+        LD  PTR
+        MOVA TMP            ; store[PTR] = the word
+        INCM PTR
+        IN
+        ST  TMP
+        LD  PTR
+        MOVA TMP            ; store[PTR] = the word
+        INCM PTR
+        IN
+        ST  TMP
+        LD  PTR
+        MOVA TMP            ; store[PTR] = the word
+        INCM PTR
+        IN
+        ST  TMP
+        LD  PTR
+        MOVA TMP            ; store[PTR] = the word
+        INCM PTR
+        IN
+        ST  TMP
+        LD  PTR
+        MOVA TMP            ; store[PTR] = the word
+        INCM PTR
+        LD  PTR
+        SUBI 97
+        BRN boot            ; keep looping while PTR < 97
+        IN
+        ST  POSX
+        IN
+        ST  POSY
+        IN
+        ST  HDG
+        IN
+        ST  DIRX
+        IN
+        ST  DIRY
+        IN
+        ST  PLANEX
+        IN
+        ST  PLANEY
+
 
 ; ── round: one key-bitmask word in, exactly one committed frame out ──────────
 ; The MUX decode: bits peeled low to high with a MODI 2 / DIVI 2 ladder, so
@@ -205,7 +272,34 @@ comy:   LD  NEWY
         JMP render
 
 ; ── render: lodev's per-column raycast, columns 0..63 ──────────────────────
-render: LDI 0
+; The per-frame prologue: everything that depends only on the player's position
+; is computed once — the fractional position, and the cell-lookup seeds PW0 (the
+; nibble divisor 16**(mapY mod 16)) and WADDR0 (the packed half-column's slot,
+; MAPB + 2*mapX + mapY/16). The DDA then maintains PW/WADDR *incrementally*, so
+; the per-step lookup is LDA/DIV/MODI instead of the full 16-instruction unpack.
+render: LD  POSX
+        MODI 1024
+        ST  FRACX           ; posX - mapX*1024, hoisted out of sidex
+        LD  POSY
+        MODI 1024
+        ST  FRACY
+        LD  POSY
+        DIVI 1024
+        ST  TMP             ; mapY
+        MODI 16
+        ADDI POWB
+        LDA
+        ST  PW0             ; 16**(mapY mod 16)
+        LD  TMP
+        DIVI 16
+        ST  TMP2            ; the half-column selector, mapY / 16
+        LD  POSX
+        DIVI 1024
+        MULI 2
+        ADD TMP2
+        ADDI MAPB
+        ST  WADDR0          ; the packed half-column's tape slot
+        LDI 0
         ST  XCOL
 colset: LD  XCOL
         MULI 32
@@ -221,12 +315,10 @@ colset: LD  XCOL
         DIVI 1024
         ADD DIRY
         ST  RDY             ; rayDirY = dirY + planeY*cameraX
-        LD  POSX
-        DIVI 1024
-        ST  MAPX            ; mapX = int(posX)
-        LD  POSY
-        DIVI 1024
-        ST  MAPY            ; mapY = int(posY)
+        LD  PW0
+        ST  PW              ; the ray starts in the player's cell
+        LD  WADDR0
+        ST  WADDR
         ; deltaDistX = abs(1/rayDirX) -> |1048576 / rayDirX|; DIV by 0 is 0 on
         ; this CPU, so a zero ray substitutes BIG = 2**30 (plan risk R2)
         LD  RDX
@@ -253,95 +345,434 @@ ddyneg: NEG
         JMP sidex
 ddyinf: LDI 1073741824
         ST  DDY
-        ; stepX / sideDistX from the fractional position (lodev's two arms)
-sidex:  LD  POSX
-        MODI 1024
-        ST  TMP             ; fracX = posX - mapX*1024
-        LD  RDX
+        ; stepX / sideDistX from the fractional position (lodev's two arms);
+        ; stepX itself is only ever used to move the word address, so the arm
+        ; records S2X = 2*stepX instead of stepX
+sidex:  LD  RDX
         BRN sxneg
-        LDI 1
-        ST  STPX            ; stepX = 1
+        LDI 2
+        ST  S2X             ; stepX = 1 -> the half-column slot moves +2
         LDI 1024
-        SUB TMP
+        SUB FRACX
         MUL DDX
         DIVI 1024
         ST  SDX             ; sideDistX = (1024 - fracX) * deltaDistX / 1024
         JMP sidey
 sxneg:  LDI 0
-        SUBI 1
-        ST  STPX            ; stepX = -1
-        LD  TMP
+        SUBI 2
+        ST  S2X             ; stepX = -1 -> -2
+        LD  FRACX
         MUL DDX
         DIVI 1024
         ST  SDX             ; sideDistX = fracX * deltaDistX / 1024
-sidey:  LD  POSY            ; stepY / sideDistY, the same two arms
-        MODI 1024
-        ST  TMP
-        LD  RDY
+sidey:  LD  RDY             ; stepY / sideDistY, the same two arms
         BRN syneg
         LDI 1
         ST  STPY
         LDI 1024
-        SUB TMP
+        SUB FRACY
         MUL DDY
         DIVI 1024
         ST  SDY
-        JMP dda
+        JMP dda0
 syneg:  LDI 0
         SUBI 1
         ST  STPY
-        LD  TMP
+        LD  FRACY
         MUL DDY
         DIVI 1024
         ST  SDY
-        ; the DDA; a sideDist tie goes to the Y arm (lodev's else — risk R5)
-dda:    LD  SDX
+        ; the DDA, unrolled 8x: a backward jump costs 8*(P - loop) ticks on
+        ; this machine, so only every 8th empty step pays a full lap; a
+        ; sideDist tie goes to the Y arm (lodev's else — risk R5)
+
+dda0:   LD  SDX
         SUB SDY
-        BRN xarm            ; sideDistX < sideDistY -> step in x
+        BRN xarm0           ; sideDistX < sideDistY -> step in x
         LD  SDY
         ADD DDY
         ST  SDY
-        LD  MAPY
-        ADD STPY
-        ST  MAPY
-        LDI 1
-        ST  SIDE            ; side = 1 (y-side)
-        JMP hit
-xarm:   LD  SDX
-        ADD DDX
-        ST  SDX
-        LD  MAPX
-        ADD STPX
-        ST  MAPX
-        LDI 0
-        ST  SIDE            ; side = 0 (x-side)
-hit:    LD  MAPY            ; the inlined cell lookup at (mapX, mapY)
-        ST  TMP2
-        MODI 16
-        ADDI POWB
-        LDA
-        ST  PW              ; 16**(mapY mod 16)
-        LD  TMP2
-        DIVI 16
-        ST  TMP2            ; the half-column selector, mapY / 16
-        LD  MAPX
-        MULI 2
-        ADD TMP2
-        ADDI MAPB
-        LDA
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg0
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru0           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity0
+yneg0:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd0           ; ... and 1/16 floors to 0
+        JMP hity0
+ywru0:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity0
+ywrd0:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity0
+hity0:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
         DIV PW
         MODI 16
-        BRZ dda             ; empty -> keep stepping (the backward lap)
-        ST  COLOR           ; hit: the wall type t in 1..7
-        ; perpWallDist = sideDist - deltaDist of the hit side, clamped to >= 1
-        LD  SIDE
-        BRZ perpx
+        BRZ dda1            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm0:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda1            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda1:   LD  SDX
+        SUB SDY
+        BRN xarm1           ; sideDistX < sideDistY -> step in x
         LD  SDY
-        SUB DDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg1
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru1           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity1
+yneg1:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd1           ; ... and 1/16 floors to 0
+        JMP hity1
+ywru1:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity1
+ywrd1:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity1
+hity1:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda2            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm1:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda2            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda2:   LD  SDX
+        SUB SDY
+        BRN xarm2           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg2
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru2           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity2
+yneg2:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd2           ; ... and 1/16 floors to 0
+        JMP hity2
+ywru2:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity2
+ywrd2:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity2
+hity2:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda3            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm2:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda3            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda3:   LD  SDX
+        SUB SDY
+        BRN xarm3           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg3
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru3           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity3
+yneg3:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd3           ; ... and 1/16 floors to 0
+        JMP hity3
+ywru3:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity3
+ywrd3:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity3
+hity3:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda4            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm3:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda4            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda4:   LD  SDX
+        SUB SDY
+        BRN xarm4           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg4
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru4           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity4
+yneg4:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd4           ; ... and 1/16 floors to 0
+        JMP hity4
+ywru4:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity4
+ywrd4:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity4
+hity4:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda5            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm4:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda5            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda5:   LD  SDX
+        SUB SDY
+        BRN xarm5           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg5
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru5           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity5
+yneg5:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd5           ; ... and 1/16 floors to 0
+        JMP hity5
+ywru5:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity5
+ywrd5:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity5
+hity5:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda6            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm5:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda6            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda6:   LD  SDX
+        SUB SDY
+        BRN xarm6           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg6
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru6           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity6
+yneg6:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd6           ; ... and 1/16 floors to 0
+        JMP hity6
+ywru6:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity6
+ywrd6:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity6
+hity6:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda7            ; empty -> the next unrolled step
+        JMP why             ; a y-side wall: t is dark
+xarm6:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda7            ; empty -> the next unrolled step
+        JMP whx             ; an x-side wall: t is sunlit
+
+dda7:   LD  SDX
+        SUB SDY
+        BRN xarm7           ; sideDistX < sideDistY -> step in x
+        LD  SDY
+        ADD DDY
+        ST  SDY
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg7
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru7           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity7
+yneg7:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd7           ; ... and 1/16 floors to 0
+        JMP hity7
+ywru7:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity7
+ywrd7:  LDI 1152921504606846976
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity7
+hity7:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
+        DIV PW
+        MODI 16
+        BRZ dda0            ; empty -> the backward lap
+        JMP why             ; a y-side wall: t is dark
+xarm7:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ dda0            ; empty -> the backward lap
+        JMP whx             ; an x-side wall: t is sunlit
+
+; Which arm found the wall picks the whole tail: no per-step side flag needed.
+; x-side (sunlit): the bright variant t + 8; perp = sideDistX - deltaDistX.
+whx:    ADDI 8
+        ST  COLOR
+        LD  SDX
+        SUB DDX
         ST  PERP
         JMP pclip
-perpx:  LD  SDX
-        SUB DDX
+why:    ST  COLOR           ; y-side: the dark variant, perp from the y pair
+        LD  SDY
+        SUB DDY
         ST  PERP
 pclip:  SUBI 1              ; ST preserved ACC = perpWallDist
         BRN pone
@@ -363,631 +794,42 @@ dehi:   LD  HALFH
         ADDI 20
         ST  DEND            ; drawEnd = 20 + halfh
         SUBI 40
-        BRN shade           ; drawEnd <= 39: no clamp
+        BRN send            ; drawEnd <= 39: no clamp
         LDI 39
         ST  DEND
-shade:  LD  SIDE            ; lodev halves y-side colours; here x-side is t + 8
-        BRZ sunlit
-        JMP paint
-sunlit: LD  COLOR
-        ADDI 8
-        ST  COLOR           ; the sunlit (bright) variant
-paint:  LD  DSTART          ; the wall run: rows drawStart..drawEnd, stride 64
+        ; (no shade block: whx/why already picked the sunlit or dark colour)
+        ; the whole column is ONE command word to the unit, which paints the wall
+        ; run (drawStart..drawEnd in COLOR) and the floor run (drawEnd+1..39
+        ; in 8) at stride 64 while the CPU raycasts the next column; the
+        ; ceiling stays black because COMMIT cleared the next buffer. The arg is
+        ; the unit's own loop seed: seed = (drawStart*64 + x)*16 + colour - 1024
+        ; (its wall lap adds 1024 *before* painting), then arg = seed*64 + n_wall
+send:   LD  DSTART
         MULI 64
         ADD XCOL
-        ST  ADDRV
-        LD  DEND
+        MULI 16
+        ADD COLOR
+        SUBI 1024           ; seed (may go negative in the top row: that is fine)
         MULI 64
-        ADD XCOL
-        ST  AEND
-wallp:  LD  ADDRV
-        DSPA
-        LD  COLOR
-        DSPD
-        LD  ADDRV
-        ADDI 64
-        ST  ADDRV
-        SUB AEND
-        BRN wallp           ; next row while ADDRV <= AEND
-        BRZ wallp
-        ; the floor run: rows drawEnd+1..39 paint colour 8 (ceiling stays
-        ; black — SWAP 0 cleared the next buffer)
-        LDI 2496
-        ADD XCOL
-        ST  AEND            ; row 39, this column
-floorp: LD  AEND
-        SUB ADDRV
-        BRN colnxt          ; ADDRV past row 39: the column is done
-        LD  ADDRV
-        DSPA
-        LDI 8
-        DSPD
-        LD  ADDRV
-        ADDI 64
-        ST  ADDRV
-        JMP floorp
+        ADD DEND
+        SUB DSTART
+        ADDI 1              ; arg = seed*64 + (drawEnd - drawStart + 1)
+        MULI 8              ; the command word: 8*arg + C_COL, and C_COL == 0
+        SND
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI 63
-        BRZ flash           ; that was column 63: the viewport is painted
+        BRZ flash           ; that was column 63: the viewport is sent
         JMP colset
 
-; ── muzzle flash: FLASH's 8 pixels, only when this round FIREd ────────────
+; ── muzzle flash: the unit's baked 8-pixel diamond, when this round FIREd ─
 flash:  LD  FIRE
         BRZ hud
-        LDI 2271
-        DSPA                ; row 35, column 31
-        LDI 11
-        DSPD
-        DSPD
-        LDI 2334
-        DSPA                ; row 36, column 30
-        LDI 11
-        DSPD
-        LDI 15
-        DSPD
-        DSPD
-        LDI 11
-        DSPD
-        LDI 2399
-        DSPA                ; row 37, column 31
-        LDI 11
-        DSPD
-        DSPD
+        LDI C_FLASH
+        SND
 
-; ── HUD strip (rows 40..47): RLE runs generated from hud_runs() ──────────
-hud:    LDI 2560
-        DSPA                ; park the cursor at row 40, column 0
-        LDI 7               ; a run of 64
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 4
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 9               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 15
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 11               ; a run of 8
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 14
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 12               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 9               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 15
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 11               ; a run of 8
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 14
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 12               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 9               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 15
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 11               ; a run of 8
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 14
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 12               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 9               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 15
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 11               ; a run of 8
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 14
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 12               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 9               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 15
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 11               ; a run of 8
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 14
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 12               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 9               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 15
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 11               ; a run of 8
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 14
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 12               ; a run of 9
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        LDI 8               ; a run of 69
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-        DSPD
-
-        LDI 0
-        DSPS                ; commit THE one frame of this round
+; ── HUD strip (rows 40..47) and the commit: one command word each ───────
+hud:    LDI C_HUD
+        SND                 ; the baked HUD strip
+        LDI C_COMMIT
+        SND                 ; SWAP 0: commit THE one frame of this round
         JMP round

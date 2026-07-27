@@ -31,6 +31,7 @@ __all__ = [
     "StreamUnit",
     "SnakeUnit",
     "PathUnit",
+    "DoomUnit",
 ]
 
 READ = 0
@@ -482,3 +483,137 @@ class PathUnit:
         # two pixel writes and why the flag survives until the robot steps onto it (§4.4).
         self._write(self.SWAP, 1)
         self.frames += 1
+
+
+class DoomUnit:
+    """A model of ``d3_unit.py``'s column-painter coprocessor — the deadman-3d panel.
+
+    The same ``8 * arg + code`` wire format as the other units, because that is what
+    the real unit's decode trie reads, and the same two structural rules:
+
+    * **It answers nothing.** ``ARCH.md`` §7.1 makes an incoming pipe a rival for
+      every ``r`` in the CPU, the jump slab's ROM read included, so a replying unit
+      cannot be placed on a machine that has jumps — and deadman-3d is nothing but
+      jumps. Every command carries enough to finish its own drawing.
+    * **It owns the display.** The three LM-75 ports hang off this block, so the CPU
+      has no display lanes at all — its paint loops, FLASH block and 512-pixel HUD
+      unroll all collapse into one command word each per column / per frame.
+
+    Four commands (codes read off the trie; ``tests/test_deadman3d.py`` pins them
+    against the CPU's ``.equ C_*`` constants so the tables cannot drift)::
+
+        COL    seed*64 + n, where seed = (top*64 + col)*16 + color - 1024 and
+               n = bot - top + 1: one viewport column — rows top..bot in
+               ``color``, rows bot+1..39 in floor colour 8, each pixel an
+               ADDR/DATA pair (stride 64); the ceiling above ``top`` stays black
+               because COMMIT clears ``next``. The odd shape is the unit's own
+               arithmetic: its wall loop circulates the packed ``addr*16+color``
+               through its value ring, adding 1024 (one row) per lap, so the
+               argument is that packed word pre-biased by one lap, and one
+               floored ``/ 64`` recovers both fields (seed may be negative).
+        FLASH  0   the 8-pixel muzzle flash (three ADDR repositions, cursor
+               auto-advance inside each run).
+        HUD    0   rows 40..47: one ADDR (2560), then 512 row-major DATA writes.
+        COMMIT 0   SWAP 0 — commit the frame, clear ``next``, reset the cursor.
+
+    The models mirror :data:`deadman3d.FLASH` and ``deadman3d.hud_rows()`` by
+    construction — the unit bakes both patterns, which is the whole point.
+    """
+
+    #: arm -> command code. COL is 0 so the CPU's per-column send is a bare
+    #: ``MULI 8; SND`` with no ``ADDI`` for the code.
+    CODES = {"COL": 0, "FLASH": 1, "HUD": 2, "COMMIT": 3}
+
+    #: One-line contract per arm, quoted into the generated asm's ``.equ C_*`` notes.
+    ARM_NOTES = {
+        "COL": "arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor",
+        "FLASH": "arg=0: the baked 8-pixel muzzle diamond (rows 35..37)",
+        "HUD": "arg=0: the baked 512-pixel HUD strip (rows 40..47)",
+        "COMMIT": "arg=0: SWAP 0 — commit the frame, clear next, reset the cursor",
+    }
+
+    #: ``display.py``'s port numbers, repeated rather than imported to keep this
+    #: module free of the display model.
+    ADDR, DATA, SWAP = 0, 1, 2
+
+    WIDTH, H3D = 64, 40  # panel columns; viewport rows 0..39 (HUD below)
+    FLOOR = 8
+
+    def __init__(self, write_display: Callable[[int, int], None]) -> None:
+        self._write = write_display
+        self.words = 0  # command words across the CPU's pipe
+        self.pixels = 0  # pixels painted (ADDR/DATA pairs plus HUD runs)
+        self.frames = 0  # commits, i.e. SWAP writes
+
+    # ── wire protocol ────────────────────────────────────────────────────────
+    def send(self, word: int) -> None:
+        """One command word: ``8 * arg + code``."""
+        self.words += 1
+        code, arg = word & 7, word >> 3
+        if code == self.CODES["COL"]:
+            self._col(arg)
+        elif code == self.CODES["FLASH"]:
+            self._flash()
+        elif code == self.CODES["HUD"]:
+            self._hud()
+        elif code == self.CODES["COMMIT"]:
+            self._write(self.SWAP, 0)
+            self.frames += 1
+        else:
+            raise StoreError(f"DOOM: no arm for command code {code}")
+
+    def recv(self) -> int:
+        raise StoreError("DOOM: the unit answers nothing; a program with RCV cannot bind")
+
+    # ── arms ─────────────────────────────────────────────────────────────────
+    def _col(self, arg: int) -> None:
+        """One viewport column, computed exactly as the unit's own loops do.
+
+        The wall loop circulates ``v = addr*16 + colour`` and adds 1024 (one row
+        of 64 cells, times 16) per lap *before* painting; the floor loop then
+        continues from the last wall address with the baked colour 8.
+        """
+        n_wall = arg % 64  # floored like the unit's `/ 64`: 0..63 even for seed < 0
+        v = arg // 64  # seed = first wall pixel's addr*16+colour, one lap early
+        if n_wall < 1:
+            raise StoreError(f"DOOM: COL with an empty wall run (arg {arg})")
+        addr = 0
+        for _ in range(n_wall):
+            v += 1024
+            addr, colour = v // 16, v % 16
+            if not 0 <= addr < self.WIDTH * self.H3D:
+                raise StoreError(f"DOOM: COL wall pixel {addr} is outside the viewport")
+            self._paint(addr, colour)
+        for _ in range(self.H3D - 1 - addr // self.WIDTH):
+            addr += self.WIDTH
+            self._paint(addr, self.FLOOR)
+
+    def _flash(self) -> None:
+        """The baked muzzle flash: three cursor runs (deadman3d.FLASH)."""
+        for addr, colors in ((2271, (11, 11)), (2334, (11, 15, 15, 11)), (2399, (11, 11))):
+            self._write(self.ADDR, addr)
+            for c in colors:
+                self._write(self.DATA, c)
+                self.pixels += 1
+
+    def _hud(self) -> None:
+        """The baked HUD strip: ADDR 2560, then 512 row-major DATA writes."""
+        self._write(self.ADDR, self.H3D * self.WIDTH)
+        mid = [self.FLOOR] * self.WIDTH
+        for c in range(4, 13):
+            mid[c] = 9  # ammo, bright red
+        for c in range(28, 36):
+            mid[c] = 11  # face, bright yellow
+        for c in range(50, 59):
+            mid[c] = 12  # armor, bright blue
+        rows = [[7] * self.WIDTH] + [mid] * 6 + [[self.FLOOR] * self.WIDTH]
+        for row in rows:
+            for c in row:
+                self._write(self.DATA, c)
+                self.pixels += 1
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _paint(self, cell: int, colour: int) -> None:
+        self._write(self.ADDR, cell)
+        self._write(self.DATA, colour)
+        self.pixels += 1

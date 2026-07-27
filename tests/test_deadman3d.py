@@ -369,9 +369,14 @@ def test_registry_pins() -> None:
     # 136 slots is past the rotating tape's practical cap, so the STORE rides
     # the grid_block man-memory (~31 ticks an access, whatever n is) …
     assert machine.STORE_TIER["deadman-3d"] == "grid"
-    # … at the recorded pad, which pins the checked-in grid (measured: the
-    # first pad where every pipe binds under the 64x48 panel).
-    assert machine.MEM_PAD["deadman-3d"] == 36
+    # … at the recorded pad — the smallest that binds every pipe now that the
+    # input pipe enters the north wall (INPUT_NORTH) instead of rivalling the
+    # memory band from the west.
+    assert machine.MEM_PAD["deadman-3d"] == 18
+    # The frame-1 tick levers, all opt-in so other machines stay byte-identical:
+    assert "deadman-3d" in machine.INPUT_NORTH
+    assert "deadman-3d" in machine.STORE_TELEPORT
+    assert machine.MEM_PLACE["deadman-3d"] == ((0, 0), (0, 10))
 
 
 def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
@@ -422,10 +427,60 @@ def test_the_ansi_play_rendering_shape() -> None:
 
 @slow
 def test_the_machine_synthesizes_with_the_grid_store() -> None:
-    """`build_for` binds every pipe: 64x48 panel + 131-slot grid_block STORE."""
+    """`build_for` binds every pipe: the DOOM unit's 64x48 panel + grid STORE."""
     m = machine.build_for("deadman-3d")
     assert m.mem_pad == machine.MEM_PAD["deadman-3d"]
-    assert m.display == (64, 48)
+    # The panel belongs to the DOOM unit now, not the CPU: the machine carries
+    # exactly one display room, 64x48 plus its walls.
+    _px, _py, pw, ph = m.regions["display"]
+    assert (pw, ph) == (d3.WIDTH + 2, d3.HEIGHT + 2) == (66, 50)
+
+
+# ── the DOOM unit: the column-painter coprocessor the CPU sends frames to ────
+def test_doom_unit_codes_pin_the_trie() -> None:
+    """The emulator model's command codes are read off the hardware trie, and
+    the generated asm's C_COL must be 0 (the column send is a bare MULI 8)."""
+    from randomfun2026solvers.lm1 import d3_unit
+    from randomfun2026solvers.lm1.store import DoomUnit
+
+    assert d3_unit.arm_codes() == DoomUnit.CODES == {
+        "COL": 0, "FLASH": 1, "HUD": 2, "COMMIT": 3}
+    assert min(d3_unit.binding_margins().values()) >= 1
+    blk = d3_unit.build_doom()
+    assert blk.lengths["addr"] == blk.lengths["data"]
+    assert blk.lengths["swap"] > blk.lengths["data"]
+
+
+@slow
+def test_doom_unit_probe_paints_like_the_model() -> None:
+    """The placed block plus a feeder, judged on the native engine against the
+    DoomUnit model's own frames — a negative-seed COL (top row 0) included."""
+    from randomfun2026solvers.fast_littleman import FastLittleman
+    from randomfun2026solvers.lm1 import d3_unit
+    from randomfun2026solvers.lm1.store import DoomUnit
+
+    codes = DoomUnit.CODES
+
+    def col(top: int, bot: int, x: int, colour: int) -> int:
+        seed = (top * 64 + x) * 16 + colour - 1024
+        return d3_unit.word(codes["COL"], seed * 64 + (bot - top + 1))
+
+    cmds = [
+        col(3, 10, 5, 12), col(0, 39, 0, 9), col(20, 20, 63, 7),
+        d3_unit.word(codes["FLASH"], 0), d3_unit.word(codes["HUD"], 0),
+        d3_unit.word(codes["COMMIT"], 0),
+        col(39, 39, 1, 3), d3_unit.word(codes["COMMIT"], 0),
+    ]
+    writes: list[tuple[int, int]] = []
+    unit = DoomUnit(lambda p, v: writes.append((p, v)))
+    for w in cmds:
+        unit.send(w)
+    expected = frames_from_writes(writes, width=64, height=48)
+    assert len(expected) == 2
+    rows, _dbg, _blk = d3_unit.build_probe(cmds)
+    res = FastLittleman(rows).run([], frames=[expected], max_ticks=3_000_000)
+    assert res.fatal is None, (res.fatal, res.fatal_pos)
+    assert res.passed is True
 
 
 # ── the checked-in machine, judged for real ──────────────────────────────────

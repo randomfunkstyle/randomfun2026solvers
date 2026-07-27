@@ -667,6 +667,9 @@ class _Cpu:
     pipe_glyphs: list[tuple[int, int, str, str]]  # (x, y, glyph, band)
     # An unused room is not just dead weight: its pipe still competes for every
     # `r`/`s` in the CPU (§7.1 is nearest, not nearest-useful), so it is not drawn.
+    #: The IN lane's ``r`` column — where the input pipe enters the *north* wall
+    #: when the machine opts into :data:`INPUT_NORTH` (see there for why).
+    in_col: int = 0
     has_in: bool = True  # False when no lane reads the input room
     has_out: bool = True  # False on a display problem: no `O` room at all
     dsp_cols: dict[str, int] = field(default_factory=dict)  # display band -> `s` column
@@ -1036,6 +1039,7 @@ def build_cpu(
         height=height,
         centre=centre,
         in_row=in_rows[0] if in_rows else 1,
+        in_col=lane_x0,
         out_col=out_cols[0],
         mem_out_row=mem_out_row,
         # The response pipe attaches *above* the request pipe: it comes back over
@@ -1972,6 +1976,17 @@ class Machine:
             "cpu:return:collector": "every lane funnels west along here",
             "cpu:return:riser": "up to the fetch row — paid once per instruction",
         }
+        if self.program.name == "deadman-3d":
+            # The demo's input protocol rides the sidecar, so the grid itself
+            # documents how to drive it (the deliverable's "input instructions").
+            from ..deadman3d import INPUT_PROTOCOL
+
+            notes["io:I"] = INPUT_PROTOCOL
+            notes["stream:panel"] = "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP"
+            notes["stream:unit"] = (
+                "the DOOM column painter (lm1/d3_unit.py): one command word per "
+                "viewport column / FLASH / HUD / COMMIT, 8*arg + code"
+            )
         for name, (x, y, w, h) in sorted(self.regions.items()):
             kind = name.split(":", 1)[0]
             note = notes.get(name, "")
@@ -2044,6 +2059,8 @@ def build(
     hot: tuple[int, int] | None = None,
     mem_offset: tuple[int, int] = (0, 0),
     store_offset: tuple[int, int] = (0, 0),
+    in_north: bool = False,
+    store_teleport: bool = False,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -2179,6 +2196,8 @@ def build(
                     hot,
                     tape_skip_batch=effective_skip_batch,
                     tape_relay_size=tape_relay_size,
+                    in_north=in_north,
+                    store_teleport=store_teleport,
                 )
             except MachineError as exc:
                 last = exc
@@ -2226,6 +2245,8 @@ def build(
                     hot,
                     tape_skip_batch=effective_skip_batch,
                     tape_relay_size=tape_relay_size,
+                    in_north=in_north,
+                    store_teleport=store_teleport,
                 )
             except MachineError:
                 continue
@@ -2295,6 +2316,8 @@ def _assemble(
     hot: tuple[int, int] | None = None,
     tape_skip_batch: int = 1,
     tape_relay_size: tuple[int, int] | None = None,
+    in_north: bool = False,
+    store_teleport: bool = False,
 ) -> Machine:
     cpu = build_cpu(
         program,
@@ -2369,6 +2392,11 @@ def _assemble(
         if cpu.has_in
         else ROM_CPU_GAP_WITHOUT_INPUT
     )
+    if in_north:
+        # The I room moves into the corridor band above the CPU (INPUT_NORTH),
+        # so the band must be deep enough to hold a 3x3 room plus its two-cell
+        # pipe into the north wall.
+        cpu_gap = max(cpu_gap, 6)
     CY = rom_bottom + cpu_gap + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
     g.blit(CX, CY, cpu.cells)
@@ -2400,7 +2428,19 @@ def _assemble(
     # `r` in the room (§7.1 is nearest, not nearest-useful) — `palette` reads no
     # input at all.
     iy = CY + cpu.in_row
-    if cpu.has_in:
+    in_x = CX + cpu.in_col
+    if cpu.has_in and in_north:
+        # INPUT_NORTH: the I room sits in the corridor band and its pipe drops
+        # into the north wall directly above the IN lane's own `r`. On the west
+        # wall this pipe was the *binding* constraint that pushed the whole
+        # memory band east (a memory `r` a few rows from `in_row` was nearer it
+        # than the east-wall response), which cost every memory instruction the
+        # extra walk twice over; from the north, its distance to any lane glyph
+        # grows with the lane's depth and it rivals nothing.
+        g.room(in_x - 1, CY - 5, in_x + 1, CY - 3)
+        g.put(in_x, CY - 4, "I")
+        route_lengths["input->cpu"] = g.draw_pipe([(in_x, CY - 2), (in_x, CY - 1)])
+    elif cpu.has_in:
         g.room(3, iy - 1, 5, iy + 1)
         g.put(4, iy, "I")
         route_lengths["input->cpu"] = g.draw_pipe([(6, iy), (CX - 1, iy)])
@@ -2568,7 +2608,53 @@ def _assemble(
         # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
         # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
         # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
-        if compact or moved:
+        tele_regions: dict[str, tuple[int, int, int, int]] = {}
+        tele_pipes = 0
+        if store_teleport:
+            # The response comes home through two teleports instead of a long
+            # pipe. ``R`` receives from any incoming pipe with **no distance
+            # term** (SPEC.md), so a wide room is a horizontal teleport and a
+            # tall one a vertical teleport: the value crosses each room in one
+            # instruction, and the per-read latency collapses from the pipe's
+            # whole length (~59 cells here) to the three short stubs (~7).
+            # L collects the store's answer above its north wall and carries it
+            # west; U carries it down the CPU's east side and hands it to the
+            # response row with exactly the attachment cell the plain pipe used,
+            # so every memory ``r``'s binding is untouched. Cost: two men.
+            from ..memory_men import teleport, teleport_v
+
+            ux = CX + W + 4  # U hugs the CPU's east wall
+            u_top = min(CY + 3, resp_row - 6)
+            u_bot = resp_row + 1
+            if u_bot - u_top < 3:
+                raise MachineError("teleport U has no interior: resp_row too high")
+            u_rows, _ = teleport_v(u_bot - u_top - 1)
+            g.room(ux, u_top, ux + _TELE_W + 1, u_bot)
+            for kk, row in enumerate(u_rows):
+                g.text(ux + 1, u_top + 1 + kk, row.replace(" ", "\0"))
+            lx0 = ux + _TELE_W + 4
+            lx1 = tout_x + 2
+            l_y1 = tout_y - 3  # L's south wall: two stub cells below it reach tout
+            l_y0 = l_y1 - _TELE_H - 1
+            if lx1 - lx0 < 8 or l_y0 <= 1:
+                raise MachineError("teleport L has no room between the CPU and the STORE")
+            l_rows, _ = teleport(lx1 - lx0 - 1)
+            g.room(lx0, l_y0, lx1, l_y1)
+            for kk, row in enumerate(l_rows):
+                g.text(lx0 + 1, l_y0 + 1 + kk, row.replace(" ", "\0"))
+            # the store's answer climbs two cells into L's south wall ...
+            n1 = g.draw_pipe([(tout_x, tout_y - 1), (tout_x, l_y1 + 1)])
+            # ... L hands it west to U's east side ...
+            n2 = g.draw_pipe([(lx0 - 1, l_y0 + 1), (ux + _TELE_W + 2, l_y0 + 1)])
+            # ... and U drops it onto the response row's own attachment cell.
+            n3 = g.draw_pipe([(ux - 1, resp_row), (CX + W + 2, resp_row)])
+            route_lengths["store->cpu"] = n1 + n2 + n3
+            tele_pipes = 2  # the response used to be ONE pipe; now it is three
+            tele_regions = {
+                "teleport:L": (lx0, l_y0, lx1 - lx0 + 1, _TELE_H + 2),
+                "teleport:U": (ux, u_top, _TELE_W + 2, u_bot - u_top + 1),
+            }
+        elif compact or moved:
             start = (tout_x, tout_y - 1)
             end = (CX + W + 2, resp_row)
             # The corridor between the CPU and the adapter is spoken for: the request
@@ -2654,6 +2740,7 @@ def _assemble(
     if hot is None:
         regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
         regions["tape"] = (TX, TY, tape.width, tape.height)
+        regions.update(tele_regions)
     else:
         regions.update(extra_regions)
     # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
@@ -2662,7 +2749,7 @@ def _assemble(
     if band_rows:
         regions["rom:corridor"] = (1, rom_bottom + 1, (CX + W + 1), band_rows + 1)
     if cpu.has_in:
-        regions["io:I"] = (3, iy - 1, 3, 3)
+        regions["io:I"] = (in_x - 1, CY - 5, 3, 3) if in_north else (3, iy - 1, 3, 3)
     if cpu.has_out:
         regions["io:O"] = (CX + cpu.out_col - 1, oy + 2, 3, 3)
     if blk is not None:
@@ -2691,7 +2778,7 @@ def _assemble(
         **stream_touches,
     }
     if cpu.has_in:
-        touches["in"] = (CX - 1, iy)
+        touches["in"] = (in_x, CY - 1) if in_north else (CX - 1, iy)
     if cpu.has_out:
         touches["out"] = (CX + cpu.out_col, CY + H + 2)
     check_bindings(
@@ -2715,7 +2802,7 @@ def _assemble(
     # walls, which is exactly why the extra decoder hop is nearly free.
     if hot is None:
         _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
-        store_pipes = (tape.pipes if store == "men-y" else _STORE_PIPES[store]) + 1
+        store_pipes = (tape.pipes if store == "men-y" else _STORE_PIPES[store]) + 1 + tele_pipes
     _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -3295,6 +3382,13 @@ def _stream(
         from . import path_unit
 
         blk = path_unit.build_path()
+    elif unit == "doom":
+        # The DOOM unit owns deadman-3d's 64x48 panel, its column paint loops, and
+        # the baked HUD/FLASH patterns; like snake and path it answers nothing, so
+        # the CPU keeps its jumps and there is no separate `_display` call.
+        from . import d3_unit
+
+        blk = d3_unit.build_doom()
     else:
         from . import stream as streammod
 
@@ -3302,6 +3396,15 @@ def _stream(
         a_slots, b_slots, c_slots = sizes
         blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
     bx, by = 1, wall_y + 5
+    if unit == "doom":
+        # The DOOM block is ~172 columns wide — far wider than the CPU — and the
+        # grid STORE's man-memory runs hundreds of rows down the machine's east
+        # side, so the flat slot just below the CPU is occupied. Hang the block
+        # below everything already drawn instead: the command pipe simply grows,
+        # and the demo pays footprint in rows, which an ungraded slug never
+        # counts. (Doom-only, so every other unit's checked-in grid stays
+        # byte-identical.)
+        by = max(by, max(y for (_x, y) in g.c) + 3)
     g.blit(bx, by, blk.cells)
 
     cmd_col = cx + cpu.stream_cols[Band.STREAM_CMD]
@@ -3695,6 +3798,20 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: `scratch/lane_order_search.py` under the new geometry before pinning one again;
 #: the weights are unchanged but the width constraint it filters on is not.
 LANE_ORDER: dict[str, tuple[str, ...]] = {
+    # deadman-3d, north to south, weighted by the frame-1 execution profile
+    # (LD 5,528 ... NEG 32): a row above the fetch row costs 2 ticks per row of
+    # height while every row below it costs a constant, so the coldest lanes
+    # take the top, the hot memory lanes sit as close above the fetch row as
+    # the response-pipe binding allows, and the hot immediates and the
+    # structured lanes take the constant-cost rows below it. (A full
+    # bottom-fill into the trie's 11 spare slots was tried and fails binding:
+    # it drags the response row down beside the slabs, whose discard `r` must
+    # stay nearest the ROM pipe.)
+    "deadman-3d": (
+        "NEG", "MOVA", "INCM", "ADDI", "MUL", "LDA", "DIV", "SUB", "ADD",
+        "ST", "LD", "MODI", "DIVI", "SUBI", "MULI", "LDI",
+        "BRN", "BRZ", "JMPF",
+    ),
     "brackets": (
         "HALT",
         "LDI",
@@ -3883,6 +4000,11 @@ _LONG_RETURN = {"matmul"}
 MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "tcp": ((-23, 40), (0, 0)),
     "gradebook": ((0, 26), (-12, -26)),
+    # deadman-3d: the STORE slides 10 rows down, which lets the constraint router
+    # shorten the serial memory routes (adapter->store 13 -> 5, store->cpu
+    # 61 -> 59); this demo makes ~15k grid-store reads per frame, so route cells
+    # are first-order ticks, and its footprint is unscored.
+    "deadman-3d": ((0, 0), (0, 10)),
 }
 
 
@@ -3894,12 +4016,32 @@ MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
 DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
 
 #: Per-slug ``mem_pad`` for machines whose pad the default search should not (or
-#: cannot) pick: :func:`build` searches ``range(0, 40)`` and takes the first pad
+#: cannot) pick: :func:`build` searches ``range(0, 40)`` and takes the best pad
 #: that binds every pipe. ``deadman-3d``'s is recorded to pin the checked-in grid
-#: (and to skip the failing prefix of the search: its 64x48 panel pushes the
-#: memory block east). Consulted by :func:`build_for` like :data:`ROM_ROWS`;
+#: and skip the search. (It was 36 when the CPU owned the panel; the DOOM unit
+#: took the display lanes with it, so the memory block no longer fights the
+#: panel for columns.) Consulted by :func:`build_for` like :data:`ROM_ROWS`;
 #: absent slugs keep the search.
-MEM_PAD: dict[str, int] = {"deadman-3d": 36}
+MEM_PAD: dict[str, int] = {"deadman-3d": 18}
+
+#: Slugs whose ``I`` room attaches to the CPU's **north** wall instead of the
+#: west. On the west wall the input pipe rivals every memory ``r`` a few rows
+#: from ``in_row`` (§7.1), which is what forced ``deadman-3d``'s memory band 39
+#: columns east — a walk every memory instruction paid twice, out and back
+#: along the collector. From the north the pipe's distance to any lane glyph
+#: grows with the lane's depth, so the memory band packs west and the pad falls
+#: to the search minimum. Opt-in per slug so every other machine's checked-in
+#: grid stays byte-identical.
+INPUT_NORTH: set[str] = {"deadman-3d"}
+
+#: Slugs whose STORE **response** comes home through two teleport rooms (an L
+#: above the store's north wall and a U down the CPU's east side) instead of a
+#: long pipe. ``R`` has no distance term, so each room is crossed in one
+#: instruction and the per-read latency collapses from the pipe's length (~59
+#: cells on ``deadman-3d``) to three short stubs (~7 cells) — first-order on a
+#: machine making ~15k grid-store reads a frame. Costs two men; opt-in per slug
+#: so every other machine's checked-in grid stays byte-identical.
+STORE_TELEPORT: set[str] = {"deadman-3d"}
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
 #: ``deadman-3d``'s 136-slot store is far past the rotating tape's ~103-slot
@@ -3981,6 +4123,8 @@ def build_for(
         compact=compact,
         mem_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[0],
         store_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[1],
+        in_north=slug in INPUT_NORTH,
+        store_teleport=slug in STORE_TELEPORT,
     )
 
 

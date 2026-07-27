@@ -95,15 +95,32 @@ Tape slot map (the asm's .equ table; slot 0 is scratch)
 
 The cell lookup is ``floor(MAPW[2x + y/16] / 16**(y mod 16)) mod 16`` —
 ``slot = MAPB + 2*mapX + (mapY / 16)``, divisor ``POWB + (mapY mod 16)`` —
-inlined at its three sites (the DDA hit test and both move-collision checks).
+inlined at both move-collision checks; the DDA instead maintains the word slot
+(``WADDR``) and the nibble divisor (``PW``) *incrementally* across steps, so
+its per-step lookup is three instructions (LDA; DIV PW; MODI 16).
 
-Input protocol: round 0 = preamble + first command; every later round is one
-command word — a **key bitmask** (a MUX of the keys held this frame, because
-space can be held while moving):
+Painting is not the CPU's job: the machine carries the **DOOM unit**
+(``lm1/d3_unit.py``, ``.unit doom``), a write-only coprocessor that owns the
+64x48 panel. Each viewport column, the muzzle flash, the HUD strip and the
+frame commit are one command word each (``8*arg + code`` — COL 0, FLASH 1,
+HUD 2, COMMIT 3, pinned to ``lm1.store.DoomUnit.CODES``), and the unit's paint
+loops run concurrently with the CPU's next raycast.
+
+Input protocol
+--------------
+Round 0 = the data preamble (:func:`preamble_words`, 103 words) + the first
+command; every later round is exactly one command word — a **key bitmask**
+(a MUX of the keys held this frame, because space can be held while moving):
 
     bit 0 (1)  W  forward         bit 1 (2)  S  backward
     bit 2 (4)  A  turn left       bit 3 (8)  D  turn right
     bit 4 (16) space/click FIRE   0 = idle (render only); higher bits ignored
+
+Example: ``keys("wa ") == 21`` steps forward, turns left and fires in one
+frame; the demo walk is spelled in :data:`WALK_CHORDS`. Each round commits
+exactly one frame and emits no program output. This table also rides the
+generated machine's debug sidecar (:data:`INPUT_PROTOCOL` — the ``io:I``
+region's note in ``deadman-3d.debug.json``/``.html``).
 
 Each word renders exactly one frame, applied in lodev's order: **turn first**
 (A and D both held cancel), then **move** along the *new* heading (W and S
@@ -147,7 +164,7 @@ from pathlib import Path
 from randomfun2026solvers.lm1.emulator import floor_div, sign_mod
 
 __all__ = [
-    "WIDTH", "HEIGHT", "H3D", "MID", "UNITS", "HEADINGS",
+    "WIDTH", "HEIGHT", "H3D", "MID", "UNITS", "HEADINGS", "INPUT_PROTOCOL",
     "MOVE_NUM", "MOVE_DEN", "BIG", "MAP_SIZE", "MAP_STR", "PALETTE",
     "KEY_FWD", "KEY_BACK", "KEY_LEFT", "KEY_RIGHT", "KEY_FIRE", "FLASH",
     "SPAWN", "State", "WALK", "WALK_CHORDS", "keys", "fire_bit",
@@ -181,6 +198,19 @@ KEY_RIGHT = 8       # bit 3: D — turn right (with A: they cancel)
 KEY_FIRE = 16       # bit 4: space/click — FLASH over the finished frame
 
 _KEY_BITS = {"w": KEY_FWD, "s": KEY_BACK, "a": KEY_LEFT, "d": KEY_RIGHT, " ": KEY_FIRE}
+
+#: The input protocol, one screenful — quoted into the generated machine's
+#: debug sidecar (the ``io:I`` region note) so the grid itself documents how to
+#: drive it. The module docstring's "Input protocol" section is the long form.
+INPUT_PROTOCOL = (
+    "Round 0: the 103-word data preamble (deadman3d.preamble_words()) then the "
+    "first command; each later round is ONE command word, a bitmask of the keys "
+    "held this frame: 1=W fwd, 2=S back, 4=A left, 8=D right, 16=space FIRE; "
+    "0 renders idle, higher bits are ignored, opposing keys cancel. Turn first, "
+    "then move, then render: exactly one committed frame per round, no program "
+    "output. keys('wa ')==21 walks, turns and fires at once; the demo walk is "
+    "WALK_CHORDS."
+)
 
 
 def keys(chord: str) -> int:
@@ -377,8 +407,9 @@ def fire_bit(cmd: int) -> bool:
 #: The muzzle flash FIRE paints over the finished frame (M5 has no game state,
 #: so this is the whole of firing): 8 pixels at the bottom-centre of the 3D
 #: viewport, bright yellow (11) with a white (15) core — (row, col, color),
-#: painted after the wall/floor columns so they overwrite them.  The asm's
-#: ``flash:`` block is generated from this same list.
+#: painted after the wall/floor columns so they overwrite them.  The DOOM
+#: unit's FLASH arm bakes these same pixels (``d3_unit.FLASH_RUNS``); the CPU
+#: just sends the one FLASH command word when FIRE is held.
 FLASH: list[tuple[int, int, int]] = [
     (35, 31, 11), (35, 32, 11),
     (36, 30, 11), (36, 31, 15), (36, 32, 15), (36, 33, 11),
@@ -493,7 +524,9 @@ def hud_rows() -> list[str]:
 
 
 def hud_runs() -> list[tuple[int, int]]:
-    """RLE (color, count) of the 8 HUD rows concatenated — the asm's paint list."""
+    """RLE (color, count) of the 8 HUD rows concatenated — the DOOM unit's HUD
+    arm is generated from this list (``d3_unit.hud_tokens``), so the baked strip
+    and this model cannot drift apart."""
     runs: list[tuple[int, int]] = []
     for ch in "".join(hud_rows()):
         c = int(ch, 16)
@@ -571,12 +604,23 @@ def cases_json(cmds: list[int]) -> dict:
 
 # ── the asm generator ────────────────────────────────────────────────────────
 #: The scalar tape slots after the boot data, numbered consecutively from 104.
+#: (No paint cursor: the DOOM unit owns the panel, so the CPU keeps no ADDRV/AEND.)
 _SCALARS = (
-    "CMD", "XCOL", "CAMX", "RDX", "RDY", "MAPX", "MAPY", "SDX", "SDY",
-    "DDX", "DDY", "STPX", "STPY", "SIDE", "PERP", "HALFH", "DSTART", "DEND",
-    "COLOR", "ADDRV", "AEND", "PW", "TMP", "TMP2", "NEWX", "NEWY",
+    "CMD", "XCOL", "CAMX", "RDX", "RDY", "SDX", "SDY",
+    "DDX", "DDY", "S2X", "STPY", "PERP", "HALFH", "DSTART", "DEND",
+    "COLOR", "PW", "WADDR", "FRACX", "FRACY", "PW0", "WADDR0",
+    "TMP", "TMP2", "NEWX", "NEWY",
     "BW", "BS", "BA", "BD", "FIRE", "PTR",
 )
+
+#: How many copies of the DDA step the generated asm unrolls. A backward jump
+#: costs ``8 * (P - loop)`` ticks on this machine, and a frame walks ~1,000 DDA
+#: steps (~16 per column), so once painting moved to the unit these laps were
+#: the dominant control-flow cost. Swept on the emulator model (157 t/instr +
+#: 8 t/skipped word, calibrated against the 31.08M native baseline): 2 -> 4.65x,
+#: 4 -> 5.53x, 8 -> 6.03x, 16 -> 6.14x; 8 is the knee — 16 doubles P for 1.7%
+#: and overfits frame 1's exact ray lengths.
+DDA_UNROLL = 8
 
 
 def tape_slots() -> dict[str, int]:
@@ -600,15 +644,19 @@ def tape_slots() -> dict[str, int]:
 def deadman3d_source() -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
-    Structure: boot loop (round 0's data preamble -> tape slots 1..103) ->
+    Structure: boot loop (round 0's data preamble -> tape slots 1..103, the
+    loop 8x-unrolled because a backward jump costs ``8*(P - loop)`` ticks) ->
     ``round:`` MUX decode (MODI 2 / DIVI 2 ladder -> BW BS BA BD FIRE) ->
     conditional turn (the packed heading word re-unpacked) -> conditional move
-    (per-axis collision, the map-cell lookup inlined) -> ``render:`` (lodev's
-    raycaster_flat.cpp per column: setup, DDA, projection, paint) -> the FIRE
-    flash -> generated HUD RLE -> one ``DSPS`` -> back to ``round:``.  The
-    lodev variable each block computes is named in its comments; every
-    expression keeps :func:`render`'s exact operation order, which is the pixel
-    contract.
+    (per-axis collision, the map-cell lookup inlined) -> ``render:`` (a
+    per-frame prologue seeds PW0/WADDR0/FRACX/FRACY; then per column: setup,
+    the :data:`DDA_UNROLL`-way unrolled DDA maintaining PW/WADDR incrementally,
+    per-arm hit tails ``whx``/``why`` that bake the sunlit/dark shading,
+    projection, and ONE ``SND`` command word to the DOOM unit) -> the FIRE
+    flash, the HUD strip and the commit, one ``SND`` each -> back to
+    ``round:``.  The lodev variable each block computes is named in its
+    comments; every expression keeps :func:`render`'s exact operation order,
+    which is the pixel contract.
 
     Regenerate with::
 
@@ -616,13 +664,15 @@ def deadman3d_source() -> str:
         from randomfun2026solvers.lm1.programs import PROGRAM_DIR
         (PROGRAM_DIR / "deadman-3d.asm").write_text(deadman3d_source())
     """
+    from randomfun2026solvers.lm1.store import DoomUnit
+
     slots = tape_slots()
     first_free = len(preamble_words()) + 1  # 104: the boot loop's stop address
     assert first_free == slots["CMD"], "the boot stop address is the first scalar"
     inv = UNITS * UNITS          # 1048576  — deltaDist numerator (1/rayDir, Q10*Q10)
     lh_num = H3D * UNITS         # 40960    — lineHeight numerator (h / perpWallDist)
-    hud_addr = H3D * WIDTH       # 2560     — the HUD strip's first pixel
-    floor_end = (H3D - 1) * WIDTH  # 2496   — row 39, the floor's last row
+    codes = DoomUnit.CODES       # the unit's trie codes; d3_unit pins these
+    assert codes["COL"] == 0, "COL must be code 0: the column send is a bare MULI 8"
 
     equ_notes = {
         "MAPB": f"..{slots['MAPB'] + 63:<3} packed map half-columns: word 2x+(y/16), nibble y mod 16",
@@ -635,16 +685,19 @@ def deadman3d_source() -> str:
         "CMD": "this round's command word",
         "XCOL": "the column being rendered (lodev x)",
         "CAMX": "lodev cameraX, Q10", "RDX": "lodev rayDirX", "RDY": "lodev rayDirY",
-        "MAPX": "lodev mapX", "MAPY": "lodev mapY",
         "SDX": "lodev sideDistX", "SDY": "lodev sideDistY",
         "DDX": "lodev deltaDistX", "DDY": "lodev deltaDistY",
-        "STPX": "lodev stepX", "STPY": "lodev stepY",
-        "SIDE": "lodev side (0 = x-side hit)", "PERP": "lodev perpWallDist",
+        "S2X": "2*stepX: the word address moves +-2 per x-step",
+        "STPY": "lodev stepY (the sign picks the PW shift arm)",
+        "PERP": "lodev perpWallDist",
         "HALFH": "lodev lineHeight / 2",
         "DSTART": "lodev drawStart", "DEND": "lodev drawEnd",
         "COLOR": "the wall type t, then the shaded colour",
-        "ADDRV": "the paint cursor, row*64 + XCOL", "AEND": "the paint loop's last address",
-        "PW": "16**(mapY mod 16) during a cell lookup",
+        "PW": "16**(mapY mod 16), maintained incrementally across DDA steps",
+        "WADDR": "MAPB + 2*mapX + mapY/16, maintained incrementally too",
+        "FRACX": "posX mod 1024, hoisted per frame", "FRACY": "posY mod 1024",
+        "PW0": "PW's per-frame seed (the player's own cell)",
+        "WADDR0": "WADDR's per-frame seed",
         "TMP": "scratch (s, frac, packed word)",
         "TMP2": "scratch (the cell lookup's half-column selector)",
         "NEWX": "the candidate posX", "NEWY": "the candidate posY",
@@ -667,9 +720,17 @@ def deadman3d_source() -> str:
         "; (muzzle-flash overlay); 0 idle, higher bits ignored. Turn first (A/D",
         "; cancel), then move along the new heading (W/S cancel), then render.",
         "; An ungraded demo — the slug borrows plotter's problem JSON for nothing",
-        "; but registration; its 64x48 panel is DISPLAY_OVERRIDE's, its input is its",
-        "; own, and its 136-slot STORE rides the grid_block man-memory (STORE_TIER),",
-        "; ~31 ticks an access.",
+        "; but registration; its 64x48 panel belongs to the DOOM unit (.unit doom,",
+        "; lm1/d3_unit.py), its input is its own, and its 134-slot STORE rides the",
+        "; grid_block man-memory (STORE_TIER), ~31 ticks an access.",
+        ";",
+        "; The CPU never touches the display: each viewport column is ONE command",
+        "; word to the write-only column-painter unit — 8*arg + code, code COL=0,",
+        "; arg = ((drawStart*64 + drawEnd)*64 + x)*16 + colour — and the unit paints",
+        "; the wall run and the floor run (stride 64) while the CPU raycasts the",
+        "; next column. FLASH (the baked 8-pixel muzzle diamond), HUD (the baked",
+        "; 512-pixel strip) and COMMIT (SWAP 0) are one command word each; the",
+        "; ceiling stays black because COMMIT clears the next buffer.",
         ";",
         "; Round 0's input carries the whole data preamble (64 packed map half-columns,",
         "; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())",
@@ -686,18 +747,39 @@ def deadman3d_source() -> str:
     ]
     for name, addr in slots.items():
         lines.append(f".equ {name:<6} {addr:<4}         ; {equ_notes[name]}")
+    lines += [
+        "",
+        "; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────",
+        ".unit doom",
+    ]
+    for arm in ("COL", "FLASH", "HUD", "COMMIT"):
+        lines.append(f".equ C_{arm:<6} {codes[arm]}            ; {DoomUnit.ARM_NOTES[arm]}")
+    n_pre = len(preamble_words())
+    boot_full = (n_pre // 8) * 8  # the 8x-unrolled loop loads slots 1..boot_full
+    addr_name = {v: k for k, v in slots.items()}
     lines += f"""
-; ── boot: round 0's data preamble -> tape slots 1..{first_free - 1} ───────────────────────
+; ── boot: round 0's data preamble -> tape slots 1..{n_pre}, the loop unrolled 8x ──
+; (a backward jump costs 8*(P - loop) ticks, so 12 laps beat 103; the last
+; {n_pre - boot_full} slots are loaded straight-line at their own addresses)
         LDI 1
         ST  PTR
-boot:   IN                  ; the next preamble word
-        ST  TMP
-        LD  PTR
-        MOVA TMP            ; store[PTR] = the word
-        INCM PTR
-        LD  PTR
-        SUBI {first_free}
-        BRN boot            ; keep loading while PTR < {first_free}
+""".splitlines()
+    for _ in range(8):
+        lines += [
+            "boot:   IN                  ; the next preamble word" if _ == 0 else "        IN",
+            "        ST  TMP",
+            "        LD  PTR",
+            "        MOVA TMP            ; store[PTR] = the word",
+            "        INCM PTR",
+        ]
+    lines += [
+        "        LD  PTR",
+        f"        SUBI {boot_full + 1}",
+        f"        BRN boot            ; keep looping while PTR < {boot_full + 1}",
+    ]
+    for addr in range(boot_full + 1, n_pre + 1):
+        lines += ["        IN", f"        ST  {addr_name[addr]}"]
+    lines += f"""
 
 ; ── round: one key-bitmask word in, exactly one committed frame out ──────────
 ; The MUX decode: bits peeled low to high with a MODI 2 / DIVI 2 ladder, so
@@ -822,7 +904,34 @@ comy:   LD  NEWY
         JMP render
 
 ; ── render: lodev's per-column raycast, columns 0..{WIDTH - 1} ──────────────────────
-render: LDI 0
+; The per-frame prologue: everything that depends only on the player's position
+; is computed once — the fractional position, and the cell-lookup seeds PW0 (the
+; nibble divisor 16**(mapY mod 16)) and WADDR0 (the packed half-column's slot,
+; MAPB + 2*mapX + mapY/16). The DDA then maintains PW/WADDR *incrementally*, so
+; the per-step lookup is LDA/DIV/MODI instead of the full 16-instruction unpack.
+render: LD  POSX
+        MODI {UNITS}
+        ST  FRACX           ; posX - mapX*1024, hoisted out of sidex
+        LD  POSY
+        MODI {UNITS}
+        ST  FRACY
+        LD  POSY
+        DIVI {UNITS}
+        ST  TMP             ; mapY
+        MODI 16
+        ADDI POWB
+        LDA
+        ST  PW0             ; 16**(mapY mod 16)
+        LD  TMP
+        DIVI 16
+        ST  TMP2            ; the half-column selector, mapY / 16
+        LD  POSX
+        DIVI {UNITS}
+        MULI 2
+        ADD TMP2
+        ADDI MAPB
+        ST  WADDR0          ; the packed half-column's tape slot
+        LDI 0
         ST  XCOL
 colset: LD  XCOL
         MULI 32
@@ -838,12 +947,10 @@ colset: LD  XCOL
         DIVI {UNITS}
         ADD DIRY
         ST  RDY             ; rayDirY = dirY + planeY*cameraX
-        LD  POSX
-        DIVI {UNITS}
-        ST  MAPX            ; mapX = int(posX)
-        LD  POSY
-        DIVI {UNITS}
-        ST  MAPY            ; mapY = int(posY)
+        LD  PW0
+        ST  PW              ; the ray starts in the player's cell
+        LD  WADDR0
+        ST  WADDR
         ; deltaDistX = abs(1/rayDirX) -> |{inv} / rayDirX|; DIV by 0 is 0 on
         ; this CPU, so a zero ray substitutes BIG = 2**30 (plan risk R2)
         LD  RDX
@@ -870,95 +977,109 @@ ddyneg: NEG
         JMP sidex
 ddyinf: LDI {BIG}
         ST  DDY
-        ; stepX / sideDistX from the fractional position (lodev's two arms)
-sidex:  LD  POSX
-        MODI {UNITS}
-        ST  TMP             ; fracX = posX - mapX*1024
-        LD  RDX
+        ; stepX / sideDistX from the fractional position (lodev's two arms);
+        ; stepX itself is only ever used to move the word address, so the arm
+        ; records S2X = 2*stepX instead of stepX
+sidex:  LD  RDX
         BRN sxneg
-        LDI 1
-        ST  STPX            ; stepX = 1
+        LDI 2
+        ST  S2X             ; stepX = 1 -> the half-column slot moves +2
         LDI {UNITS}
-        SUB TMP
+        SUB FRACX
         MUL DDX
         DIVI {UNITS}
         ST  SDX             ; sideDistX = (1024 - fracX) * deltaDistX / 1024
         JMP sidey
 sxneg:  LDI 0
-        SUBI 1
-        ST  STPX            ; stepX = -1
-        LD  TMP
+        SUBI 2
+        ST  S2X             ; stepX = -1 -> -2
+        LD  FRACX
         MUL DDX
         DIVI {UNITS}
         ST  SDX             ; sideDistX = fracX * deltaDistX / 1024
-sidey:  LD  POSY            ; stepY / sideDistY, the same two arms
-        MODI {UNITS}
-        ST  TMP
-        LD  RDY
+sidey:  LD  RDY             ; stepY / sideDistY, the same two arms
         BRN syneg
         LDI 1
         ST  STPY
         LDI {UNITS}
-        SUB TMP
+        SUB FRACY
         MUL DDY
         DIVI {UNITS}
         ST  SDY
-        JMP dda
+        JMP dda0
 syneg:  LDI 0
         SUBI 1
         ST  STPY
-        LD  TMP
+        LD  FRACY
         MUL DDY
         DIVI {UNITS}
         ST  SDY
-        ; the DDA; a sideDist tie goes to the Y arm (lodev's else — risk R5)
-dda:    LD  SDX
+        ; the DDA, unrolled {DDA_UNROLL}x: a backward jump costs 8*(P - loop) ticks on
+        ; this machine, so only every {DDA_UNROLL}th empty step pays a full lap; a
+        ; sideDist tie goes to the Y arm (lodev's else — risk R5)
+""".splitlines()
+    for k in range(DDA_UNROLL):
+        nxt = f"dda{k + 1}" if k < DDA_UNROLL - 1 else "dda0"
+        nxt_note = "the next unrolled step" if k < DDA_UNROLL - 1 else "the backward lap"
+        lines += f"""
+dda{k}:   LD  SDX
         SUB SDY
-        BRN xarm            ; sideDistX < sideDistY -> step in x
+        BRN xarm{k}           ; sideDistX < sideDistY -> step in x
         LD  SDY
         ADD DDY
         ST  SDY
-        LD  MAPY
-        ADD STPY
-        ST  MAPY
-        LDI 1
-        ST  SIDE            ; side = 1 (y-side)
-        JMP hit
-xarm:   LD  SDX
-        ADD DDX
-        ST  SDX
-        LD  MAPX
-        ADD STPX
-        ST  MAPX
-        LDI 0
-        ST  SIDE            ; side = 0 (x-side)
-hit:    LD  MAPY            ; the inlined cell lookup at (mapX, mapY)
-        ST  TMP2
-        MODI 16
-        ADDI POWB
-        LDA
-        ST  PW              ; 16**(mapY mod 16)
-        LD  TMP2
-        DIVI 16
-        ST  TMP2            ; the half-column selector, mapY / 16
-        LD  MAPX
-        MULI 2
-        ADD TMP2
-        ADDI MAPB
-        LDA
+        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+        BRN yneg{k}
+        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru{k}           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
+        JMP hity{k}
+yneg{k}:  LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd{k}           ; ... and 1/16 floors to 0
+        JMP hity{k}
+ywru{k}:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper half-column word
+        JMP hity{k}
+ywrd{k}:  LDI {16 ** 15}
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower half-column word
+        JMP hity{k}
+hity{k}:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+        LDA                 ; the packed half-column word at (mapX, mapY)
         DIV PW
         MODI 16
-        BRZ dda             ; empty -> keep stepping (the backward lap)
-        ST  COLOR           ; hit: the wall type t in 1..7
-        ; perpWallDist = sideDist - deltaDist of the hit side, clamped to >= 1
-        LD  SIDE
-        BRZ perpx
-        LD  SDY
-        SUB DDY
+        BRZ {nxt}            ; empty -> {nxt_note}
+        JMP why             ; a y-side wall: t is dark
+xarm{k}:  LD  SDX
+        ADD DDX
+        ST  SDX
+        LD  WADDR
+        ADD S2X
+        ST  WADDR           ; mapX += stepX is the half-column slot moving +-2
+        LD  WADDR
+        LDA                 ; the x-side hit test
+        DIV PW
+        MODI 16
+        BRZ {nxt}            ; empty -> {nxt_note}
+        JMP whx             ; an x-side wall: t is sunlit""".splitlines()
+    lines += f"""
+; Which arm found the wall picks the whole tail: no per-step side flag needed.
+; x-side (sunlit): the bright variant t + 8; perp = sideDistX - deltaDistX.
+whx:    ADDI 8
+        ST  COLOR
+        LD  SDX
+        SUB DDX
         ST  PERP
         JMP pclip
-perpx:  LD  SDX
-        SUB DDX
+why:    ST  COLOR           ; y-side: the dark variant, perp from the y pair
+        LD  SDY
+        SUB DDY
         ST  PERP
 pclip:  SUBI 1              ; ST preserved ACC = perpWallDist
         BRN pone
@@ -980,86 +1101,47 @@ dehi:   LD  HALFH
         ADDI {MID}
         ST  DEND            ; drawEnd = {MID} + halfh
         SUBI {H3D}
-        BRN shade           ; drawEnd <= {H3D - 1}: no clamp
+        BRN send            ; drawEnd <= {H3D - 1}: no clamp
         LDI {H3D - 1}
         ST  DEND
-shade:  LD  SIDE            ; lodev halves y-side colours; here x-side is t + 8
-        BRZ sunlit
-        JMP paint
-sunlit: LD  COLOR
-        ADDI 8
-        ST  COLOR           ; the sunlit (bright) variant
-paint:  LD  DSTART          ; the wall run: rows drawStart..drawEnd, stride {WIDTH}
+        ; (no shade block: whx/why already picked the sunlit or dark colour)
+        ; the whole column is ONE command word to the unit, which paints the wall
+        ; run (drawStart..drawEnd in COLOR) and the floor run (drawEnd+1..{H3D - 1}
+        ; in 8) at stride {WIDTH} while the CPU raycasts the next column; the
+        ; ceiling stays black because COMMIT cleared the next buffer. The arg is
+        ; the unit's own loop seed: seed = (drawStart*{WIDTH} + x)*16 + colour - 1024
+        ; (its wall lap adds 1024 *before* painting), then arg = seed*64 + n_wall
+send:   LD  DSTART
         MULI {WIDTH}
         ADD XCOL
-        ST  ADDRV
-        LD  DEND
+        MULI 16
+        ADD COLOR
+        SUBI {UNITS}           ; seed (may go negative in the top row: that is fine)
         MULI {WIDTH}
-        ADD XCOL
-        ST  AEND
-wallp:  LD  ADDRV
-        DSPA
-        LD  COLOR
-        DSPD
-        LD  ADDRV
-        ADDI {WIDTH}
-        ST  ADDRV
-        SUB AEND
-        BRN wallp           ; next row while ADDRV <= AEND
-        BRZ wallp
-        ; the floor run: rows drawEnd+1..{H3D - 1} paint colour 8 (ceiling stays
-        ; black — SWAP 0 cleared the next buffer)
-        LDI {floor_end}
-        ADD XCOL
-        ST  AEND            ; row {H3D - 1}, this column
-floorp: LD  AEND
-        SUB ADDRV
-        BRN colnxt          ; ADDRV past row {H3D - 1}: the column is done
-        LD  ADDRV
-        DSPA
-        LDI 8
-        DSPD
-        LD  ADDRV
-        ADDI {WIDTH}
-        ST  ADDRV
-        JMP floorp
+        ADD DEND
+        SUB DSTART
+        ADDI 1              ; arg = seed*64 + (drawEnd - drawStart + 1)
+        MULI 8              ; the command word: 8*arg + C_COL, and C_COL == 0
+        SND
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI {WIDTH - 1}
-        BRZ flash           ; that was column {WIDTH - 1}: the viewport is painted
+        BRZ flash           ; that was column {WIDTH - 1}: the viewport is sent
         JMP colset
 
-; ── muzzle flash: FLASH's {len(FLASH)} pixels, only when this round FIREd ────────────
+; ── muzzle flash: the unit's baked {len(FLASH)}-pixel diamond, when this round FIREd ─
 flash:  LD  FIRE
         BRZ hud
+        LDI C_FLASH
+        SND
+
+; ── HUD strip (rows {H3D}..{HEIGHT - 1}) and the commit: one command word each ───────
+hud:    LDI C_HUD
+        SND                 ; the baked HUD strip
+        LDI C_COMMIT
+        SND                 ; SWAP 0: commit THE one frame of this round
+        JMP round
 """.splitlines()
-    next_addr = None
-    acc: int | None = None
-    for r, c, color in FLASH:
-        addr = r * WIDTH + c
-        if addr != next_addr:
-            lines.append(f"        LDI {addr}")
-            lines.append(f"        DSPA                ; row {r}, column {c}")
-            acc = None
-        if acc != color:
-            lines.append(f"        LDI {color}")
-            acc = color
-        lines.append("        DSPD")
-        next_addr = addr + 1
-    lines += f"""
-; ── HUD strip (rows {H3D}..{HEIGHT - 1}): RLE runs generated from hud_runs() ──────────
-hud:    LDI {hud_addr}
-        DSPA                ; park the cursor at row {H3D}, column 0
-""".splitlines()
-    for color, count in hud_runs():
-        lines.append(f"        LDI {color}               ; a run of {count}")
-        lines.extend(["        DSPD"] * count)
-    lines += [
-        "",
-        "        LDI 0",
-        "        DSPS                ; commit THE one frame of this round",
-        "        JMP round",
-        "",
-    ]
+    lines.append("")
     return "\n".join(lines)
 
 

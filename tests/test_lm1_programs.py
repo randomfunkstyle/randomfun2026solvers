@@ -195,20 +195,20 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # are lodev's fixed-point products and quotients (a runtime rayDir cannot
         # reach DIVI), `LDA` indexes the map/POW16/heading tables, `MOVA`+`INCM`
         # are the boot loop that copies round 0's data preamble onto the tape,
-        # `NEG` is deltaDist's abs, and the three ports paint. Ungraded, so the
-        # deep trie is paid gladly rather than contorted around (see the plan).
+        # `NEG` is deltaDist's abs, and `SND` drives the DOOM painter unit —
+        # since the unit owns the panel, the three DSP* ports are gone.
+        # Ungraded, so the deep trie is paid gladly rather than contorted
+        # around (see the plan).
         "deadman-3d": {
             "DIV",
             "DIVI",
-            "DSPA",
-            "DSPD",
-            "DSPS",
             "INCM",
             "LDA",
             "MODI",
             "MOVA",
             "MUL",
             "NEG",
+            "SND",
         },
         "palette": {"DSPA", "DSPD", "DSPS"},
         # little-little-man interprets a 2D language, so its extensions are what an
