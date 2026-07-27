@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>reverse-a-list — parallel value carriers</title>
+<style>
+body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #111827; color: #e5e7eb; }
+.wrap { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100vh; }
+.canvas { overflow: auto; padding: 16px; position: relative; }
+.zoom-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; width: max-content; margin-bottom: 10px; padding: 6px; border: 1px solid #374151; background: #0b1120; }
+.zoom-toolbar button { width: 28px; height: 28px; padding: 0; border: 1px solid #64748b; border-radius: 3px; background: #111827; color: #e5e7eb; font: 16px ui-monospace, monospace; cursor: pointer; }
+.zoom-toolbar button:hover { background: #1e293b; }
+.zoom-toolbar output { min-width: 42px; color: #cbd5e1; font: 12px ui-monospace, monospace; text-align: center; }
+.zoom-stage { position: relative; }
+svg { display: block; background: #030712; border: 1px solid #374151; transform-origin: top left; }
+.cell { fill: #e5e7eb; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; text-anchor: middle; }
+.region { fill: color-mix(in srgb, var(--c), transparent 88%); stroke: var(--c); stroke-width: .75; }
+.circle-region { stroke-dasharray: 3.5 2; }
+.lane { fill: none; stroke: var(--c); stroke-width: 1.5; opacity: .88; marker-end: url(#arrow); }
+.lane.pipe { stroke-dasharray: 2 1.5; }
+.lane.expected { stroke-width: 2.5; opacity: .5; }
+.label, .lane-label { fill: #f9fafb; font: 6.5px ui-monospace, SFMono-Regular, Menlo, monospace; paint-order: stroke; stroke: #030712; stroke-width: 2px; }
+.debug-target { cursor: pointer; }
+svg .debug-target.is-active { filter: brightness(1.8); opacity: 1; stroke-width: 2; }
+svg text.debug-target.is-active { fill: #fff; font-weight: 700; }
+li.debug-target { cursor: pointer; border-left: 3px solid transparent; padding-left: 8px; }
+li.debug-target.is-active { background: #172554; border-left-color: #e5e7eb; }
+aside { overflow: auto; border-left: 1px solid #374151; padding: 16px; background: #0b1120; }
+li { margin: 0 0 10px; line-height: 1.35; }
+span { display: inline-block; width: 10px; height: 10px; margin-right: 8px; }
+#tooltip { position: fixed; z-index: 10; max-width: 340px; pointer-events: none; opacity: 0; transform: translate(14px, 14px); padding: 10px 12px; border: 1px solid #64748b; border-radius: 4px; background: #020617; box-shadow: 0 12px 30px #0008; transition: opacity .1s; }
+#tooltip.visible { opacity: 1; }
+#tooltip strong, #tooltip small, #tooltip p { display: block; margin: 0; }
+#tooltip small { margin-top: 2px; color: #94a3b8; text-transform: uppercase; }
+#tooltip p { margin-top: 6px; color: #e2e8f0; }
+</style>
+<div class="wrap">
+<div class="canvas">
+<div class="zoom-toolbar" aria-label="Diagram zoom">
+<button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out">-</button>
+<output id="zoom-value">100%</output>
+<button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+<button type="button" id="zoom-reset" title="Reset zoom" aria-label="Reset zoom">1:1</button>
+</div>
+<div class="zoom-stage" id="zoom-stage">
+<svg id="diagram" width="258" height="258" viewBox="0 0 258 258">
+<defs><marker id="arrow" markerWidth="2" markerHeight="2" refX="1.5" refY=".75" orient="auto"><path d="M0,0 L0,1.5 L1.75,.75 z" fill="#f9fafb"/></marker></defs>
+<rect class="region debug-target" data-name="worker" data-kind="region" data-detail="Controller and two collision-free value-carrier delay circuits." x="17.7" y="11.4" width="140" height="210" style="--c:#38bdf8"><title>worker: Controller and two collision-free value-carrier delay circuits.</title></rect><text class="label debug-target" data-name="worker" data-kind="region" data-detail="Controller and two collision-free value-carrier delay circuits." x="24" y="10">worker</text><rect class="region debug-target" data-name="even-rank delay" data-kind="region" data-detail="An 18-tick circuit; ] halves rank and m counts paired positions." x="31.7" y="25.4" width="56" height="70" style="--c:#22c55e"><title>even-rank delay: An 18-tick circuit; ] halves rank and m counts paired positions.</title></rect><text class="label debug-target" data-name="even-rank delay" data-kind="region" data-detail="An 18-tick circuit; ] halves rank and m counts paired positions." x="38" y="24">even-rank delay</text><rect class="region debug-target" data-name="odd-rank delay" data-kind="region" data-detail="Its nine-tick path skew interleaves odd ranks between even ranks." x="87.7" y="25.4" width="56" height="70" style="--c:#f59e0b"><title>odd-rank delay: Its nine-tick path skew interleaves odd ranks between even ranks.</title></rect><text class="label debug-target" data-name="odd-rank delay" data-kind="region" data-detail="Its nine-tick path skew interleaves odd ranks between even ranks." x="94" y="24">odd-rank delay</text><rect class="region debug-target" data-name="parity dispatcher" data-kind="region" data-detail="x selects a circuit and ] halves the remaining-rank delay." x="59.7" y="81.4" width="84" height="70" style="--c:#a78bfa"><title>parity dispatcher: x selects a circuit and ] halves the remaining-rank delay.</title></rect><text class="label debug-target" data-name="parity dispatcher" data-kind="region" data-detail="x selects a circuit and ] halves the remaining-rank delay." x="66" y="80">parity dispatcher</text><rect class="region debug-target" data-name="controller" data-kind="region" data-detail="Y retains one controller and creates one A-carrying worker per value." x="31.7" y="151.4" width="98" height="56" style="--c:#fb7185"><title>controller: Y retains one controller and creates one A-carrying worker per value.</title></rect><text class="label debug-target" data-name="controller" data-kind="region" data-detail="Y retains one controller and creates one A-carrying worker per value." x="38" y="150">controller</text><rect class="region debug-target" data-name="input" data-kind="region" data-detail="Length-prefixed list input." x="185.7" y="179.4" width="42" height="42" style="--c:#60a5fa"><title>input: Length-prefixed list input.</title></rect><text class="label debug-target" data-name="input" data-kind="region" data-detail="Length-prefixed list input." x="192" y="178">input</text><rect class="region debug-target" data-name="output" data-kind="region" data-detail="The delayed carriers arrive in descending rank order." x="185.7" y="81.4" width="42" height="42" style="--c:#f472b6"><title>output: The delayed carriers arrive in descending rank order.</title></rect><text class="label debug-target" data-name="output" data-kind="region" data-detail="The delayed carriers arrive in descending rank order." x="192" y="80">output</text>
+<polyline class="lane pipe debug-target" data-name="input pipe" data-kind="pipe lane" data-detail="" points="178,201.1 164,201.1" style="--c:#60a5fa"><title>input pipe: </title></polyline><text class="lane-label debug-target" data-name="input pipe" data-kind="pipe lane" data-detail="" x="178" y="187.8">input pipe</text><polyline class="lane pipe debug-target" data-name="output pipe" data-kind="pipe lane" data-detail="" points="164,103.1 178,103.1" style="--c:#f472b6"><title>output pipe: </title></polyline><text class="lane-label debug-target" data-name="output pipe" data-kind="pipe lane" data-detail="" x="164" y="89.8">output pipe</text>
+<text class="cell" x="24" y="24">+</text><text class="cell" x="38" y="24">-</text><text class="cell" x="52" y="24">-</text><text class="cell" x="66" y="24">-</text><text class="cell" x="80" y="24">-</text><text class="cell" x="94" y="24">-</text><text class="cell" x="108" y="24">-</text><text class="cell" x="122" y="24">-</text><text class="cell" x="136" y="24">-</text><text class="cell" x="150" y="24">+</text><text class="cell" x="24" y="38">|</text><text class="cell" x="38" y="38">v</text><text class="cell" x="52" y="38">&lt;</text><text class="cell" x="94" y="38">v</text><text class="cell" x="108" y="38">&lt;</text><text class="cell" x="150" y="38">|</text><text class="cell" x="24" y="52">|</text><text class="cell" x="52" y="52">^</text><text class="cell" x="80" y="52">&lt;</text><text class="cell" x="108" y="52">^</text><text class="cell" x="136" y="52">&lt;</text><text class="cell" x="150" y="52">|</text><text class="cell" x="24" y="66">|</text><text class="cell" x="52" y="66">&gt;</text><text class="cell" x="80" y="66">^</text><text class="cell" x="108" y="66">&gt;</text><text class="cell" x="136" y="66">^</text><text class="cell" x="150" y="66">|</text><text class="cell" x="24" y="80">|</text><text class="cell" x="52" y="80">^</text><text class="cell" x="80" y="80">&lt;</text><text class="cell" x="108" y="80">^</text><text class="cell" x="136" y="80">&lt;</text><text class="cell" x="150" y="80">|</text><text class="cell" x="24" y="94">|</text><text class="cell" x="38" y="94">a</text><text class="cell" x="52" y="94">m</text><text class="cell" x="66" y="94">&gt;</text><text class="cell" x="80" y="94">^</text><text class="cell" x="94" y="94">a</text><text class="cell" x="108" y="94">m</text><text class="cell" x="122" y="94">&gt;</text><text class="cell" x="136" y="94">^</text><text class="cell" x="150" y="94">|</text><text class="cell" x="192" y="94">+</text><text class="cell" x="206" y="94">-</text><text class="cell" x="220" y="94">+</text><text class="cell" x="24" y="108">|</text><text class="cell" x="38" y="108">&gt;</text><text class="cell" x="52" y="108">v</text><text class="cell" x="94" y="108">&gt;</text><text class="cell" x="108" y="108">s</text><text class="cell" x="122" y="108">H</text><text class="cell" x="150" y="108">|</text><text class="cell" x="164" y="108">&gt;</text><text class="cell" x="178" y="108">&gt;</text><text class="cell" x="192" y="108">|</text><text class="cell" x="206" y="108">O</text><text class="cell" x="220" y="108">|</text><text class="cell" x="24" y="122">|</text><text class="cell" x="52" y="122">s</text><text class="cell" x="122" y="122">&gt;</text><text class="cell" x="136" y="122">^</text><text class="cell" x="150" y="122">|</text><text class="cell" x="192" y="122">+</text><text class="cell" x="206" y="122">-</text><text class="cell" x="220" y="122">+</text><text class="cell" x="24" y="136">|</text><text class="cell" x="52" y="136">H</text><text class="cell" x="122" y="136">^</text><text class="cell" x="136" y="136">&lt;</text><text class="cell" x="150" y="136">|</text><text class="cell" x="24" y="150">|</text><text class="cell" x="66" y="150">^</text><text class="cell" x="80" y="150">]</text><text class="cell" x="94" y="150">x</text><text class="cell" x="108" y="150">]</text><text class="cell" x="122" y="150">v</text><text class="cell" x="150" y="150">|</text><text class="cell" x="24" y="164">|</text><text class="cell" x="38" y="164">&gt;</text><text class="cell" x="66" y="164">&gt;</text><text class="cell" x="94" y="164">Y</text><text class="cell" x="108" y="164">v</text><text class="cell" x="122" y="164">&lt;</text><text class="cell" x="150" y="164">|</text><text class="cell" x="24" y="178">|</text><text class="cell" x="94" y="178">m</text><text class="cell" x="108" y="178">v</text><text class="cell" x="136" y="178">^</text><text class="cell" x="150" y="178">|</text><text class="cell" x="24" y="192">|</text><text class="cell" x="66" y="192">^</text><text class="cell" x="80" y="192">r</text><text class="cell" x="94" y="192">d</text><text class="cell" x="108" y="192">&gt;</text><text class="cell" x="136" y="192">^</text><text class="cell" x="150" y="192">|</text><text class="cell" x="192" y="192">+</text><text class="cell" x="206" y="192">-</text><text class="cell" x="220" y="192">+</text><text class="cell" x="24" y="206">|</text><text class="cell" x="38" y="206">^</text><text class="cell" x="52" y="206">r</text><text class="cell" x="66" y="206">b</text><text class="cell" x="80" y="206">@</text><text class="cell" x="94" y="206">U</text><text class="cell" x="150" y="206">|</text><text class="cell" x="164" y="206">&lt;</text><text class="cell" x="178" y="206">&lt;</text><text class="cell" x="192" y="206">|</text><text class="cell" x="206" y="206">I</text><text class="cell" x="220" y="206">|</text><text class="cell" x="24" y="220">+</text><text class="cell" x="38" y="220">-</text><text class="cell" x="52" y="220">-</text><text class="cell" x="66" y="220">-</text><text class="cell" x="80" y="220">-</text><text class="cell" x="94" y="220">-</text><text class="cell" x="108" y="220">-</text><text class="cell" x="122" y="220">-</text><text class="cell" x="136" y="220">-</text><text class="cell" x="150" y="220">+</text><text class="cell" x="192" y="220">+</text><text class="cell" x="206" y="220">-</text><text class="cell" x="220" y="220">+</text>
+</svg>
+</div>
+</div>
+<aside>
+<h1>reverse-a-list — parallel value carriers</h1>
+<p>15 x 15</p>
+<ul><li class="debug-target" data-name="worker" data-kind="region" data-detail="Controller and two collision-free value-carrier delay circuits."><span style="background:#38bdf8"></span><b>worker</b> Controller and two collision-free value-carrier delay circuits.</li>
+<li class="debug-target" data-name="even-rank delay" data-kind="region" data-detail="An 18-tick circuit; ] halves rank and m counts paired positions."><span style="background:#22c55e"></span><b>even-rank delay</b> An 18-tick circuit; ] halves rank and m counts paired positions.</li>
+<li class="debug-target" data-name="odd-rank delay" data-kind="region" data-detail="Its nine-tick path skew interleaves odd ranks between even ranks."><span style="background:#f59e0b"></span><b>odd-rank delay</b> Its nine-tick path skew interleaves odd ranks between even ranks.</li>
+<li class="debug-target" data-name="parity dispatcher" data-kind="region" data-detail="x selects a circuit and ] halves the remaining-rank delay."><span style="background:#a78bfa"></span><b>parity dispatcher</b> x selects a circuit and ] halves the remaining-rank delay.</li>
+<li class="debug-target" data-name="controller" data-kind="region" data-detail="Y retains one controller and creates one A-carrying worker per value."><span style="background:#fb7185"></span><b>controller</b> Y retains one controller and creates one A-carrying worker per value.</li>
+<li class="debug-target" data-name="input" data-kind="region" data-detail="Length-prefixed list input."><span style="background:#60a5fa"></span><b>input</b> Length-prefixed list input.</li>
+<li class="debug-target" data-name="output" data-kind="region" data-detail="The delayed carriers arrive in descending rank order."><span style="background:#f472b6"></span><b>output</b> The delayed carriers arrive in descending rank order.</li>
+<li class="debug-target" data-name="input pipe" data-kind="pipe lane" data-detail=""><span style="background:#60a5fa"></span><b>input pipe</b> </li>
+<li class="debug-target" data-name="output pipe" data-kind="pipe lane" data-detail=""><span style="background:#f472b6"></span><b>output pipe</b> </li></ul>
+</aside>
+</div>
+<div id="tooltip" role="tooltip"><strong></strong><small></small><p></p></div>
+<script>
+const targets = [...document.querySelectorAll('.debug-target')];
+const tooltip = document.querySelector('#tooltip');
+const title = tooltip.querySelector('strong');
+const kind = tooltip.querySelector('small');
+const detail = tooltip.querySelector('p');
+let pinned = null;
+const canvas = document.querySelector('.canvas');
+const stage = document.querySelector('#zoom-stage');
+const diagram = document.querySelector('#diagram');
+const zoomValue = document.querySelector('#zoom-value');
+const baseWidth = 258;
+const baseHeight = 258;
+let zoom = 1;
+let pan = null;
+
+function setZoom(next) {
+  zoom = Math.min(3, Math.max(.35, next));
+  diagram.style.transform = `scale(${zoom})`;
+  stage.style.width = `${baseWidth * zoom}px`;
+  stage.style.height = `${baseHeight * zoom}px`;
+  zoomValue.value = `${Math.round(zoom * 100)}%`;
+  zoomValue.textContent = zoomValue.value;
+}
+document.querySelector('#zoom-in').addEventListener('click', () => setZoom(zoom * 1.25));
+document.querySelector('#zoom-out').addEventListener('click', () => setZoom(zoom / 1.25));
+document.querySelector('#zoom-reset').addEventListener('click', () => setZoom(1));
+canvas.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  setZoom(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+}, { passive: false });
+stage.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.target.closest('.debug-target')) return;
+  pan = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop };
+  stage.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+stage.addEventListener('pointermove', (event) => {
+  if (!pan) return;
+  canvas.scrollLeft = pan.left - (event.clientX - pan.x);
+  canvas.scrollTop = pan.top - (event.clientY - pan.y);
+});
+stage.addEventListener('pointerup', () => { pan = null; });
+stage.addEventListener('pointercancel', () => { pan = null; });
+setZoom(1);
+
+function setActive(name) {
+  for (const target of targets) target.classList.toggle('is-active', target.dataset.name === name);
+}
+function clearActive() {
+  if (!pinned) {
+    for (const target of targets) target.classList.remove('is-active');
+    tooltip.classList.remove('visible');
+  }
+}
+function show(target, event) {
+  title.textContent = target.dataset.name;
+  kind.textContent = target.dataset.kind;
+  detail.textContent = target.dataset.detail || 'No additional note.';
+  tooltip.style.left = event.clientX + 'px';
+  tooltip.style.top = event.clientY + 'px';
+  tooltip.classList.add('visible');
+  setActive(target.dataset.name);
+}
+for (const target of targets) {
+  target.addEventListener('pointerenter', (event) => show(target, event));
+  target.addEventListener('pointermove', (event) => show(target, event));
+  target.addEventListener('pointerleave', clearActive);
+  target.addEventListener('click', (event) => {
+    event.preventDefault();
+    pinned = pinned === target.dataset.name ? null : target.dataset.name;
+    if (pinned) show(target, event); else clearActive();
+  });
+}
+</script>
+</html>
