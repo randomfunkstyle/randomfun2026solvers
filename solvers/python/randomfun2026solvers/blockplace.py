@@ -361,9 +361,12 @@ def walks_are_the_program(room: "Room", worker) -> None:
     the pen dropped fails here even though the grid matches its plan perfectly.
     """
     for name, p in room.placed.items():
+        # Blanks are dropped, not compared: a plan may pad a row with cells the
+        # man walks over doing nothing (`Field.walk`), which is how a branch
+        # column gets aligned.  A *missing* glyph still shifts the sequence.
         walked = "".join(
             "".join(g for _c, g in sorted(row.cells, reverse=not row.east))
-            for row in p.plan.rows)
+            for row in p.plan.rows).replace(" ", "")
         want = block_glyphs(worker, name)
         if walked != want:
             raise Collision(f"{name} walks {walked!r}, its program is {want!r}")
