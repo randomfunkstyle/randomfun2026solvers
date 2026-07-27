@@ -42,6 +42,44 @@ ones — no hidden tricks; they exist to stop hardcoding. Grading runs both.
 
 You pass a case as soon as you emit the correct output; you do not have to halt.
 
+## A local average is not a score
+
+`scoring.score_program` averages the **public** cases; the judge averages **all**
+of them, and the private ones are consistently the longer ones. Every archived
+`.descr` records both numbers for the same grid, so the gap is measurable:
+
+| problem | judge cases | judge avgTicks / our public avg | submissions |
+|---|---|---|---|
+| triangle | 19 | 1.000 | 1 |
+| sudoku-validity | 20 | 1.016 - 1.018 | 10 |
+| little-little-man | 28 | 1.096 | 2 |
+| matmul | 20 | 1.236 - 1.506 | 6 |
+| pathfinder | 18 | 1.306 | 1 |
+| snake | 17 | 1.490 | 1 |
+| reverse-a-list | 20 | 1.562 - 1.565 | 3 |
+| sort-numbers | 25 | 1.572 | 1 |
+| tcp | 20 | 1.596 - 1.597 | 8 |
+| brackets | 26 | 1.763 - 1.930 | 18 |
+| gradebook | 20 | 2.557 - 2.752 | 13 |
+| subset-sum | 20 | 2.733 | 1 |
+| memory | 24 | 2.164 - 4.452 | 15 |
+
+**Project a rebuild without multiplying by this and you are up to 4x
+optimistic.** A 2x speedup measured locally on `gradebook` or `memory` can still
+be a regression on the leaderboard.
+
+The ratio is a property of the *machine*, not only of the problem. It is tight
+wherever a family of submissions shares one algorithm (`sudoku-validity`
+1.016-1.018, `tcp` 1.596-1.597, `reverse-a-list` 1.562-1.565) and wide wherever
+it does not (`memory` 2.164-4.452). What it measures is how steeply the machine's
+cost grows with case size: something linear in the input barely moves
+(`triangle` 1.000), something quadratic is punished hard.
+
+So a rival algorithm's ratio does not carry across to yours — a rebuild that
+changes the cost curve changes the ratio with it. Treat the problem's current
+ratio as a floor for a quadratic rebuild and as an overestimate for a linear one,
+and pin the real number the first time the judge answers.
+
 ## Rounds
 
 A test case contains one or more **rounds** — each an input/expected-output pair.
