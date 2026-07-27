@@ -434,11 +434,17 @@ def add_room(name: str, first: bool) -> Room:
     if first:
         specs.append(PortSpec("prod_in", "in", ("N",)))
     else:
-        # both incoming pipes come down from the band above, so both mouths are
-        # on the north wall and the split is purely by column.
-        specs += [PortSpec("psum_in", "in", ("N",)),
-                  PortSpec("prod_in", "in", ("N",))]
-        ops = [((2, 0), "r", "psum_in"), ((4, 0), "r", "prod_in")]
+        # Both incoming mouths are on the north wall and split purely by column,
+        # and the *product* is read first on purpose: `+` is commutative, so
+        # reading it first puts prod_in west and psum_in east.  That is what lets
+        # the product drop straight down from MUL (which is directly overhead and
+        # west) while the psum arrives from an east channel — and it is what frees
+        # the west channel for the chain.  Read psum first and both channels end
+        # up on the same side, where the chain's riser and the psum's riser cross
+        # at every band and no row assignment exists.
+        specs += [PortSpec("prod_in", "in", ("N",)),
+                  PortSpec("psum_in", "in", ("N",))]
+        ops = [((2, 0), "r", "prod_in"), ((4, 0), "r", "psum_in")]
     return build_room(name, w, 2, lay, specs, ops)
 
 
@@ -470,67 +476,139 @@ def mul_room(name: str) -> Room:
     return build_room(name, W_, H_, lay, specs, ops)
 
 
+def counted_loop_west(c: Circuit, x: int, y: int, body: str) -> tuple[int, int]:
+    """`counted_loop` mirrored: entered heading **west** at (x,y), exits west.
+
+    The peel glyph has to be `a`, not `d`: clockwise from west is north, which
+    walks the man into the ceiling.  Counter-clockwise from west is south, into
+    the body, which is what the eastward loop gets from `d`.
+
+        (x,y)=`<`  (x-1,y)=`a`          a: BP>0 -> CCW/south into the body
+        (x-1,y+1..)= body                  BP==0 -> straight west, out
+        (x-1,y+k+1)=`>`  (x,y+k+1)=`^`
+        (x,y+1)=`m`
+    """
+    k = len(body)
+    c.set(x, y, "<")
+    c.set(x - 1, y, "a")
+    c.run(x - 1, y + 1, body, d=S)
+    c.set(x - 1, y + k + 1, ">")
+    c.set(x, y + k + 1, "^")
+    c.set(x, y + 1, "m")
+    c.blanks(x, y + 2, k - 1, d=S)
+    return x - 2, y
+
+
 def loadf_room(name: str, f: int) -> Room:
-    """Feeder: loads its own b-block into the ring, forwards the others, then
-    per row hands MUL its weight, forwards the rest of the row, and relays one
-    row's worth of ring traffic."""
-    init_head = ">@rsMb"                       # r(block K) s(ring) M b
-    la_x = len(init_head)                      # LA: K x { r ; s(ring) }
+    """Feeder, laid **right to left**.
+
+    Running the code westward is the whole point: it puts the ring writes (the
+    INIT head and LA) at the *east* end and the chain writes (LB, LC) at the
+    *west* end, so `solve_ports` can put ``ring_out`` on the east wall — facing
+    TURN, which the floor plan forces to sit east — and ``chain_out`` on the
+    west wall, facing the chain channel.  Laid the other way round the two
+    pipes both have to leave eastward and cannot be nested; that is what
+    blocked P >= 2.
+
+    The man spawns facing east by definition, so row 0 is two cells (`@v`) that
+    turn him south then west onto the INIT row.
+
+        row 0   .. @ v          spawn, turn down
+        row 1   [LB] <tail> [LA] b M s r <     INIT, running west
+        row 5   transit back to the east edge
+        row 6   [LC] .... b <F> s r <          MAIN, running west
+        row 10  return leg
+    """
     tail = ("1+M" + _times_const(f) + "b") if f else ""
-    main_head = "> rs" + (const_free(f) + "b" if f else "")
-    # LB (init, forward other blocks) and LC (main, forward rest of row) both
-    # send to `chain_out`; stacking them in one column is what makes the
-    # three-way `s` split solvable at all.
-    loop_x = max(la_x + 2 + len(tail), len(main_head))
-    W_ = loop_x + (4 if f else 2)
-    MAIN_Y = 5
-    H_ = MAIN_Y + 6
+    lt = len(tail)
+    cf = const_free(f) if f else ""
+    W_ = max(10, lt + 12)
+    H_, MAIN_Y = 11, 6
+    la_x = W_ - 6                      # LA entry; its body column is la_x-1
+    init_end = W_ - 8                  # first free cell west of LA
+    lb_x = init_end - lt               # LB entry; body column lb_x-1
+    loop_col = lb_x - 1
 
     def lay(c: Circuit) -> None:
-        c.run(0, 0, init_head)
-        ex, _ = c.counted_loop(la_x, 0, "rs")
-        ex, _ = c.run(ex, 0, tail)
+        c.set(W_ - 2, 0, "@")
+        c.set(W_ - 1, 0, "v")
+        c.set(W_ - 1, 1, "<")
+        c.run(W_ - 2, 1, "rsMb", d=W)
+        ex, _ = counted_loop_west(c, la_x, 1, "rs")
         if f:
-            c.counted_loop(loop_x, 0, "rs")
-            ex = loop_x + 2
-        # INIT -> MAIN: east, down the spare column, west along row 4, into MAIN
-        c.route((ex, 0), E, [(W_ - 1, 0), (W_ - 1, 4), (0, 4)], (0, MAIN_Y), E)
-        c.run(0, MAIN_Y, main_head)
-        x = loop_x
+            ex, _ = c.run(ex, 1, tail, d=W)
+            ex, _ = counted_loop_west(c, lb_x, 1, "rs")
+        c.route((ex, 1), W, [(0, 1), (0, 5), (W_ - 1, 5)], (W_ - 1, MAIN_Y), W)
+        ex, _ = c.run(W_ - 2, MAIN_Y, "rs" + (cf + "b" if f else ""), d=W)
         if f:
-            c.counted_loop(loop_x, MAIN_Y, "rs")
-            x = loop_x + 2
-        c.route((x, MAIN_Y), E, [(x, H_ - 1), (0, H_ - 1)], (0, MAIN_Y), E)
+            ex, _ = counted_loop_west(c, lb_x, MAIN_Y, "rs")
+        c.route((ex, MAIN_Y), W, [(0, MAIN_Y), (0, H_ - 1), (W_ - 1, H_ - 1)],
+                (W_ - 1, MAIN_Y), W)
 
     specs = [
         PortSpec("chain_in", "in", ("N",)),
-        PortSpec("chain_out", "out", ("E",)), PortSpec("ring_out", "out", ("N",)),
+        PortSpec("chain_out", "out", ("W",)), PortSpec("ring_out", "out", ("E",)),
         PortSpec("mul_out", "out", ("S",)),
     ]
     ops = [
-        ((3, 0), "s", "ring_out"),
-        ((la_x + 1, 2), "s", "ring_out"),
-        ((3, MAIN_Y), "s", "mul_out"),
+        ((W_ - 3, 1), "s", "ring_out"),
+        ((la_x - 1, 3), "s", "ring_out"),
+        ((W_ - 3, MAIN_Y), "s", "mul_out"),
     ]
     if f:
-        ops += [
-            ((loop_x + 1, 2), "s", "chain_out"),
-            ((loop_x + 1, MAIN_Y + 2), "s", "chain_out"),
-        ]
+        ops += [((loop_col, 3), "s", "chain_out"),
+                ((loop_col, MAIN_Y + 2), "s", "chain_out")]
     else:
         specs = [s for s in specs if s.name != "chain_out"]
     return build_room(name, W_, H_, lay, specs, ops)
 
 
-def src_room(name: str, vals: list[int]) -> Room:
-    """Test-only: emit `vals` then halt.  Only used by the probes."""
-    body = "@" + "".join(f"`{v}`s" if not 0 <= v <= 9 else f"{v}s" for v in vals) + "H"
-    w = len(body)
+def lit_free(n: int) -> str:
+    """Glyphs leaving A = n for any |n| <= 99, using B as scratch and **no
+    backticks** (a backtick pairs by column as well as by row, so one in a
+    generated room can pair with one in another room and swallow a wall)."""
+    if n < 0:
+        return lit_free(-n) + "N"
+    if n <= 9:
+        return str(n)
+    if n <= 18:
+        return f"9M{n - 9}+"          # A=9, B=9, A=n-9, A=(n-9)+9
+    for a in range(9, 1, -1):
+        for b in range(18, 1, -1):
+            c = n - a * b
+            if 0 <= c <= 9:
+                # A=b, B=b, A=a, A=a*b, B=a*b, A=c, A=c+a*b
+                return lit_free(b) + f"M{a}*" + (f"M{c}+" if c else "")
+    raise ValueError(n)
+
+
+def src_room(name: str, vals: list[int], width: int = 44) -> Room:
+    """Test-only stand-in for the front end: emit `vals` in order, then halt.
+
+    Snaked across rows, because a 16-stage probe stream is several hundred
+    values and a single row would be wider than the machine.
+    """
+    body = "".join(lit_free(v) + "s" for v in vals) + "H"
+    span = width - 2
+    chunks = [body[i:i + span] for i in range(0, len(body), span)] or [""]
+    h = len(chunks)
 
     def lay(c: Circuit) -> None:
-        c.run(0, 0, body)
+        for y, chunk in enumerate(chunks):
+            east = y % 2 == 0
+            if y == 0:
+                c.set(0, 0, "@")
+                c.run(1, 0, chunk)
+            elif east:
+                c.set(0, y, ">")
+                c.run(1, y, chunk)
+            else:
+                c.set(width - 1, y, "<")
+                c.run(width - 2, y, chunk, d=W)
+            if y + 1 < h:
+                c.set(width - 1 if east else 0, y, "v")
 
-    return build_room(name, w, 1, lay, [PortSpec("out", "out")], [])
+    return build_room(name, width, h, lay, [PortSpec("out", "out", ("S",))], [])
 
 
 def io_room(name: str, glyph: str, kind: str) -> Room:
@@ -616,24 +694,29 @@ GAP = 16                 # rows between LOADF and MUL: the ring serpentine lives
 
 
 def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
-    """P stages stacked vertically.  `stream` non-None => a source room stands in
-    for the loader (probe mode).  Returns (grid, expected pipe count).
+    """P stages stacked vertically.  Returns (grid, expected pipe count).
 
-    Channel plan, and it is the whole difficulty of this machine.  MUL has three
-    pipes on its north wall, in this column order: ``a_in`` (west), ``ring_out``,
-    ``ring_in`` (east).  That order is *forced* — MUL's first `r` is west of its
-    second, so the a-mouth has to be the western one — and it decides the rest of
-    the floor plan: the ring partner (TURN) must sit **east** so its two pipes
-    nest outside the weight pipe, and the weight must come **straight down** from
-    LOADF.  Everything that has to get past the stage (the chain, the psum) is
-    therefore pushed out to channels: the chain east of TURN, the psum west of
-    the rooms.  Rows in the gap are allocated strictly top-to-bottom so no two
-    pipes want the same cell:
+    THE FLOOR PLAN, AND WHY IT IS THE ONLY ONE
 
-        r_a     weight turns west onto MUL.a_in's column
-        r_ring  MUL.ring_out turns east toward TURN
-        r_ser   the TURN->MUL serpentine's first rung (it is the eastmost target,
-                so it crosses the other two columns above where they are live)
+    MUL's north wall carries three pipes in a *forced* column order —
+    ``a_in`` < ``ring_out`` < ``ring_in`` — because MUL's first `r` (the weight)
+    sits west of its second (the ring).  Everything else follows:
+
+      * TURN sits **east**, so its two pipes nest outside the weight pipe, which
+        drops straight down from LOADF.
+      * the three gap pipes turn on strictly ordered rows, ``r_a`` above
+        ``r_ring`` above ``r_ser``, so each crosses the others' columns only
+        above where they are live.
+      * LOADF is laid right-to-left, so ``ring_out`` is on the east wall facing
+        TURN and ``chain_out`` on the west wall facing the **west channel**.
+      * ADD reads the product before the psum, which puts ``prod_in`` west (fed
+        straight down from MUL) and ``psum_in`` east — so the psum runs down an
+        **east channel** and never meets the chain.
+
+    Two north-south channels on the same side cannot both work: each one's
+    horizontals cross the other's riser at every band, and the row overlap is
+    unavoidable because one spans the top of a band and the other the bottom.
+    Putting them on opposite sides is the whole trick.
     """
     loadf = [loadf_room(f"LOADF{i}", p - 1 - i) for i in range(p)]
     muls = [mul_room(f"MUL{i}") for i in range(p)]
@@ -641,10 +724,11 @@ def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
     adds = [add_room(f"ADD{i}", i == 0) for i in range(p)]
 
     lw = max(r.bw for r in loadf)
-    X0, SY = 12, 12
-    BANDH = 13 + GAP + 11 + 6 + 4 + 10
-    chx = X0 + lw + 26
-    g = Grid(chx + 8, SY + BANDH * p + 14)
+    X0, SY = 22, 10 + (0 if stream is None else src_room('probe', stream).bh + 8)
+    BANDH = 13 + GAP + 11 + 6 + 4 + 12
+    chw = X0 - 4                      # west channel: the a/b chain
+    pse = X0 + lw + 23                # east channel: the psum
+    g = Grid(max(pse, X0 + 50) + 8, SY + BANDH * p + 24)
 
     for i in range(p):
         by = SY + BANDH * i
@@ -660,19 +744,19 @@ def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
         addy = muly + 11 + 6
         L, T, M_, A = loadf[i], turns[i], muls[i], adds[i]
         r_a, r_ring, r_ser = muly - 12, muly - 10, muly - 8
-        mx0, my0 = L.mouth("mul_out")
-        ax, ay = M_.mouth("a_in")
-        rx, ry = M_.mouth("ring_out")
-        bx, byy = T.mouth("back")
-        ox, oy = T.mouth("out")
-        ix, iy = M_.mouth("ring_in")
         east2 = X0 + lw + 6
         east3 = X0 + lw + 20
+        mx0, my0 = L.mouth("mul_out")
+        ax, ay = M_.mouth("a_in")
         g.pipe([(mx0, my0), (mx0, r_a), (ax, r_a), (ax, ay)])
+        rx, ry = M_.mouth("ring_out")
+        bx, byy = T.mouth("back")
         g.pipe([(rx, ry), (rx, r_ring), (east2, r_ring), (east2, byy), (bx, byy)])
         fx, fy = L.mouth("ring_out")
         tx, ty = T.mouth("fill")
-        g.pipe([(fx, fy), (fx, by - 4), (tx, by - 4), (tx, ty)])
+        g.pipe([(fx, fy), (tx, fy), (tx, ty)])
+        ox, oy = T.mouth("out")
+        ix, iy = M_.mouth("ring_in")
         g.pipe([(ox, oy), (ox, r_ser), (east3, r_ser), (east3, r_ser + 2),
                 (ix + 1, r_ser + 2), (ix + 1, r_ser + 4), (east3, r_ser + 4),
                 (east3, r_ser + 6), (ix, r_ser + 6), (ix, iy)])
@@ -681,24 +765,22 @@ def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
         g.pipe([(px, py), (px, py + 2), (qx, py + 2), (qx, qy)])
         npipe += 5
         if i + 1 < p:
-            # chain: east of TURN, down the far channel, back west into the next
-            # LOADF's east wall.  Nothing else lives east of `east3`.
             cx, cy = L.mouth("chain_out")
             nx, ny = loadf[i + 1].mouth("chain_in")
-            g.pipe([(cx, cy), (chx, cy), (chx, ny - 5), (nx, ny - 5), (nx, ny)])
-            # psum: west channel, clear of every room in the band below
+            g.pipe([(cx, cy), (chw, cy), (chw, ny - 4), (nx, ny - 4), (nx, ny)])
             sx0, sy0 = A.mouth("psum_out")
             dx0, dy0 = adds[i + 1].mouth("psum_in")
-            g.pipe([(sx0, sy0), (sx0, sy0 + 2), (X0 - 6, sy0 + 2),
-                    (X0 - 6, dy0 - 2), (dx0, dy0 - 2), (dx0, dy0)])
+            g.pipe([(sx0, sy0), (sx0, sy0 + 2), (pse, sy0 + 2),
+                    (pse, dy0 - 2), (dx0, dy0 - 2), (dx0, dy0)])
             npipe += 2
 
     hx, hy = loadf[0].mouth("chain_in")
     if stream is None:
         raise NotImplementedError("front end not built; see the module docstring")
     src = src_room("SRC", stream)
-    g.place(src, X0, hy - 8)
-    g.pipe([(hx, hy - 5), (hx, hy)])
+    g.place(src, X0, SY - src.bh - 6)
+    sx, sy = src.mouth("out")
+    g.pipe([(sx, sy), (sx, hy - 3), (hx, hy - 3), (hx, hy)])
     npipe += 1
     ox, oy = adds[-1].mouth("psum_out")
     o = io_room("O", "O", "in")

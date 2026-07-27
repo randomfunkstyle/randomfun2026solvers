@@ -34,10 +34,13 @@ def test_mul_north_wall_order_is_forced() -> None:
     assert ports["a_in"][1] < ports["ring_out"][1] < ports["ring_in"][1]
 
 
-def test_add_splits_its_two_north_mouths_by_column() -> None:
+def test_add_reads_the_product_first_so_the_psum_lands_east() -> None:
+    """`+` is commutative, and reading the product first is what puts prod_in
+    west (fed straight down from MUL) and psum_in east (fed from the east
+    channel). That split is what frees the west channel for the chain."""
     ports = ms.add_room("A", first=False).ports
-    assert ports["psum_in"][0] == ports["prod_in"][0] == "N"
-    assert ports["psum_in"][1] < ports["prod_in"][1]
+    assert ports["prod_in"][0] == ports["psum_in"][0] == "N"
+    assert ports["prod_in"][1] < ports["psum_in"][1]
 
 
 def test_solver_refuses_an_unsatisfiable_room() -> None:
@@ -84,12 +87,25 @@ def test_one_stage_machine_builds_with_the_pipes_it_declared() -> None:
 
 
 @pytest.mark.slow
-def test_one_stage_machine_computes_the_product() -> None:
+@pytest.mark.parametrize(
+    "p,a,b,ticks",
+    [(1, [[3], [4]], [[5, 6]], 600),
+     (2, [[1, 2], [3, 4]], [[5, 6], [7, 8]], 900)],
+)
+def test_the_chain_computes_the_product(p, a, b, ticks) -> None:
+    """P=1 proves the ring and the multiply; P=2 proves the adder chain and the
+    stage-to-stage chain under real contention."""
     from randomfun2026solvers.littleman import Littleman
 
-    text, expect = ms.probe(1, [[3], [4]], [[5, 6]])
-    snap = Littleman().tick(text, 400)
+    text, expect = ms.probe(p, a, b)
+    snap = Littleman().tick(text, ticks)
     assert [int(v) for v in snap.output] == expect
+
+
+def test_lit_free_covers_the_entry_range() -> None:
+    """Sources must be able to name every legal matrix entry without a backtick."""
+    for n in range(-99, 100):
+        assert "`" not in ms.lit_free(n)
 
 
 def test_the_mirrored_feeder_unblocks_the_floor_plan() -> None:
