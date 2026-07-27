@@ -235,3 +235,42 @@ So a rebuild wants: ports on the top wall, relay rooms in a band directly above,
 horizontal counted loops with column-ordered bodies, and the two long rings
 serpentined below. MAIN as committed in `matmul_main.py` keeps its program, its
 register discipline and its marker test, but its geometry has to be transposed.
+
+### The blueprint that follows from top-wall ports
+
+With **every** port on one wall the vertical term `(y - top)` is identical for all
+of them, so binding reduces to `|x - col|` alone — a pipe op binds whichever pipe
+is nearest **in column**, at any row. Two consequences, and they pull opposite
+ways, which is what the layout has to exploit:
+
+* a **vertical** loop body keeps every glyph in one column, so all of them bind
+  the *same* pipe — exactly right for repeated sends (`sWsWs` to `cmd`, the gauge
+  fill), useless for anything touching two pipes;
+* a **horizontal** body walks across columns, so it can touch several pipes — the
+  only shape the MAC and the fills can take.
+
+Pipe columns are therefore not free either; they have to be laid out so each
+body's glyphs land on their own pipes. One assignment that satisfies all three
+bodies at once, descending:
+
+    b_ret 20   in 19   a_fwd 18   b_fwd 17   (*) 16   prod 15
+
+    fill A   `rs`       r(in)@19  s(a_fwd)@18
+    fill B   `r s`      r(in)@19  ...  s(b_fwd)@17
+    the MAC  `r  s*s`   r(b_ret)@20 ... s(b_fwd)@17  *@16  s(prod)@15
+
+The MAC's blanks at columns 19 and 18 are not padding to taste — they are what
+puts `s(b_fwd)` on its own pipe's column while `r(b_ret)` sits on its own. That is
+the same reason the existing machine's inner loop has gaps, arrived at from the
+generator side.
+
+Remaining ports (`a_ret`, the three register pairs, `cmd`) are used only in
+straight-line code and in single-pipe vertical loops, so they can take any spare
+columns. Relay rooms sit in a band directly above, keeping those pipes 2–6 cells
+long, and the two long rings serpentine below.
+
+Estimated result: big room ~52x22, relay band ~10 rows, ring band ~11 rows, so
+about 52x43 → footprint 2,704 with roughly 17,000 judged ticks ≈ **46M**. With the
+3-wide SIMD packing on top, ~8,000 judged ticks ≈ **22M**. That is the honest
+ceiling of this architecture; going below it needs the width down, and the width is
+set by how far apart the pipe columns have to be spread.
