@@ -103,6 +103,36 @@ def test_analyze_finds_every_pipe_and_no_extras(built, tmp_path):
     assert len(info["rooms"]) == 10
 
 
+def _judge(values, expected):
+    out = subprocess.run(
+        ["node", "lm.mjs", "judge", str(GRID), "--input", " ".join(map(str, values)),
+         "--expected", " ".join(expected), "--json", "--max-ticks", "3000000"],
+        cwd=LM, capture_output=True, text=True, check=True,
+    )
+    return json.loads(out.stdout)
+
+
+@pytest.mark.slow
+@node_required
+@pytest.mark.parametrize("shape", [(2, 2, 2), (2, 2, 16), (2, 16, 2), (2, 16, 16),
+                                   (16, 2, 2), (16, 2, 16), (16, 16, 2), (16, 16, 16)])
+def test_every_corner_of_the_dimension_box(shape):
+    """All eight (N, M, K) extremes, because each ring is sized by a different product.
+
+    `N*M` fills ring A, `M*K` fills ring B, `K` is ring C's contents and `3N` is
+    `cmd`'s buffer — so a capacity that is one short shows up at one corner and
+    nowhere else. `cmd` in particular deadlocked only at N = 16.
+    """
+    n, m, k = shape
+    rng = __import__("random").Random(hash(shape) & 0xFFFF)
+    a = [[rng.randint(-99, 99) for _ in range(m)] for _ in range(n)]
+    b = [[rng.randint(-99, 99) for _ in range(k)] for _ in range(m)]
+    c = [[sum(a[i][t] * b[t][j] for t in range(m)) for j in range(k)] for i in range(n)]
+    got = _judge([n, m, k] + [v for r in a for v in r] + [v for r in b for v in r],
+                 [str(v) for r in c for v in r])
+    assert got["output"] == [str(v) for r in c for v in r], got.get("reason")
+
+
 @pytest.mark.slow
 @node_required
 def test_all_public_cases_pass_on_the_reference_engine(tmp_path):
