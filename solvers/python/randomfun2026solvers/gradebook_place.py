@@ -349,7 +349,7 @@ ATTEMPTS = 150
 #: the proxy sweep settled on and took 2,446 corridor cells to 2,287 and 16,496
 #: ticks to 15,510 -- 6.0%, at the same 70 columns.
 ORDER = [
-    "INIT", "A_END", "ROUND", "OP", "OP_GO", "SET", "GET", "S_SKIP",
+    "INIT", "A_END", "ROUND", "OP", "OP_GO", "SET", "GET", "S_LOOP",
     "S_L", "S_TEST", "FOUND", "G_HIT", "REST", "S_HIT", "T_SET", "T_END",
     "A_L", "AVG", "D34", "TOP", "T_L", "T_MID", "T_X", "T_CMP", "PHASE",
     "CELL", "STU", "ROSTER", "HORN", "PAD_B", "PADSET",

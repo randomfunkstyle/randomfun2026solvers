@@ -249,6 +249,23 @@ def test_the_grid_holds_every_glyph_the_program_compiles_to(built) -> None:
     assert ops >= worker_glyph_cells()
 
 
+def test_the_grid_builds_exactly_the_eight_pipes_it_draws(built) -> None:
+    """Counted the way the **runtime** counts, which `analyze` does not.
+
+    A corridor cell that turns against the underside of a wall mints a pipe
+    nobody meant: the grid loads, `route-check.mjs` and `lm.mjs analyze` report
+    the pipes that were *drawn*, and the room quietly splits its `s` glyphs
+    across a mouth the author never saw.  Live on `brackets` (five reported,
+    seven built) and again on `sudoku`.  Four bands, two pipes each; six rooms:
+    the worker, three turnarounds and the two I/O rooms.
+    """
+    from randomfun2026solvers.man_png import pipe_mouths, rooms_of
+
+    rows, _dbg, _info = built
+    assert len(rooms_of(rows)) == 6
+    assert len(pipe_mouths(rows)) == 8
+
+
 def test_the_grid_renders_to_a_png_that_a_viewer_would_accept(tmp_path) -> None:
     """The layout is easier to judge by eye than by coordinate, so it renders.
 

@@ -210,3 +210,20 @@ def test_the_banked_grid_passes_every_public_case() -> None:
     failed = [(c.name, c.detail) for c in result.cases if not c.passed]
     assert not failed, failed
     assert len(result.cases) == 5
+
+
+def test_the_shipped_grid_builds_exactly_the_pipes_it_draws() -> None:
+    """Counted the way the runtime counts, which is not the way `analyze` does.
+
+    A corridor cell that turns against the underside of a wall mints a pipe
+    nobody meant; the grid loads, `analyze` reports the drawn pipes, and the room
+    splits its `s` glyphs across a mouth the author never saw.  Live twice today
+    on other machines.  snake draws seven: the ring pair, the I/O pair, and the
+    painter's three port pipes to the panel.
+    """
+    from randomfun2026solvers.man_png import pipe_mouths, rooms_of
+
+    rows = GRID.read_text().rstrip("\n").split("\n")
+    # worker, relay, input room, painter, panel
+    assert len(rooms_of(rows)) == 5
+    assert len(pipe_mouths(rows)) == 7

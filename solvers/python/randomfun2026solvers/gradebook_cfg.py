@@ -198,9 +198,14 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     # rides B untouched: `q`, `r`, `s`, `-` and `X` all leave B alone.
     "GET": (["L0", "st", "ri", "M"], "S_L"),
     "SET": (["L1", "st", "ri", "M"], "S_L"),
-    "S_L": (["rq", "sq", "X"], {"pos": "S_TEST", "zero": "S_TEST", "neg": "S_SKIP"}),
-    "S_TEST": (["-", "X"], {"zero": "FOUND", "pos": "S_SKIP", "neg": "S_SKIP"}),
-    "S_SKIP": (["rr", "sr"], "S_L"),
+    # Two branches a slot, so the loop cannot collapse to one block -- but the
+    # *third* block was only ever `S_SKIP` handing the cell back and returning to
+    # the read.  Rotated into `S_LOOP`, which is `S_SKIP` and `S_L` end to end:
+    # `S_L` is now just the entry `GET`/`SET` arrive at.
+    "S_L": (["rq", "sq", "X"], {"pos": "S_TEST", "zero": "S_TEST", "neg": "S_LOOP"}),
+    "S_TEST": (["-", "X"], {"zero": "FOUND", "pos": "S_LOOP", "neg": "S_LOOP"}),
+    "S_LOOP": (["rr", "sr", "rq", "sq", "X"],
+               {"pos": "S_TEST", "zero": "S_TEST", "neg": "S_LOOP"}),
     "FOUND": (["rt", "X"], {"zero": "G_HIT", "pos": "S_HIT", "neg": "G_HIT"}),
 
     # ══ GET: one shift and one mask ═══════════════════════════════════════════
