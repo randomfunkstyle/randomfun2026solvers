@@ -412,7 +412,28 @@ swapping `<` and `>`, so `cin`, `prod` and `cmd` land on its east wall and `cout
 and `out` on its west. Then both feeds approach from the side they are already on
 and descend without crossing, and `out` runs west to the O room instead of east.
 
-The ADDER's logic is unaffected — a horizontal mirror maps each counted phase onto
-itself with the walk direction reversed — but it must be re-verified on the engine
-after mirroring, because the row order of its three phases is what makes the
-accumulate body read `prod` before `cin`.
+**That does not work, and the reason is structural: a horizontal mirror is not a
+symmetry of this language.** Tested on the engine — the mirrored ADDER probe emits
+nothing, on every shape.
+
+Two independent reasons, either fatal:
+
+* **Flipping an arrowhead reverses its pipe's flow.** `>` becomes `<`, so a pipe
+  that carried values *into* the ADDER now carries them out. A mirror does not
+  reflect the dataflow graph, it inverts it.
+* **`@` always spawns facing east** (SPEC), and no transformation of the grid
+  changes that, so every man in a mirrored room starts walking the wrong way.
+  Patching a `<` into the cell east of each spawn does not rescue it either — the
+  pipe inversion remains.
+
+So the ADDER has to be **re-derived** with its ports on the east wall, not
+transformed. Its three counted phases and their row order (which is what makes the
+accumulate body read `prod` before `cin`) have to be laid out afresh against
+east-facing ports.
+
+Also ruled out: `layout.py`'s `AStarRouter`, which was the obvious tool for the
+remaining pipes. It has no notion of pipe capacity and `score()` *minimises* total
+pipe length — but a pipe's capacity **is** its length, and ring A and ring B need
+257 cells each. A router that shortens pipes optimises against the one hard
+requirement, so it would produce a grid that loads, binds correctly, and deadlocks.
+Capacity-aware routing is the unbuilt piece `task.md` calls for.
