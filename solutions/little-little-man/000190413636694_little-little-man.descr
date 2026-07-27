@@ -1,0 +1,17 @@
+# little-little-man — submission 62e6f9d1-8d64-4b77-a083-10d186c464a7
+
+verdict      done: 28/28 cases, area2 37249, avgTicks 5,111,913, score 190,413,636,694
+submitted    2026-07-27T12:51:07+0300
+grid         193x193
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  6c1b83c6e6e13858194241b4ca9dbf036ca22c17462c4b36a6e794bc22171f1c
+commit       b90ad3e
+local        little-little-man: 14/14 public frame cases, avg 4,657,242 ticks
+source       tasks/solutions/little-little-man_cpu.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+the hot bank re-sized 104 -> 54 (one spare above the 53 used), and the fold
+re-swept against it to (83, 2200): the square 193x193 at 12 corridor rows
