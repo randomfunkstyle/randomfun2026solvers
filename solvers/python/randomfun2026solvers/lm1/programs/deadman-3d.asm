@@ -4,71 +4,74 @@
 ;   from randomfun2026solvers.lm1.programs import PROGRAM_DIR
 ;   (PROGRAM_DIR / "deadman-3d.asm").write_text(deadman3d_source())
 ;
-; lodev.org's raycaster_flat.cpp on the LM-1: 64x48 first person on the LM-75,
-; one frame per input command (0 fwd, 1 back, 2 left, 3 right, >= 4 no-op).
-; An ungraded demo — the slug borrows plotter's problem JSON for nothing but
-; registration; its 64x48 panel is DISPLAY_OVERRIDE's, its input is its own.
+; lodev.org's raycaster_flat.cpp on the LM-1: DOOM's E1M1, quantized to a
+; 32x32 grid, walked first person at 64x48 on the LM-75 — one frame per input
+; command (0 fwd, 1 back, 2 left, 3 right, >= 4 no-op). An ungraded demo —
+; the slug borrows plotter's problem JSON for nothing but registration; its
+; 64x48 panel is DISPLAY_OVERRIDE's, its input is its own, and its 131-slot
+; STORE rides the grid_block man-memory (STORE_TIER), ~31 ticks an access.
 ;
-; Round 0's input carries the whole data preamble (map rows, POW16, heading
-; tables, spawn state — deadman3d.preamble_words()) followed by the first
-; command: tables ride on INPUT because every ROM word taxes every backward
-; jump by 8 ticks forever, and because the ROM cannot hold the negative
-; components (planeY = -676 at spawn). The pixel contract is deadman3d.render():
-; every expression below is that model's, in its exact operation order.
+; Round 0's input carries the whole data preamble (64 packed map half-columns,
+; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())
+; followed by the first command: tables ride on INPUT because every ROM word
+; taxes every backward jump by 8 ticks forever. The pixel contract is
+; deadman3d.render(): every expression below is that model's, in its exact
+; operation order.
 ;
-; The map-cell lookup floor(MAPROW[x] / 16**y) mod 16 is inlined at its three
-; sites (no stack, no calls): the two move-collision tests and the DDA hit test.
+; The map-cell lookup floor(MAPW[2x + y/16] / 16**(y mod 16)) mod 16 is
+; inlined at its three sites (no stack, no calls): the two move-collision
+; tests and the DDA hit test.
 
-; ── tape slots (deadman3d.tape_slots(); slots 1..71 are the boot data) ───────
-.equ MAPB   1            ; ..16  packed map rows: nibble y of word x = map_cell(x, y)
-.equ POWB   17           ; ..32  16**y — the nibble-extraction divisors
-.equ DIRB   33           ; ..48  packed dir vectors, (dirX+1024)*4096 + (dirY+1024)
-.equ PLNB   49           ; ..64  packed plane vectors, same packing
-.equ POSX   65           ; player x, Q10 (lodev posX)
-.equ POSY   66           ; player y, Q10 (lodev posY)
-.equ HDG    67           ; heading 0..15 (22.5 deg steps, CCW from east)
-.equ DIRX   68           ; lodev dirX
-.equ DIRY   69           ; lodev dirY
-.equ PLANEX 70           ; lodev planeX
-.equ PLANEY 71           ; lodev planeY
-.equ CMD    72           ; this round's command word
-.equ XCOL   73           ; the column being rendered (lodev x)
-.equ CAMX   74           ; lodev cameraX, Q10
-.equ RDX    75           ; lodev rayDirX
-.equ RDY    76           ; lodev rayDirY
-.equ MAPX   77           ; lodev mapX
-.equ MAPY   78           ; lodev mapY
-.equ SDX    79           ; lodev sideDistX
-.equ SDY    80           ; lodev sideDistY
-.equ DDX    81           ; lodev deltaDistX
-.equ DDY    82           ; lodev deltaDistY
-.equ STPX   83           ; lodev stepX
-.equ STPY   84           ; lodev stepY
-.equ SIDE   85           ; lodev side (0 = x-side hit)
-.equ PERP   86           ; lodev perpWallDist
-.equ HALFH  87           ; lodev lineHeight / 2
-.equ DSTART 88           ; lodev drawStart
-.equ DEND   89           ; lodev drawEnd
-.equ COLOR  90           ; the wall type t, then the shaded colour
-.equ ADDRV  91           ; the paint cursor, row*64 + XCOL
-.equ AEND   92           ; the paint loop's last address
-.equ PW     93           ; 16**mapY during a cell lookup
-.equ TMP    94           ; scratch (s, frac, packed word)
-.equ NEWX   95           ; the candidate posX
-.equ NEWY   96           ; the candidate posY
-.equ PTR    97           ; the boot loop's tape cursor
+; ── tape slots (deadman3d.tape_slots(); slots 1..103 are the boot data) ──────
+.equ MAPB   1            ; ..64  packed map half-columns: word 2x+(y/16), nibble y mod 16
+.equ POWB   65           ; ..80  16**k — the nibble-extraction divisors
+.equ HDGB   81           ; ..96  packed headings: base-4096 digits dirX dirY planeX planeY, biased +1024
+.equ POSX   97           ; player x, Q10 (lodev posX)
+.equ POSY   98           ; player y, Q10 (lodev posY)
+.equ HDG    99           ; heading 0..15 (22.5 deg steps, CCW from east)
+.equ DIRX   100          ; lodev dirX
+.equ DIRY   101          ; lodev dirY
+.equ PLANEX 102          ; lodev planeX
+.equ PLANEY 103          ; lodev planeY
+.equ CMD    104          ; this round's command word
+.equ XCOL   105          ; the column being rendered (lodev x)
+.equ CAMX   106          ; lodev cameraX, Q10
+.equ RDX    107          ; lodev rayDirX
+.equ RDY    108          ; lodev rayDirY
+.equ MAPX   109          ; lodev mapX
+.equ MAPY   110          ; lodev mapY
+.equ SDX    111          ; lodev sideDistX
+.equ SDY    112          ; lodev sideDistY
+.equ DDX    113          ; lodev deltaDistX
+.equ DDY    114          ; lodev deltaDistY
+.equ STPX   115          ; lodev stepX
+.equ STPY   116          ; lodev stepY
+.equ SIDE   117          ; lodev side (0 = x-side hit)
+.equ PERP   118          ; lodev perpWallDist
+.equ HALFH  119          ; lodev lineHeight / 2
+.equ DSTART 120          ; lodev drawStart
+.equ DEND   121          ; lodev drawEnd
+.equ COLOR  122          ; the wall type t, then the shaded colour
+.equ ADDRV  123          ; the paint cursor, row*64 + XCOL
+.equ AEND   124          ; the paint loop's last address
+.equ PW     125          ; 16**(mapY mod 16) during a cell lookup
+.equ TMP    126          ; scratch (s, frac, packed word)
+.equ TMP2   127          ; scratch (the cell lookup's half-column selector)
+.equ NEWX   128          ; the candidate posX
+.equ NEWY   129          ; the candidate posY
+.equ PTR    130          ; the boot loop's tape cursor
 
-; ── boot: round 0's data preamble -> tape slots 1..71 ────────────────────────
+; ── boot: round 0's data preamble -> tape slots 1..103 ───────────────────────
         LDI 1
         ST  PTR
-boot:   IN                  ; the next preamble word (negatives arrive here)
+boot:   IN                  ; the next preamble word
         ST  TMP
         LD  PTR
         MOVA TMP            ; store[PTR] = the word
         INCM PTR
         LD  PTR
-        SUBI 72
-        BRN boot            ; keep loading while PTR < 72
+        SUBI 104
+        BRN boot            ; keep loading while PTR < 104
 
 ; ── round: one command word in, exactly one committed frame out ──────────────
 round:  IN                  ; blocks here when the walk is over (the legal end)
@@ -91,19 +94,26 @@ back:   LDI 0
         ST  TMP             ; s = -1 (no negative ROM literals)
 move:   LD  DIRX
         MUL TMP
-        DIVI 2              ; floor(dirX * s / 2) — the half-cell step
+        DIVI 1              ; floor(dirX * s * 1 / 1) — the whole-cell step
         ADD POSX
         ST  NEWX            ; newX
         ; collision X: map_cell(newX / 1024, posY / 1024), inlined
         LD  POSY
         DIVI 1024
+        ST  TMP2            ; mapY (ST preserves ACC)
+        MODI 16
         ADDI POWB
         LDA
-        ST  PW              ; 16**mapY
+        ST  PW              ; 16**(mapY mod 16)
+        LD  TMP2
+        DIVI 16
+        ST  TMP2            ; the half-column selector, mapY / 16
         LD  NEWX
         DIVI 1024
+        MULI 2
+        ADD TMP2
         ADDI MAPB
-        LDA                 ; the packed map row of newX's cell
+        LDA                 ; the packed half-column of newX's cell
         DIV PW
         MODI 16
         BRZ comx            ; empty -> commit posX
@@ -112,17 +122,24 @@ comx:   LD  NEWX
         ST  POSX
 movey:  LD  DIRY
         MUL TMP
-        DIVI 2
+        DIVI 1
         ADD POSY
         ST  NEWY            ; newY
         ; collision Y: map_cell(posX / 1024, newY / 1024) — the UPDATED posX
         LD  NEWY
         DIVI 1024
+        ST  TMP2
+        MODI 16
         ADDI POWB
         LDA
         ST  PW
+        LD  TMP2
+        DIVI 16
+        ST  TMP2
         LD  POSX
         DIVI 1024
+        MULI 2
+        ADD TMP2
         ADDI MAPB
         LDA
         DIV PW
@@ -133,7 +150,7 @@ comy:   LD  NEWY
         ST  POSY
         JMP render
 
-; ── turn arms: heading +-1 mod 16, dir/plane re-unpacked from the tables ─────
+; ── turn arms: heading +-1 mod 16, the packed heading word re-unpacked ───────
 left:   LD  HDG
         ADDI 1
         MODI 16
@@ -144,8 +161,20 @@ right:  LD  HDG
         MODI 16
         ST  HDG
 unpk:   LD  HDG
-        ADDI DIRB
-        LDA                 ; (dirX+1024)*4096 + (dirY+1024)
+        ADDI HDGB
+        LDA                 ; base-4096 digits dirX dirY planeX planeY, +1024 each
+        ST  TMP
+        MODI 4096
+        SUBI 1024
+        ST  PLANEY
+        LD  TMP
+        DIVI 4096
+        ST  TMP
+        MODI 4096
+        SUBI 1024
+        ST  PLANEX
+        LD  TMP
+        DIVI 4096
         ST  TMP
         MODI 4096
         SUBI 1024
@@ -154,17 +183,6 @@ unpk:   LD  HDG
         DIVI 4096
         SUBI 1024
         ST  DIRX
-        LD  HDG
-        ADDI PLNB
-        LDA
-        ST  TMP
-        MODI 4096
-        SUBI 1024
-        ST  PLANEY
-        LD  TMP
-        DIVI 4096
-        SUBI 1024
-        ST  PLANEX
         ; falls through to render
 
 ; ── render: lodev's per-column raycast, columns 0..63 ──────────────────────
@@ -279,10 +297,17 @@ xarm:   LD  SDX
         LDI 0
         ST  SIDE            ; side = 0 (x-side)
 hit:    LD  MAPY            ; the inlined cell lookup at (mapX, mapY)
+        ST  TMP2
+        MODI 16
         ADDI POWB
         LDA
-        ST  PW
+        ST  PW              ; 16**(mapY mod 16)
+        LD  TMP2
+        DIVI 16
+        ST  TMP2            ; the half-column selector, mapY / 16
         LD  MAPX
+        MULI 2
+        ADD TMP2
         ADDI MAPB
         LDA
         DIV PW

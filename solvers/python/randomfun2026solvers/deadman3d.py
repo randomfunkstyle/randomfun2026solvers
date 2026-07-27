@@ -4,9 +4,16 @@
 This module is the **single source of truth** for the deadman-3d demo: an
 integer transliteration of lodev.org's ``raycaster_flat.cpp``
 (https://lodev.org/cgtutor/raycasting.html), rendered 64x48 on the LM-75 —
-3D viewport rows 0..39, HUD strip rows 40..47.  The hand-lowered LM-1 assembly
-(milestone M1+) must match this model **pixel for pixel**; every constant,
-table, and expression here is written the way the asm will compute it.
+3D viewport rows 0..39, HUD strip rows 40..47.  The generated LM-1 assembly
+must match this model **pixel for pixel**; every constant, table, and
+expression here is written the way the asm computes it.
+
+The map is **DOOM's E1M1** (Hangar), hand-quantized to a 32x32 grid — a
+recognizable homage rather than a survey: the hangar start room (the octagon,
+entered from a vestibule flanked by the two entry alcoves), the courtyard with
+the armor bonus behind window slits to the north-east, the computer-area
+corridor west, the zigzag nukage room beyond it with its sawtooth walkway
+walls, and the red exit door set in the west wall.
 
 Numeric contract
 ----------------
@@ -20,7 +27,7 @@ modulo goes through the LM-1 emulator's own semantics, imported from
 * ``sign_mod(a, b)`` — remainder takes the divisor's sign (``MODI``); all
   operands here are kept nonnegative (plan risk R9).
 
-Expressions keep the exact operation order of the plan's asm lowerings, e.g.
+Expressions keep the exact operation order of the asm lowerings, e.g.
 ``rayDirX = floor_div(planeX * cameraX, 1024) + dirX`` (MUL; DIVI 1024; ADD),
 and ``deltaDist`` is ``q = floor_div(1048576, rayDir)`` then ``-q if rayDir <
 0 else q`` (DIV; BRN -> NEG), so a floored quotient of a negative ray gives
@@ -29,7 +36,7 @@ exactly the asm's value.
 Map and orientation (plan risk R10 — the mirror decision)
 ---------------------------------------------------------
 ``MAP_STR`` is printed like a conventional map: **north at the top**.  The
-printed row ``p`` holds the cells with ``y = 15 - p``, i.e. ``map_cell(x, y)``
+printed row ``p`` holds the cells with ``y = 31 - p``, i.e. ``map_cell(x, y)``
 uses x east, y north (y grows *up* the printed page).  Headings are
 ``h * 22.5``° counterclockwise from east: ``dirX = round(1024*cos)``,
 ``dirY = round(1024*sin)`` — heading 0 = east, 4 = north, so ``+1`` heading is
@@ -42,46 +49,53 @@ is dir rotated -90°: ``(dy, -dx)``.  Hence
     planeX = round(675.84 * sin(h * 22.5°))     # 675.84 = 0.66 * 1024
     planeY = round(-675.84 * cos(h * 22.5°))
 
-Evidence this is the non-mirrored sign: at spawn (cell (1,3), facing east) the
-cyan pillar at (2,4) is *north* of the player — the player's left — and it
-renders in the **left** half of the frame; the brown zigzag on the corridor's
-north side stays on the screen's left the whole walk.  Flipping the plane sign
-mirrors both to the right (that is R10's failure mode).
+Evidence this is the non-mirrored sign, exactly as in E1M1: the player spawns
+facing **north** (heading 4), and the courtyard window slits in the octagon's
+north wall (x 22..24) sit *east* of the spawn column x=21 — the player's
+right — and render in the **right** half of the frame, blue armor pedestal
+behind them; the zigzag nukage room is west and sweeps in from the screen's
+left during the turn toward it.  Flipping the plane sign mirrors both (that is
+R10's failure mode).
 
 Wall types and the display palette
 ----------------------------------
 Map nibbles are the wall type t in 1..7 (0 = empty; <= 7 keeps every packed
-row word under 2**63).  Shading: a side==0 (x-side, sunlit) hit paints
+map word under 2**63).  Shading: a side==0 (x-side, sunlit) hit paints
 ``t + 8`` (the ANSI bright variant), a side==1 hit paints ``t``.  Floor is 8,
 ceiling 0 (black).
 
 The LM-75 palette in this repo is the **ANSI** 16-colour set (see
-``lambda_deadman.py`` and ``PALETTE`` below), *not* CGA.  The plan named the
-map colours by CGA indices ("cyan-3, brown-6, blue-1, red-4"), which under the
-ANSI palette would render as brown pillars and a blue door; the visual intent
-wins, so the types are the ANSI indices of the intended colours:
+``lambda_deadman.py`` and ``PALETTE`` below), *not* CGA, and the wall types
+are the ANSI indices of each area's intended colour:
 
-    7 outer walls  (gray / bright white)      2 green accents (room walls)
-    6 cyan pillars (SW start room)            4 blue accents  (door-frame trim)
-    3 brown zigzag (corridor's north side)    1 RED exit door (east wall, inset
-                                                between two gray 7 posts)
+    7 hangar, vestibule + alcoves, courtyard (gray / bright white)
+    2 computer-area corridor walls + block, green armor platform (green)
+    6 / 3 zigzag nukage room: alternating sawtooth spurs (cyan / brown)
+    4 blue armor-bonus pedestal in the courtyard (blue)
+    1 the RED exit door, set in the west wall between gray posts
 
-The HUD block colours got the same ANSI correction: ammo red = 9, face
-yellow = 11, armor blue = 12 (the plan's 12/14/9 were CGA again).
+The HUD block colours are ANSI too: ammo red = 9, face yellow = 11, armor
+blue = 12.
 
 Tape slot map (the asm's .equ table; slot 0 is scratch)
 -------------------------------------------------------
-``preamble_words()`` yields the boot data in exact tape order, slots 1..71:
+``preamble_words()`` yields the boot data in exact tape order, slots 1..103:
 
-    MAPB    1..16   packed map rows: nibble y of word x = map_cell(x, y)
-    POWB   17..32   16**y for y = 0..15
-    DIRB   33..48   packed dir vectors,   (dirX+1024)*4096 + (dirY+1024)
-    PLNB   49..64   packed plane vectors, (planeX+1024)*4096 + (planeY+1024)
-    POSX   65       spawn posX = 1536   (cell 1, Q10 centre)
-    POSY   66       spawn posY = 3584   (cell 3)
-    HDG    67       spawn heading = 0   (east)
-    DIRX   68       spawn dirX  = 1024      DIRY   69   spawn dirY   = 0
-    PLANEX 70       spawn planeX = 0        PLANEY 71   spawn planeY = -676
+    MAPB    1..64   packed half-columns: word ``2x`` holds cells (x, 0..15),
+                    word ``2x+1`` cells (x, 16..31), nibble ``y mod 16`` each
+    POWB   65..80   16**y for y = 0..15
+    HDGB   81..96   packed headings, one word per heading h:
+                    (dirX+1024)*2^36 + (dirY+1024)*2^24
+                    + (planeX+1024)*2^12 + (planeY+1024)   (48 bits, positive)
+    POSX   97       spawn posX = 22016  (cell 21, Q10 centre)
+    POSY   98       spawn posY = 3584   (cell 3)
+    HDG    99       spawn heading = 4   (north — E1M1's real facing)
+    DIRX  100       spawn dirX  = 0         DIRY  101   spawn dirY   = 1024
+    PLANEX 102      spawn planeX = 676      PLANEY 103  spawn planeY = 0
+
+The cell lookup is ``floor(MAPW[2x + y/16] / 16**(y mod 16)) mod 16`` —
+``slot = MAPB + 2*mapX + (mapY / 16)``, divisor ``POWB + (mapY mod 16)`` —
+inlined at its three sites (the DDA hit test and both move-collision checks).
 
 Input protocol: round 0 = preamble + first command; every later round is one
 command word: 0 forward, 1 backward, 2 turn left (+1 heading), 3 turn right
@@ -89,17 +103,20 @@ command word: 0 forward, 1 backward, 2 turn left (+1 heading), 3 turn right
 
 The demo walk (``WALK``)
 ------------------------
-Spawn view (no-op), three steps forward between the pillars, a look to the
-left (turn left, hold, turn right) that sweeps the cyan pillar and green north
-wall, then straight east: out the blue-trimmed doorway, down the corridor with
-the brown zigzag strobing past on the left, ending two cells short of the red
-exit door filling the middle of the screen.  Half-cell steps; 28 commands
-(the plan guessed ~17, but the SW room to the east wall is 12 cells, i.e. 24
-half-cell steps — the route is as short as the geometry allows).
+Spawn view (no-op) at E1M1's start: up the vestibule into the octagon.  Seven
+steps north, the courtyard windows and the blue armor pedestal growing on the
+right; a half-look right at them (turn right, hold, turn left); four left
+turns to face west, sweeping the octagon's north and west walls; then straight
+west — through the green computer-area corridor, the computer block sliding
+past on the right, to the nukage-room doorway, where a second half-look sweeps
+the cyan/brown sawtooth spurs of the zigzag walkway with the red door in
+frame — ending on the walkway with the red exit door centred between sunlit
+walls.  Whole-cell steps (E1M1 distances at half-cell steps would cost ~60
+commands); 35 commands.
 
-``deadman3d_source()`` (milestones M1+M2) emits the LM-1 assembly lowered from
-this model; ``tape_slots()`` is its ``.equ`` table (the docstring's slot map
-plus the scalars, numbered consecutively from 72).
+``deadman3d_source()`` emits the LM-1 assembly lowered from this model;
+``tape_slots()`` is its ``.equ`` table (the docstring's slot map plus the
+scalars, numbered consecutively from 104).
 """
 from __future__ import annotations
 
@@ -115,8 +132,8 @@ __all__ = [
     "WIDTH", "HEIGHT", "H3D", "MID", "UNITS", "HEADINGS",
     "MOVE_NUM", "MOVE_DEN", "BIG", "MAP_SIZE", "MAP_STR", "PALETTE",
     "SPAWN", "State", "WALK",
-    "div", "map_cell", "map_row_words", "dir_table", "plane_table",
-    "unpack_vec", "step", "render", "hud_rows", "hud_runs",
+    "div", "map_cell", "map_words", "heading_table",
+    "unpack_heading", "step", "render", "hud_rows", "hud_runs",
     "preamble_words", "input_words", "frames_for_commands", "cases_json",
     "tape_slots", "deadman3d_source", "main",
 ]
@@ -128,10 +145,12 @@ H3D = 40            # 3D viewport rows 0..39
 MID = 20            # horizon row of the 3D viewport
 UNITS = 1024        # Q10 fixed point: 1024 units = one map cell
 HEADINGS = 16       # baked headings, 22.5° apart
-#: A move is half a cell along dir: dir * 512 / 1024, which the asm computes as
-#: ``DIVI 2`` — written here as ``floor_div(dir * s * MOVE_NUM, MOVE_DEN)``.
+#: A move is one whole cell along dir (E1M1 distances: the demo walk crosses
+#: ~17 cells, and half-cell steps would double the command count past budget).
+#: The asm computes it as ``DIVI {MOVE_DEN}`` — written here as
+#: ``floor_div(dir * s * MOVE_NUM, MOVE_DEN)``.
 MOVE_NUM = 1
-MOVE_DEN = 2
+MOVE_DEN = 1
 BIG = 2 ** 30       # stands in for an infinite deltaDist when rayDir == 0
 
 
@@ -140,26 +159,48 @@ def div(a: int, b: int) -> int:
     return floor_div(a, b)[0]
 
 
-# ── the map (16x16, north at the top; see the module docstring) ──────────────
-MAP_SIZE = 16
-#: ``.`` = empty, hex nibble = wall type 1..7.  Printed row p is y = 15 - p.
+# ── the map (E1M1 at 32x32, north at the top; see the module docstring) ──────
+MAP_SIZE = 32
+#: ``.`` = empty, hex nibble = wall type 1..7.  Printed row p is y = 31 - p.
+#: West to east: the zigzag nukage room (sawtooth spurs 6/3, green armor
+#: platform 2 at its north end, RED exit door 1 in the west wall), the green
+#: computer-area corridor with its computer block, the hangar octagon with the
+#: south vestibule and its two entry alcoves (spawn between them at x=21), and
+#: the courtyard (east strip + NE outdoor area, blue armor pedestal 4) behind
+#: window slits.
 MAP_STR = """\
-7777777777777777
-7..............7
-7..............7
-7..............7
-7..............7
-7..............7
-7........33....7
-7......33......7
-7....33........7
-7222222........7
-7.....2..33..337
-7.6...433..33.77
-7..............1
-7...6.4777777777
-7.....2777777777
-7777777777777777
+77777777777777777777777777777777
+77777777777777777777777777777777
+77777777777777777777777777777777
+77......777777777777777777777777
+77.2....777777777777777777777777
+77...333777777777777777777777777
+77...333777777777777777777777777
+77......777777777777777777777777
+77......777777777777777777777777
+77666...77777777777............7
+77666...77777777777............7
+77......77777777777............7
+77......77777777777............7
+77...33377777777777............7
+77...33377777777777....4.......7
+77......77777777777............7
+77......77777777777777...777...7
+77666...7777777777.......777...7
+77666...77777777...........7...7
+77......22222222...........7...7
+71.........222.................7
+71.............................7
+71.............................7
+77......22222222...........7...7
+77......77777777...........7...7
+77......7777777777.......777...7
+77777777777777777777...77777...7
+77777777777777777777...777777777
+77777777777777777.........777777
+77777777777777777..7...7..777777
+77777777777777777777777777777777
+77777777777777777777777777777777
 """
 
 _PRINTED_ROWS = MAP_STR.splitlines()
@@ -167,49 +208,42 @@ assert len(_PRINTED_ROWS) == MAP_SIZE and all(len(r) == MAP_SIZE for r in _PRINT
 
 
 def _grid_cell(x: int, y: int) -> int:
-    """Wall type straight from ``MAP_STR`` (x east, y north; row 0 is y=15)."""
+    """Wall type straight from ``MAP_STR`` (x east, y north; row 0 is y=31)."""
     ch = _PRINTED_ROWS[MAP_SIZE - 1 - y][x]
     return 0 if ch == "." else int(ch, 16)
 
 
-def map_row_words() -> list[int]:
-    """The 16 packed map words the tape holds: nibble y of word x = cell(x,y)."""
+def map_words() -> list[int]:
+    """The 64 packed map words the tape holds, two per column: word ``2x``
+    packs cells (x, 0..15), word ``2x+1`` cells (x, 16..31), nibble y mod 16."""
     words = []
     for x in range(MAP_SIZE):
-        word = 0
-        for y in range(MAP_SIZE):
-            t = _grid_cell(x, y)
-            assert t == 0 or 1 <= t <= 7, f"wall type {t} at {(x, y)} not in 1..7"
-            word += t * 16 ** y
-        assert 0 < word < 2 ** 63, f"packed row {x} overflows a signed word"
-        words.append(word)
+        for half in range(2):
+            word = 0
+            for k in range(16):
+                t = _grid_cell(x, 16 * half + k)
+                assert t == 0 or 1 <= t <= 7, f"wall type {t} at {(x, 16 * half + k)} not in 1..7"
+                word += t * 16 ** k
+            assert 0 < word < 2 ** 63, f"packed map word ({x},{half}) overflows a signed word"
+            words.append(word)
     return words
 
 
-_ROW_WORDS = map_row_words()
-#: POW16[y] = 16**y — the tape's divisor table for nibble extraction.
-POW16 = [16 ** y for y in range(MAP_SIZE)]
+_MAP_WORDS = map_words()
+#: POW16[k] = 16**k — the tape's divisor table for nibble extraction.
+POW16 = [16 ** k for k in range(16)]
 
 
 def map_cell(x: int, y: int) -> int:
-    """Cell lookup exactly as the asm does it: ``LDA MAPB+x; DIV POWB+y; MODI 16``."""
-    return sign_mod(div(_ROW_WORDS[x], POW16[y]), 16)
+    """Cell lookup exactly as the asm does it: divisor ``POWB + (y mod 16)``
+    via ``LDA``, word ``MAPB + 2x + (y / 16)`` via ``LDA``, then ``DIV PW;
+    MODI 16``."""
+    pw = POW16[sign_mod(y, 16)]
+    word = _MAP_WORDS[2 * x + div(y, 16)]
+    return sign_mod(div(word, pw), 16)
 
 
-# ── heading tables ───────────────────────────────────────────────────────────
-def _pack_vec(v: int, w: int) -> int:
-    """``(v+1024)*4096 + (w+1024)`` — both components in one positive word."""
-    word = (v + UNITS) * 4096 + (w + UNITS)
-    assert word > 0, f"packed vector ({v},{w}) is not positive"
-    return word
-
-
-def unpack_vec(word: int) -> tuple[int, int]:
-    """The asm's unpack: ``DIVI 4096`` (quotient *and* remainder), minus 1024."""
-    q, r = floor_div(word, 4096)
-    return q - UNITS, r - UNITS
-
-
+# ── heading table ────────────────────────────────────────────────────────────
 def _dir_vec(h: int) -> tuple[int, int]:
     th = math.radians(h * 22.5)
     return round(UNITS * math.cos(th)), round(UNITS * math.sin(th))
@@ -221,18 +255,31 @@ def _plane_vec(h: int) -> tuple[int, int]:
     return round(675.84 * math.sin(th)), round(-675.84 * math.cos(th))
 
 
-def dir_table() -> list[int]:
-    """16 packed direction vectors, heading h at index h."""
-    return [_pack_vec(*_dir_vec(h)) for h in range(HEADINGS)]
+def _pack_heading(dx: int, dy: int, px: int, py: int) -> int:
+    """All four components in one positive word: base-4096 digits dx dy px py,
+    each biased +1024 (component range is +-1024, so every digit fits)."""
+    word = (dx + UNITS) * 2 ** 36 + (dy + UNITS) * 2 ** 24 + (px + UNITS) * 2 ** 12 + (py + UNITS)
+    assert 0 < word < 2 ** 48, f"packed heading ({dx},{dy},{px},{py}) out of range"
+    return word
 
 
-def plane_table() -> list[int]:
-    """16 packed camera-plane vectors, heading h at index h."""
-    return [_pack_vec(*_plane_vec(h)) for h in range(HEADINGS)]
+def unpack_heading(word: int) -> tuple[int, int, int, int]:
+    """The asm's unpack: a ``DIVI 4096`` / ``MODI 4096`` chain, low digit first,
+    minus the 1024 bias — returns (dirX, dirY, planeX, planeY)."""
+    q, r = floor_div(word, 4096)
+    planeY = r - UNITS
+    q, r = floor_div(q, 4096)
+    planeX = r - UNITS
+    q, r = floor_div(q, 4096)
+    return q - UNITS, r - UNITS, planeX, planeY
 
 
-_DIR_WORDS = dir_table()
-_PLANE_WORDS = plane_table()
+def heading_table() -> list[int]:
+    """16 packed heading words, heading h at index h."""
+    return [_pack_heading(*_dir_vec(h), *_plane_vec(h)) for h in range(HEADINGS)]
+
+
+_HDG_WORDS = heading_table()
 
 
 # ── state and the command step ───────────────────────────────────────────────
@@ -245,7 +292,9 @@ class State:
     heading: int
 
 
-SPAWN = State(posX=1536, posY=3584, heading=0)  # centre of cell (1,3), facing east
+#: E1M1's start: the vestibule south of the octagon, between the two entry
+#: alcoves, facing north — cell (21, 3), heading 4.
+SPAWN = State(posX=22016, posY=3584, heading=4)
 
 
 def step(state: State, cmd: int) -> State:
@@ -253,7 +302,7 @@ def step(state: State, cmd: int) -> State:
     posX, posY, heading = state.posX, state.posY, state.heading
     if cmd == 0 or cmd == 1:
         s = 1 if cmd == 0 else -1
-        dirX, dirY = unpack_vec(_DIR_WORDS[heading])
+        dirX, dirY, _, _ = unpack_heading(_HDG_WORDS[heading])
         # lodev's per-axis collision: X first, then Y against the updated posX.
         newX = posX + div(dirX * s * MOVE_NUM, MOVE_DEN)
         if map_cell(div(newX, UNITS), div(posY, UNITS)) == 0:
@@ -272,8 +321,7 @@ def step(state: State, cmd: int) -> State:
 def render(state: State) -> list[str]:
     """One frame: 48 rows of 64 hex chars (rows 0..39 the 3D view, 40..47 HUD)."""
     posX, posY = state.posX, state.posY
-    dirX, dirY = unpack_vec(_DIR_WORDS[state.heading])
-    planeX, planeY = unpack_vec(_PLANE_WORDS[state.heading])
+    dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[state.heading])
     cols: list[list[int]] = []
     for x in range(WIDTH):
         # lodev: cameraX = 2*x/w - 1; exact in Q10 at w=64: 32*x - 1024.
@@ -380,29 +428,31 @@ def hud_runs() -> list[tuple[int, int]]:
 
 
 # ── the demo walk ────────────────────────────────────────────────────────────
-#: See the docstring: spawn view, forward between the pillars, look left and
-#: back, then straight east down the corridor to the red door.
+#: See the docstring: the E1M1 opening — vestibule north into the octagon, a
+#: half-look at the courtyard windows and the blue armor pedestal, the turn
+#: west, then the computer-area corridor into the zigzag nukage room, ending
+#: three cells short of the red exit door.
 WALK: list[int] = [
-    4,                      # hold: the spawn view
-    0, 0, 0,                # forward to cell 3 — pillars slide past both sides
-    2, 4, 3,                # look left (pillar + green wall + blue trim), hold, back
-    0, 0, 0, 0, 0, 0,       # through the blue-trimmed doorway (cell 6)
-    0, 0, 0, 0, 0, 0,       # down the corridor, zigzag strobing on the left
-    0, 0, 0, 0, 0, 0, 0, 0, # up to cell 13.5 — the red door fills the view
-    4,                      # hold: the final view of the door
+    4,                          # hold: the spawn view up the vestibule
+    0, 0, 0, 0, 0, 0, 0,        # north into the octagon, windows growing right
+    3, 4, 2,                    # half-look right: pedestal centred, and back
+    2, 2, 2, 2,                 # quarter-turn left to west, sweeping the walls
+    0, 0, 0, 0, 0, 0, 0,        # across the octagon to the corridor mouth
+    0, 0, 0, 0, 0, 0,           # the green corridor, computer block on the right
+    3, 4, 2,                    # in the doorway: half-look up the zigzag spurs
+    0, 0, 0,                    # down the walkway toward the west wall
+    4,                          # hold: the red exit door centred, sunlit flanks
 ]
 
 
 # ── boot data and the cases file ─────────────────────────────────────────────
 def preamble_words() -> list[int]:
-    """Round 0's data burst, in exact tape order (slots 1..71; see docstring)."""
-    dirX, dirY = unpack_vec(_DIR_WORDS[SPAWN.heading])
-    planeX, planeY = unpack_vec(_PLANE_WORDS[SPAWN.heading])
+    """Round 0's data burst, in exact tape order (slots 1..103; see docstring)."""
+    dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[SPAWN.heading])
     return (
-        _ROW_WORDS
+        _MAP_WORDS
         + POW16
-        + _DIR_WORDS
-        + _PLANE_WORDS
+        + _HDG_WORDS
         + [SPAWN.posX, SPAWN.posY, SPAWN.heading, dirX, dirY, planeX, planeY]
     )
 
@@ -442,27 +492,27 @@ def cases_json(cmds: list[int]) -> dict:
     return {"publicTestData": [{"name": "deadman-3d", "rounds": rounds}]}
 
 
-# ── the asm generator (milestones M1+M2) ─────────────────────────────────────
-#: The scalar tape slots after the boot data, numbered consecutively from 72.
+# ── the asm generator ────────────────────────────────────────────────────────
+#: The scalar tape slots after the boot data, numbered consecutively from 104.
 _SCALARS = (
     "CMD", "XCOL", "CAMX", "RDX", "RDY", "MAPX", "MAPY", "SDX", "SDY",
     "DDX", "DDY", "STPX", "STPY", "SIDE", "PERP", "HALFH", "DSTART", "DEND",
-    "COLOR", "ADDRV", "AEND", "PW", "TMP", "NEWX", "NEWY", "PTR",
+    "COLOR", "ADDRV", "AEND", "PW", "TMP", "TMP2", "NEWX", "NEWY", "PTR",
 )
 
 
 def tape_slots() -> dict[str, int]:
     """The asm's whole ``.equ`` table, name -> tape address (slot 0 is scratch).
 
-    Slots 1..71 are the boot data in ``preamble_words()`` order (see the module
-    docstring); the scalars follow consecutively, so the machine's
+    Slots 1..103 are the boot data in ``preamble_words()`` order (see the
+    module docstring); the scalars follow consecutively, so the machine's
     ``TAPE_SIZE`` is ``max(tape_slots().values()) + 1`` — an exactly-sized tape
     stalls silently (plan risk R6), which is why tests pin this.
     """
     slots = {
-        "MAPB": 1, "POWB": 17, "DIRB": 33, "PLNB": 49,
-        "POSX": 65, "POSY": 66, "HDG": 67, "DIRX": 68, "DIRY": 69,
-        "PLANEX": 70, "PLANEY": 71,
+        "MAPB": 1, "POWB": 65, "HDGB": 81,
+        "POSX": 97, "POSY": 98, "HDG": 99, "DIRX": 100, "DIRY": 101,
+        "PLANEX": 102, "PLANEY": 103,
     }
     for i, name in enumerate(_SCALARS):
         slots[name] = len(preamble_words()) + 1 + i
@@ -472,13 +522,14 @@ def tape_slots() -> dict[str, int]:
 def deadman3d_source() -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
-    Structure: boot loop (round 0's data preamble -> tape slots 1..71) ->
+    Structure: boot loop (round 0's data preamble -> tape slots 1..103) ->
     ``round:`` command dispatch -> move arms (per-axis collision, the map-cell
-    lookup inlined) -> turn arms (heading tables re-unpacked) -> ``render:``
-    (lodev's raycaster_flat.cpp per column: setup, DDA, projection, paint) ->
-    generated HUD RLE -> one ``DSPS`` -> back to ``round:``.  The lodev
-    variable each block computes is named in its comments; every expression
-    keeps :func:`render`'s exact operation order, which is the pixel contract.
+    lookup inlined) -> turn arms (the packed heading word re-unpacked) ->
+    ``render:`` (lodev's raycaster_flat.cpp per column: setup, DDA, projection,
+    paint) -> generated HUD RLE -> one ``DSPS`` -> back to ``round:``.  The
+    lodev variable each block computes is named in its comments; every
+    expression keeps :func:`render`'s exact operation order, which is the pixel
+    contract.
 
     Regenerate with::
 
@@ -487,7 +538,7 @@ def deadman3d_source() -> str:
         (PROGRAM_DIR / "deadman-3d.asm").write_text(deadman3d_source())
     """
     slots = tape_slots()
-    first_free = len(preamble_words()) + 1  # 72: the boot loop's stop address
+    first_free = len(preamble_words()) + 1  # 104: the boot loop's stop address
     assert first_free == slots["CMD"], "the boot stop address is the first scalar"
     inv = UNITS * UNITS          # 1048576  — deltaDist numerator (1/rayDir, Q10*Q10)
     lh_num = H3D * UNITS         # 40960    — lineHeight numerator (h / perpWallDist)
@@ -495,10 +546,9 @@ def deadman3d_source() -> str:
     floor_end = (H3D - 1) * WIDTH  # 2496   — row 39, the floor's last row
 
     equ_notes = {
-        "MAPB": f"..{slots['MAPB'] + 15:<3} packed map rows: nibble y of word x = map_cell(x, y)",
-        "POWB": f"..{slots['POWB'] + 15:<3} 16**y — the nibble-extraction divisors",
-        "DIRB": f"..{slots['DIRB'] + 15:<3} packed dir vectors, (dirX+1024)*4096 + (dirY+1024)",
-        "PLNB": f"..{slots['PLNB'] + 15:<3} packed plane vectors, same packing",
+        "MAPB": f"..{slots['MAPB'] + 63:<3} packed map half-columns: word 2x+(y/16), nibble y mod 16",
+        "POWB": f"..{slots['POWB'] + 15:<3} 16**k — the nibble-extraction divisors",
+        "HDGB": f"..{slots['HDGB'] + 15:<3} packed headings: base-4096 digits dirX dirY planeX planeY, biased +1024",
         "POSX": "player x, Q10 (lodev posX)", "POSY": "player y, Q10 (lodev posY)",
         "HDG": "heading 0..15 (22.5 deg steps, CCW from east)",
         "DIRX": "lodev dirX", "DIRY": "lodev dirY",
@@ -515,7 +565,9 @@ def deadman3d_source() -> str:
         "DSTART": "lodev drawStart", "DEND": "lodev drawEnd",
         "COLOR": "the wall type t, then the shaded colour",
         "ADDRV": "the paint cursor, row*64 + XCOL", "AEND": "the paint loop's last address",
-        "PW": "16**mapY during a cell lookup", "TMP": "scratch (s, frac, packed word)",
+        "PW": "16**(mapY mod 16) during a cell lookup",
+        "TMP": "scratch (s, frac, packed word)",
+        "TMP2": "scratch (the cell lookup's half-column selector)",
         "NEWX": "the candidate posX", "NEWY": "the candidate posY",
         "PTR": "the boot loop's tape cursor",
     }
@@ -526,30 +578,33 @@ def deadman3d_source() -> str:
         ";   from randomfun2026solvers.lm1.programs import PROGRAM_DIR",
         ';   (PROGRAM_DIR / "deadman-3d.asm").write_text(deadman3d_source())',
         ";",
-        "; lodev.org's raycaster_flat.cpp on the LM-1: 64x48 first person on the LM-75,",
-        "; one frame per input command (0 fwd, 1 back, 2 left, 3 right, >= 4 no-op).",
-        "; An ungraded demo — the slug borrows plotter's problem JSON for nothing but",
-        "; registration; its 64x48 panel is DISPLAY_OVERRIDE's, its input is its own.",
+        "; lodev.org's raycaster_flat.cpp on the LM-1: DOOM's E1M1, quantized to a",
+        "; 32x32 grid, walked first person at 64x48 on the LM-75 — one frame per input",
+        "; command (0 fwd, 1 back, 2 left, 3 right, >= 4 no-op). An ungraded demo —",
+        "; the slug borrows plotter's problem JSON for nothing but registration; its",
+        "; 64x48 panel is DISPLAY_OVERRIDE's, its input is its own, and its 131-slot",
+        "; STORE rides the grid_block man-memory (STORE_TIER), ~31 ticks an access.",
         ";",
-        "; Round 0's input carries the whole data preamble (map rows, POW16, heading",
-        "; tables, spawn state — deadman3d.preamble_words()) followed by the first",
-        "; command: tables ride on INPUT because every ROM word taxes every backward",
-        "; jump by 8 ticks forever, and because the ROM cannot hold the negative",
-        "; components (planeY = -676 at spawn). The pixel contract is deadman3d.render():",
-        "; every expression below is that model's, in its exact operation order.",
+        "; Round 0's input carries the whole data preamble (64 packed map half-columns,",
+        "; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())",
+        "; followed by the first command: tables ride on INPUT because every ROM word",
+        "; taxes every backward jump by 8 ticks forever. The pixel contract is",
+        "; deadman3d.render(): every expression below is that model's, in its exact",
+        "; operation order.",
         ";",
-        "; The map-cell lookup floor(MAPROW[x] / 16**y) mod 16 is inlined at its three",
-        "; sites (no stack, no calls): the two move-collision tests and the DDA hit test.",
+        "; The map-cell lookup floor(MAPW[2x + y/16] / 16**(y mod 16)) mod 16 is",
+        "; inlined at its three sites (no stack, no calls): the two move-collision",
+        "; tests and the DDA hit test.",
         "",
-        "; ── tape slots (deadman3d.tape_slots(); slots 1..71 are the boot data) ───────",
+        "; ── tape slots (deadman3d.tape_slots(); slots 1..103 are the boot data) ──────",
     ]
     for name, addr in slots.items():
         lines.append(f".equ {name:<6} {addr:<4}         ; {equ_notes[name]}")
     lines += f"""
-; ── boot: round 0's data preamble -> tape slots 1..{first_free - 1} ────────────────────────
+; ── boot: round 0's data preamble -> tape slots 1..{first_free - 1} ───────────────────────
         LDI 1
         ST  PTR
-boot:   IN                  ; the next preamble word (negatives arrive here)
+boot:   IN                  ; the next preamble word
         ST  TMP
         LD  PTR
         MOVA TMP            ; store[PTR] = the word
@@ -579,19 +634,26 @@ back:   LDI 0
         ST  TMP             ; s = -1 (no negative ROM literals)
 move:   LD  DIRX
         MUL TMP
-        DIVI 2              ; floor(dirX * s / 2) — the half-cell step
+        DIVI {MOVE_DEN}              ; floor(dirX * s * {MOVE_NUM} / {MOVE_DEN}) — the whole-cell step
         ADD POSX
         ST  NEWX            ; newX
         ; collision X: map_cell(newX / 1024, posY / 1024), inlined
         LD  POSY
         DIVI {UNITS}
+        ST  TMP2            ; mapY (ST preserves ACC)
+        MODI 16
         ADDI POWB
         LDA
-        ST  PW              ; 16**mapY
+        ST  PW              ; 16**(mapY mod 16)
+        LD  TMP2
+        DIVI 16
+        ST  TMP2            ; the half-column selector, mapY / 16
         LD  NEWX
         DIVI {UNITS}
+        MULI 2
+        ADD TMP2
         ADDI MAPB
-        LDA                 ; the packed map row of newX's cell
+        LDA                 ; the packed half-column of newX's cell
         DIV PW
         MODI 16
         BRZ comx            ; empty -> commit posX
@@ -600,17 +662,24 @@ comx:   LD  NEWX
         ST  POSX
 movey:  LD  DIRY
         MUL TMP
-        DIVI 2
+        DIVI {MOVE_DEN}
         ADD POSY
         ST  NEWY            ; newY
         ; collision Y: map_cell(posX / 1024, newY / 1024) — the UPDATED posX
         LD  NEWY
         DIVI {UNITS}
+        ST  TMP2
+        MODI 16
         ADDI POWB
         LDA
         ST  PW
+        LD  TMP2
+        DIVI 16
+        ST  TMP2
         LD  POSX
         DIVI {UNITS}
+        MULI 2
+        ADD TMP2
         ADDI MAPB
         LDA
         DIV PW
@@ -621,7 +690,7 @@ comy:   LD  NEWY
         ST  POSY
         JMP render
 
-; ── turn arms: heading +-1 mod 16, dir/plane re-unpacked from the tables ─────
+; ── turn arms: heading +-1 mod 16, the packed heading word re-unpacked ───────
 left:   LD  HDG
         ADDI 1
         MODI {HEADINGS}
@@ -632,8 +701,20 @@ right:  LD  HDG
         MODI {HEADINGS}
         ST  HDG
 unpk:   LD  HDG
-        ADDI DIRB
-        LDA                 ; (dirX+1024)*4096 + (dirY+1024)
+        ADDI HDGB
+        LDA                 ; base-4096 digits dirX dirY planeX planeY, +1024 each
+        ST  TMP
+        MODI 4096
+        SUBI {UNITS}
+        ST  PLANEY
+        LD  TMP
+        DIVI 4096
+        ST  TMP
+        MODI 4096
+        SUBI {UNITS}
+        ST  PLANEX
+        LD  TMP
+        DIVI 4096
         ST  TMP
         MODI 4096
         SUBI {UNITS}
@@ -642,17 +723,6 @@ unpk:   LD  HDG
         DIVI 4096
         SUBI {UNITS}
         ST  DIRX
-        LD  HDG
-        ADDI PLNB
-        LDA
-        ST  TMP
-        MODI 4096
-        SUBI {UNITS}
-        ST  PLANEY
-        LD  TMP
-        DIVI 4096
-        SUBI {UNITS}
-        ST  PLANEX
         ; falls through to render
 
 ; ── render: lodev's per-column raycast, columns 0..{WIDTH - 1} ──────────────────────
@@ -767,10 +837,17 @@ xarm:   LD  SDX
         LDI 0
         ST  SIDE            ; side = 0 (x-side)
 hit:    LD  MAPY            ; the inlined cell lookup at (mapX, mapY)
+        ST  TMP2
+        MODI 16
         ADDI POWB
         LDA
-        ST  PW
+        ST  PW              ; 16**(mapY mod 16)
+        LD  TMP2
+        DIVI 16
+        ST  TMP2            ; the half-column selector, mapY / 16
         LD  MAPX
+        MULI 2
+        ADD TMP2
         ADDI MAPB
         LDA
         DIV PW

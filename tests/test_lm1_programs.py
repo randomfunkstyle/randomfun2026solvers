@@ -84,7 +84,7 @@ OVER_TICK_CAP: set[str] = {"little-little-man"}
 #: public cases would be a vacuous pass at best (they emit no output) and a
 #: misaligned-input hang at worst. ``lambda-deadman`` reads five-word colour segments
 #: plus a negative sentinel — see ``tests/test_lambda_deadman_vector.py`` for its real
-#: cases. ``deadman-3d`` reads a 71-word data preamble then command words — see
+#: cases. ``deadman-3d`` reads a 103-word data preamble then command words — see
 #: ``tests/test_deadman3d.py``. Mirrors ``programs.DEMOS`` (which the CLI's grade
 #: default consults); the pin below keeps the two sets from drifting.
 DEMOS = {"lambda-deadman", "deadman-3d"}
