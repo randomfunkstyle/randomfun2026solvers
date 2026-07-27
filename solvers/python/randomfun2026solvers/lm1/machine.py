@@ -109,9 +109,11 @@ __all__ = [
     "display_for",
     "hw_micro",
     "image_program",
+    "DISPLAY_OVERRIDE",
     "DSP_BANDS",
     "DSP_LANE_BANDS",
     "DSP_SEM_BAND",
+    "MEM_PAD",
     "MEMORY_SEMS",
     "ROM_ROWS",
     "STREAM_SEM_BAND",
@@ -3608,6 +3610,12 @@ TAPE_SIZE = {
     # board still lives in the CPU's four bitset words, unlike snake-ring, where the
     # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
     "pathfinder-unit": 52,
+    # deadman-3d (the raycaster demo) boot-loads 71 data slots (map rows, POW16,
+    # heading tables, spawn state) and runs 26 scalars after them, so the highest
+    # address is PTR = 97 — see `deadman3d.tape_slots()`, which the tests pin this
+    # against. Highest address + 1, as everywhere: an exactly-sized tape stalls
+    # silently rather than faulting.
+    "deadman-3d": 98,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -3876,12 +3884,30 @@ MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
 }
 
 
+#: Demo slugs are not bound to any problem's panel — an ungraded demo may pick
+#: any resolution the LM-75 allows (64x64 max), and ``deadman-3d`` wants DOOM's
+#: 4:3 rather than the 32x24 its borrowed ``plotter`` JSON states. Consulted by
+#: :func:`display_for` *before* the problem JSON; graded problems must never
+#: appear here, because for them the panel size is the judge's, not ours.
+DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
+
+#: Per-slug ``mem_pad`` for machines the default pad search cannot place:
+#: :func:`build` searches ``range(0, 40)``, and ``deadman-3d``'s 64x48 panel
+#: (a 66-wide interior on a 122x145 machine) needs the memory block pushed
+#: further east than that — measured: pad 45 binds every pipe, every pad <= 40
+#: fails ("SWAP's east corridor collides with the adapter"). Consulted by
+#: :func:`build_for` like :data:`ROM_ROWS`; absent slugs keep the search.
+MEM_PAD: dict[str, int] = {"deadman-3d": 45}
+
+
 def display_for(slug: str) -> tuple[int, int] | None:
     """The problem's LM-75 resolution, or ``None`` when it has no display.
 
-    Read from the problem JSON rather than recorded here: "exactly one display at
-    the stated resolution" (``SPEC.md``) makes this the problem's number, and a
-    panel of the wrong size fails every case.
+    For a graded problem this is read from the problem JSON rather than recorded
+    here: "exactly one display at the stated resolution" (``SPEC.md``) makes this
+    the problem's number, and a panel of the wrong size fails every case. Demo
+    slugs are the exception — :data:`DISPLAY_OVERRIDE` wins for them, because a
+    demo is not bound to any problem's panel.
 
     ``tape_skip_batch`` is the tape worker implementation parameter.  ``1`` keeps
     the compact legacy loop; ``2`` uses the wider two-word counted ring.  The latter
@@ -3891,6 +3917,8 @@ def display_for(slug: str) -> tuple[int, int] | None:
     """
     from . import programs
 
+    if slug in DISPLAY_OVERRIDE:
+        return DISPLAY_OVERRIDE[slug]
     panel = (programs.problem_json(programs.problem_of(slug)).get("io") or {}).get("display")
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
@@ -3928,6 +3956,7 @@ def build_for(
         programs.load(slug),
         tape_n=TAPE_SIZE[slug],
         rom_rows=ROM_ROWS.get(slug),
+        mem_pad=MEM_PAD.get(slug),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,

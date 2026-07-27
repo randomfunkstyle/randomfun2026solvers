@@ -79,12 +79,21 @@ DISPLAY_PROBLEMS = {"plotter", "palette", "snake", "pathfinder", "little-little-
 #: see ``tests/test_llm_lm1.py`` for the assertion that holds it there.
 OVER_TICK_CAP: set[str] = {"little-little-man"}
 
-#: Ungraded demos that borrow a problem slug for its panel resolution only. Their
+#: Ungraded demos that borrow a problem slug for registration only. Their
 #: input protocol is their own, so running them against the borrowed problem's
 #: public cases would be a vacuous pass at best (they emit no output) and a
 #: misaligned-input hang at worst. ``lambda-deadman`` reads five-word colour segments
-#: plus a negative sentinel — see ``tests/test_lambda_deadman_vector.py`` for its real cases.
-DEMOS = {"lambda-deadman"}
+#: plus a negative sentinel — see ``tests/test_lambda_deadman_vector.py`` for its real
+#: cases. ``deadman-3d`` reads a 71-word data preamble then command words — see
+#: ``tests/test_deadman3d.py``. Mirrors ``programs.DEMOS`` (which the CLI's grade
+#: default consults); the pin below keeps the two sets from drifting.
+DEMOS = {"lambda-deadman", "deadman-3d"}
+
+
+def test_the_demo_set_matches_the_registry() -> None:
+    from randomfun2026solvers.lm1 import programs
+
+    assert DEMOS == set(programs.DEMOS)
 
 PROGRAMS = sorted(available())
 CASES = [
@@ -182,6 +191,25 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # The vector-display demo is plotter's opcode set plus HALT (base ISA, so
         # not listed here) — seventeen opcodes, and the demo pays the depth-5 trie.
         "lambda-deadman": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
+        # The raycaster demo is the ISA's heaviest user — 23 opcodes: `MUL`/`DIV`
+        # are lodev's fixed-point products and quotients (a runtime rayDir cannot
+        # reach DIVI), `LDA` indexes the map/POW16/heading tables, `MOVA`+`INCM`
+        # are the boot loop that copies round 0's data preamble onto the tape,
+        # `NEG` is deltaDist's abs, and the three ports paint. Ungraded, so the
+        # deep trie is paid gladly rather than contorted around (see the plan).
+        "deadman-3d": {
+            "DIV",
+            "DIVI",
+            "DSPA",
+            "DSPD",
+            "DSPS",
+            "INCM",
+            "LDA",
+            "MODI",
+            "MOVA",
+            "MUL",
+            "NEG",
+        },
         "palette": {"DSPA", "DSPD", "DSPS"},
         # little-little-man interprets a 2D language, so its extensions are what an
         # interpreter needs: `LDA`/`MOVA` to reach the program grid at the address a
