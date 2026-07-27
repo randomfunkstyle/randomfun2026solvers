@@ -410,3 +410,57 @@ def test_a_gauge_reports_its_own_occupancy(fed, seen, tmp_path) -> None:
     emitted = out.stdout.strip().splitlines()[0].split()
     assert len(emitted) == seen, f"fed {fed}, q saw {len(emitted)}, expected {seen}"
     assert set(emitted) == {"1"}
+
+
+# ── the parallel worker ──────────────────────────────────────────────────────
+def _nearest(x, y, wall_rows, side, iw):
+    """Which wall pipe a glyph at (x, y) binds, by Manhattan distance."""
+    best, who = None, None
+    for name, row in wall_rows.items():
+        d = (x if side == "west" else (iw + 1 - x)) + abs(y - row)
+        if best is None or d < best:
+            best, who = d, name
+    return who
+
+
+def test_every_worker_pipe_op_binds_the_pipe_it_was_meant_to() -> None:
+    """`r`/`s`/`q` bind the *nearest* pipe, so this is arithmetic, not intent.
+
+    All incoming pipes sit on the west wall and all outgoing on the east, so the
+    x-distance to a wall is the same for every rival and nearest collapses to
+    "on the nearest row". A glyph that drifts one row silently talks to a
+    different ring, which is the failure mode with no symptom — the machine still
+    runs and still emits numbers, just wrong ones.
+    """
+    from randomfun2026solvers import matmul_y as m
+
+    west = {"a_in": m.W_A_IN, "b_ret": m.W_B_RET, "gauge": m.W_GAUGE}
+    east = {"b_fwd": m.W_B_FWD, "prod": m.W_PROD}
+    cells = m.worker_cells()
+
+    want = {"r": {"a_in", "b_ret"}, "q": {"gauge"}, "s": {"b_fwd", "prod"}}
+    seen = {"r": set(), "q": set(), "s": set()}
+    for (x, y), ch in cells.items():
+        if ch not in want:
+            continue
+        side = "west" if ch in "rq" else "east"
+        rows = west if side == "west" else east
+        seen[ch].add(_nearest(x, y, rows, side, m.WORKER_IW))
+    for ch, expect in want.items():
+        assert seen[ch] == expect, f"{ch!r} binds {seen[ch]}, expected {expect}"
+
+
+def test_the_workers_mac_body_is_in_ring_order() -> None:
+    """`b` must go back into ring B before `*` overwrites it.
+
+    `counted_loop` walks its body down a column one glyph per row, so the row
+    order *is* the instruction order: b_ret then b_fwd then a spare row for the
+    `*` then prod. Reordering these constants still generates a grid; it just
+    multiplies by the wrong thing.
+    """
+    from randomfun2026solvers import matmul_y as m
+
+    assert m.W_B_RET < m.W_B_FWD < m.W_PROD
+    assert m.W_PROD - m.W_B_FWD >= 2, "no spare row between s(b_fwd) and s(prod) for `*`"
+    assert m.W_A_IN < m.W_B_RET, "the scalar must be fetched before the loop is entered"
+    assert m.W_GAUGE > m.W_PROD, "the gauge sits below the loop, off the body's rows"

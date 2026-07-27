@@ -333,6 +333,54 @@ def seed_chain(put, start: tuple[int, int], men: int, join_row: int, pitch: int 
     put(last, join_row, "<")
 
 
+# ── the parallel worker ──────────────────────────────────────────────────────
+# One of P independent workers. Each owns a contiguous slice of C's columns, so
+# nothing is shared with its peers and there is no FIFO-ordering hazard between
+# rooms — the reason this beats P men on one cycle, which needs the count split
+# and every man holding the same scalar.
+#
+# Per (i, t) it does K/P multiply-accumulates:
+#
+#     r(a_in)  M  q(gauge)   then  K/P x { r(b_ret) s(b_fwd) * s(prod) }
+#
+# `M` parks the scalar in B, where it survives the whole inner loop; `q` reads
+# K/P off the gauge without touching A or B (which `b` could not do); and the
+# product leaves through `prod` so the room never holds three live values. The
+# accumulate is the ADDER's job.
+#
+# The row order is what keeps the loop short: `counted_loop` walks a body down a
+# column one glyph per row, so `rs*s` lands r on b_ret, s on b_fwd, the `*` on a
+# spare row and s on prod, in exactly that order — and the order is forced,
+# because `b` has to go back into ring B before `*` overwrites it.
+W_A_IN, W_B_RET, W_GAUGE = 2, 3, 7   #: west wall
+W_B_FWD, W_PROD = 4, 6               #: east wall; row 5 is the spare for `*`
+WORKER_IW, WORKER_IH = 8, 8
+
+
+def worker_cells() -> dict[tuple[int, int], str]:
+    """A worker's interior: fetch the scalar, read the count, run the MAC loop."""
+    c = Circuit(WORKER_IW + 2, WORKER_IH + 2)
+    c.set(1, W_A_IN, "@")
+    c.set(2, W_A_IN, "r")          # the scalar, from the previous worker or CTRL
+    c.set(3, W_A_IN, "M")          # ... parked in B for the whole inner loop
+    c.set(4, W_A_IN, "v")
+    for y in range(W_A_IN + 1, W_GAUGE):
+        c.set(4, y, " ")
+    c.set(4, W_GAUGE, "q")         # BP = K/P, touching neither A nor B
+    c.set(4, W_GAUGE + 1, ">")
+    c.set(5, W_GAUGE + 1, "^")
+    for y in range(W_A_IN + 1, W_GAUGE + 1):
+        c.set(5, y, " ")
+    c.set(5, W_A_IN, ">")
+    ex, _ = c.counted_loop(6, W_A_IN, "rs*s")
+    c.set(ex, W_A_IN, "^")         # exit, then back over the top to the fetch
+    c.set(ex, W_A_IN - 1, "<")
+    for x in range(3, ex):
+        c.set(x, W_A_IN - 1, " ")
+    c.set(2, W_A_IN - 1, "v")
+    return {k: v for k, v in c.cell.items()}
+
+
 # ── the ADDER's standalone probe ─────────────────────────────────────────────
 M_IN, M_PROD, M_CMD = 2, 3, 5
 MAIN_IW, MAIN_IH = 16, 5
