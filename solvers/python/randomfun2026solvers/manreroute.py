@@ -121,11 +121,24 @@ class Move:
 class Layout:
     """The 2D state of every corridor on the grid, plus what may be touched."""
 
-    def __init__(self, graph: FlowGraph) -> None:
+    def __init__(self, graph: FlowGraph, *, empty: bool = False) -> None:
+        """``empty`` clears every corridor but keeps the ground they stood on.
+
+        Rotating a node invalidates the corridors either side of it, so a
+        rotated layout has to be routed from scratch — but the cells the old
+        corridors occupied are still ours to pave.
+        """
         self.graph = graph
         self.prog = graph.program
+        #: Per-edge direction overrides; see :meth:`dirs_for`.
+        self._dirs: dict[int, tuple[Dir, Dir]] = {}
+        #: Where the corridors were before anything moved.  Kept even in empty
+        #: mode: it is the set :meth:`render` has to blank before repainting.
+        self.original_cells: set[Cell] = {
+            cell for edge in graph.edges for cell in edge.cells
+        }
         self.paths: dict[int, tuple[Cell, ...]] = {
-            edge.id: edge.cells for edge in graph.edges
+            edge.id: () if empty else edge.cells for edge in graph.edges
         }
         #: Cells nothing may be written to: node glyphs, literal runs, walls,
         #: pipes, displays, and any non-blank cell the router did not create.
@@ -134,8 +147,9 @@ class Layout:
             self.pinned.add(node.pos)
             self.pinned.update(node.literal_run)
         self.use: dict[Cell, CellUse] = {}
-        for edge in graph.edges:
-            self._lay(edge.id, edge.cells, edge.exit_dir, edge.entry_dir)
+        if not empty:
+            for edge in graph.edges:
+                self._lay(edge.id, edge.cells, edge.exit_dir, edge.entry_dir)
         #: Blank cells the router may pave over.  A non-blank cell that is not
         #: corridor is left alone even when unreachable: it may be a backtick
         #: that another literal pairs with on its column.
@@ -148,10 +162,30 @@ class Layout:
                     cell = (x, y)
                     if cell in self.pinned:
                         continue
-                    if self.prog._char(x, y) in NEUTRAL_GLYPHS or cell in self.use:
+                    if (
+                        self.prog._char(x, y) in NEUTRAL_GLYPHS
+                        or cell in self.use
+                        or cell in self.original_cells
+                    ):
                         self.paveable.add(cell)
 
     # -- laying and lifting -------------------------------------------------
+    def dirs_for(self, edge_id: int) -> tuple[Dir, Dir]:
+        """The ``(exit, entry)`` this edge is currently laid with.
+
+        Rotating a node re-aims the corridors either side of it, so a layout has
+        to be able to hold directions that differ from the graph it was built
+        from — otherwise every trial rotation would need a whole new layout.
+        """
+        override = self._dirs.get(edge_id)
+        if override is not None:
+            return override
+        edge = self.graph.edges[edge_id]
+        return (edge.exit_dir, edge.entry_dir)
+
+    def set_dirs(self, edge_id: int, exit_dir: Dir, entry_dir: Dir) -> None:
+        self._dirs[edge_id] = (exit_dir, entry_dir)
+
     def _transitions(
         self, cells: Sequence[Cell], exit_dir: Dir, entry_dir: Dir
     ) -> list[tuple[Cell, Dir, Dir]]:
@@ -192,19 +226,19 @@ class Layout:
         for other_id, cells in self.paths.items():
             if other_id == edge_id:
                 continue
-            edge = self.graph.edges[other_id]
-            for cell, in_dir, out_dir in self._transitions(cells, edge.exit_dir, edge.entry_dir):
+            exit_dir, entry_dir = self.dirs_for(other_id)
+            for cell, in_dir, out_dir in self._transitions(cells, exit_dir, entry_dir):
                 if cell in touched and cell in self.use:
                     self.use[cell].add(in_dir, out_dir, other_id)
         self.paths[edge_id] = ()
         return old
 
     def place(self, edge_id: int, cells: Sequence[Cell]) -> None:
-        edge = self.graph.edges[edge_id]
+        exit_dir, entry_dir = self.dirs_for(edge_id)
         self.paths[edge_id] = tuple(cells)
         for cell in cells:
             self.paveable.discard(cell)
-        self._lay(edge_id, cells, edge.exit_dir, edge.entry_dir)
+        self._lay(edge_id, cells, exit_dir, entry_dir)
 
     # -- rendering ----------------------------------------------------------
     def _keeps_original(self, cell: Cell, use: CellUse) -> bool:
@@ -230,12 +264,11 @@ class Layout:
         """Paint the layout back onto the grid."""
         rows = [list(row) for row in self.prog.grid]
         # Clear everything the old corridors owned, then repaint from `use`.
-        for edge in self.graph.edges:
-            for cell in edge.cells:
-                if cell in self.pinned:
-                    continue
-                x, y = cell
-                rows[y][x] = " "
+        for cell in self.original_cells:
+            if cell in self.pinned:
+                continue
+            x, y = cell
+            rows[y][x] = " "
         for cell, use in self.use.items():
             x, y = cell
             rows[y][x] = self.prog._char(x, y) if self._keeps_original(cell, use) else use.glyph()
@@ -259,33 +292,39 @@ def route_edge(
     edge: Edge,
     *,
     limit: int,
+    exit_dir: Dir | None = None,
+    entry_dir: Dir | None = None,
 ) -> tuple[Cell, ...] | None:
     """Shortest legal corridor for ``edge``, or ``None`` if there is none.
 
     ``limit`` caps the path length, so passing the current length searches only
     for a strict improvement.  Ties break on ``(cell, direction)`` order, which
-    is what makes repeated runs identical.
+    is what makes repeated runs identical.  The direction arguments override the
+    edge's own, which is how a trial rotation is priced without rebuilding the
+    graph it belongs to.
     """
     graph = layout.graph
     src = graph.nodes[edge.src]
     if edge.dst is None:
         return None
     dst = graph.nodes[edge.dst]
+    exit_dir = edge.exit_dir if exit_dir is None else exit_dir
+    entry_dir = edge.entry_dir if entry_dir is None else entry_dir
     start_cell = src.literal_run[-1] if src.literal_run else src.pos
     target = dst.pos
 
-    first = _add(start_cell, edge.exit_dir)
+    first = _add(start_cell, exit_dir)
     # A zero-cell corridor: the nodes are already adjacent the right way round.
     if first == target:
-        return () if edge.exit_dir == edge.entry_dir else None
+        return () if exit_dir == entry_dir else None
     if first not in layout.paveable and first not in layout.use:
         return None
 
-    start_state = (first, edge.exit_dir)
+    start_state = (first, exit_dir)
     best: dict[tuple[Cell, Dir], int] = {start_state: 1}
     parent: dict[tuple[Cell, Dir], tuple[Cell, Dir] | None] = {start_state: None}
     heap: list[tuple[int, int, Cell, Dir]] = [
-        (1 + _manhattan(first, target) - 1, 1, first, edge.exit_dir)
+        (1 + _manhattan(first, target) - 1, 1, first, exit_dir)
     ]
 
     goal: tuple[Cell, Dir] | None = None
@@ -298,8 +337,8 @@ def route_edge(
         use = layout.use.get(cell)
         # Arrival: step from here into the destination with the required
         # entry direction.
-        if _add(cell, edge.entry_dir) == target:
-            if use is None or use.accepts(in_dir, edge.entry_dir):
+        if _add(cell, entry_dir) == target:
+            if use is None or use.accepts(in_dir, entry_dir):
                 goal = (cell, in_dir)
                 break
         for out_dir in DIRS:

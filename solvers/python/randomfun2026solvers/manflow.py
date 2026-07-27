@@ -50,6 +50,8 @@ __all__ = [
     "Node",
     "NodeKind",
     "build_flow_graph",
+    "canonical_signature",
+    "exits_for",
 ]
 
 #: Glyphs a corridor may be paved with.  ``' '`` and ``'.'`` pass a man through
@@ -270,6 +272,70 @@ def _exits(prog: FastLittleman, node: Node) -> list[Arm]:
             arms.append(Arm(turn, side))
         return arms
     return [Arm(0, node.in_dir)]
+
+
+def exits_for(prog: FastLittleman, node: Node, in_dir: Dir) -> list[Arm]:
+    """``_exits`` for a hypothetical entry direction, without touching ``node``.
+
+    Rotating a node is legal precisely because an instruction's effect does not
+    depend on the direction it is walked, and a conditional turn's arms are
+    *relative* — arm ``+1`` is "clockwise from however he came in".  So the arms
+    survive a rotation with their labels intact; only the compass headings move.
+    """
+    if in_dir == node.in_dir:
+        return _exits(prog, node)
+    spun = Node(
+        id=node.id,
+        pos=node.pos,
+        glyph=node.glyph,
+        kind=node.kind,
+        room=node.room,
+        in_dir=in_dir,
+        literal_run=node.literal_run,
+    )
+    return _exits(prog, spun)
+
+
+def canonical_signature(graph: FlowGraph) -> tuple:
+    """A fingerprint that survives rotation but not a change of meaning.
+
+    :func:`manreroute.graph_signature` compares nodes by ``(cell, direction)``,
+    which is exactly right while directions are pinned and useless once they are
+    not.  This numbers nodes by a breadth-first walk from the men's starting
+    cells instead, so identity comes from *where a node sits in the program*
+    rather than from which way the man happened to be facing.  Two graphs match
+    when every man runs the same glyphs in the same order and every conditional
+    turn keeps the same arm labels.
+
+    Cells are deliberately absent: a node's cell is pinned today, but binding
+    (``s``/``r`` nearest-pipe) is what actually depends on it, and that is
+    checked separately.
+    """
+    order: dict[int, int] = {}
+    pending: deque[int] = deque()
+    for start in graph.starts:
+        if start not in order:
+            order[start] = len(order)
+            pending.append(start)
+
+    encoded: list[tuple] = []
+    while pending:
+        nid = pending.popleft()
+        node = graph.nodes[nid]
+        arms: list[tuple] = []
+        for edge_id in sorted(node.out_edges, key=lambda e: (graph.edges[e].arm, e)):
+            edge = graph.edges[edge_id]
+            if edge.dst is None:
+                arms.append((edge.arm, "dead", edge.dead))
+                continue
+            if edge.dst not in order:
+                order[edge.dst] = len(order)
+                pending.append(edge.dst)
+            arms.append((edge.arm, "node", order[edge.dst]))
+        encoded.append((order[nid], node.glyph, len(node.literal_run), tuple(arms)))
+
+    encoded.sort()
+    return (tuple(order[s] for s in graph.starts), tuple(encoded))
 
 
 def _turn_between(a: Dir, b: Dir) -> int:

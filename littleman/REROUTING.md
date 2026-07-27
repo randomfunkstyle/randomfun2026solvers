@@ -101,16 +101,55 @@ moves are harmless, one-at-a-time exactly where the schedule is delicate. On
 `reverse-a-list_split` all three proposed moves are correctly rejected: the grid
 forks with `Y`, and the men collide once the timing moves.
 
-## What it will not do yet
+### `manrotate.py` — free the approach direction
 
-Node cells never move and their entry directions never change. Both are
-loosenable and both are worth more than what is already there:
+Entry direction is free for every glyph except two: a numeric literal reads
+backwards when walked backwards, and `U` turns to an absolute room side. A
+conditional turn is *not* an exception — its arms are relative, so `-1/0/+1`
+keep their meaning and simply point elsewhere on the compass. Node cells never
+move, so `s`/`r` nearest-pipe binding is untouched.
 
-* **Entry direction is free** for every glyph except literals and `U` — the
-  effect does not depend on the direction walked, and the arms of a conditional
-  turn rotate with it because `-1/0/+1` are *relative*. Freeing it turns each
-  node into a 4-way choice and would let corridors approach from whichever side
-  is nearest. It needs the signature check upgraded from equality to
-  isomorphism (canonical BFS numbering from the starts).
-* **Node placement.** Moving a node changes `s`/`r` nearest-pipe binding, so it
-  needs `optimize.bindings_preserved` in the gate — see `ARCH.md` §7.1.
+```sh
+uv run python -m randomfun2026solvers.manrotate GRID.man SLUG --out NEW.man --verbose
+```
+
+The gate has to be `manflow.canonical_signature` here, not
+`manreroute.graph_signature`: rotation changes a node's `(cell, direction)` key
+by construction, so the equality check would reject every legal turn. Canonical
+numbers nodes by a BFS from the men's starting cells instead. It ignores
+unreachable glyphs, which is correct — only what runs is the program.
+
+## Measured: this grid is space-limited, not direction-limited
+
+Worth reading before investing in either remaining lever.
+
+A relaxation bound — shortest path per edge with directions free and *no other
+corridor in the way* — said 15.5% of snake's pacing man's corridor was going to
+forced approach directions, 11.8% of wall ticks. The realised figure was
+**0.46%**.
+
+The bound was wrong because it ignored congestion, and congestion is the whole
+story. Replanning every corridor from an empty grid with directions unchanged
+comes out **2.1% worse** than what is already there. The existing layout is
+already near-optimal for the space available; there is no room to route
+straighter.
+
+Two consequences:
+
+* Do not trust a no-congestion relaxation on a dense grid. Price it against a
+  from-empty replan at the same directions first — that separates "we are
+  routing badly" from "there is nowhere to route".
+* The remaining lever is **space**, which means node **placement**, not
+  rotation. That needs `optimize.bindings_preserved` in the gate, because moving
+  an `s`/`r` silently rebinds which pipe it talks to (`ARCH.md` §7.1). On a
+  footprint-tick problem, simply enlarging the room is a bad trade: area is
+  squared.
+
+## One more thing the whole-grid replan taught
+
+The from-empty replan halves `reverse-a-list_split`'s corridor (96 -> 40 cells)
+with an identical signature — and the result passes **1 of 8** cases. The
+program is provably unchanged and thoroughly broken, purely by schedule. This is
+why rotation is packaged as per-node moves the batch search can accept or reject
+individually, rather than as one replan: an all-or-nothing grid gives the gate
+nothing to back off to.

@@ -1,0 +1,16 @@
+# snake — submission ac47c813-1fdc-4066-8ee6-375f97f0cce4
+
+verdict      done: 17/17 cases, area2 4900, avgTicks 17,879, score 87,609,118
+submitted    2026-07-27T13:59:25+0300
+grid         70x68
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  c83e3ddb00fa185aae45d3d6527fec234be85178c85c95a49de30f113f099869
+commit       547d27c
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_reroute.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Node rotation (manrotate): frees each instruction's entry direction, which is legal for every glyph except numeric literals (value depends on direction) and U (absolute side turn) — a conditional turn's arms are relative so -1/0/+1 keep their meaning and just point elsewhere. Node cells never move so nearest-pipe binding is untouched. Gate upgraded from (cell,direction) equality to a canonical BFS isomorphism, since rotation changes node keys by construction. 2 turns kept, avg 11,816 -> 11,762. Honest result: the relaxation bound said 15.5% of the pacing man's corridor was going to forced approach directions, but that bound ignored congestion — replanning from empty with directions unchanged is 2.1% WORSE, so this grid is space-limited, not direction-limited. Rotation is worth 0.46% here, not 11.8%.
