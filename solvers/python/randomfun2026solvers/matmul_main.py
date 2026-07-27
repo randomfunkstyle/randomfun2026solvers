@@ -63,28 +63,43 @@ __all__ = ["EAST", "WEST", "main_room"]
 # approach to MAIN's wall must therefore terminate *outside* that span. With the
 # band above, that means `a_ret` sits just **below** `a_fwd`, not above it. The
 # ring-vs-ring rule still holds: `a_ret` stays above `b_ret`.
-FILL_TOP, IN, A_FWD, A_RET = 2, 3, 4, 6
-B_RET, B_FWD, SPARE, PROD = 8, 9, 10, 11
+# `a_ret` sits immediately under `a_fwd` with no spare row: the row between them was
+# doing nothing, and every row above `b_fwd` is a glyph in **fill B's body**, whose
+# cycle is 2*(len+2) ticks paid M*K times.
+FILL_TOP, IN, A_FWD, A_RET = 2, 3, 4, 5
+B_RET, B_FWD, SPARE, PROD = 6, 7, 8, 9
 # Registers spaced four apart: each pair's relay room must span both of its rows, and
 # the topmost room's wall must clear `prod`'s row, since `prod`'s leg runs east over
 # these columns. **rK goes first**, directly under the drive loop's shift run — it is
 # the only register the hot loop touches, and every row between the two is a tick.
-RK_RET, RK_FWD = 18, 19
-RN_RET, RN_FWD = 13, 14
-RM_RET, RM_FWD = 22, 23
+RK_RET, RK_FWD = 17, 18
+RN_RET, RN_FWD = 11, 12
+RM_RET, RM_FWD = 21, 22
 # `cmd` sits directly under the last register pair, and the band ends one row below
 # it. Every row of the band is walked twice by every serpentine turn, and the whole
 # machine's height is MAIN's height plus two fixed bands, so this is two rows off
 # both terms of the score at once.
-CMD = 24
-BAND_T, BAND_B = 1, 25
-IW, IH = 92, 25
+CMD = 23
+BAND_T, BAND_B = 1, 24
+IW, IH = 92, 24
 SENTINEL_BUILD = "2M******"          # A = 128 with no backtick literal
 
 WEST = {"in": IN, "b_ret": B_RET, "a_ret": A_RET,
         "rn_ret": RN_RET, "rm_ret": RM_RET, "rk_ret": RK_RET}
 EAST = {"a_fwd": A_FWD, "b_fwd": B_FWD, "prod": PROD, "cmd": CMD,
         "rn_fwd": RN_FWD, "rm_fwd": RM_FWD, "rk_fwd": RK_FWD}
+
+
+def _copy(src: int, dst: int) -> str:
+    """A fill body: `r` on the input's row, `s` on the ring's, blanks between.
+
+    Derived, not written out: the body's length **is** the gap between the two port
+    rows, and its cycle is 2*(len+2) ticks paid once per value stored. Hard-coding it
+    is how a tightened row map silently stopped copying — `s` landed on the row above
+    its pipe and bound the neighbouring ring instead.
+    """
+    assert dst > src
+    return "r" + " " * (dst - src - 1) + "s"
 
 
 def descend(w: Serpentine) -> int:
@@ -144,7 +159,7 @@ def main_room() -> tuple[Circuit, int]:
     # ── fill ring A with N*M scalars, then its end marker ────────────────────
     w.op("r", RN_RET); w.op("M")
     w.op("r", RM_RET); w.op("s", RM_FWD); w.ops("*b")
-    ax, ay = c.counted_loop(descend(w), FILL_TOP, "rs")
+    ax, ay = c.counted_loop(descend(w), FILL_TOP, _copy(IN, A_FWD))
     c.turn(ax, ay, S)
     w.x, w.y, w.d = ax, ay, S
     w.ops(SENTINEL_BUILD)
@@ -153,7 +168,7 @@ def main_room() -> tuple[Circuit, int]:
     # ── fill ring B with M*K values ──────────────────────────────────────────
     w.op("r", RM_RET); w.op("M")
     w.op("r", RK_RET); w.op("s", RK_FWD); w.ops("*b")
-    bx, by = c.counted_loop(descend(w), FILL_TOP, "r     s")
+    bx, by = c.counted_loop(descend(w), FILL_TOP, _copy(IN, B_FWD))
     # Leave the exit walkable and drift two columns east: the drive loop's fetch
     # column is `bx + 2` and it is entered from the band's top row.
     c.set(bx, by, " ")
