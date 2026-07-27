@@ -1,9 +1,9 @@
-"""The DOOM (1993) title screen as line-segment data for the ``doom-screen`` CPU.
+"""The the title screen of a certain 1993 first-person shooter as line-segment data for the ``lambda-deadman`` CPU.
 
-``lm1/programs/doom-screen.asm`` is a general vector-display processor: it reads
+``lm1/programs/lambda-deadman.asm`` is a general vector-display processor: it reads
 ``x0 y0 x1 y1 colour`` five-word segments, draws each with Bresenham into the
 LM-75's ``next`` buffer, and commits the whole frame once when it reads a negative
-sentinel. This module supplies its demo payload — the 32x24, 16-colour DOOM title
+sentinel. This module supplies its demo payload — the 32x24, 16-colour lambda-deadman title
 screen, decomposed into maximal horizontal runs of equal colour.
 
 Colour-0 runs are skipped: ``DSPS`` with 0 clears ``next``, so the buffer starts
@@ -14,8 +14,8 @@ Bresenham degenerates to correctly). The stream ends with a single ``-1``.
 ``main`` writes the case JSON that ``littleman/tools/display-frames.mjs`` grades
 against::
 
-    python -m randomfun2026solvers.doom_vector --cases \
-        littleman/examples/doom-screen-cpu.cases.json
+    python -m randomfun2026solvers.lambda_deadman_vector --cases \
+        littleman/examples/lambda-deadman-cpu.cases.json
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import json
 from collections.abc import Sequence
 
 #: The frame, 24 rows by 32 columns, one hex digit (palette 0..15) per pixel.
-#: Hand-derived from the DOOM title screen, row-major, top to bottom.
+#: Hand-derived from the lambda-deadman title screen, row-major, top to bottom.
 _ROWS = (
     "11111111111111111111111111111111",
     "11110000010000010000080000001111",
@@ -112,7 +112,7 @@ def cases_json() -> dict:
     return {
         "publicTestData": [
             {
-                "name": "doom",
+                "name": "lambda-deadman",
                 "rounds": [
                     {
                         "in": [str(w) for w in input_words()],

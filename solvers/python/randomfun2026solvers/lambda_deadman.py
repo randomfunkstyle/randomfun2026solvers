@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Draw the DOOM (1993) title screen on an LM-75 display. Ungraded, for fun.
+"""Draw the the title screen of a certain 1993 first-person shooter on an LM-75 display. Ungraded, for fun.
 
-Image provenance: DOOM (1993) title screen,
+Image provenance: the title screen of a certain 1993 first-person shooter,
 https://doomwiki.org/w/images/4/4b/Doom-1-.gif, downsampled 10x with per-block
 minimal-Lab-distance quantization to the ANSI 16-color palette. 32x24 pixels,
 one hex digit per pixel (palette index 0..15), row-major top-to-bottom.
@@ -31,7 +31,7 @@ The machine is three boxes and three pipes:
   flight after the last halt. The loop ``s`` sits by the east wall (nearest:
   DATA pipe), the exit ``s`` by the west wall under the SWAP pipe's port
   (nearest: SWAP pipe); both bindings are pinned by the engine's route oracle
-  in ``tests/test_doom_screen.py``.
+  in ``tests/test_lambda_deadman.py``.
 
 The SWAP pipe is deliberately long (north over the display, down its east
 side, west under its bottom wall): the commit must arrive after all 768 DATA
@@ -221,7 +221,7 @@ def build() -> list[str]:
 
 # ── debug sidecars ───────────────────────────────────────────────────────────
 def debug_map() -> DebugMap:
-    dbg = DebugMap("doom-screen - DOOM (1993) title screen on an LM-75")
+    dbg = DebugMap("lambda-deadman - the title screen of a certain 1993 first-person shooter on an LM-75")
     dbg.region(
         "display",
         DISP_WX0,

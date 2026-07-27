@@ -1,4 +1,4 @@
-"""doom-screen: the DOOM (1993) title screen on an LM-75 display.
+"""lambda-deadman: the the title screen of a certain 1993 first-person shooter on an LM-75 display.
 
 Fast tier: the generator still produces the checked-in grid verbatim.
 Slow tier: the reference engine commits exactly one frame equal to the
@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from randomfun2026solvers.doom_screen import HEX_ROWS, build
+from randomfun2026solvers.lambda_deadman import HEX_ROWS, build
 from randomfun2026solvers.littleman import Littleman
 
 REPO = Path(__file__).resolve().parents[1]
-MAN = REPO / "littleman" / "examples" / "doom-screen.man"
+MAN = REPO / "littleman" / "examples" / "lambda-deadman.man"
 
 
 def test_build_matches_checked_in_grid():
@@ -22,7 +22,7 @@ def test_build_matches_checked_in_grid():
 @pytest.mark.slow
 def test_reference_engine_commits_the_frame():
     lm = Littleman()
-    cases = [{"name": "doom", "rounds": [{"in": [], "out": [], "frames": [HEX_ROWS]}]}]
+    cases = [{"name": "lambda-deadman", "rounds": [{"in": [], "out": [], "frames": [HEX_ROWS]}]}]
     (run,) = lm.display_frames(MAN, cases, max_ticks=200_000)
     assert run.fatal is None
     assert run.frames == [HEX_ROWS]

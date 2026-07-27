@@ -82,9 +82,9 @@ OVER_TICK_CAP: set[str] = {"little-little-man"}
 #: Ungraded demos that borrow a problem slug for its panel resolution only. Their
 #: input protocol is their own, so running them against the borrowed problem's
 #: public cases would be a vacuous pass at best (they emit no output) and a
-#: misaligned-input hang at worst. ``doom-screen`` reads five-word colour segments
-#: plus a negative sentinel — see ``tests/test_doom_vector.py`` for its real cases.
-DEMOS = {"doom-screen"}
+#: misaligned-input hang at worst. ``lambda-deadman`` reads five-word colour segments
+#: plus a negative sentinel — see ``tests/test_lambda_deadman_vector.py`` for its real cases.
+DEMOS = {"lambda-deadman"}
 
 PROGRAMS = sorted(available())
 CASES = [
@@ -181,7 +181,7 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         "plotter": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         # The vector-display demo is plotter's opcode set plus HALT (base ISA, so
         # not listed here) — seventeen opcodes, and the demo pays the depth-5 trie.
-        "doom-screen": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
+        "lambda-deadman": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
         # little-little-man interprets a 2D language, so its extensions are what an
         # interpreter needs: `LDA`/`MOVA` to reach the program grid at the address a

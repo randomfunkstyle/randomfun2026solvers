@@ -1,7 +1,7 @@
 {
   "publicTestData": [
     {
-      "name": "doom",
+      "name": "lambda-deadman",
       "rounds": [
         {
           "in": [

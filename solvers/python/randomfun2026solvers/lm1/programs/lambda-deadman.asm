@@ -1,9 +1,9 @@
-; doom-screen — a general vector-display CPU: read coloured segments, draw one frame.
+; lambda-deadman — a general vector-display CPU: read coloured segments, draw one frame.
 ;
 ; This is `plotter.asm` refitted as a *vector display processor* (an ungraded demo,
 ; not a contest problem — the slug maps onto `plotter`'s problem JSON only for the
-; 32x24 panel resolution). The demo input is the DOOM (1993) title screen decomposed
-; into horizontal runs by `randomfun2026solvers/doom_vector.py`; the point is that we
+; 32x24 panel resolution). The demo input is the the title screen of a certain 1993 first-person shooter decomposed
+; into horizontal runs by `randomfun2026solvers/lambda_deadman_vector.py`; the point is that we
 ; already have a plotter, so a full bitmap is just line data on its input pipe.
 ;
 ; Protocol, per segment: `x0 y0 x1 y1 colour` — five words, colour 0..15 — repeated,
@@ -24,10 +24,10 @@
 ;
 ; The machine that runs this is generated, not drawn:
 ;
-;   python -m randomfun2026solvers.lm1.machine doom-screen \
-;        --man littleman/examples/doom-screen-cpu.man
-;   node littleman/tools/display-frames.mjs littleman/examples/doom-screen-cpu.man \
-;        littleman/examples/doom-screen-cpu.cases.json 40000000
+;   python -m randomfun2026solvers.lm1.machine lambda-deadman \
+;        --man littleman/examples/lambda-deadman-cpu.man
+;   node littleman/tools/display-frames.mjs littleman/examples/lambda-deadman-cpu.man \
+;        littleman/examples/lambda-deadman-cpu.cases.json 40000000
 
 ; ── tape slots (eleven names, eleven slots: 1..11 of the N=12 tape) ──────────
 .equ ADDR1  1               ; 32*y1 + x1, the stop test
