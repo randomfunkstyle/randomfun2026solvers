@@ -90,3 +90,25 @@ def test_one_stage_machine_computes_the_product() -> None:
     text, expect = ms.probe(1, [[3], [4]], [[5, 6]])
     snap = Littleman().tick(text, 400)
     assert [int(v) for v in snap.output] == expect
+
+
+def test_the_mirrored_feeder_unblocks_the_floor_plan() -> None:
+    """The documented fix, proved before anyone builds it.
+
+    Laying LOADF's INIT row right-to-left moves the ring writes to the east end
+    and the chain writes to the west end. `solve_ports` then puts ring_out on
+    the east wall (facing TURN, where the floor plan needs it) and chain_out on
+    the west wall (facing a chain channel), which is exactly the placement the
+    current left-to-right layout cannot reach.
+    """
+    ports = ms.solve_ports(
+        18, 11,
+        [ms.PortSpec("chain_in", "in", ("N",)),
+         ms.PortSpec("ring_out", "out", ("E",)),
+         ms.PortSpec("chain_out", "out", ("W",)),
+         ms.PortSpec("mul_out", "out", ("S",))],
+        [((14, 0), "s", "ring_out"), ((10, 2), "s", "ring_out"),
+         ((4, 2), "s", "chain_out"), ((4, 7), "s", "chain_out"),
+         ((14, 5), "s", "mul_out")],
+    )
+    assert ports["ring_out"][0] == "E" and ports["chain_out"][0] == "W"
