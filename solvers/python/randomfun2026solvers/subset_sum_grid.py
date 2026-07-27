@@ -448,6 +448,35 @@ def _west_to_east(c: Circuit, x: int, y: int, x_entry: int, drop: int = 1) -> in
     return y + drop
 
 
+# ── what turning around does *not* buy, measured rather than estimated ────────
+#
+# The saving is one row per **change of direction**, not one row per turnable
+# block, and that is a much smaller number.  A turned block leaves heading west
+# and is entered from the east; an eastbound block leaves heading east and is
+# entered from the west.  So `E -> W` and `W -> E` are free, and `W -> W` costs a
+# row to walk back east and turn around again — `_phase3`'s `_bits` and `E3`'s
+# both pay it.  The bound is the number of alternations a chain admits, so
+# turning *every* remaining turnable block is worth far less than counting them
+# suggests: an estimate of ten to fourteen more rows was made on the block count
+# and is wrong.
+#
+# Two specific blocks were tried and put back:
+#
+# * **`_rot` at `P2_ROT`** and **`_peel_sum` at `P3_PEEL`**.  Both are single-band
+#   and both turn correctly; neither can be *placed*.  A turned block exits
+#   heading south and has to turn west on the row directly below its body — and
+#   for these two that row is `P2_TEST - 1` / `P3_TEST - 1`, which the "try the
+#   next lap" lanes already own all the way from column 22 to `LOOP_COL`.  Routing
+#   the transition along the same row does not merely collide: `LOOP_COL`'s `^`
+#   would catch the transition's man and send him round the search loop.  Moving
+#   the lane is not available either — it leaves an `X` northward, so it is on
+#   `y - 1` by construction.  Turning them needs the residual test re-signed so
+#   the next-lap outcomes exit *south*, which moves the scan band and is a
+#   redesign rather than a placement.
+# * Chaining the turned `_peel_sum` into a turned `_rot` in phase 2 closes those
+#   two rows and reopens them at the next transition, for a net of zero.
+
+
 def _link(
     c: Circuit,
     frm: tuple[int, int],
