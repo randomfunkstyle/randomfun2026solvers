@@ -109,6 +109,27 @@ loaded.
 turns it into the loop count. Verified: `n = 2, 4, 6, 16` all spawn exactly
 `n/2` carriers with correctly ordered, correctly paired values.
 
+### `Y` must be followed immediately by its `d`
+
+The order above (`Y r M v / ^ m r d`) is wrong for anything with more than one
+round. It reads a pair *before* testing the backpack, so when the list runs out
+the keeper blocks on `r` — and on the next round it swallows that round's
+length as if it were a list value. Single-round cases still pass, because the
+judge stops once the output is complete; a fuzz over multi-round cases put it at
+17/40.
+
+Reorder so the test fires before any read:
+
+```
+> M r Y        pos 0 turn(merge), 1 M, 2 r, 3 Y
+^ r m d        pos 7 turn(merge), 6 r, 5 m, 4 d
+```
+
+Round the loop that is `Y`, `d`, `m`, `r`, turn, turn, `M`, `r` — the keeper
+tests and leaves before it can wait on a pair that is not coming. The init then
+needs only one `r` of its own (for `v₀`), since `M` and the second `r` are on
+the loop.
+
 Period 8 with a single `Y`, so **`c = 8`** and by the coupling law the delay
 ring needs `s ≥ 9` — one station spacing wider than the ring the current
 solution runs. Half as many men at 9 ticks each beats sixteen at 8.
