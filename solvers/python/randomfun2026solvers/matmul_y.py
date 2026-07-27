@@ -94,7 +94,7 @@ is what keeps MAIN off ring C. Three sends per row of C, at most 48 per round.
 
 from __future__ import annotations
 
-from .circuit import N, S, Circuit
+from .circuit import N, S, Circuit, Collision
 from .lm1.machine import MachineError, _Grid
 
 __all__ = [
@@ -527,18 +527,25 @@ class Serpentine:
         self.c, self.x, self.y, self.top, self.bot, self.d = c, x, y, top, bot, heading
 
     def _step(self) -> tuple[int, int]:
-        """The next cell in the current heading, turning east if the wall is next."""
+        """The next cell in the current heading, turning east if the band ends.
+
+        `top` and `bot` are reserved for turn glyphs, so an op may only land
+        strictly between them. Letting an op sit *on* an edge leaves no cell in
+        that column for the turn that follows it, and the turn then collides with
+        the op — which is what this used to do.
+        """
         nxt = self.y + self.d[1]
-        if not self.top <= nxt <= self.bot:
+        if not self.top < nxt < self.bot:
             self._turn()
             nxt = self.y + self.d[1]
         return self.x, nxt
 
     def _turn(self) -> None:
-        """Send the man one column east and reverse his vertical heading."""
-        edge = self.y + self.d[1]
-        if not self.top <= edge <= self.bot:
-            edge = self.y
+        """Walk to the band edge, step one column east, reverse the heading."""
+        edge = self.bot if self.d == S else self.top
+        step = self.d[1]
+        for fill in range(self.y + step, edge, step):
+            self.c.set(self.x, fill, " ")
         self.c.set(self.x, edge, ">")
         self.d = N if self.d == S else S
         self.x += 1
@@ -551,6 +558,11 @@ class Serpentine:
             self.c.set(x, y, glyph)
             self.y = y
             return
+        if not self.top < row < self.bot:
+            raise Collision(
+                f"row {row} is on a band edge ({self.top}/{self.bot}); those are "
+                "reserved for turns, so no op may sit there"
+            )
         if (row - self.y) * self.d[1] <= 0:
             self._turn()
         while self.y + self.d[1] != row:

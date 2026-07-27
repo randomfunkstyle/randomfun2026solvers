@@ -494,3 +494,26 @@ def test_the_graded_set_has_no_multi_round_matmul_case(tmp_path) -> None:
         "this grid now answers more than one round; the single-round assumption "
         "behind CTRL's design no longer holds"
     )
+
+
+def test_a_serpentine_reserves_its_band_edges_for_turns() -> None:
+    """An op on a band edge leaves no cell for the turn that must follow it.
+
+    The turn glyph goes in the same column, one row past the last op. If the op
+    sat on the edge there is no such row, and the turn lands back on the op —
+    silently overwriting an instruction with a `>`. Caught by building a column
+    long enough to run off the end.
+    """
+    from randomfun2026solvers.circuit import Collision
+
+    c = Circuit(60, 30)
+    w = matmul_y.Serpentine(c, 2, 5, 5, 19, S=None) if False else \
+        matmul_y.Serpentine(c, 2, 5, 5, 19)
+    with pytest.raises(Collision, match="reserved for turns"):
+        w.op("r", 19)
+    with pytest.raises(Collision, match="reserved for turns"):
+        w.op("r", 5)
+    # a long unrowed run must walk off the band and keep going, not collide
+    for _ in range(40):
+        w.op("M")
+    assert 5 < w.y < 19, "the walker left its band"
