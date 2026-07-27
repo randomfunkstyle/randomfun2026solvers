@@ -116,6 +116,7 @@ __all__ = [
     "MEM_PAD",
     "MEMORY_SEMS",
     "ROM_ROWS",
+    "STORE_SHAPE",
     "STORE_TIER",
     "STREAM_SEM_BAND",
     "STREAM_SIZE",
@@ -2066,6 +2067,7 @@ def build(
     store_offset: tuple[int, int] = (0, 0),
     in_north: bool = False,
     store_teleport: bool = False,
+    store_shape: tuple[int, int] | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -2203,6 +2205,7 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_shape=store_shape,
                 )
             except MachineError as exc:
                 last = exc
@@ -2252,6 +2255,7 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_shape=store_shape,
                 )
             except MachineError:
                 continue
@@ -2323,6 +2327,7 @@ def _assemble(
     tape_relay_size: tuple[int, int] | None = None,
     in_north: bool = False,
     store_teleport: bool = False,
+    store_shape: tuple[int, int] | None = None,
 ) -> Machine:
     cpu = build_cpu(
         program,
@@ -2542,9 +2547,19 @@ def _assemble(
         elif store == "grid":
             tape = grid_block(tape_n)
         elif store == "men-v3":
-            from ..memory_men_v3 import v3_store_block
+            from ..memory_men_v3 import v3_store_block, v3_store_grid_block
 
-            tape = v3_store_block(tape_n, ops=STORE_OPS.get(program.name, 500))
+            v3_ops = STORE_OPS.get(program.name, 500)
+            if store_shape is not None and store_shape[0] > 1:
+                v3_cols, v3_rows = store_shape
+                if v3_cols * v3_rows < tape_n:
+                    raise MachineError(
+                        f"STORE shape {v3_cols}x{v3_rows} holds {v3_cols * v3_rows} "
+                        f"cells but the tape needs {tape_n}"
+                    )
+                tape = v3_store_grid_block(v3_cols, v3_rows, ops=v3_ops)
+            else:
+                tape = v3_store_block(tape_n, ops=v3_ops)
         elif store == "tape":
             tape = tape_block(
                 tape_n,
@@ -3898,12 +3913,13 @@ ROM_ROWS = {
     "pathfinder": 73,  # 177x179
     # The command arms are not complete and no checked-in grid exists yet.
     "pathfinder-unit": 72,
-    # deadman-3d: re-swept on native round 0 after the 64x64 map grew P to
-    # 1,383 (12 -> 2.749M, 24 -> 2.692M, 40 -> 2.666M, 56/72 flat within
-    # 0.2%): the machine is height-bound by the 328-slot men-v3 store, so the
-    # deeper fold narrows the box (312 -> 190 wide) and shortens every lane
-    # walk; 40 is the plateau knee.
-    "deadman-3d": 40,
+    # deadman-3d: re-swept jointly with :data:`STORE_SHAPE` for min max(w, h)
+    # (the viewer holds the machine's full bounding rectangle, so squareness is
+    # the demo's objective). With the 8x42 store the width floor is the
+    # CPU+adapter+store chain at 307 columns; 42 is the shallowest fold whose
+    # ROM fits inside it (41 rows -> 312 wide, rom-bound), and every deeper
+    # fold only adds height. Full sweep table in scratch/deadman3d-opt/METRICS.md.
+    "deadman-3d": 42,
 }
 
 
@@ -4022,11 +4038,13 @@ _LONG_RETURN = {"matmul"}
 MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "tcp": ((-23, 40), (0, 0)),
     "gradebook": ((0, 26), (-12, -26)),
-    # deadman-3d: the STORE slides 10 rows down, which lets the constraint router
-    # shorten the serial memory routes (adapter->store 13 -> 5, store->cpu
-    # 61 -> 59); this demo makes ~15k grid-store reads per frame, so route cells
-    # are first-order ticks, and its footprint is unscored.
-    "deadman-3d": ((0, 0), (0, 10)),
+    # deadman-3d: each row of store_dy shortens the serial adapter->store
+    # request route by one cell (~19.7k reads/frame pay it), and each row costs
+    # one row of machine height. 3 is where height meets the 307-column width
+    # exactly — the machine is 307x307, and rows past that would break the
+    # square for ~20k ticks each (measured: dy 0/3/10 -> 11.567M/11.508M/11.371M
+    # on the frame gate; squareness is this demo's objective, so 3).
+    "deadman-3d": ((0, 0), (0, 3)),
 }
 
 
@@ -4043,8 +4061,10 @@ DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
 #: and skip the search. (36 when the CPU owned the panel; 18 under the 32x32
 #: program; re-searched to 17 — the smallest that binds under the real
 #: INPUT_NORTH + teleport + MEM_PLACE config — after the 64x64 map and the
-#: men-v3 store, which tie every pad on footprint.) Consulted by
-#: :func:`build_for` like :data:`ROM_ROWS`; absent slugs keep the search.
+#: men-v3 store, which tie every pad on footprint. Re-searched again under the
+#: 8x42 :data:`STORE_SHAPE` + rom 42 geometry: the full pad search still lands
+#: on 17.) Consulted by :func:`build_for` like :data:`ROM_ROWS`; absent slugs
+#: keep the search.
 MEM_PAD: dict[str, int] = {"deadman-3d": 17}
 
 #: Slugs whose ``I`` room attaches to the CPU's **north** wall instead of the
@@ -4077,16 +4097,31 @@ STORE_TELEPORT: set[str] = {"deadman-3d"}
 #: ~14.3k accesses per frame it is worth ~0.3M ticks over ``grid``.
 STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
 
-#: Router-strip length for the men-v3 tier (``v3_store_block``'s ``ops`` knob),
-#: per slug; unlisted slugs keep v3's own default (500). Swept on deadman-3d's
-#: real frame gate: 8/32 → 11,305,517 ticks, 128/500 → 11,193,618, and the
-#: machine's bounding box is IDENTICAL at every length — the strip hides inside
-#: a bbox set by the ROM band and cell columns. The demo takes the short strip
-#: per the user's call: its reads come in one ~20k burst per frame with idle
-#: rounds between, so +112k ticks/frame (+1.3%) buys a ~99% smaller strip.
-#: Re-sweep against area²×ticks before borrowing this number for any scored
-#: machine — there the knee lands near 128, not 8.
-STORE_OPS: dict[str, int] = {"deadman-3d": 8}
+#: Router-strip length for the men-v3 tier (the ``ops`` knob of
+#: ``v3_store_block`` / ``v3_store_grid_block``), per slug; unlisted slugs keep
+#: v3's own default (500). ``deadman-3d`` runs the SINGLE looping block (v2's
+#: router footprint: one unrolled operation whose end walks straight back to its
+#: start): the CPU issues its store reads ~1k ticks apart with lookup work in
+#: between, so the walk home happens while the router idles waiting for the next
+#: request — off the critical path entirely. The unrolled strip only pays for
+#: back-to-back op streams, which this machine never generates; measured on the
+#: native frame gate the ops=1 delta is recorded in scratch/deadman3d-opt/
+#: METRICS.md. Re-sweep before borrowing this for any machine whose reads
+#: arrive in bursts.
+STORE_OPS: dict[str, int] = {"deadman-3d": 1}
+
+#: STORE shape for the men-v3 tier: ``(cols, rows)`` columns of the multi-column
+#: block (``v3_store_grid_block``); absent slugs keep the one-column strip.
+#: Capacity is ``cols * rows`` and must cover :data:`TAPE_SIZE` — the shape is
+#: pure geometry, addressing is global and unchanged. ``deadman-3d``'s store was
+#: the machine's whole silhouette (the one-column block is 681x999 and set BOTH
+#: dimensions of the 756x1197 bbox); the viewer holds the full bounding
+#: rectangle, so the shape is chosen jointly with :data:`ROM_ROWS` to minimise
+#: ``max(w, h)``: 8x42 (336 cells, 232x150 as a block) makes the machine exactly
+#: 307x307. 9x37 ties neither dimension (335x304-322 across the fold sweep) and
+#: everything wider or narrower loses on the other axis — the full sweep table
+#: is in scratch/deadman3d-opt/METRICS.md.
+STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (8, 42)}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:
@@ -4163,6 +4198,7 @@ def build_for(
         store_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[1],
         in_north=slug in INPUT_NORTH,
         store_teleport=slug in STORE_TELEPORT,
+        store_shape=STORE_SHAPE.get(slug),
     )
 
 

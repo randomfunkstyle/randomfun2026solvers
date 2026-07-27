@@ -431,6 +431,16 @@ def test_registry_pins() -> None:
     # 330 slots is past the rotating tape's practical cap, so the STORE rides
     # the men-v3 man-memory (~11 ticks an access, whatever n is) …
     assert machine.STORE_TIER["deadman-3d"] == "men-v3"
+    # … as the 8x42 multi-column block: the one-column strip was 681x999 and set
+    # BOTH dimensions of the old 756x1197 bbox; 8x42 (336 >= 330 cells) is the
+    # shape that, jointly with the 42-row ROM fold, makes the machine an exact
+    # 307x307 square — the viewer holds the full bounding rectangle, so
+    # squareness is this demo's objective.
+    assert machine.STORE_SHAPE["deadman-3d"] == (8, 42)
+    # The router is the SINGLE looping block (v2's footprint): the CPU issues
+    # reads ~1k ticks apart, so the walk home happens while the router idles —
+    # measured tick-identical to the unrolled 8-block strip on the frame gate.
+    assert machine.STORE_OPS["deadman-3d"] == 1
     # … at the recorded pad — the smallest that binds every pipe now that the
     # input pipe enters the north wall (INPUT_NORTH) instead of rivalling the
     # memory band from the west.
@@ -438,7 +448,9 @@ def test_registry_pins() -> None:
     # The frame-1 tick levers, all opt-in so other machines stay byte-identical:
     assert "deadman-3d" in machine.INPUT_NORTH
     assert "deadman-3d" in machine.STORE_TELEPORT
-    assert machine.MEM_PLACE["deadman-3d"] == ((0, 0), (0, 10))
+    # store_dy 3: each row shortens the serial request route one cell; 3 is
+    # where height meets the 307-column width exactly (the 307x307 square).
+    assert machine.MEM_PLACE["deadman-3d"] == ((0, 0), (0, 3))
 
 
 def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
@@ -499,6 +511,10 @@ def test_the_machine_synthesizes_with_the_men_v3_store() -> None:
     # exactly one display room, 64x48 plus its walls.
     _px, _py, pw, ph = m.regions["display"]
     assert (pw, ph) == (d3.WIDTH + 2, d3.HEIGHT + 2) == (66, 50)
+    # The whole point of the 8x42 STORE_SHAPE + 42-row fold + store_dy 3: the
+    # machine is an exact square (down from 756x1197), because the viewer holds
+    # its full bounding rectangle.
+    assert (max(len(r) for r in m.rows), len(m.rows)) == (307, 307)
 
 
 # ── the DOOM unit: the column-painter coprocessor the CPU sends frames to ────

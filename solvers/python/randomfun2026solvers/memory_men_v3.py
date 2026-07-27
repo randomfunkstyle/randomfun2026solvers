@@ -423,3 +423,51 @@ def v3_store_block(n: int, *, ops: int = 500) -> V3Store:
         out_cell=(ox, oy),
         pipes=3 * len(main_rows),
     )
+
+
+def v3_store_grid_block(cols: int, rows: int, *, ops: int = 500) -> V3Store:
+    """:func:`build_v3_grid` as a placeable block: the multi-column store.
+
+    The wire and the addressing are :func:`v3_store_block`'s exactly — column
+    ``j`` owns global addresses ``[j*rows, (j+1)*rows)``, so the shape is pure
+    geometry: ``cols x rows`` trades the one-column block's height for width at a
+    near-identical ticks-per-op (the sweep behind 709c62e measured grid shapes at
+    ~11.2-11.6 t/op against the strip's ~11.3). The outlet is normalised onto the
+    answer riser's real topmost pipe cell, same as the one-column block.
+
+    ``ops`` is honoured exactly: the router unrolls ``ops`` blocks (``ops=1`` is
+    the single looping block — v2's footprint, the walk home paid every lap) and
+    the snake is folded to whatever width the strip can hold.
+    """
+    if cols == 1:
+        return v3_store_block(rows, ops=ops)
+    from .memory_men_grid import build_grid
+
+    g = None
+    for per_row in range(min(max(ops, 1), 64), 0, -1):
+        try:
+            g = build_grid(cols, rows, router=router_rows(ops, per_row=per_row), io=False)
+            break
+        except Exception:  # noqa: BLE001 - the strip is simply too narrow; fold deeper
+            continue
+    if g is None:
+        raise ValueError(f"no snake width fits a {cols}x{rows} strip")
+    assert g.in_cell is not None and g.out_cell is not None
+    cells = {(x, y): ch for y, row in enumerate(g.grid_rows) for x, ch in enumerate(row) if ch != " "}
+    # Same off-by-one normalisation as the one-column block: the stub draw stops
+    # one short of the row it names, so the riser's real topmost pipe cell is one
+    # row below the named ``out_cell``.
+    ox, oy = g.out_cell
+    while (ox, oy) not in cells and oy < g.height:
+        oy += 1
+    # Per column: two bus pipes per band (repeater->decoder, decoder->cell) plus
+    # its feed (router strip -> repeater) and its one answer pipe; plus the
+    # collector -> riser stub. The in/out stubs merge with the machine's runs.
+    return V3Store(
+        cells=cells,
+        width=g.width,
+        height=g.height,
+        in_cell=g.in_cell,
+        out_cell=(ox, oy),
+        pipes=cols * (2 * rows + 2) + 1,
+    )

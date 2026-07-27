@@ -207,3 +207,41 @@ def test_the_block_answers_at_every_shape(shape):
         max_ticks=3_000_000,
     )
     assert edges.ok and edges.output == [-1000000, 1000000]
+
+
+def test_the_grid_store_block_answers_every_slot_through_its_stubs():
+    """`v3_store_grid_block`, the machine-facing multi-column block (io=False):
+    the request stub, the bottom collector, and the answer *riser* — the tall
+    teleport room that carries the answer back to the block's top, where the
+    machine's STORE teleport expects every man-memory outlet.
+
+    Wrapped standalone here: an I room feeds the in stub and an O room hangs off
+    the riser's named `out_cell`, then every one of deadman-3d's 330 slots is
+    written and read back at `ops=1` (the single looping router block).
+    """
+    from randomfun2026solvers.memory_men_v3 import v3_store_grid_block
+
+    b = v3_store_grid_block(8, 42, ops=1)
+    sx, sy = 6, 4  # room for the I room west of the stub and the O room on top
+    grid = {(x + sx, y + sy): ch for (x, y), ch in b.cells.items()}
+    ix, iy = b.in_cell[0] + sx, b.in_cell[1] + sy
+    ox, oy = b.out_cell[0] + sx, b.out_cell[1] + sy
+    for j, row in enumerate(("+-+", "|I|", "+-+")):
+        for i, ch in enumerate(row):
+            grid[(ix - 4 + i, iy - 1 + j)] = ch
+    grid[(ix - 1, iy)] = ">"
+    for j, row in enumerate(("+-+", "|O|", "+-+")):
+        for i, ch in enumerate(row):
+            grid[(ox - 1 + i, j)] = ch
+    for y in range(3, oy):
+        grid[(ox, y)] = "^"
+    w = max(x for x, _ in grid) + 1
+    h = max(y for _, y in grid) + 1
+    src = "\n".join("".join(grid.get((x, y), " ") for x in range(w)) for y in range(h))
+
+    n = 330  # deadman-3d's TAPE_SIZE; the 8x42 block holds 336
+    stream = [x for a in range(n) for x in (1, a, a * 13 + 7)]
+    stream += [x for a in range(n) for x in (0, a)]
+    want = [a * 13 + 7 for a in range(n)]
+    res = FastLittleman(src).run(stream, expected=want, max_ticks=20_000_000)
+    assert res.fatal is None and res.output == want, res.fatal or res.reason

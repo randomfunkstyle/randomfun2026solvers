@@ -568,7 +568,13 @@ RELAY_AT = (EAST + 3, UY + R_RET - 1)  # ring 1's turnaround room
 RELAY2_AT = (EAST + 3, UY + R_RET2 - 1)  # the mask ring's turnaround (V3)
 SWAP_COL = EAST + 2
 DATA_COL = EAST + 9
-PANEL_AT = (EAST + 11, UY + R_SWAP + 4)
+# The panel's top wall must sit below ADDR's east-wall row (ADDR descends into
+# the top wall), and that is the *only* floor on its height: DATA's window and
+# SWAP's under-run are column-planar whatever the row, and DATA_ROW's
+# length-equality is py-independent (addr and data both grow one cell per row).
+# R_SWAP + 4 was 37 rows lower for no reason the routes needed, and the whole
+# machine's bounding box paid them — the DOOM block hangs below everything.
+PANEL_AT = (EAST + 11, UY + R_ADDR + 2)
 ADDR_COL = EAST + 13  # inside the panel's column span (ARCH §4.4)
 SWAP_UP_COL = EAST + 14  # where SWAP comes back north into the bottom wall
 DATA_ROW = 12  # which interior row of the panel DATA enters; tuned so len == addr
