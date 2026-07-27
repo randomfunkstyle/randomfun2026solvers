@@ -64,6 +64,8 @@ __all__ = [
     "chains_of",
     "check_room",
     "estimate_ticks",
+    "fit_nb",
+    "grid_loads",
     "plan",
     "public_traces",
     "trace",
@@ -1045,10 +1047,25 @@ def walk_blocks(room: Room) -> dict[str, tuple[list[str], dict[str, str]]]:
     heading_at = room.heading
 
     def follow(pos: tuple[int, int], d: tuple[int, int]) -> str:
-        """Walk turns and blanks until the man stands on some block's first cell."""
+        """Walk turns and blanks until the man stands on some block's first cell.
+
+        Landing on the cell is half of arriving.  A block is a run of glyphs
+        read in *one* direction, so a man delivered onto its first cell facing
+        any other way executes that single glyph and then walks straight out of
+        the block, through the blanks beyond it and into somebody else's row.
+        Every other check still passes -- the glyphs are all there, in order,
+        walked from the block's own heading -- which is exactly how ``BL2
+        -pos-> BL2_R`` shipped in :mod:`matmul_dense` and hung every case with
+        ``K >= 3``.  So the heading is checked here, where every lane goes.
+        """
         for _ in range(4 * (room.iw + room.ih)):
             if pos in start:
-                return start[pos]
+                name = start[pos]
+                want = heading_at(name)[1]
+                if d != want:
+                    raise Collision(f"lane reaches {name} at {pos} heading {d}, "
+                                    f"but its glyphs are written {want}")
+                return name
             ch = c.get(*pos)
             if ch in _TURN:
                 d = _TURN[ch]
@@ -1232,19 +1249,27 @@ def _north_rows(bands: Bands, off: int) -> tuple[dict[tuple[str, bool], int], li
     return rows, order[::-1]
 
 
-def build_grid(room=None) -> tuple[list[str], object, dict[str, object]]:
+def build_grid(room=None, *, nb: int | None = None
+               ) -> tuple[list[str], object, dict[str, object]]:
     """Worker room, six rings, and the input and output rooms.
 
     `room` is any layout answering the walker's questions -- the chain layout
     here, or :class:`matmul_place.PlacedRoom`.  Everything north and east of the
     worker depends only on where the bands attach, which both agree on.
+
+    `nb` is the north band's height.  It is *not* free slack: the four stacked
+    turnaround rooms hang from the wall at ``wall - 6 - level``, so squeezing the
+    band pushes the six strip-served runs down onto their walls, and where the
+    floor lies depends on the band order -- which is why it is a parameter and
+    not the constant it used to be.  ``fit_nb`` finds it by trying, and every row
+    it finds is a row off ``max(w, h)``.
     """
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.value_ring import draw_pipe, stamp, walls
 
     room = room if room is not None else build_room()
     iw, ih, margin = room.iw, room.ih, room.margin
-    wy = NB + 1
+    wy = (NB if nb is None else nb) + 1
     off = WX + margin
     es = WX + iw + 3                          # first column of the east strip
     rows, blocks = _north_rows(room.bands, off)
@@ -1324,10 +1349,68 @@ def build_grid(room=None) -> tuple[list[str], object, dict[str, object]]:
     for label, x, y, w, h, note in room.regions():
         d.region(label, WX + x, wy + y, w, h, tags=["block"],
                  color="#22c55e", note=note)
-    info = {"worker": (iw, ih), "rings": lengths,
+    info = {"worker": (iw, ih), "rings": lengths, "nb": wy - 1,
             "blocks": len(LAID),
             "size": (max(len(r) for r in art), len(art))}
     return art, d, info
+
+
+#: What a laid `matmul` grid has to parse as: one worker, six turnaround rooms,
+#: an input and an output room; twelve ring pipes and two I/O pipes.
+GRID_ROOMS, GRID_PIPES = 9, 14
+
+
+def grid_loads(art: list[str], *, rooms: int = GRID_ROOMS,
+               pipes: int = GRID_PIPES) -> bool:
+    """Does this art parse as the machine it is meant to be, and compute?
+
+    Drawing without a collision is *not* the same as laying down a machine.
+    Squeezing the north band moves the strip drops up against the turnaround
+    rooms, and the first thing that gives is not a cell clash but a **pipe that
+    reaches back into the room it left** -- legal-looking art, fatal at load.
+    So the gate is the language, not the pen: parse the grid with the
+    independent engine, count what came out, and run the smallest case.
+    """
+    from randomfun2026solvers.fast_littleman import FastLittleman, FastLittlemanError
+    from randomfun2026solvers.matmul_cfg import matmul_reference
+
+    try:
+        machine = FastLittleman(art)
+    except FastLittlemanError:
+        return False
+    if (len(machine.rooms), len(machine.pipes)) != (rooms, pipes):
+        return False
+    case = [2, 2, 2, 1, 2, 3, 4, 5, 6, 7, 8]
+    want = matmul_reference(case)
+    try:
+        res = machine.run(input=case, expected=want, max_ticks=200_000)
+    except FastLittlemanError:
+        return False
+    return list(res.output) == want
+
+
+def fit_nb(room, *, lo: int = 6, hi: int = NB):
+    """The shortest north band this room's bands will lay in, by trying them.
+
+    A pipe's row is its rank by column and the stacked turnaround rooms hang
+    from the wall, so the two meet at a height that depends on where the bands
+    sit -- there is no formula, and the constant 15 was simply the first value
+    that worked for the first geometry.  Every row below it is a row off the
+    height, and the height is what ``max(w, h)`` charges here.
+
+    Each candidate is put through :func:`grid_loads` before it is accepted.  The
+    first band height below the floor draws perfectly and then fails to load --
+    a return pipe reaches back into its own turnaround room -- so "it built" is
+    not evidence and only the engine's own parse is.
+    """
+    for nb in range(lo, hi + 1):
+        try:
+            made = build_grid(room, nb=nb)
+        except Collision:
+            continue
+        if grid_loads(made[0]):
+            return nb, made
+    raise Collision(f"no north band between {lo} and {hi} lays this room")
 
 
 if __name__ == "__main__":  # pragma: no cover - the generator's CLI
