@@ -1,0 +1,16 @@
+# reverse-a-list — submission deaa0a41-482f-4fbc-95b2-ef1a5c149716
+
+verdict      done: 20/20 cases, area2 324, avgTicks 180, score 58,223
+submitted    2026-07-27T06:14:40+0300
+grid         13x18
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  11066aafdbd9636f1311ef8bb88083e015b0f36fa03f8aca5a71db9a9693c6fe
+commit       63bb6c7
+local        reverse-a-list: 8/8 public cases, avg 134 ticks
+source       ../../../../../../../../private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers--claude-worktrees-sort-numbers-ring/8d6fb213-c37a-4fac-896b-a6b9363874f1/scratchpad/rev_v2.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+O(n) carrier ring: one man per value on a 32-cell ring, 4 m/d exit stations; BP=n-i gives reverse order for free

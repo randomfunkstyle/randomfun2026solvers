@@ -1,0 +1,16 @@
+# little-little-man — submission 3cd50637-1bbf-4c2d-b5ce-1443420fc6fb
+
+verdict      done: 28/28 cases, area2 31684, avgTicks 5,211,254, score 165,113,377,394
+submitted    2026-07-27T14:58:12+0300
+grid         175x178
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  adbc9c5c934caaa870804271b922a3f22bdf449881bebe61c3d987805ae0bad9
+commit       729687b
+local        little-little-man: all public frame cases match (emulator)
+source       ../../../../../../Downloads/little-little-man-refold-175x178.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+Deepest of the three: ROM 92 rows at 175 wide, corridor 10 rows (buffer 1,734). 175x178, area2 31,684; local 14/14, avg 4,748,893 ticks. Third point on the same area-vs-buffer trade as 180x179 (163.8e9) and 179x178 (164.4e9).

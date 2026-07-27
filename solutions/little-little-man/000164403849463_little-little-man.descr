@@ -1,0 +1,16 @@
+# little-little-man — submission 936f3b7e-552a-4096-88f7-c3a13ff714db
+
+verdict      done: 28/28 cases, area2 32041, avgTicks 5,131,046, score 164,403,849,463
+submitted    2026-07-27T14:57:22+0300
+grid         179x178
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  44ad588397d46ed03ed7c69be716e62b588de31c722409c21f9073ae668c4584
+commit       729687b
+local        little-little-man: all public frame cases match (emulator)
+source       ../../../../../../Downloads/little-little-man-refold-179x178.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+Same re-fold, one notch shallower: ROM 90 rows at 179 wide, corridor 12 rows (buffer 2,128). 179x178, area2 32,041; local 14/14, avg 4,675,537 ticks. Sibling of the 180x179 at 163,823,101,714 — trading 1.1% of area for 1.5% of local ticks, submitted to see which way the judged 28-case average falls.
