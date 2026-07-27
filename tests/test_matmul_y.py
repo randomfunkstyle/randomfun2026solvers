@@ -566,3 +566,52 @@ def test_main_uses_only_glyphs_the_interpreter_accepts() -> None:
     c, _ = mm.main_room()
     bad = {ch for row in c.rows() for ch in row} - VALID_OPS - {"@"}
     assert not bad, f"MAIN contains glyphs the loader rejects: {sorted(bad)}"
+
+
+# ── v1: MAIN with every port on the top wall ─────────────────────────────────
+def test_v1_main_binds_every_port_by_column() -> None:
+    """All ports on one wall makes the vertical term equal, so column decides.
+
+    That is the whole reason this geometry works, and it is what the side-wall
+    version got wrong: side ports force every ring to wrap the room, which costed
+    out *larger* than the machine it would replace.
+
+    A glyph one column off still loads and still runs — it just talks to the wrong
+    ring — so this recomputes the winner for all 34 ops rather than trusting the
+    layout code.
+    """
+    from randomfun2026solvers import matmul_v1 as v1
+
+    c, _info = v1.main_room()
+    live = {(x, y): ch for y, r in enumerate(c.rows())
+            for x, ch in enumerate(r) if ch != " "}
+
+    def nearest(x, ports):
+        return min(ports, key=lambda k: (abs(x - ports[k]), ports[k]))
+
+    ops = 0
+    for (x, y), ch in live.items():
+        if ch == "r":
+            got, ports = nearest(x, v1.IN_PORTS), v1.IN_PORTS
+        elif ch == "s":
+            got, ports = nearest(x, v1.OUT_PORTS), v1.OUT_PORTS
+        else:
+            continue
+        ops += 1
+        assert ports[got] == x, (
+            f"{ch!r} at column {x} (row {y}) binds {got!r} at column {ports[got]}; "
+            "an op must sit exactly on its own port's column"
+        )
+    assert ops >= 30, f"only {ops} pipe ops; MAIN v1 is incomplete"
+
+
+def test_v1_main_is_made_of_legal_glyphs_and_stays_small() -> None:
+    """The room must stay near the port span: width is what sets the footprint."""
+    from randomfun2026solvers import matmul_v1 as v1
+
+    c, _ = v1.main_room()
+    rows = c.rows()
+    bad = {ch for row in rows for ch in row} - VALID_OPS - {"@"}
+    assert not bad, f"illegal glyphs: {sorted(bad)}"
+    used_w = max((len(r.rstrip()) for r in rows), default=0)
+    assert used_w <= 34, f"MAIN v1 is {used_w} columns; the ports only span ~26"
