@@ -3573,6 +3573,10 @@ TAPE_SIZE = {
     "tcp": 52,
     "gradebook": 32,  # one packed cell per student (16) + 15 scalars
     "plotter": 11,  # reaches address 10 — ten names aliased onto ten slots
+    # lambda-deadman is plotter plus one slot: COL (address 11) holds the segment's
+    # colour and is live across the whole round, so it can alias nothing. Highest
+    # address + 1, as everywhere — an exactly-sized tape stalls, it does not fault.
+    "lambda-deadman": 12,
     "palette": 3,  # one colour counter; the pixels need no tape at all
     "sudoku-validity": 31,  # 27 unit masks + 3 cursors, one slot of slack
     # matmul keeps both matrices in the STREAM block's rings, so its tape holds only
@@ -3733,6 +3737,9 @@ ROM_ROWS = {
     "tcp": 2,
     # The panel adds rows, so the fold stops when height becomes binding.
     "plotter": 9,  # 103x99
+    # The vector-display demo keeps plotter's fold: the inner loop is unchanged and
+    # the slug is ungraded, so nobody swept it. Drop the entry if the default wins.
+    "lambda-deadman": 9,
     # The unrolled scans make the ROM set the width.
     # Also re-swept against :data:`MEM_PLACE`, and again after `gradebook` left
     # :data:`LANE_ORDER` — the narrower default CPU moves the width/height crossing, so
