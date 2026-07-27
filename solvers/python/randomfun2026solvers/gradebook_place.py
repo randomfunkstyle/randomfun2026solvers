@@ -350,9 +350,9 @@ ATTEMPTS = 150
 #: ticks to 15,510 -- 6.0%, at the same 70 columns.
 ORDER = [
     "INIT", "A_END", "ROUND", "OP", "OP_GO", "SET", "GET", "S_LOOP",
-    "S_L", "S_TEST", "FOUND", "G_HIT", "REST", "S_HIT", "T_SET", "T_END",
-    "A_L", "AVG", "D34", "TOP", "T_L", "T_MID", "T_X", "T_CMP", "PHASE",
-    "CELL", "STU", "ROSTER", "HORN", "PAD_B", "PADSET",
+    "S_L", "S_TEST", "FOUND", "G_HIT", "REST", "T_SET", "T_END", "A_L",
+    "AVG", "TOP", "T_CMP", "T_L", "T_MID", "T_X", "PHASE", "CELL", "STU",
+    "ROSTER", "HORN", "PAD_B", "S_HIT", "PADSET", "D34",
 ]
 
 
