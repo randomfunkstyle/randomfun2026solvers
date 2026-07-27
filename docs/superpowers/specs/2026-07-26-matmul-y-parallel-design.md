@@ -437,3 +437,32 @@ pipe length — but a pipe's capacity **is** its length, and ring A and ring B n
 257 cells each. A router that shortens pipes optimises against the one hard
 requirement, so it would produce a grid that loads, binds correctly, and deadlocks.
 Capacity-aware routing is the unbuilt piece `task.md` calls for.
+
+### The one-wall design has a wall-bandwidth limit
+
+Putting every port on one wall is what makes binding trivial and what removes the
+ring wraps. It also creates a bottleneck, and that is what finally stopped the
+assembly: **thirteen pipes have to escape through one wall.**
+
+`cmd` routes. `prod` does not, and a search over thirty vertical alignments of the
+ADDER times both routing orders — sixty combinations — found no pair where both
+succeed. The strip east of MAIN admits one of them, never two, because MAIN's own
+thirteen wall pipes emerge at the same column and the two ring rises plus the three
+register relay rooms fence the rest of the strip.
+
+This is not a placement problem. It is the cost of the one-wall choice, and the
+options are:
+
+* **split MAIN's ports across two walls** (east and south). Binding then has a
+  vertical half-constraint — an op near the bottom binds a south port — which is
+  the same class of constraint the one-wall design was adopted to remove, so MAIN's
+  code has to be re-ordered around it;
+* **push the ring rises far enough east** that the strip between MAIN and them is
+  clear for the feeds, which trades footprint for routability;
+* **give the feeds their own wall**: `prod` and `cmd` on MAIN's south wall, the
+  rings and registers on the east. Only two ports on the south wall, so the
+  half-constraint applies to just two ops — the drive loop's `s(prod)` and the
+  count loop's `s(cmd)` — both of which are already in known places.
+
+The third is the cheapest and is what to try next: it keeps eleven ports on one
+wall and moves exactly the two pipes that cannot get out.

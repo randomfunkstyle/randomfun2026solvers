@@ -95,7 +95,11 @@ def build():
         g.room(x, y, x + 4, y + 3)
         g.blit(x, y, RELAY)
 
-    reg_x = east + 3
+    # The register relays sit well clear of MAIN's wall, not hard against it: `prod`
+    # and `cmd` have to descend past them to reach the ADDER, and with a 3-column gap
+    # the router finds a corridor for one of them and none for the other. The
+    # register hops get longer, which costs nothing -- they carry one value each.
+    reg_x = east + 9
     for nm, ret, fwd in (("rn", mm.RN_RET, mm.RN_FWD), ("rm", mm.RM_RET, mm.RM_FWD),
                          ("rk", mm.RK_RET, mm.RK_FWD)):
         room(reg_x, MY + ret - 1)
