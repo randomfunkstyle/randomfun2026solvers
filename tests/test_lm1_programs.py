@@ -79,10 +79,18 @@ DISPLAY_PROBLEMS = {"plotter", "palette", "snake", "pathfinder", "little-little-
 #: see ``tests/test_llm_lm1.py`` for the assertion that holds it there.
 OVER_TICK_CAP: set[str] = {"little-little-man"}
 
+#: Ungraded demos that borrow a problem slug for its panel resolution only. Their
+#: input protocol is their own, so running them against the borrowed problem's
+#: public cases would be a vacuous pass at best (they emit no output) and a
+#: misaligned-input hang at worst. ``doom-screen`` reads five-word colour segments
+#: plus a negative sentinel — see ``tests/test_doom_vector.py`` for its real cases.
+DEMOS = {"doom-screen"}
+
 PROGRAMS = sorted(available())
 CASES = [
     (stem, name, rounds)
     for stem in PROGRAMS
+    if stem not in DEMOS
     for name, rounds in rounds_for_problem(problem_of(stem))
 ]
 
@@ -171,6 +179,9 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # This is exactly 16 opcodes and so still a depth-4 trie — a 17th would add a
         # whole trie level to every instruction plus ~32 lane rows.
         "plotter": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
+        # The vector-display demo is plotter's opcode set plus HALT (base ISA, so
+        # not listed here) — seventeen opcodes, and the demo pays the depth-5 trie.
+        "doom-screen": {"DSPA", "DSPD", "DSPS", "MODI", "NEG"},
         "palette": {"DSPA", "DSPD", "DSPS"},
         # little-little-man interprets a 2D language, so its extensions are what an
         # interpreter needs: `LDA`/`MOVA` to reach the program grid at the address a

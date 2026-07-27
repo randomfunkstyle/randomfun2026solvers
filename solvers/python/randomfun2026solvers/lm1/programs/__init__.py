@@ -44,10 +44,18 @@ PROGRAM_DIR = Path(__file__).resolve().parent
 PROBLEM_DIR = Path(__file__).resolve().parents[5] / "tasks" / "problems"
 
 #: Programs whose file name is not the problem slug (alternative solutions).
+#:
+#: ``doom-screen`` is the odd one out: not an alternative solution but an ungraded
+#: vector-display demo (the DOOM title screen as segment data — see
+#: ``randomfun2026solvers/doom_vector.py``). It borrows ``plotter``'s problem JSON
+#: *only* for the 32x24 panel resolution; its input protocol (five words per
+#: segment plus a negative sentinel) is not plotter's, so it must never be graded
+#: against plotter's public cases.
 PROBLEM_OF: dict[str, str] = {
     "triangle-closed": "triangle",
     "snake-ring": "snake",
     "pathfinder-unit": "pathfinder",
+    "doom-screen": "plotter",
 }
 
 
