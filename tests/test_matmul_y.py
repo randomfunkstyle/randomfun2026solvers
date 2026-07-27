@@ -331,3 +331,52 @@ def test_relocation_preserves_every_instruction_glyph() -> None:
     for cand, how in manrelocate.candidates(rows, 2):
         got = sum(ch in instr for r in cand for ch in r if ch not in "<>^v|-+")
         assert got == want, f"{how} lost an instruction: {got} vs {want}"
+
+
+# ── validator parity on split machines ───────────────────────────────────────
+@node_required
+@pytest.mark.slow
+def test_fast_and_reference_engines_disagree_on_ticks_once_Y_is_used() -> None:
+    """`FastLittleman` understates ticks on a grid containing `Y`.
+
+    ``AGENTS.md`` records that the fast validator matched Node/WASM verdicts *and
+    exact tick counts* across all twelve checked-in solution families. That
+    measurement predates any grid that splits: every family in it was
+    single-runner-per-room. It is still true there, and this pins both halves so
+    the distinction cannot quietly rot:
+
+    * ``matmul-5818b2cc.man`` has no `Y` and the two engines agree exactly;
+    * ``matmul-c9920b5f.man`` has three and they differ by ~5%, on precisely the
+      two cases that keep split children in flight.
+
+    Both engines still *pass* every case, so this is a timing divergence and not a
+    correctness one. But the judge runs reference semantics, so any search that
+    optimises avg-ticks on a split machine is ranking against the wrong number —
+    use the fast engine to explore and the reference to accept.
+    """
+    from randomfun2026solvers import optimize
+    from randomfun2026solvers.littleman import Littleman
+
+    plain = REPO / "tasks" / "solutions" / "matmul-5818b2cc.man"
+    split = REPO / "tasks" / "solutions" / "matmul-c9920b5f.man"
+    for grid in (plain, split):
+        if not grid.exists():
+            pytest.skip(f"{grid.name} not checked in")
+
+    assert "Y" not in plain.read_text(encoding="utf-8")
+    assert "Y" in split.read_text(encoding="utf-8")
+
+    fast_plain = optimize.verify(plain, "matmul")
+    ref_plain = optimize.verify(plain, "matmul", lm=Littleman())
+    assert fast_plain.passed and ref_plain.passed
+    assert fast_plain.avg_ticks == pytest.approx(ref_plain.avg_ticks), (
+        "the no-Y grid used to agree exactly; a change to either engine broke it"
+    )
+
+    fast_split = optimize.verify(split, "matmul")
+    ref_split = optimize.verify(split, "matmul", lm=Littleman())
+    assert fast_split.passed and ref_split.passed, "both engines must still pass"
+    assert fast_split.avg_ticks < ref_split.avg_ticks * 0.99, (
+        "the fast engine no longer understates ticks on a split machine — if this "
+        "is a fix, delete this test and re-enable fast-engine tick search on Y grids"
+    )

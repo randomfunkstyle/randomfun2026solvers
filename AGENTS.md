@@ -78,6 +78,17 @@ fake backend or specifically needs the reference implementation. Keep
 debug snapshots, stepping, analysis, and routing; `FastLittleman` is the
 validation-focused backend and does not replace those debugging APIs.
 
+**The fast backend understates ticks on grids that use `Y`.** The parity
+evidence below predates any splitting machine — every family in it was
+single-runner-per-room. On `matmul-c9920b5f.man` (three `Y`s) the fast engine
+reports avg 28,286 against the reference's 29,859, diverging on exactly the two
+cases that keep split children in flight; on `matmul-5818b2cc.man` (no `Y`) the
+two still agree to the tick. Both *pass* either way, so this is a timing
+divergence, not a correctness one — but the judge runs reference semantics, so on
+a split machine **explore with the fast engine and accept with the reference**.
+`test_fast_and_reference_engines_disagree_on_ticks_once_Y_is_used` pins both
+halves.
+
 Current parity/performance evidence (2026-07-25):
 
 - all public cases for all 12 checked-in solution families matched Node/WASM
