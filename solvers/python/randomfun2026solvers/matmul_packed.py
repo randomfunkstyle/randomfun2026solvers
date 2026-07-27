@@ -19,6 +19,16 @@ columns back, width stops binding and the search can spend them on rows: the
 objective is still ``max(w, h)^2 * ticks``, still priced by walking the drawn
 grid, but the frontier it is searching along has moved.
 
+**The north band is fitted, not assumed.**  ``matmul_grid.NB`` is 15 because 15
+was the first height that laid the *first* geometry; under this one two of those
+rows are slack.  Height was binding at 96 against a width of 85, so both came
+straight off ``max(w, h)`` -- 85x96 to **85x94**, 2.865e8 to **2.746e8**, 1.043x
+-- and the eight cells they took off each coiled ring came off the ticks too.
+The fit is gated on the *engine's* parse rather than on the pen (see
+``matmul_grid.grid_loads``): one row below the floor the art draws perfectly and
+then refuses to load, because a return pipe reaches back into the turnaround
+room it left.  That failure has no collision and no symptom but a zero.
+
 ## What did not change, and why
 
 **The block placer.**  :mod:`matmul_place` lays this CFG with
@@ -92,8 +102,17 @@ def build_room() -> G.Room:
 
 
 def build_grid() -> tuple[list[str], object, dict[str, object]]:
-    """The whole machine, its debug overlay and its measured footprint."""
-    art, dbg, info = G.build_grid(build_room())
+    """The whole machine, its debug overlay and its measured footprint.
+
+    The north band is fitted rather than assumed.  ``matmul_grid.NB`` is 15
+    because 15 was the first value that laid the *first* geometry; two of those
+    rows are slack under this one, and with the height binding at 96 against a
+    width of 85 each was a row straight off ``max(w, h)``.  Fitting it takes the
+    grid to 85x94 -- 2.865e8 to 2.746e8, 1.043x, for two rows -- and it also
+    shortens both coiled rings by eight cells apiece, which is latency the `b`
+    ring pays back on the hot loop.
+    """
+    art, dbg, info = G.fit_nb(build_room())[1]
     info["geometry"] = {b: GEOMETRY.recv_w[b] for b in GEOMETRY.recv_order}
     return art, dbg, info
 

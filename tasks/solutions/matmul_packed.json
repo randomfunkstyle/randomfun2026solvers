@@ -8,7 +8,7 @@
     {
       "name": "worker",
       "x": 1,
-      "y": 16,
+      "y": 14,
       "w": 61,
       "h": 79,
       "note": "32 blocks laid by Room",
@@ -18,7 +18,7 @@
     {
       "name": "band:io",
       "x": 29,
-      "y": 16,
+      "y": 14,
       "w": 6,
       "h": 79,
       "note": "io: r binds col 32, s binds col 31",
@@ -28,7 +28,7 @@
     {
       "name": "band:x",
       "x": 53,
-      "y": 16,
+      "y": 14,
       "w": 9,
       "h": 79,
       "note": "x: r binds col 58, s binds col 57",
@@ -38,7 +38,7 @@
     {
       "name": "band:k",
       "x": 20,
-      "y": 16,
+      "y": 14,
       "w": 10,
       "h": 79,
       "note": "k: r binds col 27, s binds col 26",
@@ -48,7 +48,7 @@
     {
       "name": "band:s",
       "x": 35,
-      "y": 16,
+      "y": 14,
       "w": 6,
       "h": 79,
       "note": "s: r binds col 38, s binds col 37",
@@ -58,7 +58,7 @@
     {
       "name": "band:b",
       "x": 40,
-      "y": 16,
+      "y": 14,
       "w": 6,
       "h": 79,
       "note": "b: r binds col 43, s binds col 42",
@@ -68,7 +68,7 @@
     {
       "name": "band:c",
       "x": 46,
-      "y": 16,
+      "y": 14,
       "w": 8,
       "h": 79,
       "note": "c: r binds col 49, s binds col 48",
@@ -78,7 +78,7 @@
     {
       "name": "band:q",
       "x": 5,
-      "y": 16,
+      "y": 14,
       "w": 16,
       "h": 79,
       "note": "q: r binds col 14, s binds col 13",
@@ -90,7 +90,7 @@
       "x": 35,
       "y": 0,
       "w": 6,
-      "h": 16,
+      "h": 14,
       "note": "4 cells, holds 1 words",
       "color": "#0ea5e9",
       "tags": []
@@ -100,7 +100,7 @@
       "x": 11,
       "y": 0,
       "w": 6,
-      "h": 16,
+      "h": 14,
       "note": "6 cells, holds 4 words",
       "color": "#0ea5e9",
       "tags": []
@@ -110,7 +110,7 @@
       "x": 24,
       "y": 0,
       "w": 6,
-      "h": 16,
+      "h": 14,
       "note": "8 cells, holds 6 words",
       "color": "#0ea5e9",
       "tags": []
@@ -120,7 +120,7 @@
       "x": 46,
       "y": 0,
       "w": 6,
-      "h": 16,
+      "h": 14,
       "note": "10 cells, holds 8 words",
       "color": "#0ea5e9",
       "tags": []
@@ -130,8 +130,8 @@
       "x": 55,
       "y": 0,
       "w": 6,
-      "h": 16,
-      "note": "360 cells, holds 256 words",
+      "h": 14,
+      "note": "352 cells, holds 256 words",
       "color": "#0ea5e9",
       "tags": []
     },
@@ -140,15 +140,15 @@
       "x": 40,
       "y": 0,
       "w": 6,
-      "h": 16,
-      "note": "412 cells, holds 96 words",
+      "h": 14,
+      "note": "404 cells, holds 96 words",
       "color": "#0ea5e9",
       "tags": []
     },
     {
       "name": "chain:HEAD",
       "x": 5,
-      "y": 16,
+      "y": 14,
       "w": 57,
       "h": 11,
       "note": "HEAD LOADA_GO LOADB_HEAD",
@@ -160,7 +160,7 @@
     {
       "name": "chain:BGRP_END",
       "x": 5,
-      "y": 27,
+      "y": 25,
       "w": 57,
       "h": 1,
       "note": "BGRP_END",
@@ -172,7 +172,7 @@
     {
       "name": "chain:BGRP_GO",
       "x": 5,
-      "y": 30,
+      "y": 28,
       "w": 57,
       "h": 3,
       "note": "BGRP_GO BL1 BL1_Z",
@@ -184,7 +184,7 @@
     {
       "name": "chain:BL1_R",
       "x": 5,
-      "y": 33,
+      "y": 31,
       "w": 57,
       "h": 1,
       "note": "BL1_R",
@@ -196,7 +196,7 @@
     {
       "name": "chain:BL2",
       "x": 5,
-      "y": 35,
+      "y": 33,
       "w": 57,
       "h": 1,
       "note": "BL2 BL2_Z",
@@ -208,7 +208,7 @@
     {
       "name": "chain:BL2_R",
       "x": 5,
-      "y": 38,
+      "y": 36,
       "w": 57,
       "h": 1,
       "note": "BL2_R",
@@ -220,7 +220,7 @@
     {
       "name": "chain:BROW",
       "x": 5,
-      "y": 40,
+      "y": 38,
       "w": 57,
       "h": 18,
       "note": "BROW BLOAD_DONE CFILL_GO QBUILD",
@@ -232,7 +232,7 @@
     {
       "name": "chain:BROW_GO",
       "x": 5,
-      "y": 58,
+      "y": 56,
       "w": 57,
       "h": 1,
       "note": "BROW_GO",
@@ -244,7 +244,7 @@
     {
       "name": "chain:E1",
       "x": 5,
-      "y": 60,
+      "y": 58,
       "w": 57,
       "h": 1,
       "note": "E1",
@@ -256,7 +256,7 @@
     {
       "name": "chain:E2",
       "x": 5,
-      "y": 62,
+      "y": 60,
       "w": 57,
       "h": 1,
       "note": "E2",
@@ -268,7 +268,7 @@
     {
       "name": "chain:GEND",
       "x": 5,
-      "y": 64,
+      "y": 62,
       "w": 57,
       "h": 1,
       "note": "GEND",
@@ -280,7 +280,7 @@
     {
       "name": "chain:GG2",
       "x": 5,
-      "y": 67,
+      "y": 65,
       "w": 57,
       "h": 3,
       "note": "GG2 LN2",
@@ -292,7 +292,7 @@
     {
       "name": "chain:GRP_GO",
       "x": 5,
-      "y": 72,
+      "y": 70,
       "w": 57,
       "h": 7,
       "note": "GRP_GO GG1 LN1",
@@ -304,7 +304,7 @@
     {
       "name": "chain:ROW",
       "x": 5,
-      "y": 81,
+      "y": 79,
       "w": 57,
       "h": 1,
       "note": "ROW FIN",
@@ -316,7 +316,7 @@
     {
       "name": "chain:ROW_GO",
       "x": 5,
-      "y": 83,
+      "y": 81,
       "w": 57,
       "h": 2,
       "note": "ROW_GO",
@@ -328,7 +328,7 @@
     {
       "name": "chain:TBODY",
       "x": 5,
-      "y": 85,
+      "y": 83,
       "w": 57,
       "h": 8,
       "note": "TBODY MAC TTAIL EMIT_SET",
@@ -340,7 +340,7 @@
     {
       "name": "chain:TNEXT",
       "x": 5,
-      "y": 93,
+      "y": 91,
       "w": 57,
       "h": 1,
       "note": "TNEXT",

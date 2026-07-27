@@ -32,10 +32,16 @@ PROBLEM = REPO / "tasks" / "problems" / "matmul.json"
 #: What the generator was measured at.  `matmul_ring.man` is 88x98 / 9,604 /
 #: 31,553 / 3.030e8, so every one of these is an improvement and none is a
 #: regression -- which is the whole claim being made.
-SIZE = (85, 96)
-AREA2 = 9216
-TICKS = 31_089.714285714286
-SCORE = 286_522_806.85714287
+#:
+#: 85x96 -> 85x94 is the fitted north band (``matmul_grid.fit_nb``): 15 rows was
+#: the first height that laid the *first* geometry and two of them are slack
+#: under this one.  Height was binding at 96 against a width of 85, so both rows
+#: came straight off ``max(w, h)``, and the eight cells they took off each
+#: coiled ring came off the ticks as well.
+SIZE = (85, 94)
+AREA2 = 8836
+TICKS = 31_081.714285714286
+SCORE = 274_638_027.42857146
 
 
 def _cases() -> list[tuple[str, list[int], list[int]]]:

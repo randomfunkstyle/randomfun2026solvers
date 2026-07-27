@@ -223,6 +223,26 @@ def test_the_drawn_grid_multiplies_matrices(n: int, m: int, k: int) -> None:
     assert list(res.output) == exp, (n, m, k, res.reason)
 
 
+def test_one_row_less_north_band_draws_and_does_not_load(b: D.Bands) -> None:
+    """Why the band fit is gated on the engine's parse and not on the pen.
+
+    ``build_grid`` at `nb = 14` raises nothing: every cell it writes is free and
+    the art looks exactly like the art that works.  It is the *language* that
+    rejects it -- a return pipe reaches back into the turnaround room it left --
+    and that is a load error, not a collision.  A fit that trusted the pen would
+    have shipped it, and the only symptom is a grid that scores nothing.
+    """
+    from randomfun2026solvers.matmul_grid import grid_loads
+
+    room = D.build_room(b)
+    good, _dbg, _meta = D.build_grid(room)
+    assert grid_loads(good)
+    fitted = len(good) - room.ih - 2                 # the band the fit settled on
+    bad, _dbg, _meta = D.build_grid(room, nb=fitted - 1)
+    assert len(bad) < len(good)
+    assert not grid_loads(bad)
+
+
 def test_the_committed_grid_is_what_the_generator_emits() -> None:
     """Otherwise a fix to the pen never reaches the file that gets submitted."""
     art, _dbg, _meta = D.build_grid()

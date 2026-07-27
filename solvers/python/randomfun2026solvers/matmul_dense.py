@@ -89,23 +89,37 @@ the runtime does, which neither ``lm.mjs analyze`` nor ``route-check.mjs`` will.
 
 ## Where it stands, and what it costs
 
-All seven public cases pass on the reference engine.  105x169, 76,354 ticks a
-case, **2.18e9** -- against `matmul_grid`'s shipped 354,244,608, so the dense
-layout is 6.2x *worse* than the grid it was meant to replace, and both of its
-two numbers say why:
+All seven public cases pass on the reference engine.  105x164, 67,105 ticks a
+case, **1.80e9** -- against `matmul_packed`'s 2.746e8 on the same seven cases,
+so the dense layout is 6.6x *worse* than the grid it was meant to replace, and
+both of its two numbers say why:
 
-* **the side is 169 and only 53 of it is the room.**  The relay strip sits ~50
-  columns east of the anchors, so the ring pipes are 668 (`b`) and 754 (`x`)
+* **the side is 164 and the room is 147 of it.**  The relay strip sits ~50
+  columns east of the anchors, so the ring pipes are 650 (`b`) and 736 (`x`)
   cells long.  Rendered, the eastern half of the image is strip.
-* **the ticks are 76,354 against a 27,593-cell model.**  The gap is ring
+* **the ticks are 67,105 against a 27,593-cell model.**  The gap is ring
   *latency*, not layout: ``MAC`` re-reads the one-word spill every lap, and that
-  word has to travel the whole 130-cell `s` ring between the `ss` that writes it
+  word has to travel the whole 110-cell `s` ring between the `ss` that writes it
   and the `rs` that reads it back.  A ring the man re-reads every lap costs its
   whole length per lap, so the strip is charged twice -- once in the side and
-  once in every tick.
+  once in every tick.  (Fitting the north band from 20 rows to 15 took 24 cells
+  off `s` and 9,249 ticks off the mean, which is the same lever at 1/6 scale.)
 
 Both are the same decision.  Relays adjacent to the room, with a clear window
 per ring, removes the strip and shortens every ring at once.
+
+**And on the arithmetic it still does not pay, which is worth knowing before
+the next session spends itself on it.**  The room is 147 rows and the measured
+answer to widening the bands is that it does not shorten them -- gaps
+`[1,1,1,4,1,2]` gave 75x141 against a 71x145 baseline, four rows for a much
+wider room, because a box's height counts *direction changes within its chain*
+and not band width.  So 147 is a floor on the side however the rings are
+re-plumbed, and even at zero strip, zero band and the full 27,593-cell model
+realised as ticks, 149^2 * 27,593 = **6.1e8**: still 2.2x behind
+`matmul_packed`.  The dense layout's premise -- trade width for height by
+wrapping every chain into a narrow box -- is what costs it: 311 glyphs over 147
+rows is 2.1 a row, where `matmul_packed` gets 3.9 across 85 columns.  Beating
+that needs the *room* halved, not the rings shortened.
 
 ## The old open problem: the rectangle's anchors make the north band unroutable
 
@@ -1037,14 +1051,37 @@ def _relay_clear(box_x: int, ring: str, off: int) -> None:
                 f"{other}'s {'send' if send else 'recv'} riser climbs at {col}")
 
 
-def build_grid(room: DenseRoom | None = None):
-    """Worker room, six rings, and the input and output rooms."""
+def build_grid(room: DenseRoom | None = None, *, nb: int | None = None):
+    """Worker room, six rings, and the input and output rooms.
+
+    `nb` is the north band's height, and it is fitted rather than assumed: the
+    band needs one row per pipe plus whatever the risers and the strip drops
+    demand of each other, and where that floor lies depends on the band order.
+    Here it is 14 rather than the 20 the first order needed, and the six rows
+    come off the height *and* off every ring -- 24 cells off `s`, whose whole
+    length the ``MAC`` pays as latency on every lap.
+    """
     from randomfun2026solvers.man_debug import DebugMap
     from randomfun2026solvers.value_ring import draw_pipe, stamp, walls
 
     room = room or build_room()
+    if nb is None:
+        from randomfun2026solvers.matmul_grid import grid_loads
+
+        for probe in range(6, NB + 1):
+            try:
+                made = build_grid(room, nb=probe)
+            except Collision:
+                continue
+            # Drawing without a clash is not laying down a machine: the first
+            # band height below the floor draws perfectly and then fails to
+            # load, because a return pipe reaches back into its own turnaround
+            # room.  Only the engine's own parse settles it.
+            if grid_loads(made[0]):
+                return made
+        raise Collision("no north band lays this room")
     iw, ih = room.iw, room.ih
-    wy = NB + 1
+    wy = nb + 1
     off = WX + room.margin
     es = WX + iw + 3                          # first column of the east strip
     rows, blocks = _north_rows(off)
