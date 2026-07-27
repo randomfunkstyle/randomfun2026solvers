@@ -364,6 +364,10 @@ def build_v3_grid(cols: int, rows: int, *, ops: int = 500, per_row: int | None =
     """
     from .memory_men_grid import build_grid
 
+    if cols == 1:
+        # `build_grid` delegates one column to `build_addr`, which has no strip to
+        # hold a router. `build_v3` *is* that memory with the unrolled one.
+        return build_v3(rows, ops=ops, per_row=per_row)
     if per_row is not None:
         return build_grid(cols, rows, router=router_rows(ops, per_row=per_row))
     for candidate in range(64, 0, -1):
@@ -372,3 +376,50 @@ def build_v3_grid(cols: int, rows: int, *, ops: int = 500, per_row: int | None =
         except Exception:  # noqa: BLE001 - the strip is simply too narrow; try again
             continue
     raise ValueError(f"no snake width fits a {cols}x{rows} strip")
+
+
+# ── the machine-facing block (lm1.machine STORE tier "men-v3") ───────────────
+@dataclass(frozen=True)
+class V3Store:
+    """Same shape as ``memory_men_store.MenStore`` plus a pipe inventory, so
+    ``lm1.machine`` can place it as a STORE tier and still verify the grid's
+    total pipe count (its banded bus is ``3 * len(main_rows)`` internal pipes;
+    the in/out stubs merge with the machine's own request and response runs)."""
+
+    cells: dict[tuple[int, int], str]
+    width: int
+    height: int
+    in_cell: tuple[int, int]
+    out_cell: tuple[int, int]
+    pipes: int
+
+
+def v3_store_block(n: int, *, ops: int = 500) -> V3Store:
+    """:func:`build_v3` with I/O stubs instead of rooms, as a placeable block.
+
+    The wire is the ``memory`` problem's protocol verbatim (``0 addr`` /
+    ``1 addr value`` in, one word out per READ), which is exactly what the
+    machine's standard adapter emits — so this is a drop-in for the other
+    tiers at ~11 ticks an access against the grid store's ~31, paid for in
+    area (the router unrolls ``ops`` blocks and simply wraps for a longer
+    stream, so ``ops`` is a speed knob, not a capacity).
+    """
+    v3 = build_v3(n, ops=ops, io=False)
+    assert v3.in_cell is not None and v3.out_cell is not None
+    cells = {(x, y): ch for y, row in enumerate(v3.rows) for x, ch in enumerate(row) if ch != " "}
+    _dec, main_rows = band_room(n, DECODER_TILE, increment=True)
+    # ``build_v3``'s stub draw stops one short of the row it names, so the
+    # answer pipe's real topmost cell is one row below ``out_cell``; a caller
+    # extending the pipe from the named cell would leave a one-cell gap the
+    # engine reads as two dangling pipes.
+    ox, oy = v3.out_cell
+    while (ox, oy) not in cells and oy < v3.height:
+        oy += 1
+    return V3Store(
+        cells=cells,
+        width=v3.width,
+        height=v3.height,
+        in_cell=v3.in_cell,
+        out_cell=(ox, oy),
+        pipes=3 * len(main_rows),
+    )

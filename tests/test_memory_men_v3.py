@@ -164,3 +164,46 @@ def test_the_grid_router_hook_defaults_to_v2():
     from randomfun2026solvers.memory_men_grid import build_grid
 
     assert build_grid(2, 4).rows == build_grid(2, 4, router=None).rows
+
+
+def test_a_one_column_grid_really_gets_the_unrolled_router():
+    # `build_grid` delegates one column to `build_addr`, which has no strip — so a
+    # `router=` there used to be accepted and silently dropped, and a 1xN build
+    # measured identical to v2. Caught by sweeping shapes in isolation.
+    from randomfun2026solvers.memory_men_grid import build_grid
+    from randomfun2026solvers.memory_men_v3 import build_v3_grid
+
+    with pytest.raises(ValueError, match="one-column"):
+        build_grid(1, 8, router=("@H",))
+
+    v2 = _marginal(FastLittleman(build_grid(1, 25).source()), 25)
+    v3 = _marginal(FastLittleman(build_v3_grid(1, 25).source()), 25)
+    assert v3 < v2 * 0.75, f"1x25 v2 {v2:.2f} -> v3 {v3:.2f} ticks/op"
+
+
+@pytest.mark.parametrize("shape", [(2, 8), (4, 25), (10, 10), (8, 13)])
+def test_the_block_answers_at_every_shape(shape):
+    # n = cols*rows cells whatever the aspect: every cell starts at zero, every
+    # cell holds what was written to it, and the extremes of the value range survive.
+    from randomfun2026solvers.memory_men_v3 import build_v3_grid
+
+    cols, rows = shape
+    n = cols * rows
+    engine = FastLittleman(build_v3_grid(cols, rows).source())
+
+    fresh = engine.run([x for a in range(n) for x in (0, a)], expected=[0] * n, max_ticks=3_000_000)
+    assert fresh.ok and fresh.output == [0] * n
+
+    written = [x for a in range(n) for x in (1, a, a * 7 - 3)]
+    want = [a * 7 - 3 for a in range(n)]
+    back = engine.run(
+        written + [x for a in range(n) for x in (0, a)], expected=want, max_ticks=3_000_000
+    )
+    assert back.ok and back.output == want
+
+    edges = engine.run(
+        [1, 0, -1000000, 1, n - 1, 1000000, 0, 0, 0, n - 1],
+        expected=[-1000000, 1000000],
+        max_ticks=3_000_000,
+    )
+    assert edges.ok and edges.output == [-1000000, 1000000]

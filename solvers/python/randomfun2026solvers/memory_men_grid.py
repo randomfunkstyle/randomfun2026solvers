@@ -173,6 +173,16 @@ def build_grid(cols: int, rows: int, *, router: Sequence[str] | None = None) -> 
         # One column needs none of this: the repeater would be a pass-through
         # costing a pipeline stage and two pipes, and a strip spanning one column
         # is just a router. `memory_men_addr` *is* the one-column grid.
+        #
+        # Which is also why it cannot honour `router`: there is no strip to put one
+        # in. Say so rather than returning a grid that quietly ignores the argument
+        # — a one-column build measured identical to the default is a bug, not a
+        # negative result, and `memory_men_v3.build_v3` is the shape being asked for.
+        if router is not None:
+            raise ValueError(
+                "a one-column grid is `build_addr`, which owns no router strip; "
+                "use memory_men_v3.build_v3(rows) for the unrolled one-column memory"
+            )
         one = build_addr(rows)
         return Grid(
             cols=1,
