@@ -36,9 +36,14 @@ from .circuit import Circuit, E, N, S
 __all__ = ["IN_PORTS", "OUT_PORTS", "Snake", "main_room"]
 
 # ── port columns on the top wall ─────────────────────────────────────────────
-RN_FWD, RN_RET, RM_FWD, RM_RET = 2, 3, 4, 5
-PROD, STAR, B_FWD, A_FWD, IN, B_RET, A_RET, CMD, RK_RET, RK_FWD = (
-    16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+# Spaced so the relay room sitting above each register pair (5 columns wide) does
+# not overlap its neighbour, and so the columns those rooms occupy leave the MAC
+# cluster's pipes a clear vertical run up through the band.
+RN_FWD, RN_RET = 2, 3          # relay room spans columns 1..5
+RM_FWD, RM_RET = 7, 8          # ... 6..10
+CMD = 12
+PROD, STAR, B_FWD, A_FWD, IN, B_RET, A_RET = 16, 17, 18, 19, 20, 21, 22
+RK_RET, RK_FWD = 25, 26        # ... 24..28; read-then-write walking east
 
 OUT_PORTS = {"rn_fwd": RN_FWD, "rm_fwd": RM_FWD, "prod": PROD, "b_fwd": B_FWD,
              "a_fwd": A_FWD, "cmd": CMD, "rk_fwd": RK_FWD}
