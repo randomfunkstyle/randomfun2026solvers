@@ -52,17 +52,21 @@ from .matmul_y import Serpentine
 
 __all__ = ["EAST", "WEST", "main_room"]
 
-# The first seven rows are forced by the loop bodies: fill A is `rs` on 2,3, fill B
-# is `r  s` on 2..5, and the MAC is `rs*s` on 4..7 with row 6 spare for the `*`.
-IN, A_FWD, B_RET, B_FWD, SPARE, PROD, A_RET = 2, 3, 4, 5, 6, 7, 8
-# The register rows are free, and are spaced four apart so each pair's relay room
-# (which must span both of its rows) clears its neighbour's.
-RN_RET, RN_FWD = 10, 11        # relay room spans rows 9..12
-RM_RET, RM_FWD = 14, 15        # ... 13..16
-RK_RET, RK_FWD = 18, 19        # ... 17..20
-CMD = 22
-BAND_T, BAND_B = 1, 23
-IW, IH = 92, 24
+# The row order is what makes the whole machine routable, not just what makes the
+# loop bodies legal. Two rings whose serpentine bands sit on opposite sides of MAIN
+# can only be drawn without crossings if the pipe with the upper terminal turns up
+# and the lower one turns down, and if the ring whose band is above has the smaller
+# `ret` row. Four hand placements collided before that was clear; with `a_ret` above
+# `b_ret` the columns are free.
+A_RET, IN, A_FWD = 2, 3, 4          # ring A's band goes above, so a_ret is topmost
+B_RET, B_FWD, SPARE, PROD = 8, 9, 10, 11
+# Registers spaced four apart: each pair's relay room must span both of its rows.
+RN_RET, RN_FWD = 14, 15
+RM_RET, RM_FWD = 18, 19
+RK_RET, RK_FWD = 22, 23
+CMD = 26
+BAND_T, BAND_B = 1, 27
+IW, IH = 92, 28
 SENTINEL_BUILD = "2M******"          # A = 128 with no backtick literal
 
 WEST = {"in": IN, "b_ret": B_RET, "a_ret": A_RET,
@@ -96,8 +100,8 @@ def main_room() -> tuple[Circuit, int]:
     # ── fill ring A with N*M scalars, then its end marker ────────────────────
     w.op("r", RN_RET); w.op("M")
     w.op("r", RM_RET); w.op("s", RM_FWD); w.ops("*b")
-    x, y = w.park(BAND_T + 1)
-    ax, ay = c.counted_loop(x, BAND_T, "rs")
+    x, y = w.park(A_RET)
+    ax, ay = c.counted_loop(x, A_RET, "rs")
     c.turn(ax, ay, S)
     w.x, w.y, w.d = ax, ay, S
     w.ops(SENTINEL_BUILD)
@@ -106,8 +110,8 @@ def main_room() -> tuple[Circuit, int]:
     # ── fill ring B with M*K values ──────────────────────────────────────────
     w.op("r", RM_RET); w.op("M")
     w.op("r", RK_RET); w.op("s", RK_FWD); w.ops("*b")
-    x, y = w.park(BAND_T + 1)
-    bx, by = c.counted_loop(x, BAND_T, "r  s")
+    x, y = w.park(A_RET)
+    bx, by = c.counted_loop(x, A_RET, "r     s")
     c.turn(bx, by, S)
     w.x, w.y, w.d = bx, by, S
 
