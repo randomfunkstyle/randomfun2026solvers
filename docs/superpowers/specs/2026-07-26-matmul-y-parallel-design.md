@@ -292,3 +292,42 @@ the room stays near 22 columns. The lever on the remaining margin is the **port
 count** — six of the thirteen are the three register rings, and replacing them with
 `q` gauges costs one port each instead of two. That is where to look next, not at
 the code.
+
+
+---
+
+## The row map is what makes the assembly planar (2026-07-27)
+
+Four hand placements of ring A and ring B all collided, at a different cell each
+time. They were not bad luck. With two rings whose serpentine bands sit on opposite
+sides of MAIN, planarity is **forced** by the row map, and my map violated it.
+
+Take two pipes leaving the east wall, one turning up and one turning down. Pipe i
+has a horizontal leg at its own row spanning `45..C_i`, then a vertical run at
+`C_i`. Crossing is avoided only if:
+
+* the pipe with the **upper** terminal turns **up** and the lower one turns
+  **down**. The other way round gives `C_b > C_a` and `C_a > C_b` at once — a
+  contradiction, so no column assignment exists.
+* and symmetrically for the returns: the ring whose band is **above** must have
+  the **smaller** `ret` row, or its descent crosses the other's horizontal leg
+  while the other's ascent crosses its own.
+
+The old map had `a_ret=8` and `b_ret=4` with ring A's band above, which breaks the
+second condition — so every column choice collided, which is exactly what happened.
+
+A map that satisfies both, keeping every loop body legal:
+
+    a_ret 2   in 3   a_fwd 4   b_ret 8   b_fwd 9   (*) 10   prod 11
+
+    fill A   `rs`        r(in)@3  s(a_fwd)@4
+    fill B   `r     s`   r(in)@3  ...  s(b_fwd)@9
+    the MAC  `rs*s`      r(b_ret)@8  s(b_fwd)@9  *@10  s(prod)@11
+
+`a_ret` is now above `b_ret`, so ring A's band goes above and ring B's below, and
+`a_fwd` (row 4, upper) turns up while `b_fwd` (row 9, lower) turns down. Both
+conditions hold and the columns are then free.
+
+The MAC keeps its 12-cell cycle. Fill B grows from a 10-cell cycle to 18, because
+`in` and `b_fwd` are now six rows apart — that costs ~2k ticks on the 16x16x16
+case, and is the price of a routable machine.
