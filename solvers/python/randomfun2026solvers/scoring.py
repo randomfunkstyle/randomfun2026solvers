@@ -51,10 +51,15 @@ __all__ = [
     "ProgramScore",
     "footprint",
     "load_problem",
+    "resolve_tick_cap",
     "score_program",
 ]
 
-# The grading step cap (``tickCap: null`` on every current problem → default).
+# The grading step cap when a problem does not name its own.  **Not every problem
+# leaves it null** -- ``little-little-man`` declares ``tickCap: 50_000_000``, ten
+# times this -- so never use the default without asking the problem first; call
+# :func:`resolve_tick_cap`.  Capping a 50M-tick machine at 5M reports six of its
+# fourteen public cases as failures and makes the optimizer refuse to touch it.
 DEFAULT_TICK_CAP = 5_000_000
 
 # Where slugs resolve: scoring.py -> randomfun2026solvers -> python -> solvers
@@ -104,6 +109,27 @@ def load_problem(problem: str | os.PathLike[str] | dict[str, Any]) -> dict[str, 
     if not p.is_file():
         raise ScoringError(f"problem not found: {problem!r}")
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+def resolve_tick_cap(
+    problem: str | os.PathLike[str] | dict[str, Any] | None,
+    tick_cap: int | None = None,
+) -> int:
+    """The cap the judge grades ``problem`` under.
+
+    An explicit ``tick_cap`` wins; otherwise the problem's own ``tickCap``;
+    otherwise :data:`DEFAULT_TICK_CAP`.  Every verifier must go through this --
+    a hardcoded default silently mis-grades any problem that raises the cap.
+    """
+    if tick_cap is not None:
+        return tick_cap
+    if problem is None:
+        return DEFAULT_TICK_CAP
+    try:
+        prob = load_problem(problem)
+    except ScoringError:
+        return DEFAULT_TICK_CAP
+    return prob.get("tickCap") or DEFAULT_TICK_CAP
 
 
 def _rounds(case: dict[str, Any]) -> list[dict[str, Any]]:
@@ -269,7 +295,7 @@ def score_program(
     prob = load_problem(problem)
     scoring = prob.get("scoring", "footprint-tick")
     cases = prob.get("publicTestData") or []
-    cap = tick_cap if tick_cap is not None else (prob.get("tickCap") or DEFAULT_TICK_CAP)
+    cap = resolve_tick_cap(prob, tick_cap)
 
     width, height, area2 = footprint(program)
     result = ProgramScore(scoring=scoring, width=width, height=height, area2=area2)

@@ -1,0 +1,30 @@
+# matmul — 54x55 hand grid, NOT YET SUBMITTED
+
+grid         54x55   area2 3,025
+local        7/7 public cases, avg 13,848.57 ticks, local score 41,891,929
+source       tasks/solutions/matmul_hand54.man
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+
+Against the live submission (197,437,831 at 76x76 / 34,182 ticks) this is 4.7x
+better on both terms at once: 1.91x on area2 and 2.47x on ticks.
+
+Projected judge score depends on the ratio, which is NOT inherited from the old
+machine -- submit_guarded's 1.236-1.506 range belongs to the tape-width-bound
+build this replaces, and the ratio is a property of the machine. Pass the high
+end (2.2) and re-pin from the first judge response:
+
+    ratio 1.0 -> 41.9M (rank 23)   1.35 -> 56.6M (rank 25)
+    ratio 1.5 -> 63.1M (rank 28)   2.2  -> 92.2M (rank 31)
+
+Even at 2.2 that is rank 31 against the current rank 38, so the guard passes.
+
+Both optimisers were run against it and found nothing:
+  optimize --semantic       one candidate (steer.coalesce_resteer), rejected by verify
+  manopt --moves all --infer-capacity --speed-for-space   no improving move
+
+manfree says why: 0/55 rows and 0/54 cols are removable, and 14 of the 16 pipes
+are ONE ring group pinned at 801 cells with 0 spare, so no cut is available
+without risking a deadlock. The six pipe-only rows each carry 2-4 pipes -- those
+are crossing bands, not slack, so a re-route has nothing to avoid. Ceiling if
+every one folded is 49 rows / factor 2,916, i.e. 3.6%, and it is not reachable.
+This grid is ring-capacity-bound, not geometry-bound.

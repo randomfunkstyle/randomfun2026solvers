@@ -1082,7 +1082,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("program", type=Path)
     parser.add_argument("problem", help="problem slug or tasks/problems/*.json")
-    parser.add_argument("--tick-cap", type=int, default=5_000_000)
+    parser.add_argument("--tick-cap", type=int, default=None)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 

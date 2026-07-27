@@ -71,7 +71,17 @@ snapshot carries every pipe's contents and (on a display problem) 768 pixels, so
 parsing one per tick costs more than the run — and a profile needs an unbiased
 sample, not every tick. `--stride 1` when exactness beats speed.
 
-Two things it took a wrong answer to learn, and both are baked in now:
+Three things it took a wrong answer to learn, and all three are baked in now:
+
+- **Set `--cap` to the tick the case finishes, not a round number.** On a rounds
+  problem the machine does not halt after the last round — it parks on its input
+  `r` waiting for values that never come, and every tick past the finish is
+  sampled as a stall on that cell. Profiling `sudoku-validity_fold.man` (which
+  finishes at 11,832) with `--cap 20000` reports the worker **41 % stalled** with
+  41 % of samples on the input `r`, which reads exactly like an input-latency
+  bottleneck; at `--cap 11832` the same worker is **0 % stalled**. Get the finish
+  tick from `scoring.score_program` first. The tail can be any fraction of the
+  window, so this is not a small correction — it invents bottlenecks.
 
 - **Read it per runner, not per cell.** A *servant* blocked on its input — the
   adapter waiting for a request, the tape waiting for the adapter — is **idle**, and
