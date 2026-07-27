@@ -6,7 +6,7 @@ the best score the contest has recorded for its problem:
 
 * ``tcp_hand``            17x17, 20/20,       535,084  (was 908,720,960)
 * ``matmul_hand``         72x81, 20/20,   232,294,501  (was 1,429,920,945)
-* ``reverse-a-list_carrier`` 14x14, 20/20,    36,985  (was 513,410)
+* ``reverse-a-list_carrier`` 14x14, 20/20,    34,535  (was 513,410)
 
 Two of them are **round-gated**: the judge withholds each round's input until the
 previous round's output is complete, and ``tcp_hand`` and

@@ -1,0 +1,16 @@
+# reverse-a-list — submission 86b7ee9f-7b54-4126-a8d6-739d19bc3904
+
+verdict      done: 20/20 cases, area2 196, avgTicks 176, score 34,535
+submitted    2026-07-27T11:48:46+0300
+grid         14x14
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  a2a394346b0460fc3354f59854b9704bef9a6425f9f706b2f4514114e9b077d5
+commit       270689e
+local        reverse-a-list: 8/8 public cases, avg 131 ticks
+source       ../../../../../../../../private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers--claude-worktrees-sort-numbers-ring/8d6fb213-c37a-4fac-896b-a6b9363874f1/scratchpad/rev_v9.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+carrier birth moved adjacent to a station: flight 9 ticks -> 3, per-round overhead 22 -> 17
