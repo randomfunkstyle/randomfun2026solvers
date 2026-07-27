@@ -1,0 +1,46 @@
+# sort-numbers — submission e983dd19-200c-4152-b5dd-886793e25354
+
+verdict      done: 25/25 cases, area2 196, avgTicks 2,107.48, score 413,066
+submitted    2026-07-27T10:54:27+0000
+grid         14x14
+problem id   85dc7d34-1c5a-4ba4-9712-b151c1970301
+fingerprint  8369f0f5a7842808c8cf09720731692f648050050c5cff70ceb03da13dd17f55
+commit       65f3c5d
+local        7/7 under lm.mjs judge (engine-side round gating) + 40 randomised multi-round cases,
+             avg 1,317.3 ticks, local score 258,188.  Judged ratio 2107.48/1317.3 = 1.600.
+source       tasks/solutions/sort-numbers_network.man   (generator solvers/python/randomfun2026solvers/sort_grid.py)
+
+runner output:
+Passed 25/25 test cases
+
+notes:
+Comparator lane balance, at zero rows. 1489.0 -> 1317.3 ticks, footprint unchanged at 14x14.
+The asymmetry was never the W: a single d can only be entered on ONE heading, so one lane always
+had to walk round the block's east side to reach it. d turns clockwise on BP > 0 and a turns
+counter-clockwise, so each lane carries its OWN test and both deliver the man to the same entry
+cell facing the same way. The block becomes a flattened figure-of-eight (body west along the
+middle row, each lane east along its own) and the two test glyphs land in cells the old block was
+already spending on transit. Same 7x3, both lanes 10 ticks.
+
+Two coupled facts, neither safe alone (recorded in the docstring):
+  - The caller now enters at the body's turn cell, SKIPPING the test. Sound only because the k==1
+    pass no longer goes through the comparator at all — PASS routes it to its own emit lane.
+  - X walked into heading WEST turns clockwise to the NORTH, so the positive lane is the top row.
+    Getting this backwards is silent: loads, binds, runs, sorts, and emits the maximum.
+
+Every s is now checked against lm.mjs route — the runtime's own nearest-pipe oracle — rather than
+re-derived arithmetic, because two of the five clear their rival by exactly one cell (EMIT reaches
+the output pipe at 7 against the ring's 8).
+
+The bigger-output-pipe idea was measured and is dead: the worker's 6% stall is entirely the RING
+((4,6) s 4.0%, (3,10) r 1.6%, (4,11) r 0.4%) and the output s has never blocked once, so the
+ceiling is 0%, not 5%. The ring's own 4.0% is unreachable too — its forward pipe is 3 cells and
+every westward route dead-ends against O's and I's south walls, where an arrowhead mints a phantom
+outgoing pipe off an I/O room (a load error, not merely a wrong answer).
+
+Also fixed this run: littleman/tools/heatmap.mjs now takes --expected/--frames and gates like
+cmdJudge. It was passing "" to api.load, so it could not profile ANY round-gated machine — both
+runners read as 97-99% stalled on s because the output room never drained. It now also ends the
+sampling window at the settle tick rather than at --cap, and reports per-cell stall counts.
+
+Previous: 465,680. This: 1.13x better.
