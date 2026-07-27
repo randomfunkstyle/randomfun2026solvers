@@ -107,10 +107,12 @@ its per-step lookup is three instructions (LDA; DIV PW; MODI 16).
 
 Painting is not the CPU's job: the machine carries the **DOOM unit**
 (``lm1/d3_unit.py``, ``.unit doom``), a write-only coprocessor that owns the
-64x48 panel. Each viewport column, the muzzle flash, the HUD strip and the
-frame commit are one command word each (``8*arg + code`` — COL 0, FLASH 1,
-HUD 2, COMMIT 3, pinned to ``lm1.store.DoomUnit.CODES``), and the unit's paint
-loops run concurrently with the CPU's next raycast.
+64x48 panel. Each viewport column (banded — the wall loop's mask ring seams
+every 4th row), each title/HUD RLE run, each cursor move, the pistol sprite
+and the frame commit are one command word each (``8*arg + code`` — COL 0,
+CURS 1, RUN 4, GUN 5, GUNF 6, COMMIT 7, pinned to
+``lm1.store.DoomUnit.CODES``), and the unit's paint loops run concurrently
+with the CPU's next raycast.
 
 The title screen (round 0)
 --------------------------
@@ -144,10 +146,11 @@ region's note in ``deadman-3d.debug.json``/``.html``).
 
 Each word renders exactly one frame, applied in lodev's order: **turn first**
 (A and D both held cancel), then **move** along the *new* heading (W and S
-cancel; per-axis collision), then render — with :data:`FLASH` overlaid when
-FIRE is held: an 8-pixel muzzle flash, bright yellow with a white core, at the
-bottom-centre of the 3D viewport, painted *after* the wall/floor columns so it
-overwrites them (M5 has no game state yet; the flash is the whole of firing).
+cancel; per-axis collision), then render — the pistol sprite over the
+finished columns (:data:`GUN_FIRE`, recoil and muzzle bloom, when FIRE is
+held and :data:`GUN_IDLE` otherwise), and the live HUD after it: firing
+spends a round of :data:`AMMO_START`'s clip (floor 0) and the yellow bar
+shrinks with it.
 The asm decodes the bits with a MODI 2 / DIVI 2 ladder into the ``BW BS BA BD
 FIRE`` scalars and runs the turn and move arms conditionally.  :func:`keys`
 encodes chords readably (``keys("wa ") == 21``); ``--play`` runs the checked-in
@@ -187,11 +190,12 @@ from randomfun2026solvers.lm1.emulator import floor_div, sign_mod
 __all__ = [
     "WIDTH", "HEIGHT", "H3D", "MID", "UNITS", "HEADINGS", "INPUT_PROTOCOL",
     "MOVE_NUM", "MOVE_DEN", "BIG", "MAP_SIZE", "MAP_STR", "PALETTE",
-    "KEY_FWD", "KEY_BACK", "KEY_LEFT", "KEY_RIGHT", "KEY_FIRE", "FLASH",
+    "KEY_FWD", "KEY_BACK", "KEY_LEFT", "KEY_RIGHT", "KEY_FIRE",
+    "GUN_IDLE", "GUN_FIRE", "AMMO_START", "HEALTH_START",
     "SPAWN", "State", "WALK", "WALK_CHORDS", "keys", "fire_bit",
     "TITLE_HEX_ROWS", "title_frame", "title_runs", "title_words",
     "div", "map_cell", "map_words", "heading_table",
-    "unpack_heading", "step", "render", "hud_rows", "hud_runs",
+    "unpack_heading", "step", "render", "hud_rows", "hud_bg_rows", "hud_bg_runs",
     "preamble_words", "input_words", "frames_for_commands", "cases_json",
     "tape_slots", "deadman3d_source", "main",
 ]
@@ -225,7 +229,7 @@ KEY_FWD = 1         # bit 0: W — step forward
 KEY_BACK = 2        # bit 1: S — step backward (with W: they cancel)
 KEY_LEFT = 4        # bit 2: A — turn left (CCW, +1 heading)
 KEY_RIGHT = 8       # bit 3: D — turn right (with A: they cancel)
-KEY_FIRE = 16       # bit 4: space/click — FLASH over the finished frame
+KEY_FIRE = 16       # bit 4: space/click — fire the pistol (GUN_FIRE + ammo)
 
 _KEY_BITS = {"w": KEY_FWD, "s": KEY_BACK, "a": KEY_LEFT, "d": KEY_RIGHT, " ": KEY_FIRE}
 
@@ -471,26 +475,52 @@ def fire_bit(cmd: int) -> bool:
     return sign_mod(div(cmd, 16), 2) == 1
 
 
-#: The muzzle flash FIRE paints over the finished frame (M5 has no game state,
-#: so this is the whole of firing): 8 pixels at the bottom-centre of the 3D
-#: viewport, bright yellow (11) with a white (15) core — (row, col, color),
-#: painted after the wall/floor columns so they overwrite them.  The DOOM
-#: unit's FLASH arm bakes these same pixels (``d3_unit.FLASH_RUNS``); the CPU
-#: just sends the one FLASH command word when FIRE is held.
-FLASH: list[tuple[int, int, int]] = [
-    (35, 31, 11), (35, 32, 11),
-    (36, 30, 11), (36, 31, 15), (36, 32, 15), (36, 33, 11),
-    (37, 31, 11), (37, 32, 11),
+#: The pistol (V4) — original chunky pixel work, our own homage style: one
+#: contiguous run per sprite row, ``(viewport row, first column, colours)``
+#: with colours as hex digits (0 outline, 7 gray body, 8 shade, f highlight,
+#: b muzzle yellow). The DOOM unit's GUN arm bakes exactly these runs and the
+#: CPU sends ONE command word per frame; ``GUN_FIRE`` is the recoil variant —
+#: the gun a row higher with the muzzle flash blooming above it — sent when
+#: FIRE is held (it replaced V1's bare 8-pixel diamond).
+GUN_IDLE: list[tuple[int, int, str]] = [
+    (30, 30, "0770"),
+    (31, 29, "07f770"),
+    (32, 29, "077770"),
+    (33, 28, "00777700"),
+    (34, 27, "0777777770"),
+    (35, 27, "07788770"),
+    (36, 28, "00778770"),
+    (37, 30, "077870"),
+    (38, 30, "07770"),
+    (39, 31, "0770"),
 ]
+GUN_FIRE: list[tuple[int, int, str]] = [
+    (25, 32, "bb"),
+    (26, 31, "bffb"),
+    (27, 30, "bffffb"),
+    (28, 31, "bffb"),
+] + [(r - 1, c, colors) for r, c, colors in GUN_IDLE]
+
+#: The live HUD's scalars (V4): ammo starts full and drops one per shot down
+#: to an empty clip; health is static until the demo grows damage. The bars
+#: paint 2 rows each over the baked background: red health rows 41..42 from
+#: column 4, one pixel per 4 health; yellow ammo rows 44..45, one per 2 ammo.
+AMMO_START = 50
+HEALTH_START = 100
+BAR_COL = 4
+HEALTH_BAR_ROWS = (41, 42)
+AMMO_BAR_ROWS = (44, 45)
 
 
 # ── the renderer (lodev raycaster_flat.cpp, in Q10) ──────────────────────────
-def render(state: State, *, fire: bool = False) -> list[str]:
+def render(state: State, *, fire: bool = False,
+           ammo: int = AMMO_START, health: int = HEALTH_START) -> list[str]:
     """One frame: 48 rows of 64 hex chars (rows 0..39 the 3D view, 40..47 HUD).
 
-    ``fire=True`` paints :data:`FLASH` over the finished columns — the golden
-    twin of the asm's ``flash:`` block, which runs after the paint loops and
-    before the HUD when the round's command was a space.
+    The pistol (:data:`GUN_IDLE`, or :data:`GUN_FIRE` when ``fire``) paints
+    over the finished columns — the golden twin of the machine's one GUN/GUNF
+    command word per frame — and the HUD carries the live bars for ``ammo``
+    and ``health``.
     """
     posX, posY = state.posX, state.posY
     dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[state.heading])
@@ -578,11 +608,11 @@ def render(state: State, *, fire: bool = False) -> list[str]:
             for i in range(drawEnd - drawStart + 1)
         ]
         cols.append([0] * drawStart + run + [8] * (H3D - 1 - drawEnd))
-    if fire:
-        for r, c, color in FLASH:
-            cols[c][r] = color
+    for r, c, colors in (GUN_FIRE if fire else GUN_IDLE):
+        for i, ch in enumerate(colors):
+            cols[c + i][r] = int(ch, 16)
     rows = ["".join("%x" % cols[x][y] for x in range(WIDTH)) for y in range(H3D)]
-    return rows + hud_rows()
+    return rows + hud_rows(health, ammo)
 
 
 # ── the HUD strip (rows 40..47) ──────────────────────────────────────────────
@@ -591,31 +621,46 @@ FACE_COLOR = 11   # bright yellow (the plan's "14" was CGA yellow)
 ARMOR_COLOR = 12  # bright blue  (the plan's "9" was CGA light blue)
 
 
-def hud_rows() -> list[str]:
-    """Rows 40..47: bezel 7, six field rows of 8 with three blocks, base 8."""
+def hud_bg_rows() -> list[str]:
+    """Rows 40..47's static background: bezel 7, six field rows of base 8 with
+    the blue armor block (cols 50..58), base row 8 — the bars paint over it."""
     field = [8] * WIDTH
-    for c in range(4, 13):     # "ammo", cols 4..12
-        field[c] = AMMO_COLOR
-    for c in range(28, 36):    # "face", cols 28..35
-        field[c] = FACE_COLOR
-    for c in range(50, 59):    # "armor", cols 50..58
+    for c in range(50, 59):    # "armor", cols 50..58 — the static blue block
         field[c] = ARMOR_COLOR
     mid = "".join("%x" % c for c in field)
     return ["7" * WIDTH] + [mid] * 6 + ["8" * WIDTH]
 
 
-def hud_runs() -> list[tuple[int, int]]:
-    """RLE (color, count) of the 8 HUD rows concatenated — the DOOM unit's HUD
-    arm is generated from this list (``d3_unit.hud_tokens``), so the baked strip
-    and this model cannot drift apart."""
+def hud_bg_runs() -> list[tuple[int, int]]:
+    """RLE (color, count) of the 8 background rows concatenated — the CPU
+    repaints the strip every frame as one CURS word (cursor to 2560) plus one
+    pre-encoded RUN word per run, so this list IS the asm's constant table."""
     runs: list[tuple[int, int]] = []
-    for ch in "".join(hud_rows()):
+    for ch in "".join(hud_bg_rows()):
         c = int(ch, 16)
         if runs and runs[-1][0] == c:
             runs[-1] = (c, runs[-1][1] + 1)
         else:
             runs.append((c, 1))
     return runs
+
+
+def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START) -> list[str]:
+    """Rows 40..47: the background plus the live bars, exactly as the machine
+    paints them — red health rows 41..42 (one pixel per 4 health), yellow ammo
+    rows 44..45 (one per 2 ammo), both from column 4; an empty bar sends no
+    RUN at all, so the background shows through."""
+    rows = [[int(ch, 16) for ch in r] for r in hud_bg_rows()]
+    hpx = div(health, 4)
+    apx = div(ammo, 2)
+    for bar_rows, px, colour in (
+        (HEALTH_BAR_ROWS, hpx, AMMO_COLOR),
+        (AMMO_BAR_ROWS, apx, FACE_COLOR),
+    ):
+        for row in bar_rows:
+            for c in range(BAR_COL, BAR_COL + px):
+                rows[row - H3D][c] = colour
+    return ["".join("%x" % c for c in row) for row in rows]
 
 
 # ── the demo walk ────────────────────────────────────────────────────────────
@@ -750,12 +795,21 @@ def input_words(cmds: list[int]) -> list[int]:
 
 
 def frames_for_commands(cmds: list[int]) -> list[list[str]]:
-    """Apply each command in turn and render after it — one frame per command."""
+    """Apply each command in turn and render after it — one frame per command.
+
+    Threads the live ammo counter exactly as the asm does: a FIRE with rounds
+    left decrements BEFORE the render (the decode ladder runs first), an empty
+    clip dry-fires at 0 and still flashes.
+    """
     state = SPAWN
+    ammo = AMMO_START
     frames = []
     for cmd in cmds:
+        fire = fire_bit(cmd)
+        if fire and ammo > 0:
+            ammo -= 1
         state = step(state, cmd)
-        frames.append(render(state, fire=fire_bit(cmd)))
+        frames.append(render(state, fire=fire, ammo=ammo, health=HEALTH_START))
     return frames
 
 
@@ -788,7 +842,7 @@ _SCALARS = (
     "DDX", "DDY", "S4X", "STPY", "PERP", "HALFH", "DSTART", "DEND",
     "COLOR", "PW", "WADDR", "FRACX", "FRACY", "PW0", "WADDR0",
     "TMP", "TMP2", "NEWX", "NEWY",
-    "BW", "BS", "BA", "BD", "FIRE", "PTR",
+    "BW", "BS", "BA", "BD", "FIRE", "AMMO", "HEALTH", "PTR",
 )
 
 #: How many copies of the DDA step the generated asm unrolls. A backward jump
@@ -833,7 +887,8 @@ def deadman3d_source() -> str:
     the :data:`DDA_UNROLL`-way unrolled DDA maintaining PW/WADDR incrementally,
     per-arm hit tails ``whx``/``why`` that bake the sunlit/dark shading,
     projection, and ONE ``SND`` command word to the DOOM unit) -> the FIRE
-    flash, the HUD strip and the commit, one ``SND`` each -> back to
+    pistol sprite (GUN or GUNF by the FIRE bit), the HUD (one CURS, the
+    background RUN constants, then the live bars) and the commit -> back to
     ``round:``.  The lodev variable each block computes is named in its
     comments; every expression keeps :func:`render`'s exact operation order,
     which is the pixel contract.
@@ -883,7 +938,9 @@ def deadman3d_source() -> str:
         "NEWX": "the candidate posX", "NEWY": "the candidate posY",
         "BW": "key bit 0 (1): W, forward", "BS": "key bit 1 (2): S, backward",
         "BA": "key bit 2 (4): A, turn left", "BD": "key bit 3 (8): D, turn right",
-        "FIRE": "key bit 4 (16): space held — paint FLASH over this frame",
+        "FIRE": "key bit 4 (16): space held — fire the pistol this frame",
+        "AMMO": f"live rounds left: starts {AMMO_START}, -1 per shot, floor 0",
+        "HEALTH": f"static {HEALTH_START} until the demo grows damage",
         "PTR": "the boot loop's tape cursor",
     }
     lines = [
@@ -908,9 +965,10 @@ def deadman3d_source() -> str:
         "; word to the write-only column-painter unit — 8*arg + code, code COL=0,",
         "; arg = ((drawStart*64 + drawEnd)*64 + x)*16 + colour — and the unit paints",
         "; the wall run and the floor run (stride 64) while the CPU raycasts the",
-        "; next column. FLASH (the baked 8-pixel muzzle diamond), HUD (the baked",
-        "; 512-pixel strip) and COMMIT (SWAP 0) are one command word each; the",
-        "; ceiling stays black because COMMIT clears the next buffer.",
+        "; next column, seaming every 4th wall row via its mask ring. The pistol",
+        "; (GUN idle / GUNF recoil+flash), each cursor move (CURS), each RLE run",
+        "; (RUN) and COMMIT (SWAP 0) are one command word each; the ceiling stays",
+        "; black because COMMIT clears the next buffer.",
         ";",
         "; Round 0's input carries the whole data preamble (256 packed map quarter-columns,",
         "; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())",
@@ -934,7 +992,7 @@ def deadman3d_source() -> str:
         "; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────",
         ".unit doom",
     ]
-    for arm in ("COL", "RUN", "FLASH", "HUD", "COMMIT"):
+    for arm in ("COL", "RUN", "CURS", "GUN", "GUNF", "COMMIT"):
         lines.append(f".equ C_{arm:<6} {codes[arm]}            ; {DoomUnit.ARM_NOTES[arm]}")
     n_pre = len(preamble_words())
     boot_full = (n_pre // 8) * 8  # the 8x-unrolled loop loads slots 1..boot_full
@@ -994,6 +1052,10 @@ def deadman3d_source() -> str:
     lines += [
         "        LDI C_COMMIT",
         "        SND                 ; commit: the title screen is round 0's frame",
+        f"        LDI {AMMO_START}",
+        "        ST  AMMO            ; a full clip (V4's live HUD)",
+        f"        LDI {HEALTH_START}",
+        "        ST  HEALTH          ; static until the demo grows damage",
     ]
     lines += f"""
 
@@ -1024,9 +1086,14 @@ round:  IN                  ; blocks here when the walk is over (the legal end)
         DIVI 2
         MODI 2
         ST  FIRE            ; bit 4 (16): space — higher bits fall off here
+        BRZ turn0           ; ST preserved ACC = the fire bit
+        LD  AMMO
+        BRZ turn0           ; dry-fire on an empty clip: the counter stays 0
+        SUBI 1
+        ST  AMMO            ; one live round spent — the HUD bar shrinks
 
 ; ── turn first (lodev's order): heading += A - D, cancelling when both held ──
-        LD  BA
+turn0:  LD  BA
         SUB BD
         BRZ mvchk           ; no net turn: dir/plane stay as they are
         ADD HDG
@@ -1369,19 +1436,79 @@ send:   LD  DSTART
         SND
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI {WIDTH - 1}
-        BRZ flash           ; that was column {WIDTH - 1}: the viewport is sent
+        BRZ gun             ; that was column {WIDTH - 1}: the viewport is sent
         JMP colset
 
-; ── muzzle flash: the unit's baked {len(FLASH)}-pixel diamond, when this round FIREd ─
-flash:  LD  FIRE
-        BRZ hud
-        LDI C_FLASH
+; ── the pistol (V4): ONE command word — the unit bakes both sprites ──────────
+gun:    LD  FIRE
+        BRZ gidle
+        LDI C_GUNF
+        SND                 ; the recoil frame, muzzle flash blooming above
+        JMP hud
+gidle:  LDI C_GUN
+        SND                 ; the idle pistol, bottom-centre
+""".splitlines()
+    curs = codes["CURS"]
+    runc = codes["RUN"]
+    bg = hud_bg_runs()
+    lines += [
+        "",
+        f"; ── HUD (V4): cursor to slot {H3D * WIDTH}, the background as {len(bg)} pre-encoded RUN",
+        "; words (hud_bg_runs(): bezel, base field, the static blue armor block),",
+        "; then the LIVE bars over it — red health rows "
+        f"{HEALTH_BAR_ROWS[0]}..{HEALTH_BAR_ROWS[1]} (1px per 4), yellow",
+        f"; ammo rows {AMMO_BAR_ROWS[0]}..{AMMO_BAR_ROWS[1]} (1px per 2), both from column {BAR_COL}; an empty bar",
+        "; sends nothing and the background shows through",
+        f"hud:    LDI {8 * H3D * WIDTH + curs}",
+        "        SND                 ; CURS: the panel cursor to the strip's top-left",
+    ]
+    for colour, count in bg:
+        lines += [
+            f"        LDI {8 * (count * 16 + colour) + runc}",
+            f"        SND                 ; RUN {count} x colour {colour}",
+        ]
+    hb1 = HEALTH_BAR_ROWS[0] * WIDTH + BAR_COL
+    hb2 = HEALTH_BAR_ROWS[1] * WIDTH + BAR_COL
+    ab1 = AMMO_BAR_ROWS[0] * WIDTH + BAR_COL
+    ab2 = AMMO_BAR_ROWS[1] * WIDTH + BAR_COL
+    lines += f"""
+        LD  HEALTH
+        DIVI 4
+        ST  TMP             ; the health bar in pixels
+        BRZ abar
+        LDI {8 * hb1 + curs}
+        SND                 ; CURS: row {HEALTH_BAR_ROWS[0]}, column {BAR_COL}
+        LD  TMP
+        MULI 16
+        ADDI {AMMO_COLOR}
+        MULI 8
+        ADDI C_RUN
+        ST  TMP2            ; the bar's RUN word — reused for its second row
+        SND
+        LDI {8 * hb2 + curs}
+        SND
+        LD  TMP2
+        SND
+abar:   LD  AMMO
+        DIVI 2
+        ST  TMP             ; the ammo bar in pixels
+        BRZ cmit            ; clip empty: no bar at all
+        LDI {8 * ab1 + curs}
+        SND
+        LD  TMP
+        MULI 16
+        ADDI {FACE_COLOR}
+        MULI 8
+        ADDI C_RUN
+        ST  TMP2
+        SND
+        LDI {8 * ab2 + curs}
+        SND
+        LD  TMP2
         SND
 
-; ── HUD strip (rows {H3D}..{HEIGHT - 1}) and the commit: one command word each ───────
-hud:    LDI C_HUD
-        SND                 ; the baked HUD strip
-        LDI C_COMMIT
+; ── the commit: one command word ─────────────────────────────────────────────
+cmit:   LDI C_COMMIT
         SND                 ; SWAP 0: commit THE one frame of this round
         JMP round
 """.splitlines()

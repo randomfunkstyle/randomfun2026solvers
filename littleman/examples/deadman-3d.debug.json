@@ -356,7 +356,7 @@
     {
       "name": "display",
       "x": 170,
-      "y": 1139,
+      "y": 1145,
       "w": 66,
       "h": 50,
       "note": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -381,9 +381,9 @@
       "name": "rom",
       "x": 0,
       "y": 0,
-      "w": 304,
+      "w": 321,
       "h": 44,
-      "note": "looping ROM: 2143 words, 40 rows, re-emitted forever",
+      "note": "looping ROM: 2268 words, 40 rows, re-emitted forever",
       "color": "#a855f7",
       "tags": [
         "rom"
@@ -392,7 +392,7 @@
     {
       "name": "stream:panel",
       "x": 170,
-      "y": 1139,
+      "y": 1145,
       "w": 66,
       "h": 50,
       "note": "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -404,7 +404,7 @@
     {
       "name": "stream:relay",
       "x": 162,
-      "y": 1082,
+      "y": 1088,
       "w": 5,
       "h": 5,
       "note": "",
@@ -416,7 +416,7 @@
     {
       "name": "stream:relay2",
       "x": 162,
-      "y": 1120,
+      "y": 1130,
       "w": 5,
       "h": 5,
       "note": "",
@@ -428,10 +428,10 @@
     {
       "name": "stream:unit",
       "x": 1,
-      "y": 1055,
+      "y": 1061,
       "w": 158,
       "h": 84,
-      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / title RLE run / FLASH / HUD / COMMIT, 8*arg + code",
+      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / RLE run / cursor move / gun sprite / COMMIT, 8*arg + code",
       "color": "#f59e0b",
       "tags": [
         "stream"
@@ -440,7 +440,7 @@
     {
       "name": "stream:unit:COL",
       "x": 143,
-      "y": 1060,
+      "y": 1066,
       "w": 12,
       "h": 78,
       "note": "",
@@ -452,7 +452,7 @@
     {
       "name": "stream:unit:COMMIT",
       "x": 3,
-      "y": 1060,
+      "y": 1066,
       "w": 20,
       "h": 78,
       "note": "",
@@ -462,21 +462,33 @@
       ]
     },
     {
-      "name": "stream:unit:FLASH",
-      "x": 23,
-      "y": 1060,
-      "w": 20,
-      "h": 78,
-      "note": "",
-      "color": "#f59e0b",
-      "tags": [
-        "stream"
-      ]
-    },
-    {
-      "name": "stream:unit:HUD",
+      "name": "stream:unit:CURS",
       "x": 63,
-      "y": 1060,
+      "y": 1066,
+      "w": 20,
+      "h": 78,
+      "note": "",
+      "color": "#f59e0b",
+      "tags": [
+        "stream"
+      ]
+    },
+    {
+      "name": "stream:unit:GUN",
+      "x": 43,
+      "y": 1066,
+      "w": 20,
+      "h": 78,
+      "note": "",
+      "color": "#f59e0b",
+      "tags": [
+        "stream"
+      ]
+    },
+    {
+      "name": "stream:unit:GUNF",
+      "x": 83,
+      "y": 1066,
       "w": 20,
       "h": 78,
       "note": "",
@@ -487,8 +499,8 @@
     },
     {
       "name": "stream:unit:RUN",
-      "x": 43,
-      "y": 1060,
+      "x": 123,
+      "y": 1066,
       "w": 20,
       "h": 78,
       "note": "",
@@ -498,21 +510,9 @@
       ]
     },
     {
-      "name": "stream:unit:hud-field",
-      "x": 50,
-      "y": 1107,
-      "w": 93,
-      "h": 10,
-      "note": "",
-      "color": "#f59e0b",
-      "tags": [
-        "stream"
-      ]
-    },
-    {
       "name": "stream:unit:main",
       "x": 2,
-      "y": 1056,
+      "y": 1062,
       "w": 73,
       "h": 1,
       "note": "",
@@ -524,7 +524,7 @@
     {
       "name": "stream:unit:trie",
       "x": 4,
-      "y": 1057,
+      "y": 1063,
       "w": 141,
       "h": 3,
       "note": "",
@@ -538,8 +538,8 @@
       "x": 75,
       "y": 59,
       "w": 681,
-      "h": 993,
-      "note": "rotating pipe tape, N=328, skip_batch=1, relay=None",
+      "h": 999,
+      "note": "rotating pipe tape, N=330, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [
         "tape"

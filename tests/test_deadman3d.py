@@ -99,16 +99,29 @@ def test_frame_shape_is_48_rows_of_64_hex_chars() -> None:
         assert set(row) <= hexdigits
 
 
-def test_hud_is_constant_and_fills_rows_40_to_47() -> None:
-    hud = d3.hud_rows()
-    assert len(hud) == 8
-    other = d3.step(d3.step(d3.SPAWN, d3.KEY_FWD), d3.KEY_LEFT)
-    assert d3.render(d3.SPAWN)[d3.H3D:] == hud
-    assert d3.render(other)[d3.H3D:] == hud
-    # The RLE is a faithful re-encoding of the same 8 rows.
-    replay = "".join("%x" % c * n for c, n in d3.hud_runs())
-    assert replay == "".join(hud)
-    assert sum(n for _, n in d3.hud_runs()) == 8 * d3.WIDTH
+def test_hud_background_and_live_bars() -> None:
+    """The HUD strip: static background (bezel + blue armor block) plus the
+    proportional bars — red health 1px/4, yellow ammo 1px/2, from column 4."""
+    bg = d3.hud_bg_rows()
+    assert len(bg) == 8
+    # The background RLE is a faithful re-encoding — it is the asm's constant
+    # table (one pre-encoded RUN word per run behind one CURS).
+    replay = "".join("%x" % c * n for c, n in d3.hud_bg_runs())
+    assert replay == "".join(bg)
+    assert sum(n for _, n in d3.hud_bg_runs()) == 8 * d3.WIDTH
+    assert len(d3.hud_bg_runs()) == 14
+    # Full bars at the spawn state: 25px of each, over the background.
+    full = d3.hud_rows(100, 50)
+    assert full[1][4:29] == "9" * 25 and full[4][4:29] == "b" * 25
+    assert full[1][50:59] == "c" * 9  # the blue armor block, static
+    # A drained clip paints NO ammo bar: the background shows through.
+    empty = d3.hud_rows(100, 0)
+    assert empty[4][4:29] == "8" * 25
+    assert empty[1][4:29] == "9" * 25
+    # The render wires them through: two shots in, the bar is one px shorter.
+    assert d3.render(d3.SPAWN)[d3.H3D:] == d3.hud_rows(100, 50)
+    assert d3.render(d3.SPAWN, ammo=48)[d3.H3D:] == d3.hud_rows(100, 48)
+    assert d3.hud_rows(100, 48)[4][4:28] == "b" * 24
 
 
 def test_walk_is_its_chords_and_keys_encodes_the_mux() -> None:
@@ -191,23 +204,23 @@ SPAWN_FRAME = [
     "77f7777777778888888888888888888888888888888888888888888888888888",
     "ff77777777778888888888888888888888888888888888888888888888888888",
     "fff7777777778888888888888888888888888888888888888888888888888888",
-    "fff7777777778888888888888888888888888888888888888888888888888888",
-    "77f7777777778888888888888888888888888888888888888888888888888888",
-    "ff77777777788888888888888888888888888888888888888888888888888888",
-    "fff7777778888888888888888888888888888888888888888888888888888888",
-    "fff7777888888888888888888888888888888888888888888888888888888888",
-    "77f7788888888888888888888888888888888888888888888888888888888888",
-    "ff78888888888888888888888888888888888888888888888888888888888888",
-    "ff88888888888888888888888888888888888888888888888888888888888888",
-    "8888888888888888888888888888888888888888888888888888888888888888",
-    "8888888888888888888888888888888888888888888888888888888888888888",
+    "fff7777777778888888888888888880770888888888888888888888888888888",
+    "77f7777777778888888888888888807f77088888888888888888888888888888",
+    "ff77777777788888888888888888807777088888888888888888888888888888",
+    "fff7777778888888888888888888007777008888888888888888888888888888",
+    "fff7777888888888888888888880777777770888888888888888888888888888",
+    "77f7788888888888888888888880778877088888888888888888888888888888",
+    "ff78888888888888888888888888007787708888888888888888888888888888",
+    "ff88888888888888888888888888880778708888888888888888888888888888",
+    "8888888888888888888888888888880777088888888888888888888888888888",
+    "8888888888888888888888888888888077088888888888888888888888888888",
     "7777777777777777777777777777777777777777777777777777777777777777",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
+    "88889999999999999999999999999888888888888888888888ccccccccc88888",
+    "88889999999999999999999999999888888888888888888888ccccccccc88888",
+    "88888888888888888888888888888888888888888888888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbbb888888888888888888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbbb888888888888888888888ccccccccc88888",
+    "88888888888888888888888888888888888888888888888888ccccccccc88888",
     "8888888888888888888888888888888888888888888888888888888888888888",
 ]
 
@@ -245,23 +258,23 @@ ZIGZAG_LOOK_FRAME = [
     "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
     "8888888888888888888888888888888888888888333333333333333333333333",
     "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "8888888888888888888888888888888888888888333333333333333333333333",
-    "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888883333333333333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888888833333333333bbbbbbbbbbb",
-    "8888888888888888888888888888888888888888888833333333333333333333",
-    "88888888888888888888888888888888888888888888883333333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888888888888833333bbbbbbbbbbb",
-    "88888888888888888888888888888888888888888888888888333bbbbbbbbbbb",
+    "88888888888888888888888888888807708888883333333333333bbbbbbbbbbb",
+    "8888888888888888888888888888807f770888883333333333333bbbbbbbbbbb",
+    "8888888888888888888888888888807777088888333333333333333333333333",
+    "88888888888888888888888888880077770088883333333333333bbbbbbbbbbb",
+    "88888888888888888888888888807777777708883333333333333bbbbbbbbbbb",
+    "88888888888888888888888888807788770888888833333333333bbbbbbbbbbb",
+    "8888888888888888888888888888007787708888888833333333333333333333",
+    "88888888888888888888888888888807787088888888883333333bbbbbbbbbbb",
+    "88888888888888888888888888888807770888888888888833333bbbbbbbbbbb",
+    "88888888888888888888888888888880770888888888888888333bbbbbbbbbbb",
     "7777777777777777777777777777777777777777777777777777777777777777",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
-    "8888999999999888888888888888bbbbbbbb88888888888888ccccccccc88888",
+    "88889999999999999999999999999888888888888888888888ccccccccc88888",
+    "88889999999999999999999999999888888888888888888888ccccccccc88888",
+    "88888888888888888888888888888888888888888888888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbb8888888888888888888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbb8888888888888888888888ccccccccc88888",
+    "88888888888888888888888888888888888888888888888888ccccccccc88888",
     "8888888888888888888888888888888888888888888888888888888888888888",
 ]
 
@@ -276,24 +289,30 @@ def test_pinned_zigzag_look_frame() -> None:
 
 
 def test_pinned_fire_frame() -> None:
-    """WALK[10] FIREs at the armor pedestal: the muzzle flash, and nothing else."""
+    """WALK[10] FIREs at the armor pedestal: the recoil sprite, the muzzle
+    flash blooming above it, and the ammo bar one round shorter."""
     assert d3.WALK[10] == d3.KEY_FIRE == 16
     fire = d3.frames_for_commands(d3.WALK)[10]
-    # The frame differs from the un-fired render in exactly FLASH's 8 pixels …
     state = d3.SPAWN
     for cmd in d3.WALK[:11]:
         state = d3.step(state, cmd)
-    plain = d3.render(state)
+    # The frame is exactly the fired render at the post-shot ammo count …
+    assert fire == d3.render(state, fire=True, ammo=49, health=100)
+    # … the viewport differs from the idle render only where the two sprites
+    # differ (GUN_FIRE where it paints, GUN_IDLE's cells restored elsewhere) …
+    plain = d3.render(state, ammo=49, health=100)
+    fire_px = {(r, c + i) for r, c, cs in d3.GUN_FIRE for i in range(len(cs))}
+    idle_px = {(r, c + i) for r, c, cs in d3.GUN_IDLE for i in range(len(cs))}
     diff = {
-        (r, c): fire[r][c]
+        (r, c)
         for r in range(d3.H3D) for c in range(d3.WIDTH)
         if fire[r][c] != plain[r][c]
     }
-    assert diff == {(r, c): "%x" % color for r, c, color in d3.FLASH}
-    # … and the pin, hand-checked in the PNGs: a bright-yellow diamond with a
-    # white core at the bottom-centre of the viewport, over the floor.
-    assert [row[29:35] for row in fire[34:39]] == [
-        "888888", "88bb88", "8bffb8", "88bb88", "888888"]
+    assert diff <= (fire_px | idle_px)
+    # … and the pin, hand-checked in the PNGs: the muzzle flash's bright
+    # yellow/white bloom above the raised pistol's outlined slide.
+    assert [row[29:36] for row in fire[26:30]] == [
+        "88bffb8", "8bffffb", "88bffb8", "8077088"]
 
 
 # ── the title screen ─────────────────────────────────────────────────────────
@@ -392,10 +411,12 @@ def test_tape_slots_are_the_documented_map() -> None:
     slots = d3.tape_slots()
     assert (slots["MAPB"], slots["POWB"], slots["HDGB"]) == (1, 257, 273)
     assert slots["POSX"] == len(d3.preamble_words()) - 6 == 289
-    # The scalars run consecutively after the boot data, PTR last.
+    # The scalars run consecutively after the boot data, PTR last (the V4
+    # live-HUD scalars AMMO and HEALTH sit just before it).
     scalars = sorted(v for k, v in slots.items() if v >= slots["CMD"])
-    assert scalars == list(range(296, 328))
-    assert slots["PTR"] == max(slots.values()) == 327
+    assert scalars == list(range(296, 330))
+    assert slots["AMMO"] == 327 and slots["HEALTH"] == 328
+    assert slots["PTR"] == max(slots.values()) == 329
 
 
 def test_registry_pins() -> None:
@@ -406,8 +427,8 @@ def test_registry_pins() -> None:
     assert machine.display_for("deadman-3d") == (d3.WIDTH, d3.HEIGHT) == (64, 48)
     assert machine.display_for("plotter") == (32, 24)
     # … and the tape is highest .equ address + 1 (an exactly-sized tape stalls).
-    assert machine.TAPE_SIZE["deadman-3d"] == max(d3.tape_slots().values()) + 1 == 328
-    # 328 slots is past the rotating tape's practical cap, so the STORE rides
+    assert machine.TAPE_SIZE["deadman-3d"] == max(d3.tape_slots().values()) + 1 == 330
+    # 330 slots is past the rotating tape's practical cap, so the STORE rides
     # the men-v3 man-memory (~11 ticks an access, whatever n is) …
     assert machine.STORE_TIER["deadman-3d"] == "men-v3"
     # … at the recorded pad — the smallest that binds every pipe now that the
@@ -488,7 +509,11 @@ def test_doom_unit_codes_pin_the_trie() -> None:
     from randomfun2026solvers.lm1.store import DoomUnit
 
     assert d3_unit.arm_codes() == DoomUnit.CODES == {
-        "COL": 0, "HUD": 1, "FLASH": 3, "RUN": 5, "COMMIT": 7}
+        "COL": 0, "CURS": 1, "RUN": 4, "GUN": 5, "GUNF": 6, "COMMIT": 7}
+    # The unit's baked sprites are the golden model's, glyph for glyph.
+    assert DoomUnit.GUN_IDLE == tuple(d3.GUN_IDLE)
+    assert DoomUnit.GUN_FIRE == tuple(d3.GUN_FIRE)
+    assert DoomUnit.MASKS == (7, 15, 15, 15)
     assert min(d3_unit.binding_margins().values()) >= 1
     blk = d3_unit.build_doom()
     assert blk.lengths["addr"] == blk.lengths["data"]
@@ -509,15 +534,21 @@ def test_doom_unit_probe_paints_like_the_model() -> None:
         seed = (top * 64 + x) * 16 + colour - 1024
         return d3_unit.word(codes["COL"], seed * 64 + (bot - top + 1))
 
+    w = d3_unit.word
     cmds = [
         # frame 1 opens like the title round: RUNs at the cursor, then COMMIT
-        d3_unit.word(codes["RUN"], 70 * 16 + 9), d3_unit.word(codes["RUN"], 1 * 16 + 12),
-        d3_unit.word(codes["RUN"], 200 * 16 + 3), d3_unit.word(codes["COMMIT"], 0),
-        col(3, 10, 5, 12), col(0, 39, 0, 9), col(20, 20, 63, 7),
-        d3_unit.word(codes["FLASH"], 0), d3_unit.word(codes["HUD"], 0),
-        d3_unit.word(codes["RUN"], 5 * 16 + 14),
-        d3_unit.word(codes["COMMIT"], 0),
-        col(39, 39, 1, 3), d3_unit.word(codes["COMMIT"], 0),
+        w(codes["RUN"], 70 * 16 + 9), w(codes["RUN"], 1 * 16 + 12),
+        w(codes["RUN"], 200 * 16 + 3), w(codes["COMMIT"], 0),
+        # frame 2 is a gameplay frame: banded columns, the idle gun, then the
+        # HUD flow — CURS to the strip, background RUNs, a CURS+RUN bar
+        col(3, 10, 5, 12), col(0, 39, 0, 9), col(20, 20, 63, 7), col(5, 39, 30, 14),
+        w(codes["GUN"], 0),
+        w(codes["CURS"], 2560), w(codes["RUN"], 64 * 16 + 7),
+        w(codes["RUN"], 55 * 16 + 8),
+        w(codes["CURS"], 41 * 64 + 4), w(codes["RUN"], 25 * 16 + 9),
+        w(codes["COMMIT"], 0),
+        # frame 3: the recoil sprite over a wall column
+        col(10, 30, 22, 11), w(codes["GUNF"], 0), w(codes["COMMIT"], 0),
     ]
     writes: list[tuple[int, int]] = []
     unit = DoomUnit(lambda p, v: writes.append((p, v)))

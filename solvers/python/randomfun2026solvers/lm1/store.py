@@ -513,32 +513,55 @@ class DoomUnit:
                floored ``/ 64`` recovers both fields (seed may be negative).
         RUN    count*16 + colour: ``count`` bare DATA writes of ``colour`` at
                the panel's own cursor (row-major auto-advance) — the title
-               screen is ~1k of these, one word per RLE run, and no ADDR at
-               all because COMMIT reset the cursor to the panel's top-left.
-        FLASH  0   the 8-pixel muzzle flash (three ADDR repositions, cursor
-               auto-advance inside each run).
-        HUD    0   rows 40..47: one ADDR (2560), then 512 row-major DATA writes.
+               screen is ~1k of these, one word per RLE run; the live HUD is
+               a CURS plus ~14 of them per frame.
+        CURS   addr: reposition the panel cursor (one bare ADDR write) — what
+               lets the CPU paint arbitrary RLE (the HUD strip, the bars)
+               with RUN words.
+        GUN    0   the baked idle pistol sprite (one ADDR + DATA run per
+               sprite row), bottom-centre over the finished columns.
+        GUNF   0   the recoil variant: the pistol a row higher with the
+               muzzle flash blooming above it (V1's bare diamond, retired).
         COMMIT 0   SWAP 0 — commit the frame, clear ``next``, reset the cursor.
 
-    The models mirror :data:`deadman3d.FLASH` and ``deadman3d.hud_rows()`` by
-    construction — the unit bakes both patterns, which is the whole point.
+    The models mirror ``deadman3d.GUN_IDLE``/``GUN_FIRE`` by construction —
+    the unit bakes both sprites, which is the whole point.
     """
 
     #: arm -> command code, read off the 3-bit trie's geometry (a west branch
     #: is a set bit; ``d3_unit.arm_codes`` derives these and the tests pin the
     #: two tables). COL is 0 so the CPU's per-column send is a bare
-    #: ``MULI 8; SND`` with no ``ADDI`` for the code; 2, 4 and 6 are the three
-    #: spare leaves.
-    CODES = {"COL": 0, "HUD": 1, "FLASH": 3, "RUN": 5, "COMMIT": 7}
+    #: ``MULI 8; SND`` with no ``ADDI`` for the code; 2 and 3 are the two
+    #: spare leaves. RUN lives on an eastern leaf (its arm's ``r`` must beat
+    #: the cmd pipe — rule 2), the write-only sprite arms fill the west.
+    CODES = {"COL": 0, "CURS": 1, "RUN": 4, "GUN": 5, "GUNF": 6, "COMMIT": 7}
 
     #: One-line contract per arm, quoted into the generated asm's ``.equ C_*`` notes.
     ARM_NOTES = {
         "COL": "arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor",
         "RUN": "arg=count*16+colour: count pixels at the panel's own cursor",
-        "FLASH": "arg=0: the baked 8-pixel muzzle diamond (rows 35..37)",
-        "HUD": "arg=0: the baked 512-pixel HUD strip (rows 40..47)",
+        "CURS": "arg=addr: reposition the panel cursor (the RLE painter's ADDR)",
+        "GUN": "arg=0: the baked idle pistol sprite (rows 30..39)",
+        "GUNF": "arg=0: the recoil pistol + muzzle flash (rows 25..38)",
         "COMMIT": "arg=0: SWAP 0 — commit the frame, clear next, reset the cursor",
     }
+
+    #: The pistol sprites, (row, first column, hex colours) per contiguous
+    #: run — duplicated from ``deadman3d.GUN_IDLE``/``GUN_FIRE`` (the tests
+    #: pin the tables equal) to keep this module free of the display model.
+    GUN_IDLE = (
+        (30, 30, "0770"), (31, 29, "07f770"), (32, 29, "077770"),
+        (33, 28, "00777700"), (34, 27, "0777777770"), (35, 27, "07788770"),
+        (36, 28, "00778770"), (37, 30, "077870"), (38, 30, "07770"),
+        (39, 31, "0770"),
+    )
+    GUN_FIRE = (
+        (25, 32, "bb"), (26, 31, "bffb"), (27, 30, "bffffb"), (28, 31, "bffb"),
+        (29, 30, "0770"), (30, 29, "07f770"), (31, 29, "077770"),
+        (32, 28, "00777700"), (33, 27, "0777777770"), (34, 27, "07788770"),
+        (35, 28, "00778770"), (36, 30, "077870"), (37, 30, "07770"),
+        (38, 31, "0770"),
+    )
 
     #: ``display.py``'s port numbers, repeated rather than imported to keep this
     #: module free of the display model.
@@ -562,10 +585,12 @@ class DoomUnit:
             self._col(arg)
         elif code == self.CODES["RUN"]:
             self._run(arg)
-        elif code == self.CODES["FLASH"]:
-            self._flash()
-        elif code == self.CODES["HUD"]:
-            self._hud()
+        elif code == self.CODES["CURS"]:
+            self._write(self.ADDR, arg)
+        elif code == self.CODES["GUN"]:
+            self._sprite(self.GUN_IDLE)
+        elif code == self.CODES["GUNF"]:
+            self._sprite(self.GUN_FIRE)
         elif code == self.CODES["COMMIT"]:
             self._write(self.SWAP, 0)
             self.frames += 1
@@ -616,28 +641,13 @@ class DoomUnit:
             self._write(self.DATA, colour)
             self.pixels += 1
 
-    def _flash(self) -> None:
-        """The baked muzzle flash: three cursor runs (deadman3d.FLASH)."""
-        for addr, colors in ((2271, (11, 11)), (2334, (11, 15, 15, 11)), (2399, (11, 11))):
-            self._write(self.ADDR, addr)
-            for c in colors:
-                self._write(self.DATA, c)
-                self.pixels += 1
-
-    def _hud(self) -> None:
-        """The baked HUD strip: ADDR 2560, then 512 row-major DATA writes."""
-        self._write(self.ADDR, self.H3D * self.WIDTH)
-        mid = [self.FLOOR] * self.WIDTH
-        for c in range(4, 13):
-            mid[c] = 9  # ammo, bright red
-        for c in range(28, 36):
-            mid[c] = 11  # face, bright yellow
-        for c in range(50, 59):
-            mid[c] = 12  # armor, bright blue
-        rows = [[7] * self.WIDTH] + [mid] * 6 + [[self.FLOOR] * self.WIDTH]
-        for row in rows:
-            for c in row:
-                self._write(self.DATA, c)
+    def _sprite(self, runs: tuple[tuple[int, int, str], ...]) -> None:
+        """A baked pistol sprite: one ADDR reposition per contiguous row run,
+        then its colours at the cursor's own auto-advance."""
+        for row, col, colors in runs:
+            self._write(self.ADDR, row * self.WIDTH + col)
+            for ch in colors:
+                self._write(self.DATA, int(ch, 16))
                 self.pixels += 1
 
     # ── helpers ──────────────────────────────────────────────────────────────

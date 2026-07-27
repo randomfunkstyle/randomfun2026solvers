@@ -1989,7 +1989,8 @@ class Machine:
             notes["stream:panel"] = "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP"
             notes["stream:unit"] = (
                 "the DOOM column painter (lm1/d3_unit.py): one command word per "
-                "viewport column / title RLE run / FLASH / HUD / COMMIT, 8*arg + code"
+                "viewport column / RLE run / cursor move / gun sprite / COMMIT, "
+                "8*arg + code"
             )
         for name, (x, y, w, h) in sorted(self.regions.items()):
             kind = name.split(":", 1)[0]
@@ -3730,11 +3731,12 @@ TAPE_SIZE = {
     "pathfinder-unit": 52,
     # deadman-3d (the E1M1 raycaster demo) boot-loads 295 data slots (256 packed
     # map quarter-columns for the 64x64 grid, POW16, 16 packed heading words, spawn
+    # state) and keeps the V4 live-HUD scalars (AMMO, HEALTH) beside the rest,
     # state) and runs 32 scalars after them, so the highest address is PTR = 135
     # — see `deadman3d.tape_slots()`, which the tests pin this against. Highest
     # address + 1, as everywhere: an exactly-sized tape stalls silently rather
     # than faulting.
-    "deadman-3d": 328,
+    "deadman-3d": 330,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -4065,7 +4067,7 @@ INPUT_NORTH: set[str] = {"deadman-3d"}
 STORE_TELEPORT: set[str] = {"deadman-3d"}
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
-#: ``deadman-3d``'s 328-slot store is far past the rotating tape's ~103-slot
+#: ``deadman-3d``'s 330-slot store is far past the rotating tape's ~103-slot
 #: practical cap (and a ring that size would cost ~1,100 ticks a read anyway),
 #: so it rides :func:`grid_block`, the address-carrying man-memory: ~31 ticks an
 #: access flat, paid for in rows — which an ungraded demo does not count.

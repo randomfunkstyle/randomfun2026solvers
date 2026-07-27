@@ -18,17 +18,20 @@ The unit owns
 The CPU only ever *sends* (§7.1: a replying unit cannot coexist with ``JMPF`` —
 measured on ``snake``), so every command carries what its drawing needs.
 
-Five commands, one word each, ``8 * arg + code`` (:func:`arm_codes` reads the
-codes off the trie — three levels now, so the codes are the 3-bit west-branch
+Six commands, one word each, ``8 * arg + code`` (:func:`arm_codes` reads the
+codes off the trie — three levels, so the codes are the 3-bit west-branch
 masks; ``store.DoomUnit.CODES`` and the generated asm's ``.equ C_*`` are
 pinned against it)::
 
-    COL    seed*64 + n   paint one viewport column; no commit.
+    COL    seed*64 + n   paint one viewport column, seaming every 4th wall
+                         row via the mask ring; no commit.
                          seed = (top*64 + col)*16 + colour - 1024, n = wall px.
     RUN    count*16 + c  count pixels of colour c at the panel's own cursor
-                         (row-major auto-advance) — the title screen's RLE.
-    FLASH  0             the baked 8-pixel muzzle diamond; no commit.
-    HUD    0             the baked 512-pixel HUD strip; no commit.
+                         (row-major auto-advance) — the title screen's RLE,
+                         and the HUD strip's painter behind a CURS.
+    CURS   addr          reposition the panel cursor; no commit.
+    GUN    0             the baked idle pistol sprite; no commit.
+    GUNF   0             the recoil pistol + muzzle flash; no commit.
     COMMIT 0             SWAP 0 — commit the frame, clear next, reset cursor.
 
 Why COL's argument looks like that
@@ -66,14 +69,18 @@ Geometry: the same three rules as path_unit, all asserted
    only ever carries COMMIT, which trails the last paint by a whole collector
    walk, but the tie is refused on principle, as in path_unit).
 
-The HUD field
--------------
+The sprite arms and the backtick discipline
+-------------------------------------------
 
-The HUD is 512 row-major pixels behind one ADDR reposition, so its arm is a
-**serpentine of bare DATA sends** woven through the DATA window's rows between
-the FLASH and COL arms' columns. Colours are derived, not spelled: B holds 8
-for the whole walk, so ``3~`` is 11 and ``4~`` is 12 (the engine-verified
-workaround for the backtick column-pairing trap — no literals in the field).
+The pistol arms are chains of one descent column per sprite row run —
+``path_unit``'s MOVE pattern — with colours derived, not spelled: B holds 8
+for the whole arm, so ``3~`` is 11 and ``7~`` is 15 (the engine-verified
+workaround for the backtick pairing traps). The engine also pairs backticks
+**along each row**, and a pair swallows everything between as one numeric
+literal — which is why every sprite descent opens its address literal on the
+same row (pairs stay local, climb-column blanks between), and why RUN's and
+COL's argument unpacks are literal-free (16 = 8+8, 64 = 8*8, the argument
+parked in ring 1 across the build).
 """
 
 from __future__ import annotations
@@ -119,8 +126,8 @@ R_RET = 28  # east wall, in: value ring 1's return
 R_RING = 30  # east wall, out: into value ring 1
 R_ADDR = 46  # east wall, out: panel ADDR
 R_DATA = 56  # east wall, out: panel DATA
-R_RET2 = 66  # east wall, in: the mask ring's return (V3 banding)
-R_RING2 = 68  # east wall, out: into the mask ring
+R_RET2 = 70  # east wall, in: the mask ring's return (V3 banding)
+R_RING2 = 72  # east wall, out: into the mask ring
 R_SWAP = 80  # east wall, out: panel SWAP — far below, so DATA's window is deep
 R_COLLECT = 82  # every arm rejoins here and walks back to MAIN
 
@@ -163,25 +170,19 @@ TRIE_COL = LEAF0 + LEAF_PITCH * ((1 << TRIE_BITS) - 1) // 2  # 73
 #: loop machinery spills ten columns east, and RUN must sit west of HUD so the
 #: serpentine field east of HUD's descent clears RUN's loop columns. Leaves
 #: 4..6 are spare — headroom for later arms (textures, the gun sprite).
-ARM_LEAF: dict[str, int] = {"COMMIT": 0, "FLASH": 1, "RUN": 2, "HUD": 3, "COL": 7}
+#: RUN sits on an EASTERN leaf: its literal-free ``/16`` parks the argument in
+#: ring 1 and takes it back with an ``r``, and rule 2 only lets an ``r`` beat
+#: the cmd pipe's north-wall distance from the far-east columns. The sprite
+#: arms fill the west instead (their chains are ``s``-only).
+ARM_LEAF: dict[str, int] = {
+    "COMMIT": 0, "GUN": 2, "CURS": 3, "GUNF": 4, "RUN": 6, "COL": 7,
+}
 ARMS: tuple[str, ...] = tuple(ARM_LEAF)
-
-#: The HUD field: the serpentine's columns (edges are turn lanes).
-FIELD_W = LEAF0 + 2 * LEAF_PITCH + 6  # 49 — east of the RUN arm's loop columns
-FIELD_E = LEAF0 + 7 * LEAF_PITCH - 2  # 141 — west of COL's leaf
 
 #: The panel (``machine.DISPLAY_OVERRIDE["deadman-3d"]``).
 PANEL_W, PANEL_H = 64, 48
 H3D = 40  # viewport rows 0..39; the HUD strip is rows 40..47
 FLOOR = 8
-
-#: The muzzle flash as the panel walks it: (ADDR, colours...) runs — the same
-#: pixels as ``deadman3d.FLASH``, cursor-advanced within each run.
-FLASH_RUNS: tuple[tuple[int, tuple[int, ...]], ...] = (
-    (2271, (11, 11)),
-    (2334, (11, 15, 15, 11)),
-    (2399, (11, 11)),
-)
 
 #: The COL arm's two counted-loop bodies (rows R_RET..; sends on their bands).
 #: The banded wall lap (V3): pop v from ring 1, v += 1024, push it back; split
@@ -190,7 +191,7 @@ FLASH_RUNS: tuple[tuple[int, tuple[int, ...]], ...] = (
 #: drops the bright variant to the dark shade), and push the mask back — the
 #: FIFO is the rotation. Register flow: A carries the working value, B parks
 #: the one being held across a glyph, the two rings hold everything else.
-BAND_BODY = "rM`1024`+sM`16`W/ sWMrW&sW" + " " * 9 + "s"
+BAND_BODY = "rM`1024`+sM`16`W/ sWM rW&sW" + " " * 10 + "s"
 #: Floor lap: addr += 64, back to the ring, ADDR, then the baked colour 8.
 FLOOR_BODY = "r+s" + " " * 15 + "s8" + " " * 8 + "s"
 #: RUN lap: one bare DATA send of the colour parked in A (the panel's cursor
@@ -241,23 +242,23 @@ def word(code: int, arg: int) -> int:
     return 8 * arg + code
 
 
-def hud_tokens() -> str:
-    """The HUD serpentine's glyph string: colour loads and bare DATA sends.
+def _pixel_tokens(colors: str) -> list[str]:
+    """Colour loads and bare DATA sends for one contiguous sprite run.
 
-    Colours over 9 are derived with ``~`` against B == 8 (11 = ``3~``, 12 =
-    ``4~``) — no literals, which keeps the field free of backticks. The runs
-    come from :func:`deadman3d.hud_runs`, so the baked pattern and the golden
-    model cannot drift apart.
+    B holds 8 for the whole arm, so the two non-glyph colours are derived:
+    ``b`` (11) is ``3~`` and ``f`` (15) is ``7~`` — no literals, which keeps
+    the sprite columns free of backtick-pairing traps. A repeated colour is a
+    bare send (the panel cursor advances itself).
     """
-    from ..deadman3d import hud_runs
-
-    glyph = {7: "7", 8: "8", 9: "9", 11: "3~", 12: "4~"}
-    out: list[str] = []
-    for colour, count in hud_runs():
-        if colour not in glyph:
-            raise DoomUnitError(f"HUD colour {colour} has no literal-free load")
-        out.append(glyph[colour] + "s" * count)
-    return "".join(out)
+    loads = {"0": ["0"], "7": ["7"], "8": ["8"], "b": ["3", "~"], "f": ["7", "~"]}
+    toks: list[str] = []
+    cur = None
+    for ch in colors:
+        if ch != cur:
+            toks += loads[ch]
+            cur = ch
+        toks.append("s")
+    return toks
 
 
 # ── the unit's interior ──────────────────────────────────────────────────────
@@ -334,62 +335,21 @@ def unit_interior() -> Unit:
     pipe(x, R_SWAP, "s", "swap")
     c.vertical(x, R_SWAP, R_COLLECT)
 
-    # ── FLASH: three cursor runs, colours XOR-derived against B == 8 ─────────
-    # Each run is its own descent column (ADDR sends must all stand on R_ADDR),
-    # linked by blank climb columns — path_unit's MOVE pattern.
-    x = col["FLASH"]
-    c.run(x, R_ARG + 1, "`2271`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
-    c.vertical(x, R_ARG + 6, R_ADDR)
-    pipe(x, R_ADDR, "s", "addr")
-    c.run(x, R_ADDR + 1, "8M3~", d=S)  # B = 8 for the whole arm; A = 11
-    c.vertical(x, R_ADDR + 4, WIN_TOP)
-    pipe(x, WIN_TOP, "s", "data")
-    pipe(x, WIN_TOP + 1, "s", "data")
-    c.set(x, WIN_TOP + 2, ">")
-    c.set(x + 1, WIN_TOP + 2, "^")
-    c.vertical(x + 1, WIN_TOP + 2, R_ARG - 1)
-    c.set(x + 1, R_ARG - 1, ">")
-    x2 = x + 2
-    c.set(x2, R_ARG - 1, "v")
-    c.run(x2, R_ARG + 1, "`2334`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
-    c.vertical(x2, R_ARG + 6, R_ADDR)
-    pipe(x2, R_ADDR, "s", "addr")
-    c.run(x2, R_ADDR + 1, "3~", d=S)  # A = 11 again (the literal clobbered it)
-    c.vertical(x2, R_ADDR + 2, WIN_TOP)
-    pipe(x2, WIN_TOP, "s", "data")  # 11
-    c.run(x2, WIN_TOP + 1, "7~", d=S)  # A = 15
-    pipe(x2, WIN_TOP + 3, "s", "data")
-    pipe(x2, WIN_TOP + 4, "s", "data")  # 15, 15
-    c.run(x2, WIN_TOP + 5, "3~", d=S)  # A = 11
-    pipe(x2, WIN_TOP + 7, "s", "data")
-    c.set(x2, WIN_TOP + 8, ">")
-    c.set(x2 + 1, WIN_TOP + 8, "^")
-    c.vertical(x2 + 1, WIN_TOP + 8, R_ARG - 1)
-    c.set(x2 + 1, R_ARG - 1, ">")
-    x3 = x + 4
-    c.set(x3, R_ARG - 1, "v")
-    c.run(x3, R_ARG + 1, "`2399`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
-    c.vertical(x3, R_ARG + 6, R_ADDR)
-    pipe(x3, R_ADDR, "s", "addr")
-    c.run(x3, R_ADDR + 1, "3~", d=S)  # A = 11
-    c.vertical(x3, R_ADDR + 2, WIN_TOP)
-    pipe(x3, WIN_TOP, "s", "data")
-    pipe(x3, WIN_TOP + 1, "s", "data")
-    c.vertical(x3, WIN_TOP + 1, R_COLLECT)
-
-    # ── RUN: colour run at the panel's own cursor (the title screen's RLE) ───
+    # ── RUN: colour run at the panel's own cursor (the title screen's RLE,
+    # and since V4 the HUD strip's painter behind a CURS) ────────────────────
     # arg = count*16 + colour: split it, park the colour in A (d/m only touch
     # BP, so it survives every lap), BP = count, then a counted loop of one
     # bare DATA send per lap — the cursor advances itself, so consecutive RUNs
     # paint the panel row-major exactly like deadman3d.title_runs().
     x = col["RUN"]
     c.run(x, R_ARG, "M8W/", d=S)  # A = arg, B = the code (dead)
-    c.set(x, R_ARG + 4, "M")  # B = arg
-    c.run(x, R_ARG + 5, "`16`", d=S)
-    c.run(x, R_ARG + 9, "W/", d=S)  # A = count, B = colour
-    c.set(x, R_ARG + 11, "b")  # BP = count
-    c.set(x, R_ARG + 12, "W")  # A = colour, B = count (dead)
-    c.vertical(x, R_ARG + 12, R_LOOP)
+    # literal-free /16 (a backtick here would row-pair across the sprite
+    # arms' digit rows): park arg in ring 1, build 16 = 8 + 8, take it back
+    pipe(x, R_ARG + 4, "s", "ring")  # ring 1 holds [arg]
+    c.run(x, R_ARG + 5, "8M8+M", d=S)  # B = 16
+    pipe(x, R_ARG + 10, "r", "ring_ret")  # A = arg, B = 16
+    c.run(x, R_ARG + 11, "/bW", d=S)  # A -> count -> BP; A = colour
+    c.vertical(x, R_ARG + 13, R_LOOP)
     c.set(x, R_LOOP, ">")
     c.counted_loop(x + 1, R_LOOP, RUN_BODY)
     body_glyphs(x + 1, R_LOOP, RUN_BODY)
@@ -397,56 +357,76 @@ def unit_interior() -> Unit:
     c.set(rx, R_LOOP, "v")
     c.vertical(rx, R_LOOP, R_COLLECT)
 
-    # ── HUD: one ADDR reposition, then the serpentine of bare DATA sends ─────
-    x = col["HUD"]
-    c.run(x, R_ARG + 1, "`2560`", d=S)  # row 6: keeps row 5 clear of the backtick row-pairs
-    c.vertical(x, R_ARG + 6, R_ADDR)
+    # ── CURS (V4): reposition the panel cursor — the RLE painter's ADDR ──────
+    x = col["CURS"]
+    c.run(x, R_ARG, "M8W/", d=S)  # A = arg = the target address
+    c.vertical(x, R_ARG + 3, R_ADDR)
     pipe(x, R_ADDR, "s", "addr")
-    c.run(x, R_ADDR + 1, "8M", d=S)  # B = 8: 11 is 3~, 12 is 4~
-    c.vertical(x, R_ADDR + 2, WIN_TOP - 1)
-    c.set(x, WIN_TOP - 1, "<")  # west along the corridor row above the window
-    c.horizontal(WIN_TOP - 1, x, FIELD_W)
-    c.set(FIELD_W, WIN_TOP - 1, "v")
-    c.set(FIELD_W, WIN_TOP, ">")
-    tokens = hud_tokens()
-    tx, ty, d = FIELD_W + 1, WIN_TOP, 1
-    for ch in tokens:
-        if not FIELD_W < tx < FIELD_E:
-            raise DoomUnitError(f"HUD serpentine left its lanes at {(tx, ty)}")
-        if ch == "s":
-            pipe(tx, ty, "s", "data")
-        else:
-            c.set(tx, ty, ch)
-        at_edge = (d == 1 and tx == FIELD_E - 1) or (d == -1 and tx == FIELD_W + 1)
-        if at_edge:
-            edge = FIELD_E if d == 1 else FIELD_W
-            c.set(edge, ty, "v")
-            c.set(edge, ty + 1, "<" if d == 1 else ">")
-            ty += 1
-            d = -d
-            if ty > WIN_BOT:
-                raise DoomUnitError("the HUD serpentine fell out of the DATA window")
-        else:
-            tx += d
-    # run out the current row to its edge, then drop to the collector
-    end = FIELD_E if d == 1 else FIELD_W
-    c.horizontal(ty, tx - d, end)
-    c.set(end, ty, "v")
-    c.vertical(end, ty, R_COLLECT)
+    c.vertical(x, R_ADDR, R_COLLECT)
+
+    # ── GUN / GUNF (V4): the baked pistol sprites, one descent per row run ───
+    # path_unit's MOVE pattern like the old FLASH arm, generated straight from
+    # deadman3d's sprite tables: `addr` -> ADDR, then the run's colour loads
+    # and sends walked down the DATA window, linked by blank climb columns.
+    def sprite_arm(x0: int, runs: tuple[tuple[int, int, str], ...]) -> None:
+        a = x0
+        for k, (row, col0, colors) in enumerate(runs):
+            lit = f"`{row * PANEL_W + col0}`"
+            if k > 0:
+                c.set(a, R_ARG, "v")
+            c.run(a, R_ARG + 1, lit, d=S)  # every descent's backticks share rows
+            c.vertical(a, R_ARG + len(lit), R_ADDR)
+            pipe(a, R_ADDR, "s", "addr")
+            toks = _pixel_tokens(colors)
+            if k == 0:
+                toks = ["8", "M"] + toks  # B = 8 for the whole arm (b=3~, f=7~)
+            first = toks.index("s")
+            lead, body = toks[:first], toks[first:]
+            if len(lead) > WIN_TOP - R_ADDR - 2:
+                raise DoomUnitError(f"sprite run {(row, col0)}: {len(lead)} leading loads")
+            if len(body) > WIN_BOT - WIN_TOP + 1:
+                raise DoomUnitError(
+                    f"sprite run {(row, col0)} needs {len(body)} DATA-window rows; "
+                    f"split it or shorten it"
+                )
+            y0 = WIN_TOP - len(lead)
+            c.vertical(a, R_ADDR, y0)
+            for i, t in enumerate(toks):
+                if t == "s":
+                    pipe(a, y0 + i, "s", "data")
+                else:
+                    c.set(a, y0 + i, t)
+            y_end = y0 + len(toks)
+            if k + 1 < len(runs):
+                c.set(a, y_end, ">")
+                c.set(a + 1, y_end, "^")
+                c.vertical(a + 1, y_end, R_ARG)
+                c.set(a + 1, R_ARG, ">")
+                a += 2
+            else:
+                c.vertical(a, y_end - 1, R_COLLECT)
+        if a >= col["COL"] - 1:
+            raise DoomUnitError(f"sprite arm at {x0} spills into column {a}")
+
+    from ..deadman3d import GUN_FIRE, GUN_IDLE
+
+    sprite_arm(col["GUN"], tuple(GUN_IDLE))
+    sprite_arm(col["GUNF"], tuple(GUN_FIRE))
 
     # ── COL: unpack, seed the mask ring, the banded wall loop, the interlude,
     # the floor loop, the drains ─────────────────────────────────────────────
     x = col["COL"]
     c.run(x, R_ARG, "M8W/", d=S)  # A = arg, B = the code
-    c.set(x, R_ARG + 4, "M")  # B = arg
-    c.run(x, R_ARG + 5, "`64`", d=S)
-    c.run(x, R_ARG + 9, "W/W", d=S)  # A = n_wall, B = seed
-    c.set(x, R_ARG + 12, "b")  # BP = n_wall
-    c.set(x, R_ARG + 13, "W")  # A = seed
-    pipe(x, R_ARG + 14, "s", "ring")  # ring 1 holds [seed]
+    # literal-free /64 (same backtick row-pairing dodge as RUN's): park arg,
+    # build 64 = 8 * 8, take arg back and split it
+    pipe(x, R_ARG + 4, "s", "ring")  # ring 1 holds [arg]
+    c.run(x, R_ARG + 5, "8M8*M", d=S)  # B = 64
+    pipe(x, R_ARG + 10, "r", "ring_ret")  # A = arg, B = 64
+    c.run(x, R_ARG + 11, "/WbW", d=S)  # A = seed, then BP = n_wall, A = seed
+    pipe(x, R_ARG + 15, "s", "ring")  # ring 1 holds [seed]
     # seed the mask ring for THIS command — [7, 15, 15, 15], so the banding
     # seam anchors at the wall run's top row — then climb back to the loop
-    c.vertical(x, R_ARG + 14, R_RING2 - 6)
+    c.vertical(x, R_ARG + 15, R_RING2 - 6)
     c.set(x, R_RING2 - 6, "7")  # A = 7 (the seam mask)
     pipe(x, R_RING2 - 5, "s", "ring2")
     c.run(x, R_RING2 - 4, "`15`", d=S)  # A = 15 (the no-op mask)
@@ -689,8 +669,6 @@ def build_doom() -> DoomBlock:
             if arm != "COL"
         },
         "unit:COL": (UX + arm_columns()["COL"] - 1, UY + R_ARG, 12, R_COLLECT - R_ARG + 1),
-        "unit:hud-field": (UX + FIELD_W, UY + WIN_TOP, FIELD_E - FIELD_W + 1,
-                           WIN_BOT - WIN_TOP + 1),
         "relay": (rx, ry, RELAY_IW + 2, RELAY_IH + 2),
         "relay2": (rx2, ry2, RELAY_IW + 2, RELAY_IH + 2),
         "panel": (px, py, PANEL_W + 2, PANEL_H + 2),

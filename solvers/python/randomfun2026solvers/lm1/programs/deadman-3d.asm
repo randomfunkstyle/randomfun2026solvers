@@ -19,9 +19,10 @@
 ; word to the write-only column-painter unit — 8*arg + code, code COL=0,
 ; arg = ((drawStart*64 + drawEnd)*64 + x)*16 + colour — and the unit paints
 ; the wall run and the floor run (stride 64) while the CPU raycasts the
-; next column. FLASH (the baked 8-pixel muzzle diamond), HUD (the baked
-; 512-pixel strip) and COMMIT (SWAP 0) are one command word each; the
-; ceiling stays black because COMMIT clears the next buffer.
+; next column, seaming every 4th wall row via its mask ring. The pistol
+; (GUN idle / GUNF recoil+flash), each cursor move (CURS), each RLE run
+; (RUN) and COMMIT (SWAP 0) are one command word each; the ceiling stays
+; black because COMMIT clears the next buffer.
 ;
 ; Round 0's input carries the whole data preamble (256 packed map quarter-columns,
 ; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())
@@ -77,15 +78,18 @@
 .equ BS     323          ; key bit 1 (2): S, backward
 .equ BA     324          ; key bit 2 (4): A, turn left
 .equ BD     325          ; key bit 3 (8): D, turn right
-.equ FIRE   326          ; key bit 4 (16): space held — paint FLASH over this frame
-.equ PTR    327          ; the boot loop's tape cursor
+.equ FIRE   326          ; key bit 4 (16): space held — fire the pistol this frame
+.equ AMMO   327          ; live rounds left: starts 50, -1 per shot, floor 0
+.equ HEALTH 328          ; static 100 until the demo grows damage
+.equ PTR    329          ; the boot loop's tape cursor
 
 ; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────
 .unit doom
 .equ C_COL    0            ; arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor
-.equ C_RUN    5            ; arg=count*16+colour: count pixels at the panel's own cursor
-.equ C_FLASH  3            ; arg=0: the baked 8-pixel muzzle diamond (rows 35..37)
-.equ C_HUD    1            ; arg=0: the baked 512-pixel HUD strip (rows 40..47)
+.equ C_RUN    4            ; arg=count*16+colour: count pixels at the panel's own cursor
+.equ C_CURS   1            ; arg=addr: reposition the panel cursor (the RLE painter's ADDR)
+.equ C_GUN    5            ; arg=0: the baked idle pistol sprite (rows 30..39)
+.equ C_GUNF   6            ; arg=0: the recoil pistol + muzzle flash (rows 25..38)
 .equ C_COMMIT 7            ; arg=0: SWAP 0 — commit the frame, clear next, reset the cursor
 
 ; ── boot: round 0's data preamble -> tape slots 1..295, the loop unrolled 8x ──
@@ -182,6 +186,10 @@ title:  IN                  ; the next pre-encoded RUN word
         BRN title           ; keep looping while PTR < 121
         LDI C_COMMIT
         SND                 ; commit: the title screen is round 0's frame
+        LDI 50
+        ST  AMMO            ; a full clip (V4's live HUD)
+        LDI 100
+        ST  HEALTH          ; static until the demo grows damage
 
 
 ; ── round: one key-bitmask word in, exactly one committed frame out ──────────
@@ -211,9 +219,14 @@ round:  IN                  ; blocks here when the walk is over (the legal end)
         DIVI 2
         MODI 2
         ST  FIRE            ; bit 4 (16): space — higher bits fall off here
+        BRZ turn0           ; ST preserved ACC = the fire bit
+        LD  AMMO
+        BRZ turn0           ; dry-fire on an empty clip: the counter stays 0
+        SUBI 1
+        ST  AMMO            ; one live round spent — the HUD bar shrinks
 
 ; ── turn first (lodev's order): heading += A - D, cancelling when both held ──
-        LD  BA
+turn0:  LD  BA
         SUB BD
         BRZ mvchk           ; no net turn: dir/plane stay as they are
         ADD HDG
@@ -1257,18 +1270,90 @@ send:   LD  DSTART
         SND
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI 63
-        BRZ flash           ; that was column 63: the viewport is sent
+        BRZ gun             ; that was column 63: the viewport is sent
         JMP colset
 
-; ── muzzle flash: the unit's baked 8-pixel diamond, when this round FIREd ─
-flash:  LD  FIRE
-        BRZ hud
-        LDI C_FLASH
+; ── the pistol (V4): ONE command word — the unit bakes both sprites ──────────
+gun:    LD  FIRE
+        BRZ gidle
+        LDI C_GUNF
+        SND                 ; the recoil frame, muzzle flash blooming above
+        JMP hud
+gidle:  LDI C_GUN
+        SND                 ; the idle pistol, bottom-centre
+
+; ── HUD (V4): cursor to slot 2560, the background as 14 pre-encoded RUN
+; words (hud_bg_runs(): bezel, base field, the static blue armor block),
+; then the LIVE bars over it — red health rows 41..42 (1px per 4), yellow
+; ammo rows 44..45 (1px per 2), both from column 4; an empty bar
+; sends nothing and the background shows through
+hud:    LDI 20481
+        SND                 ; CURS: the panel cursor to the strip's top-left
+        LDI 8252
+        SND                 ; RUN 64 x colour 7
+        LDI 6468
+        SND                 ; RUN 50 x colour 8
+        LDI 1252
+        SND                 ; RUN 9 x colour 12
+        LDI 7108
+        SND                 ; RUN 55 x colour 8
+        LDI 1252
+        SND                 ; RUN 9 x colour 12
+        LDI 7108
+        SND                 ; RUN 55 x colour 8
+        LDI 1252
+        SND                 ; RUN 9 x colour 12
+        LDI 7108
+        SND                 ; RUN 55 x colour 8
+        LDI 1252
+        SND                 ; RUN 9 x colour 12
+        LDI 7108
+        SND                 ; RUN 55 x colour 8
+        LDI 1252
+        SND                 ; RUN 9 x colour 12
+        LDI 7108
+        SND                 ; RUN 55 x colour 8
+        LDI 1252
+        SND                 ; RUN 9 x colour 12
+        LDI 8900
+        SND                 ; RUN 69 x colour 8
+
+        LD  HEALTH
+        DIVI 4
+        ST  TMP             ; the health bar in pixels
+        BRZ abar
+        LDI 21025
+        SND                 ; CURS: row 41, column 4
+        LD  TMP
+        MULI 16
+        ADDI 9
+        MULI 8
+        ADDI C_RUN
+        ST  TMP2            ; the bar's RUN word — reused for its second row
+        SND
+        LDI 21537
+        SND
+        LD  TMP2
+        SND
+abar:   LD  AMMO
+        DIVI 2
+        ST  TMP             ; the ammo bar in pixels
+        BRZ cmit            ; clip empty: no bar at all
+        LDI 22561
+        SND
+        LD  TMP
+        MULI 16
+        ADDI 11
+        MULI 8
+        ADDI C_RUN
+        ST  TMP2
+        SND
+        LDI 23073
+        SND
+        LD  TMP2
         SND
 
-; ── HUD strip (rows 40..47) and the commit: one command word each ───────
-hud:    LDI C_HUD
-        SND                 ; the baked HUD strip
-        LDI C_COMMIT
+; ── the commit: one command word ─────────────────────────────────────────────
+cmit:   LDI C_COMMIT
         SND                 ; SWAP 0: commit THE one frame of this round
         JMP round
