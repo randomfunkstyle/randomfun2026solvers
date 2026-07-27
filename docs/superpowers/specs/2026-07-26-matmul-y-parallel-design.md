@@ -390,3 +390,29 @@ exactly what 110 candidates reported.
 and every up row is above every down row. The condition holds, the columns are
 free again, and ring C's relay and the O room go in the same lower band as the
 ADDER — which also keeps `out` short.
+
+### `prod` and `cmd` cannot both be simple L-routes: mirror the ADDER
+
+Moving the ADDER below MAIN satisfies the up/down separation, but `prod` and `cmd`
+still cannot both reach it. Both run from MAIN's east wall (rows 51 and 66) down to
+the ADDER's **west** wall (rows 92 and 96), so both are L-routes going east, south,
+then west, and:
+
+* `cmd`'s vertical crosses `prod`'s westward leg unless `C_cmd > C_prod`;
+* `cmd`'s **first** leg, at row 66, crosses `prod`'s vertical (spanning 51..92)
+  unless `C_cmd < C_prod`.
+
+Contradiction, and adding a jog to either one reproduces it one column over — the
+two conditions are on opposite sides of the same inequality however the path is
+folded.
+
+The cause is that both pipes come from the north-east and the ADDER presents its
+ports on the **west**. So **mirror the ADDER**: reflect its interior horizontally,
+swapping `<` and `>`, so `cin`, `prod` and `cmd` land on its east wall and `cout`
+and `out` on its west. Then both feeds approach from the side they are already on
+and descend without crossing, and `out` runs west to the O room instead of east.
+
+The ADDER's logic is unaffected — a horizontal mirror maps each counted phase onto
+itself with the walk direction reversed — but it must be re-verified on the engine
+after mirroring, because the row order of its three phases is what makes the
+accumulate body read `prod` before `cin`.
