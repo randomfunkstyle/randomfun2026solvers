@@ -552,6 +552,31 @@ class Serpentine:
         self.c.turn(self.x, edge, self.d)
         self.y = edge
 
+    def _uturn(self) -> None:
+        """Reverse the heading **where the man stands**: two cells, not a walk out.
+
+        :meth:`_turn` walks to the band edge first, which costs `2 * band height`
+        ticks every time the program revisits a row it has already passed. That is
+        free in a loop body (nothing revisits) and ruinous in straight-line setup
+        code: MAIN reverses fifteen times before the first multiply, and on a
+        23-row band that was most of the small cases' running time.
+
+        The reversal itself is the same two glyphs at any row — `>` on the cell the
+        man is about to step onto and the opposite heading beside it — so the only
+        reason to prefer the edge is that the edge is always free. Here the target
+        cell is checked, and the walk-out is the fallback.
+        """
+        nxt = self.y + self.d[1]
+        if not self.top <= nxt <= self.bot or not self.c.free(self.x, nxt) \
+                or not self.c.free(self.x + 1, nxt):
+            self._turn()
+            return
+        self.c.set(self.x, nxt, ">")
+        self.d = N if self.d == S else S
+        self.x += 1
+        self.c.turn(self.x, nxt, self.d)
+        self.y = nxt
+
     def op(self, glyph: str, row: int | None = None) -> None:
         if row is None:
             x, y = self._step()
@@ -564,7 +589,7 @@ class Serpentine:
                 "reserved for turns, so no op may sit there"
             )
         if (row - self.y) * self.d[1] <= 0:
-            self._turn()
+            self._uturn()
         while self.y + self.d[1] != row:
             x, y = self._step()
             self.c.set(x, y, " ")
