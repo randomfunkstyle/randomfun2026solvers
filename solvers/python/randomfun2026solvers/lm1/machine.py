@@ -2544,7 +2544,7 @@ def _assemble(
         elif store == "men-v3":
             from ..memory_men_v3 import v3_store_block
 
-            tape = v3_store_block(tape_n)
+            tape = v3_store_block(tape_n, ops=STORE_OPS.get(program.name, 500))
         elif store == "tape":
             tape = tape_block(
                 tape_n,
@@ -4076,6 +4076,17 @@ STORE_TELEPORT: set[str] = {"deadman-3d"}
 #: area — which an ungraded demo does not count. Measured on deadman-3d's
 #: ~14.3k accesses per frame it is worth ~0.3M ticks over ``grid``.
 STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
+
+#: Router-strip length for the men-v3 tier (``v3_store_block``'s ``ops`` knob),
+#: per slug; unlisted slugs keep v3's own default (500). Swept on deadman-3d's
+#: real frame gate: 8/32 → 11,305,517 ticks, 128/500 → 11,193,618, and the
+#: machine's bounding box is IDENTICAL at every length — the strip hides inside
+#: a bbox set by the ROM band and cell columns. The demo takes the short strip
+#: per the user's call: its reads come in one ~20k burst per frame with idle
+#: rounds between, so +112k ticks/frame (+1.3%) buys a ~99% smaller strip.
+#: Re-sweep against area²×ticks before borrowing this number for any scored
+#: machine — there the knee lands near 128, not 8.
+STORE_OPS: dict[str, int] = {"deadman-3d": 8}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:
