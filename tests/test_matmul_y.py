@@ -464,3 +464,33 @@ def test_the_workers_mac_body_is_in_ring_order() -> None:
     assert m.W_PROD - m.W_B_FWD >= 2, "no spare row between s(b_fwd) and s(prod) for `*`"
     assert m.W_A_IN < m.W_B_RET, "the scalar must be fetched before the loop is entered"
     assert m.W_GAUGE > m.W_PROD, "the gauge sits below the loop, off the body's rows"
+
+
+# ── how many rounds the graded set actually has ──────────────────────────────
+@node_required
+@pytest.mark.slow
+def test_the_graded_set_has_no_multi_round_matmul_case(tmp_path) -> None:
+    """The grid that scores 20/20 answers one round and then stalls.
+
+    Every public case has exactly one round, and `privateTestCount` is 0, but the
+    problem statement allows several — so a machine could in principle need a
+    round loop, a ring drain between rounds, and a read/write balance on every
+    register so the next round does not read a stale value.
+
+    It does not. Feeding `matmul-compacted.man` the same case twice produces the
+    first answer only, and that grid was judged 20/20. So the graded set is
+    single-round, and none of that machinery has to exist.
+
+    If this ever fails, the judge started sending multiple rounds and every
+    single-round matmul grid in `solutions/` is invalid.
+    """
+    grid = REPO / "tasks" / "solutions" / "matmul-compacted.man"
+    if not grid.exists():
+        pytest.skip("matmul-compacted.man not checked in")
+    case = [2, 2, 2, 1, 2, 3, 4, 5, 6, 7, 8]
+    want = [19, 22, 43, 50]
+    got, _ticks = _judge(grid.read_text(encoding="utf-8"), case + case, want + want, tmp_path)
+    assert got == want, (
+        "this grid now answers more than one round; the single-round assumption "
+        "behind CTRL's design no longer holds"
+    )
