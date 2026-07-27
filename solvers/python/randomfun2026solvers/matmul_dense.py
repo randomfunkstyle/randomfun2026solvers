@@ -789,7 +789,11 @@ class DenseRoom:
 #: load phases.  Only routing distance depends on it -- every edge between two
 #: boxes is a corridor either way -- but a corridor is ticks, and `GEND`,
 #: `GRP_GO` and `TNEXT` are on the emit path 34 times a case.
-BOX_ORDER = ["TBODY", "TNEXT", "GRP_GO", "E1", "GG2", "E2", "GEND", "ROW", "ROW_GO",
+#:
+#: `TBODY` used to head the hot chain and no longer does: `ROW_GO` enters the `t`
+#: loop through `TNEXT`, which leaves `TBODY` with one predecessor, so the whole
+#: `t` loop is now one chain headed by `TNEXT`.  One box fewer, same order.
+BOX_ORDER = ["TNEXT", "GRP_GO", "E1", "GG2", "E2", "GEND", "ROW", "ROW_GO",
              "BGRP_END", "BGRP_GO", "BL1_R", "BL2", "BL2_R", "BROW_GO",
              "HEAD", "BROW"]
 

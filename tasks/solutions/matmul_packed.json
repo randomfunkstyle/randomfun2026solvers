@@ -10,7 +10,7 @@
       "x": 1,
       "y": 14,
       "w": 61,
-      "h": 79,
+      "h": 77,
       "note": "32 blocks laid by Room",
       "color": "#f59e0b",
       "tags": []
@@ -20,7 +20,7 @@
       "x": 29,
       "y": 14,
       "w": 6,
-      "h": 79,
+      "h": 77,
       "note": "io: r binds col 32, s binds col 31",
       "color": "#1f2937",
       "tags": []
@@ -30,7 +30,7 @@
       "x": 53,
       "y": 14,
       "w": 9,
-      "h": 79,
+      "h": 77,
       "note": "x: r binds col 58, s binds col 57",
       "color": "#1f2937",
       "tags": []
@@ -40,7 +40,7 @@
       "x": 20,
       "y": 14,
       "w": 10,
-      "h": 79,
+      "h": 77,
       "note": "k: r binds col 27, s binds col 26",
       "color": "#1f2937",
       "tags": []
@@ -50,7 +50,7 @@
       "x": 35,
       "y": 14,
       "w": 6,
-      "h": 79,
+      "h": 77,
       "note": "s: r binds col 38, s binds col 37",
       "color": "#1f2937",
       "tags": []
@@ -60,7 +60,7 @@
       "x": 40,
       "y": 14,
       "w": 6,
-      "h": 79,
+      "h": 77,
       "note": "b: r binds col 43, s binds col 42",
       "color": "#1f2937",
       "tags": []
@@ -70,7 +70,7 @@
       "x": 46,
       "y": 14,
       "w": 8,
-      "h": 79,
+      "h": 77,
       "note": "c: r binds col 49, s binds col 48",
       "color": "#1f2937",
       "tags": []
@@ -80,7 +80,7 @@
       "x": 5,
       "y": 14,
       "w": 16,
-      "h": 79,
+      "h": 77,
       "note": "q: r binds col 14, s binds col 13",
       "color": "#1f2937",
       "tags": []
@@ -131,7 +131,7 @@
       "y": 0,
       "w": 6,
       "h": 14,
-      "note": "352 cells, holds 256 words",
+      "note": "344 cells, holds 256 words",
       "color": "#0ea5e9",
       "tags": []
     },
@@ -141,7 +141,7 @@
       "y": 0,
       "w": 6,
       "h": 14,
-      "note": "404 cells, holds 96 words",
+      "note": "396 cells, holds 96 words",
       "color": "#0ea5e9",
       "tags": []
     },
@@ -158,12 +158,12 @@
       ]
     },
     {
-      "name": "chain:BGRP_END",
+      "name": "chain:BROW_GO",
       "x": 5,
       "y": 25,
       "w": 57,
       "h": 1,
-      "note": "BGRP_END",
+      "note": "BROW_GO",
       "color": "#22c55e",
       "tags": [
         "block"
@@ -172,7 +172,7 @@
     {
       "name": "chain:BGRP_GO",
       "x": 5,
-      "y": 28,
+      "y": 27,
       "w": 57,
       "h": 3,
       "note": "BGRP_GO BL1 BL1_Z",
@@ -184,7 +184,7 @@
     {
       "name": "chain:BL1_R",
       "x": 5,
-      "y": 31,
+      "y": 30,
       "w": 57,
       "h": 1,
       "note": "BL1_R",
@@ -196,7 +196,7 @@
     {
       "name": "chain:BL2",
       "x": 5,
-      "y": 33,
+      "y": 32,
       "w": 57,
       "h": 1,
       "note": "BL2 BL2_Z",
@@ -208,7 +208,7 @@
     {
       "name": "chain:BL2_R",
       "x": 5,
-      "y": 36,
+      "y": 35,
       "w": 57,
       "h": 1,
       "note": "BL2_R",
@@ -218,9 +218,21 @@
       ]
     },
     {
+      "name": "chain:BGRP_END",
+      "x": 5,
+      "y": 37,
+      "w": 57,
+      "h": 1,
+      "note": "BGRP_END",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
       "name": "chain:BROW",
       "x": 5,
-      "y": 38,
+      "y": 40,
       "w": 57,
       "h": 18,
       "note": "BROW BLOAD_DONE CFILL_GO QBUILD",
@@ -230,60 +242,36 @@
       ]
     },
     {
-      "name": "chain:BROW_GO",
-      "x": 5,
-      "y": 56,
-      "w": 57,
-      "h": 1,
-      "note": "BROW_GO",
-      "color": "#22c55e",
-      "tags": [
-        "block"
-      ]
-    },
-    {
-      "name": "chain:E1",
+      "name": "chain:ROW",
       "x": 5,
       "y": 58,
       "w": 57,
       "h": 1,
-      "note": "E1",
+      "note": "ROW FIN",
       "color": "#22c55e",
       "tags": [
         "block"
       ]
     },
     {
-      "name": "chain:E2",
+      "name": "chain:ROW_GO",
       "x": 5,
       "y": 60,
       "w": 57,
-      "h": 1,
-      "note": "E2",
+      "h": 2,
+      "note": "ROW_GO",
       "color": "#22c55e",
       "tags": [
         "block"
       ]
     },
     {
-      "name": "chain:GEND",
+      "name": "chain:TNEXT",
       "x": 5,
       "y": 62,
       "w": 57,
-      "h": 1,
-      "note": "GEND",
-      "color": "#22c55e",
-      "tags": [
-        "block"
-      ]
-    },
-    {
-      "name": "chain:GG2",
-      "x": 5,
-      "y": 65,
-      "w": 57,
-      "h": 3,
-      "note": "GG2 LN2",
+      "h": 8,
+      "note": "TNEXT TBODY MAC TTAIL EMIT_SET",
       "color": "#22c55e",
       "tags": [
         "block"
@@ -302,48 +290,48 @@
       ]
     },
     {
-      "name": "chain:ROW",
+      "name": "chain:E1",
       "x": 5,
       "y": 79,
       "w": 57,
       "h": 1,
-      "note": "ROW FIN",
+      "note": "E1",
       "color": "#22c55e",
       "tags": [
         "block"
       ]
     },
     {
-      "name": "chain:ROW_GO",
+      "name": "chain:GG2",
       "x": 5,
       "y": 81,
       "w": 57,
-      "h": 2,
-      "note": "ROW_GO",
+      "h": 3,
+      "note": "GG2 LN2",
       "color": "#22c55e",
       "tags": [
         "block"
       ]
     },
     {
-      "name": "chain:TBODY",
+      "name": "chain:GEND",
       "x": 5,
-      "y": 83,
-      "w": 57,
-      "h": 8,
-      "note": "TBODY MAC TTAIL EMIT_SET",
-      "color": "#22c55e",
-      "tags": [
-        "block"
-      ]
-    },
-    {
-      "name": "chain:TNEXT",
-      "x": 5,
-      "y": 91,
+      "y": 86,
       "w": 57,
       "h": 1,
-      "note": "TNEXT",
+      "note": "GEND",
+      "color": "#22c55e",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "chain:E2",
+      "x": 5,
+      "y": 89,
+      "w": 57,
+      "h": 1,
+      "note": "E2",
       "color": "#22c55e",
       "tags": [
         "block"
