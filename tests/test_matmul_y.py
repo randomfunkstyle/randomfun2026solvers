@@ -517,3 +517,52 @@ def test_a_serpentine_reserves_its_band_edges_for_turns() -> None:
     for _ in range(40):
         w.op("M")
     assert 5 < w.y < 19, "the walker left its band"
+
+
+# ── MAIN, the merged controller and multiply room ────────────────────────────
+def test_mains_pipe_ops_all_bind_the_pipe_on_their_own_row() -> None:
+    """34 pipe ops, and every one must resolve to the pipe on its own row.
+
+    Every incoming pipe is on MAIN's west wall and every outgoing on its east, so
+    no wall competes with itself and "nearest" collapses to "nearest row" — a glyph
+    binds correctly wherever it sits horizontally. That is what lets the controller
+    and the multiply loop share one room without a west-half/east-half constraint.
+
+    A glyph one row off still loads, still runs, and computes the wrong product.
+    So this recomputes the Manhattan winner for every `r`/`s`/`q` in the room
+    rather than trusting the layout code.
+    """
+    from randomfun2026solvers import matmul_main as mm
+
+    c, _used = mm.main_room()
+    rows = c.rows()
+    live = {(x, y): ch for y, r in enumerate(rows)
+            for x, ch in enumerate(r) if ch != " "}
+
+    def winner(x, y, wall, side):
+        return min(wall, key=lambda k:
+                   (x if side == "w" else (mm.IW + 1 - x)) + abs(y - wall[k]))
+
+    ops = 0
+    for (x, y), ch in live.items():
+        if ch in "rq":
+            side, wall = "w", mm.WEST
+        elif ch == "s":
+            side, wall = "e", mm.EAST
+        else:
+            continue
+        ops += 1
+        on_row = [k for k, v in {**mm.WEST, **mm.EAST}.items() if v == y]
+        got = winner(x, y, wall, side)
+        assert on_row and got in on_row, (
+            f"{ch!r} at ({x},{y}) binds {got!r}; row {y} carries {on_row}"
+        )
+    assert ops >= 30, f"only {ops} pipe ops placed; MAIN is incomplete"
+
+
+def test_main_uses_only_glyphs_the_interpreter_accepts() -> None:
+    from randomfun2026solvers import matmul_main as mm
+
+    c, _ = mm.main_room()
+    bad = {ch for row in c.rows() for ch in row} - VALID_OPS - {"@"}
+    assert not bad, f"MAIN contains glyphs the loader rejects: {sorted(bad)}"
