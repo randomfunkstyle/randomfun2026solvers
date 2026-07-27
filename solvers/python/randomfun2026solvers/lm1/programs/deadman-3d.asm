@@ -6,10 +6,14 @@
 ;
 ; lodev.org's raycaster_flat.cpp on the LM-1: DOOM's E1M1, quantized to a
 ; 32x32 grid, walked first person at 64x48 on the LM-75 — one frame per input
-; command (0 fwd, 1 back, 2 left, 3 right, >= 4 no-op). An ungraded demo —
-; the slug borrows plotter's problem JSON for nothing but registration; its
-; 64x48 panel is DISPLAY_OVERRIDE's, its input is its own, and its 131-slot
-; STORE rides the grid_block man-memory (STORE_TIER), ~31 ticks an access.
+; word, and each word is a MUX of the keys held that frame: bit0 (1) W fwd,
+; bit1 (2) S back, bit2 (4) A left, bit3 (8) D right, bit4 (16) space FIRE
+; (muzzle-flash overlay); 0 idle, higher bits ignored. Turn first (A/D
+; cancel), then move along the new heading (W/S cancel), then render.
+; An ungraded demo — the slug borrows plotter's problem JSON for nothing
+; but registration; its 64x48 panel is DISPLAY_OVERRIDE's, its input is its
+; own, and its 136-slot STORE rides the grid_block man-memory (STORE_TIER),
+; ~31 ticks an access.
 ;
 ; Round 0's input carries the whole data preamble (64 packed map half-columns,
 ; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())
@@ -59,7 +63,12 @@
 .equ TMP2   127          ; scratch (the cell lookup's half-column selector)
 .equ NEWX   128          ; the candidate posX
 .equ NEWY   129          ; the candidate posY
-.equ PTR    130          ; the boot loop's tape cursor
+.equ BW     130          ; key bit 0 (1): W, forward
+.equ BS     131          ; key bit 1 (2): S, backward
+.equ BA     132          ; key bit 2 (4): A, turn left
+.equ BD     133          ; key bit 3 (8): D, turn right
+.equ FIRE   134          ; key bit 4 (16): space held — paint FLASH over this frame
+.equ PTR    135          ; the boot loop's tape cursor
 
 ; ── boot: round 0's data preamble -> tape slots 1..103 ───────────────────────
         LDI 1
@@ -73,26 +82,71 @@ boot:   IN                  ; the next preamble word
         SUBI 104
         BRN boot            ; keep loading while PTR < 104
 
-; ── round: one command word in, exactly one committed frame out ──────────────
+; ── round: one key-bitmask word in, exactly one committed frame out ──────────
+; The MUX decode: bits peeled low to high with a MODI 2 / DIVI 2 ladder, so
+; every word — junk and high bits included — decodes exactly as the golden
+; model's step() does.
 round:  IN                  ; blocks here when the walk is over (the legal end)
-        ST  CMD
-        BRZ fwd             ; 0 = forward
-        SUBI 1
-        BRZ back            ; 1 = backward
-        SUBI 1
-        BRZ left            ; 2 = turn left  (CCW, +1 heading)
-        SUBI 1
-        BRZ right           ; 3 = turn right (-1 = +15 mod 16)
-        JMP render          ; >= 4 = no-op: just render
+        ST  CMD             ; ST preserves ACC
+        MODI 2
+        ST  BW              ; bit 0 (1): W, forward
+        LD  CMD
+        DIVI 2
+        ST  TMP
+        MODI 2
+        ST  BS              ; bit 1 (2): S, backward
+        LD  TMP
+        DIVI 2
+        ST  TMP
+        MODI 2
+        ST  BA              ; bit 2 (4): A, turn left
+        LD  TMP
+        DIVI 2
+        ST  TMP
+        MODI 2
+        ST  BD              ; bit 3 (8): D, turn right
+        LD  TMP
+        DIVI 2
+        MODI 2
+        ST  FIRE            ; bit 4 (16): space — higher bits fall off here
 
-; ── move arms (lodev: pos += dir * moveSpeed, collision per axis) ────────────
-fwd:    LDI 1
-        ST  TMP             ; s = +1
-        JMP move
-back:   LDI 0
-        SUBI 1
-        ST  TMP             ; s = -1 (no negative ROM literals)
-move:   LD  DIRX
+; ── turn first (lodev's order): heading += A - D, cancelling when both held ──
+        LD  BA
+        SUB BD
+        BRZ mvchk           ; no net turn: dir/plane stay as they are
+        ADD HDG
+        MODI 16
+        ST  HDG             ; heading + (BA - BD), MODI's floored sign wraps -1
+        LD  HDG             ; re-unpack the packed heading word
+        ADDI HDGB
+        LDA                 ; base-4096 digits dirX dirY planeX planeY, +1024 each
+        ST  TMP
+        MODI 4096
+        SUBI 1024
+        ST  PLANEY
+        LD  TMP
+        DIVI 4096
+        ST  TMP
+        MODI 4096
+        SUBI 1024
+        ST  PLANEX
+        LD  TMP
+        DIVI 4096
+        ST  TMP
+        MODI 4096
+        SUBI 1024
+        ST  DIRY
+        LD  TMP
+        DIVI 4096
+        SUBI 1024
+        ST  DIRX
+
+; ── then move, along the NEW heading: s = W - S, cancelling when both held ───
+mvchk:  LD  BW
+        SUB BS
+        BRZ render          ; no net move: just render
+        ST  TMP             ; s = +1 forward, -1 backward
+        LD  DIRX
         MUL TMP
         DIVI 1              ; floor(dirX * s * 1 / 1) — the whole-cell step
         ADD POSX
@@ -149,41 +203,6 @@ movey:  LD  DIRY
 comy:   LD  NEWY
         ST  POSY
         JMP render
-
-; ── turn arms: heading +-1 mod 16, the packed heading word re-unpacked ───────
-left:   LD  HDG
-        ADDI 1
-        MODI 16
-        ST  HDG
-        JMP unpk
-right:  LD  HDG
-        ADDI 15
-        MODI 16
-        ST  HDG
-unpk:   LD  HDG
-        ADDI HDGB
-        LDA                 ; base-4096 digits dirX dirY planeX planeY, +1024 each
-        ST  TMP
-        MODI 4096
-        SUBI 1024
-        ST  PLANEY
-        LD  TMP
-        DIVI 4096
-        ST  TMP
-        MODI 4096
-        SUBI 1024
-        ST  PLANEX
-        LD  TMP
-        DIVI 4096
-        ST  TMP
-        MODI 4096
-        SUBI 1024
-        ST  DIRY
-        LD  TMP
-        DIVI 4096
-        SUBI 1024
-        ST  DIRX
-        ; falls through to render
 
 ; ── render: lodev's per-column raycast, columns 0..63 ──────────────────────
 render: LDI 0
@@ -389,8 +408,31 @@ floorp: LD  AEND
         JMP floorp
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI 63
-        BRZ hud             ; that was column 63: the viewport is painted
+        BRZ flash           ; that was column 63: the viewport is painted
         JMP colset
+
+; ── muzzle flash: FLASH's 8 pixels, only when this round FIREd ────────────
+flash:  LD  FIRE
+        BRZ hud
+        LDI 2271
+        DSPA                ; row 35, column 31
+        LDI 11
+        DSPD
+        DSPD
+        LDI 2334
+        DSPA                ; row 36, column 30
+        LDI 11
+        DSPD
+        LDI 15
+        DSPD
+        DSPD
+        LDI 11
+        DSPD
+        LDI 2399
+        DSPA                ; row 37, column 31
+        LDI 11
+        DSPD
+        DSPD
 
 ; ── HUD strip (rows 40..47): RLE runs generated from hud_runs() ──────────
 hud:    LDI 2560

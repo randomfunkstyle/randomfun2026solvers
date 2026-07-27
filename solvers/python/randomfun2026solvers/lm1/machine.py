@@ -3613,11 +3613,11 @@ TAPE_SIZE = {
     "pathfinder-unit": 52,
     # deadman-3d (the E1M1 raycaster demo) boot-loads 103 data slots (64 packed
     # map half-columns for the 32x32 grid, POW16, 16 packed heading words, spawn
-    # state) and runs 27 scalars after them, so the highest address is PTR = 130
+    # state) and runs 32 scalars after them, so the highest address is PTR = 135
     # — see `deadman3d.tape_slots()`, which the tests pin this against. Highest
     # address + 1, as everywhere: an exactly-sized tape stalls silently rather
     # than faulting.
-    "deadman-3d": 131,
+    "deadman-3d": 136,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -3902,7 +3902,7 @@ DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
 MEM_PAD: dict[str, int] = {"deadman-3d": 36}
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
-#: ``deadman-3d``'s 131-slot store is far past the rotating tape's ~103-slot
+#: ``deadman-3d``'s 136-slot store is far past the rotating tape's ~103-slot
 #: practical cap (and a ring that size would cost ~1,100 ticks a read anyway),
 #: so it rides :func:`grid_block`, the address-carrying man-memory: ~31 ticks an
 #: access flat, paid for in rows — which an ungraded demo does not count.

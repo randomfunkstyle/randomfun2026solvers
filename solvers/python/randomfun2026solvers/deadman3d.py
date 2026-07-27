@@ -40,7 +40,7 @@ printed row ``p`` holds the cells with ``y = 31 - p``, i.e. ``map_cell(x, y)``
 uses x east, y north (y grows *up* the printed page).  Headings are
 ``h * 22.5``° counterclockwise from east: ``dirX = round(1024*cos)``,
 ``dirY = round(1024*sin)`` — heading 0 = east, 4 = north, so ``+1`` heading is
-a **left** turn, exactly as command 2 promises.
+a **left** turn, exactly as the A key promises.
 
 The camera plane must point to the *player's right* (cameraX = +1 is the right
 screen edge, and rayDir = dir + plane*cameraX/1024), which in this y-up frame
@@ -98,8 +98,24 @@ The cell lookup is ``floor(MAPW[2x + y/16] / 16**(y mod 16)) mod 16`` —
 inlined at its three sites (the DDA hit test and both move-collision checks).
 
 Input protocol: round 0 = preamble + first command; every later round is one
-command word: 0 forward, 1 backward, 2 turn left (+1 heading), 3 turn right
-(+15 heading), >= 4 no-op — each command renders exactly one frame.
+command word — a **key bitmask** (a MUX of the keys held this frame, because
+space can be held while moving):
+
+    bit 0 (1)  W  forward         bit 1 (2)  S  backward
+    bit 2 (4)  A  turn left       bit 3 (8)  D  turn right
+    bit 4 (16) space/click FIRE   0 = idle (render only); higher bits ignored
+
+Each word renders exactly one frame, applied in lodev's order: **turn first**
+(A and D both held cancel), then **move** along the *new* heading (W and S
+cancel; per-axis collision), then render — with :data:`FLASH` overlaid when
+FIRE is held: an 8-pixel muzzle flash, bright yellow with a white core, at the
+bottom-centre of the 3D viewport, painted *after* the wall/floor columns so it
+overwrites them (M5 has no game state yet; the flash is the whole of firing).
+The asm decodes the bits with a MODI 2 / DIVI 2 ladder into the ``BW BS BA BD
+FIRE`` scalars and runs the turn and move arms conditionally.  :func:`keys`
+encodes chords readably (``keys("wa ") == 21``); ``--play`` runs the checked-in
+asm on a persistent emulator, one single-key word per keypress — the machine,
+played live (chords remain reachable by script).
 
 The demo walk (``WALK``)
 ------------------------
@@ -111,8 +127,10 @@ west — through the green computer-area corridor, the computer block sliding
 past on the right, to the nukage-room doorway, where a second half-look sweeps
 the cyan/brown sawtooth spurs of the zigzag walkway with the red door in
 frame — ending on the walkway with the red exit door centred between sunlit
-walls.  Whole-cell steps (E1M1 distances at half-cell steps would cost ~60
-commands); 35 commands.
+walls.  FIRE at the dramatic beats: at the armor pedestal, then *while
+stepping* onto the final walkway cell (the ``"w "`` chord — the MUX at work),
+and once more standing at the door.  Whole-cell steps (E1M1 distances at
+half-cell steps would cost ~60 commands); 35 words, spelled ``WALK_CHORDS``.
 
 ``deadman3d_source()`` emits the LM-1 assembly lowered from this model;
 ``tape_slots()`` is its ``.equ`` table (the docstring's slot map plus the
@@ -131,7 +149,8 @@ from randomfun2026solvers.lm1.emulator import floor_div, sign_mod
 __all__ = [
     "WIDTH", "HEIGHT", "H3D", "MID", "UNITS", "HEADINGS",
     "MOVE_NUM", "MOVE_DEN", "BIG", "MAP_SIZE", "MAP_STR", "PALETTE",
-    "SPAWN", "State", "WALK",
+    "KEY_FWD", "KEY_BACK", "KEY_LEFT", "KEY_RIGHT", "KEY_FIRE", "FLASH",
+    "SPAWN", "State", "WALK", "WALK_CHORDS", "keys", "fire_bit",
     "div", "map_cell", "map_words", "heading_table",
     "unpack_heading", "step", "render", "hud_rows", "hud_runs",
     "preamble_words", "input_words", "frames_for_commands", "cases_json",
@@ -152,6 +171,28 @@ HEADINGS = 16       # baked headings, 22.5° apart
 MOVE_NUM = 1
 MOVE_DEN = 1
 BIG = 2 ** 30       # stands in for an infinite deltaDist when rayDir == 0
+
+#: DOOM's controls, MUXed: each round's command word is a bitmask of the keys
+#: held this frame (see the module docstring's protocol section).
+KEY_FWD = 1         # bit 0: W — step forward
+KEY_BACK = 2        # bit 1: S — step backward (with W: they cancel)
+KEY_LEFT = 4        # bit 2: A — turn left (CCW, +1 heading)
+KEY_RIGHT = 8       # bit 3: D — turn right (with A: they cancel)
+KEY_FIRE = 16       # bit 4: space/click — FLASH over the finished frame
+
+_KEY_BITS = {"w": KEY_FWD, "s": KEY_BACK, "a": KEY_LEFT, "d": KEY_RIGHT, " ": KEY_FIRE}
+
+
+def keys(chord: str) -> int:
+    """Encode simultaneously-held keys: ``keys("wa ") == 21``.
+
+    Any character outside w/s/a/d/space contributes nothing, so ``keys(".")``
+    is 0 — the idle render — and holding a key twice is just the key.
+    """
+    word = 0
+    for ch in chord:
+        word |= _KEY_BITS.get(ch, 0)
+    return word
 
 
 def div(a: int, b: int) -> int:
@@ -298,10 +339,25 @@ SPAWN = State(posX=22016, posY=3584, heading=4)
 
 
 def step(state: State, cmd: int) -> State:
-    """Apply one command: 0 fwd, 1 back, 2 left, 3 right, >=4 no-op."""
+    """Apply one key-bitmask word, exactly as the asm's decode ladder does.
+
+    Bits are peeled with the same MODI 2 / DIVI 2 chain (so any word, junk
+    included, decodes identically here and on the machine); then lodev's
+    order: turn first (A/D cancel), move second along the *new* heading
+    (W/S cancel, per-axis collision).
+    """
     posX, posY, heading = state.posX, state.posY, state.heading
-    if cmd == 0 or cmd == 1:
-        s = 1 if cmd == 0 else -1
+    bw = sign_mod(cmd, 2)
+    q = div(cmd, 2)
+    bs = sign_mod(q, 2)
+    q = div(q, 2)
+    ba = sign_mod(q, 2)
+    q = div(q, 2)
+    bd = sign_mod(q, 2)
+    if ba - bd != 0:
+        heading = sign_mod(heading + (ba - bd), HEADINGS)
+    s = bw - bs
+    if s != 0:
         dirX, dirY, _, _ = unpack_heading(_HDG_WORDS[heading])
         # lodev's per-axis collision: X first, then Y against the updated posX.
         newX = posX + div(dirX * s * MOVE_NUM, MOVE_DEN)
@@ -310,16 +366,34 @@ def step(state: State, cmd: int) -> State:
         newY = posY + div(dirY * s * MOVE_NUM, MOVE_DEN)
         if map_cell(div(posX, UNITS), div(newY, UNITS)) == 0:
             posY = newY
-    elif cmd == 2:
-        heading = sign_mod(heading + 1, HEADINGS)   # turn left (CCW)
-    elif cmd == 3:
-        heading = sign_mod(heading + 15, HEADINGS)  # turn right (-1 ≡ +15 mod 16)
     return State(posX, posY, heading)
 
 
+def fire_bit(cmd: int) -> bool:
+    """The FIRE key, exactly as the asm decodes it: bit 4 of the word."""
+    return sign_mod(div(cmd, 16), 2) == 1
+
+
+#: The muzzle flash FIRE paints over the finished frame (M5 has no game state,
+#: so this is the whole of firing): 8 pixels at the bottom-centre of the 3D
+#: viewport, bright yellow (11) with a white (15) core — (row, col, color),
+#: painted after the wall/floor columns so they overwrite them.  The asm's
+#: ``flash:`` block is generated from this same list.
+FLASH: list[tuple[int, int, int]] = [
+    (35, 31, 11), (35, 32, 11),
+    (36, 30, 11), (36, 31, 15), (36, 32, 15), (36, 33, 11),
+    (37, 31, 11), (37, 32, 11),
+]
+
+
 # ── the renderer (lodev raycaster_flat.cpp, in Q10) ──────────────────────────
-def render(state: State) -> list[str]:
-    """One frame: 48 rows of 64 hex chars (rows 0..39 the 3D view, 40..47 HUD)."""
+def render(state: State, *, fire: bool = False) -> list[str]:
+    """One frame: 48 rows of 64 hex chars (rows 0..39 the 3D view, 40..47 HUD).
+
+    ``fire=True`` paints :data:`FLASH` over the finished columns — the golden
+    twin of the asm's ``flash:`` block, which runs after the paint loops and
+    before the HUD when the round's command was a space.
+    """
     posX, posY = state.posX, state.posY
     dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[state.heading])
     cols: list[list[int]] = []
@@ -392,6 +466,9 @@ def render(state: State) -> list[str]:
             + [color] * (drawEnd - drawStart + 1)
             + [8] * (H3D - 1 - drawEnd)
         )
+    if fire:
+        for r, c, color in FLASH:
+            cols[c][r] = color
     rows = ["".join("%x" % cols[x][y] for x in range(WIDTH)) for y in range(H3D)]
     return rows + hud_rows()
 
@@ -428,21 +505,21 @@ def hud_runs() -> list[tuple[int, int]]:
 
 
 # ── the demo walk ────────────────────────────────────────────────────────────
-#: See the docstring: the E1M1 opening — vestibule north into the octagon, a
-#: half-look at the courtyard windows and the blue armor pedestal, the turn
-#: west, then the computer-area corridor into the zigzag nukage room, ending
-#: three cells short of the red exit door.
-WALK: list[int] = [
-    4,                          # hold: the spawn view up the vestibule
-    0, 0, 0, 0, 0, 0, 0,        # north into the octagon, windows growing right
-    3, 4, 2,                    # half-look right: pedestal centred, and back
-    2, 2, 2, 2,                 # quarter-turn left to west, sweeping the walls
-    0, 0, 0, 0, 0, 0, 0,        # across the octagon to the corridor mouth
-    0, 0, 0, 0, 0, 0,           # the green corridor, computer block on the right
-    3, 4, 2,                    # in the doorway: half-look up the zigzag spurs
-    0, 0, 0,                    # down the walkway toward the west wall
-    4,                          # hold: the red exit door centred, sunlit flanks
-]
+#: One chord per frame, each encoded by :func:`keys`.  The beats: hold the
+#: spawn view up the vestibule; seven ``w`` north into the octagon, windows
+#: growing on the right; ``d`` half-look right at the armor pedestal and FIRE
+#: at it; five ``a`` back and round to west, sweeping the walls; thirteen ``w``
+#: across the octagon and down the green corridor to the nukage-room doorway;
+#: ``d``, hold, ``a`` — the half-look up the zigzag spurs; three steps down the
+#: walkway, firing *while moving* on the last (``"w "`` — the MUX at work);
+#: and FIRE again, standing at the red exit door.
+WALK_CHORDS: list[str] = (
+    ["."] + ["w"] * 7 + ["d", " ", "a"] + ["a"] * 4
+    + ["w"] * 13 + ["d", ".", "a"] + ["w", "w", "w "] + [" "]
+)
+
+#: The command words the demo feeds the machine: ``WALK_CHORDS`` encoded.
+WALK: list[int] = [keys(ch) for ch in WALK_CHORDS]
 
 
 # ── boot data and the cases file ─────────────────────────────────────────────
@@ -468,7 +545,7 @@ def frames_for_commands(cmds: list[int]) -> list[list[str]]:
     frames = []
     for cmd in cmds:
         state = step(state, cmd)
-        frames.append(render(state))
+        frames.append(render(state, fire=fire_bit(cmd)))
     return frames
 
 
@@ -497,7 +574,8 @@ def cases_json(cmds: list[int]) -> dict:
 _SCALARS = (
     "CMD", "XCOL", "CAMX", "RDX", "RDY", "MAPX", "MAPY", "SDX", "SDY",
     "DDX", "DDY", "STPX", "STPY", "SIDE", "PERP", "HALFH", "DSTART", "DEND",
-    "COLOR", "ADDRV", "AEND", "PW", "TMP", "TMP2", "NEWX", "NEWY", "PTR",
+    "COLOR", "ADDRV", "AEND", "PW", "TMP", "TMP2", "NEWX", "NEWY",
+    "BW", "BS", "BA", "BD", "FIRE", "PTR",
 )
 
 
@@ -523,10 +601,11 @@ def deadman3d_source() -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
     Structure: boot loop (round 0's data preamble -> tape slots 1..103) ->
-    ``round:`` command dispatch -> move arms (per-axis collision, the map-cell
-    lookup inlined) -> turn arms (the packed heading word re-unpacked) ->
-    ``render:`` (lodev's raycaster_flat.cpp per column: setup, DDA, projection,
-    paint) -> generated HUD RLE -> one ``DSPS`` -> back to ``round:``.  The
+    ``round:`` MUX decode (MODI 2 / DIVI 2 ladder -> BW BS BA BD FIRE) ->
+    conditional turn (the packed heading word re-unpacked) -> conditional move
+    (per-axis collision, the map-cell lookup inlined) -> ``render:`` (lodev's
+    raycaster_flat.cpp per column: setup, DDA, projection, paint) -> the FIRE
+    flash -> generated HUD RLE -> one ``DSPS`` -> back to ``round:``.  The
     lodev variable each block computes is named in its comments; every
     expression keeps :func:`render`'s exact operation order, which is the pixel
     contract.
@@ -569,6 +648,9 @@ def deadman3d_source() -> str:
         "TMP": "scratch (s, frac, packed word)",
         "TMP2": "scratch (the cell lookup's half-column selector)",
         "NEWX": "the candidate posX", "NEWY": "the candidate posY",
+        "BW": "key bit 0 (1): W, forward", "BS": "key bit 1 (2): S, backward",
+        "BA": "key bit 2 (4): A, turn left", "BD": "key bit 3 (8): D, turn right",
+        "FIRE": "key bit 4 (16): space held — paint FLASH over this frame",
         "PTR": "the boot loop's tape cursor",
     }
     lines = [
@@ -580,10 +662,14 @@ def deadman3d_source() -> str:
         ";",
         "; lodev.org's raycaster_flat.cpp on the LM-1: DOOM's E1M1, quantized to a",
         "; 32x32 grid, walked first person at 64x48 on the LM-75 — one frame per input",
-        "; command (0 fwd, 1 back, 2 left, 3 right, >= 4 no-op). An ungraded demo —",
-        "; the slug borrows plotter's problem JSON for nothing but registration; its",
-        "; 64x48 panel is DISPLAY_OVERRIDE's, its input is its own, and its 131-slot",
-        "; STORE rides the grid_block man-memory (STORE_TIER), ~31 ticks an access.",
+        "; word, and each word is a MUX of the keys held that frame: bit0 (1) W fwd,",
+        "; bit1 (2) S back, bit2 (4) A left, bit3 (8) D right, bit4 (16) space FIRE",
+        "; (muzzle-flash overlay); 0 idle, higher bits ignored. Turn first (A/D",
+        "; cancel), then move along the new heading (W/S cancel), then render.",
+        "; An ungraded demo — the slug borrows plotter's problem JSON for nothing",
+        "; but registration; its 64x48 panel is DISPLAY_OVERRIDE's, its input is its",
+        "; own, and its 136-slot STORE rides the grid_block man-memory (STORE_TIER),",
+        "; ~31 ticks an access.",
         ";",
         "; Round 0's input carries the whole data preamble (64 packed map half-columns,",
         "; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())",
@@ -613,26 +699,71 @@ boot:   IN                  ; the next preamble word
         SUBI {first_free}
         BRN boot            ; keep loading while PTR < {first_free}
 
-; ── round: one command word in, exactly one committed frame out ──────────────
+; ── round: one key-bitmask word in, exactly one committed frame out ──────────
+; The MUX decode: bits peeled low to high with a MODI 2 / DIVI 2 ladder, so
+; every word — junk and high bits included — decodes exactly as the golden
+; model's step() does.
 round:  IN                  ; blocks here when the walk is over (the legal end)
-        ST  CMD
-        BRZ fwd             ; 0 = forward
-        SUBI 1
-        BRZ back            ; 1 = backward
-        SUBI 1
-        BRZ left            ; 2 = turn left  (CCW, +1 heading)
-        SUBI 1
-        BRZ right           ; 3 = turn right (-1 = +15 mod 16)
-        JMP render          ; >= 4 = no-op: just render
+        ST  CMD             ; ST preserves ACC
+        MODI 2
+        ST  BW              ; bit 0 (1): W, forward
+        LD  CMD
+        DIVI 2
+        ST  TMP
+        MODI 2
+        ST  BS              ; bit 1 (2): S, backward
+        LD  TMP
+        DIVI 2
+        ST  TMP
+        MODI 2
+        ST  BA              ; bit 2 (4): A, turn left
+        LD  TMP
+        DIVI 2
+        ST  TMP
+        MODI 2
+        ST  BD              ; bit 3 (8): D, turn right
+        LD  TMP
+        DIVI 2
+        MODI 2
+        ST  FIRE            ; bit 4 (16): space — higher bits fall off here
 
-; ── move arms (lodev: pos += dir * moveSpeed, collision per axis) ────────────
-fwd:    LDI 1
-        ST  TMP             ; s = +1
-        JMP move
-back:   LDI 0
-        SUBI 1
-        ST  TMP             ; s = -1 (no negative ROM literals)
-move:   LD  DIRX
+; ── turn first (lodev's order): heading += A - D, cancelling when both held ──
+        LD  BA
+        SUB BD
+        BRZ mvchk           ; no net turn: dir/plane stay as they are
+        ADD HDG
+        MODI {HEADINGS}
+        ST  HDG             ; heading + (BA - BD), MODI's floored sign wraps -1
+        LD  HDG             ; re-unpack the packed heading word
+        ADDI HDGB
+        LDA                 ; base-4096 digits dirX dirY planeX planeY, +1024 each
+        ST  TMP
+        MODI 4096
+        SUBI {UNITS}
+        ST  PLANEY
+        LD  TMP
+        DIVI 4096
+        ST  TMP
+        MODI 4096
+        SUBI {UNITS}
+        ST  PLANEX
+        LD  TMP
+        DIVI 4096
+        ST  TMP
+        MODI 4096
+        SUBI {UNITS}
+        ST  DIRY
+        LD  TMP
+        DIVI 4096
+        SUBI {UNITS}
+        ST  DIRX
+
+; ── then move, along the NEW heading: s = W - S, cancelling when both held ───
+mvchk:  LD  BW
+        SUB BS
+        BRZ render          ; no net move: just render
+        ST  TMP             ; s = +1 forward, -1 backward
+        LD  DIRX
         MUL TMP
         DIVI {MOVE_DEN}              ; floor(dirX * s * {MOVE_NUM} / {MOVE_DEN}) — the whole-cell step
         ADD POSX
@@ -689,41 +820,6 @@ movey:  LD  DIRY
 comy:   LD  NEWY
         ST  POSY
         JMP render
-
-; ── turn arms: heading +-1 mod 16, the packed heading word re-unpacked ───────
-left:   LD  HDG
-        ADDI 1
-        MODI {HEADINGS}
-        ST  HDG
-        JMP unpk
-right:  LD  HDG
-        ADDI {HEADINGS - 1}
-        MODI {HEADINGS}
-        ST  HDG
-unpk:   LD  HDG
-        ADDI HDGB
-        LDA                 ; base-4096 digits dirX dirY planeX planeY, +1024 each
-        ST  TMP
-        MODI 4096
-        SUBI {UNITS}
-        ST  PLANEY
-        LD  TMP
-        DIVI 4096
-        ST  TMP
-        MODI 4096
-        SUBI {UNITS}
-        ST  PLANEX
-        LD  TMP
-        DIVI 4096
-        ST  TMP
-        MODI 4096
-        SUBI {UNITS}
-        ST  DIRY
-        LD  TMP
-        DIVI 4096
-        SUBI {UNITS}
-        ST  DIRX
-        ; falls through to render
 
 ; ── render: lodev's per-column raycast, columns 0..{WIDTH - 1} ──────────────────────
 render: LDI 0
@@ -929,9 +1025,27 @@ floorp: LD  AEND
         JMP floorp
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI {WIDTH - 1}
-        BRZ hud             ; that was column {WIDTH - 1}: the viewport is painted
+        BRZ flash           ; that was column {WIDTH - 1}: the viewport is painted
         JMP colset
 
+; ── muzzle flash: FLASH's {len(FLASH)} pixels, only when this round FIREd ────────────
+flash:  LD  FIRE
+        BRZ hud
+""".splitlines()
+    next_addr = None
+    acc: int | None = None
+    for r, c, color in FLASH:
+        addr = r * WIDTH + c
+        if addr != next_addr:
+            lines.append(f"        LDI {addr}")
+            lines.append(f"        DSPA                ; row {r}, column {c}")
+            acc = None
+        if acc != color:
+            lines.append(f"        LDI {color}")
+            acc = color
+        lines.append("        DSPD")
+        next_addr = addr + 1
+    lines += f"""
 ; ── HUD strip (rows {H3D}..{HEIGHT - 1}): RLE runs generated from hud_runs() ──────────
 hud:    LDI {hud_addr}
         DSPA                ; park the cursor at row {H3D}, column 0
@@ -995,13 +1109,135 @@ def _write_pngs(frames: list[list[str]], out_dir: Path, scale: int = 8) -> None:
             img.resize((WIDTH * scale, HEIGHT * scale), Image.NEAREST).save(path)
 
 
+# ── --play: the machine, played live ─────────────────────────────────────────
+class _MachinePlayer:
+    """The checked-in asm on ONE persistent emulator: one frame per keypress.
+
+    A from-scratch replay costs ~85 ms per accumulated frame (measured: 2.9 s
+    by frame 35), so the emulator is kept alive instead.  It stops on the
+    blocking ``IN`` by raising *after* the opcode fetch has advanced the ring
+    phase, so resuming rewinds the phase one word — the re-fetch re-executes
+    the ``IN`` against the newly appended command.  The fast tests pin this
+    pixel-equal to a from-scratch run.
+    """
+
+    def __init__(self) -> None:
+        from randomfun2026solvers.lm1 import programs
+        from randomfun2026solvers.lm1.emulator import Emulator
+
+        self._em = Emulator(programs.load("deadman-3d"))
+        self._words: list[int] = list(preamble_words())
+        self.frames = 0
+
+    def feed(self, code: int) -> list[str]:
+        """Append one command word, run to the next block, return its frame."""
+        from randomfun2026solvers.lm1.display import frames_from_writes
+        from randomfun2026solvers.lm1.emulator import Round
+
+        em = self._em
+        self._words.append(code)
+        if self.frames:
+            em.phase = (em.phase - 1) % em.P  # rewind the fetch that hit the block
+            em.reason = ""
+        res = em.run(
+            [Round(input=tuple(self._words))],
+            max_instructions=em.instructions + 500_000,
+        )
+        assert res.reason == "input-exhausted", res.reason
+        self.frames += 1
+        return frames_from_writes(em.display_writes, width=WIDTH, height=HEIGHT)[-1]
+
+
+def _ansi_frame(frame: list[str]) -> str:
+    """The frame as 24 terminal lines: ▀ half-blocks, truecolor fg/bg pairs."""
+    out = []
+    for y in range(0, HEIGHT, 2):
+        line = []
+        for x in range(WIDTH):
+            tr, tg, tb = PALETTE[int(frame[y][x], 16)]
+            br, bg, bb = PALETTE[int(frame[y + 1][x], 16)]
+            line.append(f"\x1b[38;2;{tr};{tg};{tb};48;2;{br};{bg};{bb}m▀")
+        out.append("".join(line) + "\x1b[0m")
+    return "\n".join(out)
+
+
+def _play_frame(player: "_MachinePlayer | None", state: State, code: int) -> tuple[State, str]:
+    """One keypress against whichever engine: returns (state, terminal text)."""
+    state = step(state, code)
+    if player is None:  # --golden: the model, instant
+        frame = render(state, fire=fire_bit(code))
+        n = None
+    else:
+        frame = player.feed(code)
+        n = player.frames
+    status = (
+        f"frame {n if n is not None else '-'}  pos ({state.posX / UNITS:.1f}, "
+        f"{state.posY / UNITS:.1f})  heading {state.heading * 22.5:g}°  "
+        f"[w/s move  a/d turn  space fire  q quit]"
+    )
+    return state, _ansi_frame(frame) + "\n" + status
+
+
+def _play_script(script: str, golden: bool) -> None:
+    """Render each key's frame to stdout exactly as --play would (for tests)."""
+    player = None if golden else _MachinePlayer()
+    state = SPAWN
+    for ch in script:
+        state, text = _play_frame(player, state, keys(ch))
+        print(text)
+
+
+def _play(golden: bool) -> None:
+    """Raw-keypress loop on the real machine (or --golden): w/a/s/d/space; q quits."""
+    import sys
+    import termios
+    import time
+    import tty
+
+    player = None if golden else _MachinePlayer()
+    state = SPAWN
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    print("\x1b[2J", end="")
+    try:
+        tty.setcbreak(fd)
+        code = 0  # idle: the spawn view, before any key
+        while True:
+            t0 = time.perf_counter()
+            state, text = _play_frame(player, state, code)
+            ms = (time.perf_counter() - t0) * 1000
+            print(f"\x1b[H{text}  {ms:.0f} ms", flush=True)
+            while True:
+                ch = sys.stdin.read(1)
+                if ch in ("q", "\x03"):
+                    return
+                if ch in ("w", "a", "s", "d", " "):
+                    code = keys(ch)
+                    break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        print("\x1b[0m")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--walk", help='command words, e.g. "4 0 0 2" (default: WALK)')
+    parser.add_argument("--walk", help='one key per frame, e.g. ".wwa d" (default: WALK)')
     parser.add_argument("--cases", type=Path, help="write cases_json(WALK) here")
     parser.add_argument("--png", type=Path, help="dump preview PNGs to this directory")
+    parser.add_argument("--play", action="store_true",
+                        help="play the machine live: w/a/s/d/space, q quits")
+    parser.add_argument("--golden", action="store_true",
+                        help="with --play/--play-script: golden model, instant frames")
+    parser.add_argument("--play-script", metavar="KEYS",
+                        help='render KEYS as --play would, non-interactively')
     args = parser.parse_args(argv)
-    cmds = [int(w) for w in args.walk.split()] if args.walk else WALK
+    if args.play_script is not None:
+        _play_script(args.play_script, args.golden)
+        return
+    if args.play:
+        _play(args.golden)
+        return
+    cmds = [keys(ch) for ch in args.walk] if args.walk else WALK
     if args.cases:
         args.cases.write_text(json.dumps(cases_json(cmds)) + "\n")
         print(f"wrote {args.cases}")

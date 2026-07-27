@@ -99,13 +99,36 @@ def test_frame_shape_is_48_rows_of_64_hex_chars() -> None:
 def test_hud_is_constant_and_fills_rows_40_to_47() -> None:
     hud = d3.hud_rows()
     assert len(hud) == 8
-    other = d3.step(d3.step(d3.SPAWN, 0), 2)
+    other = d3.step(d3.step(d3.SPAWN, d3.KEY_FWD), d3.KEY_LEFT)
     assert d3.render(d3.SPAWN)[d3.H3D:] == hud
     assert d3.render(other)[d3.H3D:] == hud
     # The RLE is a faithful re-encoding of the same 8 rows.
     replay = "".join("%x" % c * n for c, n in d3.hud_runs())
     assert replay == "".join(hud)
     assert sum(n for _, n in d3.hud_runs()) == 8 * d3.WIDTH
+
+
+def test_walk_is_its_chords_and_keys_encodes_the_mux() -> None:
+    """The walk is spelled as chords; keys() encodes held-key bitmasks."""
+    assert d3.WALK == [d3.keys(ch) for ch in d3.WALK_CHORDS]
+    assert len(d3.WALK) == 35
+    assert (d3.KEY_FWD, d3.KEY_BACK, d3.KEY_LEFT, d3.KEY_RIGHT, d3.KEY_FIRE) == (
+        1, 2, 4, 8, 16)
+    assert d3.keys("wa ") == 21 and d3.keys(".") == 0 and d3.keys("ww") == 1
+    # The FIRE beats: at the pedestal, chorded with the last step, at the door.
+    assert [i for i, c in enumerate(d3.WALK) if d3.fire_bit(c)] == [9, 33, 34]
+    assert d3.WALK[33] == d3.keys("w ") == 17  # fire while moving: the MUX
+
+
+def test_chord_semantics_turn_then_move_and_cancelling() -> None:
+    """A held chord turns first, then moves along the NEW heading; opposing
+    keys cancel — mirrored exactly by the asm's decode (the fuzz walk's net)."""
+    assert d3.step(d3.SPAWN, d3.keys("wa")) == d3.step(
+        d3.step(d3.SPAWN, d3.keys("a")), d3.keys("w"))
+    assert d3.step(d3.SPAWN, d3.keys("ws")) == d3.SPAWN  # W+S cancel
+    assert d3.step(d3.SPAWN, d3.keys("ad")) == d3.SPAWN  # A+D cancel
+    assert d3.step(d3.SPAWN, 32 + 64) == d3.SPAWN        # high bits ignored
+    assert d3.fire_bit(d3.keys(" ")) and not d3.fire_bit(d3.keys("w"))
 
 
 def test_one_frame_per_command() -> None:
@@ -244,8 +267,29 @@ def test_pinned_spawn_frame() -> None:
 
 
 def test_pinned_zigzag_look_frame() -> None:
-    assert d3.WALK[28] == 3, "the pin is the frame right after the doorway half-look"
+    assert d3.WALK[28] == d3.KEY_RIGHT, "the pin is the frame after the doorway half-look"
     assert d3.frames_for_commands(d3.WALK)[28] == ZIGZAG_LOOK_FRAME
+
+
+def test_pinned_fire_frame() -> None:
+    """WALK[9] FIREs at the armor pedestal: the muzzle flash, and nothing else."""
+    assert d3.WALK[9] == d3.KEY_FIRE == 16
+    fire = d3.frames_for_commands(d3.WALK)[9]
+    # The frame differs from the un-fired render in exactly FLASH's 8 pixels …
+    state = d3.SPAWN
+    for cmd in d3.WALK[:10]:
+        state = d3.step(state, cmd)
+    plain = d3.render(state)
+    diff = {
+        (r, c): fire[r][c]
+        for r in range(d3.H3D) for c in range(d3.WIDTH)
+        if fire[r][c] != plain[r][c]
+    }
+    assert diff == {(r, c): "%x" % color for r, c, color in d3.FLASH}
+    # … and the pin, hand-checked in the PNGs: a bright-yellow diamond with a
+    # white core at the bottom-centre of the viewport, over the floor.
+    assert [row[29:35] for row in fire[34:39]] == [
+        "888888", "88bb88", "8bffb8", "88bb88", "888888"]
 
 
 # ── boot data and the cases file ─────────────────────────────────────────────
@@ -309,8 +353,8 @@ def test_tape_slots_are_the_documented_map() -> None:
     assert slots["POSX"] == len(d3.preamble_words()) - 6 == 97
     # The scalars run consecutively after the boot data, PTR last.
     scalars = sorted(v for k, v in slots.items() if v >= slots["CMD"])
-    assert scalars == list(range(104, 131))
-    assert slots["PTR"] == max(slots.values()) == 130
+    assert scalars == list(range(104, 136))
+    assert slots["PTR"] == max(slots.values()) == 135
 
 
 def test_registry_pins() -> None:
@@ -321,8 +365,8 @@ def test_registry_pins() -> None:
     assert machine.display_for("deadman-3d") == (d3.WIDTH, d3.HEIGHT) == (64, 48)
     assert machine.display_for("plotter") == (32, 24)
     # … and the tape is highest .equ address + 1 (an exactly-sized tape stalls).
-    assert machine.TAPE_SIZE["deadman-3d"] == max(d3.tape_slots().values()) + 1 == 131
-    # 131 slots is past the rotating tape's practical cap, so the STORE rides
+    assert machine.TAPE_SIZE["deadman-3d"] == max(d3.tape_slots().values()) + 1 == 136
+    # 136 slots is past the rotating tape's practical cap, so the STORE rides
     # the grid_block man-memory (~31 ticks an access, whatever n is) …
     assert machine.STORE_TIER["deadman-3d"] == "grid"
     # … at the recorded pad, which pins the checked-in grid (measured: the
@@ -336,7 +380,7 @@ def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
     Covers the no-op, move and turn arms plus the render pipeline end to end;
     the full walk and the fuzz walk are the slow tier.
     """
-    cmds = [4, 0, 2, 0]
+    cmds = [0, d3.KEY_FWD, d3.keys("wa "), d3.KEY_RIGHT]
     assert _emulator_frames(cmds, max_instructions=5_000_000) == d3.frames_for_commands(cmds)
 
 
@@ -348,10 +392,32 @@ def test_the_full_demo_walk_is_pixel_equal_to_golden() -> None:
 
 @slow
 def test_a_seeded_fuzz_walk_is_pixel_equal_to_golden() -> None:
-    """40 seeded commands: every arm, wall bumps, all the diagonal headings."""
+    """40 seeded key codes: every arm (fire included), wall bumps, diagonal
+    headings — plus junk codes that must fall through to the no-op render."""
     rng = random.Random(2026)
-    cmds = [rng.randrange(6) for _ in range(40)]
+    pool = [1, 2, 4, 8] * 2 + [16, 21, 26, 3, 12, 17, 0, 255, 100, -3]
+    cmds = [rng.choice(pool) for _ in range(40)]
+    assert any(d3.fire_bit(c) for c in cmds) and -3 in cmds and 255 in cmds
     assert _emulator_frames(cmds) == d3.frames_for_commands(cmds)
+
+
+def test_the_persistent_player_matches_a_from_scratch_run() -> None:
+    """--play's resumable emulator (the phase-rewind trick) is pixel-exact."""
+    cmds = [0, 1, 16, 4, 21, 8, 2, 255]  # every arm, fires, a chord, junk
+    player = d3._MachinePlayer()
+    fed = [player.feed(c) for c in cmds]
+    assert fed == _emulator_frames(cmds, max_instructions=5_000_000)
+    assert fed == d3.frames_for_commands(cmds)
+
+
+def test_the_ansi_play_rendering_shape() -> None:
+    """--play draws 24 half-block lines of 64 cells, reset at each line's end."""
+    text = d3._ansi_frame(d3.render(d3.SPAWN))
+    lines = text.split("\n")
+    assert len(lines) == d3.HEIGHT // 2 == 24
+    for line in lines:
+        assert line.count("▀") == d3.WIDTH
+        assert line.endswith("\x1b[0m")
 
 
 @slow

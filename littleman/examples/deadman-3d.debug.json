@@ -8,7 +8,7 @@
     {
       "name": "adapter",
       "x": 73,
-      "y": 152,
+      "y": 155,
       "w": 14,
       "h": 6,
       "note": "expands one sign-biased request word into the tape's `op addr [value]`",
@@ -20,7 +20,7 @@
     {
       "name": "cpu:fetch",
       "x": 9,
-      "y": 174,
+      "y": 177,
       "w": 4,
       "h": 1,
       "note": ">rbr \u2014 opcode into BP, then the operand into A (fixed-width 2 words)",
@@ -32,7 +32,7 @@
     {
       "name": "cpu:lane:ADD",
       "x": 18,
-      "y": 155,
+      "y": 158,
       "w": 45,
       "h": 1,
       "note": "opcode 12 \u2014 ADD",
@@ -44,7 +44,7 @@
     {
       "name": "cpu:lane:ADDI",
       "x": 18,
-      "y": 171,
+      "y": 174,
       "w": 16,
       "h": 1,
       "note": "opcode 14 \u2014 ADDI",
@@ -56,7 +56,7 @@
     {
       "name": "cpu:lane:BRN",
       "x": 18,
-      "y": 177,
+      "y": 180,
       "w": 35,
       "h": 1,
       "note": "opcode 17 \u2014 BRN",
@@ -68,7 +68,7 @@
     {
       "name": "cpu:lane:BRZ",
       "x": 18,
-      "y": 179,
+      "y": 182,
       "w": 34,
       "h": 1,
       "note": "opcode 9 \u2014 BRZ",
@@ -80,7 +80,7 @@
     {
       "name": "cpu:lane:DIV",
       "x": 18,
-      "y": 149,
+      "y": 152,
       "w": 48,
       "h": 1,
       "note": "opcode 24 \u2014 DIV",
@@ -92,7 +92,7 @@
     {
       "name": "cpu:lane:DIVI",
       "x": 18,
-      "y": 161,
+      "y": 164,
       "w": 42,
       "h": 1,
       "note": "opcode 18 \u2014 DIVI",
@@ -104,7 +104,7 @@
     {
       "name": "cpu:lane:DSPA",
       "x": 18,
-      "y": 203,
+      "y": 206,
       "w": 16,
       "h": 1,
       "note": "opcode 15 \u2014 DSPA",
@@ -116,7 +116,7 @@
     {
       "name": "cpu:lane:DSPD",
       "x": 18,
-      "y": 201,
+      "y": 204,
       "w": 16,
       "h": 1,
       "note": "opcode 23 \u2014 DSPD",
@@ -128,7 +128,7 @@
     {
       "name": "cpu:lane:DSPS",
       "x": 18,
-      "y": 205,
+      "y": 208,
       "w": 16,
       "h": 1,
       "note": "opcode 31 \u2014 DSPS",
@@ -140,7 +140,7 @@
     {
       "name": "cpu:lane:IN",
       "x": 18,
-      "y": 143,
+      "y": 146,
       "w": 51,
       "h": 1,
       "note": "opcode 0 \u2014 IN",
@@ -152,7 +152,7 @@
     {
       "name": "cpu:lane:INCM",
       "x": 18,
-      "y": 145,
+      "y": 148,
       "w": 50,
       "h": 1,
       "note": "opcode 16 \u2014 INCM",
@@ -164,7 +164,7 @@
     {
       "name": "cpu:lane:JMPF",
       "x": 18,
-      "y": 181,
+      "y": 184,
       "w": 33,
       "h": 1,
       "note": "opcode 25 \u2014 JMPF",
@@ -176,7 +176,7 @@
     {
       "name": "cpu:lane:LD",
       "x": 18,
-      "y": 163,
+      "y": 166,
       "w": 41,
       "h": 1,
       "note": "opcode 10 \u2014 LD",
@@ -188,7 +188,7 @@
     {
       "name": "cpu:lane:LDA",
       "x": 18,
-      "y": 157,
+      "y": 160,
       "w": 44,
       "h": 1,
       "note": "opcode 28 \u2014 LDA",
@@ -200,7 +200,7 @@
     {
       "name": "cpu:lane:LDI",
       "x": 18,
-      "y": 175,
+      "y": 178,
       "w": 16,
       "h": 1,
       "note": "opcode 1 \u2014 LDI",
@@ -212,7 +212,7 @@
     {
       "name": "cpu:lane:MODI",
       "x": 18,
-      "y": 165,
+      "y": 168,
       "w": 16,
       "h": 1,
       "note": "opcode 26 \u2014 MODI",
@@ -224,7 +224,7 @@
     {
       "name": "cpu:lane:MOVA",
       "x": 18,
-      "y": 147,
+      "y": 150,
       "w": 49,
       "h": 1,
       "note": "opcode 8 \u2014 MOVA",
@@ -236,7 +236,7 @@
     {
       "name": "cpu:lane:MUL",
       "x": 18,
-      "y": 159,
+      "y": 162,
       "w": 43,
       "h": 1,
       "note": "opcode 2 \u2014 MUL",
@@ -248,7 +248,7 @@
     {
       "name": "cpu:lane:MULI",
       "x": 18,
-      "y": 173,
+      "y": 176,
       "w": 16,
       "h": 1,
       "note": "opcode 30 \u2014 MULI",
@@ -260,7 +260,7 @@
     {
       "name": "cpu:lane:NEG",
       "x": 18,
-      "y": 167,
+      "y": 170,
       "w": 16,
       "h": 1,
       "note": "opcode 6 \u2014 NEG",
@@ -272,7 +272,7 @@
     {
       "name": "cpu:lane:ST",
       "x": 18,
-      "y": 151,
+      "y": 154,
       "w": 47,
       "h": 1,
       "note": "opcode 4 \u2014 ST",
@@ -284,7 +284,7 @@
     {
       "name": "cpu:lane:SUB",
       "x": 18,
-      "y": 153,
+      "y": 156,
       "w": 46,
       "h": 1,
       "note": "opcode 20 \u2014 SUB",
@@ -296,7 +296,7 @@
     {
       "name": "cpu:lane:SUBI",
       "x": 18,
-      "y": 169,
+      "y": 172,
       "w": 16,
       "h": 1,
       "note": "opcode 22 \u2014 SUBI",
@@ -308,7 +308,7 @@
     {
       "name": "cpu:return:collector",
       "x": 10,
-      "y": 206,
+      "y": 209,
       "w": 59,
       "h": 1,
       "note": "every lane funnels west along here",
@@ -320,7 +320,7 @@
     {
       "name": "cpu:return:riser",
       "x": 9,
-      "y": 175,
+      "y": 178,
       "w": 1,
       "h": 32,
       "note": "up to the fetch row \u2014 paid once per instruction",
@@ -332,7 +332,7 @@
     {
       "name": "cpu:slab:BRN",
       "x": 36,
-      "y": 209,
+      "y": 212,
       "w": 13,
       "h": 8,
       "note": "BRN: discard loop / X fan-out (2-D, so not a lane)",
@@ -344,7 +344,7 @@
     {
       "name": "cpu:slab:BRZ",
       "x": 23,
-      "y": 208,
+      "y": 211,
       "w": 13,
       "h": 8,
       "note": "BRZ: discard loop / X fan-out (2-D, so not a lane)",
@@ -356,7 +356,7 @@
     {
       "name": "cpu:slab:JMPF",
       "x": 10,
-      "y": 207,
+      "y": 210,
       "w": 13,
       "h": 4,
       "note": "JMPF: discard loop / X fan-out (2-D, so not a lane)",
@@ -368,7 +368,7 @@
     {
       "name": "cpu:trie",
       "x": 13,
-      "y": 143,
+      "y": 146,
       "w": 5,
       "h": 63,
       "note": "depth-5 backpack trie; leaves are bit-reversed",
@@ -380,7 +380,7 @@
     {
       "name": "display",
       "x": 4,
-      "y": 222,
+      "y": 225,
       "w": 66,
       "h": 50,
       "note": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -392,7 +392,7 @@
     {
       "name": "io:I",
       "x": 3,
-      "y": 142,
+      "y": 145,
       "w": 3,
       "h": 3,
       "note": "",
@@ -405,9 +405,9 @@
       "name": "rom",
       "x": 0,
       "y": 0,
-      "w": 60,
-      "h": 142,
-      "note": "looping ROM: 1203 words, 138 rows, re-emitted forever",
+      "w": 61,
+      "h": 145,
+      "note": "looping ROM: 1250 words, 141 rows, re-emitted forever",
       "color": "#a855f7",
       "tags": [
         "rom"
@@ -416,10 +416,10 @@
     {
       "name": "tape",
       "x": 91,
-      "y": 142,
+      "y": 145,
       "w": 36,
-      "h": 402,
-      "note": "rotating pipe tape, N=131, skip_batch=1, relay=None",
+      "h": 417,
+      "note": "rotating pipe tape, N=136, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [
         "tape"
