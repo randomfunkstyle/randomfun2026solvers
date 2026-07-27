@@ -10,9 +10,28 @@
 #   scripts/submit_guarded.sh <slug> <grid.man> [local_score] [ratio]
 #
 # With local_score and ratio it refuses to submit when local*ratio >= live.
-# Without them it prints the live score and asks for confirmation.  Per-problem
-# local->judged ratios measured so far: sudoku 1.016, lllm 1.087, gradebook
-# 2.74, subset-sum 2.735, matmul 1.24.
+# Without them it prints the live score and asks for confirmation.
+#
+# PASS THE HIGH END OF THE RATIO RANGE.  The judge scores 20 cases where
+# score_program averages 7-8, and the private cases are the *longer* ones, so a
+# local average is optimistic by a factor that is itself uncertain.  Measured
+# across the archive:
+#
+#     triangle        1.000        reverse-a-list  1.562-1.565
+#     sudoku-validity 1.016-1.018  tcp             1.596-1.597
+#     lllm            1.087        brackets        1.763-1.930
+#     matmul          1.236-1.506  gradebook       2.557-2.752
+#     snake           1.527        subset-sum      2.735
+#     memory          2.164-4.452
+#
+# The ratio belongs to the *machine*, not the problem: it is tight where
+# submissions share an algorithm (tcp 1.596-1.597) and wide where they do not
+# (memory 2.164-4.452), because what it measures is how steeply cost grows with
+# case size.  So it cannot be carried across a redesign -- treat it as a floor
+# for a quadratic rebuild, an overestimate for a linear one, and re-pin it from
+# the first judge response.  Using the low end of matmul's range projected 340M
+# for a grid that judged at 340M against a live 222M; the high end would have
+# refused it.
 set -euo pipefail
 
 SLUG=${1:?slug}; GRID=${2:?grid.man}; LOCAL=${3:-}; RATIO=${4:-}

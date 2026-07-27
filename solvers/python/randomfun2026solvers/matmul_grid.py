@@ -47,6 +47,7 @@ dead -- proven over every shape in 2..16 in ``tests/test_matmul_grid.py``.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from randomfun2026solvers.circuit import CCW, CW, E, N, S, W, Circuit, Collision
@@ -612,11 +613,28 @@ class Plan:
         return sum(len(c.rows) for c in self.chains)
 
 
-def plan(geom: Geometry = None) -> Plan:  # type: ignore[assignment]
+def plan(geom: Geometry = None,           # type: ignore[assignment]
+         order: Sequence[str] | None = None) -> Plan:
+    """Lay every chain into pen rows, in the order the chains are stacked.
+
+    ``order`` names the chain heads, north to south.  It is not cosmetic: a
+    chain's *back edge* -- the loop that returns from its last branch to its own
+    head, or to the head of a chain above it -- is walked once per iteration, and
+    what it costs is the distance between the two.  ``chains_of`` returns them
+    alphabetically, which is as good as random; annealing the stacking order
+    against ``max(w, h)^2 * estimate_ticks`` is worth a few percent of the ticks
+    for nothing at all in cells.  ``None`` keeps the alphabetical order.
+    """
     geom = geom or GEOMETRY
     bands = layout_bands(geom.recv_order, geom.send_order, geom.recv_w, geom.send_w)
     backticks: set[int] = set()
     chains = chains_of()
+    if order is not None:
+        by_head = {c.blocks[0]: c for c in chains}
+        if sorted(order) != sorted(by_head):
+            raise Collision(f"chain order names {sorted(order)}, "
+                            f"the CFG has {sorted(by_head)}")
+        chains = [by_head[h] for h in order]
     for chain in chains:
         plan_chain(chain, bands, backticks)
     return Plan(bands, chains)

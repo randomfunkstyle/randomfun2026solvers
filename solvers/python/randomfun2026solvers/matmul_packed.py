@@ -96,9 +96,31 @@ GEOMETRY = G.Geometry(
 )
 
 
+#: The order the sixteen chains are stacked in, north to south.
+#:
+#: ``chains_of`` returns them alphabetically, which is as good as random, and it
+#: is not a cosmetic choice: every loop in this CFG closes with a **back edge**
+#: from a chain's last branch to the head of a chain above it, and what that edge
+#: costs is the distance between the two.  The group loop's ``GEND -> GRP_GO``
+#: closes 25 times a case and the row loop's ``TTAIL -> TNEXT`` 47 times, so the
+#: stacking order is worth real ticks for nothing at all in cells.
+#:
+#: Annealed against ``max(w, h)^2 * estimate_ticks`` -- the contest's own
+#: objective, priced by walking the drawn grid rather than by any proxy -- over
+#: six seeds of 7,000 moves: **30,297 ticks to 29,108, 3.9%, at the same 61x77
+#: room**.  The band order and widths do not move with it: all 5,040 orders were
+#: re-enumerated against this CFG (only 184 of them lay at all) and the shipped
+#: one is rank 1, and a coordinate descent over every band width in -4..+12 finds
+#: no single change that pays.
+CHAIN_ORDER = (
+    "HEAD", "BROW_GO", "BGRP_GO", "BL1_R", "BL2", "BL2_R", "BGRP_END",
+    "BROW", "ROW", "ROW_GO", "TNEXT", "GRP_GO", "E1", "GG2", "GEND", "E2",
+)
+
+
 def build_room() -> G.Room:
-    """The worker room: tuned bands, and no channel column that is never used."""
-    return G.build_room(G.plan(GEOMETRY), trim=True)
+    """The worker room: tuned bands, annealed chain order, no dead channel."""
+    return G.build_room(G.plan(GEOMETRY, order=CHAIN_ORDER), trim=True)
 
 
 def build_grid() -> tuple[list[str], object, dict[str, object]]:

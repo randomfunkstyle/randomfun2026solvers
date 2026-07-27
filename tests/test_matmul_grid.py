@@ -202,7 +202,7 @@ def test_the_checked_in_grid_is_what_the_generator_emits():
 
 def test_the_footprint_is_what_the_report_claims():
     w, h, area2 = scoring.footprint(GRID)
-    assert (w, h, area2) == (88, 98, 9604)
+    assert (w, h, area2) == (88, 96, 9216)
 
 
 # ── the engine ────────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ def test_the_estimator_agrees_with_the_engine_on_the_full_size_case():
     room = mg.build_room()
     traces = mg.public_traces()
     est = mg.estimate_ticks(room, *traces[3])
-    assert abs(est - 132_330) < 0.02 * 132_330
+    assert abs(est - 128_424) < 0.02 * 128_424
 
 
 @pytest.mark.slow

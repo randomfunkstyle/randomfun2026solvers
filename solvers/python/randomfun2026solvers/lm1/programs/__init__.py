@@ -29,6 +29,7 @@ __all__ = [
     "PROGRAM_DIR",
     "PROBLEM_DIR",
     "PROBLEM_OF",
+    "DEMOS",
     "available",
     "load",
     "problem_of",
@@ -44,11 +45,33 @@ PROGRAM_DIR = Path(__file__).resolve().parent
 PROBLEM_DIR = Path(__file__).resolve().parents[5] / "tasks" / "problems"
 
 #: Programs whose file name is not the problem slug (alternative solutions).
+#:
+#: ``lambda-deadman`` is the odd one out: not an alternative solution but an ungraded
+#: vector-display demo (the lambda-deadman title screen as segment data — see
+#: ``randomfun2026solvers/lambda_deadman_vector.py``). It borrows ``plotter``'s problem JSON
+#: *only* for the 32x24 panel resolution; its input protocol (five words per
+#: segment plus a negative sentinel) is not plotter's, so it must never be graded
+#: against plotter's public cases.
+#:
+#: ``deadman-3d`` (the first-person raycaster demo, ``randomfun2026solvers/deadman3d.py``)
+#: is the same kind of citizen, except it does not even take plotter's panel: its
+#: 64x48 resolution comes from ``machine.DISPLAY_OVERRIDE``, and the mapping here
+#: exists only so the registration glue (problem JSON present, CLI wiring) holds.
 PROBLEM_OF: dict[str, str] = {
     "triangle-closed": "triangle",
     "snake-ring": "snake",
     "pathfinder-unit": "pathfinder",
+    "lambda-deadman": "plotter",
+    "deadman-3d": "plotter",
 }
+
+#: Ungraded demos: they borrow a problem slug for registration only, so running
+#: them against the borrowed problem's public cases is meaningless at best (they
+#: emit no output) and an instruction-cap burn at worst — ``deadman-3d`` would
+#: read plotter's segment words as its data preamble and raycast a garbage map
+#: that no ray ever exits. The CLI's ``grade`` default and the program-suite
+#: tests both exclude them; each demo's own test file runs its real cases.
+DEMOS: frozenset[str] = frozenset({"lambda-deadman", "deadman-3d"})
 
 
 def problem_of(stem: str) -> str:

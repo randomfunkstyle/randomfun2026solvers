@@ -1,0 +1,701 @@
+{
+  "title": "tcp - two-tape queue walked by a marker word",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "driver",
+      "x": 0,
+      "y": 16,
+      "w": 6,
+      "h": 10,
+      "note": "Reads n, forwards n `seq val` pairs, then sends -1 as the halt sentinel. The count lives here so the worker's backpack is free.",
+      "color": "#3b82f6",
+      "tags": [
+        "compute",
+        "counter"
+      ]
+    },
+    {
+      "name": "worker",
+      "x": 7,
+      "y": 15,
+      "w": 20,
+      "h": 22,
+      "note": "INIT, MAIN, FAIL, ENQUEUE, the scan loop and MATCH.",
+      "color": "#3b82f6",
+      "tags": [
+        "compute",
+        "queue"
+      ]
+    },
+    {
+      "name": "S relay",
+      "x": 15,
+      "y": 0,
+      "w": 5,
+      "h": 5,
+      "note": "Turnaround for the sequence-number tape; one word per 6-tick lap.",
+      "color": "#3b82f6",
+      "tags": [
+        "ring"
+      ]
+    },
+    {
+      "name": "V relay",
+      "x": 21,
+      "y": 0,
+      "w": 5,
+      "h": 5,
+      "note": "Turnaround for the value tape, rotated in lockstep with the S tape.",
+      "color": "#3b82f6",
+      "tags": [
+        "ring"
+      ]
+    },
+    {
+      "name": "INIT",
+      "x": 8,
+      "y": 16,
+      "w": 18,
+      "h": 1,
+      "note": "Seed the tapes: MARK onto S, a junk word onto V. Falls into SCAN, whose first lap reads MARK back and leaves with the flag clear.",
+      "color": "#3b82f6",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "ENQUEUE",
+      "x": 8,
+      "y": 17,
+      "w": 18,
+      "h": 3,
+      "note": "A = seq (d + want); push it to S, read val, push it to V, set the flag. Every packet takes this path, the exact match included.",
+      "color": "#3b82f6",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "SCAN",
+      "x": 17,
+      "y": 20,
+      "w": 9,
+      "h": 7,
+      "note": "The hot loop, 18 ticks a slot: r(S), subtract want, and one X splits marker / match / no-match.",
+      "color": "#3b82f6",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "MAIN",
+      "x": 8,
+      "y": 29,
+      "w": 18,
+      "h": 4,
+      "note": "r(input), A = seq - want. Negative is the driver's sentinel and halts; the rest folds north into `b ]]]] d`.",
+      "color": "#3b82f6",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "FAIL",
+      "x": 9,
+      "y": 24,
+      "w": 5,
+      "h": 1,
+      "note": "d >= 16: emit -1 and stop. The stream is lost.",
+      "color": "#3b82f6",
+      "tags": [
+        "block"
+      ]
+    },
+    {
+      "name": "MATCH",
+      "x": 8,
+      "y": 33,
+      "w": 18,
+      "h": 3,
+      "note": "r(V), emit, want += 1, flag another pass -- the new want may sit in a slot this pass has already walked past.",
+      "color": "#3b82f6",
+      "tags": [
+        "block"
+      ]
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "drain burst",
+      "input": "16 15 215 / 14 214 / 13 213 / 12 212 / 11 211 / 10 210 / 9 209 / 8 208 / 7 207 / 6 206 / 5 205 / 4 204 / 3 203 / 2 202 / 1 201 / 0 200",
+      "from_tick": 0,
+      "to_tick": 9000,
+      "watch": [
+        "worker",
+        "SCAN",
+        "S relay",
+        "V relay"
+      ],
+      "note": "Fifteen packets queued, then packet 0 unlocks all sixteen at once -- the deepest the tapes ever get."
+    },
+    {
+      "name": "loss case",
+      "input": "20 1 301 / 2 302 / 3 303 / 4 304 / 5 305 / 6 306 / 7 307 / 8 308 / 9 309 / 10 310 / 11 311 / 12 312 / 13 313 / 14 314 / 15 315 / 16 316",
+      "from_tick": 0,
+      "to_tick": 7000,
+      "watch": [
+        "worker",
+        "MAIN",
+        "FAIL"
+      ],
+      "note": "seq 16 arrives while want is still 0: `b ]]]] d` fires and the machine emits -1 and stops."
+    }
+  ],
+  "lanes": [
+    {
+      "name": "input pipe",
+      "points": [
+        [
+          1,
+          14
+        ],
+        [
+          1,
+          15
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          1,
+          14
+        ],
+        [
+          1,
+          15
+        ]
+      ]
+    },
+    {
+      "name": "driver -> worker",
+      "points": [
+        [
+          4,
+          15
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          8,
+          13
+        ],
+        [
+          8,
+          14
+        ]
+      ],
+      "note": "Enters at the westmost anchor, clear of the output pipe.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          4,
+          15
+        ],
+        [
+          4,
+          14
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          5,
+          13
+        ],
+        [
+          6,
+          13
+        ],
+        [
+          7,
+          13
+        ],
+        [
+          8,
+          13
+        ],
+        [
+          8,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "output pipe",
+      "points": [
+        [
+          11,
+          14
+        ],
+        [
+          11,
+          13
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          11,
+          14
+        ],
+        [
+          11,
+          13
+        ]
+      ]
+    },
+    {
+      "name": "S tape forward",
+      "points": [
+        [
+          16,
+          14
+        ],
+        [
+          16,
+          5
+        ]
+      ],
+      "note": "Both legs are 10 cells, so the ring is 20 -- at least the 18 that 17 resident words plus one free cell to turn on demand, and not so many more that an almost-empty queue stalls a whole lap waiting for the marker to come round.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          16,
+          14
+        ],
+        [
+          16,
+          13
+        ],
+        [
+          16,
+          12
+        ],
+        [
+          16,
+          11
+        ],
+        [
+          16,
+          10
+        ],
+        [
+          16,
+          9
+        ],
+        [
+          16,
+          8
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          6
+        ],
+        [
+          16,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "S tape return",
+      "points": [
+        [
+          18,
+          5
+        ],
+        [
+          18,
+          14
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          18,
+          5
+        ],
+        [
+          18,
+          6
+        ],
+        [
+          18,
+          7
+        ],
+        [
+          18,
+          8
+        ],
+        [
+          18,
+          9
+        ],
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          11
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          13
+        ],
+        [
+          18,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "V tape forward",
+      "points": [
+        [
+          22,
+          14
+        ],
+        [
+          22,
+          5
+        ]
+      ],
+      "note": "Both legs are 10 cells, so the ring is 20 -- at least the 18 that 17 resident words plus one free cell to turn on demand, and not so many more that an almost-empty queue stalls a whole lap waiting for the marker to come round.",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          22,
+          14
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          12
+        ],
+        [
+          22,
+          11
+        ],
+        [
+          22,
+          10
+        ],
+        [
+          22,
+          9
+        ],
+        [
+          22,
+          8
+        ],
+        [
+          22,
+          7
+        ],
+        [
+          22,
+          6
+        ],
+        [
+          22,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "V tape return",
+      "points": [
+        [
+          24,
+          5
+        ],
+        [
+          24,
+          14
+        ]
+      ],
+      "note": "",
+      "color": "#f97316",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          24,
+          5
+        ],
+        [
+          24,
+          6
+        ],
+        [
+          24,
+          7
+        ],
+        [
+          24,
+          8
+        ],
+        [
+          24,
+          9
+        ],
+        [
+          24,
+          10
+        ],
+        [
+          24,
+          11
+        ],
+        [
+          24,
+          12
+        ],
+        [
+          24,
+          13
+        ],
+        [
+          24,
+          14
+        ]
+      ]
+    },
+    {
+      "name": "no-match cycle",
+      "points": [
+        [
+          20,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          24,
+          20
+        ],
+        [
+          24,
+          23
+        ],
+        [
+          20,
+          23
+        ]
+      ],
+      "note": "The rectangle the scan walks per queue slot: `+`/s(S) up column 10, r(V)/s(V) across the top, back down column 16.",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          20,
+          23
+        ],
+        [
+          19,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          22
+        ],
+        [
+          18,
+          21
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          19,
+          20
+        ],
+        [
+          20,
+          20
+        ],
+        [
+          21,
+          20
+        ],
+        [
+          22,
+          20
+        ],
+        [
+          23,
+          20
+        ],
+        [
+          24,
+          20
+        ],
+        [
+          24,
+          21
+        ],
+        [
+          24,
+          22
+        ],
+        [
+          24,
+          23
+        ],
+        [
+          23,
+          23
+        ],
+        [
+          22,
+          23
+        ],
+        [
+          21,
+          23
+        ],
+        [
+          20,
+          23
+        ]
+      ]
+    },
+    {
+      "name": "pass restart",
+      "points": [
+        [
+          24,
+          29
+        ],
+        [
+          20,
+          29
+        ],
+        [
+          20,
+          24
+        ],
+        [
+          21,
+          24
+        ]
+      ],
+      "note": "Marker reached with the flag set: clear it and walk one more full pass from the anchor.",
+      "color": "#f97316",
+      "kind": "control",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          24,
+          29
+        ],
+        [
+          23,
+          29
+        ],
+        [
+          22,
+          29
+        ],
+        [
+          21,
+          29
+        ],
+        [
+          20,
+          29
+        ],
+        [
+          20,
+          28
+        ],
+        [
+          20,
+          27
+        ],
+        [
+          20,
+          26
+        ],
+        [
+          20,
+          25
+        ],
+        [
+          20,
+          24
+        ],
+        [
+          21,
+          24
+        ]
+      ]
+    }
+  ]
+}

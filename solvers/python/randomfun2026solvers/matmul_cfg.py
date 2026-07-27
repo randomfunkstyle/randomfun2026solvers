@@ -212,13 +212,22 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     # `[acc_0 .. acc_{G-1}, T, G]` and its two headers are read at the tail of
     # every `t`, which is the moment they are wanted.
     "ROW": (["rq", "X"], {"pos": "ROW_GO", "zero": "FIN", "neg": "FIN"}),
+    # `ROW_GO` enters the `t` loop through `TNEXT` rather than jumping over it to
+    # `TBODY`.  `TNEXT` is `rc b sc` -- exactly the `BP = G` that `ROW_GO` used to
+    # do for itself -- so dropping that triple and falling into `TNEXT` costs
+    # nothing and leaves `TBODY` with a **single** predecessor.  That is what the
+    # layout wants: `chains_of` may only chain a block whose in-degree is one, so
+    # with two predecessors `TBODY` had to be a chain head and `TNEXT -> TBODY`
+    # was a routed lane -- 27 walked cells for a three-glyph block, taken once per
+    # `t`, 1,261 ticks a case.  Reversed, the chain is `TNEXT, TBODY, MAC, TTAIL,
+    # EMIT_SET`, the hot edge is a fall-through, and the lane that is left over is
+    # `ROW_GO -> TNEXT`, walked once a row instead of once a `t`.
     "ROW_GO": ([
         "M", "L1", "W", "-", "sq",             # I - 1
         "rq", "sq", "M",                        # B = M
         "rc", "W", "sc",                        # T = M
-        "rc", "b", "sc",                        # BP = G
         "rq", "sq",                             # K -- head back to I
-    ], "TBODY"),
+    ], "TNEXT"),
     "TBODY": (["rx", "ss"], "MAC"),
     "MAC": ([
         "rs", "ss", "M",                        # A = a, restored, B = a
