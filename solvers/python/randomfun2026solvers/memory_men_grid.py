@@ -152,12 +152,20 @@ class Grid:
         return "\n".join(self.grid_rows)
 
 
-def build_grid(cols: int, rows: int) -> Grid:
+def build_grid(cols: int, rows: int, *, router: Sequence[str] | None = None) -> Grid:
     """``cols`` columns of ``rows`` cells each, addresses running column by column.
 
     Column ``j`` owns ``[j*rows, (j+1)*rows)`` and its igniter is handed ``j*rows``
     as a literal, so all ``cols`` igniters walk at once and the fixed cost of the
     whole memory is one column's walk.
+
+    ``router`` swaps the strip's program for another one driving the same bus --
+    :func:`memory_men_v3.router_rows` is the reason the hook exists. The strip only
+    ever needed the router to own one incoming pipe and no outgoing pipe but the
+    column stubs, so any program with those two properties drops in. Measured on
+    ``4x25``: the default's 16.79 ticks per operation against v3's 11.28, at the
+    cost of a taller strip (the v3 router trades area for the walk home, and this
+    grid is the one shape where area is what the score is made of).
     """
     if cols < 1 or rows < 1:
         raise ValueError("a grid needs at least one column of at least one cell")
@@ -189,7 +197,8 @@ def build_grid(cols: int, rows: int) -> Grid:
     # I room, its pipe, the router strip, its pipes, the columns, their pipes,
     # the collector strip, its pipe, the O room. Two-cell pipes throughout.
     router_y = 6
-    router_h = len(ROUTER_ROWS)
+    router_prog = tuple(router) if router is not None else ROUTER_ROWS
+    router_h = len(router_prog)
     col_y = router_y + router_h + 1 + _GAP - 1  # south wall, 2 pipe cells, north wall
     # A collector only has to reach its column's *last band row*, not the column's
     # last row — the band below it is a tile's third row, which owns no pipe. So
@@ -218,7 +227,7 @@ def build_grid(cols: int, rows: int) -> Grid:
 
     # ── the router strip ──────────────────────────────────────────────────────
     strip_w = column_x(cols - 1)["end"] - x0
-    router_body = [r.ljust(strip_w) for r in ROUTER_ROWS]
+    router_body = [r.ljust(strip_w) for r in router_prog]
     _room(grid, x0, router_y, router_body)
     _io_room(grid, x0 + 1, router_y - 5, "I")
     draw_pipe(grid, [(x0 + 1, router_y - 3), (x0 + 1, router_y - 2), (x0 + 1, router_y - 1)])
