@@ -331,3 +331,30 @@ conditions hold and the columns are then free.
 The MAC keeps its 12-cell cycle. Fill B grows from a 10-cell cycle to 18, because
 `in` and `b_fwd` are now six rows apart — that costs ~2k ticks on the 16x16x16
 case, and is the price of a routable machine.
+
+### A third constraint: a ring must not cross *itself*
+
+The two rules above stop ring A crossing ring B. They do not stop a ring crossing
+itself, and that is what the next four failed routes were.
+
+`a_fwd` leaves MAIN at its own row and rises to its band, so its **rise column
+blocks every row between the two**. `a_ret` comes back to MAIN's wall along its own
+row, and that approach has to cross the rise column — so `a_ret`'s row must lie
+*outside* the span `(band, a_fwd)`. With the band above MAIN, "outside" means
+**below** `a_fwd`.
+
+Found the same way as the others: by searching candidate routes and reading the
+collisions rather than deriving them. Twelve candidates for `a_ret`, and the first
+three all failed at `collision at (56, 8): '-' vs '|'` — a_fwd's own leg along the
+foot of its band.
+
+All three conditions together, and a map satisfying them:
+
+    a_ret below a_fwd          (a ring must not cross itself)
+    a_ret above b_ret          (band-above ring takes the smaller ret row)
+    b_ret above b_fwd          (upper terminal turns up, lower turns down)
+
+    (fill loop top) 2   in 3   a_fwd 4   a_ret 6   b_ret 8   b_fwd 9   (*) 10   prod 11
+
+MAIN stays 43x28 with all 34 pipe ops bound. `a_ret` is read only in the drive loop,
+never in a counted body, so moving it costs nothing.

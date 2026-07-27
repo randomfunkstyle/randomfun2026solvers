@@ -58,7 +58,12 @@ __all__ = ["EAST", "WEST", "main_room"]
 # and the lower one turns down, and if the ring whose band is above has the smaller
 # `ret` row. Four hand placements collided before that was clear; with `a_ret` above
 # `b_ret` the columns are free.
-A_RET, IN, A_FWD = 2, 3, 4          # ring A's band goes above, so a_ret is topmost
+# A ring also has to not cross *itself*. `a_fwd` rises from its own row up to its
+# band, so its rise column blocks every row between them — and `a_ret`'s westward
+# approach to MAIN's wall must therefore terminate *outside* that span. With the
+# band above, that means `a_ret` sits just **below** `a_fwd`, not above it. The
+# ring-vs-ring rule still holds: `a_ret` stays above `b_ret`.
+FILL_TOP, IN, A_FWD, A_RET = 2, 3, 4, 6
 B_RET, B_FWD, SPARE, PROD = 8, 9, 10, 11
 # Registers spaced four apart: each pair's relay room must span both of its rows.
 RN_RET, RN_FWD = 14, 15
@@ -100,8 +105,8 @@ def main_room() -> tuple[Circuit, int]:
     # ── fill ring A with N*M scalars, then its end marker ────────────────────
     w.op("r", RN_RET); w.op("M")
     w.op("r", RM_RET); w.op("s", RM_FWD); w.ops("*b")
-    x, y = w.park(A_RET)
-    ax, ay = c.counted_loop(x, A_RET, "rs")
+    x, y = w.park(FILL_TOP)
+    ax, ay = c.counted_loop(x, FILL_TOP, "rs")
     c.turn(ax, ay, S)
     w.x, w.y, w.d = ax, ay, S
     w.ops(SENTINEL_BUILD)
@@ -110,8 +115,8 @@ def main_room() -> tuple[Circuit, int]:
     # ── fill ring B with M*K values ──────────────────────────────────────────
     w.op("r", RM_RET); w.op("M")
     w.op("r", RK_RET); w.op("s", RK_FWD); w.ops("*b")
-    x, y = w.park(A_RET)
-    bx, by = c.counted_loop(x, A_RET, "r     s")
+    x, y = w.park(FILL_TOP)
+    bx, by = c.counted_loop(x, FILL_TOP, "r     s")
     c.turn(bx, by, S)
     w.x, w.y, w.d = bx, by, S
 
