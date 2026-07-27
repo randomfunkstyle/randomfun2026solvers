@@ -1,0 +1,16 @@
+# matmul — submission e0ca4303-1970-41f6-a62a-e311e26c2fa2
+
+verdict      done: 20/20 cases, area2 6561, avgTicks 33,545, score 220,091,697
+submitted    2026-07-27T14:17:19+0300
+grid         72x81
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  a2a701193500d64516f70a7cd48ebee42c482c756f7751ce2e646262d8673ce9
+commit       9016838
+local        matmul: 7/7 public cases, avg 26,960 ticks
+source       tasks/solutions/matmul_hand_reroute.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Corridor reroute on matmul_hand (72x81), which was NOT in this worktree — it lives only in .claude/worktrees/sort-numbers-ring and is the lineage behind our live 197,437,831. 33 corridors rerouted, footprint unchanged at area2 6561, so the whole delta is ticks. Both engines agree on the gain: fast 28,286 -> 26,960 (-1,326.29), reference 29,859 -> 28,532 (-1,326.28). They disagree on an absolute constant of exactly 1,572.57 ticks/case on this grid in both directions — a Y-fork/drain-tail difference worth someone's attention, since it means fast-engine local scores understate matmul. Profiling this grid needed a fix: Y children start mid-corridor, not on an instruction, so the profiler now resolves a runner's start position into an edge offset.

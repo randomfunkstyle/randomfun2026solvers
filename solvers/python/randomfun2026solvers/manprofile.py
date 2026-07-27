@@ -45,6 +45,7 @@ __all__ = [
     "Profile",
     "TraceMachine",
     "profile_program",
+    "resume_index",
     "trace_case",
 ]
 
@@ -341,13 +342,41 @@ class Profile:
             edge = self.graph.edges[edge_id]
             src = self.graph.nodes[edge.src]
             dst = "dead" if edge.dst is None else repr(self.graph.nodes[edge.dst].glyph)
-            men = ",".join(str(m) for m in sorted(self.edge_men.get(edge_id, ())))
+            walkers = sorted(self.edge_men.get(edge_id, ()))
+            men = ",".join(str(m) for m in walkers[:3]) + (
+                f"+{len(walkers) - 3}" if len(walkers) > 3 else ""
+            )
             lines.append(
                 f"  e{edge_id:<4d} man{men} {src.glyph!r}@{src.pos[0]},{src.pos[1]}"
                 f" arm={edge.arm:+d} -> {dst}"
                 f"  len={edge.length:<3d} x{cost.traffic:<7d} = {cost.ticks} ticks"
             )
         return "\n".join(lines)
+
+
+def resume_index(graph: FlowGraph) -> dict[tuple[Cell, Dir], tuple[int, int]]:
+    """Where in the graph a man standing on ``(cell, direction)`` is.
+
+    A ``Y`` fork puts its child down in the middle of a corridor rather than on
+    an instruction, so a child runner's trace does not begin at a node.  This
+    maps every corridor cell back to the edge and offset it belongs to, which is
+    what lets those runners be profiled at all — and they are not a curiosity,
+    they are how the matmul and reverse-a-list designs work.
+    """
+    index: dict[tuple[Cell, Dir], tuple[int, int]] = {}
+    for edge in graph.edges:
+        in_dir = edge.exit_dir
+        for i, cell in enumerate(edge.cells):
+            nxt = edge.cells[i + 1] if i + 1 < len(edge.cells) else None
+            index.setdefault((cell, in_dir), (edge.id, i))
+            if nxt is not None:
+                in_dir = (
+                    1 if nxt[0] > cell[0] else -1 if nxt[0] < cell[0] else 0,
+                    1 if nxt[1] > cell[1] else -1 if nxt[1] < cell[1] else 0,
+                )  # type: ignore[assignment]
+            else:
+                in_dir = edge.entry_dir
+    return index
 
 
 def _walk_trace(
@@ -360,6 +389,8 @@ def _walk_trace(
     man: ManCost,
     runner_id: int,
     edge_men: dict[int, set[int]],
+    *,
+    start_edge: tuple[int, int] | None = None,
 ) -> None:
     """Replay one runner's trace against the graph, folding it into ``man``.
 
@@ -372,6 +403,32 @@ def _walk_trace(
     i = 0
     n = len(states)
     node_id = start_node
+
+    if start_edge is not None:
+        # A forked child begins part-way along a corridor: walk out the rest of
+        # it before the normal node-to-node loop can take over.
+        edge_id, offset = start_edge
+        edge = edges[edge_id]
+        for cell in edge.cells[offset:]:
+            if i >= n:
+                break
+            if states[i][0] != cell:
+                mismatches.append(
+                    f"runner {runner_id} joined edge #{edge_id} at {offset} "
+                    f"but tick {i} is {states[i][0]}, not {cell}"
+                )
+                return
+            man.corridor += 1
+            i += 1
+            while i < n and states[i][0] == cell:
+                man.corridor += 1
+                man.blocked += 1
+                i += 1
+        edge_walks[edge_id] = edge_walks.get(edge_id, 0) + 1
+        edge_men.setdefault(edge_id, set()).add(runner_id)
+        if edge.dst is None:
+            return
+        node_id = edge.dst
 
     while i < n:
         node = nodes[node_id]
@@ -463,6 +520,7 @@ def profile_program(
     edge_walks: dict[int, int] = {}
     node_cost: dict[int, NodeCost] = {}
     profile = Profile(graph=graph, edges={}, nodes={})
+    resume = resume_index(graph)
 
     for index, case in enumerate(cases):
         name = case.get("name") or f"case-{index}"
@@ -494,16 +552,19 @@ def profile_program(
             if not states:
                 continue
             start = graph.node_at(states[0][0], states[0][1])
+            start_edge = None
             if start is None:
-                profile.mismatches.append(
-                    f"{name}: runner {runner_id} starts off-graph at {states[0]}"
-                )
-                continue
+                start_edge = resume.get((states[0][0], states[0][1]))
+                if start_edge is None:
+                    profile.mismatches.append(
+                        f"{name}: runner {runner_id} starts off-graph at {states[0]}"
+                    )
+                    continue
             man = profile.men.setdefault(runner_id, ManCost())
             before = (man.corridor, man.node)
             _walk_trace(
                 graph,
-                start.id,
+                start.id if start is not None else -1,
                 states,
                 edge_walks,
                 node_cost,
@@ -511,6 +572,7 @@ def profile_program(
                 man,
                 runner_id,
                 profile.edge_men,
+                start_edge=start_edge,
             )
             profile.corridor_ticks += man.corridor - before[0]
             profile.node_ticks += man.node - before[1]

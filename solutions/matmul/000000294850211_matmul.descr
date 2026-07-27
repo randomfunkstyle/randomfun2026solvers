@@ -1,0 +1,16 @@
+# matmul — submission 127a102d-a72f-485d-81b9-d859fd924ae1
+
+verdict      done: 20/20 cases, area2 8464, avgTicks 34,836, score 294,850,211
+submitted    2026-07-27T14:11:53+0300
+grid         85x92
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  b0423cddc00e9a756b738737004d44a38744958ec418b7c174431265a6542f4f
+commit       9016838
+local        matmul: 7/7 public cases, avg 28,324 ticks
+source       tasks/solutions/matmul_reroute.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Corridor reroute applied to matmul_packed, the live lineage (local 246,279,426 x 0.8017 = 197,442,216 vs live 197,437,831 — the ratio pins it). 29 corridors rerouted over 2 rounds, avg 29,097 -> 28,324 ticks (-2.66%), 7/7 on both engines. Rotation found nothing here. Note for anyone repeating this: matmul_cpu reroutes far better in absolute terms (-7.86%, 102k man-ticks) but it is a 760M-local grid against packed's 246M — always point the optimiser at the best lineage, not the one with the most slack.

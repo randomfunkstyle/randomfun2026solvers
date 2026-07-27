@@ -107,3 +107,18 @@ def test_frame_gated_problems_trace_to_the_same_tick_as_the_engine() -> None:
     assert native.passed
     assert result.step == native.step
     assert trace
+
+
+def test_forked_children_are_profiled_not_dropped() -> None:
+    """A ``Y`` child starts mid-corridor, not on an instruction.
+
+    ``matmul_hand`` forks into hundreds of men.  Before the resume index they
+    all failed to attach to the graph and the grid could not be profiled at all,
+    which silently excluded our best-headroom problem from the pipeline.
+    """
+    path = SOLUTIONS / "matmul_hand.man"
+    profile = profile_program(path, "matmul")
+
+    assert not profile.mismatches
+    assert len(profile.men) > 1
+    assert profile.corridor_ticks > 0
