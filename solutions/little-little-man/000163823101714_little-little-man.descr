@@ -1,0 +1,16 @@
+# little-little-man — submission 01712956-342a-4a1d-9a14-7299340010cc
+
+verdict      done: 28/28 cases, area2 32400, avgTicks 5,056,269, score 163,823,101,714
+submitted    2026-07-27T14:54:56+0300
+grid         180x179
+problem id   383158cc-1891-46b2-9a9f-d9ed2661c85d
+fingerprint  6c46fe1aabb06390e49bbfc144d0ad0982d9812ecca5a960a115b94296e30242
+commit       729687b
+local        little-little-man: all public frame cases match (emulator)
+source       ../../../../../../Downloads/little-little-man-refold-180x179.man
+
+runner output:
+Passed 28/28 test cases
+
+notes:
+ROM re-fold on the 193x171 grid: 83 rows -> 89 at 180 wide, corridor 12 -> 14 rows (buffer 2,496). Only the ROM room and the corridor change; the CPU tail is byte-identical. 193x171 -> 180x179, area2 37,249 -> 32,400; local 14/14, avg 4,605,502 ticks (was 4,631,961).

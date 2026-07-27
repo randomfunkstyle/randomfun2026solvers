@@ -1,0 +1,16 @@
+# reverse-a-list — submission 259569ca-0b23-4be4-9323-06e2f38fe14b
+
+verdict      done: 20/20 cases, area2 225, avgTicks 189, score 42,458
+submitted    2026-07-27T06:21:37+0300
+grid         15x15
+problem id   537ec979-d883-40f3-9663-b59579a0682c
+fingerprint  50bf3d40a4aac2479ef703b91506717996d5aa75b7fbc873f81c3caf4f2e04c6
+commit       63bb6c7
+local        reverse-a-list: 8/8 public cases, avg 143 ticks
+source       ../../../../../../../../private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers--claude-worktrees-sort-numbers-ring/8d6fb213-c37a-4fac-896b-a6b9363874f1/scratchpad/rev_v6.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+15x15 carrier ring: 11x7 ring, 4 m/d stations with exit-path lengths tuned to compensate uneven 10/6 spacing; wrapped I/O pipes

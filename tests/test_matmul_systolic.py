@@ -34,10 +34,13 @@ def test_mul_north_wall_order_is_forced() -> None:
     assert ports["a_in"][1] < ports["ring_out"][1] < ports["ring_in"][1]
 
 
-def test_add_splits_its_two_north_mouths_by_column() -> None:
+def test_add_reads_the_product_first_so_the_psum_lands_east() -> None:
+    """`+` is commutative, and reading the product first is what puts prod_in
+    west (fed straight down from MUL) and psum_in east (fed from the east
+    channel). That split is what frees the west channel for the chain."""
     ports = ms.add_room("A", first=False).ports
-    assert ports["psum_in"][0] == ports["prod_in"][0] == "N"
-    assert ports["psum_in"][1] < ports["prod_in"][1]
+    assert ports["prod_in"][0] == ports["psum_in"][0] == "N"
+    assert ports["prod_in"][1] < ports["psum_in"][1]
 
 
 def test_solver_refuses_an_unsatisfiable_room() -> None:
@@ -84,12 +87,25 @@ def test_one_stage_machine_builds_with_the_pipes_it_declared() -> None:
 
 
 @pytest.mark.slow
-def test_one_stage_machine_computes_the_product() -> None:
+@pytest.mark.parametrize(
+    "p,a,b,ticks",
+    [(1, [[3], [4]], [[5, 6]], 600),
+     (2, [[1, 2], [3, 4]], [[5, 6], [7, 8]], 900)],
+)
+def test_the_chain_computes_the_product(p, a, b, ticks) -> None:
+    """P=1 proves the ring and the multiply; P=2 proves the adder chain and the
+    stage-to-stage chain under real contention."""
     from randomfun2026solvers.littleman import Littleman
 
-    text, expect = ms.probe(1, [[3], [4]], [[5, 6]])
-    snap = Littleman().tick(text, 400)
+    text, expect = ms.probe(p, a, b)
+    snap = Littleman().tick(text, ticks)
     assert [int(v) for v in snap.output] == expect
+
+
+def test_lit_free_covers_the_entry_range() -> None:
+    """Sources must be able to name every legal matrix entry without a backtick."""
+    for n in range(-99, 100):
+        assert "`" not in ms.lit_free(n)
 
 
 def test_the_mirrored_feeder_unblocks_the_floor_plan() -> None:
@@ -112,3 +128,37 @@ def test_the_mirrored_feeder_unblocks_the_floor_plan() -> None:
          ((14, 5), "s", "mul_out")],
     )
     assert ports["ring_out"][0] == "E" and ports["chain_out"][0] == "W"
+
+
+def _public_case(name: str):
+    import json
+    from pathlib import Path
+    probs = Path(__file__).resolve().parents[1] / "tasks" / "problems" / "matmul.json"
+    case = next(c for c in json.loads(probs.read_text())["publicTestData"]
+                if name in c["name"])
+    vals = [int(v) for v in case["rounds"][0]["in"]]
+    n, m, k = vals[:3]
+    a = [vals[3 + i * m: 3 + (i + 1) * m] for i in range(n)]
+    off = 3 + n * m
+    b = [vals[off + t * k: off + (t + 1) * k] for t in range(m)]
+    return a, b, [int(v) for v in case["rounds"][0]["out"]]
+
+
+def test_stream_and_expectation_match_the_hardest_public_case() -> None:
+    """The 16-stage chain's own arithmetic, checked against the judge's data."""
+    a, b, out = _public_case("16x16x16")
+    assert ms.expected(a, b) == out
+    # 16 blocks of K+1, then N rows of P, all of it oblivious to the case's shape
+    assert len(ms.stream_for(a, b, 16)) == 16 * (len(b[0]) + 1) + len(a) * 16
+
+
+@pytest.mark.slow
+def test_sixteen_stages_compute_the_hardest_public_case() -> None:
+    """Every stage live, M = 16 so none of them is a zero-weight passenger."""
+    from randomfun2026solvers.littleman import Littleman
+
+    a, b, out = _public_case("16x16x16")
+    text, expect = ms.probe(16, a, b)
+    assert expect == out
+    snap = Littleman().tick(text, 12000)
+    assert [int(v) for v in snap.output] == out

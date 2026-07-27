@@ -111,90 +111,100 @@ placement exists the build raises rather than emitting a plausible grid.
 `check_mouths` additionally counts arrowheads-against-a-wall the way the
 *runtime* does (`lm.mjs analyze` under-reports these) and refuses a surprise.
 
-WHAT IS BUILT AND WHAT IT MEASURED  (2026-07-27)
-================================================
-
-`probe(1, [[3],[4]], [[5,6]])` builds a **complete one-stage machine** — SRC,
-LOADF, TURN, ring, MUL, ADD, O, seven pipes, every binding solved — and the
-reference engine runs it to ``15 18 20 24``, which is exactly
-``[[3],[4]] x [[5,6]]``.  So the mechanism is proven end to end: the K-prefixed
-ring, the `R` turnaround, the weight handoff, the multiply with the weight
-parked in B, and the psum relay.
-
-Measured on that grid (45 x 68, 29% dense):
-
-    output 1 at tick 163   output 2 at 175   output 3 at 307   output 4 at 319
-
-**The beat is 12 ticks** (163->175 and 307->319).  That is the number the whole
-projection rests on and it is better than the 12-16 that was assumed.  The
-132-tick gap between rows is *not* architectural: the probe's TURN->MUL leg is
-serpentined to ~60 cells, and with only K+1 = 3 values in it the multiplier
-waits a full revolution at every row boundary.  A production ring wants
-``L ~= K + 4`` (>= 18 cells, so 17 values fit while loading, and no longer),
-which makes a row cost ``max((K+1)*12, L)`` = ``(K+1)*12`` for every K >= 2.
-
-Projected for the real 16-stage machine:
-
-    compute   N*K beats x 12 ticks         16x16x16 -> 3,072
-    b-load    LOADF_0 relays (P-1)(K+1)    16x16x16 -> ~1,500
-    total                                  16x16x16 -> ~5,000 ticks
-
-against the serial machine's 123,254 on that case — a **25x tick win** — and an
-average across the seven local cases somewhere near 2,000-3,000 against 29,097.
-
-That is what makes the area budget generous.  At avg 3,000 ticks the machine
-beats the 197,437,831 live score (at the measured 1.506 judged ratio) for any
-side under **209**; at side 100 it lands at 3.0e7 local / 4.5e7 judged, 4.4x
-better than the bar.  Summed room area is ~9,000 cells (LOADF ~250 avg x 16,
-MUL 132 x 16, TURN 28 x 16, ADD 40 x 15, rings 20 x 16, front end ~1,500), so a
-side of 100-130 is the realistic target and the build is worth finishing.
-
-WHAT BLOCKED P >= 2, EXACTLY
-============================
-
-The stage rooms and their bindings are all solved and general in `p`.  What is
-not solved is the **floor plan**, and the obstruction is specific:
-
-1. MUL's north-wall column order is *forced* to ``a_in < ring_out < ring_in``.
-   MUL's first `r` (the weight) sits west of its second (the ring), so the
-   a-mouth must be the western one; the L4 body's `r` sits further east still,
-   which pins ring_in east of both.  Verified by exhaustion in `solve_ports`.
-2. Therefore the ring partner (TURN) has to sit **east** of the stage: its two
-   pipes then nest *outside* the weight pipe, which drops straight down from
-   LOADF.  Put TURN west and the serpentine has to cross the weight column at a
-   row where that column is live, and no row assignment exists.
-3. But LOADF's `s` cells put the ring writes (INIT head, LA) at the **west** end
-   of its INIT row and the chain writes (LB, LC) at the **east** end, so
-   `solve_ports` can only ever put ``ring_out`` north/west and ``chain_out``
-   east.  The ring-fill pipe then has to travel east *over* LOADF to reach TURN
-   while the chain pipe also has to leave eastward, and the two cannot be
-   nested: whichever turns higher is crossed by the other's riser.  Every row
-   assignment tried collides, and the collision is a hard `Circuit.set` error,
-   not a silent one.
-
-THE FIX, FOR WHOEVER PICKS THIS UP
+WHAT IS BUILT, AND WHAT IT MEASURES
 ==================================
 
-Make LOADF's INIT row run **right to left**.  Lay it with ``Circuit.run(..., d=W)``
-and a mirrored counted loop so that LA (the ring writes) ends up at the *east*
-end and LB/LC (the chain writes) at the *west* end.  `solve_ports` will then put
-``ring_out`` on the east wall facing TURN and ``chain_out`` on the west wall
-facing a chain channel, and the two pipes never share a corridor.
-`Circuit.counted_loop` only builds an east-entered loop, so add a westward
-variant (it is the same five glyphs mirrored) or place those twelve cells by
-hand.
+The **array is finished and verified**.  `probe(P, A, B)` builds a complete
+P-stage machine with a source room standing in for the front end, and the
+reference engine agrees at every scale tried:
 
-The cheaper alternative, if the mirror is awkward: **split LOADF into two
-rooms** — LOAD (INIT only: chain in, chain out, ring out) and FEED (MAIN only:
-chain in, chain out, mul out).  Each then has at most two outgoing pipes and the
-three-way `s` split disappears entirely.  It costs 16 more rooms but they are
-small, and it also shortens the widest room (the f=15 INIT row is 26 wide, which
-is what sets `lw` and therefore the strip pitch).
+    probe(1,  [[3],[4]], [[5,6]])          -> 15 18 20 24        (ring + multiply)
+    probe(2,  [[1,2],[3,4]], [[5,6],[7,8]])-> 19 22 43 50        (adder chain)
+    probe(16, <the 16x16x16 public case>)  -> all 256 values      (every stage live)
 
-After that the remaining work is: the front end (see the stream section above —
-GATE / A-padder / B-blocker plus a ~256-cell delay line, because A arrives
-before B but B is what has to be resident), and packing the 16 stages into a
-4x4 or 2x8 arrangement instead of the probe's single column.
+Ticks, measured:
+
+    16x16x16   first output 4,483   settles 8,563   beat 16 ticks/value
+    serial machine on the same case                123,254
+
+**14.4x on the hardest case.**  The beat is 16 ticks and the fill is 4,483, so
+the fill dominates every small case (a 2x16x2 case settles at 2,873, of which
+2,683 is fill).  Expect an average near 3,500 across the seven local cases
+against the serial machine's 29,097 — call it **8x on ticks**.
+
+WHAT IS NOT BUILT, AND WHAT IT COSTS
+====================================
+
+Two things stand between this and a scoring `.man`.
+
+**1. The front end.**  `probe` hard-codes the case in a source room.  A real
+machine has to turn ``N M K A B`` into the stream the chain wants.  Design
+below — it is now only five small rooms, because of the countdown protocol.
+
+**2. Packing.**  The stages are stacked in one column, so the grid is 72 x 1055
+and the score would be absurd.  Room area is only 538 cells per band (LOADF
+26x13, MUL 12x11, TURN 7x4, ADD 10x4) but the band as laid out is 53 x 59 =
+3,127 — 17% dense.  Tightening it (TURN into the gap beside MUL rather than
+east of LOADF; per-stage LOADF widths instead of one pitch; the trailing slack
+rows) gets a band to roughly 34 x 48, so 16 of them pack into about side 162.
+
+Which gives the honest arithmetic, and it is worth stating plainly:
+
+    area 26,000 x avg 3,500 ticks = 9.1e7 local -> 1.37e8 judged
+    against the 197,437,831 bar                    ~1.4x better
+
+So this architecture wins, but by less than the tick number suggests: sixteen
+stages of four rooms is a lot of area, and `score = area x ticks` charges both.
+The remaining headroom is in the **fill**, not the beat — 4,483 ticks of fill on
+the big case and 2,683 on a small one, against a beat that only costs 16.  The
+fill is the b-block cascade (LOADF_0 relays 15(K+1) values at ~7 ticks each) plus
+the a-phase forwarding plus the psum chain filling.  Halving it would be worth
+more than any plausible packing win.
+
+THE FRONT END, SPECIFIED
+========================
+
+The obvious design needs a ~256-cell delay line, because A arrives before B but
+B is what has to be resident.  **The countdown protocol removes it**, and lets
+the front end run in input order with no buffering at all.
+
+Prepend each padded A row with the number of rows still to come:
+
+    [N] [row_0 padded to 16] [N-1] [row_1] ... [1] [row_{N-1}] [0]
+    [block_0] ... [block_15]        block_p = K, B[p][0..K-1]
+
+LOADF's MAIN then reads the countdown, forwards it, and branches on `X`:
+nonzero means take a weight and forward F values (BP is free, so `<F>` works for
+F >= 10); zero means fall through to the b-block phase.  No delay line, no
+sentinel arithmetic, no nested counter — the outer loop is data-driven and the
+inner one is the only user of BP.  A does not have to be resident, because each
+stage's N weights simply queue in its LOADF->MUL pipe (make it >= 16 cells).
+
+Five rooms, each with at most two pipes per direction, plus three one-room ring
+turnarounds:
+
+  GATE   r->N ; s(a: N) ; M ; r->M ; s(a: M) ; * ; b ; W ; N M 9 + M 7 + ;
+         s(a: 16-M) ; s(b: M) ; r->K ; s(b: K) ; [N*M x {r ; s(a)}] ;
+         [forever {r ; s(b)}]
+         `N M 9 + M 7 +` is 16-M built from A=M with B as scratch, which is the
+         one arithmetic trick the front end needs: there is no way to load 16
+         into A without touching B, and B is live everywhere it matters.
+  APAD   ring [N, M, 16-M].  forever { r(ring)->c ; s(out: c) ;
+         M ; 1 ; N ; + ; s(ring: c-1) ; r(ring)->M ; s(ring) ; b ;
+         [M x {r(in) ; s(out)}] ; r(ring)->16-M ; s(ring) ; b ;
+         [x {0 ; s(out)}] }
+  BZERO  ring [M, K].  forwards M*K real values, then emits (16-M)*K zeros.
+  BPAD   ring [K].  forever { r(ring) ; s(ring) ; s(out: K) ; b ;
+         [K x {r(in) ; s(out)}] } — one [K, B row] block per lap.
+  MERGE  forever { r(a)->c ; s(out) ; X ; nonzero -> 16 x {r(a) ; s(out)} } ;
+         then forever { r(b) ; s(out) }.  MERGE is the only room that has to
+         know where A ends, and the countdown tells it.
+
+APAD keeps looping and blocking after it emits the 0; MERGE has already switched
+to the b path and never reads it again, so the stall is harmless.
+
+`solve_ports` will place all of these — every one has at most two incoming and
+two outgoing pipes, which is the regime it solves comfortably.
 """
 from __future__ import annotations
 
@@ -434,11 +444,17 @@ def add_room(name: str, first: bool) -> Room:
     if first:
         specs.append(PortSpec("prod_in", "in", ("N",)))
     else:
-        # both incoming pipes come down from the band above, so both mouths are
-        # on the north wall and the split is purely by column.
-        specs += [PortSpec("psum_in", "in", ("N",)),
-                  PortSpec("prod_in", "in", ("N",))]
-        ops = [((2, 0), "r", "psum_in"), ((4, 0), "r", "prod_in")]
+        # Both incoming mouths are on the north wall and split purely by column,
+        # and the *product* is read first on purpose: `+` is commutative, so
+        # reading it first puts prod_in west and psum_in east.  That is what lets
+        # the product drop straight down from MUL (which is directly overhead and
+        # west) while the psum arrives from an east channel — and it is what frees
+        # the west channel for the chain.  Read psum first and both channels end
+        # up on the same side, where the chain's riser and the psum's riser cross
+        # at every band and no row assignment exists.
+        specs += [PortSpec("prod_in", "in", ("N",)),
+                  PortSpec("psum_in", "in", ("N",))]
+        ops = [((2, 0), "r", "prod_in"), ((4, 0), "r", "psum_in")]
     return build_room(name, w, 2, lay, specs, ops)
 
 
@@ -470,67 +486,139 @@ def mul_room(name: str) -> Room:
     return build_room(name, W_, H_, lay, specs, ops)
 
 
+def counted_loop_west(c: Circuit, x: int, y: int, body: str) -> tuple[int, int]:
+    """`counted_loop` mirrored: entered heading **west** at (x,y), exits west.
+
+    The peel glyph has to be `a`, not `d`: clockwise from west is north, which
+    walks the man into the ceiling.  Counter-clockwise from west is south, into
+    the body, which is what the eastward loop gets from `d`.
+
+        (x,y)=`<`  (x-1,y)=`a`          a: BP>0 -> CCW/south into the body
+        (x-1,y+1..)= body                  BP==0 -> straight west, out
+        (x-1,y+k+1)=`>`  (x,y+k+1)=`^`
+        (x,y+1)=`m`
+    """
+    k = len(body)
+    c.set(x, y, "<")
+    c.set(x - 1, y, "a")
+    c.run(x - 1, y + 1, body, d=S)
+    c.set(x - 1, y + k + 1, ">")
+    c.set(x, y + k + 1, "^")
+    c.set(x, y + 1, "m")
+    c.blanks(x, y + 2, k - 1, d=S)
+    return x - 2, y
+
+
 def loadf_room(name: str, f: int) -> Room:
-    """Feeder: loads its own b-block into the ring, forwards the others, then
-    per row hands MUL its weight, forwards the rest of the row, and relays one
-    row's worth of ring traffic."""
-    init_head = ">@rsMb"                       # r(block K) s(ring) M b
-    la_x = len(init_head)                      # LA: K x { r ; s(ring) }
+    """Feeder, laid **right to left**.
+
+    Running the code westward is the whole point: it puts the ring writes (the
+    INIT head and LA) at the *east* end and the chain writes (LB, LC) at the
+    *west* end, so `solve_ports` can put ``ring_out`` on the east wall — facing
+    TURN, which the floor plan forces to sit east — and ``chain_out`` on the
+    west wall, facing the chain channel.  Laid the other way round the two
+    pipes both have to leave eastward and cannot be nested; that is what
+    blocked P >= 2.
+
+    The man spawns facing east by definition, so row 0 is two cells (`@v`) that
+    turn him south then west onto the INIT row.
+
+        row 0   .. @ v          spawn, turn down
+        row 1   [LB] <tail> [LA] b M s r <     INIT, running west
+        row 5   transit back to the east edge
+        row 6   [LC] .... b <F> s r <          MAIN, running west
+        row 10  return leg
+    """
     tail = ("1+M" + _times_const(f) + "b") if f else ""
-    main_head = "> rs" + (const_free(f) + "b" if f else "")
-    # LB (init, forward other blocks) and LC (main, forward rest of row) both
-    # send to `chain_out`; stacking them in one column is what makes the
-    # three-way `s` split solvable at all.
-    loop_x = max(la_x + 2 + len(tail), len(main_head))
-    W_ = loop_x + (4 if f else 2)
-    MAIN_Y = 5
-    H_ = MAIN_Y + 6
+    lt = len(tail)
+    cf = const_free(f) if f else ""
+    W_ = max(10, lt + 12)
+    H_, MAIN_Y = 11, 6
+    la_x = W_ - 6                      # LA entry; its body column is la_x-1
+    init_end = W_ - 8                  # first free cell west of LA
+    lb_x = init_end - lt               # LB entry; body column lb_x-1
+    loop_col = lb_x - 1
 
     def lay(c: Circuit) -> None:
-        c.run(0, 0, init_head)
-        ex, _ = c.counted_loop(la_x, 0, "rs")
-        ex, _ = c.run(ex, 0, tail)
+        c.set(W_ - 2, 0, "@")
+        c.set(W_ - 1, 0, "v")
+        c.set(W_ - 1, 1, "<")
+        c.run(W_ - 2, 1, "rsMb", d=W)
+        ex, _ = counted_loop_west(c, la_x, 1, "rs")
         if f:
-            c.counted_loop(loop_x, 0, "rs")
-            ex = loop_x + 2
-        # INIT -> MAIN: east, down the spare column, west along row 4, into MAIN
-        c.route((ex, 0), E, [(W_ - 1, 0), (W_ - 1, 4), (0, 4)], (0, MAIN_Y), E)
-        c.run(0, MAIN_Y, main_head)
-        x = loop_x
+            ex, _ = c.run(ex, 1, tail, d=W)
+            ex, _ = counted_loop_west(c, lb_x, 1, "rs")
+        c.route((ex, 1), W, [(0, 1), (0, 5), (W_ - 1, 5)], (W_ - 1, MAIN_Y), W)
+        ex, _ = c.run(W_ - 2, MAIN_Y, "rs" + (cf + "b" if f else ""), d=W)
         if f:
-            c.counted_loop(loop_x, MAIN_Y, "rs")
-            x = loop_x + 2
-        c.route((x, MAIN_Y), E, [(x, H_ - 1), (0, H_ - 1)], (0, MAIN_Y), E)
+            ex, _ = counted_loop_west(c, lb_x, MAIN_Y, "rs")
+        c.route((ex, MAIN_Y), W, [(0, MAIN_Y), (0, H_ - 1), (W_ - 1, H_ - 1)],
+                (W_ - 1, MAIN_Y), W)
 
     specs = [
         PortSpec("chain_in", "in", ("N",)),
-        PortSpec("chain_out", "out", ("E",)), PortSpec("ring_out", "out", ("N",)),
+        PortSpec("chain_out", "out", ("W",)), PortSpec("ring_out", "out", ("E",)),
         PortSpec("mul_out", "out", ("S",)),
     ]
     ops = [
-        ((3, 0), "s", "ring_out"),
-        ((la_x + 1, 2), "s", "ring_out"),
-        ((3, MAIN_Y), "s", "mul_out"),
+        ((W_ - 3, 1), "s", "ring_out"),
+        ((la_x - 1, 3), "s", "ring_out"),
+        ((W_ - 3, MAIN_Y), "s", "mul_out"),
     ]
     if f:
-        ops += [
-            ((loop_x + 1, 2), "s", "chain_out"),
-            ((loop_x + 1, MAIN_Y + 2), "s", "chain_out"),
-        ]
+        ops += [((loop_col, 3), "s", "chain_out"),
+                ((loop_col, MAIN_Y + 2), "s", "chain_out")]
     else:
         specs = [s for s in specs if s.name != "chain_out"]
     return build_room(name, W_, H_, lay, specs, ops)
 
 
-def src_room(name: str, vals: list[int]) -> Room:
-    """Test-only: emit `vals` then halt.  Only used by the probes."""
-    body = "@" + "".join(f"`{v}`s" if not 0 <= v <= 9 else f"{v}s" for v in vals) + "H"
-    w = len(body)
+def lit_free(n: int) -> str:
+    """Glyphs leaving A = n for any |n| <= 99, using B as scratch and **no
+    backticks** (a backtick pairs by column as well as by row, so one in a
+    generated room can pair with one in another room and swallow a wall)."""
+    if n < 0:
+        return lit_free(-n) + "N"
+    if n <= 9:
+        return str(n)
+    if n <= 18:
+        return f"9M{n - 9}+"          # A=9, B=9, A=n-9, A=(n-9)+9
+    for a in range(9, 1, -1):
+        for b in range(18, 1, -1):
+            c = n - a * b
+            if 0 <= c <= 9:
+                # A=b, B=b, A=a, A=a*b, B=a*b, A=c, A=c+a*b
+                return lit_free(b) + f"M{a}*" + (f"M{c}+" if c else "")
+    raise ValueError(n)
+
+
+def src_room(name: str, vals: list[int], width: int = 44) -> Room:
+    """Test-only stand-in for the front end: emit `vals` in order, then halt.
+
+    Snaked across rows, because a 16-stage probe stream is several hundred
+    values and a single row would be wider than the machine.
+    """
+    body = "".join(lit_free(v) + "s" for v in vals) + "H"
+    span = width - 2
+    chunks = [body[i:i + span] for i in range(0, len(body), span)] or [""]
+    h = len(chunks)
 
     def lay(c: Circuit) -> None:
-        c.run(0, 0, body)
+        for y, chunk in enumerate(chunks):
+            east = y % 2 == 0
+            if y == 0:
+                c.set(0, 0, "@")
+                c.run(1, 0, chunk)
+            elif east:
+                c.set(0, y, ">")
+                c.run(1, y, chunk)
+            else:
+                c.set(width - 1, y, "<")
+                c.run(width - 2, y, chunk, d=W)
+            if y + 1 < h:
+                c.set(width - 1 if east else 0, y, "v")
 
-    return build_room(name, w, 1, lay, [PortSpec("out", "out")], [])
+    return build_room(name, width, h, lay, [PortSpec("out", "out", ("S",))], [])
 
 
 def io_room(name: str, glyph: str, kind: str) -> Room:
@@ -612,28 +700,33 @@ def check_mouths(grid: Grid, expect: int) -> None:
 # ── the probe: a P-stage chain fed by a hard-coded source room ───────────────
 
 
-GAP = 16                 # rows between LOADF and MUL: the ring serpentine lives here
+GAP = 13                 # rows between LOADF and MUL: the ring serpentine lives here
 
 
 def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
-    """P stages stacked vertically.  `stream` non-None => a source room stands in
-    for the loader (probe mode).  Returns (grid, expected pipe count).
+    """P stages stacked vertically.  Returns (grid, expected pipe count).
 
-    Channel plan, and it is the whole difficulty of this machine.  MUL has three
-    pipes on its north wall, in this column order: ``a_in`` (west), ``ring_out``,
-    ``ring_in`` (east).  That order is *forced* — MUL's first `r` is west of its
-    second, so the a-mouth has to be the western one — and it decides the rest of
-    the floor plan: the ring partner (TURN) must sit **east** so its two pipes
-    nest outside the weight pipe, and the weight must come **straight down** from
-    LOADF.  Everything that has to get past the stage (the chain, the psum) is
-    therefore pushed out to channels: the chain east of TURN, the psum west of
-    the rooms.  Rows in the gap are allocated strictly top-to-bottom so no two
-    pipes want the same cell:
+    THE FLOOR PLAN, AND WHY IT IS THE ONLY ONE
 
-        r_a     weight turns west onto MUL.a_in's column
-        r_ring  MUL.ring_out turns east toward TURN
-        r_ser   the TURN->MUL serpentine's first rung (it is the eastmost target,
-                so it crosses the other two columns above where they are live)
+    MUL's north wall carries three pipes in a *forced* column order —
+    ``a_in`` < ``ring_out`` < ``ring_in`` — because MUL's first `r` (the weight)
+    sits west of its second (the ring).  Everything else follows:
+
+      * TURN sits **east**, so its two pipes nest outside the weight pipe, which
+        drops straight down from LOADF.
+      * the three gap pipes turn on strictly ordered rows, ``r_a`` above
+        ``r_ring`` above ``r_ser``, so each crosses the others' columns only
+        above where they are live.
+      * LOADF is laid right-to-left, so ``ring_out`` is on the east wall facing
+        TURN and ``chain_out`` on the west wall facing the **west channel**.
+      * ADD reads the product before the psum, which puts ``prod_in`` west (fed
+        straight down from MUL) and ``psum_in`` east — so the psum runs down an
+        **east channel** and never meets the chain.
+
+    Two north-south channels on the same side cannot both work: each one's
+    horizontals cross the other's riser at every band, and the row overlap is
+    unavoidable because one spans the top of a band and the other the bottom.
+    Putting them on opposite sides is the whole trick.
     """
     loadf = [loadf_room(f"LOADF{i}", p - 1 - i) for i in range(p)]
     muls = [mul_room(f"MUL{i}") for i in range(p)]
@@ -641,10 +734,11 @@ def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
     adds = [add_room(f"ADD{i}", i == 0) for i in range(p)]
 
     lw = max(r.bw for r in loadf)
-    X0, SY = 12, 12
-    BANDH = 13 + GAP + 11 + 6 + 4 + 10
-    chx = X0 + lw + 26
-    g = Grid(chx + 8, SY + BANDH * p + 14)
+    X0, SY = 22, 10 + (0 if stream is None else src_room('probe', stream).bh + 8)
+    BANDH = 13 + GAP + 11 + 6 + 4 + 12
+    chw = X0 - 4                      # west channel: the a/b chain
+    pse = X0 + lw + 23                # east channel: the psum
+    g = Grid(max(pse, X0 + 50) + 8, SY + BANDH * p + 24)
 
     for i in range(p):
         by = SY + BANDH * i
@@ -660,45 +754,44 @@ def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
         addy = muly + 11 + 6
         L, T, M_, A = loadf[i], turns[i], muls[i], adds[i]
         r_a, r_ring, r_ser = muly - 12, muly - 10, muly - 8
+        east2 = X0 + lw + 6
         mx0, my0 = L.mouth("mul_out")
         ax, ay = M_.mouth("a_in")
+        g.pipe([(mx0, my0), (mx0, r_a), (ax, r_a), (ax, ay)])
         rx, ry = M_.mouth("ring_out")
         bx, byy = T.mouth("back")
-        ox, oy = T.mouth("out")
-        ix, iy = M_.mouth("ring_in")
-        east2 = X0 + lw + 6
-        east3 = X0 + lw + 20
-        g.pipe([(mx0, my0), (mx0, r_a), (ax, r_a), (ax, ay)])
         g.pipe([(rx, ry), (rx, r_ring), (east2, r_ring), (east2, byy), (bx, byy)])
         fx, fy = L.mouth("ring_out")
         tx, ty = T.mouth("fill")
-        g.pipe([(fx, fy), (fx, by - 4), (tx, by - 4), (tx, ty)])
-        g.pipe([(ox, oy), (ox, r_ser), (east3, r_ser), (east3, r_ser + 2),
-                (ix + 1, r_ser + 2), (ix + 1, r_ser + 4), (east3, r_ser + 4),
-                (east3, r_ser + 6), (ix, r_ser + 6), (ix, iy)])
+        g.pipe([(fx, fy), (tx, fy), (tx, ty)])
+        ox, oy = T.mouth("out")
+        ix, iy = M_.mouth("ring_in")
+        # The TURN->MUL leg has to hold K+1 <= 17 values while the array is
+        # still loading (MUL is not reading yet), and no more: every cell beyond
+        # that is a tick of revolution latency at each row boundary.  Going
+        # straight west from TURN is already ~30 cells, so it needs no serpentine.
+        g.pipe([(ox, oy), (ox, r_ser), (ix, r_ser), (ix, iy)])
         px, py = M_.mouth("prod_out")
         qx, qy = A.mouth("prod_in")
         g.pipe([(px, py), (px, py + 2), (qx, py + 2), (qx, qy)])
         npipe += 5
         if i + 1 < p:
-            # chain: east of TURN, down the far channel, back west into the next
-            # LOADF's east wall.  Nothing else lives east of `east3`.
             cx, cy = L.mouth("chain_out")
             nx, ny = loadf[i + 1].mouth("chain_in")
-            g.pipe([(cx, cy), (chx, cy), (chx, ny - 5), (nx, ny - 5), (nx, ny)])
-            # psum: west channel, clear of every room in the band below
+            g.pipe([(cx, cy), (chw, cy), (chw, ny - 4), (nx, ny - 4), (nx, ny)])
             sx0, sy0 = A.mouth("psum_out")
             dx0, dy0 = adds[i + 1].mouth("psum_in")
-            g.pipe([(sx0, sy0), (sx0, sy0 + 2), (X0 - 6, sy0 + 2),
-                    (X0 - 6, dy0 - 2), (dx0, dy0 - 2), (dx0, dy0)])
+            g.pipe([(sx0, sy0), (sx0, sy0 + 2), (pse, sy0 + 2),
+                    (pse, dy0 - 2), (dx0, dy0 - 2), (dx0, dy0)])
             npipe += 2
 
     hx, hy = loadf[0].mouth("chain_in")
     if stream is None:
         raise NotImplementedError("front end not built; see the module docstring")
     src = src_room("SRC", stream)
-    g.place(src, X0, hy - 8)
-    g.pipe([(hx, hy - 5), (hx, hy)])
+    g.place(src, X0, SY - src.bh - 6)
+    sx, sy = src.mouth("out")
+    g.pipe([(sx, sy), (sx, hy - 3), (hx, hy - 3), (hx, hy)])
     npipe += 1
     ox, oy = adds[-1].mouth("psum_out")
     o = io_room("O", "O", "in")
