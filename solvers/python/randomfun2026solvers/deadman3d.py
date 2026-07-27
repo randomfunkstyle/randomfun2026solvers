@@ -1740,7 +1740,7 @@ def _local_build(out_dir: Path, cmds: list[int]) -> None:
     (out_dir / "deadman-3d_local.cases.json").write_text(
         json.dumps(cases_json(cmds)) + "\n", encoding="utf-8")
     (out_dir / "deadman-3d_local.input.txt").write_text(
-        " ".join(str(w) for w in preamble_words() + list(cmds)) + "\n", encoding="utf-8")
+        " ".join(str(w) for w in input_words(list(cmds))) + "\n", encoding="utf-8")
     _write_pngs([title_frame()] + frames_for_commands(cmds), out_dir / "frames")
     print(f"wrote {out_dir}/deadman-3d_local.cases.json, .input.txt, frames/")
 

@@ -689,3 +689,19 @@ def test_the_taped_machine_census_dims_and_first_round_gate() -> None:
     res = FastLittleman(src).run(inp, frames=frames, max_ticks=300_000_000)
     assert res.fatal is None, res.fatal
     assert res.passed is True
+
+
+def test_input_txt_is_the_flattened_cases_input() -> None:
+    """input.txt must be EVERYTHING the program reads — preamble, title runs,
+    commands — i.e. exactly the cases file's rounds flattened. A hand-rolled
+    writer once dropped the title words and shipped a 345-word file that left
+    the machine blocked at the title painter forever."""
+    import json
+
+    rounds = json.loads(
+        (REPO / "littleman" / "examples" / "deadman-3d.cases.json").read_text()
+    )["publicTestData"][0]["rounds"]
+    flat = [w for r in rounds for w in r["in"]]
+    txt = (REPO / "littleman" / "examples" / "deadman-3d.input.txt").read_text().split()
+    assert txt == flat
+    assert txt == [str(w) for w in d3.input_words(list(d3.WALK))]
