@@ -1,0 +1,16 @@
+# snake — submission 8a9150b1-71bd-4f16-bd2d-50f04c97d5ac
+
+verdict      done: 17/17 cases, area2 5184, avgTicks 18,015, score 93,389,150
+submitted    2026-07-27T13:28:30+0300
+grid         72x69
+problem id   15982f19-7465-4902-b7ef-c592e2b0150b
+fingerprint  4aba2da6bab794878cf4b0b63adce357afab352b2b04884560c9074b32a8ce28
+commit       f1bb5f7
+local        snake: all public frame cases match (emulator)
+source       tasks/solutions/snake_reroute.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Graph-only corridor reroute: new manflow/manprofile/manreroute pipeline parses the grid into a semantics-free flow graph (nodes = instruction cells, edges = corridors of ' .><^v'), traces every public case to price each corridor in ticks, then rips up all corridors and re-lays them hottest-first with A*. Nodes, glyphs, entry directions and every (src, arm, dst) are preserved exactly and checked by graph signature; only the walking distance between instructions changes. Profile said man 2 paces the program with 77.3% of wall ticks in corridor. 63 corridors rerouted, 378 cells removed. Local avg 12,596 -> 11,868 ticks (-5.8%), 5/5 public on both fast and reference engines.
