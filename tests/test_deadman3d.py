@@ -626,3 +626,46 @@ def test_the_first_rounds_judge_clean_on_the_native_engine() -> None:
     assert res.fatal is None, res.fatal
     assert res.output == []
     assert res.passed is True
+
+
+# ── the taped store variant: the same demo with ~20 men instead of ~700 ──────
+TAPED_MAN = REPO / "littleman" / "examples" / "deadman-3d_taped.man"
+
+
+def test_taped_registry_pins() -> None:
+    """The taped variant is opt-in: the canonical machine STAYS men-v3, and the
+    taped build is the one-liner `build_for("deadman-3d", store="taped")`."""
+    assert machine.STORE_TIER["deadman-3d"] == "men-v3"
+    # Traffic-shaped plan: the hot high addresses (POWB/HDG at 257..288, then
+    # POSX and the per-frame scalars up to PTR=329) get small cheap rings.
+    assert machine.TAPED_BANKS["deadman-3d"] == (128, 128, 40, 33)
+    assert sum(machine.TAPED_BANKS["deadman-3d"]) >= machine.TAPE_SIZE["deadman-3d"] - 1
+    assert machine.TAPED_SKIP_BATCH["deadman-3d"] == 2
+    # No deadman-3d_taped.input.txt: same program, same protocol, same input —
+    # the canonical deadman-3d.input.txt drives both machines.
+    assert not (TAPED_MAN.parent / "deadman-3d_taped.input.txt").exists()
+
+
+@slow
+def test_checked_in_taped_man_matches_the_machine_builder() -> None:
+    rows = TAPED_MAN.read_text().rstrip("\n").split("\n")
+    assert machine.build_for("deadman-3d", store="taped").rows == rows
+
+
+@slow
+def test_the_taped_machine_census_dims_and_first_round_gate() -> None:
+    """The variant's whole reason: ~20 little men (the visualizer's metric)
+    against the men-v3 store's ~700, in the same 307-wide bounding class —
+    and the frames still judge pixel-clean on the native engine."""
+    m = machine.build_for("deadman-3d", store="taped")
+    src = "\n".join(m.rows)
+    assert (max(len(r) for r in m.rows), len(m.rows)) == (307, 233)
+    assert src.count("@") == 20  # no births: static men ARE the census
+    from randomfun2026solvers.fast_littleman import FastLittleman
+
+    case = d3.cases_json(d3.WALK[:1])["publicTestData"][0]
+    inp = " / ".join(" ".join(r["in"]) for r in case["rounds"])
+    frames = [r["frames"] for r in case["rounds"]]
+    res = FastLittleman(src).run(inp, frames=frames, max_ticks=300_000_000)
+    assert res.fatal is None, res.fatal
+    assert res.passed is True

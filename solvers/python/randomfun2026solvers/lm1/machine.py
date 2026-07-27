@@ -1312,7 +1312,7 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3", "taped")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -1430,7 +1430,7 @@ def adapter_tape_gap(program_name: str, store: str) -> int:
     own column 0, where its inlet stub lives.
     """
     gap = ADAPTER_TAPE_GAP_FOR.get(program_name, ADAPTER_TAPE_GAP)
-    if store == "men-v3":
+    if store in ("men-v3", "taped"):
         gap = max(gap, 6)
     return max(gap, ADAPTER_TAPE_GAP_BY_STORE.get(store, 0))
 
@@ -2146,8 +2146,8 @@ def build(
         raise MachineError(f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}")
     if tape_jump_threshold < 1:
         raise MachineError(f"tape_jump_threshold must be positive, got {tape_jump_threshold}")
-    if store != "tape" and tape_skip_batch != 1:
-        raise MachineError("tape_skip_batch applies only to store='tape'")
+    if store not in ("tape", "taped") and tape_skip_batch != 1:
+        raise MachineError("tape_skip_batch applies only to the tape tiers")
     if store != "tape" and tape_relay_size is not None:
         raise MachineError("tape_relay_size applies only to store='tape'")
     if short_return is None:
@@ -2560,6 +2560,18 @@ def _assemble(
                 tape = v3_store_grid_block(v3_cols, v3_rows, ops=v3_ops)
             else:
                 tape = v3_store_block(tape_n, ops=v3_ops)
+        elif store == "taped":
+            from ..memory_taped import taped_store_block
+
+            tape = taped_store_block(
+                tape_n,
+                TAPED_BANKS.get(program.name, 4),
+                skip_batch=(
+                    tape_skip_batch
+                    if tape_skip_batch != 1
+                    else TAPED_SKIP_BATCH.get(program.name, 1)
+                ),
+            )
         elif store == "tape":
             tape = tape_block(
                 tape_n,
@@ -2828,10 +2840,11 @@ def _assemble(
     # walls, which is exactly why the extra decoder hop is nearly free.
     if hot is None:
         _STORE_PIPES = {
-            "men-y": None, "men-v3": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2,
+            "men-y": None, "men-v3": None, "taped": None,
+            "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2,
         }
         store_pipes = (
-            tape.pipes if store in ("men-y", "men-v3") else _STORE_PIPES[store]
+            tape.pipes if store in ("men-y", "men-v3", "taped") else _STORE_PIPES[store]
         ) + 1 + tele_pipes
     _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
     return Machine(
@@ -2997,7 +3010,7 @@ def two_tier_adapter(hot_top: int) -> _Adapter2:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3", "taped")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -4123,6 +4136,28 @@ STORE_OPS: dict[str, int] = {"deadman-3d": 1}
 #: is in scratch/deadman3d-opt/METRICS.md.
 STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (8, 42)}
 
+#: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
+#: 330 slots as banked pipe tapes behind a gate chain. This tier exists for the
+#: *little-man census* — a bank is two men (worker + relay) and a gate one,
+#: against the man-memory's ~two per slot — so the visualizer renders ~20 men
+#: instead of ~700. The price is the ring tax (~5-8 ticks per slot per read),
+#: which is why the canonical deadman-3d machine stays on men-v3; build the
+#: taped variant with ``build_for("deadman-3d", store="taped")``.
+#:
+#: The plan is a tuple of bank sizes in address order (an int means uniform).
+#: deadman-3d's is traffic-shaped, swept on the native frame gate: the high
+#: addresses are the hot ones (POWB 257..272, HDG 273..288, then POSX and the
+#: per-frame scalars up to PTR at 329), so they get two SMALL rings — bank
+#: locals, and so the ring tax, stay tiny where the traffic is — and the 256
+#: map words split across two 128s. Uniform 4x83 measured 23.7M ticks on
+#: rounds 0..1; this plan 18.6M at the same men, width and height.
+TAPED_BANKS: dict[str, int | tuple[int, ...]] = {"deadman-3d": (128, 128, 40, 33)}
+
+#: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
+#: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
+#: and measured -13% on the frame gate; the machine still fits the 307 width.
+TAPED_SKIP_BATCH: dict[str, int] = {"deadman-3d": 2}
+
 
 def display_for(slug: str) -> tuple[int, int] | None:
     """The problem's LM-75 resolution, or ``None`` when it has no display.
@@ -4214,6 +4249,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--man", "--out", dest="man", type=_Path, help="write the grid here")
     ap.add_argument("--html", type=_Path, help="write a labelled debug overlay here")
     ap.add_argument("--json", type=_Path, help="write the debug region sidecar here")
+    ap.add_argument(
+        "--store",
+        choices=STORE_TIERS,
+        help="override the slug's registered STORE tier (e.g. deadman-3d's taped variant)",
+    )
     ap.add_argument("--report", action="store_true", help="print the size report to stderr")
     ap.add_argument(
         "--compact",
@@ -4254,6 +4294,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_batch = int(args.tape_skip_batch)
     m = build_for(
         args.slug,
+        store=args.store,
         tape_skip_batch=skip_batch,
         tape_relay_size=relay_size,
         tape_jump_threshold=args.tape_jump_threshold,
