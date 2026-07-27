@@ -71,7 +71,7 @@ RM_RET, RM_FWD = 18, 19
 RK_RET, RK_FWD = 22, 23
 CMD = 26
 BAND_T, BAND_B = 1, 27
-IW, IH = 92, 28
+IW, IH = 92, 27   # interior row 28 was never used: the band ends at BAND_B
 SENTINEL_BUILD = "2M******"          # A = 128 with no backtick literal
 
 WEST = {"in": IN, "b_ret": B_RET, "a_ret": A_RET,
@@ -80,9 +80,31 @@ EAST = {"a_fwd": A_FWD, "b_fwd": B_FWD, "prod": PROD, "cmd": CMD,
         "rn_fwd": RN_FWD, "rm_fwd": RM_FWD, "rk_fwd": RK_FWD}
 
 
+def descend(w: Serpentine) -> int:
+    """Park the man on the band's **top** row heading SOUTH, and return his column.
+
+    `counted_loop` must be entered from directly above its `>`: its two columns are
+    the body and the *return* leg, and the return leg carries the `m`. A man who
+    walks up into the loop from below therefore crosses `m` before he has ever met
+    the `d` that tests the count, and the loop runs one iteration short — the exact
+    symptom that lost the last scalar of every fill. Turning at the top edge puts
+    him one column clear of the loop, pointing into its entry cell.
+    """
+    if w.d == S:
+        w._turn()                      # down to the bottom edge, back up one column
+    w._turn()                          # at the top edge: one column east, heading south
+    return w.x
+
+
 def main_room() -> tuple[Circuit, int]:
     c = Circuit(IW + 2, IH + 2)
     c.set(1, BAND_T, "@")
+    # `@` always spawns facing EAST, and the serpentine's first column is walked
+    # SOUTH — so the entry needs its own turn glyph. Without it the man sails east
+    # along the band's top row and drops into whichever column has the first `v`,
+    # entering the program in the middle. It loads and binds perfectly and computes
+    # nothing.
+    c.turn(2, BAND_T, S)
     w = Serpentine(c, 2, BAND_T, BAND_T, BAND_B, S)
 
     # ── read N, M, K into their rings ────────────────────────────────────────
@@ -91,7 +113,13 @@ def main_room() -> tuple[Circuit, int]:
     w.op("r", IN); w.op("s", RK_FWD)
 
     # ── the ADDER's count words: BP = N, then A = K and B = K1 = (M-1)*K ─────
-    w.op("r", RN_RET); w.op("b"); w.op("s", RN_FWD)
+    # BP = N + 1, not N. `counted_loop_horizontal` wants to be entered at its
+    # top-**right** cell heading south, where the first `d` sees the untouched count;
+    # the serpentine delivers the man along the top row from the west instead, so he
+    # crosses that row's `m` once before the first test and the body runs BP - 1
+    # times. Paying for it in the count costs four glyphs and no columns; re-entering
+    # the loop from above costs seven columns of MAIN's width, which is squared.
+    w.op("r", RN_RET); w.op("s", RN_FWD); w.ops("M1+b")
     w.ops("1M")
     w.op("r", RM_RET); w.op("s", RM_FWD); w.ops("-M")
     w.op("r", RK_RET); w.op("s", RK_FWD); w.ops("*M")
@@ -99,14 +127,17 @@ def main_room() -> tuple[Circuit, int]:
     x, y = w.park(CMD - 1)
     c.set(x, y, ">")
     ex, ey = c.counted_loop_horizontal(x + 1, y, "sWsWs")
-    c.turn(ex, ey, N)                      # exits south; turn back up the band
-    w.x, w.y, w.d = ex, ey, N
+    # The exit is directly under the loop's own `d`, so turning north there walks the
+    # man straight back into it: `d` with BP == 0 passes him through to the `v` above
+    # and that turns him south again — a two-cell oscillation that deadlocks the whole
+    # machine. Step one column east first, *then* turn up the band.
+    c.set(ex, ey, ">")
+    w.resume(ex + 1, ey, N)
 
     # ── fill ring A with N*M scalars, then its end marker ────────────────────
     w.op("r", RN_RET); w.op("M")
     w.op("r", RM_RET); w.op("s", RM_FWD); w.ops("*b")
-    x, y = w.park(FILL_TOP)
-    ax, ay = c.counted_loop(x, FILL_TOP, "rs")
+    ax, ay = c.counted_loop(descend(w), FILL_TOP, "rs")
     c.turn(ax, ay, S)
     w.x, w.y, w.d = ax, ay, S
     w.ops(SENTINEL_BUILD)
@@ -115,9 +146,11 @@ def main_room() -> tuple[Circuit, int]:
     # ── fill ring B with M*K values ──────────────────────────────────────────
     w.op("r", RM_RET); w.op("M")
     w.op("r", RK_RET); w.op("s", RK_FWD); w.ops("*b")
-    x, y = w.park(FILL_TOP)
-    bx, by = c.counted_loop(x, FILL_TOP, "r     s")
-    c.turn(bx, by, S)
+    bx, by = c.counted_loop(descend(w), FILL_TOP, "r     s")
+    # Leave the exit walkable and drift two columns east: the drive loop's fetch
+    # column is `bx + 2` and it is entered from the band's top row.
+    c.set(bx, by, " ")
+    c.set(bx + 1, by, " ")
     w.x, w.y, w.d = bx, by, S
 
     # ── the drive loop: one scalar per (i, t) until ring A's end marker ───────
@@ -130,6 +163,7 @@ def main_room() -> tuple[Circuit, int]:
     c.set(d0, BAND_T, "v")
     for y in range(BAND_T + 1, A_RET):
         c.set(d0, y, " ")
+    c.set(d0, FILL_TOP, "v")                   # ... where fill B hands the man over
     c.set(d0, A_RET, "r")                      # the scalar
     c.set(d0, A_RET + 1, "M")                  # ... parked in B
     c.set(d0, A_RET + 2, "b")                  # BP = scalar
@@ -157,9 +191,13 @@ def main_room() -> tuple[Circuit, int]:
     c.set(test + 3, B_RET - 1, ">")
     mx, my = c.counted_loop(test + 4, B_RET - 1, "rs*s")
 
-    # back-edge: over the top of everything, west, and down to the fetch again
+    # back-edge: over the top of everything, west, and down to the fetch again.
+    # It has to climb all the way to the band's top row, because that is the row the
+    # westward run is cleared on and the row `d0`'s `v` sits on.
     c.set(mx, my, "^")
-    c.set(mx, my - 1, "<")
+    for y in range(BAND_T + 1, my):
+        c.set(mx, y, " ")
+    c.set(mx, BAND_T, "<")
     for x in range(d0 + 1, mx):
         c.set(x, BAND_T, " ")
     return c, mx + 2
