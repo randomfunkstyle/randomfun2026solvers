@@ -115,7 +115,7 @@ numeric literal at all and the vertical-pairing load error cannot arise.
 
 from __future__ import annotations
 
-from randomfun2026solvers.circuit import E, N, Circuit
+from randomfun2026solvers.circuit import E, N, W, Circuit
 from randomfun2026solvers.subset_sum_mitm import public_cases
 
 __all__ = [
@@ -146,18 +146,98 @@ BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)
 #: Worker interior.  ``IH`` is set by :data:`NOSOL_ROW` — the deepest thing in the
 #: room is the no-solution emit, and everything below the last code block is the
 #: corridor that reaches it.  One row of slack past that row is all it needs.
-IW, IH = 46, 146
+IW, IH = 46, 135
 
 
-def _op(c: Circuit, x: int, y: int, glyph: str, band: str) -> None:
-    """Place `r` or `s` at (x,y), refusing any column outside `band`."""
+#: Bands used by the block currently being drawn, so :func:`_turned` can refuse
+#: one that spans two of them.  A list, not a set, because it is sliced by mark.
+_BANDS_USED: list[str] = []
+
+
+def _op(c, x: int, y: int, glyph: str, band: str) -> None:
+    """Place `r` or `s` at (x,y), refusing any column outside `band`.
+
+    The column checked is the one the glyph ends up on, not the one the caller
+    asked for: under :class:`_Turned` those differ, and it is the physical column
+    that decides which pipe the op binds to.
+    """
     lo, hi = BANDS[band]
-    if not lo <= x <= hi:
+    px = c.col(x) if hasattr(c, "col") else x
+    if not lo <= px <= hi:
         raise ValueError(
-            f"{glyph!r} at ({x},{y}) is outside the {band!r} band {lo}..{hi}; "
+            f"{glyph!r} at ({px},{y}) is outside the {band!r} band {lo}..{hi}; "
             "it would bind to another pipe"
         )
+    _BANDS_USED.append(band)
     c.set(x, y, glyph)
+
+
+#: A heading glyph read backwards is the opposite heading.  Nothing else changes:
+#: `X`, `x`, `d` and `a` turn *relative* to the man's heading, and a rotation
+#: reverses the heading too, so their chirality survives it.  A plain horizontal
+#: mirror would flip all four and silently invert every branch.
+_FLIP = {">": "<", "<": ">", "^": "v", "v": "^"}
+
+
+class _Turned:
+    """A :class:`Circuit` façade that draws everything rotated 180 degrees.
+
+    The point is that a **westbound** block is not a new block.  A man walking
+    west over a block laid out backwards executes exactly the same glyph
+    sequence in exactly the same order, so the westbound form of any block is its
+    own drawing turned around — which means it is written once and used twice.
+
+    Rotation, not reflection.  Under a horizontal mirror a clockwise `X` becomes
+    counter-clockwise and every branch inverts; under a rotation the heading
+    reverses as well and the two cancel.  That is what makes this mechanical.
+    """
+
+    def __init__(self, c: Circuit, ax: int, ay: int) -> None:
+        self.c, self.ax, self.ay = c, ax, ay      # (x, y) -> (ax - x, ay - y)
+
+    def col(self, x: int) -> int:
+        return self.ax - x
+
+    def set(self, x: int, y: int, ch: str) -> None:
+        self.c.set(self.ax - x, self.ay - y, _FLIP.get(ch, ch))
+
+    def free(self, x: int, y: int) -> bool:
+        return self.c.free(self.ax - x, self.ay - y)
+
+    def get(self, x: int, y: int) -> str:
+        return _FLIP.get(self.c.get(self.ax - x, self.ay - y), self.c.get(self.ax - x, self.ay - y))
+
+    def run(self, x: int, y: int, ops: str, d=E) -> tuple[int, int]:
+        for ch in ops:
+            self.set(x, y, ch)
+            x, y = x + d[0], y + d[1]
+        return x, y
+
+    def horizontal(self, y: int, x0: int, x1: int) -> None:
+        self.c.horizontal(self.ay - y, self.ax - x0, self.ax - x1)
+
+    def vertical(self, x: int, y0: int, y1: int) -> None:
+        self.c.vertical(self.ax - x, self.ay - y0, self.ay - y1)
+
+
+def _turned(c: Circuit, ax: int, ay: int, draw, *args, **kw):
+    """Draw `draw` rotated about `(ax/2, ay/2)`, refusing a two-band block.
+
+    **A block that touches two pipe bands cannot be turned around.**  Rotation
+    moves its westmost op east and its eastmost op west, so an `io`-band `s` and
+    a `v`-band `r` swap sides and each binds to the other's ring.  Nothing about
+    the grid says so — it loads, it runs, and it answers with the wrong number —
+    so the ban is a build error here rather than a rule to remember.
+    """
+    mark = len(_BANDS_USED)
+    result = draw(_Turned(c, ax, ay), *args, **kw)
+    used = set(_BANDS_USED[mark:])
+    if len(used) > 1:
+        raise ValueError(
+            f"{draw.__name__} touches bands {sorted(used)}; turning it around "
+            "swaps them, so each op would bind to the other band's ring"
+        )
+    return result
 
 
 def rin(c: Circuit, x: int, y: int) -> None:
@@ -315,6 +395,40 @@ def _peel_emit(c: Circuit, xr: int, y: int, xout: int) -> tuple[int, int]:
 # block's own row, which is the mistake that silently re-steers a man.
 
 EAST_COL, WEST_COL = 38, 13
+
+
+def _east_to_west(c: Circuit, x: int, y: int, drop: int, height: int, x_entry: int) -> int:
+    """Turn the man around into a westbound block `height` rows tall.
+
+    He drops down the column he left the last block on — which is east of
+    everything the turned block occupies, so the descent runs beside it, not
+    through it — and walks in along the block's own bottom row.  Two glyphs, and
+    **no row of its own**: that row is the turned block's last row anyway.
+
+    This is the whole of the saving.  The all-eastbound stack spent one blank row
+    per block sending the man back to the west column, twenty-odd times.
+    """
+    c.horizontal(y, x, drop)
+    c.set(drop, y, "v")
+    c.vertical(drop, y, y + height)
+    c.set(drop, y + height, "<")
+    c.horizontal(y + height, drop, x_entry)
+    return y + height
+
+
+def _west_to_east(c: Circuit, x: int, y: int, x_entry: int, drop: int = 1) -> int:
+    """...and back east, along the row the westbound block just finished on.
+
+    `drop` is 1 unless the block being entered is a :func:`_rot`, whose exit cell
+    sits on the row **above** its body: that row has to be free, so the man is
+    dropped two rows instead of one and the turned block above keeps its own.
+    """
+    c.horizontal(y, x, WEST_COL)
+    c.set(WEST_COL, y, "v")
+    c.vertical(WEST_COL, y, y + drop)
+    c.set(WEST_COL, y + drop, ">")
+    c.horizontal(y + drop, WEST_COL, x_entry)
+    return y + drop
 
 
 def _link(
@@ -908,7 +1022,7 @@ def _scan(c: Circuit) -> None:
 #: with ring V threaded through both, which needs a baton word and an idle relay
 #: loop in whichever room is not the active phase.  Width is free either way:
 #: the grid is 92 wide against a 153 side.
-NOSOL_COL, NOSOL_ROW = 44, 145
+NOSOL_COL, NOSOL_ROW = 44, 134
 
 
 def _nosol(c: Circuit) -> None:
@@ -1001,9 +1115,9 @@ def _phase3(c: Circuit) -> None:
 #: Emit's rows.  Three laps: count the bits and answer `k`, then the left half's
 #: chosen values, then the right half's.  Left before right **is** increasing
 #: index order, which is why no combined mask and no output buffer are needed.
-E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 80, 83, 89, 94, 98
-E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 103, 106, 112, 116, 121, 125
-E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 128, 131, 137, 142
+E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 80, 84, 85, 90, 94
+E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 99, 103, 104, 108, 113, 117
+E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 120, 124, 126, 131
 
 
 def _emit(c: Circuit) -> None:
@@ -1025,11 +1139,15 @@ def _emit(c: Circuit) -> None:
     vr(c, 23, y)                            # A = CR
     vs(c, 24, y)
     c.run(25, y, "+b1M0")                   # BP = C*256 + CR, A = 0, B = 1
-    _link(c, (30, y), E, E1_COUNT - 2, (17, E1_COUNT))
 
-    _bits(c, 20, E1_COUNT, shift=False)     # A = the number of chosen indices
-    _link(c, (21, E1_COUNT), E, E1_EMIT - 2, (14, E1_EMIT))
-    y = E1_EMIT
+    # ── the population count runs **westbound**, turned around ───────────────
+    # `_bits` touches no pipe at all, so it is the safest block in the room to
+    # turn: nothing about it can bind to the wrong ring.  Four rows and a link
+    # row become four rows.
+    row = _east_to_west(c, 30, y, 30, 4, 29)
+    _turned(c, 46, row, _bits, 20, 0, shift=False)
+    y = _west_to_east(c, 25, row, 14)
+    assert (row, y) == (E1_COUNT, E1_EMIT), (row, y)
     c.set(14, y, "v")
     c.set(14, y + 1, "<")
     c.horizontal(y + 1, 14, OUT_COL)
@@ -1056,11 +1174,11 @@ def _emit(c: Circuit) -> None:
     vr(c, 21, y)                            # A = G
     vs(c, 22, y)
     c.run(23, y, "+b1M0")                   # BP = C + 2^hL, A = 0, B = 1
-    _link(c, (28, y), E, E2_MASK - 2, (17, E2_MASK))
-    _bits(c, 20, E2_MASK, shift=True)
-    c.run(21, E2_MASK, "}b")                # BP = the left mask
-    _link(c, (23, E2_MASK), E, E2_ROT - 2, (14, E2_ROT))
-    y = E2_ROT
+    row = _east_to_west(c, 28, y, 30, 4, 29)
+    _turned(c, 46, row, _bits, 20, 0, shift=True)
+    c.run(25, row, "}b", d=W)               # BP = the left mask, walked westward
+    y = _west_to_east(c, 23, row, 14)
+    assert (row, y) == (E2_MASK, E2_ROT), (row, y)
     vr(c, 14, y)                            # CR and GR, rotated
     vs(c, 15, y)
     vr(c, 16, y)
@@ -1088,10 +1206,11 @@ def _emit(c: Circuit) -> None:
     vr(c, 23, y)                            # A = GR = 256
     vs(c, 24, y)
     c.run(25, y, "+b1M0")                   # BP = CR + 256, A = 0, B = 1
-    _link(c, (30, y), E, E3_MASK - 2, (17, E3_MASK))
-    _bits(c, 20, E3_MASK, shift=True)
-    c.run(21, E3_MASK, "}b")                # BP = the right mask
-    _link(c, (23, E3_MASK), E, E3_SKIP - 2, (19, E3_SKIP))
+    row = _east_to_west(c, 30, y, 30, 4, 29)
+    _turned(c, 46, row, _bits, 20, 0, shift=True)
+    c.run(25, row, "}b", d=W)               # BP = the right mask
+    y = _west_to_east(c, 23, row, 19, drop=2)
+    assert (row, y) == (E3_MASK, E3_SKIP), (row, y)
     _rot(c, VRET_COL, E3_SKIP)              # skip the left values, stop on MB
     _link(c, (22, E3_SKIP - 1), N, E3_PEEL - 3, (18, E3_PEEL))
     _peel_emit(c, VRET_COL, E3_PEEL, OUT_COL)
