@@ -615,3 +615,33 @@ def test_v1_main_is_made_of_legal_glyphs_and_stays_small() -> None:
     assert not bad, f"illegal glyphs: {sorted(bad)}"
     used_w = max((len(r.rstrip()) for r in rows), default=0)
     assert used_w <= 34, f"MAIN v1 is {used_w} columns; the ports only span ~26"
+
+
+def test_main_binds_by_row_with_every_port_on_one_wall() -> None:
+    """All thirteen ports on a single wall, which is what avoids ring wraps.
+
+    Splitting them (incoming west, outgoing east) also gives clean row binding, but
+    it forces every ring to wrap the room — a ring must return to the room it left
+    — and costing MAIN's five rings that way came to ~95x75, worse than the machine
+    being replaced. With both legs on the same wall the relay sits just outside and
+    the pipe is only as long as its capacity needs.
+
+    So the binding must hold with one combined port set, not two separate ones.
+    """
+    from randomfun2026solvers import matmul_main as mm
+
+    ports = {**mm.WEST, **mm.EAST}
+    assert len(set(ports.values())) == len(ports), "two ports share a row"
+    c, _ = mm.main_room()
+    ops = 0
+    for y, row in enumerate(c.rows()):
+        for x, ch in enumerate(row):
+            if ch not in "rs":
+                continue
+            ops += 1
+            got = min(ports, key=lambda k: (abs(y - ports[k]), ports[k]))
+            assert ports[got] == y, (
+                f"{ch!r} at row {y} binds {got!r} on row {ports[got]}; with one wall "
+                "an op must sit exactly on its own port's row"
+            )
+    assert ops >= 30, f"only {ops} pipe ops"

@@ -13,13 +13,25 @@ come from a register ring, because `r`, `s` and `b` all leave B alone:
 So there is no scalar pipe, no K gauge and no separate worker room. The ADDER
 accumulates and emits, so MAIN never touches the output either.
 
-And because *every* incoming pipe is on the west wall and every outgoing on the
-east, there is no wall competing with itself: an `r` and an `s` each bind purely
-by row, anywhere in the room. That removes the west-half/east-half constraint that
-was forcing the program to be reordered.
+## All thirteen ports go on ONE wall
 
-    west   in@2  b_ret@4  a_ret@8  rn@9  rm@11  rk@13
-    east   a_fwd@3  b_fwd@5  prod@7  rn@10  rm@12  rk@14  cmd@15
+Every port on a single wall means the distance *along* the other axis is identical
+for all of them, so `r` and `s` each bind purely by row, anywhere in the room.
+
+    in@2  a_fwd@3  b_ret@4  b_fwd@5  prod@7  a_ret@8
+    rn_ret@9  rn_fwd@10  rm_ret@11  rm_fwd@12  rk_ret@13  rk_fwd@14  cmd@15
+
+One wall, not two, and that is the whole point. Splitting them — incoming west,
+outgoing east — also gives clean row binding, but it forces every **ring** to wrap
+around the room, because a ring must return to the room it left. Costed with a
+nesting discipline that keeps the wrap planar, MAIN's five rings came to roughly
+95x75: worse than the machine being replaced, before an instruction runs.
+
+With both legs of a ring on the *same* wall there is no wrap. The ring is
+`MAIN → relay → MAIN`, the relay sits just outside, and the pipe is as long as its
+capacity needs and no longer. The three register rings become 2-cell hops to relay
+rooms stacked in a column beside the room; only ring A and ring B are long, and
+their length is serpentined where it is free.
 
 Row order is the program, because `counted_loop` walks a body down a column one
 glyph per row:
