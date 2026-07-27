@@ -250,6 +250,59 @@ def adder_cells() -> dict[tuple[int, int], str]:
     return cells
 
 
+# ── the gauge: a loop count that costs one glyph and no registers ────────────
+# `q` sets BP to the number of values in the nearest incoming pipe. Point a pipe
+# into a room and never read it, and it fills to exactly what was put in and stays
+# there — so `q` is a *repeatable* read of a constant, and unlike `b` it touches
+# neither A nor B.
+#
+# That is what makes the parallel worker possible. Its cycle is
+# `r(b) s(b) * s(prod)` with the scalar sitting in B for the whole inner loop, so
+# there is no register left to load a count from: `b` would clobber A and the
+# scalar is in B. `q` reads K/P off a gauge without disturbing either.
+#
+# Measured on the reference wasm (`test_a_gauge_reports_its_own_occupancy`):
+# feeding 1/2/3/5 values into a 5-cell gauge reports 1/2/3/5, and feeding 7
+# reports 5 — it saturates at the pipe's capacity, which is also its length
+# (SPEC.md). So a gauge for a value up to V needs V cells, and matmul's counts are
+# all <= 16, which is why this is cheap here and would not be for N*M.
+GAUGE_SETTLE = 28  #: nop cells walked before `q`, so the pipe has settled first
+
+
+def gauge_probe(capacity: int = 5) -> str:
+    """A grid whose output length *is* what `q` saw, for pinning the semantics."""
+    room_t, room_b, room_r = 8, 15, 38
+    w, h = room_r + 8, room_b + 1
+    g = [[" "] * w for _ in range(h)]
+
+    def put(x: int, y: int, ch: str) -> None:
+        g[y][x] = ch
+
+    def txt(x: int, y: int, text: str) -> None:
+        for i, ch in enumerate(text):
+            g[y][x + i] = ch
+
+    txt(2, 0, "+-+"), txt(2, 1, "|I|"), txt(2, 2, "+-+")
+    for y in range(3, 3 + capacity):
+        put(3, y, "v")
+    txt(0, room_t, "+" + "-" * (room_r - 1) + "+")
+    for y in range(room_t + 1, room_b):
+        put(0, y, "|"), put(room_r, y, "|")
+    txt(0, room_b, "+" + "-" * (room_r - 1) + "+")
+
+    put(1, 9, "@")
+    put(GAUGE_SETTLE + 1, 9, "q")
+    x, y = GAUGE_SETTLE + 2, 9
+    put(x, y, ">"), put(x + 1, y, "d")            # counted loop: emit `1` per unit
+    put(x + 1, y + 1, "1"), put(x + 1, y + 2, "s")
+    put(x + 1, y + 3, "<"), put(x, y + 3, "^")
+    put(x, y + 1, "m"), put(x, y + 2, " ")
+    put(x + 2, y, "H")
+    put(room_r + 1, y + 2, ">"), put(room_r + 2, y + 2, ">")
+    txt(room_r + 3, y + 1, "+-+"), txt(room_r + 3, y + 2, "|O|"), txt(room_r + 3, y + 3, "+-+")
+    return "\n".join("".join(r).rstrip() for r in g) + "\n"
+
+
 # ── seeding P men onto one cycle ─────────────────────────────────────────────
 def seed_chain(put, start: tuple[int, int], men: int, join_row: int, pitch: int = 1) -> None:
     """Place ``men`` runners onto the cycle whose south row is ``join_row``.

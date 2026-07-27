@@ -380,3 +380,33 @@ def test_fast_and_reference_engines_disagree_on_ticks_once_Y_is_used() -> None:
         "the fast engine no longer understates ticks on a split machine — if this "
         "is a fix, delete this test and re-enable fast-engine tick search on Y grids"
     )
+
+
+# ── the gauge ────────────────────────────────────────────────────────────────
+@node_required
+@pytest.mark.slow
+@pytest.mark.parametrize(("fed", "seen"), [(1, 1), (2, 2), (3, 3), (5, 5), (7, 5)])
+def test_a_gauge_reports_its_own_occupancy(fed, seen, tmp_path) -> None:
+    """`q` counts the whole pipe, and a dead-end pipe saturates at its length.
+
+    This is the primitive the parallel worker needs: its inner cycle keeps the
+    scalar in B and the product in A, so there is no register free to load a loop
+    count into — `b` would clobber A. `q` reads the count off a pipe nobody reads,
+    touching neither.
+
+    The saturation at 5 is the part worth pinning: a gauge for a value up to V
+    needs V cells, so this is cheap for matmul's counts (all <= 16) and would not
+    be for something like N*M.
+    """
+    grid = matmul_y.gauge_probe(capacity=5)
+    path = tmp_path / "gauge.man"
+    path.write_text(grid, encoding="utf-8")
+    out = subprocess.run(
+        ["node", "lm.mjs", "run", str(path), "--input", " ".join(["7"] * fed),
+         "--max-ticks", "900"],
+        cwd=LM, capture_output=True, text=True, check=False,
+    )
+    assert out.returncode == 0, out.stderr.strip()[:300]
+    emitted = out.stdout.strip().splitlines()[0].split()
+    assert len(emitted) == seen, f"fed {fed}, q saw {len(emitted)}, expected {seen}"
+    assert set(emitted) == {"1"}
