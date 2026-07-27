@@ -269,8 +269,26 @@ straight-line code and in single-pipe vertical loops, so they can take any spare
 columns. Relay rooms sit in a band directly above, keeping those pipes 2–6 cells
 long, and the two long rings serpentine below.
 
-Estimated result: big room ~52x22, relay band ~10 rows, ring band ~11 rows, so
-about 52x43 → footprint 2,704 with roughly 17,000 judged ticks ≈ **46M**. With the
-3-wide SIMD packing on top, ~8,000 judged ticks ≈ **22M**. That is the honest
-ceiling of this architecture; going below it needs the width down, and the width is
-set by how far apart the pipe columns have to be spread.
+### Sizing it — and a correction
+
+My first pass put the big room at 52 columns and concluded the architecture floors
+at ~22M. That was wrong, and wrong in the direction that matters: the room does not
+need to be as wide as the code is long. It needs to be as wide as the **port
+columns**, because that is the only thing a glyph's column has to reach. Thirteen
+ports at consecutive columns plus the MAC body's six-glyph span and a corridor is
+about **22 columns**, not 52 — the program's length goes into *rows*, not columns,
+since a serpentine can hit several ports per row.
+
+    big room     22 x 20  (interior; ~260 cells of path for ~80 ops)
+    relay band   6 rooms at 6x4, two rows of three     ~10 rows
+    ring band    rings serpentined at 22 wide
+
+                          rings      ring rows   total h   footprint   judged   score
+    no packing         531 cells        24          54       2,916     ~17,000   50M
+    3-wide SIMD on B   360 cells        17          47       2,209      ~8,000   18M
+
+So the architecture does reach under 20M, but only with the packing, and only if
+the room stays near 22 columns. The lever on the remaining margin is the **port
+count** — six of the thirteen are the three register rings, and replacing them with
+`q` gauges costs one port each instead of two. That is where to look next, not at
+the code.
