@@ -146,7 +146,7 @@ BANDS: dict[str, tuple[int, int]] = {"io": (0, 11), "v": (14, 24), "b": (27, 45)
 #: Worker interior.  ``IH`` is set by :data:`NOSOL_ROW` — the deepest thing in the
 #: room is the no-solution emit, and everything below the last code block is the
 #: corridor that reaches it.  One row of slack past that row is all it needs.
-IW, IH = 46, 130
+IW, IH = 46, 125
 
 
 #: Bands used by the block currently being drawn, so :func:`_turned` can refuse
@@ -414,6 +414,22 @@ def _east_to_west(c: Circuit, x: int, y: int, drop: int, height: int, x_entry: i
     c.set(drop, y + height, "<")
     c.horizontal(y + height, drop, x_entry)
     return y + height
+
+
+def _south_to_east(c: Circuit, x: int, y: int, x_entry: int) -> int:
+    """A turned :func:`_rot` leaves heading **south**, so it needs its own turn.
+
+    Eastbound, `_rot` exits on the row *above* its body and every caller has to
+    keep that row free.  Turned, it exits on the row below — which is the way the
+    stack is already going, so the exit row is the transition row and costs
+    nothing extra.
+    """
+    c.set(x, y, "<")
+    c.horizontal(y, x, WEST_COL)
+    c.set(WEST_COL, y, "v")
+    c.set(WEST_COL, y + 1, ">")
+    c.horizontal(y + 1, WEST_COL, x_entry)
+    return y + 1
 
 
 def _west_to_east(c: Circuit, x: int, y: int, x_entry: int, drop: int = 1) -> int:
@@ -1022,7 +1038,7 @@ def _scan(c: Circuit) -> None:
 #: with ring V threaded through both, which needs a baton word and an idle relay
 #: loop in whichever room is not the active phase.  Width is free either way:
 #: the grid is 92 wide against a 153 side.
-NOSOL_COL, NOSOL_ROW = 44, 129
+NOSOL_COL, NOSOL_ROW = 44, 124
 
 
 def _nosol(c: Circuit) -> None:
@@ -1116,8 +1132,8 @@ def _phase3(c: Circuit) -> None:
 #: chosen values, then the right half's.  Left before right **is** increasing
 #: index order, which is why no combined mask and no output buffer are needed.
 E1_HEAD, E1_COUNT, E1_EMIT, E1_MB, E1_MT = 75, 79, 80, 85, 89
-E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 94, 98, 99, 103, 108, 112
-E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 115, 119, 121, 126
+E2_HEAD, E2_MASK, E2_ROT, E2_PEEL, E2_MT, E2_RR = 89, 93, 94, 98, 103, 107
+E3_HEAD, E3_MASK, E3_SKIP, E3_PEEL = 110, 114, 116, 121
 
 
 def _emit(c: Circuit) -> None:
@@ -1157,11 +1173,19 @@ def _emit(c: Circuit) -> None:
     c.horizontal(y + 2, OUT_COL - 1, VRET_COL)
     vr(c, VRET_COL, y + 2)                  # GR, rotated
     vs(c, VRET_COL + 1, y + 2)
-    _link(c, (VRET_COL + 2, y + 2), E, E1_MB - 2, (19, E1_MB))
-    _rot(c, VRET_COL, E1_MB)                # on to MB
-    _link(c, (22, E1_MB - 1), N, E1_MT - 2, (19, E1_MT))
-    _rot(c, VRET_COL, E1_MT)                # on to MT
-    _link(c, (22, E1_MT - 1), N, E2_HEAD - 3, (14, E2_HEAD))
+    # ── both rotations turned: each costs its two rows and the exit row ──────
+    # `_rot`'s axis is 44, not `_bits`'s 46: it *has* pipe ops, and a rotation
+    # about 46 lands them on columns 25 and 26, one past the `v` band's east
+    # edge.  `_op` refuses it, which is the check doing its job — a rotated ring
+    # op that binds to ring B is not visible in the grid or in the answer's
+    # shape, only in its value.
+    row = _east_to_west(c, VRET_COL + 2, y + 2, 30, 2, 25)
+    _turned(c, 44, row, _rot, VRET_COL, 0)  # on to MB
+    c.set(22, row + 1, ">")                 # out of the south exit, back east
+    row = _east_to_west(c, 22, row + 1, 30, 2, 25)
+    _turned(c, 44, row, _rot, VRET_COL, 0)  # on to MT
+    y = _south_to_east(c, 22, row + 1, 14)
+    assert y == E2_HEAD, (row, y)
 
     # ── lap 2: reverse C and emit the left half's chosen values ──────────────
     y = E2_HEAD
