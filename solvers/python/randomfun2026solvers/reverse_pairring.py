@@ -59,6 +59,62 @@ which is `~2g^2 + 14g + c` against the shipped `4n^2 + 34n + 7`.  Over the eight
 public cases that is an average near 220 ticks against the measured 1012.75 of
 `solutions/reverse-a-list/000000000513410_reverse-a-list.man`.
 
+## The judge runs twenty cases; we measure eight
+
+**A local average is not a score.**  The three archived submissions carry both
+numbers, and the private cases are consistently the longer ones:
+
+    judge avgTicks   local public avg   ratio
+        1585              1012.75        1.565
+        1589              1016.75        1.562
+        1589              1016.75        1.562
+
+:data:`PRIVATE_TICK_RATIO` is that 1.563.  Multiply a local public average by it
+before squaring a side against a leaderboard number, or a projection lands ~36%
+optimistic — which is the difference between clearing the live 118,401 and tying
+it.  At the pair ring's ~220 local average the judge should see ~344, so
+
+    side 18 -> 111,500   a tie, not a win
+    side 16 ->  88,100
+    side 15 ->  77,400
+
+**Side 16 is the first side that is actually worth submitting.**  The ratio is
+measured on a rotation machine and both the numerator and denominator scale with
+`n^2`, so it transfers to the pair ring; re-measure it if the algorithm's shape
+ever stops being quadratic.
+
+## Top five is out of reach for this design, and that is a result
+
+The I/O floor is `2n + c` a round because the judge withholds the next list
+until the current one is printed, so the eight public cases cannot average below
+~35 ticks.  `13,764 / 35 = 396` puts the leader's side at **19 or less** with a
+near-linear machine.  Top five (17,508) needs side 14 at `t ~ 89`, or side 12 at
+`t ~ 122` — under any rotation curve, including this one.  **The pair ring
+cannot reach top five; only a linear machine can.**  Five linear designs were
+priced and rejected, and none should be re-tried without new information:
+
+* **One pipe per value (the 9n comb).**  Genuinely `9n + c`, ~143 local average,
+  because the drainer's eastward traverse hides under the slower load.  But
+  sixteen anchors force ~22 columns while loader (7 rows) + pipes + drainer
+  (9 rows) force ~20 — side 22, ~69k local, no better than the pair ring for far
+  more machine.
+* **Pairs into eight pipes.**  The pair work needs ~11 rows a column, so the
+  width halves and the height doubles.  Area and `max(w, h)` both unchanged.
+* **Arithmetic packing.**  Values are +-1e6 = 21 bits, so only three fit a 64-bit
+  word.  `w = w*K + x` has three live values against `A`, `B` and a *write-only*
+  `BP`, and `r` always clobbers `A` — so the accumulator must occupy `B` at the
+  receive, which evicts `K`.  The base has to be reloaded every pair and costs
+  more than the packing saves.
+* **Men as storage.**  Parked men release **FIFO, never LIFO**: creation order is
+  monotone (the right child keeps the parent's slot, the left child is the newest
+  runner), and a blocked `s` resolves in creation order, so position on the grid
+  does not decide who sends first.  This is a substrate fact, not a fact about
+  reversal.
+* **Staggered pipe lengths so `R` sees them ready in reverse.**  Lengths must
+  fall faster than the loader's per-value cost, which is ~750 pipe cells.  And
+  crossing sixteen pipes to make *reading order* reverse is not planar, so the
+  cheap version does not exist either.
+
 ## Where the glyphs may stand
 
 Every pipe in `reverse_list_ast`'s worker anchors on the room's **east** wall,
@@ -83,7 +139,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["Geom", "binding", "zone_map", "AST_WORKER"]
+__all__ = ["Geom", "binding", "zone_map", "AST_WORKER", "PRIVATE_TICK_RATIO", "judge_score"]
+
+#: The judge averages twenty cases; `scoring.score_program` averages the eight
+#: public ones, and the private twelve are longer.  Measured from the three
+#: archived `reverse-a-list` submissions, whose `.descr` files record both the
+#: judge's `avgTicks` and our local public average — 1585/1012.75, 1589/1016.75
+#: and 1589/1016.75, which agree to 0.2%.
+PRIVATE_TICK_RATIO = 1.563
+
+
+def judge_score(side: int, local_avg_ticks: float) -> float:
+    """What the leaderboard should show for a grid we measured locally.
+
+    Comparing a raw local average against a leaderboard number is how a
+    regression gets reported as a win: it is ~36% optimistic on this problem.
+    """
+    return side * side * local_avg_ticks * PRIVATE_TICK_RATIO
 
 
 @dataclass
