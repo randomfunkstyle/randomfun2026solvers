@@ -448,6 +448,104 @@ def _west_to_east(c: Circuit, x: int, y: int, x_entry: int, drop: int = 1) -> in
     return y + drop
 
 
+# ══════════════ THE TWO-ROOM SPLIT — designed, costed, not built ══════════════
+#
+# This is the last structural lever on `subset-sum` and the only one left with
+# real headroom.  It is written down rather than half-built, because it is a
+# redesign and the failure it invites is the worst one this substrate offers: a
+# ring threaded through two rooms has ops on *both* sides of it, and a mis-bound
+# ring op is invisible in the grid, invisible in the answer's shape, and wrong
+# only in its value.
+#
+# ## The seam is real, not arbitrary
+#
+# **Phase 3 and emit need ring V and the output pipe.  They never touch ring B.**
+# That is what makes the cut natural: everything that reads ring B (the doubling
+# pass in `_rightvals`, and `_scan`) is in init and phase 2, and everything after
+# the search only walks values back out of ring V.  Measured row spans, from the
+# constants above:
+#
+#     room A   init 0..21 + phase 2 23..53      54 rows + an idle loop ~4   = 58
+#     room B   phase 3 54..71 + emit 75..119
+#              + the no-solution emit           67 rows + an idle loop ~6   = 73
+#
+# ## Geometry, and why it is worth ~x0.44 rather than ~x0.6
+#
+# Side by side, the charged side is `max(width, height)` and the two rooms are
+# very different widths.  Room A needs all three bands and stays 46 wide.  **Room
+# B needs only `v` and `io`** — no ring B — so its interior is ~32.  With ring B
+# serpentined in the band above (it is 262 cells, so the band grows from 5 rows to
+# ~10):
+#
+#     width    48 (A) + 34 (B)                        = 82
+#     height   10 (band) + 75 (B, the taller room)    = 85
+#     side 85, area2 7,225  against 16,384            -> x0.44
+#
+# Ticks go the other way by about 5%: see the relay cost below.  Net ~x0.46, so
+# roughly **5.6e9 judged** from 12.18e9.  Do not put room B on the left — ring B
+# must serpentine on room A's side, and swapping them forces the grid to ~138
+# wide, which is worse than what we have.
+#
+# ## Ring V threads both rooms, and the relay room disappears
+#
+# A pipe may not loop back to its own room, which is why ring V needs a
+# turnaround today.  With two rooms it does not: `A -> B -> A` is a legal ring of
+# two pipes, and `relay(6, 4)` is deleted.  Whichever room is not the active phase
+# forwards words for the other.
+#
+# **The cost is small and this is the number the design turns on.**  The existing
+# relay walks a 16-cell perimeter carrying 5 words — 3.2 ticks a word, and it is
+# already inside the measured 5-ticks-a-word figure.  An idle room forwarding with
+# `r`, `s` plus a baton poll is ~6 ticks a word, so the delta is ~2.8 a word.  A
+# lap moves 28 ring-V words, so ~78 ticks on a ~1,500-tick lap: **+5%**, and it is
+# throughput, not latency, so it does not stall.
+#
+# ## The baton is a pipe, not a sentinel word
+#
+# The obvious design — room A writes a marker into ring V and room B watches for
+# it — costs ~10 ticks a word instead of 6, because every word then needs `M 2 +
+# X W` to be compared without destroying it, and that doubles ring V's cost on
+# every lap of the search.  It is also fragile: `MB` is `-1` and `MT` is
+# `-(t+1)`, so the marker has to dodge both.
+#
+# Use a **third pipe, A -> B, polled with `q`**.  `q` sets `BP` to the number of
+# values waiting in the nearest incoming pipe, and `d` branches on `BP > 0`, so
+# room B's idle loop is `r`(V) `s`(V) `q` `d` — four glyphs, no compare, and the
+# ring word is never inspected.  Place the `q` nearer the baton's anchor column
+# than ring V's; that is the *only* band constraint room B has on receives, and
+# it is why B needs two receive anchors well apart.
+#
+# The baton carries a value, which is the other thing it buys: `0` for "phase 2
+# found a residual", `1` for "exhausted, answer 0".  Room B reads it and branches,
+# so `_nosol` moves into room B as a two-glyph block beside the output pipe and
+# stops being the deepest thing in the grid.
+#
+# After sending the baton, **room A must keep forwarding ring V forever** — room
+# B's phase 3 and emit laps rotate it, and a ring only turns if every room on it
+# is turning it.  A's idle loop is a bare `r`, `s`; it never needs to stop, and
+# the program does not need to halt to score.
+#
+# ## What has to be refactored first
+#
+# `_op` reads the module-level :data:`BANDS`, and the two rooms have different
+# ones.  Make the band table a parameter (or a small per-room object holding
+# `IW`, the anchor columns and the table) and thread it through `rin`/`out`/`vr`/
+# `vs`/`br`/`bs`.  Room A's anchors lose the `O` pipe, so its send midpoints move:
+# recompute them, do not assume the current 14..24 / 27..45 survive.  Room B has
+# only three pipes and its bands are wide.
+#
+# **Keep both guards firing per room.**  `_mouths` counts against `_boxes`, so add
+# room B and the new pipes there and keep `expect` exact — a second room doubles
+# the wall length an arrowhead can sit against.  `_turned`'s band check must run
+# against the room the block is being drawn into, not against room A's table.
+#
+# ## What is not yet known
+#
+# The relay figure above is derived from `relay_words`, not measured on a
+# two-room grid; build the smallest such grid and measure it before committing to
+# the layout.  Nothing else here rests on an unmeasured number.
+
+
 # ── what turning around does *not* buy, measured rather than estimated ────────
 #
 # The saving is one row per **change of direction**, not one row per turnable
