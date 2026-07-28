@@ -4351,10 +4351,10 @@ TAPE_SIZE = {
     # the tests pin this against. Highest address + 1, as everywhere: an
     # exactly-sized tape stalls silently rather than faulting.
     "deadman-3d": 600,
-    # deadman-3d_hires forwards pre-encoded router words straight from the input
-    # room to the tiled wall, so its whole state is the round's word counter in
-    # slot 1 (slot 0 is the assembler's scratch).
-    "deadman-3d_hires": 2,
+    # deadman-3d_hires: deadman-3d's boot data unchanged, but the ZBUF block is
+    # one slot per rendered column (128, not 64) and the tiled send carries six
+    # more scalars (deadman3d._TILE_SCALARS) — see `deadman3d.tape_slots`.
+    "deadman-3d_hires": 670,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -4731,7 +4731,7 @@ MEM_PAD: dict[str, int] = {"deadman-3d": 17}
 #: grows with the lane's depth, so the memory band packs west and the pad falls
 #: to the search minimum. Opt-in per slug so every other machine's checked-in
 #: grid stays byte-identical.
-INPUT_NORTH: set[str] = {"deadman-3d"}
+INPUT_NORTH: set[str] = {"deadman-3d", "deadman-3d_hires"}
 
 #: Slugs whose CPU removes the decode trie's **dead leaf rows**: only used
 #: opcodes get a lane pair, the trie is re-routed over the compacted band with
@@ -4741,7 +4741,7 @@ INPUT_NORTH: set[str] = {"deadman-3d"}
 #: for the horizontal ``]`` shifts). Every instruction's decode descent, return
 #: drop and riser shorten with the band. Opt-in per slug so every other
 #: machine's checked-in grid stays byte-identical.
-TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the gate
+TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 rows, -13.6% on the gate
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
@@ -4824,7 +4824,7 @@ TOP_RETURN_BUS: set[str] = set()
 #: cells on ``deadman-3d``) to three short stubs (~7 cells) — first-order on a
 #: machine making ~15k grid-store reads a frame. Costs two men; opt-in per slug
 #: so every other machine's checked-in grid stays byte-identical.
-STORE_TELEPORT: set[str] = {"deadman-3d"}
+STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
 #: ``deadman-3d``'s 330-slot store is far past the rotating tape's ~103-slot
@@ -4835,7 +4835,7 @@ STORE_TELEPORT: set[str] = {"deadman-3d"}
 #: an access against the grid store's ~31, flat in the address, at the price of
 #: area — which an ungraded demo does not count. Measured on deadman-3d's
 #: ~14.3k accesses per frame it is worth ~0.3M ticks over ``grid``.
-STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
+STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3", "deadman-3d_hires": "men-v3"}
 
 #: Router-strip length for the men-v3 tier (the ``ops`` knob of
 #: ``v3_store_block`` / ``v3_store_grid_block``), per slug; unlisted slugs keep
@@ -4848,7 +4848,7 @@ STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
 #: native frame gate the ops=1 delta is recorded in scratch/deadman3d-opt/
 #: METRICS.md. Re-sweep before borrowing this for any machine whose reads
 #: arrive in bursts.
-STORE_OPS: dict[str, int] = {"deadman-3d": 1}
+STORE_OPS: dict[str, int] = {"deadman-3d": 1, "deadman-3d_hires": 1}
 
 #: STORE shape for the men-v3 tier: ``(cols, rows)`` columns of the multi-column
 #: block (``v3_store_grid_block``); absent slugs keep the one-column strip.
@@ -4867,7 +4867,10 @@ STORE_OPS: dict[str, int] = {"deadman-3d": 1}
 #: block's 67 rows floor the machine HEIGHT at ~397, the 11-wide chain
 #: floors the width at 391, and 10-wide crosses rom-width against height
 #: at the 60-row fold.
-STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
+STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
+                                           # 670 slots against 600: one more column
+                                           # of the same 60-deep block.
+                                           "deadman-3d_hires": (12, 60)}
 
 #: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
 #: 600 slots as banked pipe tapes behind a gate chain. This tier exists for the

@@ -86,9 +86,10 @@ OVER_TICK_CAP: set[str] = {"little-little-man"}
 #: plus a negative sentinel — see ``tests/test_lambda_deadman_vector.py`` for its real
 #: cases. ``deadman-3d`` reads a 451-word data preamble then command words — see
 #: ``tests/test_deadman3d.py``. ``deadman-3d_hires`` is that demo's 128x96 tiled
-#: variant — its input is pre-encoded router words for a four-panel wall, see
-#: ``tests/test_deadman3d_hires.py``. Mirrors ``programs.DEMOS`` (which the CLI's
-#: grade default consults); the pin below keeps the two sets from drifting.
+#: variant — the same raycaster over four 64x48 panels, and the same input shape
+#: with a different title burst; see ``tests/test_deadman3d_hires.py``. Mirrors
+#: ``programs.DEMOS`` (which the CLI's grade default consults); the pin below
+#: keeps the two sets from drifting.
 DEMOS = {"lambda-deadman", "deadman-3d", "deadman-3d_hires"}
 
 
@@ -212,12 +213,20 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
             "NEG",
             "SND",
         },
-        # The tiled variant of the raycaster demo is the *opposite* extreme: the
-        # tile selector already rides in the word, so the CPU decodes nothing and
-        # forwards. `SND` is the one lane to the wall's router; `DECM` counts the
-        # round's burst down. Every pixel decision lives in the unit or in the
-        # words, which is the architecture being demonstrated (lm1/d3_router.py).
-        "deadman-3d_hires": {"DECM", "SND"},
+        # The 128x96 tiled variant is the same program at a different geometry,
+        # so it is the same opcode set — one `SND` lane, now carrying a router
+        # word with a tile selector in its low three bits (lm1/d3_router.py).
+        "deadman-3d_hires": {
+            "DIV",
+            "DIVI",
+            "INCM",
+            "LDA",
+            "MODI",
+            "MOVA",
+            "MUL",
+            "NEG",
+            "SND",
+        },
         "palette": {"DSPA", "DSPD", "DSPS"},
         # little-little-man interprets a 2D language, so its extensions are what an
         # interpreter needs: `LDA`/`MOVA` to reach the program grid at the address a

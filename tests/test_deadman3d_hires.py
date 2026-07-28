@@ -1,13 +1,18 @@
-"""The 128x96 tiled variant: four 64x48 LM-75s behind a 1-of-4 router.
+"""The raycaster at 128x96, on four tiled 64x48 LM-75s.
 
-``deadman-3d_hires`` is its own slug and its own program, so the 64x48 family is
-untouched — the first test here is the one that says so, byte for byte.
+``deadman-3d_hires`` is the same demo at twice the resolution, which the panel
+cannot give you on its own — its interior stops at 64x64 (``SPEC.md``) — so the
+frame is a 2x2 behind ``lm1/d3_router.py``'s 1-of-4 router.
 
-What the rest pin is the tiling itself: the router's selectors read off its trie
-(pinned against the emulator model exactly as the unit's arm codes are), the
-seam at ``y = 48`` that every hi-res viewport column crosses, the per-tile-row
-floor bound the COL arm bakes, and the broadcast COMMIT that is the only reason
-four independently-swapping panels compose into one frame.
+The first two tests are the ones that matter most, and they are deliberately
+blunt: the 64x48 family's grids and its generated assembly must come back byte
+for byte.  The whole port is a ``Geom`` parameter whose default is the committed
+screen, so "nothing moved" is checkable rather than argued.
+
+The rest pin what a resolution change actually breaks: the derived screen
+constants, the tile map, the per-panel floor bound the COL arm bakes, and — the
+one that caught two real bugs — that the machine paints what the model says,
+across the seam.
 """
 
 from __future__ import annotations
@@ -35,17 +40,23 @@ EXAMPLES = REPO / "littleman" / "examples"
     ],
 )
 def test_the_64x48_family_is_byte_identical(artifact: str, kwargs: dict) -> None:
-    """The whole point of a new slug: no existing machine moves a byte.
-
-    The tiled wall reaches the generator through three additive edits — a new
-    ``.unit`` name, a ``floor_row`` parameter on the DOOM block that defaults to
-    what it always baked, and a widened ``unit in (...)`` test — and every one of
-    them is supposed to be invisible here.
-    """
     from randomfun2026solvers.lm1 import machine
 
     m = machine.build_for("deadman-3d", **kwargs)
     assert (EXAMPLES / artifact).read_text().rstrip("\n").split("\n") == m.rows
+
+
+def test_the_committed_assembly_regenerates_byte_for_byte() -> None:
+    """The strongest guard on the ``Geom`` refactor.
+
+    ``deadman3d_source`` grew a geometry parameter and its body now reads a
+    dozen locals where it read module constants; every one of those defaults to
+    the value it always had, and this is what says so.
+    """
+    from randomfun2026solvers.deadman3d import deadman3d_source
+    from randomfun2026solvers.lm1.programs import PROGRAM_DIR
+
+    assert deadman3d_source() == (PROGRAM_DIR / "deadman-3d.asm").read_text()
 
 
 def test_the_doom_block_is_unchanged_at_its_default_floor() -> None:
@@ -69,6 +80,41 @@ def test_a_tile_floor_moves_the_literal_and_nothing_else() -> None:
         d3_unit.build_doom(100)
 
 
+# ── the screen ───────────────────────────────────────────────────────────────
+def test_the_committed_geometry_reproduces_the_module_constants() -> None:
+    from randomfun2026solvers import deadman3d as d3
+
+    g = d3.GEOM64
+    assert (g.width, g.height, g.h3d, g.mid) == (d3.WIDTH, d3.HEIGHT, d3.H3D, d3.MID)
+    assert g.cam_step == 32 and g.lh_num == 81920  # the asm's baked literals
+    assert not g.tiled and g.tiles == (1, 1)
+    assert g.floor_row(0) == d3.H3D - 1 == 39
+    assert g.hud_h == d3.HEIGHT - d3.H3D
+
+
+def test_the_tiled_geometry_agrees_with_the_hardware() -> None:
+    """The panel floor bounds the COL arm bakes are derived, not transcribed."""
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers.lm1 import d3_router
+
+    g = d3.GEOM128
+    assert (g.width, g.height, g.h3d, g.mid) == (128, 96, 80, 40)
+    assert g.cam_step == 16 and g.lh_num == 163840
+    assert g.tiles == (2, 2) and g.hud_h == 16
+    assert tuple(g.floor_row(t) for t in range(4)) == d3_router.TILE_FLOOR_ROW
+    assert (g.tile_of(0, 0), g.tile_of(127, 0)) == (0, 1)
+    assert (g.tile_of(0, 95), g.tile_of(127, 95)) == (2, 3)
+    assert g.tile_of(63, 47) == 0 and g.tile_of(64, 48) == 3
+    assert g.tile_addr(64, 48) == 0 and g.tile_addr(127, 95) == 47 * 64 + 63
+
+
+def test_the_camera_step_refuses_a_width_it_cannot_be_exact_at() -> None:
+    from randomfun2026solvers.deadman3d import Geom
+
+    with pytest.raises(ValueError, match="not exact"):
+        _ = Geom(width=100, height=96, h3d=80).cam_step
+
+
 # ── the router ───────────────────────────────────────────────────────────────
 def test_the_selectors_are_read_off_the_trie_and_pinned_to_the_model() -> None:
     from randomfun2026solvers.lm1 import d3_router
@@ -76,7 +122,6 @@ def test_the_selectors_are_read_off_the_trie_and_pinned_to_the_model() -> None:
 
     assert d3_router.SEL == DoomWall.SEL
     assert d3_router.TILE_FLOOR_ROW == DoomWall.FLOOR_ROW
-    # Five destinations on eight leaves, every selector distinct and in 0..7.
     assert sorted(d3_router.SEL.values()) == sorted(set(d3_router.SEL.values()))
     assert all(0 <= v < 8 for v in d3_router.SEL.values())
 
@@ -91,7 +136,6 @@ def test_only_the_broadcast_leaf_is_an_S() -> None:
 
 
 def test_every_tile_leaf_binds_its_own_outlet() -> None:
-    """Nearest-pipe binding, recomputed here rather than trusted from the builder."""
     from randomfun2026solvers.lm1 import d3_router
 
     r = d3_router.router_interior()
@@ -103,86 +147,52 @@ def test_every_tile_leaf_binds_its_own_outlet() -> None:
         assert sorted(dists)[1] > sorted(dists)[0]  # no reading-order tie
 
 
-def test_the_wall_places_four_panels_and_four_legs() -> None:
+def test_the_commit_is_the_broadcast_and_a_tile_word_is_not() -> None:
+    from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers.lm1 import d3_router
 
-    wall = d3_router.build_wall()
-    assert len(wall.panels) == 4
-    assert len(set(wall.panels)) == 4
-    assert len(wall.legs) == 4
-    assert wall.pipes == 4 + 4 * 7  # four fan-out legs plus each block's seven
+    assert d3.commit_word(d3.GEOM64) == 7  # the bare unit code, no router
+    assert d3.commit_word(d3.GEOM128) % 8 == d3_router.SEL["ALL"]
+    for tile in range(4):
+        assert d3.unit_word("CURS", 0, tile, d3.GEOM128) % 8 == d3_router.SEL[f"T{tile}"]
 
 
-# ── the tiling ───────────────────────────────────────────────────────────────
-def test_the_tile_map_is_the_documented_one() -> None:
-    from randomfun2026solvers.lm1 import display
-
-    assert (display.tile_of(0, 0), display.tile_of(127, 0)) == (0, 1)
-    assert (display.tile_of(0, 95), display.tile_of(127, 95)) == (2, 3)
-    assert display.tile_of(63, 47) == 0 and display.tile_of(64, 48) == 3
-    assert display.tile_addr(64, 48) == 0
-    assert display.tile_addr(127, 95) == 47 * 64 + 63
-    with pytest.raises(ValueError):
-        display.tile_of(128, 0)
-
-
-def test_a_viewport_column_splits_at_the_seam() -> None:
-    """The one hot-loop primitive a hi-res raycaster needs, in its three cases."""
+# ── the art ──────────────────────────────────────────────────────────────────
+def test_the_hires_art_is_the_shape_the_screen_needs() -> None:
+    from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers import deadman3d_hires as hires
 
-    # Wholly in the top tile: still two commands, because the bottom tile has to
-    # be floored and the unit only floors after a wall run.
-    assert len(hires.col_words(10, 4, 20, 3)) == 2
-    # Straddling: one command per tile.
-    assert len(hires.col_words(10, 30, 60, 3)) == 2
-    # Wholly below the seam: the top tile is all *ceiling*, which COMMIT already
-    # cleared to black, so it needs no command at all — one, not two.
-    assert len(hires.col_words(10, 55, 70, 3)) == 1
-    # Below the bottom tile's viewport bound there is nothing for the top tile
-    # to paint beyond floor, and the bottom tile's run is clamped to row 31.
-    for bad in ((10, -1, 5, 3), (10, 5, 80, 3), (128, 0, 5, 3), (10, 0, 5, 16)):
-        with pytest.raises(ValueError):
-            hires.col_words(*bad)
+    art = d3.art_for(d3.GEOM128)
+    assert len(art.title) == 96 and all(len(r) == 128 for r in art.title)
+    assert len(art.hud_bg) == 16 and all(len(r) == 128 for r in art.hud_bg)
+    # The wells double, so the divisors halve — a full clip fills its own well
+    # and never overruns it.
+    assert d3.div(d3.AMMO_START, art.ammo_per_px) <= art.ammo_cols[1] - art.ammo_cols[0]
+    assert d3.div(d3.HEALTH_START, art.health_per_px) <= art.health_cols[1] - art.health_cols[0]
+    assert hires.GEOM.tile_of(*art.face_box[:2]) == 2  # the mugshot starts on T2
 
 
-def test_the_model_paints_what_the_frames_say() -> None:
-    """The wall model, the tile split and the composition agree end to end."""
-    from randomfun2026solvers import deadman3d_hires as hires
+def test_the_mugshot_straddles_the_seam_and_the_encoder_splits_it() -> None:
+    """The one span in the frame that is genuinely two panels wide."""
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers import deadman3d_hires  # registers the hires art
 
-    frames = hires.frames_for_words()
-    assert len(frames) == 2
-    assert all(len(f) == 96 and all(len(r) == 128 for r in f) for f in frames)
-    assert frames[0] == hires.title_frame()
-    assert frames[1] == hires.seam_frame()
+    g, art = deadman3d_hires.GEOM, d3.art_for(d3.GEOM128)
+    col, row, w, _h = art.face_box
+    assert col < g.tile_w < col + w, "the mugshot no longer crosses x = 64"
+    words = d3.span_words(row, col, "1" * w, g)
+    assert len({word % 8 for word in words}) == 2  # one selector per panel
 
 
-def test_composition_refuses_a_frame_stitched_from_mismatched_halves() -> None:
-    """The invariant the broadcast exists to keep, made checkable."""
-    from randomfun2026solvers.lm1 import display
-    from randomfun2026solvers.lm1.store import DoomWall
+def test_a_committed_span_is_one_cursor_and_its_runs() -> None:
+    from randomfun2026solvers import deadman3d as d3
 
-    writes: list[tuple[int, int, int]] = []
-    wall = DoomWall(lambda t, p, v: writes.append((t, p, v)))
-    wall.send(8 * (8 * 0 + wall.units[0].CODES["COMMIT"]) + wall.SEL["T0"])
-    with pytest.raises(ValueError, match="broadcast"):
-        display.tiled_frames_from_writes(writes)
+    words = d3.span_words(41, 0, "1111", d3.GEOM64)
+    assert words == [d3.unit_word("CURS", 41 * 64, 0, d3.GEOM64),
+                     d3.unit_word("RUN", 4 * 16 + 1, 0, d3.GEOM64)]
 
 
 # ── the machine ──────────────────────────────────────────────────────────────
-def test_the_checked_in_artifacts_match_their_builders() -> None:
-    """The committed grid and input stream are regenerable, byte for byte."""
-    from randomfun2026solvers import deadman3d_hires as hires
-    from randomfun2026solvers.lm1 import machine
-    from randomfun2026solvers.lm1.programs import PROGRAM_DIR
-
-    m = machine.build_for("deadman-3d_hires")
-    man = EXAMPLES / "deadman-3d_hires.man"
-    assert man.read_text().rstrip("\n").split("\n") == m.rows
-    assert (PROGRAM_DIR / "deadman-3d_hires.asm").read_text() == hires.hires_source()
-    stream = (EXAMPLES / "deadman-3d_hires.input.txt").read_text().split()
-    assert [int(v) for v in stream] == hires.input_words()
-
-
 def test_the_machine_builds_with_four_display_rooms() -> None:
     from randomfun2026solvers.littleman import Littleman
     from randomfun2026solvers.lm1 import machine
@@ -195,16 +205,76 @@ def test_the_machine_builds_with_four_display_rooms() -> None:
         assert (hi[0] - lo[0] - 1, hi[1] - lo[1] - 1) == (64, 48)
 
 
-def test_the_program_forwards_and_commits_on_the_broadcast() -> None:
+def test_the_checked_in_artifacts_match_their_builders() -> None:
+    """The committed grid, assembly and input stream are all regenerable.
+
+    The input stream especially: round 0 carries the title's RLE and the title
+    is a different picture at 128x96, so this file is **not** the 64x48
+    machine's and must never be copied from it.
+    """
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers import deadman3d_hires as hires
+    from randomfun2026solvers.lm1 import machine
+    from randomfun2026solvers.lm1.programs import PROGRAM_DIR
+
+    m = machine.build_for("deadman-3d_hires")
+    man = EXAMPLES / "deadman-3d_hires.man"
+    assert man.read_text().rstrip("\n").split("\n") == m.rows
+    assert (PROGRAM_DIR / "deadman-3d_hires.asm").read_text() == hires.hires_source()
+    stream = (EXAMPLES / "deadman-3d_hires.input.txt").read_text().split()
+    assert [int(v) for v in stream] == hires.input_words(list(d3.WALK[:6]))
+    assert stream != (EXAMPLES / "deadman-3d.input.txt").read_text().split()
+
+
+def test_the_tape_covers_a_column_per_ray_and_the_tile_scalars() -> None:
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers.lm1 import machine
+
+    slots = d3.tape_slots(d3.GEOM128)
+    assert slots["CMD"] == slots["ZBUF"] + 128  # one z-slot per rendered column
+    assert set(d3._TILE_SCALARS) <= set(slots)
+    assert machine.TAPE_SIZE["deadman-3d_hires"] == max(slots.values()) + 1
+    # the committed layout is untouched by any of it
+    assert max(d3.tape_slots().values()) + 1 == machine.TAPE_SIZE["deadman-3d"]
+
+
+# ── the pixels, end to end ───────────────────────────────────────────────────
+def test_the_machine_paints_what_the_model_says_across_the_seam() -> None:
+    """The test that caught both real bugs in the port.
+
+    One: the unit reseeds its banding mask per COMMAND, so a column split at the
+    seam restarts its stripe phase on the lower panel and the model has to do
+    the same.  Two: the floor-only panel's seed pixel is the wall loop's first
+    lap, whose mask is 7 — and ``8 & 7 == 0``, so the floor colour is the one
+    colour that cannot survive it.  Both showed up here as a wrong row 48 and
+    nowhere else.
+    """
+    from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers import deadman3d_hires as hires
     from randomfun2026solvers.lm1 import display
+    from randomfun2026solvers.lm1.asm import assemble
     from randomfun2026solvers.lm1.emulator import Emulator, Round
-    from randomfun2026solvers.lm1.programs import load
 
-    prog = load("deadman-3d_hires")
+    cmds = list(d3.WALK[:2])
+    prog = assemble(hires.hires_source(), name="deadman-3d_hires")
     assert prog.unit == "doom4"
-    res = Emulator(prog).run(
-        [Round(input=tuple(hires.input_words()))], max_instructions=4_000_000
-    )
-    assert res.output == ()
-    assert display.tiled_frames_from_writes(res.wall_writes) == hires.frames_for_words()
+    res = Emulator(prog).run([Round(input=tuple(hires.input_words(cmds)))],
+                             max_instructions=200_000_000)
+    frames = display.tiled_frames_from_writes(res.wall_writes)
+    assert frames == [hires.title_frame()] + hires.frames_for_commands(cmds)
+    # and the seam is a real one: walls on both sides of it in this view
+    view = frames[1]
+    assert sum(1 for x in range(128)
+               if view[47][x] not in "08" and view[48][x] not in "08") > 20
+
+
+def test_composition_refuses_a_frame_stitched_from_mismatched_halves() -> None:
+    """The invariant the broadcast COMMIT exists to keep, made checkable."""
+    from randomfun2026solvers.lm1 import display
+    from randomfun2026solvers.lm1.store import DoomWall
+
+    writes: list[tuple[int, int, int]] = []
+    wall = DoomWall(lambda t, p, v: writes.append((t, p, v)))
+    wall.send(8 * (8 * 0 + wall.units[0].CODES["COMMIT"]) + wall.SEL["T0"])
+    with pytest.raises(ValueError, match="broadcast"):
+        display.tiled_frames_from_writes(writes)

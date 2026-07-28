@@ -7,8 +7,8 @@
   "regions": [
     {
       "name": "adapter",
-      "x": 71,
-      "y": 10,
+      "x": 80,
+      "y": 487,
       "w": 14,
       "h": 6,
       "note": "expands one sign-biased request word into the tape's `op addr [value]`",
@@ -20,7 +20,7 @@
     {
       "name": "cpu:fetch",
       "x": 9,
-      "y": 14,
+      "y": 509,
       "w": 4,
       "h": 1,
       "note": ">rbr \u2014 opcode into BP, then the operand into A (fixed-width 2 words)",
@@ -30,24 +30,72 @@
       ]
     },
     {
-      "name": "cpu:lane:BRZ",
-      "x": 16,
-      "y": 17,
-      "w": 23,
+      "name": "cpu:lane:ADD",
+      "x": 22,
+      "y": 490,
+      "w": 48,
       "h": 1,
-      "note": "opcode 5 \u2014 BRZ",
+      "note": "opcode 12 \u2014 ADD",
       "color": "#3b82f6",
       "tags": [
         "cpu"
       ]
     },
     {
-      "name": "cpu:lane:DECM",
-      "x": 16,
-      "y": 9,
-      "w": 50,
+      "name": "cpu:lane:ADDI",
+      "x": 22,
+      "y": 506,
+      "w": 4,
       "h": 1,
-      "note": "opcode 4 \u2014 DECM",
+      "note": "opcode 14 \u2014 ADDI",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:BRN",
+      "x": 22,
+      "y": 512,
+      "w": 31,
+      "h": 1,
+      "note": "opcode 17 \u2014 BRN",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:BRZ",
+      "x": 22,
+      "y": 514,
+      "w": 30,
+      "h": 1,
+      "note": "opcode 9 \u2014 BRZ",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:DIV",
+      "x": 22,
+      "y": 484,
+      "w": 51,
+      "h": 1,
+      "note": "opcode 24 \u2014 DIV",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:DIVI",
+      "x": 22,
+      "y": 496,
+      "w": 45,
+      "h": 1,
+      "note": "opcode 18 \u2014 DIVI",
       "color": "#3b82f6",
       "tags": [
         "cpu"
@@ -55,9 +103,9 @@
     },
     {
       "name": "cpu:lane:IN",
-      "x": 16,
-      "y": 7,
-      "w": 51,
+      "x": 22,
+      "y": 478,
+      "w": 54,
       "h": 1,
       "note": "opcode 0 \u2014 IN",
       "color": "#3b82f6",
@@ -66,12 +114,48 @@
       ]
     },
     {
-      "name": "cpu:lane:JMPF",
-      "x": 16,
-      "y": 19,
-      "w": 22,
+      "name": "cpu:lane:INCM",
+      "x": 22,
+      "y": 480,
+      "w": 53,
       "h": 1,
-      "note": "opcode 3 \u2014 JMPF",
+      "note": "opcode 16 \u2014 INCM",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:JMPF",
+      "x": 22,
+      "y": 516,
+      "w": 29,
+      "h": 1,
+      "note": "opcode 25 \u2014 JMPF",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:LD",
+      "x": 22,
+      "y": 498,
+      "w": 44,
+      "h": 1,
+      "note": "opcode 10 \u2014 LD",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:LDA",
+      "x": 22,
+      "y": 492,
+      "w": 47,
+      "h": 1,
+      "note": "opcode 28 \u2014 LDA",
       "color": "#3b82f6",
       "tags": [
         "cpu"
@@ -79,8 +163,8 @@
     },
     {
       "name": "cpu:lane:LDI",
-      "x": 16,
-      "y": 15,
+      "x": 22,
+      "y": 510,
       "w": 4,
       "h": 1,
       "note": "opcode 1 \u2014 LDI",
@@ -90,12 +174,72 @@
       ]
     },
     {
-      "name": "cpu:lane:SND",
-      "x": 16,
-      "y": 21,
+      "name": "cpu:lane:MODI",
+      "x": 22,
+      "y": 500,
       "w": 4,
       "h": 1,
-      "note": "opcode 7 \u2014 SND",
+      "note": "opcode 26 \u2014 MODI",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:MOVA",
+      "x": 22,
+      "y": 482,
+      "w": 52,
+      "h": 1,
+      "note": "opcode 8 \u2014 MOVA",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:MUL",
+      "x": 22,
+      "y": 494,
+      "w": 46,
+      "h": 1,
+      "note": "opcode 2 \u2014 MUL",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:MULI",
+      "x": 22,
+      "y": 508,
+      "w": 4,
+      "h": 1,
+      "note": "opcode 30 \u2014 MULI",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:NEG",
+      "x": 22,
+      "y": 502,
+      "w": 4,
+      "h": 1,
+      "note": "opcode 6 \u2014 NEG",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:SND",
+      "x": 22,
+      "y": 518,
+      "w": 4,
+      "h": 1,
+      "note": "opcode 31 \u2014 SND",
       "color": "#3b82f6",
       "tags": [
         "cpu"
@@ -103,11 +247,23 @@
     },
     {
       "name": "cpu:lane:ST",
-      "x": 16,
-      "y": 11,
-      "w": 45,
+      "x": 22,
+      "y": 486,
+      "w": 50,
       "h": 1,
-      "note": "opcode 2 \u2014 ST",
+      "note": "opcode 4 \u2014 ST",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:lane:SUB",
+      "x": 22,
+      "y": 488,
+      "w": 49,
+      "h": 1,
+      "note": "opcode 20 \u2014 SUB",
       "color": "#3b82f6",
       "tags": [
         "cpu"
@@ -115,11 +271,11 @@
     },
     {
       "name": "cpu:lane:SUBI",
-      "x": 16,
-      "y": 13,
+      "x": 22,
+      "y": 504,
       "w": 4,
       "h": 1,
-      "note": "opcode 6 \u2014 SUBI",
+      "note": "opcode 22 \u2014 SUBI",
       "color": "#3b82f6",
       "tags": [
         "cpu"
@@ -128,8 +284,8 @@
     {
       "name": "cpu:return:collector",
       "x": 10,
-      "y": 22,
-      "w": 57,
+      "y": 519,
+      "w": 66,
       "h": 1,
       "note": "every lane funnels west along here",
       "color": "#3b82f6",
@@ -140,10 +296,22 @@
     {
       "name": "cpu:return:riser",
       "x": 9,
-      "y": 15,
+      "y": 510,
       "w": 1,
-      "h": 8,
+      "h": 10,
       "note": "up to the fetch row \u2014 paid once per instruction",
+      "color": "#3b82f6",
+      "tags": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "cpu:slab:BRN",
+      "x": 36,
+      "y": 522,
+      "w": 13,
+      "h": 8,
+      "note": "BRN: discard loop / X fan-out (2-D, so not a lane)",
       "color": "#3b82f6",
       "tags": [
         "cpu"
@@ -152,7 +320,7 @@
     {
       "name": "cpu:slab:BRZ",
       "x": 23,
-      "y": 24,
+      "y": 521,
       "w": 13,
       "h": 8,
       "note": "BRZ: discard loop / X fan-out (2-D, so not a lane)",
@@ -164,7 +332,7 @@
     {
       "name": "cpu:slab:JMPF",
       "x": 10,
-      "y": 23,
+      "y": 520,
       "w": 13,
       "h": 4,
       "note": "JMPF: discard loop / X fan-out (2-D, so not a lane)",
@@ -176,10 +344,10 @@
     {
       "name": "cpu:trie",
       "x": 13,
-      "y": 7,
-      "w": 3,
-      "h": 15,
-      "note": "depth-3 backpack trie; leaves are bit-reversed",
+      "y": 478,
+      "w": 9,
+      "h": 41,
+      "note": "depth-5 backpack trie; leaves are bit-reversed",
       "color": "#3b82f6",
       "tags": [
         "cpu"
@@ -188,7 +356,7 @@
     {
       "name": "display",
       "x": 264,
-      "y": 109,
+      "y": 750,
       "w": 309,
       "h": 159,
       "note": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -199,8 +367,8 @@
     },
     {
       "name": "io:I",
-      "x": 3,
-      "y": 6,
+      "x": 21,
+      "y": 472,
       "w": 3,
       "h": 3,
       "note": "",
@@ -213,9 +381,9 @@
       "name": "rom",
       "x": 0,
       "y": 0,
-      "w": 59,
-      "h": 6,
-      "note": "looping ROM: 32 words, 2 rows, re-emitted forever",
+      "w": 68,
+      "h": 472,
+      "note": "looping ROM: 4848 words, 468 rows, re-emitted forever",
       "color": "#a855f7",
       "tags": [
         "rom"
@@ -224,7 +392,7 @@
     {
       "name": "stream:router",
       "x": 1,
-      "y": 43,
+      "y": 684,
       "w": 92,
       "h": 10,
       "note": "",
@@ -236,7 +404,7 @@
     {
       "name": "stream:t0:panel",
       "x": 264,
-      "y": 109,
+      "y": 750,
       "w": 66,
       "h": 50,
       "note": "",
@@ -248,7 +416,7 @@
     {
       "name": "stream:t0:relay",
       "x": 256,
-      "y": 88,
+      "y": 729,
       "w": 5,
       "h": 5,
       "note": "",
@@ -260,7 +428,7 @@
     {
       "name": "stream:t0:relay2",
       "x": 256,
-      "y": 130,
+      "y": 771,
       "w": 5,
       "h": 5,
       "note": "",
@@ -272,7 +440,7 @@
     {
       "name": "stream:t0:unit",
       "x": 95,
-      "y": 61,
+      "y": 702,
       "w": 158,
       "h": 84,
       "note": "",
@@ -284,7 +452,7 @@
     {
       "name": "stream:t0:unit:COL",
       "x": 237,
-      "y": 66,
+      "y": 707,
       "w": 12,
       "h": 78,
       "note": "",
@@ -296,7 +464,7 @@
     {
       "name": "stream:t0:unit:COMMIT",
       "x": 97,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -308,7 +476,7 @@
     {
       "name": "stream:t0:unit:CURS",
       "x": 157,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -320,7 +488,7 @@
     {
       "name": "stream:t0:unit:GUN",
       "x": 117,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -332,7 +500,7 @@
     {
       "name": "stream:t0:unit:GUNF",
       "x": 177,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -344,7 +512,7 @@
     {
       "name": "stream:t0:unit:RUN",
       "x": 217,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -356,7 +524,7 @@
     {
       "name": "stream:t0:unit:main",
       "x": 96,
-      "y": 62,
+      "y": 703,
       "w": 73,
       "h": 1,
       "note": "",
@@ -368,7 +536,7 @@
     {
       "name": "stream:t0:unit:trie",
       "x": 98,
-      "y": 63,
+      "y": 704,
       "w": 141,
       "h": 3,
       "note": "",
@@ -380,7 +548,7 @@
     {
       "name": "stream:t1:panel",
       "x": 507,
-      "y": 109,
+      "y": 750,
       "w": 66,
       "h": 50,
       "note": "",
@@ -392,7 +560,7 @@
     {
       "name": "stream:t1:relay",
       "x": 499,
-      "y": 88,
+      "y": 729,
       "w": 5,
       "h": 5,
       "note": "",
@@ -404,7 +572,7 @@
     {
       "name": "stream:t1:relay2",
       "x": 499,
-      "y": 130,
+      "y": 771,
       "w": 5,
       "h": 5,
       "note": "",
@@ -416,7 +584,7 @@
     {
       "name": "stream:t1:unit",
       "x": 338,
-      "y": 61,
+      "y": 702,
       "w": 158,
       "h": 84,
       "note": "",
@@ -428,7 +596,7 @@
     {
       "name": "stream:t1:unit:COL",
       "x": 480,
-      "y": 66,
+      "y": 707,
       "w": 12,
       "h": 78,
       "note": "",
@@ -440,7 +608,7 @@
     {
       "name": "stream:t1:unit:COMMIT",
       "x": 340,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -452,7 +620,7 @@
     {
       "name": "stream:t1:unit:CURS",
       "x": 400,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -464,7 +632,7 @@
     {
       "name": "stream:t1:unit:GUN",
       "x": 360,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -476,7 +644,7 @@
     {
       "name": "stream:t1:unit:GUNF",
       "x": 420,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -488,7 +656,7 @@
     {
       "name": "stream:t1:unit:RUN",
       "x": 460,
-      "y": 66,
+      "y": 707,
       "w": 20,
       "h": 78,
       "note": "",
@@ -500,7 +668,7 @@
     {
       "name": "stream:t1:unit:main",
       "x": 339,
-      "y": 62,
+      "y": 703,
       "w": 73,
       "h": 1,
       "note": "",
@@ -512,7 +680,7 @@
     {
       "name": "stream:t1:unit:trie",
       "x": 341,
-      "y": 63,
+      "y": 704,
       "w": 141,
       "h": 3,
       "note": "",
@@ -524,7 +692,7 @@
     {
       "name": "stream:t2:panel",
       "x": 264,
-      "y": 218,
+      "y": 859,
       "w": 66,
       "h": 50,
       "note": "",
@@ -536,7 +704,7 @@
     {
       "name": "stream:t2:relay",
       "x": 256,
-      "y": 197,
+      "y": 838,
       "w": 5,
       "h": 5,
       "note": "",
@@ -548,7 +716,7 @@
     {
       "name": "stream:t2:relay2",
       "x": 256,
-      "y": 239,
+      "y": 880,
       "w": 5,
       "h": 5,
       "note": "",
@@ -560,7 +728,7 @@
     {
       "name": "stream:t2:unit",
       "x": 95,
-      "y": 170,
+      "y": 811,
       "w": 158,
       "h": 84,
       "note": "",
@@ -572,7 +740,7 @@
     {
       "name": "stream:t2:unit:COL",
       "x": 237,
-      "y": 175,
+      "y": 816,
       "w": 12,
       "h": 78,
       "note": "",
@@ -584,7 +752,7 @@
     {
       "name": "stream:t2:unit:COMMIT",
       "x": 97,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -596,7 +764,7 @@
     {
       "name": "stream:t2:unit:CURS",
       "x": 157,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -608,7 +776,7 @@
     {
       "name": "stream:t2:unit:GUN",
       "x": 117,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -620,7 +788,7 @@
     {
       "name": "stream:t2:unit:GUNF",
       "x": 177,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -632,7 +800,7 @@
     {
       "name": "stream:t2:unit:RUN",
       "x": 217,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -644,7 +812,7 @@
     {
       "name": "stream:t2:unit:main",
       "x": 96,
-      "y": 171,
+      "y": 812,
       "w": 73,
       "h": 1,
       "note": "",
@@ -656,7 +824,7 @@
     {
       "name": "stream:t2:unit:trie",
       "x": 98,
-      "y": 172,
+      "y": 813,
       "w": 141,
       "h": 3,
       "note": "",
@@ -668,7 +836,7 @@
     {
       "name": "stream:t3:panel",
       "x": 507,
-      "y": 218,
+      "y": 859,
       "w": 66,
       "h": 50,
       "note": "",
@@ -680,7 +848,7 @@
     {
       "name": "stream:t3:relay",
       "x": 499,
-      "y": 197,
+      "y": 838,
       "w": 5,
       "h": 5,
       "note": "",
@@ -692,7 +860,7 @@
     {
       "name": "stream:t3:relay2",
       "x": 499,
-      "y": 239,
+      "y": 880,
       "w": 5,
       "h": 5,
       "note": "",
@@ -704,7 +872,7 @@
     {
       "name": "stream:t3:unit",
       "x": 338,
-      "y": 170,
+      "y": 811,
       "w": 158,
       "h": 84,
       "note": "",
@@ -716,7 +884,7 @@
     {
       "name": "stream:t3:unit:COL",
       "x": 480,
-      "y": 175,
+      "y": 816,
       "w": 12,
       "h": 78,
       "note": "",
@@ -728,7 +896,7 @@
     {
       "name": "stream:t3:unit:COMMIT",
       "x": 340,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -740,7 +908,7 @@
     {
       "name": "stream:t3:unit:CURS",
       "x": 400,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -752,7 +920,7 @@
     {
       "name": "stream:t3:unit:GUN",
       "x": 360,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -764,7 +932,7 @@
     {
       "name": "stream:t3:unit:GUNF",
       "x": 420,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -776,7 +944,7 @@
     {
       "name": "stream:t3:unit:RUN",
       "x": 460,
-      "y": 175,
+      "y": 816,
       "w": 20,
       "h": 78,
       "note": "",
@@ -788,7 +956,7 @@
     {
       "name": "stream:t3:unit:main",
       "x": 339,
-      "y": 171,
+      "y": 812,
       "w": 73,
       "h": 1,
       "note": "",
@@ -800,7 +968,7 @@
     {
       "name": "stream:t3:unit:trie",
       "x": 341,
-      "y": 172,
+      "y": 813,
       "w": 141,
       "h": 3,
       "note": "",
@@ -811,14 +979,38 @@
     },
     {
       "name": "tape",
-      "x": 84,
-      "y": 6,
-      "w": 33,
-      "h": 34,
-      "note": "rotating pipe tape, N=2, skip_batch=1, relay=None",
+      "x": 98,
+      "y": 477,
+      "w": 344,
+      "h": 204,
+      "note": "rotating pipe tape, N=670, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [
         "tape"
+      ]
+    },
+    {
+      "name": "teleport:L",
+      "x": 88,
+      "y": 472,
+      "w": 353,
+      "h": 4,
+      "note": "",
+      "color": "#64748b",
+      "tags": [
+        "teleport"
+      ]
+    },
+    {
+      "name": "teleport:U",
+      "x": 80,
+      "y": 472,
+      "w": 6,
+      "h": 14,
+      "note": "",
+      "color": "#64748b",
+      "tags": [
+        "teleport"
       ]
     }
   ],
