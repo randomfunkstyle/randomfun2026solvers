@@ -701,6 +701,26 @@ SEEK_THRESHOLD = 256
 #: 387,532-word discard bill, for a third of the width the full set costs. The
 #: only other family with long jumps is ``BRZ`` (25 jumps, 64,169 words); ``BRN``
 #: has none in steady state (its 107 long jumps are all boot's).
+#:
+#: **``BRZ`` was re-tried on the taped tier and it does not pay.** It captures
+#: exactly the bill it was predicted to — 64,169 of frame 1's 387,532 words, so
+#: the split goes from 67.9% to **84.5%** of the discard, +16.6 points — and buys
+#: essentially nothing (native/fast engine, taped, the 57-command ``WALK``):
+#:
+#: | build | box | ticks | Δ |
+#: |---|---|---|---|
+#: | ``JMPF`` (shipped) | 295x269 | 591,485,564 | — |
+#: | ``JMPF``+``BRZ`` | **309x271** | 588,983,630 | **-0.42%** |
+#:
+#: The extra slab lifts the ``mem_pad`` floor 22 -> 29 (the progression the
+#: paragraph above predicts), and that pad charges every memory instruction the
+#: extra walk twice. DOOM's taped tier is memory-bound, so the pad gives back
+#: almost the whole discard win. What is left costs **14 columns**: the width
+#: floors at 309 whatever the fold — ``rom_rows`` 80..110 all land on 309, because
+#: the *store* binds the width, not the drum — which breaks the taped machine's
+#: checked-in 300 ceiling (``test_deadman3d.py``) for four tenths of a percent.
+#: Not shipped. ``SEEK_THRESHOLD`` needs no re-tuning either: ``JMPF``+``BRZ`` is
+#: the same plateau (thr 64 -> 84.7%, 256 -> 84.5%, cliff still above 384).
 SEEK_OPS: tuple[str, ...] = ("JMPF",)
 
 
@@ -4567,6 +4587,32 @@ ROM_ROWS = {
 #: This is a buffer, not a ring. A true code ring (the ``LOOP`` room of ``ARCH.md``
 #: §3's diagram) would make the CPU re-send every word it reads or the ring drains,
 #: which costs an ``s`` per discarded word and gives back much of the win.
+#:
+#: **Stays empty. Behind a seek drum it is actively harmful, and that is the whole
+#: story.** Measured flat on ``brackets``/``tcp``/``gradebook``
+#: (``ROM-RECIRCULATION.md``); measured on ``deadman-3d`` — the one slug with a
+#: :data:`SEEK_DRUM` — it is a large *loss*, structurally rather than by a tuning
+#: miss. ``seekrom``'s protocol makes the CPU **flush the corridor to the ``-1``
+#: sentinel** on every seek, so the corridor's length is paid in full by each long
+#: jump. A buffer is precisely a longer corridor, so it prices every seek at its
+#: own capacity (native/fast engine, taped, the 57-command ``WALK``):
+#:
+#: | corridor | seek drum | ticks | Δ |
+#: |---|---|---|---|
+#: | 29 (routing accident) | on | 591,485,564 | — |
+#: | 500 | on | 611,878,828 | **+3.4%** |
+#: | 1,677 | on | 675,651,202 | **+14.2%** |
+#: | 29 | **off** | 653,734,716 | — |
+#: | 1,677 | **off** | 629,578,991 | **-3.7%** |
+#:
+#: The last two rows are the control, and they are what makes this a *conflict*
+#: rather than a dead feature: on the classic drum the buffer does what it was
+#: designed to do and is worth -3.7%; on the seek drum the same corridor costs
+#: +14.2%. Canonical at 1,677 is **+30.3%**. The regression is monotone in
+#: corridor length in both tiers — the flush model, not noise — and combining it
+#: with a wider :data:`SEEK_OPS` is *super*-additive (+17.3%, against +13.8%
+#: predicted from the two alone), because each extra split family adds seeks and
+#: every seek pays the flush again.
 ROM_BUFFER: dict[str, int] = {}
 
 
