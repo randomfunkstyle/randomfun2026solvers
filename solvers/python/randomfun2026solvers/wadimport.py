@@ -66,10 +66,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 __all__ = [
-    "PALETTE", "Wad", "MapData", "Level",
+    "PALETTE", "Wad", "MapData", "Level", "DAMAGE_SPECIALS",
     "read_wad", "parse_map", "supercover", "rasterize",
     "decode_png", "decode_picture", "srgb_to_lab", "family_of",
-    "quantize_title", "despeckle",
+    "quantize_title", "despeckle", "quantize_sprite", "sprite_runs",
+    "gun_tables", "face_tables", "iwad_art",
     "load_freedoom", "load_iwad", "emit", "main",
 ]
 
@@ -114,6 +115,15 @@ class MapData:
     sidedefs: list[tuple[str, str, str, int]]
     #: (x, y, angle, type, flags)
     things: list[tuple[int, int, int, int, int]]
+    #: (floor_h, ceil_h, floorpic, ceilpic, light, special, tag) — M5's damage
+    #: floors come from ``special`` (see :data:`DAMAGE_SPECIALS`)
+    sectors: list[tuple[int, int, str, str, int, int, int]] = field(default_factory=list)
+
+
+#: The DOOM damage-floor family: 5%/10%/20% nukage and slime specials (4 is
+#: 20% + light blink, 16 is 20%; 11 — end-level — deliberately excluded: at
+#: this resolution it is an exit pad, not a pool).
+DAMAGE_SPECIALS = frozenset({4, 5, 7, 16})
 
 
 def read_wad(data: bytes | Path) -> Wad:
@@ -156,7 +166,11 @@ def parse_map(wad: Wad, mapname: str) -> MapData:
         _xo, _yo, up, lo, mid, sector = struct.unpack("<hh8s8s8sH", d)
         sidedefs.append((_cstr(up), _cstr(lo), _cstr(mid), sector))
     things = [struct.unpack("<hhHHH", d) for d in _records(section["THINGS"], 10)]
-    return MapData(vertexes, linedefs, sidedefs, things)
+    sectors = []
+    for d in _records(section.get("SECTORS", b""), 26):
+        fh, ch, fp, cp, light, special, tag = struct.unpack("<hh8s8shhh", d)
+        sectors.append((fh, ch, _cstr(fp), _cstr(cp), light, special, tag))
+    return MapData(vertexes, linedefs, sidedefs, things, sectors)
 
 
 def _records(data: bytes, size: int):
@@ -218,6 +232,9 @@ class Raster:
     heading: int                             # 0..15, CCW from east
     bbox: tuple[int, int, int, int]          # minx, miny, maxx, maxy
     void_filled: int = 0
+    #: open cells standing on a damage floor (sector special 4/5/7/16)
+    nukage: set[tuple[int, int]] = field(default_factory=set)
+    nukage_stats: dict = field(default_factory=dict)
 
 
 def rasterize(m: MapData, grid: int = 64, min_len: float = 32.0) -> Raster:
@@ -285,6 +302,8 @@ def rasterize(m: MapData, grid: int = 64, min_len: float = 32.0) -> Raster:
     leaks = [c for c in open_cells if c[0] in (0, grid - 1) or c[1] in (0, grid - 1)]
     assert not leaks, f"map leaks into the void at {sorted(leaks)[:8]}"
 
+    nukage, nstats = _damage_floors(m, to_grid, grid, open_cells)
+
     void = 0
     for x in range(grid):
         for y in range(grid):
@@ -292,7 +311,142 @@ def rasterize(m: MapData, grid: int = 64, min_len: float = 32.0) -> Raster:
                 cells[(x, y)] = "#VOID"
                 void += 1
     return Raster(grid, cells, open_cells, spawn, heading,
-                  (minx, miny, maxx, maxy), void)
+                  (minx, miny, maxx, maxy), void, nukage, nstats)
+
+
+def _damage_floors(m: MapData, to_grid, grid: int,
+                   open_cells: set[tuple[int, int]]) -> tuple[set[tuple[int, int]], dict]:
+    """Which open cells stand on a damage floor (M5).
+
+    Region flood fill: the open cells are partitioned into regions bounded by
+    the supercover of **all** linedefs — two-sided ones included, as thin
+    boundaries for regioning only (they are room-to-room joins, not walls).
+    Each region's sector is then identified by *sampling*: points either side
+    of every linedef (offset along its normal, the right side facing the right
+    sidedef — DOOM's front) vote their sidedef's sector into whatever region
+    they land in, weighted by linedef length; the plurality wins.  A region
+    whose sector's special is in :data:`DAMAGE_SPECIALS` is nukage.  Open
+    cells *on* a boundary (a pool's rim) resolve by their own cell votes,
+    then by neighbour majority.  If the specials find nothing but flats named
+    NUKAGE*/SLIME*/LAVA* exist, the flat-name fallback is used (documented in
+    ``stats['nukage_by']``).
+    """
+    stats: dict = {"regions": 0, "unresolved_regions": 0, "nukage_cells": 0,
+                   "damage_sectors": 0, "nukage_by": "specials"}
+    if not m.sectors:
+        return set(), stats
+
+    def damaging_special(sec: int) -> bool:
+        return m.sectors[sec][5] in DAMAGE_SPECIALS
+
+    def damaging_flat(sec: int) -> bool:
+        return m.sectors[sec][2].upper().startswith(("NUKAGE", "SLIME", "LAVA"))
+
+    stats["damage_sectors"] = sum(1 for s in range(len(m.sectors)) if damaging_special(s))
+    stats["flat_sectors"] = sum(1 for s in range(len(m.sectors)) if damaging_flat(s))
+
+    # 1. The boundary raster: every linedef, any length, both-sided included.
+    boundary: set[tuple[int, int]] = set()
+    for v1, v2, _flags, _special, _tag, _right, _left in m.linedefs:
+        ax, ay = m.vertexes[v1]
+        bx, by = m.vertexes[v2]
+        if (ax, ay) == (bx, by):
+            continue
+        for c in supercover(*to_grid(ax, ay), *to_grid(bx, by)):
+            if 0 <= c[0] < grid and 0 <= c[1] < grid:
+                boundary.add(c)
+
+    # 2. Regions: 4-connected components of open cells off the boundary.
+    region_of: dict[tuple[int, int], int] = {}
+    regions: list[list[tuple[int, int]]] = []
+    for cell in sorted(open_cells):
+        if cell in boundary or cell in region_of:
+            continue
+        rid = len(regions)
+        comp = [cell]
+        region_of[cell] = rid
+        queue = deque([cell])
+        while queue:
+            x, y = queue.popleft()
+            for nxt in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if nxt in open_cells and nxt not in boundary and nxt not in region_of:
+                    region_of[nxt] = rid
+                    comp.append(nxt)
+                    queue.append(nxt)
+        regions.append(comp)
+    stats["regions"] = len(regions)
+
+    # 3. Sector votes: sample points either side of each linedef.  The right
+    # sidedef faces the right of v1->v2, which in this y-up frame is the
+    # normal (dy, -dx).
+    votes: dict[int, Counter] = defaultdict(Counter)
+    cell_votes: dict[tuple[int, int], Counter] = defaultdict(Counter)
+    for v1, v2, _flags, _special, _tag, right, left in m.linedefs:
+        ax, ay = m.vertexes[v1]
+        bx, by = m.vertexes[v2]
+        gax, gay = to_grid(ax, ay)
+        gbx, gby = to_grid(bx, by)
+        dx, dy = gbx - gax, gby - gay
+        ln = math.hypot(dx, dy)
+        if ln < 1e-9:
+            continue
+        nx, ny = dy / ln, -dx / ln
+        length = math.hypot(bx - ax, by - ay)
+        for side, sd in ((1.0, right), (-1.0, left)):
+            if sd == NO_SIDE or sd >= len(m.sidedefs):
+                continue
+            sector = m.sidedefs[sd][3]
+            if sector >= len(m.sectors):
+                continue
+            for f in (0.25, 0.5, 0.75):
+                for off in (0.6, 1.2):
+                    px = gax + f * dx + side * off * nx
+                    py = gay + f * dy + side * off * ny
+                    cell = (math.floor(px), math.floor(py))
+                    rid = region_of.get(cell)
+                    if rid is not None:
+                        votes[rid][sector] += length
+                    elif cell in open_cells:  # an open boundary cell (a rim)
+                        cell_votes[cell][sector] += length
+
+    sector_of_region = {rid: cnt.most_common(1)[0][0] for rid, cnt in votes.items()}
+    stats["unresolved_regions"] = len(regions) - len(sector_of_region)
+
+    def resolve(damaging) -> set[tuple[int, int]]:
+        nukage: set[tuple[int, int]] = set()
+        clear: set[tuple[int, int]] = set()
+        for rid, comp in enumerate(regions):
+            sec = sector_of_region.get(rid)
+            (nukage if sec is not None and damaging(sec) else clear).update(comp)
+        # The rims: first by their own votes, then two neighbour-majority passes.
+        rim = [c for c in open_cells if c not in region_of]
+        rest = []
+        for cell in rim:
+            if cell_votes.get(cell):
+                (nukage if damaging(cell_votes[cell].most_common(1)[0][0])
+                 else clear).add(cell)
+            else:
+                rest.append(cell)
+        for _ in range(2):
+            for cell in list(rest):
+                x, y = cell
+                nb = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+                n_nuk = sum(1 for c in nb if c in nukage)
+                n_clr = sum(1 for c in nb if c in clear)
+                if n_nuk + n_clr:
+                    (nukage if n_nuk > n_clr else clear).add(cell)
+                    rest.remove(cell)
+        return nukage
+
+    nukage = resolve(damaging_special)
+    if not nukage and stats["flat_sectors"]:
+        stats["nukage_by"] = "flats"
+        nukage = resolve(damaging_flat)
+    # Agreement between the two definitions, for the report.
+    stats["special_vs_flat_disagree"] = sum(
+        1 for s in range(len(m.sectors)) if damaging_special(s) != damaging_flat(s))
+    stats["nukage_cells"] = len(nukage)
+    return nukage, stats
 
 
 # ── colours ──────────────────────────────────────────────────────────────────
@@ -506,6 +660,183 @@ def despeckle(grid: list[list[int]]) -> list[list[int]]:
     return out
 
 
+# ── sprite art (M5: the HUD face; the --wad art overrides) ───────────────────
+def quantize_sprite(rgba: list[list[tuple[int, int, int, int]]], tw: int, th: int,
+                    *, background: tuple[int, int, int] | None = None,
+                    brightness: float = 1.0,
+                    ) -> list[list[int | None]]:
+    """Block-Lab quantize a sprite to ``tw`` x ``th``.
+
+    With ``background`` given, the sprite is composited onto it first and every
+    cell is opaque (the HUD face on the field gray).  Without it, a target cell
+    whose source block is mostly transparent stays ``None`` (the pistol's
+    outline), and only opaque pixels vote.
+    """
+    hh, ww = len(rgba), len(rgba[0])
+    cache: dict[tuple[int, int, int], list[float]] = {}
+
+    def dists(rgb: tuple[int, int, int]) -> list[float]:
+        rgb = tuple(min(255, round(c * brightness)) for c in rgb)
+        if rgb not in cache:
+            lab = srgb_to_lab(rgb)
+            cache[rgb] = [math.dist(lab, pl) for pl in _LAB]
+        return cache[rgb]
+
+    grid: list[list[int | None]] = []
+    for ty in range(th):
+        y0, y1 = int(ty * hh / th), max(int(ty * hh / th) + 1, int((ty + 1) * hh / th))
+        row: list[int | None] = []
+        for tx in range(tw):
+            x0, x1 = int(tx * ww / tw), max(int(tx * ww / tw) + 1, int((tx + 1) * ww / tw))
+            acc = [0.0] * 16
+            opaque = total = 0
+            for yy in range(y0, y1):
+                for xx in range(x0, x1):
+                    r, g, b, a = rgba[yy][xx]
+                    total += 1
+                    if a > 128:
+                        opaque += 1
+                        d = dists((r, g, b))
+                    elif background is not None:
+                        d = dists(background)
+                    else:
+                        continue
+                    for i in range(16):
+                        acc[i] += d[i]
+            if background is None and opaque * 2 < total:
+                row.append(None)
+            else:
+                row.append(min(range(16), key=acc.__getitem__))
+        grid.append(row)
+    return grid
+
+
+def sprite_runs(grid: list[list[int | None]], row0: int, col0: int,
+                *, max_body: int = 12) -> list[tuple[int, int, str]]:
+    """``(row, col, colors)`` runs for the DOOM unit's sprite arms.
+
+    Contiguous opaque spans per row, split so every run fits the arm's descent
+    windows — the token accounting mirrors ``d3_unit._pixel_tokens`` (one load
+    for a colour 0..9, two for a..f, one send per pixel; ``max_body`` is the
+    DATA window's 12 rows, counted from the first send).
+    """
+    runs: list[tuple[int, int, str]] = []
+    for r, row in enumerate(grid):
+        c = 0
+        while c < len(row):
+            if row[c] is None:
+                c += 1
+                continue
+            start = c
+            colors = ""
+            cur: int | None = None
+            body = 0  # tokens from the first send, d3_unit's window budget
+            while c < len(row) and row[c] is not None:
+                px = row[c]
+                cost = (0 if px == cur else (1 if px < 10 else 2)) + 1
+                if colors and body + cost > max_body:
+                    break  # split: the next pixel opens a fresh run
+                # the first pixel's loads are the run's lead, not its body
+                body += cost if colors else 1
+                colors += "%x" % px
+                cur = px
+                c += 1
+            runs.append((row0 + r, col0 + start, colors))
+    return runs
+
+
+def _crop_alpha(rgba: list[list[tuple[int, int, int, int]]]):
+    """The sprite's opaque bounding box (DOOM picture lumps pad heavily)."""
+    ys = [y for y, row in enumerate(rgba) if any(px[3] > 128 for px in row)]
+    xs = [x for x in range(len(rgba[0])) if any(row[x][3] > 128 for row in rgba)]
+    if not ys or not xs:
+        raise ValueError("sprite is fully transparent")
+    return [row[min(xs):max(xs) + 1] for row in rgba[min(ys):max(ys) + 1]]
+
+
+def gun_tables(idle_rgba, flash_rgba, *, width: int = 11, height: int = 10,
+               brightness: float = 1.0):
+    """``(GUN_IDLE, GUN_FIRE)`` run tables from a pistol + muzzle-flash pair.
+
+    The committed art's construction: the idle gun bottom-centred on the
+    viewport (bottom row 39), the fire variant the same gun one row higher
+    with the flash blooming directly above it.
+    """
+    idle = quantize_sprite(_crop_alpha(idle_rgba), width, height,
+                           brightness=brightness)
+    idle_runs = sprite_runs(idle, 40 - height, (64 - width) // 2)
+    flash_src = _crop_alpha(flash_rgba)
+    fh = 4
+    fw = max(2, min(10, round(fh * len(flash_src[0]) / len(flash_src))))
+    flash = quantize_sprite(flash_src, fw, fh, brightness=brightness)
+    # the flash sits clear above the RECOILED gun (whose top row is
+    # 40 - height - 1), exactly like the committed art's 25..28 band
+    flash_runs = sprite_runs(flash, 40 - height - fh - 1, 32 - fw // 2)
+    fire_runs = flash_runs + [(r - 1, c, colors) for r, c, colors in idle_runs]
+    for name, runs in (("idle", idle_runs), ("fire", fire_runs)):
+        if len(runs) > 20:
+            raise ValueError(
+                f"the {name} pistol quantized to {len(runs)} runs; the unit's "
+                "sprite arms fit 20 (leaf spill bound) — coarsen the quantize")
+    return idle_runs, fire_runs
+
+
+#: The HUD face's box: 10x6 in the strip's field rows, clear of the bars
+#: (columns 4..28) and the armor block (50..58).
+FACE_W, FACE_H, FACE_ROW, FACE_COL = 10, 6, 41, 33
+#: The face-core crop (top, bottom, left, right fractions): a 24x29 portrait
+#: squashed whole into 6 rows smears eyes and mouth together, so the box keeps
+#: the brow-to-chin band (montage-eyeballed on both art sources).
+FACE_CROP = (0.18, 0.05, 0.08, 0.08)
+
+
+def face_tables(faces: dict[str, list[list[tuple[int, int, int, int]]]],
+                *, brightness: float = 1.4) -> dict[str, list[tuple[int, int, str]]]:
+    """``{state: runs}`` for the status-bar face: each source cropped to the
+    face core, composited onto the HUD field gray (colour 8) and block-Lab
+    quantized to the face box — one opaque run per row (the CPU paints them
+    as CURS + RUN words, so there is no arm budget to honour)."""
+    out = {}
+    t, b, lft, rgt = FACE_CROP
+    for name, rgba in faces.items():
+        src = _crop_alpha(rgba)
+        h, w = len(src), len(src[0])
+        src = [row[int(w * lft):w - int(w * rgt)]
+               for row in src[int(h * t):h - int(h * b)]]
+        grid = quantize_sprite(src, FACE_W, FACE_H,
+                               background=PALETTE[8], brightness=brightness)
+        out[name] = [(FACE_ROW + r, FACE_COL, "".join("%x" % c for c in grid[r]))
+                     for r in range(FACE_H)]
+    return out
+
+
+#: Which IWAD lumps feed the --wad art overrides: the pistol pair and the
+#: status-bar face family (centre gaze per pain band; EVL is the fire grimace).
+IWAD_ART_LUMPS = {
+    "gun_idle": "PISGA0", "gun_flash": "PISFA0",
+    "face_healthy": "STFST01", "face_hurt": "STFST21",
+    "face_bloody": "STFST41", "face_grim": "STFEVL0",
+}
+
+
+def iwad_art(path: Path) -> dict:
+    """The --wad art override bundle: WAD-derived pistol + face run tables
+    (M5: the local machines' GUN/GUNF arms and FACE paint carry the user's
+    own art; nothing from this path may be committed)."""
+    wad = read_wad(path)
+    playpal = wad.lump("PLAYPAL")[:768]
+
+    def pic(key: str):
+        return decode_picture(wad.lump(IWAD_ART_LUMPS[key]), playpal)
+
+    gun_idle, gun_fire = gun_tables(pic("gun_idle"), pic("gun_flash"))
+    faces = face_tables({
+        "healthy": pic("face_healthy"), "hurt": pic("face_hurt"),
+        "bloody": pic("face_bloody"), "grim": pic("face_grim"),
+    })
+    return {"gun_idle": gun_idle, "gun_fire": gun_fire, "faces": faces}
+
+
 # ── the Level bundle ─────────────────────────────────────────────────────────
 @dataclass
 class Level:
@@ -516,6 +847,9 @@ class Level:
     heading: int                            # 0..15
     title_rows: list[str]                   # 48 rows of 64 hex digits
     families: dict[str, int]                # texture name -> wall family
+    #: 64 printed rows, same orientation as ``map_rows``: ``N`` = an open cell
+    #: on a damage floor, ``.`` = anything else (M5's nukage bit plane).
+    nukage_rows: list[str] = field(default_factory=list)
     avg_colours: dict[str, tuple[int, int, int]] = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
 
@@ -542,13 +876,17 @@ def _finish_level(raster: Raster, avg: dict[str, tuple[int, int, int] | None],
     families["#VOID"] = 7
     grid = raster.grid
     rows = []
+    nrows = []
     for p in range(grid):
         y = grid - 1 - p
         row = ""
+        nrow = ""
         for x in range(grid):
             tex = raster.cells.get((x, y))
             row += "." if tex is None else f"{families[tex]:x}"
+            nrow += "N" if tex is None and (x, y) in raster.nukage else "."
         rows.append(row)
+        nrows.append(nrow)
     wall_cells = sum(1 for t in raster.cells.values() if t != "#VOID")
     used = sorted(set(families[t] for t in families if t != "#VOID"))
     stats = {
@@ -561,10 +899,13 @@ def _finish_level(raster: Raster, avg: dict[str, tuple[int, int, int] | None],
         "textures": len(families) - 1,
         "families_used": used,
         "title_runs": _run_count(title_rows),
+        **{f"nukage_{k}" if not k.startswith("nukage") else k: v
+           for k, v in raster.nukage_stats.items()},
     }
     return Level(rows, raster.spawn, raster.heading, title_rows,
-                 families, {k: tuple(round(c) for c in v) for k, v in avg.items()
-                            if v is not None}, stats)
+                 families, nrows,
+                 {k: tuple(round(c) for c in v) for k, v in avg.items()
+                  if v is not None}, stats)
 
 
 def _run_count(rows: list[str]) -> int:
@@ -713,9 +1054,13 @@ def emit(level: Level, out_dir: Path) -> None:
         "heading": level.heading,
         "title_rows": level.title_rows,
         "families": level.families,
+        "nukage_rows": level.nukage_rows,
         "stats": level.stats,
     }, indent=1) + "\n", encoding="utf-8")
     (out_dir / "map.txt").write_text(level.map_str(), encoding="utf-8")
+    if level.nukage_rows:
+        (out_dir / "nukage.txt").write_text(
+            "\n".join(level.nukage_rows) + "\n", encoding="utf-8")
     (out_dir / "title.txt").write_text("\n".join(level.title_rows) + "\n", encoding="utf-8")
     (out_dir / "families.txt").write_text(level.family_table() + "\n", encoding="utf-8")
     grid = len(level.map_rows)
@@ -728,7 +1073,8 @@ def emit(level: Level, out_dir: Path) -> None:
             if (x, y) == level.spawn:
                 row.append((255, 255, 0))
             elif ch == ".":
-                row.append((40, 40, 40))
+                nuk = level.nukage_rows and level.nukage_rows[p][x] == "N"
+                row.append((0, 130, 0) if nuk else (40, 40, 40))
             else:
                 row.append(PALETTE[int(ch, 16)])
         overhead.append(row)

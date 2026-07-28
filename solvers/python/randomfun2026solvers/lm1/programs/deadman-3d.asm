@@ -13,7 +13,7 @@
 ; cancel), then move along the new heading (W/S cancel), then render.
 ; An ungraded demo — the slug borrows plotter's problem JSON for nothing
 ; but registration; its 64x48 panel belongs to the DOOM unit (.unit doom,
-; lm1/d3_unit.py), its input is its own, and its 328-slot STORE rides the
+; lm1/d3_unit.py), its input is its own, and its 395-slot STORE rides the
 ; men-v3 man-memory (STORE_TIER), ~11 ticks an access.
 ;
 ; The CPU never touches the display: each viewport column is ONE command
@@ -26,7 +26,8 @@
 ; black because COMMIT clears the next buffer.
 ;
 ; Round 0's input carries the whole data preamble (256 packed map quarter-columns,
-; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())
+; POW16, the 16 packed heading words, the 64-word nukage bit plane and the
+; spawn state — deadman3d.preamble_words())
 ; followed by the title screen's RLE (deadman3d.title_words(): one pre-encoded
 ; RUN command word per run, forwarded IN/SND and committed as round 0's one
 ; frame): tables and art ride on INPUT because every ROM word taxes every
@@ -38,51 +39,53 @@
 ; inlined at its three sites (no stack, no calls): the two move-collision
 ; tests and the DDA hit test.
 
-; ── tape slots (deadman3d.tape_slots(); slots 1..295 are the boot data) ──────
+; ── tape slots (deadman3d.tape_slots(); slots 1..359 are the boot data) ──────
 .equ MAPB   1            ; ..256 packed map quarter-columns: word 4x+(y/16), nibble y mod 16
 .equ POWB   257          ; ..272 16**k — the nibble-extraction divisors
 .equ HDGB   273          ; ..288 packed headings: base-4096 digits dirX dirY planeX planeY, biased +1024
-.equ POSX   289          ; player x, Q10 (lodev posX)
-.equ POSY   290          ; player y, Q10 (lodev posY)
-.equ HDG    291          ; heading 0..15 (22.5 deg steps, CCW from east)
-.equ DIRX   292          ; lodev dirX
-.equ DIRY   293          ; lodev dirY
-.equ PLANEX 294          ; lodev planeX
-.equ PLANEY 295          ; lodev planeY
-.equ CMD    296          ; this round's command word
-.equ XCOL   297          ; the column being rendered (lodev x)
-.equ CAMX   298          ; lodev cameraX, Q10
-.equ RDX    299          ; lodev rayDirX
-.equ RDY    300          ; lodev rayDirY
-.equ SDX    301          ; lodev sideDistX
-.equ SDY    302          ; lodev sideDistY
-.equ DDX    303          ; lodev deltaDistX
-.equ DDY    304          ; lodev deltaDistY
-.equ S4X    305          ; 4*stepX: the word address moves +-4 per x-step
-.equ STPY   306          ; lodev stepY (the sign picks the PW shift arm)
-.equ PERP   307          ; lodev perpWallDist
-.equ HALFH  308          ; lodev lineHeight / 2
-.equ DSTART 309          ; lodev drawStart
-.equ DEND   310          ; lodev drawEnd
-.equ COLOR  311          ; the wall type t, then the shaded colour
-.equ PW     312          ; 16**(mapY mod 16), maintained incrementally across DDA steps
-.equ WADDR  313          ; MAPB + 4*mapX + mapY/16, maintained incrementally too
-.equ FRACX  314          ; posX mod 1024, hoisted per frame
-.equ FRACY  315          ; posY mod 1024
-.equ PW0    316          ; PW's per-frame seed (the player's own cell)
-.equ WADDR0 317          ; WADDR's per-frame seed
-.equ TMP    318          ; scratch (s, frac, packed word)
-.equ TMP2   319          ; scratch (the cell lookup's quarter-column selector)
-.equ NEWX   320          ; the candidate posX
-.equ NEWY   321          ; the candidate posY
-.equ BW     322          ; key bit 0 (1): W, forward
-.equ BS     323          ; key bit 1 (2): S, backward
-.equ BA     324          ; key bit 2 (4): A, turn left
-.equ BD     325          ; key bit 3 (8): D, turn right
-.equ FIRE   326          ; key bit 4 (16): space held — fire the pistol this frame
-.equ AMMO   327          ; live rounds left: starts 50, -1 per shot, floor 0
-.equ HEALTH 328          ; static 100 until the demo grows damage
-.equ PTR    329          ; the boot loop's tape cursor
+.equ NUKB   289          ; ..352 the nukage bit plane: word x, bit y — 1 = damage floor (M5)
+.equ POSX   353          ; player x, Q10 (lodev posX)
+.equ POSY   354          ; player y, Q10 (lodev posY)
+.equ HDG    355          ; heading 0..15 (22.5 deg steps, CCW from east)
+.equ DIRX   356          ; lodev dirX
+.equ DIRY   357          ; lodev dirY
+.equ PLANEX 358          ; lodev planeX
+.equ PLANEY 359          ; lodev planeY
+.equ CMD    360          ; this round's command word
+.equ XCOL   361          ; the column being rendered (lodev x)
+.equ CAMX   362          ; lodev cameraX, Q10
+.equ RDX    363          ; lodev rayDirX
+.equ RDY    364          ; lodev rayDirY
+.equ SDX    365          ; lodev sideDistX
+.equ SDY    366          ; lodev sideDistY
+.equ DDX    367          ; lodev deltaDistX
+.equ DDY    368          ; lodev deltaDistY
+.equ S4X    369          ; 4*stepX: the word address moves +-4 per x-step
+.equ STPY   370          ; lodev stepY (the sign picks the PW shift arm)
+.equ PERP   371          ; lodev perpWallDist
+.equ HALFH  372          ; lodev lineHeight / 2
+.equ DSTART 373          ; lodev drawStart
+.equ DEND   374          ; lodev drawEnd
+.equ COLOR  375          ; the wall type t, then the shaded colour
+.equ PW     376          ; 16**(mapY mod 16), maintained incrementally across DDA steps
+.equ WADDR  377          ; MAPB + 4*mapX + mapY/16, maintained incrementally too
+.equ FRACX  378          ; posX mod 1024, hoisted per frame
+.equ FRACY  379          ; posY mod 1024
+.equ PW0    380          ; PW's per-frame seed (the player's own cell)
+.equ WADDR0 381          ; WADDR's per-frame seed
+.equ TMP    382          ; scratch (s, frac, packed word)
+.equ TMP2   383          ; scratch (the cell lookup's quarter-column selector)
+.equ NEWX   384          ; the candidate posX
+.equ NEWY   385          ; the candidate posY
+.equ BW     386          ; key bit 0 (1): W, forward
+.equ BS     387          ; key bit 1 (2): S, backward
+.equ BA     388          ; key bit 2 (4): A, turn left
+.equ BD     389          ; key bit 3 (8): D, turn right
+.equ FIRE   390          ; key bit 4 (16): space held — fire the pistol this frame
+.equ AMMO   391          ; live rounds left: starts 50, -1 per shot, floor 0
+.equ HEALTH 392          ; live health: starts 100, nukage -5 a frame, floor 0
+.equ NUKE   393          ; 1 when this frame stands on nukage: green floor, health drain
+.equ PTR    394          ; the boot loop's tape cursor
 
 ; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────
 .unit doom
@@ -93,8 +96,8 @@
 .equ C_GUNF   6            ; arg=0: the recoil pistol + muzzle flash (rows 25..38)
 .equ C_COMMIT 7            ; arg=0: SWAP 0 — commit the frame, clear next, reset the cursor
 
-; ── boot: round 0's data preamble -> tape slots 1..295, the loop unrolled 8x ──
-; (a backward jump costs 8*(P - loop) ticks, so 36 laps beat 295; the last
+; ── boot: round 0's data preamble -> tape slots 1..359, the loop unrolled 8x ──
+; (a backward jump costs 8*(P - loop) ticks, so 44 laps beat 359; the last
 ; 7 slots are loaded straight-line at their own addresses)
         LDI 1
         ST  PTR
@@ -139,8 +142,8 @@ boot:   IN                  ; the next preamble word
         MOVA TMP            ; store[PTR] = the word
         INCM PTR
         LD  PTR
-        SUBI 289
-        BRN boot            ; keep looping while PTR < 289
+        SUBI 353
+        BRN boot            ; keep looping while PTR < 353
         IN
         ST  POSX
         IN
@@ -200,7 +203,7 @@ title:  IN                  ; the next pre-encoded RUN word
         LDI 50
         ST  AMMO            ; a full clip (V4's live HUD)
         LDI 100
-        ST  HEALTH          ; static until the demo grows damage
+        ST  HEALTH          ; full health — nukage drains it (M5)
 
 
 ; ── round: one key-bitmask word in, exactly one committed frame out ──────────
@@ -382,13 +385,60 @@ comy:   LD  NEWY
         ST  POSY
         JMP render
 
+; ── nukage (M5): the player's cell's bit of the 1-bit damage plane ───────────
+; bit y of plane word NUKB+x is  word / 16**(y/4) / 2**(y mod 4) mod 2 — the
+; high bits of the shift ride the POWB table (16**k == 2**4k), the low two
+; come off a 4-way divisor ladder (there is no POW2 table on the tape).
+; Standing on nukage: HEALTH -5, floor 0, and NUKE=1 makes every
+; column's floor repaint green (the overlay COL words below).
+render: LD  POSY
+        DIVI 1024
+        ST  TMP             ; mapY = the plane word's bit index
+        DIVI 4
+        ADDI POWB
+        LDA                 ; 16**(mapY / 4)
+        ST  TMP2
+        LD  POSX
+        DIVI 1024
+        ADDI NUKB
+        LDA                 ; the player's column's plane word
+        DIV TMP2
+        ST  NUKE            ; parked: the word shifted down 4*(mapY/4) bits
+        LD  TMP
+        MODI 4              ; the low two bits pick the 1/2/4/8 divisor
+        BRZ nkm0
+        SUBI 1
+        BRZ nkm1
+        SUBI 1
+        BRZ nkm2
+        LD  NUKE
+        DIVI 8
+        JMP nkbit
+nkm1:   LD  NUKE
+        DIVI 2
+        JMP nkbit
+nkm2:   LD  NUKE
+        DIVI 4
+        JMP nkbit
+nkm0:   LD  NUKE
+nkbit:  MODI 2
+        ST  NUKE            ; 1 = this frame stands on a damage floor
+        BRZ prolog          ; clean floor: no damage
+        LD  HEALTH
+        SUBI 5
+        BRN hzero
+        ST  HEALTH          ; the red bar shrinks on this very frame
+        JMP prolog
+hzero:  LDI 0
+        ST  HEALTH          ; floor 0: the bar empties, no death mechanics yet
+
 ; ── render: lodev's per-column raycast, columns 0..63 ──────────────────────
 ; The per-frame prologue: everything that depends only on the player's position
 ; is computed once — the fractional position, and the cell-lookup seeds PW0 (the
 ; nibble divisor 16**(mapY mod 16)) and WADDR0 (the packed quarter-column's slot,
 ; MAPB + 4*mapX + mapY/16). The DDA then maintains PW/WADDR *incrementally*, so
 ; the per-step lookup is LDA/DIV/MODI instead of the full 16-instruction unpack.
-render: LD  POSX
+prolog: LD  POSX
         MODI 1024
         ST  FRACX           ; posX - mapX*1024, hoisted out of sidex
         LD  POSY
@@ -1329,6 +1379,28 @@ send:   LD  DSTART
         ADDI 1              ; arg = seed*64 + (drawEnd - drawStart + 1)
         MULI 8              ; the command word: 8*arg + C_COL, and C_COL == 0
         SND
+        LD  NUKE
+        BRZ colnxt          ; clean floor: the COL word's gray floor stands
+        LD  DEND
+        SUBI 39
+        BRZ colnxt          ; wall to the bottom row: no floor to flood
+        ; the green flood (M5): standing on nukage, a SECOND bare COL word
+        ; repaints this column's floor run (rows drawEnd+1..39) in
+        ; 2 — the unit needs no new arm: colour 2 is
+        ; mask-invariant (2 & 7 == 2 & 15), the guard
+        ; keeps its wall run nonempty, and its own floor lap count is 0
+        LD  DEND
+        ADDI 1
+        MULI 64
+        ADD XCOL
+        MULI 16
+        ADDI 2
+        SUBI 1024
+        MULI 64
+        ADDI 39
+        SUB DEND            ; arg = seed*64 + (39 - drawEnd)
+        MULI 8
+        SND
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI 63
         BRZ gun             ; that was column 63: the viewport is sent
@@ -1399,7 +1471,7 @@ hud:    LDI 20481
 abar:   LD  AMMO
         DIVI 2
         ST  TMP             ; the ammo bar in pixels
-        BRZ cmit            ; clip empty: no bar at all
+        BRZ face            ; clip empty: no bar at all
         LDI 22561
         SND
         LD  TMP
@@ -1413,6 +1485,339 @@ abar:   LD  AMMO
         SND
         LD  TMP2
         SND
+
+; ── the face (M5): the Freedoom status-bar face, 6x10 at rows 41..46,
+; columns 33..42 — four baked variants (face_for), each a constant list of
+; CURS + RLE RUN words; the branch ladder picks FIRE's grimace first, then
+; the HEALTH band (> 66 healthy, > 33 hurt, else bloodied)
+face:   LD  FIRE
+        BRZ fband           ; not firing: the health band picks the face
+        JMP fgrim
+fband:  LD  HEALTH
+        SUBI 67
+        BRN fb2
+        JMP fwell           ; health > 66: the healthy face
+fb2:    LD  HEALTH
+        SUBI 34
+        BRN fbld            ; health <= 33: the bloodied face
+        JMP fhurt
+fwell:  LDI 21257          ; healthy (stfst00)
+        SND                 ; CURS: face row 41, column 33
+        LDI 388
+        SND                 ; RUN 3 x colour 0
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 644
+        SND                 ; RUN 5 x colour 0
+        LDI 21769
+        SND                 ; CURS: face row 42, column 33
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22281
+        SND                 ; CURS: face row 43, column 33
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22793
+        SND                 ; CURS: face row 44, column 33
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 796
+        SND                 ; RUN 6 x colour 3
+        LDI 252
+        SND                 ; RUN 1 x colour 15
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23305
+        SND                 ; CURS: face row 45, column 33
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 23817
+        SND                 ; CURS: face row 46, column 33
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        JMP cmit
+fhurt:  LDI 21257          ; hurt (stfst20)
+        SND                 ; CURS: face row 41, column 33
+        LDI 1284
+        SND                 ; RUN 10 x colour 0
+        LDI 21769
+        SND                 ; CURS: face row 42, column 33
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22281
+        SND                 ; CURS: face row 43, column 33
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22793
+        SND                 ; CURS: face row 44, column 33
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 796
+        SND                 ; RUN 6 x colour 3
+        LDI 252
+        SND                 ; RUN 1 x colour 15
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23305
+        SND                 ; CURS: face row 45, column 33
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 412
+        SND                 ; RUN 3 x colour 3
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 23817
+        SND                 ; CURS: face row 46, column 33
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 140
+        SND                 ; RUN 1 x colour 1
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        JMP cmit
+fbld:   LDI 21257          ; bloodied (stfst40)
+        SND                 ; CURS: face row 41, column 33
+        LDI 1284
+        SND                 ; RUN 10 x colour 0
+        LDI 21769
+        SND                 ; CURS: face row 42, column 33
+        LDI 516
+        SND                 ; RUN 4 x colour 0
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 388
+        SND                 ; RUN 3 x colour 0
+        LDI 22281
+        SND                 ; CURS: face row 43, column 33
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 252
+        SND                 ; RUN 1 x colour 15
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 140
+        SND                 ; RUN 1 x colour 1
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22793
+        SND                 ; CURS: face row 44, column 33
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 412
+        SND                 ; RUN 3 x colour 3
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 23305
+        SND                 ; CURS: face row 45, column 33
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 140
+        SND                 ; RUN 1 x colour 1
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 140
+        SND                 ; RUN 1 x colour 1
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23817
+        SND                 ; CURS: face row 46, column 33
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 140
+        SND                 ; RUN 1 x colour 1
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 332
+        SND                 ; RUN 2 x colour 9
+        LDI 140
+        SND                 ; RUN 1 x colour 1
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        JMP cmit
+fgrim:  LDI 21257          ; the FIRE grimace (stfevl0)
+        SND                 ; CURS: face row 41, column 33
+        LDI 452
+        SND                 ; RUN 3 x colour 8
+        LDI 900
+        SND                 ; RUN 7 x colour 0
+        LDI 21769
+        SND                 ; CURS: face row 42, column 33
+        LDI 516
+        SND                 ; RUN 4 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 644
+        SND                 ; RUN 5 x colour 0
+        LDI 22281
+        SND                 ; CURS: face row 43, column 33
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22793
+        SND                 ; CURS: face row 44, column 33
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23305
+        SND                 ; CURS: face row 45, column 33
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 23817
+        SND                 ; CURS: face row 46, column 33
+        LDI 452
+        SND                 ; RUN 3 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 452
+        SND                 ; RUN 3 x colour 8
 
 ; ── the commit: one command word ─────────────────────────────────────────────
 cmit:   LDI C_COMMIT

@@ -194,3 +194,167 @@ def test_committed_freedoom_map_is_a_wadimport_shape() -> None:
         assert d3.map_cell(i, 63) > 0 and d3.map_cell(63, i) > 0
     sx, sy = d3.SPAWN.posX // 1024, d3.SPAWN.posY // 1024
     assert d3.map_cell(sx, sy) == 0
+
+
+# ── damage floors (M5): SECTORS + the region flood fill ──────────────────────
+def two_room_wad(*, special: int = 7, floorpic: bytes = b"NUKAGE1") -> bytes:
+    """Two 256x256 rooms joined by a two-sided linedef; room B's sector is a
+    damage floor.  Wound like a real level: walking v1->v2, the right sidedef
+    faces its own sector (y-up, right = (dy, -dx))."""
+    verts = [(0, 0), (0, 256), (256, 256), (256, 0), (512, 256), (512, 0)]
+    vertexes = b"".join(struct.pack("<hh", *v) for v in verts)
+    NO = 0xFFFF
+    #      v1 v2 flags special tag right left
+    lds = [
+        (0, 1, 1, 0, 0, 0, NO),   # A west
+        (1, 2, 1, 0, 0, 1, NO),   # A north
+        (3, 0, 1, 0, 0, 2, NO),   # A south
+        (2, 3, 4, 0, 0, 3, 4),    # the JOIN: right faces A, left faces B
+        (2, 4, 1, 0, 0, 5, NO),   # B north
+        (4, 5, 1, 0, 0, 6, NO),   # B east
+        (5, 3, 1, 0, 0, 7, NO),   # B south
+    ]
+    linedefs = b"".join(struct.pack("<HHHHHHH", *ld) for ld in lds)
+    #             (sector of each sidedef above, in order)
+    sd_sectors = [0, 0, 0, 0, 1, 1, 1, 1]
+    sidedefs = b"".join(
+        struct.pack("<hh8s8s8sH", 0, 0, b"-", b"-",
+                    b"-" if i == 3 or i == 4 else b"STARTAN3", s)
+        for i, s in enumerate(sd_sectors))
+    things = struct.pack("<hhHHH", 128, 128, 0, 1, 7)
+    sectors = (struct.pack("<hh8s8shhh", 0, 128, b"FLOOR4_8", b"CEIL3_5", 160, 0, 0)
+               + struct.pack("<hh8s8shhh", -8, 128, floorpic, b"CEIL3_5", 160, special, 0))
+    lumps = [
+        _lump("E1M1", b""),
+        _lump("THINGS", things),
+        _lump("LINEDEFS", linedefs),
+        _lump("SIDEDEFS", sidedefs),
+        _lump("VERTEXES", vertexes),
+        _lump("SECTORS", sectors),
+    ]
+    body = b""
+    directory = b""
+    offset = 12 + 16 * len(lumps)
+    for name, data in lumps:
+        directory += struct.pack("<II", offset + len(body), len(data)) + name
+        body += data
+    return struct.pack("<4sII", b"PWAD", len(lumps), 12) + directory + body
+
+
+def test_sectors_parse_and_nukage_region_resolution() -> None:
+    """The SECTORS lump decodes; the region flood fill marks room B's cells
+    (special 7 — the 5% damage floor) and leaves room A clean."""
+    m = wi.parse_map(wi.read_wad(two_room_wad()), "E1M1")
+    assert m.sectors == [
+        (0, 128, "FLOOR4_8", "CEIL3_5", 160, 0, 0),
+        (-8, 128, "NUKAGE1", "CEIL3_5", 160, 7, 0),
+    ]
+    r = wi.rasterize(m, grid=64, min_len=32.0)
+    assert r.nukage, "room B must resolve to nukage"
+    assert r.nukage_stats["nukage_by"] == "specials"
+    assert r.nukage_stats["unresolved_regions"] == 0
+    # A cell deep in each room: B's is nukage, A's (the spawn's) is not.
+    assert r.spawn not in r.nukage
+    gx = round((384 / 512) * 62) + 1   # room B's centre, roughly, on the grid
+    gy = round((128 / 512) * 62) + 8
+    hits = [c for c in r.nukage if abs(c[0] - gx) <= 3]
+    assert hits, f"no nukage near room B's centre column {gx}"
+    # Every nukage cell is an open cell (never a wall).
+    assert r.nukage <= r.open_cells
+
+
+def test_nukage_flat_name_fallback_is_documented() -> None:
+    """With no damage special anywhere but a NUKAGE* flat, the documented
+    fallback marks the region by flat name and says so in the stats."""
+    m = wi.parse_map(wi.read_wad(two_room_wad(special=0)), "E1M1")
+    r = wi.rasterize(m, grid=64, min_len=32.0)
+    assert r.nukage
+    assert r.nukage_stats["nukage_by"] == "flats"
+
+
+# ── sprite art (M5): the run splitter and the --wad art tables ───────────────
+def _run_tokens(colors: str) -> tuple[int, int]:
+    """(lead, body) token counts exactly as d3_unit._pixel_tokens builds them."""
+    toks: list[str] = []
+    cur = None
+    for ch in colors:
+        c = int(ch, 16)
+        if ch != cur:
+            toks += ["%d" % c] if c < 10 else ["%d" % (c - 8), "~"]
+            cur = ch
+        toks.append("s")
+    first = toks.index("s")
+    return first, len(toks) - first
+
+
+def test_sprite_runs_split_to_the_descent_window() -> None:
+    """A busy row splits so every run's body fits the DATA window (12 rows),
+    the replay is lossless, and transparency breaks runs."""
+    row: list[int | None] = [1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 0, 0, None, 7]
+    runs = wi.sprite_runs([row], 30, 20)
+    assert len(runs) >= 3
+    replay: dict[int, int] = {}
+    for r, c, colors in runs:
+        assert r == 30
+        lead, body = _run_tokens(colors)
+        assert lead <= 2 and body <= 12
+        for i, ch in enumerate(colors):
+            replay[c + i] = int(ch, 16)
+    assert replay == {20 + i: v for i, v in enumerate(row) if v is not None}
+
+
+def test_gun_and_face_tables_fit_the_unit_budgets() -> None:
+    """Synthetic pistol + flash quantize into <= 20 runs placed like the
+    committed art (idle bottom row 39, flash above the recoiled gun), and the
+    face tables are one 10-wide opaque run per row in the face box."""
+    gun = [[(200, 60, 40, 255)] * 22 for _ in range(20)]
+    flash = [[(255, 255, 120, 255)] * 8 for _ in range(6)]
+    idle, fire = wi.gun_tables(gun, flash)
+    assert 1 <= len(idle) <= 20 and 1 <= len(fire) <= 20
+    assert max(r for r, _c, _s in idle) == 39          # bottom-anchored
+    assert max(r for r, _c, _s in fire) == 38          # recoiled one row up
+    assert min(r for r, _c, _s in fire) < min(r for r, _c, _s in idle) - 1
+    face = wi.face_tables({"healthy": [[(180, 140, 100, 255)] * 24 for _ in range(29)]})
+    runs = face["healthy"]
+    assert [r for r, _c, _s in runs] == list(range(wi.FACE_ROW, wi.FACE_ROW + wi.FACE_H))
+    assert all(c == wi.FACE_COL and len(s) == wi.FACE_W for _r, c, s in runs)
+
+
+def test_iwad_art_extracts_the_named_lumps() -> None:
+    """A synthetic IWAD carrying PLAYPAL + tiny picture lumps for the pistol
+    and face family round-trips through iwad_art (Mode B's art override)."""
+    playpal = bytes([0, 0, 0]) + bytes([180, 60, 40]) + bytes([250, 250, 120]) + bytes(759)
+
+    def picture(w: int, h: int, idx: int) -> bytes:
+        cols = []
+        post = bytes([0, h]) + b"\0" + bytes([idx]) * h + b"\0" + b"\xff"
+        header = struct.pack("<HHhh", w, h, 0, 0)
+        offs = []
+        at = 8 + 4 * w
+        for _ in range(w):
+            offs.append(at)
+            at += len(post)
+        return header + b"".join(struct.pack("<I", o) for o in offs) + post * w
+
+    lumps = [_lump("PLAYPAL", playpal)]
+    for key, name in wi.IWAD_ART_LUMPS.items():
+        idx = 2 if key == "gun_flash" else 1
+        lumps.append(_lump(name, picture(16, 16, idx)))
+    body = b""
+    directory = b""
+    offset = 12 + 16 * len(lumps)
+    for name, data in lumps:
+        directory += struct.pack("<II", offset + len(body), len(data)) + name
+        body += data
+    wad = struct.pack("<4sII", b"IWAD", len(lumps), 12) + directory + body
+    tmp = Path(__file__).parent / "_tmp_art.wad"
+    tmp.write_bytes(wad)
+    try:
+        art = wi.iwad_art(tmp)
+    finally:
+        tmp.unlink()
+    assert set(art) == {"gun_idle", "gun_fire", "faces"}
+    assert set(art["faces"]) == {"healthy", "hurt", "bloody", "grim"}
+    assert 1 <= len(art["gun_idle"]) <= 20 and 1 <= len(art["gun_fire"]) <= 20
+    for runs in art["faces"].values():
+        assert len(runs) == wi.FACE_H and all(len(s) == wi.FACE_W for _r, _c, s in runs)

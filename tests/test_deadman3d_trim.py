@@ -25,4 +25,4 @@ def test_trim_artifact_matches_the_builder() -> None:
 
     m = machine.build_for("deadman-3d", trim_dead=True)
     assert MAN.read_text().rstrip("\n").split("\n") == m.rows
-    assert (m.width, m.height) == (307, 307)
+    assert (m.width, m.height) == (335, 333)
