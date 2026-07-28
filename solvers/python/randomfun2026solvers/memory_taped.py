@@ -40,8 +40,8 @@ without consuming it — into read/write arms::
 
 Binding needs no argument anywhere: the room has ONE incoming pipe (every
 ``U``/``r`` takes from it) and two outgoing pipes on the **same wall**, so §7.1's
-column term cancels and the row decides — the local pipe leaves beside the
-rows-1/3 arms, the downstream pipe beside the rows-9/11 arms.
+column term cancels and the row decides — the local pipe leaves beside the two
+north arms, the downstream pipe beside the two south ones.
 
 The answer side has no logic at all. At most one request is in flight (the CPU
 blocks on every read), so the banks' answers all rise into one **collector
@@ -58,7 +58,7 @@ from __future__ import annotations
 
 from .memory_men_v3 import V3Store
 
-__all__ = ["bank_gate", "taped_store_block", "taped_plan"]
+__all__ = ["bank_gate", "gate_rows", "taped_store_block", "taped_plan"]
 
 #: The gate's interior height; rows 1..12 like the two-tier adapter it descends
 #: from, with the same return loop (east column down, floor west, climb to ``U``).
@@ -69,17 +69,59 @@ GATE_IN_ROW = 6
 GATE_LOCAL_ROW = 2
 GATE_DOWN_ROW = 10
 
+#: The same gate with its five nop spacers taken out. The gate inherited its
+#: 12-row body from the two-tier adapter, which needed the slack; this room does
+#: not. Northbound out of the ``X`` the man only has to reach the ``d`` and then
+#: the ``>``, so two rows do what five did; southbound past the elbow he only has
+#: to reach the ``a`` and then the ``>``, so two rows do what four did. Every
+#: deleted cell is a ``.`` — a nop the man *walks*, so it is a tick each way, and
+#: the return leg's descent and climb shorten with the body.
+#:
+#: Nothing else moves: the arms keep their glyphs and their columns, so ``cx``
+#: and ``cr`` are unchanged and every ``s``'s Manhattan distance to the two
+#: outgoing pipes stays ``m``-independent (see :func:`bank_gate`).
+COMPACT_GATE_H = 7
+COMPACT_GATE_IN_ROW = 3
+COMPACT_GATE_LOCAL_ROW = 1
+COMPACT_GATE_DOWN_ROW = 6
 
-def bank_gate(m: int) -> tuple[dict[tuple[int, int], str], int]:
+
+def gate_rows(compact: bool = False) -> tuple[int, int, int, int]:
+    """``(height, in row, local out row, downstream out row)`` for a bank gate.
+
+    ``compact=False`` is the shipped 12-row body, so every existing caller's
+    grid stays byte-identical; ``True`` is the spacer-free 7-row one.
+    """
+    if compact:
+        return (
+            COMPACT_GATE_H,
+            COMPACT_GATE_IN_ROW,
+            COMPACT_GATE_LOCAL_ROW,
+            COMPACT_GATE_DOWN_ROW,
+        )
+    return GATE_H, GATE_IN_ROW, GATE_LOCAL_ROW, GATE_DOWN_ROW
+
+
+def bank_gate(m: int, *, compact: bool = False) -> tuple[dict[tuple[int, int], str], int]:
     """One range gate for a bank of ``m`` slots: cells (walls included), width.
 
     Local coordinates: walls at column 0 / row 0, interior from (1, 1). The
-    caller attaches the request pipe to the west wall at :data:`GATE_IN_ROW`
-    and the two outgoing pipes to the east wall at :data:`GATE_LOCAL_ROW` /
-    :data:`GATE_DOWN_ROW`.
+    caller attaches the request pipe to the west wall at the in row and the two
+    outgoing pipes to the east wall at the local / downstream rows — all three
+    from :func:`gate_rows`, which is also where ``compact`` is described.
     """
     if m < 1:
         raise ValueError(f"a bank must hold at least one slot, not {m}")
+    h, in_row, _local_row, _down_row = gate_rows(compact)
+    # The four arm rows. The shipped body leaves nop spacers between the
+    # stations (two above the `d`, one everywhere else); compact leaves none, so
+    # each station sits on the row the man reaches next.
+    gap = 0 if compact else 1
+    turn = in_row + 1  # the A > 0 elbow, merging into column cx + 1
+    n_write = in_row - 1 - 2 * gap  # the `d` that splits north on the parked op
+    n_read = n_write - 1 - gap  # ... and the read arm above it (row 1 either way)
+    s_write = turn + 1 + gap  # the `a` that splits south on the parked op
+    s_read = s_write + 1 + gap  # ... and the read arm below it
     lit = f"`{m + 1}`"
     cx = 7 + len(lit)  # the range test's X
     cr = cx + 13  # the return column, east of the longest arm plus slack
@@ -96,46 +138,43 @@ def bank_gate(m: int) -> tuple[dict[tuple[int, int], str], int]:
             put(x + i, y, ch)
 
     # the spine: op -> backpack, then A = addr - (m+1), then the three-way X
-    text(1, GATE_IN_ROW, f"UbrM{lit}W-X")
+    text(1, in_row, f"UbrM{lit}W-X")
 
     # A < 0 (mine): north, splitting on the parked op at `d`
-    put(cx, 5, ".")
-    put(cx, 4, ".")
-    put(cx, 3, "d")  # BP > 0 (write): turn right of northbound = east
-    text(cx + 1, 3, "+M1sWsrs")
-    put(cx, 2, ".")
-    put(cx, 1, ">")  # BP == 0 (read): straight through to the top row
-    text(cx + 1, 1, "+M0sWs")
+    for y in range(n_read + 1, in_row):
+        put(cx, y, "d" if y == n_write else ".")  # BP > 0 (write): right = east
+    text(cx + 1, n_write, "+M1sWsrs")
+    put(cx, n_read, ">")  # BP == 0 (read): straight through to the top row
+    text(cx + 1, n_read, "+M0sWs")
 
     # A == 0 goes straight and A > 0 turns south; they merge one column east
     # (the zero IS the first downstream address, so the merge is correct).
-    put(cx + 1, GATE_IN_ROW, "v")
-    put(cx, 7, ">")
-    put(cx + 1, 7, "v")
-    put(cx + 1, 8, ".")
-    put(cx + 1, 9, "a")  # BP > 0 (write): turn left of southbound = east
-    text(cx + 2, 9, "M1+M1sWsrs")
-    put(cx + 1, 10, ".")
-    put(cx + 1, 11, ">")
-    text(cx + 2, 11, "M1+M0sWs")
+    put(cx + 1, in_row, "v")
+    put(cx, turn, ">")
+    put(cx + 1, turn, "v")
+    for y in range(turn + 1, s_read):
+        put(cx + 1, y, "a" if y == s_write else ".")  # BP > 0 (write): left = east
+    text(cx + 2, s_write, "M1+M1sWsrs")
+    put(cx + 1, s_read, ">")
+    text(cx + 2, s_read, "M1+M0sWs")
 
     # the return leg: every arm walks east onto the same descent, then the
     # floor runs west and the climb re-enters the spine's `U` from below
-    for y in range(1, GATE_H):
+    for y in range(1, h):
         put(cr, y, "v")
-    put(cr, GATE_H, "<")
-    put(cr - 1, GATE_H, "@")
+    put(cr, h, "<")
+    put(cr - 1, h, "@")
     for x in range(2, cr - 1):
-        put(x, GATE_H, "<")
-    put(1, GATE_H, "^")
-    for y in range(GATE_IN_ROW + 1, GATE_H):
+        put(x, h, "<")
+    put(1, h, "^")
+    for y in range(in_row + 1, h):
         put(1, y, "^")
 
     # walls
     for x in range(0, cr + 2):
         put(x, 0, "+" if x in (0, cr + 1) else "-")
-        put(x, GATE_H + 1, "+" if x in (0, cr + 1) else "-")
-    for y in range(1, GATE_H + 1):
+        put(x, h + 1, "+" if x in (0, cr + 1) else "-")
+    for y in range(1, h + 1):
         put(0, y, "|")
         put(cr + 1, y, "|")
     return g, cr + 2
@@ -168,7 +207,13 @@ def taped_plan(n: int, banks: int | tuple[int, ...]) -> list[int]:
     return sizes + [last]
 
 
-def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int = 1) -> V3Store:
+def taped_store_block(
+    n: int,
+    banks: int | tuple[int, ...],
+    *,
+    skip_batch: int = 1,
+    compact_gate: bool = False,
+) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
 
     ``n`` is the machine's ``TAPE_SIZE`` (slot count; usable addresses
@@ -177,14 +222,21 @@ def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int =
     Returns the same :class:`V3Store` contract the men-v3 blocks use — request
     stub west, answer stub rising out of the top, exact pipe inventory — so
     ``lm1.machine`` places it through the identical branch, teleports and all.
+
+    ``compact_gate`` builds the gates from :data:`COMPACT_GATE_H`'s spacer-free
+    body instead of the shipped 12-row one — five fewer rows per gate and a
+    shorter walk through every one of them. The gate strip is the block's floor,
+    so the block loses those five rows too. ``False`` keeps the shipped body, so
+    every existing caller's grid is byte-identical.
     """
     from .lm1.machine import tape_block
 
+    _gate_h, gate_in_row, gate_local_row, gate_down_row = gate_rows(compact_gate)
     sizes = taped_plan(n, banks)
     tapes = [tape_block(size + 1, skip_batch=skip_batch) for size in sizes]
     bank_w = max(t.width for t in tapes)
     bank_h = max(t.height for t in tapes)
-    gates = [bank_gate(m) for m in sizes[:-1]]
+    gates = [bank_gate(m, compact=compact_gate) for m in sizes[:-1]]
     gate_w = max(w for _, w in gates)
 
     # ── the floor plan ───────────────────────────────────────────────────────
@@ -237,21 +289,21 @@ def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int =
         tin = (bx[k] + tapes[k].in_cell[0], bank_y + tapes[k].in_cell[1])
         pipe(
             [
-                (east + 1, gate_y + GATE_LOCAL_ROW),
-                (riser, gate_y + GATE_LOCAL_ROW),
+                (east + 1, gate_y + gate_local_row),
+                (riser, gate_y + gate_local_row),
                 (riser, tin[1]),
                 tin,
             ]
         )
-        down_y = gate_y + GATE_DOWN_ROW
+        down_y = gate_y + gate_down_row
         if k + 1 < nb - 1:
             # chain: east two cells, up to the next gate's entry row, straight in
             pipe(
                 [
                     (east + 1, down_y),
                     (east + 2, down_y),
-                    (east + 2, gate_y + GATE_IN_ROW),
-                    (gx[k + 1], gate_y + GATE_IN_ROW),
+                    (east + 2, gate_y + gate_in_row),
+                    (gx[k + 1], gate_y + gate_in_row),
                 ]
             )
         else:
@@ -282,7 +334,7 @@ def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int =
     pipe([(out_x, coll_y - 1), (out_x, 0)])
 
     # ── the block's own ports ────────────────────────────────────────────────
-    in_y = gate_y + GATE_IN_ROW
+    in_y = gate_y + gate_in_row
     pipe([(gx[0] - 2, in_y), (gx[0], in_y)])
     in_cell = (gx[0] - 2, in_y)
     ox, oy = out_x, 0

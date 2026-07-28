@@ -1167,6 +1167,32 @@ def test_taped_registry_pins() -> None:
     assert not (TAPED_MAN.parent / "deadman-3d_taped.input.txt").exists()
 
 
+def test_the_compact_gate_is_keyed_by_tier_and_only_the_taped_tier_takes_it() -> None:
+    """The gate chain's five nop spacers come out for the taped tier only.
+
+    Keyed by ``(slug, tier)`` because only the taped tier has gates at all — and
+    keyed at all so that the men-v3 machine, which shares the slug, cannot pick
+    the flag up. A read for the hot last bank crosses three gates' south arms,
+    so the deletion is worth ~2 ticks a gate plus its own arm.
+    """
+    assert machine.TAPED_COMPACT_GATE == {("deadman-3d", "taped")}
+    # not the slug: the canonical build must not see it
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_COMPACT_GATE)
+
+
+@slow
+def test_the_compact_gate_moves_only_the_taped_family() -> None:
+    """'Nothing else moves a byte': the men-v3 machines are built from the same
+    registry and the same slug, so this is the check that the opt-in really is
+    one."""
+    for stem, kwargs in (
+        ("deadman-3d", {}),
+        ("deadman-3d_trim", {"trim_dead": True}),
+    ):
+        rows = (REPO / "littleman" / "examples" / f"{stem}.man").read_text()
+        assert machine.build_for("deadman-3d", **kwargs).rows == rows.rstrip("\n").split("\n")
+
+
 @slow
 def test_checked_in_taped_man_matches_the_machine_builder() -> None:
     rows = TAPED_MAN.read_text().rstrip("\n").split("\n")

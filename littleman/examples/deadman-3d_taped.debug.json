@@ -562,7 +562,7 @@
       "x": 69,
       "y": 97,
       "w": 224,
-      "h": 63,
+      "h": 58,
       "note": "rotating pipe tape, N=600, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [

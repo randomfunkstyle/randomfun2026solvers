@@ -2535,6 +2535,7 @@ def build(
     store_offset: tuple[int, int] = (0, 0),
     in_north: bool = False,
     store_teleport: bool = False,
+    store_compact_gate: bool = False,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
@@ -2720,6 +2721,7 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_compact_gate=store_compact_gate,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
@@ -2773,6 +2775,7 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_compact_gate=store_compact_gate,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
@@ -2848,6 +2851,7 @@ def _assemble(
     tape_relay_size: tuple[int, int] | None = None,
     in_north: bool = False,
     store_teleport: bool = False,
+    store_compact_gate: bool = False,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
@@ -3111,6 +3115,7 @@ def _assemble(
                     if tape_skip_batch != 1
                     else TAPED_SKIP_BATCH.get(program.name, 1)
                 ),
+                compact_gate=store_compact_gate,
             )
         elif store == "tape":
             tape = tape_block(
@@ -4826,6 +4831,68 @@ TOP_RETURN_BUS: set[str] = set()
 #: so every other machine's checked-in grid stays byte-identical.
 STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 
+#: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
+#: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
+#: 12-row one. Keyed by tier because only the taped tier has gates at all;
+#: absent pairs keep the 12-row build byte-identical.
+#:
+#: The gate inherited its 12 rows from the two-tier adapter, and five of them
+#: are lone ``.`` nops the man simply walks across. Deleting them is not mainly a
+#: smaller room — it is **ticks**, because the request walks every one of those
+#: cells, and it is ticks *per gate in the chain*: ``A > 0`` means "not mine,
+#: pass downstream", so a request for bank ``k`` walks the south path of all
+#: ``k`` gates ahead of it before it walks its own arm. Cells off the walk, by
+#: arm (counted by walking the grid, not derived):
+#:
+#: ::
+#:
+#:     arm                        request U->s     full loop U->U
+#:     north read  (local read)   22 -> 19  (3)    70 -> 60  (10)
+#:     north write (local write)  22 -> 20  (2)    66 -> 58  (8)
+#:     south read  (pass down)    25 -> 23  (2)    60 -> 56  (4)
+#:     south write (pass down)    25 -> 24  (1)    60 -> 56  (4)
+#:
+#: The request column is latency the CPU waits on outright; the loop column is
+#: the gate man's recovery, which only shows when he, not the ring, is what the
+#: next access waits for.
+#:
+#: **The chain is where the money is, because DOOM's traffic is lopsided.**
+#: Profiled on the wire (``0 addr`` / ``1 addr value``) over the checked-in
+#: 115-frame tour: 10,118 reads and 3,315 writes a frame, and with
+#: :data:`TAPED_BANKS`' ``(256, 195, 64, 85)``
+#:
+#: * bank 3 (516..600, the per-frame scalars) takes **88.5%** of reads and
+#:   **97.9%** of writes — and it is the bank with *no gate of its own*, so it
+#:   is reached only by passing all three gates' south arms;
+#: * bank 0 (the 256 map words) takes 7.7%, bank 1 3.7%, bank 2 (ZBUF) 0.1%.
+#:
+#: Average gates traversed: **2.81** a read, **3.00** a write. So the average
+#: read sheds 5.73 cells and the average write 3.02 — 68.0k ticks a frame on the
+#: request path alone.
+#:
+#: Measured on the checked-in 115-frame tour, native engine, all frames clean:
+#:
+#: * 12-row gate (shipped): 1,113,752,187   295x269
+#: * **7-row gate (this)**:  1,102,849,373   295x269   **-0.98%**
+#:
+#: That is -10,902,814 ticks, **-94,807 a frame** — more than the 68.0k the
+#: request path alone predicts, so ~10% of the return-leg saving is on the
+#: critical path too: with the hot bank an 85-slot ring, the gate men really are
+#: part of what the next access waits for.
+#:
+#: **Size did not move, and was never going to.** The block loses its five rows
+#: (224x63 -> 224x58) but it sits at rows 97..154 of a machine whose floor is the
+#: display/stream panel at rows 217..266. 295x269 both ways.
+#:
+#: Follow-up this measurement suggests, not taken here: the hot bank is *last* in
+#: the chain, so 88.5% of reads pay three gate traversals to reach the cheapest
+#: ring. Ordering the banks hot-first would skip two whole gates (~22 cells each
+#: on the request path) rather than two spacers — an order of magnitude more.
+#: But the gate's range test is a prefix test by construction, so bank order IS
+#: address order: it means moving the per-frame scalars to low addresses in
+#: ``deadman3d.tape_slots()``, a program change, not a store one.
+TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
 #: ``deadman-3d``'s 330-slot store is far past the rotating tape's ~103-slot
 #: practical cap (and a ring that size would cost ~1,100 ticks a read anyway),
@@ -5010,6 +5077,7 @@ def build_for(
         store_offset=tier.get("store_offset", store_offset),
         in_north=slug in INPUT_NORTH,
         store_teleport=slug in STORE_TELEPORT,
+        store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,

@@ -26,6 +26,8 @@ if str(PKG) not in sys.path:
 
 from randomfun2026solvers.fast_littleman import FastLittleman  # noqa: E402
 from randomfun2026solvers.memory_taped import (  # noqa: E402
+    bank_gate,
+    gate_rows,
     taped_plan,
     taped_store_block,
 )
@@ -77,6 +79,79 @@ def test_every_address_reads_back_what_was_written(skip_batch: int) -> None:
     """All 329 slots, written through the whole chain then read one bank per
     run (see the module docstring for why reads are grouped per bank)."""
     engine = _standalone(taped_store_block(330, PLAN, skip_batch=skip_batch))
+    writes = [x for a in range(1, 330) for x in (1, a, a * 13 + 7)]
+    bounds = [1]
+    for m in taped_plan(330, PLAN):
+        bounds.append(bounds[-1] + m)
+    for lo, hi in zip(bounds, bounds[1:], strict=False):
+        hi = min(hi, 330)
+        reads = [x for a in range(lo, hi) for x in (0, a)]
+        want = [a * 13 + 7 for a in range(lo, hi)]
+        res = engine.run(writes + reads, expected=want, max_ticks=60_000_000)
+        assert res.fatal is None and res.output == want, (
+            lo,
+            hi,
+            res.fatal or res.reason,
+            res.output[:5],
+        )
+
+
+# ── the compact gate: the same four arms with the nop spacers deleted ────────
+def test_the_compact_gate_is_opt_in_and_five_rows_shorter() -> None:
+    """Off by default, so every existing caller's grid is byte-identical."""
+    for kwargs in ({}, {"skip_batch": 2}):
+        shipped = taped_store_block(330, PLAN, **kwargs)
+        default_off = taped_store_block(330, PLAN, compact_gate=False, **kwargs)
+        assert default_off.cells == shipped.cells
+        compact = taped_store_block(330, PLAN, compact_gate=True, **kwargs)
+        # the gate strip is the block's floor, so the block loses the rows too
+        assert compact.height == shipped.height - 5
+        assert compact.width == shipped.width
+        # ... and nothing else: same census, same pipe inventory
+        assert compact.pipes == shipped.pipes
+        assert sum(1 for c in compact.cells.values() if c == "@") == sum(
+            1 for c in shipped.cells.values() if c == "@"
+        )
+    assert gate_rows(True)[0] == gate_rows(False)[0] - 5
+
+
+def test_every_gate_send_still_binds_to_the_pipe_it_means() -> None:
+    """The gate's whole binding argument is that no ``s`` needs an argument:
+    two outgoing pipes on one wall, and the *row* decides which is nearest
+    (SPEC.md, "Which pipe do I talk to?"). Compacting moves every arm row, so
+    the margins shrink — this is the check that they never cross.
+
+    The pipes' source segments are the cells just east of the east wall, at the
+    local / downstream rows; ties break by reading order. The rule needs no arm
+    arithmetic: an ``s`` **above** the spine is a local arm and must reach the
+    local pipe, one **below** it is a downstream arm and must reach the other.
+    """
+    for compact in (False, True):
+        _h, in_row, local_row, down_row = gate_rows(compact)
+        # every bank size the literal's width can produce, and then some
+        for m in (1, 5, 64, 85, 195, 256, 999, 12345):
+            g, w = bank_gate(m, compact=compact)
+            src = {local_row: (w, local_row), down_row: (w, down_row)}
+            sends = [(x, y) for (x, y), ch in g.items() if ch == "s"]
+            assert len(sends) == 10, (m, compact, len(sends))
+            assert all(y != in_row for _x, y in sends)  # the spine sends nothing
+            for x, y in sends:
+                want = local_row if y < in_row else down_row
+                dist = {row: abs(px - x) + abs(py - y) for row, (px, py) in src.items()}
+                nearest = min(src, key=lambda row: (dist[row], row))
+                assert nearest == want, (
+                    f"m={m} compact={compact}: the `s` at {(x, y)} binds to the "
+                    f"row-{nearest} pipe, not row {want} ({dist})"
+                )
+
+
+@pytest.mark.parametrize("skip_batch", [1, 2])
+def test_the_compact_gate_routes_every_address_the_same(skip_batch: int) -> None:
+    """Correctness first: deleting a corridor cell must not lose a request.
+    Same probe as the shipped body's, one bank per run."""
+    engine = _standalone(
+        taped_store_block(330, PLAN, skip_batch=skip_batch, compact_gate=True)
+    )
     writes = [x for a in range(1, 330) for x in (1, a, a * 13 + 7)]
     bounds = [1]
     for m in taped_plan(330, PLAN):
