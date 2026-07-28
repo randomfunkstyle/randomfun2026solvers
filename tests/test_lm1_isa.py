@@ -83,6 +83,10 @@ def test_v1_has_no_ext_rows_and_ext_extends_it() -> None:
         "AND",
         "INCM",
         "DECM",
+        # build-time only: machine.seek_split rewrites long jumps into these
+        "JMPS",
+        "BRZS",
+        "BRNS",
     }
 
 
@@ -148,7 +152,9 @@ def test_jmp_is_an_alias_for_jmpf() -> None:
 
 def test_jump_and_branch_ops_take_labels() -> None:
     targets = {op.mnemonic for op in LM1_EXT if op.takes_target}
-    assert targets == {"JMPF", "BRZ", "BRN"}
+    # The three seek variants take the same label operand; they are never
+    # written in source, only substituted by ``machine.seek_split``.
+    assert targets == {"JMPF", "BRZ", "BRN", "JMPS", "BRZS", "BRNS"}
 
 
 def test_duplicate_opcode_is_rejected() -> None:
