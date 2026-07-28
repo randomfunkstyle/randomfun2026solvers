@@ -263,6 +263,73 @@ def test_sectors_parse_and_nukage_region_resolution() -> None:
     assert r.nukage <= r.open_cells
 
 
+def monster_wad(things: list[tuple[int, int, int, int]]) -> bytes:
+    """synthetic_wad's one room, with a chosen THINGS list appended after the
+    player start: each entry is ``(x, y, type, flags)``."""
+    base = synthetic_wad()
+    wad = wi.read_wad(base)
+    lumps = []
+    for name, data in wad.lumps:
+        if name == "THINGS":
+            data = data + b"".join(
+                struct.pack("<hhHHH", x, y, 0, mtype, flags)
+                for x, y, mtype, flags in things)
+        lumps.append(_lump(name, data))
+    body = b""
+    directory = b""
+    offset = 12 + 16 * len(lumps)
+    for name, data in lumps:
+        directory += struct.pack("<II", offset + len(body), len(data)) + name
+        body += data
+    return struct.pack("<4sII", b"PWAD", len(lumps), 12) + directory + body
+
+
+def test_monster_things_are_filtered_mapped_and_capped() -> None:
+    """THINGS -> billboards: only the known monster types survive, and only
+    those present on medium skill, outside the multiplayer-only set, standing
+    on an open cell, one per cell, capped in THINGS order."""
+    inside = [(96 + 8 * i, 96, 3004, 7) for i in range(3)]  # three zombiemen
+    things = inside + [
+        (160, 160, 3001, 7),    # an imp -> species 1
+        (170, 170, 9, 7),       # a sergeant -> species 0
+        (180, 180, 3004, 1),    # skill-1 only: flags & 2 clear -> dropped
+        (190, 190, 3004, 0x17),  # multiplayer-only -> dropped
+        (4, 4, 3004, 7),        # inside the south-west wall -> dropped
+        (2001, 2001, 2005, 7),  # a chainsaw: not a monster type at all
+    ]
+    m = wi.parse_map(wi.read_wad(monster_wad(things)), "E1M1")
+    r = wi.rasterize(m, grid=64, min_len=32.0)
+    st = r.monster_stats
+    assert st["monster_things"] == len(things) - 1  # the chainsaw never counts
+    assert st["skill_dropped"] == 2
+    assert st["closed_dropped"] == 1
+    assert st["monsters_kept"] == len(r.monsters)
+    # Species mapping, and every survivor on open floor.
+    assert {s for _cx, _cy, s in r.monsters} == {0, 1}
+    for cx, cy, species in r.monsters:
+        assert (cx, cy) in r.open_cells
+        assert species in (0, 1)
+    # One billboard per cell: the three zombiemen 8 map units apart collapse
+    # into however many distinct grid cells they land in, no more.
+    assert len({(cx, cy) for cx, cy, _s in r.monsters}) == len(r.monsters)
+    # Nothing is lost silently: every counted thing was kept or dropped for a
+    # named reason.
+    assert (st["monsters_kept"] + st["skill_dropped"] + st["closed_dropped"]
+            + st["dupe_dropped"] + st["cap_dropped"]) == st["monster_things"]
+
+
+def test_monster_things_cap_at_sixteen() -> None:
+    """Past the cap the extra THINGS are counted, not silently forgotten."""
+    many = [(48 + 24 * (i % 7), 48 + 24 * (i // 7), 3001, 7) for i in range(42)]
+    r = wi.rasterize(wi.parse_map(wi.read_wad(monster_wad(many)), "E1M1"),
+                     grid=64, min_len=32.0)
+    assert len(r.monsters) == wi.MAX_MONSTERS == 16
+    assert r.monster_stats["cap_dropped"] > 0
+    assert (r.monster_stats["monsters_kept"] + r.monster_stats["cap_dropped"]
+            + r.monster_stats["dupe_dropped"] + r.monster_stats["closed_dropped"]
+            + r.monster_stats["skill_dropped"]) == r.monster_stats["monster_things"]
+
+
 def test_nukage_flat_name_fallback_is_documented() -> None:
     """With no damage special anywhere but a NUKAGE* flat, the documented
     fallback marks the region by flat name and says so in the stats."""
@@ -353,8 +420,11 @@ def test_iwad_art_extracts_the_named_lumps() -> None:
         art = wi.iwad_art(tmp)
     finally:
         tmp.unlink()
-    assert set(art) == {"gun_idle", "gun_fire", "faces"}
+    assert set(art) == {"gun_idle", "gun_fire", "faces", "monster_sprites"}
     assert set(art["faces"]) == {"healthy", "hurt", "bloody", "grim"}
+    # M7a: the same override path carries the monster billboards — one packed
+    # word per sprite column, every word inside the signed range.
+    assert all(0 <= w < 2**63 for w in art["monster_sprites"])
     assert 1 <= len(art["gun_idle"]) <= 20 and 1 <= len(art["gun_fire"]) <= 20
     for runs in art["faces"].values():
         assert len(runs) == wi.FACE_H and all(len(s) == wi.FACE_W for _r, _c, s in runs)

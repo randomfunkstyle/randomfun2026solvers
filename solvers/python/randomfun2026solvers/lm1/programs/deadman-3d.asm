@@ -13,7 +13,7 @@
 ; cancel), then move along the new heading (W/S cancel), then render.
 ; An ungraded demo — the slug borrows plotter's problem JSON for nothing
 ; but registration; its 64x48 panel belongs to the DOOM unit (.unit doom,
-; lm1/d3_unit.py), its input is its own, and its 395-slot STORE rides the
+; lm1/d3_unit.py), its input is its own, and its 597-slot STORE rides the
 ; men-v3 man-memory (STORE_TIER), ~11 ticks an access.
 ;
 ; The CPU never touches the display: each viewport column is ONE command
@@ -26,8 +26,9 @@
 ; black because COMMIT clears the next buffer.
 ;
 ; Round 0's input carries the whole data preamble (256 packed map quarter-columns,
-; POW16, the 16 packed heading words, the 64-word nukage bit plane and the
-; spawn state — deadman3d.preamble_words())
+; POW16, the 16 packed heading words, the 64-word nukage bit plane, the spawn
+; state, the 16-monster table with its HP block and the 60 packed sprite
+; columns — deadman3d.preamble_words())
 ; followed by the title screen's RLE (deadman3d.title_words(): one pre-encoded
 ; RUN command word per run, forwarded IN/SND and committed as round 0's one
 ; frame): tables and art ride on INPUT because every ROM word taxes every
@@ -39,7 +40,7 @@
 ; inlined at its three sites (no stack, no calls): the two move-collision
 ; tests and the DDA hit test.
 
-; ── tape slots (deadman3d.tape_slots(); slots 1..359 are the boot data) ──────
+; ── tape slots (deadman3d.tape_slots(); slots 1..451 are the boot data) ──────
 .equ MAPB   1            ; ..256 packed map quarter-columns: word 4x+(y/16), nibble y mod 16
 .equ POWB   257          ; ..272 16**k — the nibble-extraction divisors
 .equ HDGB   273          ; ..288 packed headings: base-4096 digits dirX dirY planeX planeY, biased +1024
@@ -51,41 +52,91 @@
 .equ DIRY   357          ; lodev dirY
 .equ PLANEX 358          ; lodev planeX
 .equ PLANEY 359          ; lodev planeY
-.equ CMD    360          ; this round's command word
-.equ XCOL   361          ; the column being rendered (lodev x)
-.equ CAMX   362          ; lodev cameraX, Q10
-.equ RDX    363          ; lodev rayDirX
-.equ RDY    364          ; lodev rayDirY
-.equ SDX    365          ; lodev sideDistX
-.equ SDY    366          ; lodev sideDistY
-.equ DDX    367          ; lodev deltaDistX
-.equ DDY    368          ; lodev deltaDistY
-.equ S4X    369          ; 4*stepX: the word address moves +-4 per x-step
-.equ STPY   370          ; lodev stepY (the sign picks the PW shift arm)
-.equ PERP   371          ; lodev perpWallDist
-.equ HALFH  372          ; lodev lineHeight / 2
-.equ DSTART 373          ; lodev drawStart
-.equ DEND   374          ; lodev drawEnd
-.equ COLOR  375          ; the wall type t, then the shaded colour
-.equ PW     376          ; 16**(mapY mod 16), maintained incrementally across DDA steps
-.equ WADDR  377          ; MAPB + 4*mapX + mapY/16, maintained incrementally too
-.equ FRACX  378          ; posX mod 1024, hoisted per frame
-.equ FRACY  379          ; posY mod 1024
-.equ PW0    380          ; PW's per-frame seed (the player's own cell)
-.equ WADDR0 381          ; WADDR's per-frame seed
-.equ TMP    382          ; scratch (s, frac, packed word)
-.equ TMP2   383          ; scratch (the cell lookup's quarter-column selector)
-.equ NEWX   384          ; the candidate posX
-.equ NEWY   385          ; the candidate posY
-.equ BW     386          ; key bit 0 (1): W, forward
-.equ BS     387          ; key bit 1 (2): S, backward
-.equ BA     388          ; key bit 2 (4): A, turn left
-.equ BD     389          ; key bit 3 (8): D, turn right
-.equ FIRE   390          ; key bit 4 (16): space held — fire the pistol this frame
-.equ AMMO   391          ; live rounds left: starts 50, -1 per shot, floor 0
-.equ HEALTH 392          ; live health: starts 100, nukage -5 a frame, floor 0
-.equ NUKE   393          ; 1 when this frame stands on nukage: green floor, health drain
-.equ PTR    394          ; the boot loop's tape cursor
+.equ MONB   360          ; ..375 monster table (M7a): ((cx*64)+cy)*2 + species
+.equ MHPB   376          ; ..391 initial monster HP (M7b's hit ledger)
+.equ SPRB   392          ; ..451 packed sprite columns: nibble 0 = bottom px, 0 = clear
+.equ ZBUF   452          ; ..515 per-column wall depth, rewritten whole every frame
+.equ CMD    516          ; this round's command word
+.equ XCOL   517          ; the column being rendered (lodev x)
+.equ CAMX   518          ; lodev cameraX, Q10
+.equ RDX    519          ; lodev rayDirX
+.equ RDY    520          ; lodev rayDirY
+.equ SDX    521          ; lodev sideDistX
+.equ SDY    522          ; lodev sideDistY
+.equ DDX    523          ; lodev deltaDistX
+.equ DDY    524          ; lodev deltaDistY
+.equ S4X    525          ; 4*stepX: the word address moves +-4 per x-step
+.equ STPY   526          ; lodev stepY (the sign picks the PW shift arm)
+.equ PERP   527          ; lodev perpWallDist
+.equ HALFH  528          ; lodev lineHeight / 2
+.equ DSTART 529          ; lodev drawStart
+.equ DEND   530          ; lodev drawEnd
+.equ COLOR  531          ; the wall type t, then the shaded colour
+.equ PW     532          ; 16**(mapY mod 16), maintained incrementally across DDA steps
+.equ WADDR  533          ; MAPB + 4*mapX + mapY/16, maintained incrementally too
+.equ FRACX  534          ; posX mod 1024, hoisted per frame
+.equ FRACY  535          ; posY mod 1024
+.equ PW0    536          ; PW's per-frame seed (the player's own cell)
+.equ WADDR0 537          ; WADDR's per-frame seed
+.equ TMP    538          ; scratch (s, frac, packed word)
+.equ TMP2   539          ; scratch (the cell lookup's quarter-column selector)
+.equ NEWX   540          ; the candidate posX
+.equ NEWY   541          ; the candidate posY
+.equ BW     542          ; key bit 0 (1): W, forward
+.equ BS     543          ; key bit 1 (2): S, backward
+.equ BA     544          ; key bit 2 (4): A, turn left
+.equ BD     545          ; key bit 3 (8): D, turn right
+.equ FIRE   546          ; key bit 4 (16): space held — fire the pistol this frame
+.equ AMMO   547          ; live rounds left: starts 50, -1 per shot, floor 0
+.equ HEALTH 548          ; live health: starts 100, nukage -5 a frame, floor 0
+.equ NUKE   549          ; 1 when this frame stands on nukage: green floor, health drain
+.equ DET    550          ; planeX*dirY - dirX*planeY (Q20) — the projection divisor, > 0
+.equ MI     551          ; the selection loop's monster index
+.equ MSP    552          ; the candidate's species (0 POSS / 1 TROO)
+.equ MDX    553          ; monster cell centre - posX, Q10
+.equ MDY    554          ; … - posY
+.equ TXN    555          ; camera x numerator dirY*MDX - dirX*MDY (Q20)
+.equ TYN    556          ; camera depth numerator planeX*MDY - planeY*MDX (Q20)
+.equ CTY    557          ; the candidate's depth TY = TYN*1024/DET — ZBUF's own units
+.equ CBAND  558          ; the candidate's scale band 0/1/2
+.equ COFF   559          ; the band's column offset in the sprite stripe (0/10/16)
+.equ CHW    560          ; the band's half width (5/3/2)
+.equ CW1    561          ; the band's width - 1 (9/5/3)
+.equ CSX0   562          ; the candidate's first screen column (may be < 0)
+.equ CSX1   563          ; the candidate's last screen column (may be > 63)
+.equ CBOT   564          ; the candidate's bottom row: the floor line at TY, clamped 39
+.equ CBASE  565          ; SPRB + species*20 + band offset: the column words' base slot
+.equ STY0   566          ; slot 0 (farthest kept) depth; FAR = empty
+.equ STY1   567          ; slot 1 depth
+.equ STY2   568          ; slot 2 (nearest kept) depth
+.equ SSX0   569          ; slot 0 first column
+.equ SSX1   570          ; slot 1 first column
+.equ SSX2   571          ; slot 2 first column
+.equ SEX0   572          ; slot 0 last column
+.equ SEX1   573          ; slot 1 last column
+.equ SEX2   574          ; slot 2 last column
+.equ SBA0   575          ; slot 0 sprite base
+.equ SBA1   576          ; slot 1 sprite base
+.equ SBA2   577          ; slot 2 sprite base
+.equ SBO0   578          ; slot 0 bottom row
+.equ SBO1   579          ; slot 1 bottom row
+.equ SBO2   580          ; slot 2 bottom row
+.equ SBN0   581          ; slot 0 band
+.equ SBN1   582          ; slot 1 band
+.equ SBN2   583          ; slot 2 band
+.equ SID0   584          ; slot 0 monster index + 1; 0 = empty (M7b's hit candidate)
+.equ SID1   585          ; slot 1 monster index + 1
+.equ SID2   586          ; slot 2 monster index + 1
+.equ SLOT   587          ; the paint loop's slot cursor 0..2 (far -> near)
+.equ WTY    588          ; the painting slot's depth (the ZBUF compare term)
+.equ WX     589          ; the painting column
+.equ WX1    590          ; the painting slot's last column
+.equ WPTR   591          ; the painting column's sprite word slot (BASE + column)
+.equ WBOT   592          ; the painting slot's bottom row
+.equ WBAND  593          ; the painting slot's band — picks the chain entry
+.equ Q      594          ; the column's packed nibbles, shifted down as the chain climbs
+.equ ADDRV  595          ; the pre-encoded CURS word of the pixel being painted
+.equ PTR    596          ; the boot loop's tape cursor
 
 ; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────
 .unit doom
@@ -96,9 +147,9 @@
 .equ C_GUNF   6            ; arg=0: the recoil pistol + muzzle flash (rows 25..38)
 .equ C_COMMIT 7            ; arg=0: SWAP 0 — commit the frame, clear next, reset the cursor
 
-; ── boot: round 0's data preamble -> tape slots 1..359, the loop unrolled 8x ──
-; (a backward jump costs 8*(P - loop) ticks, so 44 laps beat 359; the last
-; 7 slots are loaded straight-line at their own addresses)
+; ── boot: round 0's data preamble -> tape slots 1..451, the loop unrolled 8x ──
+; (a backward jump costs 8*(P - loop) ticks, so 56 laps beat 451; the last
+; 3 slots are loaded straight-line at their own addresses)
         LDI 1
         ST  PTR
 boot:   IN                  ; the next preamble word
@@ -142,22 +193,14 @@ boot:   IN                  ; the next preamble word
         MOVA TMP            ; store[PTR] = the word
         INCM PTR
         LD  PTR
-        SUBI 353
-        BRN boot            ; keep looping while PTR < 353
+        SUBI 449
+        BRN boot            ; keep looping while PTR < 449
         IN
-        ST  POSX
+        ST  449
         IN
-        ST  POSY
+        ST  450
         IN
-        ST  HDG
-        IN
-        ST  DIRX
-        IN
-        ST  DIRY
-        IN
-        ST  PLANEX
-        IN
-        ST  PLANEY
+        ST  451
 
 
 ; ── title: Freedoom's title art (titlepic @ d14dbbe) — round 0's one frame ───
@@ -1327,9 +1370,14 @@ why:    ST  COLOR           ; y-side: stripe = mapX & 1 = (WADDR - 1) / 4 % 2
         ST  PERP
 pclip:  SUBI 1              ; ST preserved ACC = perpWallDist
         BRN pone
-        JMP nearck
+        JMP zstore
 pone:   LDI 1
         ST  PERP
+; the z-buffer (M7a): the column's final clamped depth, persisted for the
+; sprite pass's occlusion compare — store[ZBUF + XCOL] = PERP
+zstore: LD  XCOL
+        ADDI ZBUF
+        MOVA PERP
 ; distance shading + the panel stripe (V3): COLOR steps up to the bright
 ; variant t + 8 exactly when the wall is NEAR (perp < 16384) and this
 ; column's stripe bit is set; a far wall keeps the dark base whatever its face
@@ -1403,8 +1451,542 @@ send:   LD  DSTART
         SND
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI 63
-        BRZ gun             ; that was column 63: the viewport is sent
+        BRZ spsel           ; that was column 63: the viewport is sent
         JMP colset
+
+; ── the sprite phase (M7a): static occluded monster billboards ───────────────
+; Selection first: every MONB word is unpacked and run down the cull chain
+; (behind the plane; nearer than 1024; past 12288; off screen), the
+; scale band picked by depth (TY < 3562 near 10x14 / < 5851 mid
+; 6x9 / far 4x5), and the nearest three kept in a far-first slot file —
+; slot 0 = farthest, strict compares, so an equal-depth later THINGS index
+; never displaces an earlier one. DET = planeX*dirY - dirX*planeY > 0 for
+; every baked heading (plane is dir rotated -90 deg; the tests assert all 16).
+spsel:  LD  PLANEX
+        MUL DIRY
+        ST  DET
+        LD  DIRX
+        MUL PLANEY
+        ST  TMP
+        LD  DET
+        SUB TMP
+        ST  DET             ; the projection divisor, Q20
+        LDI 12288
+        ST  STY0            ; empty slots sit AT the far cull: any candidate
+        ST  STY1            ; that survived it compares strictly nearer
+        ST  STY2
+        LDI 0
+        ST  SID0
+        ST  SID1
+        ST  SID2
+        ST  MI
+msel:   LD  MI
+        SUBI 16
+        BRN mbody
+        JMP mpaint          ; all 16 monsters considered
+mbody:  LD  MI
+        ADDI MONB
+        LDA                 ; ((cx*64) + cy)*2 + species
+        ST  TMP
+        MODI 2
+        ST  MSP
+        LD  TMP
+        DIVI 2
+        ST  TMP             ; cx*64 + cy
+        MODI 64
+        MULI 1024
+        ADDI 512
+        SUB POSY
+        ST  MDY             ; cell centre - player, Q10
+        LD  TMP
+        DIVI 64
+        MULI 1024
+        ADDI 512
+        SUB POSX
+        ST  MDX
+        LD  PLANEX
+        MUL MDY
+        ST  TYN
+        LD  PLANEY
+        MUL MDX
+        ST  TMP
+        LD  TYN
+        SUB TMP
+        ST  TYN             ; camera depth numerator (Q20)
+        SUBI 1
+        BRN mnext           ; TYN <= 0: behind the camera plane
+        LD  DIRY
+        MUL MDX
+        ST  TXN
+        LD  DIRX
+        MUL MDY
+        ST  TMP
+        LD  TXN
+        SUB TMP
+        ST  TXN             ; camera x numerator (Q20)
+        LD  TYN
+        MULI 1024
+        DIV DET
+        ST  CTY             ; TY, Q10 — the same units as PERP/ZBUF
+        SUBI 1024
+        BRN mnext           ; the player stands inside the monster
+        LD  CTY
+        SUBI 12288
+        BRN mband
+        JMP mnext           ; beyond the far cull
+mband:  LD  CTY
+        SUBI 3562
+        BRN mb0
+        LD  CTY
+        SUBI 5851
+        BRN mb1
+        LDI 2               ; the far band: 4x5
+        ST  CBAND
+        LDI 16
+        ST  COFF
+        LDI 2
+        ST  CHW
+        LDI 3
+        ST  CW1
+        JMP msx
+mb0:    LDI 0               ; the near band: 10x14
+        ST  CBAND
+        ST  COFF
+        LDI 5
+        ST  CHW
+        LDI 9
+        ST  CW1
+        JMP msx
+mb1:    LDI 1               ; the mid band: 6x9
+        ST  CBAND
+        LDI 10
+        ST  COFF
+        LDI 3
+        ST  CHW
+        LDI 5
+        ST  CW1
+msx:    LD  TXN
+        MULI 32
+        DIV TYN
+        ADDI 32             ; SX = 32 + 32*TXN/TYN (the DETs cancel)
+        SUB CHW
+        ST  CSX0            ; first screen column (ST preserves ACC)
+        ADD CW1
+        ST  CSX1            ; last screen column
+        BRN mnext           ; SX1 < 0: wholly off the left edge
+        LD  CSX0
+        SUBI 64
+        BRN mbot
+        JMP mnext           ; SX0 > 63: wholly off the right edge
+mbot:   LDI 81920
+        DIV CTY
+        DIVI 2
+        ADDI 20
+        ST  CBOT            ; the floor line at TY == the wall drawEnd there
+        SUBI 40
+        BRN mbase
+        LDI 39
+        ST  CBOT            ; near clamp: the sprite slides up, stays whole
+mbase:  LD  MSP
+        MULI 20
+        ADD COFF
+        ADDI SPRB
+        ST  CBASE           ; the band's column words start here
+; the 3-slot far-first insertion: nearest three kept, slot 0 = farthest;
+; strict < everywhere, so ties keep the earlier THINGS index
+        LD  CTY
+        SUB STY0
+        BRN insa
+        JMP mnext           ; not nearer than the farthest kept: dropped
+insa:   LD  CTY
+        SUB STY1
+        BRN sh01
+        JMP put0            ; nearer than slot 0 only: it replaces slot 0
+sh01:   LD  STY1            ; slot 1 retreats to slot 0 …
+        ST  STY0
+        LD  SSX1
+        ST  SSX0
+        LD  SEX1
+        ST  SEX0
+        LD  SBA1
+        ST  SBA0
+        LD  SBO1
+        ST  SBO0
+        LD  SBN1
+        ST  SBN0
+        LD  SID1
+        ST  SID0
+        LD  CTY
+        SUB STY2
+        BRN sh12
+        JMP put1
+sh12:   LD  STY2            ; … slot 2 retreats to slot 1 …
+        ST  STY1
+        LD  SSX2
+        ST  SSX1
+        LD  SEX2
+        ST  SEX1
+        LD  SBA2
+        ST  SBA1
+        LD  SBO2
+        ST  SBO1
+        LD  SBN2
+        ST  SBN1
+        LD  SID2
+        ST  SID1
+        LD  CTY             ; … and the candidate takes slot 2 (nearest)
+        ST  STY2
+        LD  CSX0
+        ST  SSX2
+        LD  CSX1
+        ST  SEX2
+        LD  CBASE
+        ST  SBA2
+        LD  CBOT
+        ST  SBO2
+        LD  CBAND
+        ST  SBN2
+        LD  MI
+        ADDI 1
+        ST  SID2            ; monster index + 1; 0 stays "empty"
+        JMP mnext
+put1:   LD  CTY
+        ST  STY1
+        LD  CSX0
+        ST  SSX1
+        LD  CSX1
+        ST  SEX1
+        LD  CBASE
+        ST  SBA1
+        LD  CBOT
+        ST  SBO1
+        LD  CBAND
+        ST  SBN1
+        LD  MI
+        ADDI 1
+        ST  SID1
+        JMP mnext
+put0:   LD  CTY
+        ST  STY0
+        LD  CSX0
+        ST  SSX0
+        LD  CSX1
+        ST  SEX0
+        LD  CBASE
+        ST  SBA0
+        LD  CBOT
+        ST  SBO0
+        LD  CBAND
+        ST  SBN0
+        LD  MI
+        ADDI 1
+        ST  SID0
+mnext:  INCM MI
+        JMP msel
+
+; ── the paint: slots 0 -> 2 (far to near), per column ZBUF-occluded ─────────
+; The slot scalars are field-major triples, LDA'd by SLOT; per visible column
+; ONE packed word carries the whole strip and the shared chain below walks it
+; bottom-up. A monster never touches rows > its BOT <= 39, so the gun and HUD
+; paint after this phase overpaint nothing they don't own.
+mpaint: LDI 0
+        ST  SLOT
+mslot:  LD  SLOT
+        ADDI SID0
+        LDA
+        BRZ mslotn          ; an empty slot paints nothing
+        LD  SLOT
+        ADDI STY0
+        LDA
+        ST  WTY
+        LD  SLOT
+        ADDI SSX0
+        LDA
+        ST  WX
+        LD  SLOT
+        ADDI SEX0
+        LDA
+        ST  WX1
+        LD  SLOT
+        ADDI SBA0
+        LDA
+        ST  WPTR            ; advances every column, skipped ones included
+        LD  SLOT
+        ADDI SBO0
+        LDA
+        ST  WBOT
+        LD  SLOT
+        ADDI SBN0
+        LDA
+        ST  WBAND
+mcol:   LD  WX
+        SUB WX1
+        SUBI 1
+        BRN mcolb
+        JMP mslotn          ; past the last column: the slot is painted
+mcolb:  LD  WX
+        BRN mcadv           ; x < 0: clipped off the left edge
+        SUBI 64
+        BRN mcz
+        JMP mslotn          ; x > 63: clipped off the right edge
+mcz:    LD  WX
+        ADDI ZBUF
+        LDA                 ; this column's wall depth
+        ST  TMP
+        LD  WTY
+        SUB TMP
+        BRN mcvis
+        JMP mcadv           ; the wall is nearer: occluded, per column
+mcvis:  LD  WPTR
+        LDA
+        ST  Q               ; the whole sprite column in one packed word
+        LD  WBOT
+        MULI 64
+        ADD WX
+        MULI 8
+        ADDI C_CURS
+        ST  ADDRV           ; the bottom pixel's pre-encoded CURS word
+        LD  WBAND
+        BRZ mch0
+        SUBI 1
+        BRZ mch1
+        JMP chain_h5
+mch0:   JMP chain_h14
+mch1:   JMP chain_h9
+chain_h14: ; 14 blocks: the near band's strip
+        LD  Q
+        MODI 16
+        BRZ csk0            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk0:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk1            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk1:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk2            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk2:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk3            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk3:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk4            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk4:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+chain_h9:  ; enter here for the mid band's 9
+        LD  Q
+        MODI 16
+        BRZ csk5            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk5:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk6            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk6:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk7            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk7:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk8            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk8:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+chain_h5:  ; enter here for the far band's 5
+        LD  Q
+        MODI 16
+        BRZ csk9            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk9:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk10            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk10:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk11            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk11:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk12            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk12:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+        LD  Q
+        MODI 16
+        BRZ csk13            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI 132             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk13:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+mcadv:  INCM WPTR
+        INCM WX
+        JMP mcol
+mslotn: INCM SLOT           ; ACC = the slot just finished
+        SUBI 2
+        BRZ gun             ; that was slot 2: all billboards painted
+        JMP mslot
 
 ; ── the pistol (V4): ONE command word — the unit bakes both sprites ──────────
 gun:    LD  FIRE

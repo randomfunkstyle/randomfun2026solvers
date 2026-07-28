@@ -3948,14 +3948,16 @@ TAPE_SIZE = {
     # board still lives in the CPU's four bitset words, unlike snake-ring, where the
     # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
     "pathfinder-unit": 52,
-    # deadman-3d (the E1M1 raycaster demo) boot-loads 359 data slots (256 packed
+    # deadman-3d (the E1M1 raycaster demo) boot-loads 451 data slots (256 packed
     # map quarter-columns for the 64x64 grid, POW16, 16 packed heading words,
-    # M5's 64-word nukage bit plane, spawn state) and runs 35 scalars after
-    # them (the V4 live-HUD AMMO/HEALTH and M5's NUKE among them), so the
-    # highest address is PTR = 394 — see `deadman3d.tape_slots()`, which the
-    # tests pin this against. Highest address + 1, as everywhere: an
-    # exactly-sized tape stalls silently rather than faulting.
-    "deadman-3d": 395,
+    # M5's 64-word nukage bit plane, spawn state, and M7a's 16-monster table +
+    # HP block + 60 packed sprite columns), runs the 64-slot per-frame ZBUF
+    # after them and 81 scalars after that (the sprite pass's selection slots
+    # and paint cursors among them), so the highest address is PTR = 596 —
+    # see `deadman3d.tape_slots()`, which the tests pin this against. Highest
+    # address + 1, as everywhere: an exactly-sized tape stalls silently
+    # rather than faulting.
+    "deadman-3d": 597,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -4120,13 +4122,14 @@ ROM_ROWS = {
     # deadman-3d: re-swept jointly with :data:`STORE_SHAPE` for min max(w, h)
     # (the viewer holds the machine's full bounding rectangle, so squareness is
     # the demo's objective). Historic sweeps in scratch/deadman3d-opt/
-    # METRICS.md (42-row fold) and the M6 re-sweep (min max = 307 at 44 rows,
-    # the exact 307x307 square). M5 grew the ROM ~350 words (nukage damage,
-    # the green flood, the face variants): the re-sweep (rom_rows 44..70 x
-    # shapes 7..10 wide x store_dy 0..3) floors the width at 335 (the 9x44
-    # store chain) and 50 is the shallowest fold inside it — 335x318 at dy 0;
-    # deeper folds only add height, shallower ones are rom-bound wider.
-    "deadman-3d": 50,
+    # METRICS.md: 307x307 at the pre-M5 330-slot tape, 335x333 at M5's 395.
+    # M7a grew the tape to 597 (monsters + sprites + ZBUF) and the ROM ~980
+    # words (the sprite phase, P 2973 -> 3957): the re-sweep (shapes 9..11
+    # wide x rom_rows 40..80 x store_dy) moves the optimum to the 10-wide
+    # store (the 9-wide block is 67 rows and floors the HEIGHT at ~397, the
+    # 11-wide chain floors the width at 391) — 10x60 + rom 60 = 374x376,
+    # max 376; 59 rows is rom-bound wider (378), 61 only taller.
+    "deadman-3d": 60,
 }
 
 
@@ -4247,14 +4250,13 @@ MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "gradebook": ((0, 26), (-12, -26)),
     # deadman-3d: each row of store_dy shortens the serial adapter->store
     # request route by one cell (~19.7k reads/frame pay it), and each row costs
-    # one row of machine height. Since the M5 growth the machine is
-    # width-bound at 335 with 17 rows of height slack under it (335x318 at
-    # dy 0), so the rows are free until height meets width: 15 is the deepest
-    # dy that still binds every pipe (16+ collide in the memory band) —
-    # 335x333, the shortest hot route the box allows (historic dy sweep at
-    # the 42-row fold: dy 0/3/10 -> 11.567M/11.508M/11.371M on the frame
-    # gate).
-    "deadman-3d": ((0, 0), (0, 15)),
+    # one row of machine height. The M7a machine (10x60 store + rom 60,
+    # 374x376) is height-bound with NO slack — every dy row pushes max(w, h)
+    # up one — so the M5-era dy 15 goes back to 0; squareness is the demo's
+    # objective and outranks the ~0.3M/frame the shorter hot route bought
+    # (historic dy sweep at the 42-row fold: dy 0/3/10 ->
+    # 11.567M/11.508M/11.371M on the frame gate).
+    "deadman-3d": ((0, 0), (0, 0)),
 }
 
 
@@ -4346,18 +4348,20 @@ STORE_OPS: dict[str, int] = {"deadman-3d": 1}
 #: the machine's whole silhouette (the one-column block is 681x999 and set BOTH
 #: dimensions of the 756x1197 bbox); the viewer holds the full bounding
 #: rectangle, so the shape is chosen jointly with :data:`ROM_ROWS` to minimise
-#: ``max(w, h)`` (the historic 330-slot sweep is in
-#: scratch/deadman3d-opt/METRICS.md: 8x42 + rom 44 made the exact 307x307
-#: square). M5 grew the tape to 395 slots (the nukage bit plane) and the ROM
-#: by ~350 words (the damage arm, the green flood, the face variants); the
-#: M5 re-sweep (shapes 7..10 wide x rom_rows 44..70 x store_dy 0..3) puts
-#: the minimum at 9x44 (396 cells) + rom 50 + dy 0 = 335x318: the 9-wide
-#: block sets the machine's 335 width floor, and every deeper fold or
-#: narrower shape only trades past it.
-STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (9, 44)}
+#: ``max(w, h)`` (the historic sweeps are in scratch/deadman3d-opt/
+#: METRICS.md: 8x42 + rom 44 = the exact 307x307 square at 330 slots,
+#: 9x44 + rom 50 = 335x333 at M5's 395). M7a grew the tape to 597 slots
+#: (the monster table, HP block, 60 packed sprite columns and the 64-slot
+#: ZBUF) and the ROM ~980 words (the sprite phase); the M7a re-sweep
+#: (shapes 9..11 wide x rom_rows 40..80 x store_dy) puts the minimum at
+#: 10x60 (600 cells) + rom 60 + dy 0 = 374x376 (max 376): the 9-wide
+#: block's 67 rows floor the machine HEIGHT at ~397, the 11-wide chain
+#: floors the width at 391, and 10-wide crosses rom-width against height
+#: at the 60-row fold.
+STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
 
 #: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
-#: 395 slots as banked pipe tapes behind a gate chain. This tier exists for the
+#: 597 slots as banked pipe tapes behind a gate chain. This tier exists for the
 #: *little-man census* — a bank is two men (worker + relay) and a gate one,
 #: against the man-memory's ~two per slot — so the visualizer renders ~20 men
 #: instead of ~700. The price is the ring tax (~5-8 ticks per slot per read),
@@ -4367,14 +4371,19 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (9, 44)}
 #: The plan is a tuple of bank sizes in address order (an int means uniform).
 #: deadman-3d's is traffic-shaped, swept on the native frame gate: the high
 #: addresses are the hot ones (POWB 257..272, HDG 273..288, then POSX and the
-#: per-frame scalars up to PTR — 394 since M5), so they get SMALL rings —
+#: per-frame scalars up to PTR — 596 since M7a), so they get SMALL rings —
 #: bank locals, and so the ring tax, stay tiny where the traffic is — and the
 #: 256 map words split across two 128s. Uniform 4x83 measured 23.7M ticks on
 #: rounds 0..1 of the 330-slot machine; the traffic-shaped plan 18.6M at the
-#: same men, width and height. M5's third bank adds the once-a-frame nukage
-#: plane beside POWB/HDGB (96 words); the last ring stays the hot spawn +
-#: per-frame scalars.
-TAPED_BANKS: dict[str, int | tuple[int, ...]] = {"deadman-3d": (128, 128, 96, 42)}
+#: same men, width and height. M5's third bank added the once-a-frame nukage
+#: plane beside POWB/HDGB (96 words); M7a appends two more: the boot-mostly
+#: spawn + monster + sprite block (99 words, 353..451 — sprite columns are
+#: read only while a billboard paints) and the HOT 64-slot ZBUF as its own
+#: cheap ring (64 depth writes plus the occlusion reads every frame must not
+#: pay a big ring's lap), with the per-frame scalars keeping a small last
+#: ring (81).
+TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
+    "deadman-3d": (128, 128, 96, 99, 64, 81)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
