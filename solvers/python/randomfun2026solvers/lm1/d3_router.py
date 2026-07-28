@@ -318,6 +318,26 @@ RX, RY = 0, 1
 GAP_X = 8
 GAP_Y = 8
 
+#: The blocks' west margin — how far east of the wall's own edge column 0 the
+#: 2x2 starts.  It used to be ``IW + 4`` (94), which put the whole router room
+#: *beside* block 0 and charged its 92 columns to the wall's width for nothing:
+#: the router is 10 rows tall and the blocks start at row 18, so it fits
+#: perfectly well **above** block 0's left-hand columns.
+#:
+#: What the margin actually has to cover is the two **lower** tiles' legs.  A
+#: leg leaves the router's south wall, drops to its lane row and runs east, and
+#: the bottom row's lanes are ~114 rows below the router — so those two descents
+#: have to pass the whole height of the top row of blocks, which means their
+#: outlet columns must stay west of ``bx0``.  :data:`DEST_LEAF` already puts the
+#: bottom tiles on the two westernmost leaves (``T2`` at 3, ``T3`` at 15), so
+#: clearing column 15 is the whole requirement and 17 is the first value that
+#: does it.  The top tiles' legs turn two rows above the blocks and never
+#: descend past them, so their outlets (27, 39) may sit over block 0 freely.
+#:
+#: 572 -> 495 columns, which is a quarter of the wall and — with the ROM folded
+#: (``machine.ROM_ROWS``) — a quarter off the machine's binding side.
+BLOCK_X0 = 17
+
 #: The last panel row COL's floor run fills, per tile row.  At 128x96 the 3D
 #: viewport is logical rows 0..79 and the HUD is 80..95, so a **top** tile is
 #: viewport all the way down (floor to its own row 47) and a **bottom** tile stops
@@ -394,8 +414,9 @@ def build_wall() -> Wall:
     g.blit(RX, RY, r.cells)
     south_wall = RY + IH + 1
 
-    # The blocks: a 2x2 whose west column clears every leg's descent.
-    bx0 = RX + IW + 2 + 2
+    # The blocks: a 2x2 whose west margin clears the two long leg descents (see
+    # :data:`BLOCK_X0`); the router itself sits *above* block 0, not beside it.
+    bx0 = RX + BLOCK_X0
     bx1 = bx0 + blk.width + GAP_X
     by0 = south_wall + 1 + GAP_Y - 1
     by1 = by0 + blk.height + GAP_Y

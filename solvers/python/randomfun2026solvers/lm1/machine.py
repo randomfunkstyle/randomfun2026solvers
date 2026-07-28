@@ -4548,11 +4548,16 @@ ROM_ROWS = {
     # 65 -> 769x369, 80 -> 626x384, 90 -> 573x394, 110 -> 573x414, 150 ->
     # 573x453, 190 -> 573x494, 230 -> 573x533, and the un-folded default ->
     # 573x1155). `Machine.area2` is max(w, h)**2, so the objective is the larger
-    # side, and from 90 rows down the ROM itself sets the width while from 90 up
-    # the tiled wall's 573 does. 90 is that crossing: **573x394**, and every row
-    # deeper is a row of pure height. Re-sweep it if the wall ever narrows —
-    # the crossing moves with the wall, not with the program.
-    "deadman-3d_hires": 90,
+    # side, and the crossing is wherever the ROM's own width meets the wall's.
+    # Against the 572-wide wall that was 90 rows (573x394); the wall then lost
+    # its router column band (:data:`d3_router.BLOCK_X0`, 572 -> 495) and the
+    # crossing moved with it, exactly as predicted — re-swept at 495:
+    #   95 -> 528x399   100 -> 503x404   **105 -> 496x409**
+    #  110 -> 496x414   120 -> 496x424
+    # Below 105 the ROM is wider than the wall; above it every row is a row of
+    # pure height. Re-sweep whenever the wall narrows again (the packed panel
+    # cluster would take it to ~482) or the program grows.
+    "deadman-3d_hires": 105,
 }
 
 
