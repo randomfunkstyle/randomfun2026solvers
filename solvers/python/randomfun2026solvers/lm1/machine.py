@@ -88,7 +88,7 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -477,7 +477,41 @@ class _Plan:
     sem: dict[str, Sem] = field(default_factory=dict)
 
 
-def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Plan:
+def _relabel_slots(
+    placed: dict[str, int], want: Mapping[str, int], lanes: int
+) -> dict[str, int]:
+    """Apply a rank-preserving leaf relabelling to ``placed``.
+
+    Every failure mode here is one that would silently move a lane — a missing
+    mnemonic, a duplicate slot, or a map that permutes the north-to-south order —
+    so all three are errors rather than a best effort. See :func:`plan`.
+    """
+    if set(want) != set(placed):
+        missing = sorted(set(placed) - set(want))
+        extra = sorted(set(want) - set(placed))
+        raise MachineError(
+            "opcode slot map must name exactly the used opcodes; "
+            f"missing {missing}, unknown {extra}"
+        )
+    if len(set(want.values())) != len(want):
+        raise MachineError("opcode slot map assigns one slot twice")
+    bad = sorted(m for m, s in want.items() if not 0 <= s < lanes)
+    if bad:
+        raise MachineError(f"opcode slot map is outside 0..{lanes - 1} for {bad}")
+    if sorted(placed, key=lambda m: want[m]) != sorted(placed, key=lambda m: placed[m]):
+        raise MachineError(
+            "opcode slot map must preserve the lanes' north-to-south order — it "
+            "re-labels leaves, it does not re-order lanes; use middle_order for that"
+        )
+    return dict(want)
+
+
+def plan(
+    program: Program,
+    *,
+    middle_order: Sequence[str] | None = None,
+    slots: Mapping[str, int] | None = None,
+) -> _Plan:
     """Assign lane rows by pipe need, then derive opcode numbers from the trie.
 
     The trie sorts its leaves in **bit-reversed** order (``ARCH.md`` §2.4), so
@@ -494,6 +528,21 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
     ``2 * drop_x - row`` (east to the drop column, south to the collector, west
     along it), so a hot lane wants to be *low* on both terms at once. See
     ``LANE_ORDER`` for the per-program orders this bought and §7.6 for the method.
+
+    ``slots`` re-labels the *leaf slots* the lanes land on without moving a single
+    lane. Under ``trim_dead`` a lane's row is ``y0 + 2 * rank(slot)`` — the rank of
+    its slot among the used ones, not the slot itself — so any **rank-preserving**
+    relabelling leaves every row, every drop column and every measured lane tick
+    exactly where they were, and changes only ``number = _bitrev(slot, k)``. That
+    is a pure *ROM-encoding* knob: an opcode below 10 is one digit and costs the
+    drum ``Ns`` = 2 cells, one at 10 or above costs ```NN`s`` = 5, and which ten of
+    the ``1 << k`` slots bit-reverse below 10 is fixed geometry the default
+    contiguous packing has no way to aim at. See :data:`OPCODE_SLOTS`.
+
+    The rank-preserving condition is *enforced*, not documented: a map that
+    reorders the lanes is rejected, so this can never silently undo a tuned
+    ``LANE_ORDER``. It is only row-neutral under ``trim_dead`` (:func:`build`
+    checks that), because the untrimmed band puts a lane at ``2 * slot + 1``.
     """
     used = [op.mnemonic for op in program.ops_used]
     sems = {op.mnemonic: op.sem for op in program.ops_used}
@@ -536,13 +585,13 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
         return (group(m), -width(m), m)
 
     order = sorted(used, key=rank)
-    slots = list(range(lanes))
+    free = list(range(lanes))
     placed: dict[str, int] = {}
     for m in [n for n in order if group(n) == 0]:
-        placed[m] = slots.pop(0)
+        placed[m] = free.pop(0)
     for g in (3, 2):
         for m in reversed([n for n in order if group(n) == g]):
-            placed[m] = slots.pop()
+            placed[m] = free.pop()
     middle = [n for n in order if group(n) == 1]
     if middle_order is not None:
         want = list(middle_order)
@@ -553,7 +602,10 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
             )
         middle = want
     for m in middle:
-        placed[m] = slots.pop(0)
+        placed[m] = free.pop(0)
+
+    if slots is not None:
+        placed = _relabel_slots(placed, slots, lanes)
 
     return _Plan(
         k=k,
@@ -2754,6 +2806,7 @@ def build(
     tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     middle_order: Sequence[str] | None = None,
+    opcode_slots: Mapping[str, int] | None = None,
     rom_buffer: int | None = None,
     compact: bool = False,
     hot: tuple[int, int] | None = None,
@@ -2881,7 +2934,11 @@ def build(
                     order.insert(at, new)
                     at += 1
             middle_order = order
-    p = plan(program, middle_order=middle_order)
+    if opcode_slots is not None and not trim_dead:
+        # Untrimmed, a lane sits at ``2 * slot + 1``, so relabelling the leaves
+        # *moves* it — the whole point of the knob is that it does not.
+        raise MachineError("opcode_slots is row-neutral only with trim_dead")
+    p = plan(program, middle_order=middle_order, slots=opcode_slots)
     seek_layout = None
     if seek:
         # The seek drum resolves jump operands as row*K+offset in its own packed
@@ -5161,6 +5218,42 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "taped"): {"rom_rows": 81},
 }
 
+#: Per-``(slug, tier)`` **leaf relabelling** for the decode trie: which slot each
+#: opcode's lane occupies, north to south. Absent keys keep the contiguous default
+#: and every other machine stays byte-identical.
+#:
+#: This is a *ROM-encoding* knob and nothing else. A lane's row is its slot's
+#: **rank** under :data:`TRIM_DEAD_LANES`, so a rank-preserving relabelling leaves
+#: every row, drop column and lane tick untouched (:func:`plan` enforces that) and
+#: only moves ``number = _bitrev(slot, k)``. The drum charges an opcode below ten
+#: ``Ns`` = 2 cells and one from ten up ```NN`s`` = 5, and the ten slots that
+#: bit-reverse below ten are ``0, 2, 4, 8, 12, 16, 18, 20, 24, 28`` — a spread the
+#: default packing (``0..N-1`` plus the pinned tail) cannot aim at. With 22 lanes in
+#: 32 slots there are ten spare, and spending them to land the hot opcodes on those
+#: ranks is a pure win in cells.
+#:
+#: DOOM's map is the exact optimum of that assignment (``scratch/rom-opt/slots.py``
+#: — a DP over slot x rank against the **static** opcode histogram, which is what
+#: the drum's cells and its lap length are both counted in, not the execution
+#: profile ``LANE_ORDER`` is weighted by). Measured on the taped tier:
+#:
+#: | quantity | default | relabelled |
+#: |---|---|---|
+#: | one-digit opcode words | 610 of 2,152 | **1,401 of 2,152** |
+#: | opcode cells | 8,930 | **6,557** (-2,373) |
+#: | whole drum, cells/word | 4.626 | **4.075** |
+#: | drum data columns | 267 | **236** |
+#:
+#: See :data:`SEEK_DRUM` for what those cells are worth in ticks.
+OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
+    ("deadman-3d", "taped"): {
+        "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5,
+        "LDA": 8, "DIV": 9, "SUB": 10, "ADD": 11, "ST": 12, "LD": 16,
+        "MODI": 18, "DIVI": 20, "SUBI": 21, "MULI": 22, "LDI": 24,
+        "JMPS": 25, "BRN": 26, "BRZ": 28, "JMPF": 29, "SND": 30,
+    },
+}
+
 #: Slugs whose CPU gets a **second return bus above the band**: a simple lane
 #: returns over whichever bus is cheaper — the classic drop to the collector
 #: below, or an ascent to row 1 and a walk west into a column-1 drop onto the
@@ -5579,6 +5672,7 @@ def build_for(
         tape_relay_size=tape_relay_size,
         tape_jump_threshold=tape_jump_threshold,
         middle_order=LANE_ORDER.get(slug),
+        opcode_slots=OPCODE_SLOTS.get((slug, store)),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
         mem_offset=tier.get("mem_offset", mem_offset),
