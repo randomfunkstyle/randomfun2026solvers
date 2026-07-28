@@ -459,7 +459,11 @@ opcode histogram can.
 | opcode cells | 8,930 | **6,557** |
 | whole drum | 19,912 cells, 4.626/word | **17,539, 4.075/word** |
 | drum block | 284x94 | **252x93** |
-| drum lap | 23,048 cells | **20,060** |
+| data area `data_w x rows` | 23,048 cells | **20,060** |
+
+(The data area is the lap's dominant term — the man also walks each row's two
+turn cells and its gadget pair, the wrap riser and the two connectors, ~700 cells
+in all, which the fold moves and the encoding does not.)
 
 Ticks, native/fast engine, `passed=True` throughout:
 
