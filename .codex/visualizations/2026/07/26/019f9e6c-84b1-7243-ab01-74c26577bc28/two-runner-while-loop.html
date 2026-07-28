@@ -1,0 +1,242 @@
+<div id="two-runner-while-loop">
+  <style>
+    #two-runner-while-loop {
+      color: inherit;
+      display: grid;
+      gap: 12px;
+    }
+    #two-runner-while-loop svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    #two-runner-while-loop .room {
+      fill: currentColor;
+      fill-opacity: 0.05;
+      stroke: currentColor;
+      stroke-opacity: 0.35;
+      stroke-width: 3;
+    }
+    #two-runner-while-loop .lane {
+      fill: none;
+      stroke: currentColor;
+      stroke-opacity: 0.22;
+      stroke-width: 9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    #two-runner-while-loop .lane.active {
+      stroke: currentColor;
+      stroke-opacity: 0.9;
+    }
+    #two-runner-while-loop .pipe {
+      fill: none;
+      stroke: currentColor;
+      stroke-opacity: 0.62;
+      stroke-width: 5;
+      marker-end: url(#while-arrow);
+    }
+    #two-runner-while-loop .runner {
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 3;
+      transition: transform 180ms ease;
+    }
+    #two-runner-while-loop .runner-label {
+      fill: currentColor;
+      font-weight: 500;
+    }
+    #two-runner-while-loop .token {
+      fill: currentColor;
+      stroke: none;
+      transition: transform 180ms ease;
+    }
+    #two-runner-while-loop .body {
+      fill: currentColor;
+      fill-opacity: 0.08;
+      stroke: currentColor;
+      stroke-opacity: 0.72;
+      stroke-width: 2;
+    }
+    #two-runner-while-loop text {
+      fill: currentColor;
+      font-weight: 400;
+    }
+    #two-runner-while-loop .secondary {
+      fill: currentColor;
+      opacity: 0.68;
+    }
+    #two-runner-while-loop .glyph {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 500;
+    }
+    #two-runner-while-loop .status {
+      min-height: 1.5em;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #two-runner-while-loop .runner,
+      #two-runner-while-loop .token {
+        transition: none;
+      }
+    }
+  </style>
+
+  <div class="viz-controls" aria-label="Loop step controls">
+    <button class="btn" type="button" data-action="previous">Previous</button>
+    <button class="btn btn-primary" type="button" data-action="next">Next step</button>
+    <span class="text-small text-muted" data-step-label>1 / 6 · wait for input</span>
+  </div>
+
+  <svg viewBox="0 0 736 390" role="img" aria-labelledby="while-title while-desc">
+    <title id="while-title">Two-runner input-driven while loop</title>
+    <desc id="while-desc">A persistent receiver runner cycles through receive and dispatch. A persistent worker runner blocks on its receive, performs the body once for each token, emits the result, and returns to receive.</desc>
+
+    <defs>
+      <marker id="while-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="currentColor"/>
+      </marker>
+    </defs>
+
+    <rect class="room" x="18" y="116" width="70" height="70" rx="4"/>
+    <text x="53" y="146" text-anchor="middle" class="secondary">input</text>
+    <text x="53" y="168" text-anchor="middle" class="glyph">I</text>
+
+    <rect class="room" x="126" y="48" width="240" height="252" rx="6"/>
+    <text x="246" y="32" text-anchor="middle">receiver / dispatcher</text>
+    <path class="lane" data-receiver-lane d="M164 151 H316 V254 H164 V151"/>
+    <text x="164" y="136" text-anchor="middle" class="glyph">r</text>
+    <text x="316" y="136" text-anchor="middle" class="glyph">s</text>
+    <text x="240" y="278" text-anchor="middle" class="secondary">cycle back</text>
+
+    <rect class="room" x="442" y="48" width="240" height="252" rx="6"/>
+    <text x="562" y="32" text-anchor="middle">body worker</text>
+    <path class="lane" data-worker-lane d="M480 151 H518 H606 H644 V254 H480 V151"/>
+    <text x="480" y="136" text-anchor="middle" class="glyph">r</text>
+    <rect class="body" x="528" y="124" width="68" height="54" rx="6"/>
+    <text x="562" y="146" text-anchor="middle">body</text>
+    <text x="562" y="166" text-anchor="middle" class="secondary">once</text>
+    <text x="644" y="136" text-anchor="middle" class="glyph">s</text>
+    <text x="560" y="278" text-anchor="middle" class="secondary">cycle back</text>
+
+    <rect class="room" x="648" y="324" width="70" height="52" rx="4"/>
+    <text x="683" y="345" text-anchor="middle" class="secondary">output</text>
+    <text x="683" y="366" text-anchor="middle" class="glyph">O</text>
+
+    <path class="pipe" d="M88 151 H126"/>
+    <text x="107" y="137" text-anchor="middle" class="secondary">x</text>
+    <path class="pipe" d="M366 151 H442"/>
+    <text x="404" y="137" text-anchor="middle" class="secondary">job x</text>
+    <path class="pipe" d="M644 178 V312 H683 V324"/>
+    <text x="660" y="245" class="secondary">result</text>
+
+    <circle class="runner" data-receiver cx="0" cy="0" r="12" transform="translate(164 151)"/>
+    <text class="runner-label" data-receiver-mark x="164" y="156" text-anchor="middle">A</text>
+    <circle class="runner" data-worker cx="0" cy="0" r="12" transform="translate(480 151)"/>
+    <text class="runner-label" data-worker-mark x="480" y="156" text-anchor="middle">B</text>
+    <circle class="token" data-token cx="0" cy="0" r="8" transform="translate(106 151)"/>
+
+    <text x="18" y="332" class="secondary">Empty input is the condition:</text>
+    <text x="18" y="354">runner A blocks on <tspan class="glyph">r</tspan>; runner B blocks on <tspan class="glyph">r</tspan>.</text>
+    <text x="18" y="376" class="secondary">The job pipe provides ordering and backpressure.</text>
+  </svg>
+
+  <div class="viz-row text-small status" aria-live="polite" data-detail>
+    A waits at r. B also waits at r, so no body execution happens without an input.
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById("two-runner-while-loop");
+      const receiver = root.querySelector("[data-receiver]");
+      const worker = root.querySelector("[data-worker]");
+      const receiverMark = root.querySelector("[data-receiver-mark]");
+      const workerMark = root.querySelector("[data-worker-mark]");
+      const token = root.querySelector("[data-token]");
+      const label = root.querySelector("[data-step-label]");
+      const detail = root.querySelector("[data-detail]");
+      const receiverLane = root.querySelector("[data-receiver-lane]");
+      const workerLane = root.querySelector("[data-worker-lane]");
+
+      const steps = [
+        {
+          name: "wait for input",
+          receiver: [164, 151],
+          worker: [480, 151],
+          token: [106, 151],
+          active: "none",
+          detail: "A waits at r. B also waits at r, so no body execution happens without an input."
+        },
+        {
+          name: "receive x",
+          receiver: [164, 151],
+          worker: [480, 151],
+          token: [164, 151],
+          active: "receiver",
+          detail: "A consumes one input value x. That receive is the while-loop gate."
+        },
+        {
+          name: "dispatch job",
+          receiver: [316, 151],
+          worker: [480, 151],
+          token: [404, 151],
+          active: "receiver",
+          detail: "A sends exactly one job token, then starts cycling back toward its input r."
+        },
+        {
+          name: "worker receives",
+          receiver: [240, 254],
+          worker: [480, 151],
+          token: [480, 151],
+          active: "worker",
+          detail: "B receives that one token. Pipe order ensures jobs cannot overtake one another."
+        },
+        {
+          name: "execute body once",
+          receiver: [164, 210],
+          worker: [562, 151],
+          token: [562, 151],
+          active: "worker",
+          detail: "B crosses the body exactly once for this token while A is already waiting for the next input."
+        },
+        {
+          name: "emit and repeat",
+          receiver: [164, 151],
+          worker: [644, 151],
+          token: [683, 312],
+          active: "worker",
+          detail: "B emits the result and cycles back to r. The same two runners persist for the next value."
+        }
+      ];
+
+      let index = 0;
+
+      function moveText(node, point) {
+        node.setAttribute("x", String(point[0]));
+        node.setAttribute("y", String(point[1] + 5));
+      }
+
+      function render() {
+        const step = steps[index];
+        receiver.setAttribute("transform", `translate(${step.receiver[0]} ${step.receiver[1]})`);
+        worker.setAttribute("transform", `translate(${step.worker[0]} ${step.worker[1]})`);
+        token.setAttribute("transform", `translate(${step.token[0]} ${step.token[1]})`);
+        moveText(receiverMark, step.receiver);
+        moveText(workerMark, step.worker);
+        receiverLane.classList.toggle("active", step.active === "receiver");
+        workerLane.classList.toggle("active", step.active === "worker");
+        label.textContent = `${index + 1} / ${steps.length} · ${step.name}`;
+        detail.textContent = step.detail;
+      }
+
+      root.querySelector("[data-action='previous']").addEventListener("click", () => {
+        index = (index - 1 + steps.length) % steps.length;
+        render();
+      });
+      root.querySelector("[data-action='next']").addEventListener("click", () => {
+        index = (index + 1) % steps.length;
+        render();
+      });
+      render();
+    })();
+  </script>
+</div>

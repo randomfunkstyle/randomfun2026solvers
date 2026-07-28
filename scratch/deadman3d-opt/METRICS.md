@@ -210,3 +210,88 @@ big enough share of a frame at 3 billboards x <= 14 rows. **No-go.**
 The measurement to repeat if the sprite budget ever grows (more slots, taller
 bands, per-column texture stepping): count painted pixels per frame from the
 golden model, multiply by 4, divide by the emulator's instructions/frame.
+
+## M7c — the bounding-box re-sweep (user: "put the input left, reclaim the
+## empty CPU column and bottom row")
+
+Baseline, main @134f72f: canonical `build_for("deadman-3d")` **379x376**
+(max 379), taped **395x231** (max 395). Method as always: build-only sweeps to
+find the frontier, then native round-gated FastLittleman at the knee.
+
+### What actually binds each dimension (measure first)
+| machine | width is | height is |
+|---|---|---|
+| canonical (men-v3) | the **ROM** — rows 0..63 span 0..378; the store chain (75 + the 288-wide block) floors at 363, 16 columns clear | `rom_rows + 3*store_rows + 112` — the ROM fold, the 204-row store block, and the ~100-row DOOM stack under it |
+| taped | the **store** — 75 + the 320-wide 6-bank block = 395; the ROM is 379 | the same sum with a 59-row block: 231, i.e. **164 rows of slack** |
+
+Two closed forms fall out and drive everything below: `rom_w ≈ 22,740 / rom_rows`
+(so one more fold row buys ~6 columns and costs exactly 1), and the taped
+block is `48*banks + 32` columns wide **independent of the bank sizes** — the
+bank COUNT is a layout number, the sizes are pure tick tuning.
+
+### The three requested sub-changes, measured
+1. **Input on the WEST wall.** It is *feasible* and **dimension-neutral**, not
+   the pad disaster the M7-era note recorded. `in_north=False` fails to build
+   at the shipped `ROM_CPU_GAP`, but the collision is not the input pipe — it
+   is the STORE **teleport L** room, which lives at `rom_bottom+1..+4` and
+   needs a corridor ≥6 rows deep. `INPUT_NORTH` is what forces that depth
+   today, so the I room is riding for free. Forcing the gap to 6 and building
+   west: **379x376 at mem_pad 15..28** — byte-for-byte the same box as north,
+   and the historical "pad 39" rationale is dead (the teleport, not the wall,
+   is what unbinds the memory `r` now). Dropping the teleport too gets the
+   corridor to 1 row and the box to 379x371 (-5 rows, best case 373 after a
+   re-fold), for iter 05's ~9% of frame ticks. **No-go: 4 pixels for 9%.**
+2. **The empty rightmost CPU column.** Real — interior column 53 of the CPU
+   box (widest lane BRN ends at 52), and `build_cpu`'s `width = ret_x + 1`
+   makes it structural. Worth **0**: proxy-measured by walking the store west
+   with `mem_pad` instead — pad 15..31 (store x 73..89) all build the
+   *identical* 379x376, because the ROM is 16 columns wider than the store
+   chain. On the taped tier the store *does* bind, but `store_offset` dx buys
+   20 columns there against this one. **No-go.**
+3. **The empty CPU bottom row.** Real, and already documented at
+   `machine.py`'s `height = bottom` ("free on ten of the eleven machines and
+   changes no footprint; load-bearing on matmul"). Worth **0** here for a
+   different reason: the CPU box ends at row 123 and the machine's height is
+   set 150 rows lower, by the store block plus the DOOM stack. **No-go.**
+
+### What did win
+| lever | canonical | taped |
+|---|---|---|
+| `ROM_ROWS` 60 -> **61** | 379x376 -> **373x377** (max 379 -> 377) | — |
+| `TAPED_BANKS` 6 -> **4**, cold pairs merged `(256, 195, 64, 85)` | — | store 320 -> 224 cols |
+| `TIER_LAYOUT[("deadman-3d","taped")]` = `rom_rows 83`, `store_offset (-20,0)` | — | 395x231 -> **279x258** (max 395 -> 279) |
+
+`ROM_ROWS` sweep (10x60 store, build-only): 56 406x372 / 58 393x374 / 60
+379x376 / **61 373x377** / 62 369x378 / 63 363x379, then width floors at 363
+and only height grows. 61 is the crossing. Every other axis is dominated: 11
+store columns floor the width at 391, 9 columns floor the height at ~397, and
+600 slots at 10 columns force exactly 60 rows, so `store_h` is not free.
+
+Taped joint frontier (bank plan x store dx x rom_rows, min max(w,h)):
+6 banks 395 · 5 banks (128,128,195,64,85) 347 · **4 banks (256,195,64,85) 299
+at dx 0, 283 at dx -16, 279 at dx -20** · 3 banks (256,195,149) 263 but +29%
+ticks. dx -21 stops routing. The men-v3 store cannot take a negative dx at all
+("cannot compact STORE request route"), which is why the offset lives in
+`TIER_LAYOUT` and not in `MEM_PLACE`.
+
+Merging the two COLD bank pairs is faster as well as narrower — 9-round native
+gate at rom 78: 4 banks **90,157,275** vs 6 banks 93,649,383 (-3.7%). One
+fewer gate on every access beats the merged cold rings' laps. Merging the HOT
+pair (ZBUF 64 + the per-frame scalars 85) into 149 costs +29% and re-proves the
+original traffic-shaping lesson.
+
+### Final numbers (native, round-gated, `passed=True` throughout)
+| gate | before | after | delta |
+|---|---|---|---|
+| canonical dims | 379x376 (max 379, bbox 142,504) | **373x377** (max **377**, bbox 140,621) | -2 / -1.3% |
+| taped dims | 395x231 (max 395, bbox 91,245) | **279x258** (max **279**, bbox 71,982) | **-116 / -21%** |
+| canonical, full 57-command walk (58 rounds) | 330,339,051 | **327,860,446** | **-0.75%** |
+| taped, full walk | 659,297,504 | **654,884,941** | **-0.67%** |
+| canonical, 115-frame tour (116 rounds) | 645,715,913 | **640,802,749** | **-0.76%** |
+| taped, tour | 1,271,045,970 | **1,253,152,404** | **-1.41%** |
+
+Both tiers got smaller *and* faster; nothing was traded. Taped census still 20
+men. `deadman-3d.input.txt`, `.cases.json` and `_tour.input.txt` are unchanged
+(the program never moved) — `plan_tour.py <out> 2 5` reproduces the checked-in
+tour byte-identically. Test ceilings tightened 400 -> 390 (canonical/trim) and
+400 -> 300 (taped).

@@ -121,6 +121,7 @@ __all__ = [
     "STREAM_SEM_BAND",
     "STREAM_SIZE",
     "TAPE_SIZE",
+    "TIER_LAYOUT",
 ]
 
 
@@ -4128,9 +4129,21 @@ ROM_ROWS = {
     # words (the sprite phase, P 2973 -> 3957): the re-sweep (shapes 9..11
     # wide x rom_rows 40..80 x store_dy) moves the optimum to the 10-wide
     # store (the 9-wide block is 67 rows and floors the HEIGHT at ~397, the
-    # 11-wide chain floors the width at 391) — 10x60 + rom 60 = 374x376,
-    # max 376; 59 rows is rom-bound wider (378), 61 only taller.
-    "deadman-3d": 60,
+    # 11-wide chain floors the width at 391).
+    #
+    # M7b re-sweep (rom_rows 48..76 x shapes 6..14 x mem_pad 8..47 x store_dy,
+    # build-only, then native-gated at the knee). The canonical machine is a
+    # pure ROM-width / stack-height trade: width = max(rom_w(rows), 75 + store
+    # block width) and height = rows + 3*store_rows + 112, so one more fold row
+    # buys ~6 columns and costs exactly one row until the store chain's 363
+    # floor takes over at 63 rows. 60 -> 379x376 (max 379); **61 -> 373x377
+    # (max 377)**; 62 -> 369x378; 63 -> 363x379. 61 is the crossing, and it is
+    # also 0.8% FASTER on the native 9-round gate (46,529,444 vs 46,890,041) —
+    # a deeper fold shortens nothing the CPU walks, but it narrows the ROM's own
+    # rows. Everything else in the space is dominated: 10 columns is the widest
+    # store the 373-wide box holds (11 floors the width at 391) and 600 slots
+    # then force 60 rows, so store_h is not a free variable at all.
+    "deadman-3d": 61,
 }
 
 
@@ -4261,6 +4274,34 @@ MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
 }
 
 
+#: Per-``(slug, STORE tier)`` layout overrides, for a slug that ships **two**
+#: machines off one program. The registry above is written for a slug's
+#: canonical tier; a variant tier can have a completely different width/height
+#: trade, and forcing it to share the canonical numbers just makes it bigger.
+#:
+#: ``deadman-3d`` is the case: its men-v3 store is a 288x204 block, so the
+#: canonical machine's width floors at 363 and its height at ``rom_rows + 316``
+#: — a knife-edge crossing at 61 fold rows. The taped store is 224x59 (four
+#: banks), which floors the width 140 columns lower and leaves ~100 rows of
+#: height slack, so the taped machine wants a *much* deeper fold and the store
+#: pulled west. Sharing ``ROM_ROWS`` costs it 373 against 279.
+#:
+#: Recognised keys: ``rom_rows``, ``mem_offset``, ``store_offset`` (the
+#: :data:`MEM_PLACE` pair, overridable one at a time). Absent ``(slug, tier)``
+#: pairs change nothing, so every other machine stays byte-identical.
+TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
+    # deadman-3d's taped variant, swept jointly (bank plan x store dx x
+    # rom_rows) on the native 9-round gate. The store's width is
+    # ``48*banks + 32`` at skip-batch 2 and does NOT depend on the bank sizes,
+    # so the bank COUNT is the width knob and the sizes stay pure tick tuning.
+    # ``store_offset`` dx pulls the block west along the adapter's request
+    # route; -20 is the last value that still binds (-21 fails to route), and
+    # the fold then deepens until the ROM meets the store chain's floor.
+    # 395x231 -> **279x258** (max 395 -> 279, bbox 91,245 -> 71,982).
+    ("deadman-3d", "taped"): {"rom_rows": 83, "store_offset": (-20, 0)},
+}
+
+
 #: Demo slugs are not bound to any problem's panel — an ungraded demo may pick
 #: any resolution the LM-75 allows (64x64 max), and ``deadman-3d`` wants DOOM's
 #: 4:3 rather than the 32x24 its borrowed ``plotter`` JSON states. Consulted by
@@ -4384,8 +4425,21 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
 #: pay a big ring's lap), with the per-frame scalars keeping a small last
 #: ring (84 since M7b's three shot scalars — the last bank grows with them, so
 #: the plan keeps covering the whole tape; a plan that under-covers stalls).
+#:
+#: **The bank COUNT is a width knob; the bank SIZES are not.** Measured: the
+#: placed block is ``48*banks + 32`` columns wide at skip-batch 2 (``36*banks +
+#: 32`` at 1) whatever the sizes, so six banks cost 320 columns and put the
+#: taped machine's whole width floor 16 columns past the ROM's. Merging the two
+#: COLD pairs — the 128+128 map halves and the 96 nukage plane + 99 boot-mostly
+#: spawn/monster/sprite block — down to ``(256, 195, 64, 85)`` takes the block
+#: to 224 columns while leaving the two HOT rings (the 64-slot ZBUF and the
+#: per-frame scalars) exactly as small as they were. On the native 9-round gate
+#: that is FASTER, not slower: 90,157,275 against six banks' 93,649,383 at the
+#: same fold — one fewer gate on every access beats the merged cold rings' laps.
+#: Merging the hot pair too (three banks, ``(256, 195, 149)``) is the wrong
+#: direction and re-proves the original lesson: 121,458,179, +29%.
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
-    "deadman-3d": (128, 128, 96, 99, 64, 84)}
+    "deadman-3d": (256, 195, 64, 85)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
@@ -4454,10 +4508,19 @@ def build_for(
         raise MachineError(
             f"tape_skip_batch must be 1, 2, 4, None, or 'task', got {tape_skip_batch!r}"
         )
+    # A slug that ships two machines off one program gets one layout per tier:
+    # the store block's shape is what sets the width/height trade, and the two
+    # tiers' blocks are nothing alike (see :data:`TIER_LAYOUT`). Empty for every
+    # other `(slug, tier)`, so their grids stay byte-identical.
+    tier = TIER_LAYOUT.get((slug, store), {})
+    unknown = set(tier) - {"rom_rows", "mem_offset", "store_offset"}
+    if unknown:
+        raise MachineError(f"TIER_LAYOUT[{(slug, store)!r}] has unknown keys {sorted(unknown)}")
+    mem_offset, store_offset = MEM_PLACE.get(slug, ((0, 0), (0, 0)))
     return build(
         program if program is not None else programs.load(slug),
         tape_n=TAPE_SIZE[slug],
-        rom_rows=ROM_ROWS.get(slug),
+        rom_rows=tier.get("rom_rows", ROM_ROWS.get(slug)),
         mem_pad=MEM_PAD.get(slug),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
@@ -4468,8 +4531,8 @@ def build_for(
         middle_order=LANE_ORDER.get(slug),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
-        mem_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[0],
-        store_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[1],
+        mem_offset=tier.get("mem_offset", mem_offset),
+        store_offset=tier.get("store_offset", store_offset),
         in_north=slug in INPUT_NORTH,
         store_teleport=slug in STORE_TELEPORT,
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
