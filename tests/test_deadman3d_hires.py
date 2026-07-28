@@ -17,6 +17,7 @@ across the seam.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,49 @@ if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
 EXAMPLES = REPO / "littleman" / "examples"
+
+#: A locally owned IWAD, if the person running the suite has one.  The 128x96
+#: family takes *every* input from it — id's own E1M1 as well as the art — so
+#: without one there is nothing to build and those tests skip.  ``DEADMAN3D_IWAD``
+#: overrides; the fallback is where the repo's own docs suggest keeping it.
+#: No test reads an IWAD unless it is there, which keeps `DEADMAN-3D.md`'s
+#: promise that the suite needs none.
+IWAD = Path(os.environ.get("DEADMAN3D_IWAD", "")) if os.environ.get("DEADMAN3D_IWAD") \
+    else Path.home() / "Downloads" / "doom1_0" / "DOOM1.WAD"
+needs_iwad = pytest.mark.skipif(
+    not IWAD.is_file(),
+    reason=f"deadman-3d_hires is IWAD-only and no IWAD is present at {IWAD} "
+           "(set DEADMAN3D_IWAD to point at one)",
+)
+
+
+#: Everything ``install_level`` rebinds.  The IWAD build swaps the module onto
+#: id's E1M1, and a byte-identity test running afterwards in the same worker
+#: would then build a *different* deadman-3d — so the fixture puts them back.
+_INSTALLED_GLOBALS = (
+    "MAP_STR", "_PRINTED_ROWS", "_MAP_WORDS", "NUKAGE_STR", "_NUKE_ROWS",
+    "_NUKE_WORDS", "SPAWN", "TITLE_HEX_ROWS", "MONSTERS", "_MON_WORDS",
+    "_MHP_WORDS", "_WAD_INSTALLED",
+)
+
+
+@pytest.fixture
+def wad_installed():
+    """id's own E1M1 and art at 128x96, undone again afterwards."""
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers import deadman3d_hires as hires
+
+    saved = {n: getattr(d3, n) for n in _INSTALLED_GLOBALS}
+    saved_art = dict(d3.ART_REGISTRY)
+    try:
+        hires.install_wad(IWAD)
+        yield hires
+    finally:
+        for name, value in saved.items():
+            for mod in d3._twin_modules():
+                setattr(mod, name, value)
+        d3.ART_REGISTRY.clear()
+        d3.ART_REGISTRY.update(saved_art)
 
 
 # ── the additive contract ────────────────────────────────────────────────────
@@ -158,29 +202,35 @@ def test_the_commit_is_the_broadcast_and_a_tile_word_is_not() -> None:
 
 
 # ── the art ──────────────────────────────────────────────────────────────────
-def test_the_hires_art_is_the_shape_the_screen_needs() -> None:
+@needs_iwad
+def test_the_hires_art_is_the_shape_the_screen_needs(wad_installed) -> None:
     from randomfun2026solvers import deadman3d as d3
-    from randomfun2026solvers import deadman3d_hires as hires
 
     art = d3.art_for(d3.GEOM128)
     assert len(art.title) == 96 and all(len(r) == 128 for r in art.title)
     assert len(art.hud_bg) == 16 and all(len(r) == 128 for r in art.hud_bg)
+    # The mugshot is the IWAD's own at the slot STBAR_REGIONS gives at this
+    # strip size — 13x14, not a doubled 6x7.
+    assert art.face_box == (58, 80, 13, 14)
+    assert set(art.faces) == {"healthy", "hurt", "bloody", "grim"}
+    # The pistol is quantized at 22x20 and bottom-centred on the 80-row
+    # viewport, so its last row is the viewport's last row.
+    assert max(r for r, _c, _x in art.gun_idle) == d3.GEOM128.h3d - 1
     # The wells double, so the divisors halve — a full clip fills its own well
     # and never overruns it.
     assert d3.div(d3.AMMO_START, art.ammo_per_px) <= art.ammo_cols[1] - art.ammo_cols[0]
     assert d3.div(d3.HEALTH_START, art.health_per_px) <= art.health_cols[1] - art.health_cols[0]
-    assert hires.GEOM.tile_of(*art.face_box[:2]) == 2  # the mugshot starts on T2
 
 
-def test_the_mugshot_straddles_the_seam_and_the_encoder_splits_it() -> None:
+@needs_iwad
+def test_the_mugshot_straddles_the_seam_and_the_encoder_splits_it(wad_installed) -> None:
     """The one span in the frame that is genuinely two panels wide."""
     from randomfun2026solvers import deadman3d as d3
-    from randomfun2026solvers import deadman3d_hires  # registers the hires art
 
-    g, art = deadman3d_hires.GEOM, d3.art_for(d3.GEOM128)
-    col, row, w, _h = art.face_box
+    g, art = d3.GEOM128, d3.art_for(d3.GEOM128)
+    col, _row, w, _h = art.face_box
     assert col < g.tile_w < col + w, "the mugshot no longer crosses x = 64"
-    words = d3.span_words(row, col, "1" * w, g)
+    words = d3.span_words(_row, col, "1" * w, g)
     assert len({word % 8 for word in words}) == 2  # one selector per panel
 
 
@@ -193,53 +243,55 @@ def test_a_committed_span_is_one_cursor_and_its_runs() -> None:
 
 
 # ── the machine ──────────────────────────────────────────────────────────────
-def test_the_machine_builds_with_four_display_rooms() -> None:
+@needs_iwad
+def test_the_machine_builds_with_four_display_rooms(wad_installed, tmp_path) -> None:
     from randomfun2026solvers.littleman import Littleman
-    from randomfun2026solvers.lm1 import machine
 
-    m = machine.build_for("deadman-3d_hires")
+    built = wad_installed.build_local(IWAD, tmp_path, list(range(1)), pngs=False)
+    m = built["machine"]
     info = Littleman().analyze("\n".join(m.rows))
     assert len(info.displays) == 4
     for panel in info.displays:
         lo, hi = panel["min"], panel["max"]
         assert (hi[0] - lo[0] - 1, hi[1] - lo[1] - 1) == (64, 48)
+    # and it landed in the directory it was asked for, not in the tree
+    assert (tmp_path / "deadman-3d_hires.man").is_file()
 
 
-def test_the_checked_in_artifacts_match_their_builders() -> None:
-    """The committed grid, assembly and input stream are all regenerable.
+@needs_iwad
+def test_the_family_commits_nothing() -> None:
+    """Everything it generates carries IWAD data, so none of it is in the tree.
 
-    The input stream especially: round 0 carries the title's RLE and the title
-    is a different picture at 128x96, so this file is **not** the 64x48
-    machine's and must never be copied from it.
+    The three Freedoom-based families keep their committed grids; this one is
+    built locally into a gitignored directory (``DEADMAN-3D.md``: owning an IWAD
+    is fine, putting its data in a public repository is not).
     """
-    from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers import deadman3d_hires as hires
-    from randomfun2026solvers.lm1 import machine
     from randomfun2026solvers.lm1.programs import PROGRAM_DIR
 
-    m = machine.build_for("deadman-3d_hires")
-    man = EXAMPLES / "deadman-3d_hires.man"
-    assert man.read_text().rstrip("\n").split("\n") == m.rows
-    assert (PROGRAM_DIR / "deadman-3d_hires.asm").read_text() == hires.hires_source()
-    stream = (EXAMPLES / "deadman-3d_hires.input.txt").read_text().split()
-    assert [int(v) for v in stream] == hires.input_words(list(d3.WALK[:6]))
-    assert stream != (EXAMPLES / "deadman-3d.input.txt").read_text().split()
+    assert not (EXAMPLES / "deadman-3d_hires.man").exists()
+    assert not (EXAMPLES / "deadman-3d_hires.input.txt").exists()
+    assert not (PROGRAM_DIR / "deadman-3d_hires.asm").exists()
+    assert hires.LOCAL_DIR.name == "local"
+    ignore = (REPO / ".gitignore").read_text()
+    assert "littleman/examples/local/" in ignore
 
 
 def test_the_tape_covers_a_column_per_ray_and_the_tile_scalars() -> None:
+    """Resolution-only, so it needs no art and runs everywhere."""
     from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers.lm1 import machine
 
     slots = d3.tape_slots(d3.GEOM128)
     assert slots["CMD"] == slots["ZBUF"] + 128  # one z-slot per rendered column
     assert set(d3._TILE_SCALARS) <= set(slots)
-    assert machine.TAPE_SIZE["deadman-3d_hires"] == max(slots.values()) + 1
     # the committed layout is untouched by any of it
     assert max(d3.tape_slots().values()) + 1 == machine.TAPE_SIZE["deadman-3d"]
 
 
 # ── the pixels, end to end ───────────────────────────────────────────────────
-def test_the_machine_paints_what_the_model_says_across_the_seam() -> None:
+@needs_iwad
+def test_the_machine_paints_what_the_model_says_across_the_seam(wad_installed) -> None:
     """The test that caught both real bugs in the port.
 
     One: the unit reseeds its banding mask per COMMAND, so a column split at the
@@ -250,11 +302,11 @@ def test_the_machine_paints_what_the_model_says_across_the_seam() -> None:
     nowhere else.
     """
     from randomfun2026solvers import deadman3d as d3
-    from randomfun2026solvers import deadman3d_hires as hires
     from randomfun2026solvers.lm1 import display
     from randomfun2026solvers.lm1.asm import assemble
     from randomfun2026solvers.lm1.emulator import Emulator, Round
 
+    hires = wad_installed
     cmds = list(d3.WALK[:2])
     prog = assemble(hires.hires_source(), name="deadman-3d_hires")
     assert prog.unit == "doom4"

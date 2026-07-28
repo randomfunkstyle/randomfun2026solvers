@@ -85,12 +85,12 @@ OVER_TICK_CAP: set[str] = {"little-little-man"}
 #: misaligned-input hang at worst. ``lambda-deadman`` reads five-word colour segments
 #: plus a negative sentinel — see ``tests/test_lambda_deadman_vector.py`` for its real
 #: cases. ``deadman-3d`` reads a 451-word data preamble then command words — see
-#: ``tests/test_deadman3d.py``. ``deadman-3d_hires`` is that demo's 128x96 tiled
-#: variant — the same raycaster over four 64x48 panels, and the same input shape
-#: with a different title burst; see ``tests/test_deadman3d_hires.py``. Mirrors
-#: ``programs.DEMOS`` (which the CLI's grade default consults); the pin below
-#: keeps the two sets from drifting.
-DEMOS = {"lambda-deadman", "deadman-3d", "deadman-3d_hires"}
+#: ``tests/test_deadman3d.py``. (``deadman-3d_hires``, the 128x96 tiled variant,
+#: is deliberately NOT here: it is IWAD-only and commits no ``.asm``, so it is
+#: not a checked-in program at all — see ``tests/test_deadman3d_hires.py``.)
+#: Mirrors ``programs.DEMOS`` (which the CLI's grade default consults); the pin
+#: below keeps the two sets from drifting.
+DEMOS = {"lambda-deadman", "deadman-3d"}
 
 
 def test_the_demo_set_matches_the_registry() -> None:
@@ -203,20 +203,6 @@ def test_extension_users_are_exactly_the_ones_we_expect() -> None:
         # Ungraded, so the deep trie is paid gladly rather than contorted
         # around (see the plan).
         "deadman-3d": {
-            "DIV",
-            "DIVI",
-            "INCM",
-            "LDA",
-            "MODI",
-            "MOVA",
-            "MUL",
-            "NEG",
-            "SND",
-        },
-        # The 128x96 tiled variant is the same program at a different geometry,
-        # so it is the same opcode set — one `SND` lane, now carrying a router
-        # word with a tile selector in its low three bits (lm1/d3_router.py).
-        "deadman-3d_hires": {
             "DIV",
             "DIVI",
             "INCM",

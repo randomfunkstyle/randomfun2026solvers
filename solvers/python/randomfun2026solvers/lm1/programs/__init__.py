@@ -63,11 +63,6 @@ PROBLEM_OF: dict[str, str] = {
     "pathfinder-unit": "pathfinder",
     "lambda-deadman": "plotter",
     "deadman-3d": "plotter",
-    # ``deadman-3d_hires`` is deadman-3d's 128x96 tiled variant: its framebuffer is
-    # four 64x48 LM-75s behind ``lm1/d3_router.py``'s 1-of-4 router, since one panel
-    # stops at 64x64 (``SPEC.md``). Its own slug and its own program, so the 64x48
-    # family stays byte-identical.
-    "deadman-3d_hires": "plotter",
 }
 
 #: Ungraded demos: they borrow a problem slug for registration only, so running
@@ -76,7 +71,7 @@ PROBLEM_OF: dict[str, str] = {
 #: read plotter's segment words as its data preamble and raycast a garbage map
 #: that no ray ever exits. The CLI's ``grade`` default and the program-suite
 #: tests both exclude them; each demo's own test file runs its real cases.
-DEMOS: frozenset[str] = frozenset({"lambda-deadman", "deadman-3d", "deadman-3d_hires"})
+DEMOS: frozenset[str] = frozenset({"lambda-deadman", "deadman-3d"})
 
 
 def problem_of(stem: str) -> str:

@@ -75,6 +75,7 @@ from pathlib import Path
 __all__ = [
     "PALETTE", "Wad", "MapData", "Level", "DAMAGE_SPECIALS",
     "MONSTER_TYPES", "MAX_MONSTERS", "MON_BANDS",
+    "pack_sprite_columns_wide", "HIRES_BANDS", "HIRES_GUN",
     "read_wad", "parse_map", "supercover", "rasterize",
     "decode_png", "decode_picture", "srgb_to_lab", "family_of",
     "quantize_title", "despeckle", "quantize_sprite", "sprite_runs",
@@ -1097,6 +1098,7 @@ def pack_sprite_columns(grid: list[list[int]]) -> list[int]:
     """
     h, w = len(grid), len(grid[0])
     assert h <= 14, f"sprite height {h} > 14 would overflow a packed word"
+
     words = []
     for x in range(w):
         word = 0
@@ -1109,65 +1111,121 @@ def pack_sprite_columns(grid: list[list[int]]) -> list[int]:
 
 def monster_band_words(rgba: list[list[tuple[int, int, int, int]]],
                        *, pad_to_bands: bool = False,
-                       brightness: float = 1.0) -> list[int]:
-    """The 20 packed words of one sprite's three bands (10+6+4 columns).
+                       brightness: float = 1.0,
+                       bands: tuple[tuple[int, int], ...] = MON_BANDS,
+                       words_per_col: int = 1) -> list[int]:
+    """One sprite's bands, packed — 20 words at the committed ``MON_BANDS``.
 
     ``pad_to_bands`` is the corpse path: the source (a low, wide death frame)
     is quantized to the band width at its own proportional height (floor 2)
     and padded with transparent top rows to the band height, so the paint
     chain needs no extra entry points.
+
+    ``words_per_col`` > 1 splits a column that is too tall for one word.  A
+    packed column is one nibble per row and 16**15 is the last power that fits
+    64 bits, so a band taller than 14 rows — which every band is once the
+    screen doubles — has to become two words, low rows first.  See
+    :func:`pack_sprite_columns_wide`.
     """
     src = _crop_alpha(rgba)
     sh, sw = len(src), len(src[0])
     words: list[int] = []
-    for bw, bh in MON_BANDS:
+    for bw, bh in bands:
         if pad_to_bands:
             ch = max(2, min(bh, round(bw * sh / sw)))
             grid = quantize_monster(src, bw, ch, brightness=brightness)
             grid = [[0] * bw for _ in range(bh - ch)] + grid
         else:
             grid = quantize_monster(src, bw, bh, brightness=brightness)
-        words += pack_sprite_columns(grid)
-    assert len(words) == sum(w for w, _h in MON_BANDS) == 20
+        words += pack_sprite_columns_wide(grid, words_per_col)
+    assert len(words) == words_per_col * sum(w for w, _h in bands)
     return words
 
 
+def pack_sprite_columns_wide(grid: list[list[int]], words_per_col: int = 1) -> list[int]:
+    """Packed columns, ``words_per_col`` words each, **low rows in the first**.
+
+    ``words_per_col == 1`` is :func:`pack_sprite_columns` exactly.  Above that
+    the column is cut into that many 14-row slices from the bottom up and each
+    slice packed on its own, so the paint chain reloads its working word every
+    14 nibbles instead of running out of bits at row 15.
+
+    The column is padded with transparent rows to ``14 * words_per_col`` first,
+    which is what lets one shared chain serve every band: with the sprite in
+    the *bottom* rows and zeros above, a short band simply skips its way
+    through the padding (the chain already branches over a 0 nibble) and no
+    band needs an entry point of its own.
+    """
+    h, w = len(grid), len(grid[0])
+    span = 14 * words_per_col
+    if h > span:
+        raise ValueError(f"sprite height {h} > {span} = 14 * {words_per_col} words")
+    padded = [[0] * w for _ in range(span - h)] + grid
+    out: list[int] = []
+    for x in range(w):
+        for k in range(words_per_col):
+            word = 0
+            for j in range(14):  # j = rows above this slice's bottom
+                row = span - 1 - (14 * k + j)
+                word += padded[row][x] * 16 ** j
+            assert 0 <= word < 2 ** 63
+            out.append(word)
+    return out
+
+
 def monster_sprite_words(mon0_rgba, mon1_rgba, corpse_rgba,
-                         *, brightness: float = 1.0) -> list[int]:
-    """The whole 60-word ``SPRB`` table: species 0 (POSS art) bands, species 1
+                         *, brightness: float = 1.0,
+                         bands: tuple[tuple[int, int], ...] = MON_BANDS,
+                         words_per_col: int = 1) -> list[int]:
+    """The whole ``SPRB`` table: species 0 (POSS art) bands, species 1
     (TROO art) bands, then the shared corpse frame padded to the band boxes.
-    Column base offsets are ``species * 20 + (0, 10, 16)[band]`` (corpse:
-    ``40 + ...``, an M7b consumer)."""
-    return (monster_band_words(mon0_rgba, brightness=brightness)
-            + monster_band_words(mon1_rgba, brightness=brightness)
-            + monster_band_words(corpse_rgba, pad_to_bands=True,
-                                 brightness=brightness))
+    Column base offsets are ``species * stride + band offset`` (corpse:
+    ``2 * stride + ...``, an M7b consumer), all in units of
+    ``words_per_col`` words."""
+    kw = {"brightness": brightness, "bands": bands, "words_per_col": words_per_col}
+    return (monster_band_words(mon0_rgba, **kw)
+            + monster_band_words(mon1_rgba, **kw)
+            + monster_band_words(corpse_rgba, pad_to_bands=True, **kw))
 
 
 def gun_tables(idle_rgba, flash_rgba, *, width: int = 11, height: int = 10,
-               brightness: float = 1.0):
+               brightness: float = 1.0,
+               screen: tuple[int, int] = (64, 40),
+               max_runs: int | None = 20, max_body: int = 12):
     """``(GUN_IDLE, GUN_FIRE)`` run tables from a pistol + muzzle-flash pair.
 
-    The committed art's construction: the idle gun bottom-centred on the
-    viewport (bottom row 39), the fire variant the same gun one row higher
-    with the flash blooming directly above it.
+    The construction, at any screen: the idle gun bottom-centred on the
+    viewport, the fire variant the same gun one row higher with the flash
+    blooming directly above it.  At the committed 64x40 that is the gun on rows
+    30..39 and the flash on 25..28.
+
+    ``screen`` is ``(width, h3d)`` — the *viewport*, not the frame, since the
+    status bar is below it.  ``max_runs``/``max_body`` are the DOOM unit's
+    sprite-arm budget: a baked arm holds 20 runs of at most a 12-row descent
+    window.  Pass ``None`` and a large body when the **CPU** draws the sprite
+    instead (the tiled machine does — see ``deadman3d._pistol_asm``), because
+    then the only cost of a run is two ROM words and there is no arm to spill.
     """
+    sw, sh3d = screen
     idle = quantize_sprite(_crop_alpha(idle_rgba), width, height,
                            brightness=brightness)
-    idle_runs = sprite_runs(idle, 40 - height, (64 - width) // 2)
+    idle_runs = sprite_runs(idle, sh3d - height, (sw - width) // 2,
+                            max_body=max_body)
     flash_src = _crop_alpha(flash_rgba)
-    fh = 4
-    fw = max(2, min(10, round(fh * len(flash_src[0]) / len(flash_src))))
+    fh = max(2, round(4 * height / 10))
+    fw = max(2, min(width, round(fh * len(flash_src[0]) / len(flash_src))))
     flash = quantize_sprite(flash_src, fw, fh, brightness=brightness)
     # the flash sits clear above the RECOILED gun (whose top row is
-    # 40 - height - 1), exactly like the committed art's 25..28 band
-    flash_runs = sprite_runs(flash, 40 - height - fh - 1, 32 - fw // 2)
+    # sh3d - height - 1), exactly like the committed art's 25..28 band
+    flash_runs = sprite_runs(flash, sh3d - height - fh - 1, sw // 2 - fw // 2,
+                             max_body=max_body)
     fire_runs = flash_runs + [(r - 1, c, colors) for r, c, colors in idle_runs]
     for name, runs in (("idle", idle_runs), ("fire", fire_runs)):
-        if len(runs) > 20:
+        if max_runs is not None and len(runs) > max_runs:
             raise ValueError(
                 f"the {name} pistol quantized to {len(runs)} runs; the unit's "
-                "sprite arms fit 20 (leaf spill bound) — coarsen the quantize")
+                f"sprite arms fit {max_runs} (leaf spill bound) — coarsen the "
+                "quantize, or pass max_runs=None if the CPU draws it")
     return idle_runs, fire_runs
 
 
@@ -1251,6 +1309,17 @@ def stbar_rows(rgba: list[list[tuple[int, int, int, int]]],
 #: doubles, which is the resolution dithering needs to read as shading rather
 #: than noise.
 HIRES_W, HIRES_H, HIRES_H3D = 128, 96, 80
+
+#: The monster bands at the hi-res screen: the committed ``MON_BANDS`` doubled,
+#: because a billboard's size is a projection and the projection doubles with
+#: the viewport.  Every height is then past the 14 rows one packed word holds,
+#: which is why :func:`pack_sprite_columns_wide` exists and why the hi-res table
+#: is two words a column.
+HIRES_BANDS = tuple((2 * w, 2 * h) for w, h in MON_BANDS)
+
+#: The pistol at the hi-res screen — the committed 11x10 doubled, quantized
+#: from the source at that size rather than enlarged after the fact.
+HIRES_GUN = (22, 20)
 HIRES_HUD_W, HIRES_HUD_H = HIRES_W, HIRES_H - HIRES_H3D
 
 
@@ -1338,22 +1407,35 @@ def iwad_stbar(wad: Wad, playpal: bytes) -> list[list[tuple[int, int, int, int]]
 
 
 def iwad_art(path: Path, *, dither: str = "none",
-             hud_size: tuple[int, int] = (HUD_W, HUD_H), h3d: int = 40) -> dict:
+             hud_size: tuple[int, int] = (HUD_W, HUD_H), h3d: int = 40,
+             gun: tuple[int, int] = (11, 10), screen: tuple[int, int] | None = None,
+             max_runs: int | None = 20, max_body: int = 12,
+             bands: tuple[tuple[int, int], ...] = MON_BANDS,
+             words_per_col: int = 1) -> dict:
     """The --wad art override bundle: WAD-derived pistol, status bar and face
     run tables (M5/M8: the local machines' GUN/GUNF arms, HUD background and
     FACE paint carry the user's own art; nothing from this path may be
     committed).
 
     ``dither``/``hud_size``/``h3d`` are the M9 opt-ins (the defaults are the
-    64x8 strip over the 40-row viewport, undithered).  The pistol is left at
-    the 64-column geometry its arm budget is sized for."""
+    64x8 strip over the 40-row viewport, undithered).
+
+    ``gun``/``screen``/``max_runs``/``max_body`` size and place the pistol, and
+    ``bands``/``words_per_col`` the monster billboards — all defaulting to the
+    committed geometry.  Pass the hi-res set (:data:`HIRES_GUN`,
+    :data:`HIRES_BANDS`, ``words_per_col=2``, ``max_runs=None``) and every
+    sprite here is quantized from the lump at its final size rather than
+    enlarged afterwards, which is the whole point of deriving art from the WAD
+    instead of scaling someone else's quantization of it."""
     wad = read_wad(path)
     playpal = wad.lump("PLAYPAL")[:768]
 
     def pic(key: str):
         return decode_picture(wad.lump(IWAD_ART_LUMPS[key]), playpal)
 
-    gun_idle, gun_fire = gun_tables(pic("gun_idle"), pic("gun_flash"))
+    gun_idle, gun_fire = gun_tables(
+        pic("gun_idle"), pic("gun_flash"), width=gun[0], height=gun[1],
+        screen=screen or (HUD_W, h3d), max_runs=max_runs, max_body=max_body)
     hud_bg = stbar_rows(iwad_stbar(wad, playpal), *hud_size, dither=dither)
     box = face_box(*hud_size, h3d)
     faces = face_tables({
@@ -1361,7 +1443,8 @@ def iwad_art(path: Path, *, dither: str = "none",
         "bloody": pic("face_bloody"), "grim": pic("face_grim"),
     }, background=PALETTE[int(hud_bg[box[1] - h3d][box[0]], 16)],
         box=box, dither=dither)
-    sprites = monster_sprite_words(pic("mon0"), pic("mon1"), pic("corpse"))
+    sprites = monster_sprite_words(pic("mon0"), pic("mon1"), pic("corpse"),
+                                   bands=bands, words_per_col=words_per_col)
     return {"gun_idle": gun_idle, "gun_fire": gun_fire, "faces": faces,
             "hud_bg": hud_bg, "monster_sprites": sprites}
 

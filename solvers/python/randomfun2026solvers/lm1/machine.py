@@ -4351,10 +4351,6 @@ TAPE_SIZE = {
     # the tests pin this against. Highest address + 1, as everywhere: an
     # exactly-sized tape stalls silently rather than faulting.
     "deadman-3d": 600,
-    # deadman-3d_hires: deadman-3d's boot data unchanged, but the ZBUF block is
-    # one slot per rendered column (128, not 64) and the tiled send carries six
-    # more scalars (deadman3d._TILE_SCALARS) — see `deadman3d.tape_slots`.
-    "deadman-3d_hires": 670,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.

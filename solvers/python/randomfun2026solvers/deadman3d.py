@@ -452,8 +452,10 @@ def art_for(geom: Geom = GEOM64) -> Art:
     if geom.art != "committed":
         if geom.art not in ART_REGISTRY:
             raise KeyError(
-                f"no art registered for {geom.art!r}; import the module that "
-                f"provides it (have {sorted(ART_REGISTRY)})"
+                f"no art registered for {geom.art!r} (have {sorted(ART_REGISTRY)}). "
+                "The 128x96 family takes every table from an IWAD lump quantized "
+                "at that size and has no fallback on purpose — call "
+                "deadman3d_hires.install_wad(path_to_iwad) first."
             )
         return ART_REGISTRY[geom.art]
     return Art(
@@ -3509,7 +3511,8 @@ def _twin_modules() -> list:
 def install_level(map_rows: list[str], spawn_cell: tuple[int, int], heading: int,
                   title_rows: list[str],
                   nukage_rows: list[str] | None = None,
-                  monsters: list[tuple[int, int, int]] | None = None) -> None:
+                  monsters: list[tuple[int, int, int]] | None = None,
+                  geom: Geom = GEOM64) -> None:
     """Swap the module onto an imported level (``wadimport`` output).
 
     Everything downstream — :func:`map_cell`, :func:`preamble_words`,
@@ -3524,7 +3527,7 @@ def install_level(map_rows: list[str], spawn_cell: tuple[int, int], heading: int
     global MAP_STR, _PRINTED_ROWS, _MAP_WORDS, SPAWN, TITLE_HEX_ROWS, _WAD_INSTALLED
     global NUKAGE_STR, _NUKE_ROWS, _NUKE_WORDS, MONSTERS, _MON_WORDS, _MHP_WORDS
     assert len(map_rows) == MAP_SIZE and all(len(r) == MAP_SIZE for r in map_rows)
-    assert len(title_rows) == HEIGHT and all(len(r) == WIDTH for r in title_rows)
+    assert len(title_rows) == geom.height and all(len(r) == geom.width for r in title_rows)
     MAP_STR = "\n".join(map_rows) + "\n"
     _PRINTED_ROWS = list(map_rows)
     _MAP_WORDS = map_words()
@@ -3541,7 +3544,11 @@ def install_level(map_rows: list[str], spawn_cell: tuple[int, int], heading: int
     assert map_cell(x, y) == 0, f"imported spawn cell {spawn_cell} is a wall"
     SPAWN = State(posX=x * UNITS + UNITS // 2, posY=y * UNITS + UNITS // 2,
                   heading=heading % HEADINGS)
-    TITLE_HEX_ROWS = list(title_rows)
+    # At a tiled geometry the title belongs to that screen's art bundle, not to
+    # this module's 64x48 table; `deadman3d_hires.install` puts it there and the
+    # global stays what it was so a same-process 64x48 build is unaffected.
+    if not geom.tiled:
+        TITLE_HEX_ROWS = list(title_rows)
     _WAD_INSTALLED = True
     here = globals()
     for mod in _twin_modules():

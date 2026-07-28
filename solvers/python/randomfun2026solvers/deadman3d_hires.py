@@ -17,22 +17,26 @@ COL word *per panel the column touches* (``_column_send_asm``), the status bar
 and the mugshot became tile-split spans, and the pistol moved from the unit's
 baked arm to CURS/RUN words the CPU sends (``_pistol_asm`` says why).
 
-The art, and its one honest limitation
---------------------------------------
+This family is IWAD-only, and nothing it produces is committed
+--------------------------------------------------------------
 
-The repo commits **quantized output**, not source art: ``TITLE_HEX_ROWS``,
-``HUD_BG_ROWS``, ``FACE_*`` and the pistol tables are the result of running
-:mod:`wadimport` over a Freedoom checkout that is not itself in the tree (see
-that module's ``--freedoom DIR``).  So the committed 128x96 art here is those
-tables **doubled**, not re-quantized from the 320x200 originals: real art, real
-runs, correct geometry, but not the extra detail a true 128x96 quantization
-would recover.  Re-deriving it needs a Freedoom checkout and is a one-argument
-change — :func:`hires_art` takes whatever tables it is given.
+**Everything** here comes from a locally owned IWAD: the level geometry is id's
+own E1M1, the title, status bar, 13x14 mugshot, pistol and monster sprites are
+all quantized from the WAD's lumps *at* 128x96 rather than enlarged from
+someone else's quantization of them, and the wall colours come from the IWAD's
+own textures.  There is no Freedoom fallback and no doubled art.
 
-``--wad`` is the exception and the demonstration: pointed at a local IWAD,
-:mod:`wadimport` quantizes id's own art straight to the hi-res geometry
-(:data:`wadimport.HIRES_W` and friends, :func:`wadimport.face_box`'s 13x14
-mugshot slot), and nothing from that path is committed.
+Which means the generated grid and input stream **embed IWAD data**, and
+``DOOM1.WAD`` is not redistributable (``littleman/DEADMAN-3D.md``).  So this
+family commits nothing at all: :func:`build_local` writes into
+``littleman/examples/local/``, which is in ``.gitignore``, exactly as
+``deadman3d.py``'s own ``--wad`` mode does.  The three committed families —
+``deadman-3d``, ``deadman-3d_taped``, ``deadman-3d_trim`` — stay Freedoom-based,
+byte-identical and fully attributed; none of this touches them.
+
+Build it with::
+
+    python -m randomfun2026solvers.deadman3d_hires --wad ~/DOOM1.WAD --build
 
 Not in this stage
 -----------------
@@ -53,87 +57,67 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from randomfun2026solvers import deadman3d as d3
+from randomfun2026solvers import wadimport as wi
 from randomfun2026solvers.deadman3d import GEOM128, Art, Geom
 
 __all__ = [
     "GEOM",
+    "LOCAL_DIR",
     "SCALE",
+    "build_local",
     "cases_json",
     "frames_for_commands",
     "hires_art",
     "hires_source",
     "input_words",
     "install",
+    "install_wad",
     "title_frame",
-    "upscale_rows",
-    "upscale_runs",
 ]
+
+#: Where a build lands.  Gitignored, because everything in it is IWAD-derived.
+LOCAL_DIR = Path(__file__).resolve().parents[3] / "littleman" / "examples" / "local"
 
 #: The screen this module drives.
 GEOM: Geom = GEOM128
 
-#: How much the committed 64x48 art is enlarged to reach it.  Exactly 2 in each
-#: direction, which is why every screen-space table doubles cleanly.
+#: The hi-res screen against the committed one, in each direction.  Not an
+#: upscale factor — no art is enlarged — but the ratio the *layout* numbers
+#: scale by: the status wells and the bar rows are geometry, not pictures.
 SCALE = 2
 
 
-# ── enlarging the committed art ──────────────────────────────────────────────
-def upscale_rows(rows: Sequence[str], scale: int = SCALE) -> list[str]:
-    """A hex-digit raster enlarged ``scale``x, nearest neighbour."""
-    return [
-        "".join(ch * scale for ch in row) for row in rows for _ in range(scale)
-    ]
-
-
-def upscale_runs(runs: Sequence[tuple[int, int, str]],
-                 scale: int = SCALE) -> list[tuple[int, int, str]]:
-    """A sprite run table enlarged ``scale``x — ``scale`` rows out of every one.
-
-    A run is ``(row, first column, colours)`` in *screen* coordinates, so both
-    the position and the colour string scale.  The copies are left as separate
-    runs: each becomes its own span and the encoder run-length codes it anyway.
-    """
-    out: list[tuple[int, int, str]] = []
-    for row, col, colours in runs:
-        wide = "".join(ch * scale for ch in colours)
-        out += [(row * scale + k, col * scale, wide) for k in range(scale)]
-    return out
-
-
 def hires_art(
-    title: Sequence[str] | None = None,
-    hud_bg: Sequence[str] | None = None,
-    gun_idle: Sequence[tuple[int, int, str]] | None = None,
-    gun_fire: Sequence[tuple[int, int, str]] | None = None,
-    faces: dict[str, list[tuple[int, int, str]]] | None = None,
-    face_box: tuple[int, int, int, int] | None = None,
+    title: Sequence[str],
+    hud_bg: Sequence[str],
+    gun_idle: Sequence[tuple[int, int, str]],
+    gun_fire: Sequence[tuple[int, int, str]],
+    faces: dict[str, list[tuple[int, int, str]]],
+    face_box: tuple[int, int, int, int],
 ) -> Art:
-    """The 128x96 screen-space tables, defaulting to the committed art doubled.
+    """The 128x96 screen-space tables.  Every one is required, and on purpose.
 
-    Every argument is an override for the ``--wad`` path, which quantizes id's
-    art straight to this geometry rather than enlarging Freedoom's.
+    There is no default and no fallback: this family takes its art from an IWAD
+    lump quantized *at* 128x96, and an argument that could be omitted would be
+    an invitation to enlarge a 64x48 table instead — which is exactly the thing
+    the WAD path exists to avoid.  :func:`install_wad` is the only caller.
 
-    The wells are re-cut rather than scaled blindly: a doubled well is twice as
-    many pixels for the same 50 rounds and 100 health, so the per-pixel divisor
-    halves.  Computed from the well's own width, rounded up, so a full clip
-    fills its well exactly and never overruns it.
+    The status wells are the one thing derived rather than imported, because
+    they are geometry, not art: the bar is twice as wide, so a well is twice as
+    many pixels for the same 50 rounds and 100 health and the per-pixel divisor
+    halves.  Rounded up from the well's own width, so a full clip fills it
+    exactly and never overruns it.
     """
     g = GEOM
     ammo_cols = (d3.AMMO_BAR_COLS[0] * SCALE, d3.AMMO_BAR_COLS[1] * SCALE)
     health_cols = (d3.HEALTH_BAR_COLS[0] * SCALE, d3.HEALTH_BAR_COLS[1] * SCALE)
     art = Art(
-        title=list(title) if title is not None else upscale_rows(d3.TITLE_HEX_ROWS),
-        hud_bg=list(hud_bg) if hud_bg is not None else upscale_rows(d3.HUD_BG_ROWS),
-        gun_idle=list(gun_idle) if gun_idle is not None else upscale_runs(d3.GUN_IDLE),
-        gun_fire=list(gun_fire) if gun_fire is not None else upscale_runs(d3.GUN_FIRE),
-        faces=faces or {
-            "healthy": upscale_runs(d3.FACE_HEALTHY),
-            "hurt": upscale_runs(d3.FACE_HURT),
-            "bloody": upscale_runs(d3.FACE_BLOODY),
-            "grim": upscale_runs(d3.FACE_GRIM),
-        },
-        face_box=face_box or (d3.FACE_COL * SCALE, d3.FACE_ROW * SCALE,
-                              d3.FACE_W * SCALE, d3.FACE_H * SCALE),
+        title=list(title),
+        hud_bg=list(hud_bg),
+        gun_idle=list(gun_idle),
+        gun_fire=list(gun_fire),
+        faces=faces,
+        face_box=face_box,
         bar_rows=(d3.BAR_ROWS[0] * SCALE, d3.BAR_ROWS[1] * SCALE),
         ammo_cols=ammo_cols,
         health_cols=health_cols,
@@ -147,12 +131,13 @@ def hires_art(
     return art
 
 
-def install(art: Art | None = None) -> None:
-    """Register the hi-res art so ``deadman3d.art_for(GEOM128)`` resolves."""
-    d3.ART_REGISTRY["hires"] = art or hires_art()
+def install(art: Art) -> None:
+    """Register the hi-res art so ``deadman3d.art_for(GEOM128)`` resolves.
 
-
-install()
+    Nothing calls this at import: until an IWAD has been read there is no art,
+    and ``art_for`` raising is the correct answer rather than a doubled stand-in.
+    """
+    d3.ART_REGISTRY["hires"] = art
 
 
 # ── the demo, at 128x96 ──────────────────────────────────────────────────────
@@ -186,28 +171,100 @@ def hires_source() -> str:
     return d3.deadman3d_source(GEOM)
 
 
+def install_wad(wad: Path, *, brightness: float | None = None) -> dict:
+    """Install id's own E1M1 and art, both at 128x96.  Returns the art bundle.
+
+    The level goes onto :mod:`deadman3d`'s globals, exactly as its own
+    ``--wad`` mode does — ``map_cell``, ``preamble_words``, ``render`` and the
+    generator all read them at call time — but the *title* is handed to the
+    hi-res art bundle instead of the module's 64x48 table, so a 64x48 build in
+    the same process is left alone.
+
+    Nothing here is committable.  See the module docstring.
+    """
+    g = GEOM
+    level = wi.load_iwad(wad, "E1M1", grid=64, title_size=(g.width, g.height))
+    kw = {} if brightness is None else {"brightness": brightness}
+    art = wi.iwad_art(
+        wad,
+        hud_size=(g.width, g.hud_h), h3d=g.h3d,
+        gun=wi.HIRES_GUN, screen=(g.width, g.h3d),
+        # the CPU draws the pistol at this geometry (deadman3d._pistol_asm), so
+        # there is no sprite arm to spill and no descent window to fit
+        max_runs=None, max_body=64,
+        bands=wi.HIRES_BANDS, words_per_col=2,
+        **kw,
+    )
+    box = wi.face_box(g.width, g.hud_h, g.h3d)
+    d3.install_level(level.map_rows, level.spawn, level.heading, level.title_rows,
+                     level.nukage_rows or None, level.monsters or None, geom=g)
+    install(hires_art(title=level.title_rows, hud_bg=art["hud_bg"],
+                      gun_idle=art["gun_idle"], gun_fire=art["gun_fire"],
+                      faces=art["faces"], face_box=box))
+    return art
+
+
+def build_local(wad: Path, out_dir: Path | None = None,
+                cmds: Sequence[int] | None = None,
+                *, pngs: bool = True) -> dict:
+    """The whole local artifact set for the IWAD-only hi-res family.
+
+    Writes the assembly, the machine, its debug sidecars, the round-gated cases
+    file, the flat input stream and the composed 128x96 frames — all into
+    ``littleman/examples/local/``, which is gitignored because every one of them
+    carries IWAD data.
+
+    The tape size is a property of *this* level rather than a registry constant
+    (id's E1M1 and Freedoom's do not hold the same number of monsters), so it is
+    computed here and written into the registry for the build.
+    """
+    from randomfun2026solvers.lm1 import machine
+    from randomfun2026solvers.lm1.asm import assemble
+
+    out_dir = out_dir or LOCAL_DIR
+    cmds = list(d3.WALK[:16] if cmds is None else cmds)
+    install_wad(wad)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    src = hires_source()
+    (out_dir / "deadman-3d_hires.asm").write_text(src, encoding="utf-8")
+    prog = assemble(src, name="deadman-3d_hires")
+    machine.TAPE_SIZE["deadman-3d_hires"] = max(d3.tape_slots(GEOM).values()) + 1
+    m = machine.build_for("deadman-3d_hires", program=prog)
+    (out_dir / "deadman-3d_hires.man").write_text("\n".join(m.rows) + "\n", encoding="utf-8")
+    m.debug_map().write_html(m.rows, out_dir / "deadman-3d_hires.debug.html")
+    m.debug_map().write_json(out_dir / "deadman-3d_hires.debug.json")
+    (out_dir / "deadman-3d_hires.input.txt").write_text(
+        " ".join(str(w) for w in input_words(cmds)) + "\n", encoding="utf-8")
+    (out_dir / "deadman-3d_hires.cases.json").write_text(
+        json.dumps(cases_json(cmds)) + "\n", encoding="utf-8")
+    frames = [title_frame()] + frames_for_commands(cmds)
+    if pngs:
+        d3._write_pngs(frames, out_dir / "hires-frames", scale=6)
+    print(f"wrote {out_dir}/deadman-3d_hires.* ({m.width}x{m.height}, "
+          f"P={prog.P}, tape={machine.TAPE_SIZE['deadman-3d_hires']}) "
+          f"and {len(frames)} frames")
+    return {"machine": m, "program": prog, "frames": frames}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    ap.add_argument("--asm", type=Path)
-    ap.add_argument("--input", type=Path)
-    ap.add_argument("--cases", type=Path)
-    ap.add_argument("--pngs", type=Path, metavar="DIR")
-    ap.add_argument("--frames", type=int, default=6, help="how many walk frames")
+    ap.add_argument("--wad", type=Path, required=True,
+                    help="a locally owned IWAD — this family has no other source")
+    ap.add_argument("--build", action="store_true",
+                    help=f"write the whole artifact set into {LOCAL_DIR}")
+    ap.add_argument("--out", type=Path, help="override the output directory")
+    ap.add_argument("--frames", type=int, default=16, help="how many walk frames")
+    ap.add_argument("--no-pngs", action="store_true")
     args = ap.parse_args(argv)
 
     cmds = list(d3.WALK[: args.frames])
-    if args.asm:
-        args.asm.write_text(hires_source(), encoding="utf-8")
-    if args.input:
-        args.input.write_text(" ".join(str(w) for w in input_words(cmds)) + "\n",
-                              encoding="utf-8")
-    if args.cases:
-        args.cases.write_text(json.dumps(cases_json(cmds)) + "\n", encoding="utf-8")
-    if args.pngs:
-        d3._write_pngs([title_frame()] + frames_for_commands(cmds), args.pngs)
-    if not any((args.asm, args.input, args.cases, args.pngs)):
-        print(f"{GEOM.width}x{GEOM.height}, viewport {GEOM.h3d}, tiles {GEOM.tiles}")
-        print(f"title runs: {len(d3.title_words(GEOM))}, input: {len(input_words(cmds))}")
+    if args.build:
+        build_local(args.wad, args.out, cmds, pngs=not args.no_pngs)
+        return 0
+    install_wad(args.wad)
+    print(f"{GEOM.width}x{GEOM.height}, viewport {GEOM.h3d}, tiles {GEOM.tiles}")
+    print(f"title runs: {len(d3.title_words(GEOM))}, input: {len(input_words(cmds))}")
     return 0
 
 
