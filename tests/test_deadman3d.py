@@ -964,7 +964,10 @@ def test_the_machine_synthesizes_with_the_men_v3_store() -> None:
     # went stale on every layout retune without ever catching a bug. The
     # committed artifact pins the actual bytes.
     w, h = max(len(r) for r in m.rows), len(m.rows)
-    assert max(w, h) <= 400, (w, h)
+    # The ceiling tracks the machine down: 377 since the M7b fold re-sweep
+    # (ROM_ROWS 60 -> 61 crosses the ROM's width against the store stack's
+    # height), so 390 keeps ~3% of slack instead of 400's 6%.
+    assert max(w, h) <= 390, (w, h)
     assert max(w, h) - min(w, h) <= max(w, h) // 10, (w, h)
 
 
@@ -1096,6 +1099,20 @@ def test_taped_registry_pins() -> None:
     # tuning outcome that moves with every re-sweep.
     assert sum(machine.TAPED_BANKS["deadman-3d"]) >= machine.TAPE_SIZE["deadman-3d"] - 1
     assert machine.TAPED_SKIP_BATCH["deadman-3d"] == 2
+    # The bank COUNT is the block's width (48*banks + 32 at skip-batch 2,
+    # independent of the sizes), so it is a layout number, not just a tuning
+    # one — four banks is what puts the taped machine's width floor under the
+    # ROM's. Property, not the split.
+    assert len(machine.TAPED_BANKS["deadman-3d"]) == 4
+    # TIER_LAYOUT is opt-in per (slug, tier): only deadman-3d's taped variant
+    # deviates from the shared registry, so every other machine — and the
+    # canonical men-v3 build — stays byte-identical.
+    assert set(machine.TIER_LAYOUT) == {("deadman-3d", "taped")}
+    tier = machine.TIER_LAYOUT[("deadman-3d", "taped")]
+    assert set(tier) <= {"rom_rows", "mem_offset", "store_offset"}
+    # The taped store is a quarter of the men-v3 block's height, so its fold
+    # goes far deeper than the canonical machine's height budget allows.
+    assert tier["rom_rows"] > machine.ROM_ROWS["deadman-3d"]
     # No deadman-3d_taped.input.txt: same program, same protocol, same input —
     # the canonical deadman-3d.input.txt drives both machines.
     assert not (TAPED_MAN.parent / "deadman-3d_taped.input.txt").exists()
@@ -1127,7 +1144,10 @@ def test_the_taped_machine_census_dims_and_first_round_gate() -> None:
     src = "\n".join(m.rows)
     # Properties, not frozen numbers: the box stays in the canonical size
     # class, and the census stays "a couple dozen men", not the store's ~700.
-    assert max(max(len(r) for r in m.rows), len(m.rows)) <= 400
+    # The taped block is 224 columns against men-v3's 288 and 59 rows against
+    # 204, so with its own TIER_LAYOUT fold the variant is now the *smaller*
+    # of the two machines — 279x258 at the M7b sweep — hence its own ceiling.
+    assert max(max(len(r) for r in m.rows), len(m.rows)) <= 300
     assert src.count("@") <= 30  # no births: static men ARE the census
     from randomfun2026solvers.fast_littleman import FastLittleman
 

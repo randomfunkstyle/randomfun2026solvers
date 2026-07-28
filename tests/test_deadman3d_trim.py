@@ -28,5 +28,5 @@ def test_trim_artifact_matches_the_builder() -> None:
     # The artifact equality above already pins every byte; assert only the
     # doctrine — near-square, size class bounded — so layout retunes don't
     # break a test that caught nothing.
-    assert max(m.width, m.height) <= 400
+    assert max(m.width, m.height) <= 390
     assert max(m.width, m.height) - min(m.width, m.height) <= max(m.width, m.height) // 10
