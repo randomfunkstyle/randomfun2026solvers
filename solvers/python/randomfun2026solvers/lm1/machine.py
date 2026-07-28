@@ -5283,7 +5283,8 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: shipped 27). Absent means "keep the shipped row", which is what holds
 #: ``deadman-3d``, ``deadman-3d_trim`` and ``deadman-3d_hires`` byte-identical.
 #:
-#: **The unit's height is the machine's floor, and eight rows of it were empty.**
+#: **The unit's height is the machine's floor, and seventeen rows of it were
+#: doing nothing.**
 #: The DOOM block hangs below everything (``rom`` rows 0..93, CPU/tape 94..168,
 #: the block 170..270), so the machine's last row *is* the block's, and the
 #: block's height is ``R_ADDR + PANEL_H + 6`` — the panel hangs two rows below
@@ -5297,27 +5298,30 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: whole lower half translates as one piece, every ``_send_band`` decision (a
 #: comparison of row *differences*) is invariant, and all four pipe lengths —
 #: which depend on ``ADDR-DATA`` and ``ADDR-SWAP``, not on ADDR — are unchanged.
-#: Rows 19..26 of the shipped map hold no cell at all. The floor is 19 and
-#: **RUN's arm sets it, not COL's** — COL has the longer unpack but its corridor
-#: cell sits in the *climb* column one east, so its leaf column may carry
-#: machinery on the corridor row; RUN's ``>`` is in its own leaf column directly
-#: under ``/bW``. Swept: 18 and below collide on RUN's ``W`` at column 123.
+#: Rows 19..26 of the shipped map hold no cell at all, and rows 10..18 come free
+#: once RUN's ``>`` steps into a climb column of its own — COL already does this,
+#: which is why COL's leaf column may carry machinery on the corridor row and
+#: RUN's could not. Below 10 the limit stops being a collision and becomes rule 1:
+#: COL's seed push sits at a fixed row 20, *above* the corridor, and must stay
+#: nearer the ring band (``loop+3``) than ADDR (``loop+19``); their midpoint is
+#: ``loop+11``. 9 is the reading-order tie the builder refuses, 8 and below would
+#: send the wall seed to the panel.
 #:
-#: Measured. Block 235x101 -> 235x93 at ``loop_row`` 19; pipe lengths (addr 15,
+#: Measured. Block 235x101 -> 235x84 at ``loop_row`` 10; pipe lengths (addr 15,
 #: data 15, swap 35) and binding margins (min 2) are identical at every value in
-#: 19..27, and the standalone probe — every arm, a negative-seed COL, both
+#: 10..27, and the standalone probe — every arm, a negative-seed COL, both
 #: sprites, the banding masks — passes pixel-for-pixel on the native engine at
-#: all nine, in 44,735 steps at 19 against 45,447 at 27 (the arms' descents to
-#: the corridor are shorter, so the lift is very slightly *cheaper* too).
+#: all eighteen, in 44,054 steps at 10 against 45,447 at 27 (the arms' descents
+#: to the corridor are shorter, so the lift is very slightly *cheaper* too).
 #:
-#: The taped machine then goes **287x271 -> 287x263** on the 116-round tour,
-#: 839,384,674 -> 839,202,914 ticks (-0.02%, i.e. flat). The width is
-#: the taped store's floor (see :data:`SEEK_TIER_LAYOUT`) and the unit never
-#: reached it — the block's east edge is column 235 — so this is height and only
-#: height. It is banked height as well: ``rom_rows`` 81 is the shallowest fold
-#: that reaches the 287 floor, and the eight rows come off the total that fold
-#: has to fit under.
-DOOM_LOOP_ROW: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 19}
+#: The taped machine then goes **287x271 -> 287x254**, 839,384,674 ->
+#: 839,158,874 ticks on the 116-round tour (-0.03%, i.e. flat). The width is the
+#: taped store's floor (see :data:`SEEK_TIER_LAYOUT`) and the unit never reached
+#: it — the block's east edge is column 235 — so this is height and only height.
+#: It is banked height as well: ``rom_rows`` 81 is the shallowest fold that
+#: reaches the 287 floor, and the seventeen rows come off the total that fold has
+#: to fit under.
+DOOM_LOOP_ROW: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 10}
 
 #: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
 #: different from :data:`TAPED_BANKS`' address order. The value is a permutation

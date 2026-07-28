@@ -1052,7 +1052,11 @@ def test_doom_loop_row_lifts_the_block_and_nothing_else() -> None:
     from randomfun2026solvers.lm1 import d3_unit
 
     base = d3_unit.build_doom()
-    assert d3_unit.MIN_LOOP_ROW == 19, "the swept floor: RUN's `>` sits under its /bW"
+    # The floor is a binding limit, not a collision one: COL's seed push stays at
+    # row 20 while the corridor rises, and it must stay nearer ring than ADDR.
+    assert d3_unit.SEED_PUSH_ROW == 20
+    assert d3_unit.MIN_LOOP_ROW == 10
+    assert d3_unit.SEED_PUSH_ROW < d3_unit.MIN_LOOP_ROW + 11
     heights = {}
     for lr in range(d3_unit.MIN_LOOP_ROW, d3_unit.R_LOOP + 1):
         blk = d3_unit.build_doom(loop_row=lr)
@@ -1065,16 +1069,17 @@ def test_doom_loop_row_lifts_the_block_and_nothing_else() -> None:
     # One row of corridor is exactly one row of block, all the way down.
     assert heights == {lr: base.height - (d3_unit.R_LOOP - lr) for lr in heights}
     assert heights[d3_unit.R_LOOP] == base.height
-    assert heights[d3_unit.MIN_LOOP_ROW] == base.height - 8
+    assert heights[d3_unit.MIN_LOOP_ROW] == base.height - 17
 
-    # Below the floor the builder refuses rather than silently overwriting RUN.
-    with pytest.raises(d3_unit.DoomUnitError, match="MIN_LOOP_ROW|loop_row"):
+    # Below the floor the builder refuses rather than letting the seed push bind
+    # to ADDR, which would send the wall seed to the panel instead of the ring.
+    with pytest.raises(d3_unit.DoomUnitError, match="seed push"):
         d3_unit.build_doom(loop_row=d3_unit.MIN_LOOP_ROW - 1)
 
 
 def test_doom_loop_row_is_opt_in_per_tier() -> None:
     """Only the taped tier lifts the corridor; the canonical build must not."""
-    assert machine.DOOM_LOOP_ROW == {("deadman-3d", "taped"): 19}
+    assert machine.DOOM_LOOP_ROW == {("deadman-3d", "taped"): 10}
 
 
 @slow

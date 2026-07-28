@@ -474,38 +474,62 @@ glyphs lands. So the whole lower half translates as one rigid piece, every
 four pipe lengths — which depend on `ADDR-DATA` and `ADDR-SWAP`, not on ADDR —
 are unchanged.
 
-Rows 19..26 of the shipped map hold no cell at all. The floor is 19, and **RUN's
-arm sets it, not COL's**: COL has the longer unpack but its corridor cell sits in
-the *climb* column one east, so its leaf column may carry machinery on the
-corridor row; RUN's `>` is in its own leaf column directly under `/bW`. 18 and
-below collide on RUN's `W` at column 123.
+Rows 19..26 of the shipped map hold no cell at all, so 19 is free immediately.
+Below that the floor moved twice:
+
+**19 was RUN's arm.** COL has the longer unpack but its corridor cell sits in the
+*climb* column one east, so its leaf column may carry machinery on the corridor
+row; RUN's `>` was in its own leaf column directly under `/bW`, and 18 collided
+on that `W`. Giving RUN the same climb — one turn east, one column up, and its
+counted loop shifts one column into the 16 spare it already had — costs three
+cells and unlocks nine more rows.
+
+**10 is rule 1, and it is a real floor.** Nothing collides below 10; what fails
+is binding. COL's seed push sits at a *fixed* row 20 — it is above the corridor,
+anchored to `R_ARG` — while the bands rise with the corridor beneath it, so the
+two are driven together. The push must stay nearer the ring band (`loop+3`) than
+ADDR (`loop+19`), whose midpoint is `loop+11`, giving `20 < loop+11`. Swept: 10
+builds with margin 2, 9 is the reading-order tie `_check_unit` refuses, and 8 and
+below bind the seed push to ADDR outright — the wall seed would go to the panel.
 
 | loop_row | block | probe steps | probe |
 |---|---|---|---|
+| 9 | — | — | refused (margin 0 at (143,20)) |
+| 10 | 235x84 | 44,054 | PASS |
+| 14 | 235x88 | 44,362 | PASS |
 | 19 | 235x93 | 44,735 | PASS |
-| 21 | 235x95 | 44,913 | PASS |
 | 24 | 235x98 | 45,180 | PASS |
 | 27 (shipped) | 235x101 | 45,447 | PASS |
 
 Pipe lengths (addr 15, data 15, swap 35) and binding margins (min 2) are
-identical at every value in 19..27. The probe mix is every arm, a negative-seed
+identical at every value in 10..27. The probe mix is every arm, a negative-seed
 COL, both sprites and the banding masks, judged against `store.DoomUnit`'s own
 frames on the native engine. The lift is very slightly *cheaper* as well — the
 arms' descents to the corridor are shorter.
 
-The fold was re-checked and does not move: 79 -> 292x260, 80 -> 289x261,
-**81 -> 287x263**, 84 -> 287x266. 81 is still the shallowest fold that reaches
-the 287 width floor, now at eight fewer rows.
+The fold was re-checked and does not move: 78 -> 299x249, 79 -> 292x251,
+80 -> 289x252, **81 -> 287x254**, 84 -> 287x257, 88 -> 287x261. 81 is still the
+shallowest fold that reaches the 287 width floor, now at seventeen fewer rows.
 
 ## Combined (M10)
 
 | | before | after |
 |---|---|---|
-| DOOM block | 235x101 | **235x93** |
-| taped box | 287x271 | **287x263** |
-| taped, 116-round tour | 839,384,674 | **839,202,914** (-0.02%) |
+| DOOM block | 235x101 | **235x84** |
+| taped box | 287x271 | **287x254** |
+| taped, 116-round tour | 839,384,674 | **839,158,874** (-0.03%) |
 | `deadman-3d` / `_trim` | `f62d63fd…` | `f62d63fd…` (unmoved) |
 | `deadman-3d_hires` wall | 572x228 | 572x228 (unmoved) |
+
+### What is left
+
+The unit's own interior bottom (`R_COLLECT` = `loop+55` = 65) is now 20 rows
+clear of the panel's under-run, so it still is not binding — the next row would
+still come off ADDR. Getting one needs the `ADDR-RET` gap of 19 to shrink, and
+that gap is `BAND_BODY`'s own 18 ops of unpack before it can send ADDR. It has
+exactly two blank cells (indices 17 and 21); removing the first moves the
+mask-pop `r` one row closer to `ring_ret` and one further from `ring2_ret`, which
+is a 21-vs-21 tie. So the next row costs a re-tune of the band body, for one row.
 
 Opt-in via `machine.DOOM_LOOP_ROW`; absent means the shipped row 27, which is
 what holds the canonical and hi-res families byte-identical. `deadman-3d_hires`

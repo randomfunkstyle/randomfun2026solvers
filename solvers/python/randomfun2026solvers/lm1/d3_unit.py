@@ -84,10 +84,13 @@ east-wall term moves with the glyph. All four pipe lengths depend on
 That matters because the block is the machine's floor. It hangs below
 everything, and its height is ``R_ADDR + PANEL_H + 6`` — the panel two rows
 below ADDR's band row, the SWAP under-run three below the panel. The interior's
-own bottom (``R_COLLECT``) is sixteen rows clear of that, so ADDR alone sets
-the height, and lifting the corridor lifts ADDR one for one. The shipped
-``R_LOOP`` of 27 leaves rows 19..26 wholly empty; :data:`MIN_LOOP_ROW` is the
-floor. ``machine.DOOM_LOOP_ROW`` is where a tier opts in.
+own bottom (``R_COLLECT``) sits sixteen rows clear of that and rises with the
+corridor too, so it never becomes the floor: ADDR alone sets the height, and
+lifting the corridor lifts ADDR one for one. The shipped
+``R_LOOP`` of 27 leaves rows 19..26 wholly empty, and below that the arms' own
+pre-loop machinery gives way: RUN's ``>`` steps into a climb column like COL's,
+and the corridor runs down to :data:`MIN_LOOP_ROW`, seventeen rows in all.
+``machine.DOOM_LOOP_ROW`` is where a tier opts in.
 
 The sprite arms and the backtick discipline
 -------------------------------------------
@@ -127,6 +130,7 @@ __all__ = [
     "PANEL_W",
     "ROWS",
     "Rows",
+    "SEED_PUSH_ROW",
     "UNIT_IH",
     "UNIT_IW",
     "Unit",
@@ -159,9 +163,9 @@ R_LOOP = 27  # the corridor row every counted loop is entered on, heading east
 #: *differences*) is invariant under that translation.
 #:
 #: Which is what makes ``loop_row`` a free parameter. Rows 19..26 are wholly
-#: empty in the shipped map, and dropping the corridor onto row 19 lifts the
-#: panel — and with it the machine's bottom — by eight rows. See
-#: :data:`MIN_LOOP_ROW` for the floor and why RUN's arm, not COL's, sets it.
+#: empty in the shipped map, and the corridor goes all the way down to
+#: :data:`MIN_LOOP_ROW` — 17 rows — lifting the panel, and with it the machine's
+#: bottom, one row for one.
 BELOW_LOOP: dict[str, int] = {
     "ret": 1,  # east wall, in: value ring 1's return (the loop body's first op)
     "ring": 3,  # east wall, out: into value ring 1
@@ -408,14 +412,23 @@ class Unit:
 _S_BANDS = ("ring", "addr", "data", "ring2", "swap")
 
 
-#: The highest the loop corridor can be pulled, and **RUN's arm is what sets it**
-#: — not COL's, which is the longer of the two unpacks. COL's ends with the seed
-#: push at ``R_ARG + 15`` but its corridor cell sits in the *climb* column one
-#: east, so its own leaf column is free to hold machinery on the corridor row.
-#: RUN's ``>`` is in its leaf column, right under ``/bW`` at ``R_ARG + 11..13``,
-#: so the corridor has to clear row ``R_ARG + 13``. Swept: 18 and below collide
-#: on RUN's ``W``/``b`` at column 123, 19 builds.
-MIN_LOOP_ROW = R_ARG + 14  # 19
+#: The row COL's unpack parks the wall seed in ring 1 on. It is **above** the
+#: corridor and stays put while the corridor moves, which is what makes it the
+#: floor: the arms' pre-loop machinery is anchored to ``R_ARG`` at the top of the
+#: unit, the bands are anchored to the corridor below it, and lifting the
+#: corridor drives the two together.
+SEED_PUSH_ROW = R_ARG + 15  # 20
+
+#: The highest the loop corridor can be pulled, and it is a **binding** limit
+#: rather than a collision one. Once RUN's ``>`` steps into a climb column of its
+#: own (see :func:`unit_interior`), nothing collides until row 5; what fails
+#: first is rule 1. COL's seed push at :data:`SEED_PUSH_ROW` must stay strictly
+#: nearer the ring band (``loop + 3``) than ADDR (``loop + 19``), and their
+#: midpoint is ``loop + 11``, so the corridor has to satisfy
+#: ``SEED_PUSH_ROW < loop + 11``. Swept and confirmed: 10 builds with margin 2,
+#: 9 is the reading-order tie ``_check_unit`` refuses, 8 and below bind the seed
+#: push to ADDR outright — which would send the wall seed to the panel.
+MIN_LOOP_ROW = SEED_PUSH_ROW - (BELOW_LOOP["ring"] + BELOW_LOOP["addr"]) // 2 + 1  # 10
 
 
 def unit_interior(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> Unit:
@@ -429,7 +442,8 @@ def unit_interior(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> Unit:
     it the whole lower half of the unit (:data:`BELOW_LOOP`). The shipped 27
     leaves rows 19..26 wholly empty; :data:`MIN_LOOP_ROW` is the floor. Pulling
     it up lifts the panel — and the machine's bottom — one row per row, so this
-    is the block's whole height lever.
+    is the block's whole height lever. Only rows move: no leaf, and therefore no
+    command code, depends on it.
     """
     if not 10 <= floor_row <= 99:
         raise DoomUnitError(
@@ -438,9 +452,9 @@ def unit_interior(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> Unit:
         )
     if loop_row < MIN_LOOP_ROW:
         raise DoomUnitError(
-            f"loop_row {loop_row} is above MIN_LOOP_ROW {MIN_LOOP_ROW}: the corridor "
-            "would run through RUN's own unpack, whose `/bW` ends at R_ARG+13 in the "
-            "same column its `>` needs"
+            f"loop_row {loop_row} is above MIN_LOOP_ROW {MIN_LOOP_ROW}: COL's seed "
+            f"push at row {SEED_PUSH_ROW} would be nearer ADDR ({loop_row + 19}) than "
+            f"the ring ({loop_row + 3}) and the wall seed would go to the panel"
         )
     rows = Rows.of(loop_row)
     c = Circuit(UNIT_IW + 2, rows.collect + 2)
@@ -502,11 +516,23 @@ def unit_interior(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> Unit:
     c.run(x, R_ARG + 5, "8M8+M", d=S)  # B = 16
     pipe(x, R_ARG + 10, "r", "ring_ret")  # A = arg, B = 16
     c.run(x, R_ARG + 11, "/bW", d=S)  # A -> count -> BP; A = colour
-    c.vertical(x, R_ARG + 13, rows.loop)
-    c.set(x, rows.loop, ">")
-    c.counted_loop(x + 1, rows.loop, RUN_BODY)
-    body_glyphs(x + 1, rows.loop, RUN_BODY)
-    rx = x + 3  # counted_loop's exit cell, heading east
+    # The corridor is normally below the unpack, so the arm just walks down onto
+    # it. When it has been lifted *past* the unpack, RUN borrows COL's trick: turn
+    # east one column and climb, which is why COL's own leaf column is free to
+    # carry machinery on the corridor row and RUN's is not.
+    if rows.loop > R_ARG + 13:
+        c.vertical(x, R_ARG + 13, rows.loop)
+        c.set(x, rows.loop, ">")
+        lx = x + 1
+    else:
+        c.set(x, R_ARG + 14, ">")
+        c.set(x + 1, R_ARG + 14, "^")
+        c.vertical(x + 1, R_ARG + 14, rows.loop)
+        c.set(x + 1, rows.loop, ">")
+        lx = x + 2
+    c.counted_loop(lx, rows.loop, RUN_BODY)
+    body_glyphs(lx, rows.loop, RUN_BODY)
+    rx = lx + 2  # counted_loop's exit cell, heading east
     c.set(rx, rows.loop, "v")
     c.vertical(rx, rows.loop, rows.collect)
 
