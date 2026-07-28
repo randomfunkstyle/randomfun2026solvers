@@ -17,6 +17,7 @@ ncmd = sys.argv[2]
 buf = sys.argv[3]
 ops = sys.argv[4] if len(sys.argv) > 4 else "-"
 pad = sys.argv[5] if len(sys.argv) > 5 else "-"
+seek = sys.argv[6] if len(sys.argv) > 6 else "-"
 
 if buf != "-":
     M.ROM_BUFFER["deadman-3d"] = int(buf)
@@ -26,10 +27,10 @@ if pad != "-":
     M.SEEK_MEM_PAD["deadman-3d"] = None if pad == "search" else int(pad)
 
 t0 = time.time()
-m = M.build_for("deadman-3d", store=tier)
+m = M.build_for("deadman-3d", store=tier, **({} if seek == "-" else {"seek": seek == "1"}))
 src = "\n".join(m.rows)
 w, h = max(len(r) for r in m.rows), len(m.rows)
-print(f"tier={tier} buf={buf} ops={ops} pad={M.SEEK_MEM_PAD['deadman-3d']}")
+print(f"tier={tier} buf={buf} ops={ops} pad={M.SEEK_MEM_PAD['deadman-3d']} seek={seek}")
 print(f"  dims {w}x{h}  max={max(w, h)}  area={w * h:,}  build {time.time() - t0:.1f}s", flush=True)
 
 walk = d3.WALK if ncmd == "full" else d3.WALK[: int(ncmd)]

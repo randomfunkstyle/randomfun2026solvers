@@ -87,12 +87,19 @@ def report(rows, label):
           f"{lw:,} words = {100*lw/max(tot_w,1):.1f}% of the bill")
     for mn, (c, w) in sorted(by.items(), key=lambda kv: -kv[1][1]):
         print(f"    {mn:6s} {c:6,} jumps {w:9,} words  {100*w/max(lw,1):.1f}% of long")
-    # threshold sweep, in fixed-image units
-    print("  threshold sweep (fixed-image units), JMPF only:")
-    for thr in (64, 128, 192, 256, 384, 512, 768, 1024, 2048):
-        sel = [r for r in rows if r[3] >= thr and r[1] == "JMPF"]
-        w = sum(r[2] for r in sel)
-        print(f"    thr {thr:5d}: {len(sel):6,} jumps  {w:9,} words  {100*w/max(tot_w,1):5.1f}%")
+    # Threshold sweep in fixed-image units, per candidate SEEK_OPS set. The
+    # threshold is a plateau for JMPF alone; the question BRZ raises is whether
+    # its handful of jumps have a different enough length distribution to move
+    # the corner, so both sets are swept side by side.
+    for opset in (("JMPF",), ("JMPF", "BRZ")):
+        print(f"  threshold sweep (fixed-image units), {'+'.join(opset)}:")
+        for thr in (64, 128, 192, 256, 384, 512, 768, 1024, 2048):
+            sel = [r for r in rows if r[3] >= thr and r[1] in opset]
+            w = sum(r[2] for r in sel)
+            print(
+                f"    thr {thr:5d}: {len(sel):6,} jumps  {w:9,} words  "
+                f"{100*w/max(tot_w,1):5.1f}%"
+            )
 
 
 boot = [r for r in records if r[0] == 0]
