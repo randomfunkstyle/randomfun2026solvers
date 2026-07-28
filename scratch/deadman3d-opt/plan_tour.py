@@ -4,8 +4,8 @@ Navigates on the open-cell grid (a move is 2 cells along the heading, so both
 the half-way and destination cells must be open), turns 22.5 degrees a frame,
 and fires only when a monster is actually painted at the crosshair column.
 """
+import heapq
 import sys
-from collections import deque
 
 sys.path.insert(0, "solvers/python")
 from randomfun2026solvers import deadman3d as d3  # noqa: E402
@@ -27,21 +27,31 @@ def neighbours(cell):
 
 
 def bfs(start, goal_pred):
-    prev = {start: None}
-    q = deque([start])
-    while q:
-        cell = q.popleft()
+    """Cheapest route to the first cell satisfying goal_pred.
+
+    Uniform-cost, not breadth-first: a nukage cell costs 30 steps to enter, so
+    the patrol only wades into slime when the slime IS the goal. Plain BFS
+    routed the hunts straight through the moat and drained the bar to zero
+    before the second monster.
+    """
+    seen = {}
+    heap = [(0, start, None)]
+    while heap:
+        cost, cell, via = heapq.heappop(heap)
+        if cell in seen:
+            continue
+        seen[cell] = via
         if goal_pred(cell):
             path = []
-            while prev[cell] is not None:
-                h, parent = prev[cell]
+            while seen[cell] is not None:
+                h, parent = seen[cell]
                 path.append((h, cell))
                 cell = parent
             return path[::-1]
         for h, nxt in neighbours(cell):
-            if nxt not in prev:
-                prev[nxt] = (h, cell)
-                q.append(nxt)
+            if nxt not in seen:
+                step = 1 + 30 * d3.nukage_cell(*nxt)
+                heapq.heappush(heap, (cost + step, nxt, (h, cell)))
     return None
 
 
@@ -82,6 +92,10 @@ def aim_heading(state, target):
     return int(round(ang / 22.5)) % 16
 
 
+SOAK_AT = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+SOAK_BEATS = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+
+
 def main():
     state = d3.SPAWN
     chords: list[str] = []
@@ -96,10 +110,28 @@ def main():
 
     # A tour of the level: five monster hunts, chosen nearest-first from the
     # start hall so the route reads as one continuous patrol.
+    def soak(beats):
+        """Wade into the nearest slime and stand in it: -5 HP a frame, the bar
+        drains, the face drops through its health bands."""
+        path = bfs(cell(), lambda c: d3.nukage_cell(*c) == 1)
+        if path is None:
+            return False
+        for h, _dst in path:
+            for t in turn_chords(state.heading, h)[0]:
+                emit(t)
+            emit("w")
+        for _ in range(beats):
+            emit(".")
+        return True
+
     alive = [m for m in d3.MONSTERS]
     hunted = []
     log = []
-    for _ in range(6):
+    for hunt in range(6):
+        # Two visits to the nukage, so the walk shows healthy -> hurt ->
+        # bloodied rather than a full bar for 105 frames.
+        if hunt == SOAK_AT:
+            log.append(("soak", cell(), soak(SOAK_BEATS)))
         here = cell()
         # Nearest remaining monster by grid distance.
         alive.sort(key=lambda m: abs(m[0] - here[0]) + abs(m[1] - here[1]))
@@ -159,7 +191,21 @@ def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/tour.input.txt"
     open(path, "w").write(out + "\n")
     print("words written:", len(out.split()), "->", path)
-    print("chords:", "".join("," if c == "." else c for c in chords))
+    spelled = "".join("," if c == "." else c for c in chords)
+    print("chords:", spelled)
+    open(path.replace(".input.txt", ".chords.txt"), "w").write(spelled + "\n")
+
+    # What the HUD actually does over the route.
+    st, health, bands = d3.SPAWN, 100, []
+    for ch in chords:
+        st = d3.step(st, d3.keys(ch))
+        if d3.nukage_cell(d3.div(st.posX, 1024), d3.div(st.posY, 1024)):
+            health = max(0, health - 5)
+        bands.append("healthy" if health > 66 else
+                     "hurt" if health > 33 else "bloodied")
+    print("nukage frames:", sum(1 for i in range(1, len(bands)) if True) and None or 0)
+    print(f"health 100 -> {health}; face band changes:",
+          [(i, bands[i]) for i in range(1, len(bands)) if bands[i] != bands[i - 1]])
 
 
 main()
