@@ -1167,6 +1167,47 @@ def test_taped_registry_pins() -> None:
     assert not (TAPED_MAN.parent / "deadman-3d_taped.input.txt").exists()
 
 
+def test_store_answer_west_is_opt_in_per_tier() -> None:
+    """The taped STORE hands its own answer to the CPU; no other tier opts in.
+
+    ``@>Rv`` is the forward-only ``R``/``s`` loop — a room that computes nothing
+    and exists only to move a value across itself without paying a pipe's
+    distance term. The taped response used to cross **three** of them: the
+    store's own four-bank collector, then two relay rooms this generator added
+    to carry that collector's answer to the CPU. Widening the collector itself
+    deletes both relays, so the whole machine now holds exactly one.
+    """
+    assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
+    taped = machine.build_for("deadman-3d", store="taped")
+    assert sum(r.count("@>Rv") for r in taped.rows) == 1
+    assert not [r for r in taped.debug_map().regions if r.name.startswith("teleport:")]
+
+    # men-v3 keeps its pair, and not for want of trying: its collector sits at
+    # the block's floor ~190 rows below the response row, so widening it west
+    # shortens nothing — the answer still has to climb, then cross. Deleting
+    # the pair there costs +68% on the tour, against -0.5% saved here.
+    assert machine.STORE_TIER["deadman-3d"] == "men-v3"
+    assert ("deadman-3d", "men-v3") not in machine.STORE_ANSWER_WEST
+    canonical = machine.build_for("deadman-3d")
+    assert {
+        r.name for r in canonical.debug_map().regions if r.name.startswith("teleport:")
+    } == {"teleport:L", "teleport:U"}
+
+
+def test_the_widened_collector_is_off_by_default() -> None:
+    """``answer_west`` is a block parameter, so every other caller must be able
+    to ignore it and get the byte-identical block it always got."""
+    from randomfun2026solvers.memory_taped import taped_store_block
+
+    assert taped_store_block(64, 2).cells == taped_store_block(64, 2, answer_west=None).cells
+    wide = taped_store_block(64, 2, answer_west=1)
+    assert wide.cells != taped_store_block(64, 2).cells
+    # ... and the widened block still answers from one cell, further west and
+    # below its collector rather than above it.
+    assert wide.out_cell[0] < taped_store_block(64, 2).out_cell[0]
+    assert wide.out_cell[1] > taped_store_block(64, 2).out_cell[1]
+
+
 @slow
 def test_checked_in_taped_man_matches_the_machine_builder() -> None:
     rows = TAPED_MAN.read_text().rstrip("\n").split("\n")

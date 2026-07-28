@@ -2535,6 +2535,7 @@ def build(
     store_offset: tuple[int, int] = (0, 0),
     in_north: bool = False,
     store_teleport: bool = False,
+    store_answer_west: bool = False,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
@@ -2720,6 +2721,7 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_answer_west=store_answer_west,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
@@ -2773,6 +2775,7 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_answer_west=store_answer_west,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
@@ -2848,6 +2851,7 @@ def _assemble(
     tape_relay_size: tuple[int, int] | None = None,
     in_north: bool = False,
     store_teleport: bool = False,
+    store_answer_west: bool = False,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
@@ -3103,6 +3107,10 @@ def _assemble(
         elif store == "taped":
             from ..memory_taped import taped_store_block
 
+            # The block's own placement does not depend on the block, so its
+            # origin is known before it is built — which is what lets the answer
+            # collector be widened to a column named in *machine* coordinates.
+            tx_pre = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
             tape = taped_store_block(
                 tape_n,
                 TAPED_BANKS.get(program.name, 4),
@@ -3111,6 +3119,10 @@ def _assemble(
                     if tape_skip_batch != 1
                     else TAPED_SKIP_BATCH.get(program.name, 1)
                 ),
+                # Land the collector's west wall on ``CX + W + 3``: the column
+                # the deleted teleport U used to occupy, one clear of the
+                # response pipe's own attachment cell.
+                answer_west=(CX + W + 4 - tx_pre) if store_answer_west else None,
             )
         elif store == "tape":
             tape = tape_block(
@@ -3186,7 +3198,24 @@ def _assemble(
         # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
         tele_regions: dict[str, tuple[int, int, int, int]] = {}
         tele_pipes = 0
-        if store_teleport:
+        if store_answer_west:
+            # No forwarding rooms at all: the STORE's own answer collector was
+            # widened until its west end reached the CPU, so the response is one
+            # stub pipe again — the thing L and U were invented to replace.
+            #
+            # The collector is a teleport already (it merges four banks with
+            # ``R``, which has no distance term), and widening a teleport is
+            # free: the value still crosses it in one instruction. So the two
+            # rooms this generator used to add were not buying a teleport, they
+            # were *relaying between* teleports — three hops where the store
+            # could simply have handed the value over itself. It leaves on
+            # ``resp_row``'s own attachment cell, so every memory ``r``'s
+            # binding is untouched.
+            n1 = g.draw_pipe(
+                [(tout_x, tout_y + 1), (tout_x, resp_row), (CX + W + 2, resp_row)]
+            )
+            route_lengths["store->cpu"] = n1
+        elif store_teleport:
             # The response comes home through two teleports instead of a long
             # pipe. ``R`` receives from any incoming pipe with **no distance
             # term** (SPEC.md), so a wide room is a horizontal teleport and a
@@ -4826,6 +4855,36 @@ TOP_RETURN_BUS: set[str] = set()
 #: so every other machine's checked-in grid stays byte-identical.
 STORE_TELEPORT: set[str] = {"deadman-3d"}
 
+#: ``(slug, tier)`` pairs whose STORE **widens its own answer collector** to the
+#: CPU's east wall instead of being relayed there by :data:`STORE_TELEPORT`'s two
+#: rooms. Wins the same argument the two rooms did, one hop earlier.
+#:
+#: The taped store already ends in a teleport — one 151-column room merging four
+#: banks with ``R``, which has no distance term. This generator then built two
+#: more rooms to carry that room's answer to the CPU, so a read crossed **three**
+#: forwarders and ten pipe cells to get home. But widening a teleport is free:
+#: pulling the collector's own west wall out to ``CX + W + 3`` (the block's west
+#: end is empty for these rows) puts the answer beside the CPU with no extra
+#: room at all, and a six-cell stub finishes it. One forwarder, seven cells.
+#:
+#: Measured on the checked-in 115-frame tour, taped tier:
+#:
+#: * three rooms / 10 cells (shipped): 1,113,752,187
+#: * two rooms   / 10 cells:           1,112,107,549  (-0.15%)
+#: * **one room / 7 cells (this)**:    see the commit message
+#: * zero rooms  / 57 cells:           1,159,488,639  (+4.1%)
+#:
+#: The last line is why the rooms were not simply deleted: ``R``'s missing
+#: distance term is worth ~1M ticks a pipe cell here. The win is not fewer
+#: teleports, it is not *relaying between* teleports.
+#:
+#: men-v3 must stay off, and not for want of trying: its collector is at the
+#: block's floor, ~190 rows below ``resp_row``, so widening it west does not
+#: shorten anything — the answer still has to climb. Keyed by tier for that
+#: reason; absent pairs keep the two-room build byte-identical.
+STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
 #: ``deadman-3d``'s 330-slot store is far past the rotating tape's ~103-slot
 #: practical cap (and a ring that size would cost ~1,100 ticks a read anyway),
@@ -5006,7 +5065,8 @@ def build_for(
         mem_offset=tier.get("mem_offset", mem_offset),
         store_offset=tier.get("store_offset", store_offset),
         in_north=slug in INPUT_NORTH,
-        store_teleport=slug in STORE_TELEPORT,
+        store_teleport=slug in STORE_TELEPORT and (slug, store) not in STORE_ANSWER_WEST,
+        store_answer_west=(slug, store) in STORE_ANSWER_WEST,
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,

@@ -568,30 +568,6 @@
       "tags": [
         "tape"
       ]
-    },
-    {
-      "name": "teleport:L",
-      "x": 79,
-      "y": 92,
-      "w": 38,
-      "h": 4,
-      "note": "",
-      "color": "#64748b",
-      "tags": [
-        "teleport"
-      ]
-    },
-    {
-      "name": "teleport:U",
-      "x": 71,
-      "y": 92,
-      "w": 6,
-      "h": 18,
-      "note": "",
-      "color": "#64748b",
-      "tags": [
-        "teleport"
-      ]
     }
   ],
   "circles": [],
