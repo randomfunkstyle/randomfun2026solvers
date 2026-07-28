@@ -5248,7 +5248,15 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: | whole drum, cells/word | 4.626 | **4.075** |
 #: | drum data columns | 267 | **236** |
 #:
-#: See :data:`SEEK_DRUM` for what those cells are worth in ticks.
+#: **What those cells are worth in ticks is almost nothing, and that is the
+#: finding.** The 13% shorter lap moves the 115-frame tour 839,384,674 ->
+#: 838,737,298, **-0.077%**; a `+1 blank cell per token` control prices the whole
+#: drum at ~0.6% of tour ticks. The taped width floors at 287 on the *store*
+#: (``TX 61 + 224 + the east return pipe``), so the drum's 284 was one column
+#: under the floor and its 252 is 35 under: what this bought is a **32-column
+#: reserve** for whoever narrows the store, not the tick. Full profile, and the
+#: three levers costed and rejected beside it, in ``ROM-RECIRCULATION.md``
+#: §"The drum's *contents*".
 OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
     ("deadman-3d", "taped"): {
         "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5,
