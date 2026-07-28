@@ -800,6 +800,15 @@ def seek_words(program: Program, p: _Plan, *, rows: int):
 _STRUCT_X0 = 2  # slabs hug the west wall, keeping their `r` nearest the ROM pipe
 _STRUCT_X0_SEEK = 5  # seek mode: columns 1..4 belong to the flush/remainder tail
 _SLAB_PITCH = 13  # columns per slab: each gets its own band (see _slab)
+#: The narrowest pitch the band is *drawn* at. A branch slab spans exactly eleven
+#: columns — its exit riser at ``base - 1`` through the ``neg`` arm at ``base + 9``
+#: — so eleven is where consecutive slabs touch without overlapping, and ten makes
+#: slab ``i``'s riser share a column with slab ``i-1``'s ``neg`` arm. That happens
+#: to *work* when the shared column is another riser (both men head north and the
+#: collector catches both), which is luck, not geometry: relabel which arm a branch
+#: takes and it becomes a drop into a riser. Ten measured 0.01% better than eleven
+#: on `little-little-man` — inside the noise, and not worth standing on.
+_SLAB_PITCH_FLOOR = 11
 _JUMP_SLAB_ROWS = 4
 _BRANCH_SLAB_ROWS = 8
 
@@ -926,6 +935,65 @@ def _uneven_trie(
     return entry, cells
 
 
+def _tight_struct_entry(
+    p: _Plan,
+    structured: list[str],
+    row_of: dict[str, int],
+    struct_x0: int,
+    drain_unit_bits: int,
+    pitch: int = _SLAB_PITCH,
+) -> tuple[dict[str, int], frozenset[int]]:
+    """Westmost legal entry column per slab, and the columns no entry may use.
+
+    The slab band is a staircase: slab ``i`` sits at ``struct_x0 + i * pitch``
+    on entry row ``collector + 1 + i``, one pitch east and one row south of slab
+    ``i - 1``. A structured lane's drop therefore only has to clear the lane band
+    (the caller's ``floor``) and land inside **its own** column band — every
+    shallower body stops at ``base - pitch + 9``, west of the westmost entry this
+    returns, and every deeper one starts a whole pitch east.
+    The ``struct_east + 1`` floor the default rule uses is a much stronger
+    condition than the geometry needs.
+
+    Two families of column are still forbidden outright, because a slab's *risers*
+    run up to the collector and would meet the drop head-on there:
+
+    * ``base - 1`` — every slab's exit riser, the column the discarded-and-done
+      man climbs on;
+    * ``base + 3 / 6 / 9`` — a branch's three arm columns; the two not-taken arms
+      rise to the collector on theirs.
+
+    A drop sharing one of those leaves `.` on the collector row where the riser
+    needs its `<`, and the rising man sails north into the lane band instead of
+    turning west for the fetch site. They are reserved for every slab, not only
+    the shallower ones, so the answer does not depend on which slab is asking.
+
+    The westmost entry itself is per-slab:
+
+    * a branch turns its man south at ``base``, so ``base + 1`` is enough;
+    * a counted-discard jump owns ``a<`` at ``base``/``base + 1``, so ``base + 2``;
+    * a drained jump (:func:`_drain_block`) turns south on the block's spine at
+      ``base - 1 + spine``, so the drop must land at least one cell east of it.
+    """
+    order = sorted(structured, key=lambda m: -row_of[m])
+    base = {m: struct_x0 + i * pitch for i, m in enumerate(order)}
+    spine = 0
+    if drain_unit_bits:
+        from .drain import build_drain
+
+        spine = build_drain(0, unit_bits=drain_unit_bits, even=True).spine
+    first: dict[str, int] = {}
+    reserved: set[int] = set()
+    for m in order:
+        b = base[m]
+        reserved.add(b - 1)
+        if p.sem[m] in _JUMP_SEMS:
+            first[m] = b + spine if drain_unit_bits else b + 2
+        else:
+            first[m] = b + 1
+            reserved |= {b + 3, b + 6, b + 9}
+    return first, frozenset(reserved)
+
+
 def build_cpu(
     program: Program,
     p: _Plan,
@@ -937,6 +1005,8 @@ def build_cpu(
     trim_dead: bool = False,
     top_bus: bool = False,
     seek: bool = False,
+    tight_drops: bool = False,
+    slab_pitch: int = _SLAB_PITCH,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -946,12 +1016,26 @@ def build_cpu(
 
     ``trim_dead`` removes the unused leaf slots' rows (see :func:`_uneven_trie`);
     ``top_bus`` adds a second return bus above the band and routes each simple
-    lane over whichever bus is cheaper. Both default off and leave the layout
-    byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
-    :data:`TOP_RETURN_BUS`.
+    lane over whichever bus is cheaper; ``tight_drops`` walks each slab's entry
+    column back to its own band (:func:`_tight_struct_entry`); ``slab_pitch``
+    narrows the staircase's step. All four default off/unchanged and leave the
+    layout byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
+    :data:`TOP_RETURN_BUS` / :data:`TIGHT_STRUCT_DROPS` / :data:`SLAB_PITCH`.
     """
     if (trim_dead or top_bus) and not short_return:
         raise MachineError("trim_dead/top_bus require the short-return drop rule")
+    if tight_drops and not short_return:
+        raise MachineError("tight_drops requires the short-return drop rule")
+    if slab_pitch < _SLAB_PITCH_FLOOR:
+        raise MachineError(
+            f"slab pitch {slab_pitch} is below the {_SLAB_PITCH_FLOOR}-column span a "
+            "branch slab occupies (`base - 1` .. `base + 9`); slabs would overlap"
+        )
+    if tight_drops and seek:
+        # Seek slabs are a different shape (a taken row *below* the band, a shared
+        # flush tail in columns 1..4) and their entry geometry has not been proved
+        # against a tightened column. Say so rather than emit an unvalidated grid.
+        raise MachineError("tight_drops is not supported with the seek drum")
     k, lanes = p.k, p.lanes
     used = list(p.number)
     bus_row = 1
@@ -1042,7 +1126,7 @@ def build_cpu(
             for m in structured
         }
         struct_x0 = _STRUCT_X0
-    struct_east = struct_x0 + max(1, len(structured)) * _SLAB_PITCH
+    struct_east = struct_x0 + max(1, len(structured)) * slab_pitch
 
     # ── lane extents ─────────────────────────────────────────────────────────
     lane_cells: dict[tuple[int, int], tuple[str, str | None]] = {}
@@ -1122,10 +1206,21 @@ def build_cpu(
     # simple man arriving on that column would sail *past* the collector and be
     # swallowed by the wrong slab. Keeping simple lanes west of ``struct_east`` and
     # structured ones east of it makes that disjointness structural.
+    #
+    # ``tight_drops`` replaces that structural disjointness with a bookkept one —
+    # see :func:`_tight_struct_entry` for the geometry and :data:`TIGHT_STRUCT_DROPS`
+    # for why it is worth doing.
     drop_x: dict[int, int] = {}
     assigned: set[int] = set()
+    struct_cols: set[int] = set()
+    tight_first, tight_reserved = (
+        _tight_struct_entry(p, structured, row_of, struct_x0, drain_unit_bits, slab_pitch)
+        if tight_drops
+        else ({}, frozenset())
+    )
     if short_return:
         floor = lane_x0
+        struct_min = lane_x0
         for r in sorted(all_rows, reverse=True):
             # Halting rows carry no drop but do carry glyphs, so they still raise the
             # floor for everything above them — as do top-bus lanes, whose return
@@ -1138,20 +1233,40 @@ def build_cpu(
                 # A slab's entry column must be unique in *both* directions: its `<`
                 # turns an arriving man west, so any other drop sharing the column
                 # would be swallowed by this slab's entry row.
-                c = max(floor, struct_east + 1)
-                while c in assigned:
+                #
+                # ``struct_min`` keeps the structured columns strictly increasing
+                # bottom-to-top, which is what makes ``order`` below reproduce the
+                # slab order ``tight_first`` was computed against. Without it a
+                # bumped column could overtake the next lane's and silently pair a
+                # slab with another slab's entry column.
+                c = (
+                    max(floor, tight_first[m], struct_min)
+                    if tight_drops
+                    else max(floor, struct_east + 1)
+                )
+                while c in assigned or c in tight_reserved:
                     c += 1
+                struct_min = c + 1
+                struct_cols.add(c)
             else:
+                # A micro-program long enough to reach the slabs has to join the
+                # structured lanes' uniqueness discipline rather than risk
+                # their columns.  Never reset it to ``struct_east + 1``:
+                # ``floor`` is the suffix maximum that proves this column clears
+                # the current lane and every lane below it. Moving west from that
+                # floor can put the drop directly on a live lane glyph.
+                #
+                # ``struct_cols`` is what that discipline is actually protecting: a
+                # slab entry leaves `.` on the collector row, and a simple man
+                # sharing the column would sail past his turn west into the slab.
+                # Under ``tight_drops`` it is tracked directly, so simple lanes go
+                # back to sharing columns freely — two `v`s in one column are fine
+                # (a southbound man keeps his heading over a `v`), and every lane
+                # east of ``struct_east`` otherwise pays for a uniqueness it never
+                # needed against its neighbours.
                 c = floor
-                if c > struct_east:
-                    # A micro-program long enough to reach the slabs has to join the
-                    # structured lanes' uniqueness discipline rather than risk
-                    # their columns.  Never reset it to ``struct_east + 1``:
-                    # ``floor`` is the suffix maximum that proves this column clears
-                    # the current lane and every lane below it. Moving west from that
-                    # floor can put the drop directly on a live lane glyph.
-                    while c in assigned:
-                        c += 1
+                while c in struct_cols or (not tight_drops and c > struct_east and c in assigned):
+                    c += 1
             drop_x[r] = c
             assigned.add(c)
     else:
@@ -1176,6 +1291,11 @@ def build_cpu(
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
     order = sorted(structured, key=lambda m: drop_x[row_of[m]])
+    if tight_drops and order != sorted(structured, key=lambda m: -row_of[m]):
+        # ``tight_first`` priced each slab against the base this order gives it, so a
+        # disagreement means the two disciplines have drifted and the entry columns
+        # would be measured against the wrong slabs. Fail rather than mis-wire.
+        raise MachineError("tight slab entries: the drop order left the slab order")
     slab_at: dict[str, int] = {}
     slab_base: dict[str, int] = {}
     # The collector sits **immediately** below the lane band, above the slabs, and
@@ -1191,7 +1311,7 @@ def build_cpu(
     # rather than each slab getting a private row band. Only the entry row is an
     # exclusive resource: it is the westbound run slab *i*'s drop lands on, and it
     # spans ``[base_i, drop_x_i]``, which crosses every *shallower* body band but
-    # stops east of every deeper one (``base_j > base_i + _SLAB_PITCH - 1`` for
+    # stops east of every deeper one (``base_j > base_i + slab_pitch - 1`` for
     # ``j > i``). So slab *i*'s body, hanging directly below its own entry row
     # inside its own column band, is crossed by no other slab's entry run, and the
     # bands overlap in rows for free: ``n`` entry rows plus the tallest body,
@@ -1201,7 +1321,7 @@ def build_cpu(
     # over a `.` — the same mechanism the drop columns have always used.
     for i, m in enumerate(order):
         slab_at[m] = collector + 1 + i
-        slab_base[m] = struct_x0 + i * _SLAB_PITCH
+        slab_base[m] = struct_x0 + i * slab_pitch
     bottom = max((slab_at[m] + slab_rows[m] for m in order), default=collector + 1)
     taken_row = bottom + 1  # seek mode only: the eastbound send row below the slabs
     if seek:
@@ -1495,7 +1615,7 @@ def build_cpu(
         end = asc_x.get(r, drop_x.get(r, lane_end[r]))
         regions[f"lane:{m}"] = (lane_x0, r, max(1, end - lane_x0 + 1), 1)
     for m in order:
-        regions[f"slab:{m}"] = (slab_base[m], slab_at[m], _SLAB_PITCH, slab_rows[m])
+        regions[f"slab:{m}"] = (slab_base[m], slab_at[m], slab_pitch, slab_rows[m])
 
     return _Cpu(
         cells=g.c,
@@ -1557,8 +1677,9 @@ def _slab(
 
     # BP==0 (or a not-taken arm) leaves a man westbound out of the discard loop's
     # `a`. He rises at ``base - 1`` — the first column west of the loop, still
-    # clear of the shallower band, whose bodies stop at ``base - 4`` (arms reach
-    # ``base' + 9``, pitch 13). Entry rows are stacked now, so running him west
+    # clear of the shallower band, whose bodies stop at ``base' + 9`` (the `neg`
+    # arm), i.e. ``base - 4`` at the default pitch 13 and ``base - 2`` at
+    # :data:`_SLAB_PITCH_FLOOR`. Entry rows are stacked now, so running him west
     # to x=1 at this depth would walk him straight through every shallower slab's
     # loop; the riser instead crosses only shallower *entry rows*, as `.` holes
     # in their soft `<` runs. For slab 0 (``base == _STRUCT_X0``) this is the
@@ -1653,6 +1774,70 @@ DRAIN_UNIT_BITS: dict[str, int] = {
     # -12.7%, so the drain is worth ~4.5 points of that and 6 rows of slab depth.
     "little-little-man": 2,
 }
+
+#: Per-program opt-in for **tight slab entry columns** — the walk *to* a jump or
+#: branch, which is a different cost from the discard it performs there.
+#:
+#: The default rule floors every structured lane's drop at ``struct_east + 1``,
+#: east of the whole slab band. So a structured instruction walks east from
+#: ``lane_x0`` to that column, south to its entry row, then all the way back west
+#: to its own ``base`` — and the man who leaves the slab climbs at ``base - 1``
+#: and walks the collector west to the riser. Those three legs telescope: the
+#: round trip is ``2 * drop_x - lane_x0 - 2`` cells and **the slab's own column
+#: cancels out**. Only the drop column costs anything, and it costs double.
+#:
+#: :func:`_tight_struct_entry` shows the floor is far stronger than the staircase
+#: needs. Landing each slab in its own band instead makes the walk depend on the
+#: slab's index rather than on the band's total width, which is the whole point:
+#: the default cost grows with the number of structured opcodes *for every one of
+#: them*, so adding a third branch lengthens the first one's walk.
+#:
+#: Measured on ``little-little-man`` (16 opcodes, three slabs, ``lane_x0`` 9,
+#: ``struct_east`` 41), cells walked per execution of that opcode:
+#:
+#: | slab | base | drop before | drop after | walk before | walk after |
+#: |---|---|---|---|---|---|
+#: | `JMPF` | 2 | 42 | 15 | 73 | **19** |
+#: | `BRZ` | 15 | 43 | 16 | 75 | **21** |
+#: | `BRN` | 28 | 44 | 29 | 77 | **47** |
+#:
+#: The residue on `BRN` is its ``base``: the third slab starts 26 columns east, and
+#: its drop cannot precede it. That is what :data:`SLAB_PITCH` is for.
+#:
+#: The simple lanes gain twice over. Their own drops stop bumping east past three
+#: reserved slab columns, and the uniqueness rule east of ``struct_east`` — which
+#: only ever existed to keep them off those columns — goes with it, so they share
+#: their floor freely again as they always have west of the band.
+#:
+#: Empty by default, so every machine not named here is byte-identical. Requires
+#: the short-return drop rule and is not available under the seek drum, whose
+#: slabs are a different shape.
+TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
+
+#: Per-program **slab pitch**, the staircase's step. The default 13 gives a branch
+#: slab two spare columns it never uses: its glyphs run from the exit riser at
+#: ``base - 1`` to the ``neg`` arm at ``base + 9``, eleven columns
+#: (:data:`_SLAB_PITCH_FLOOR`). Narrowing the step walks every slab after the first
+#: west, which under :data:`TIGHT_STRUCT_DROPS` walks its entry column west with it
+#: — two cells off the round trip per column, per execution of that opcode.
+#:
+#: It also moves the *deepest* slab's discard ``r`` west, and that turns out to be
+#: what the CPU's east wall is really pinned to. §7.1 makes that ``r`` bind the ROM
+#: pipe on the west wall, and its rival is the memory-response pipe touching the
+#: **east** wall — so a narrower CPU is a *closer* rival, and the pad search has to
+#: escape east until the tie breaks. Measured on ``little-little-man``, sweeping
+#: ``mem_pad`` for each pitch with tight entries on (fast engine, 14 public cases,
+#: 192x193 throughout — the ROM sets the box, so none of this moves the footprint):
+#:
+#: | pitch | binds from | avgTicks |
+#: |---|---|---|
+#: | 13 (default) | 30 | 4,975,064 |
+#: | 12 | 26 | 4,962,708 |
+#: | **11** | **22** | **4,952,101** |
+#:
+#: Every column of pitch buys back a column of ``mem_pad`` and then some. Empty by
+#: default, so every machine not named here is byte-identical.
+SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
 
 
 def _drain_block(
@@ -2867,6 +3052,8 @@ def _assemble(
         stream_pad=stream_pad,
         short_return=short_return,
         drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
+        tight_drops=not seek and program.name in TIGHT_STRUCT_DROPS,
+        slab_pitch=SLAB_PITCH.get(program.name, _SLAB_PITCH),
         trim_dead=trim_dead,
         top_bus=top_bus,
         seek=seek,
