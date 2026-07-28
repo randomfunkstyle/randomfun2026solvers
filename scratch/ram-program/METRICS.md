@@ -273,3 +273,137 @@ serializer (a decoder-tree unit of its own) — noted, not built.
   (sound single-column variant), `gradebook_ram2.man` / `gradebook_ram2sc.man`,
   `tri3.asm`/`tri3_ram2.man` (3-slab smoke), debug harnesses `dbg_*.py`,
   `trace_cpu.mjs`, `trace2.mjs`.
+
+# ═══ Stage 3 — the SEEK-DRUM (2026-07-28, post-merge b757fd6) ═══
+
+The Stage-2 conclusion was that the tick win lives in the *jump mechanism*, not
+in replacing the store. This builds exactly that: the packed drum keeps its
+~3.3 cells a word for sequential supply, and gains random access for jumps.
+
+## The mechanism (`lm1/seekrom.py` + `machine.py`'s opt-in `seek`)
+
+* Every data-row transition passes a **gadget** — ``q`` then ``d``/``a``. With
+  no request pending the drum man walks straight into his row (2 cells a row,
+  the whole sequential tax). With one pending he is diverted into a **cascade**
+  that zigzags down the gadget cells to a bottom collector, west to a riser, and
+  up to the **station**.
+* The station builds ``K = 128`` in ``B`` from digits (no backtick may enter
+  these columns), receives the request, ``/`` splits it into ``row`` (A) and
+  ``offset`` (B), emits the **sentinel ``-1``** then the offset into the fetch
+  corridor, and splits on ``row``'s parity with ``x`` — even rows enter down the
+  west ladder, odd down the east. ``]`` halves BP into the rung count.
+* A ladder rung is pitch-2, three columns, ``d`` entered heading east: BP == 0
+  exits through the row's own gadget (whose ``q`` now reads 0) into the row;
+  BP > 0 detours through ``m`` and re-enters one row-pair lower.
+* CPU side, all three elements engine-proven by the Stage-2 RAM work: the taken
+  path sends ``row*K+offset`` out an east-wall request pipe, then **flushes the
+  corridor to the sentinel** with a two-glyph ``r``/``X`` sign loop (words are
+  non-negative, ARCH §4.2, so the sign is the whole test and **ACC is never
+  touched**), reads the offset, and runs the stock 2x4 counted discard for it.
+  The drum packs every row to an **even** word count, which is that loop's
+  invariant.
+
+Verified standalone on the reference engine (`scratch/ram-program/toy_seek.*`):
+sequential emission byte-identical to the packed drum including the wrap, and
+requests answered correctly for both row parities and mid-stream.
+
+## The hybrid, which is the whole result
+
+A seek is a flat few hundred ticks; a discarded word is ~4.5. So the seek is
+only worth it for **long** jumps — and the distribution decides everything.
+Measured on a `deadman-3d` frame (emulator, per taken jump):
+
+| skip distance | jumps | words | share of the discard bill |
+|---|---|---|---|
+| 0-64 | 2,417 | 58,933 | 15.4% |
+| 64-256 | 6 | 1,121 | 0.3% |
+| 256-1024 | 58 | 34,613 | 9.0% |
+| 1024+ | 128 | 288,143 | **75.3%** |
+
+**186 jumps of 2,609 carry 84% of the words.** So `machine.seek_split` rewrites
+only those instructions to new build-time opcodes (`JMPS`/`BRZS`/`BRNS`,
+`SEEK_THRESHOLD = 256`); everything else keeps the counted discard it is already
+good at. Source, listings and the emulator still say `JMPF`.
+
+## Measured: brackets
+
+Fitted over all 9 public cases (all builds 9/9 on the fast engine, exact fits):
+
+| build | box | start | per instr | per jump |
+|---|---|---|---|---|
+| drum (baseline) | 89x60 | -102 | 122.1 | 5.12/skipped word (~105) |
+| all-seek (threshold 0) | 93x73 | -150 | 133.9 | 229.4 |
+
+**Brackets cannot show the win and says so.** Its image is 72 words, so the
+longest jump skips ~60 — far under the 256 crossover — and at the real
+threshold `build(..., seek=True)` refuses to build ("no jump is long enough to
+seek"). Forcing it (threshold 0) costs +11.8 ticks an instruction for a per-jump
+cost *worse* than the discard it replaced. That is the mechanism behaving
+exactly as designed on a program with nothing to seek; it is proof of
+correctness (9/9, including a mixed classic+seek slab build at threshold 32),
+not of value. The value is only visible where `8 x (P - L)` is large.
+
+## Measured: deadman-3d (native, round-gated, every frame matched)
+
+Re-baselined post-merge: P = 3,957 var-width words (2,132 instructions), frame 1
+executes 20,821 instructions and takes 2,609 jumps skipping 382,810 words.
+
+| build | box | fp | boot | per gameplay frame | Δ frame |
+|---|---|---|---|---|---|
+| drum (canonical) | 374x376 | 141,376 | 3,006,218 | 5,826,361 | — |
+| **seek, JMPF only** | **379x382** | **145,924** | 3,089,784 | **4,916,381** | **-15.6%** |
+| seek, JMPF+BRZ | 393x382 | 154,449 | 3,166,523 | 4,946,150 | -15.1% |
+| seek, all three | 407x382 | 165,649 | 965,346 | 5,375,802 | -7.7% |
+| seek, *no* split (all jumps seek) | 378x385 | 148,225 | 842,189 | 7,327,033 | **+25.8%** |
+
+Two results worth keeping:
+
+**1. Seeking every jump is a large loss (+25.8% a frame).** The all-seek build
+looks like a win on the boot+frame-1 gate (7.57M vs 8.51M) purely because boot's
+107 jumps skip ~3,900 words each and the seek crushes them; the steady-state
+frame, whose jumps skip 147 on average, gets 25.8% *worse*. **A gate that
+includes boot cannot referee a per-frame change** — the same trap as
+"measure where the effect can show", one level up.
+
+**2. Splitting more than `JMPF` is also a loss.** Each extra family costs a lane
+and a 13-column slab; the slab band is what pushes the memory block east, and
+the pad it forces (17 -> 22 -> 29 -> 36) charges every memory instruction that
+walk twice over. JMPF alone carries 80% of the long-jump words for a third of
+the width, so `SEEK_OPS` defaults to `("JMPF",)`.
+
+One binding fact worth recording: the classic slabs must stay **west** of the
+seek slabs. A classic discard's `r` has to be nearer the ROM pipe than the
+STORE's response pipe (§7.1), a seek slab has no `r` at all, and slab order
+follows the lanes' drop columns — so `build()` splices the new mnemonics in
+*above* every classic structured lane. Placed the obvious way (beside their
+originals) the sixth slab's `r` sat 70 cells from `mem_resp` and 95 from `rom`,
+and nothing bound.
+
+## Go / no-go against the two criteria
+
+**(a) net ticks/frame improve by >= 5%: PASS — -15.6%** (5,826,361 ->
+4,916,381 per gameplay frame, native, frames matched). Boot is +2.8%, one-time.
+Over the coordinator's 54-round walk the projection is 305.6M -> ~258M.
+
+**(b) footprint / squareness survives: PASS.** 374x376 -> 379x382: the machine
+stays near-square (0.8% off, against the 10% doctrine) and grows 3.2% in area²,
+from +6 rows of CPU tail and 5 columns of pad. Nothing about the fold changes.
+
+**Verdict: GO**, and it is wired in behind the per-slug opt-in
+(`machine.SEEK_DRUM`, empty by default with `SEEK_MEM_PAD["deadman-3d"] = 22`
+recorded so a seek build is deterministic). I have **not** added `deadman-3d` to
+the set or regenerated the canonical artifacts: two agents are live on
+`deadman3d.py`/`d3_unit.py` for M7b, and flipping it changes every DOOM
+artifact. `build_for("deadman-3d", seek=True)` reproduces the measured machine
+exactly; the flip is one line when the coordinator wants it.
+
+## Stage-3 artifacts
+
+- `solvers/python/randomfun2026solvers/lm1/seekrom.py` — the drum.
+- `machine.py` — `seek_split`, `seek_words`, `SEEK_*` registries, the seek slab
+  and tail in `build_cpu`, the request pipe in `_assemble`. Flag-off is
+  byte-identical (2,606-test suite green).
+- `isa.py` — `JMPS`/`BRZS`/`BRNS` and their sems (build-time only).
+- `tests/test_seekrom.py` — 7 fast + 2 slow.
+- `scratch/ram-program/`: `toy_seek.py` (standalone drum), `gate_frames.py`
+  (the A/B harness), `deadman_seek.man`, `brackets_seek.man`.

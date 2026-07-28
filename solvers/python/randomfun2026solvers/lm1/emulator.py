@@ -582,7 +582,14 @@ def _spill_pop(em: Emulator, _: int | None) -> None:
     em.b = em.a  # `M`
 
 
+# The three ``*_SEEK`` sems share these handlers: at the *source* level a seek
+# jump means exactly what its classic twin means, and only the generated
+# hardware differs (``machine.seek_split`` rewrites the opcode at build time and
+# ``seek_words`` re-encodes the operand as a drum row/offset). An assembled
+# program never contains them, so this keeps "every opcode is executable" true
+# without pretending the emulator models the drum.
 @_handler(Sem.JUMP)
+@_handler(Sem.JUMP_SEEK)
 def _jump(em: Emulator, n: int | None) -> None:
     assert n is not None
     em.bp = n  # `b`
@@ -590,6 +597,7 @@ def _jump(em: Emulator, n: int | None) -> None:
 
 
 @_handler(Sem.BR_ZERO)
+@_handler(Sem.BR_ZERO_SEEK)
 def _br_zero(em: Emulator, n: int | None) -> None:
     assert n is not None
     # `W` `X`: branch on sign(ACC); every lane's second `W` restores A = n.
@@ -598,6 +606,7 @@ def _br_zero(em: Emulator, n: int | None) -> None:
 
 
 @_handler(Sem.BR_NEG)
+@_handler(Sem.BR_NEG_SEEK)
 def _br_neg(em: Emulator, n: int | None) -> None:
     assert n is not None
     if em.b < 0:

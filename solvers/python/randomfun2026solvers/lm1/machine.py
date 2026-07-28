@@ -94,7 +94,7 @@ from typing import TYPE_CHECKING
 
 from . import rom as rommod
 from .asm import Program
-from .isa import TARGET_SEMS, Isa, Micro, Sem
+from .isa import SEEK_OF, TARGET_SEMS, Isa, Micro, Sem
 from .routing import RouteBox, RouteError, constrained_route
 
 if TYPE_CHECKING:  # the tape block's own canvas; imported lazily at run time
@@ -356,8 +356,10 @@ MEMORY_SEMS = frozenset(
 )
 
 #: Tags realised as a structures-band slab rather than a flat lane.
-_JUMP_SEMS = frozenset({Sem.JUMP})
-_BRANCH_SEMS = frozenset({Sem.BR_ZERO, Sem.BR_NEG})
+_JUMP_SEMS = frozenset({Sem.JUMP, Sem.JUMP_SEEK})
+_BRANCH_SEMS = frozenset({Sem.BR_ZERO, Sem.BR_NEG, Sem.BR_ZERO_SEEK, Sem.BR_NEG_SEEK})
+#: The half of the two families above that seeks the drum instead of discarding.
+_SEEK_SEMS = frozenset({Sem.JUMP_SEEK, Sem.BR_ZERO_SEEK, Sem.BR_NEG_SEEK})
 
 
 def hw_micro(sem: Sem) -> tuple[tuple[str, str | None], ...]:
@@ -645,8 +647,135 @@ def image_program(program: Program, p: _Plan | None = None) -> Program:
     )
 
 
+def _target_index(program: Program, instrs: Sequence, index_of_word: dict, k: int) -> int:
+    """Which instruction a jump/branch at ``instrs[k]`` lands on."""
+    ins = instrs[k]
+    assert ins.operand is not None
+    after = (ins.pos + ins.words) % program.P
+    target_word = (after + ins.operand) % program.P
+    if target_word not in index_of_word:
+        raise MachineError(
+            f"{ins.mnemonic} at word {ins.pos} jumps to word {target_word}, "
+            "which is not an instruction boundary"
+        )
+    return index_of_word[target_word]
+
+
+#: A taken jump discards ~4.5 ticks a word, while a drum seek is a flat few
+#: hundred whatever the distance — so the seek only pays above a crossover.
+#: Measured on ``deadman-3d``: a seek is ~1,140 ticks and a discarded word 4.5,
+#: putting the break-even near 250 words. 256 is that, rounded to a power of two.
+#:
+#: The distribution is what makes the split worth having rather than a tuning
+#: knob: in a ``deadman-3d`` frame **186 jumps of 2,609 skip 84% of all the
+#: words**, so seeking only those buys nearly the whole discard bill while the
+#: 2,423 tight-loop jumps keep the counted discard they are already good at.
+SEEK_THRESHOLD = 256
+
+
+#: Which classic opcodes ``seek_split`` may rewrite. Every extra family costs a
+#: lane *and* a 13-column slab, and the slab band is what pushes the memory
+#: block east, so restricting this is the footprint knob. Measured on
+#: ``deadman-3d``: ``JMPF`` alone carries 80% of the long-jump words (258,110 of
+#: 322,756 in a frame), for a third of the width the full set costs.
+SEEK_OPS: tuple[str, ...] = ("JMPF",)
+
+
+def seek_split(
+    program: Program,
+    *,
+    threshold: int = SEEK_THRESHOLD,
+    ops: Sequence[str] = SEEK_OPS,
+) -> Program:
+    """Rewrite long jumps/branches to their seek-drum opcodes (build-time only).
+
+    Source, listings and the emulator keep talking about ``JMPF``/``BRZ``/
+    ``BRN``; only the *hardware* image distinguishes them, so this returns a
+    copy of ``program`` whose long structured instructions carry the ``*S``
+    mnemonics and their sems. Distance is the classic forward-skip count, which
+    is exactly what the discard would have paid for.
+    """
+    instrs = sorted(program.instrs, key=lambda i: i.pos)
+    n = len(instrs)
+    index_of_word = {ins.pos: k for k, ins in enumerate(instrs)}
+    allowed = set(ops)
+    out = []
+    for k, ins in enumerate(instrs):
+        if ins.sem in TARGET_SEMS and ins.sem in SEEK_OF and ins.mnemonic in allowed:
+            skip = 2 * ((_target_index(program, instrs, index_of_word, k) - k - 1) % n)
+            if skip >= threshold:
+                seek_sem = SEEK_OF[ins.sem]
+                op = next(o for o in program.isa if o.sem is seek_sem)
+                out.append(ins.model_copy(update={"mnemonic": op.mnemonic, "code": op.code, "sem": seek_sem}))
+                continue
+        out.append(ins)
+    return program.model_copy(update={"instrs": tuple(out)})
+
+
+def seek_words(program: Program, p: _Plan, *, rows: int):
+    """The fixed-width image for a seek build, and its drum layout.
+
+    A **seek** operand is ``row * SEEK_K + offset`` of the target's opcode word
+    in the *packed* drum; a classic jump keeps its forward-skip count. The seek
+    operands depend on the packing, which depends on the token widths, which
+    depend on the operands — so they are emitted as fixed-width zero-padded
+    literals and the layout is a two-pass fixed point.
+    """
+    from .seekrom import SEEK_K, build_seek_rom, seek_target
+
+    instrs = sorted(program.instrs, key=lambda i: i.pos)
+    n = len(instrs)
+    index_of_word = {ins.pos: k for k, ins in enumerate(instrs)}
+
+    def encode(target_operand: dict[int, int]) -> list[int]:
+        out: list[int] = []
+        for k, ins in enumerate(instrs):
+            if ins.sem in _SEEK_SEMS:
+                operand = target_operand.get(k, 0)
+            elif ins.sem in TARGET_SEMS:
+                t = _target_index(program, instrs, index_of_word, k)
+                operand = 2 * ((t - k - 1) % n)
+            elif ins.operand is None:
+                operand = 0
+            else:
+                operand = ins.operand
+                if ins.sem in MEMORY_SEMS and operand < 1:
+                    raise MachineError(
+                        f"{ins.mnemonic} at word {ins.pos} addresses STORE slot "
+                        f"{operand}; hardware addresses start at 1"
+                    )
+            out += [p.number[ins.mnemonic], operand]
+        return out
+
+    targets = {
+        k: _target_index(program, instrs, index_of_word, k)
+        for k, ins in enumerate(instrs)
+        if ins.sem in _SEEK_SEMS
+    }
+    if not targets:
+        raise MachineError(
+            "seek=True but no jump is long enough to seek; build without it"
+        )
+    # Fixed-width literals for the seek operands only, so the packing does not
+    # move as their values resolve.
+    wide = frozenset(2 * k + 1 for k in targets)
+    operands = {k: 0 for k in targets}
+    probe = build_seek_rom(encode(operands), rows=rows, wide=wide, wide_digits=5)
+    digits = len(str((probe.rows_used + 2) * SEEK_K))
+    layout = build_seek_rom(encode(operands), rows=rows, wide=wide, wide_digits=digits)
+    for _ in range(4):
+        operands = {k: seek_target(layout, 2 * t) for k, t in targets.items()}
+        words = encode(operands)
+        new_layout = build_seek_rom(words, rows=rows, wide=wide, wide_digits=digits)
+        if new_layout.word_pos == layout.word_pos:
+            return words, new_layout
+        layout = new_layout
+    raise MachineError("seek operand layout did not converge")
+
+
 # ── the CPU room ─────────────────────────────────────────────────────────────
 _STRUCT_X0 = 2  # slabs hug the west wall, keeping their `r` nearest the ROM pipe
+_STRUCT_X0_SEEK = 5  # seek mode: columns 1..4 belong to the flush/remainder tail
 _SLAB_PITCH = 13  # columns per slab: each gets its own band (see _slab)
 _JUMP_SLAB_ROWS = 4
 _BRANCH_SLAB_ROWS = 8
@@ -784,6 +913,7 @@ def build_cpu(
     drain_unit_bits: int = 0,
     trim_dead: bool = False,
     top_bus: bool = False,
+    seek: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -859,17 +989,37 @@ def build_cpu(
     # A drain hangs *below* the entry row rather than beside it, so it sets the
     # slab's depth: a jump is its entry row plus the block, a branch is its four
     # rows of `X` fan-out and turn row plus the block.
-    if drain_unit_bits:
+    if seek and drain_unit_bits:
+        raise MachineError("seek mode replaces the discard entirely; no drain to size")
+    if seek:
+        # Hybrid: a *seek* slab is shallow (a drop to the taken row, plus the
+        # branch's X fan-out); a *classic* slab keeps its counted discard, which
+        # short jumps are already good at. Bases start at 5 because the seek
+        # tail owns columns 1..4 (flush loop, remainder read, its discard).
+        slab_rows = {}
+        for m in structured:
+            if p.sem[m] in _SEEK_SEMS:
+                slab_rows[m] = 2 if p.sem[m] in _JUMP_SEMS else 5
+            else:
+                slab_rows[m] = (
+                    _JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS
+                )
+        # The tail lives strictly below the band, so the slabs keep column 2 —
+        # which is what keeps a classic discard `r` nearest the ROM pipe.
+        struct_x0 = _STRUCT_X0
+    elif drain_unit_bits:
         from .drain import build_drain
 
         _drain_h = build_drain(0, unit_bits=drain_unit_bits, even=True).height
         slab_rows = {m: (1 if p.sem[m] in _JUMP_SEMS else 5) + _drain_h for m in structured}
+        struct_x0 = _STRUCT_X0
     else:
         slab_rows = {
             m: (_JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS)
             for m in structured
         }
-    struct_east = _STRUCT_X0 + max(1, len(structured)) * _SLAB_PITCH
+        struct_x0 = _STRUCT_X0
+    struct_east = struct_x0 + max(1, len(structured)) * _SLAB_PITCH
 
     # ── lane extents ─────────────────────────────────────────────────────────
     lane_cells: dict[tuple[int, int], tuple[str, str | None]] = {}
@@ -884,7 +1034,10 @@ def build_cpu(
             lane_end[r] = max((x for x, _ in cells), default=lane_x0 - 1)
         else:
             # A structured opcode's lane is only its preamble; the rest is a slab.
-            pre = "b" if p.sem[m] in _JUMP_SEMS else "W"
+            # Seek mode keeps the operand (row*K+rem) in A — no count to park.
+            # A seek jump keeps the operand in A (it is sent, not counted); a
+            # classic jump parks it in BP for the discard loop.
+            pre = ("." if p.sem[m] in _SEEK_SEMS else "b") if p.sem[m] in _JUMP_SEMS else "W"
             lane_cells[(lane_x0, r)] = (pre, None)
             lane_end[r] = lane_x0
 
@@ -1025,8 +1178,11 @@ def build_cpu(
     # over a `.` — the same mechanism the drop columns have always used.
     for i, m in enumerate(order):
         slab_at[m] = collector + 1 + i
-        slab_base[m] = _STRUCT_X0 + i * _SLAB_PITCH
+        slab_base[m] = struct_x0 + i * _SLAB_PITCH
     bottom = max((slab_at[m] + slab_rows[m] for m in order), default=collector + 1)
+    taken_row = bottom + 1  # seek mode only: the eastbound send row below the slabs
+    if seek:
+        bottom = taken_row + 9
 
     # ── ascent columns for the top bus, the drops' mirror ────────────────────
     # Assigned *after* the drops so they can refuse every drop column: a rising
@@ -1117,31 +1273,138 @@ def build_cpu(
 
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
-    for m in order:
-        struct_drops |= _slab(
-            g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
-        )
+    taken_drops: list[int] = []
+    if seek:
+        # Send-and-flush slabs (engine-proven by the Stage-2 RAM work): the
+        # taken path carries `row*K+rem` in A down to the eastbound taken row,
+        # sends it out the east-wall request pipe, then drops into the flush
+        # block: r/X until the drum's sentinel (-1), read the remainder, and
+        # run the stock 2x4 counted discard. ACC stays in B throughout.
+        for m in order:
+            s0, base = slab_at[m], slab_base[m]
+            if p.sem[m] not in _SEEK_SEMS:
+                # A short jump keeps the classic counted discard, verbatim.
+                struct_drops |= _slab(
+                    g, m, p, s0, base, collector, pipe_glyphs, drain_unit_bits
+                )
+            elif p.sem[m] in _JUMP_SEMS:
+                for yy in range(s0 + 1, taken_row):
+                    g.soft(base, yy, ".")
+                taken_drops.append(base)
+            else:
+                g.soft(base, s0 + 1, ".")
+                g.put(base, s0 + 2, ">")
+                g.put(base + 1, s0 + 2, "X")
+                g.put(base + 1, s0 + 1, ">")
+                g.put(base + 1, s0 + 3, ">")
+                arm_rows = {"neg": s0 + 1, "zero": s0 + 2, "pos": s0 + 3}
+                arm_cols = {"neg": base + 9, "zero": base + 6, "pos": base + 3}
+                taken = "zero" if p.sem[m] is Sem.BR_ZERO_SEEK else "neg"
+                for arm, row in arm_rows.items():
+                    g.put(base + 2, row, "W")
+                    for cc in range(base + 3, arm_cols[arm]):
+                        g.soft(cc, row, ".")
+                    if arm == taken:
+                        g.put(arm_cols[arm], row, "v")
+                        for yy in range(row + 1, taken_row):
+                            g.soft(arm_cols[arm], yy, ".")
+                        taken_drops.append(arm_cols[arm])
+                    else:
+                        g.put(arm_cols[arm], row, "^")
+                        for yy in range(collector + 1, row):
+                            g.soft(arm_cols[arm], yy, ".")
+                        struct_drops.add(arm_cols[arm])
+        for m in order:
+            s0, dx = slab_at[m], drop_x[row_of[m]]
+            base = slab_base[m]
+            g.put(dx, s0, "<")
+            if p.sem[m] not in _SEEK_SEMS and p.sem[m] in _JUMP_SEMS:
+                # the classic discard loop owns `a<` at base..base+1
+                for x in range(base + 2, dx):
+                    g.soft(x, s0, "<")
+            else:
+                for x in range(base + 1, dx):
+                    g.soft(x, s0, "<")
+                g.put(base, s0, "v")
 
-    # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place and
-    # only fills the genuinely free cells with `<`.
-    for m in order:
-        s0, dx = slab_at[m], drop_x[row_of[m]]
-        base = slab_base[m]
-        g.put(dx, s0, "<")
-        if p.sem[m] in _JUMP_SEMS:
-            # The compact discard loop owns `a<` at base..base+1 and is entered
-            # directly from the westbound slab-entry corridor.
-            for x in range(base + 2, dx):
-                g.soft(x, s0, "<")
-        else:
-            for x in range(base + 1, dx):
-                g.soft(x, s0, "<")
-            g.put(base, s0, "v")
+        # ── the seek tail, entirely BELOW the slab band ───────────────────────
+        # Nothing here shares a row with a slab, so the classic slabs keep their
+        # west-hugging columns (and with them the ROM binding their discard `r`
+        # depends on). Rows t .. t+7, columns 1 .. e_s+1.
+        #
+        #   t    : taken drops land, run east, `s` the request, turn south
+        #   t+1  : westbound corridor back to the flush loop's column
+        #   t+1..t+3, cols 2..6 : the flush loop
+        #   t+4..t+7, cols 2..3 : the stock 2x4 counted discard for the remainder
+        #
+        # The flush `X` is entered heading **south**, which is what puts the
+        # sentinel's exit on a downward path: heading south, A>0 turns west and
+        # A==0 goes straight — both stay in the loop — while A<0 turns east and
+        # leaves. Program words are non-negative (ARCH §4.2) and the drum's
+        # sentinel is -1, so the sign is the whole test and ACC is never touched.
+        t = taken_row
+        e_s = struct_east + 2
+        for col in taken_drops:
+            g.put(col, t, ">")
+        for x in range(min(taken_drops), e_s):
+            g.soft(x, t, ".")
+        emit(e_s, t, "s", "cmd")
+        g.put(e_s + 1, t, "v")
+        g.put(e_s + 1, t + 1, "<")
+        for x in range(4, e_s + 1):
+            g.soft(x, t + 1, ".")
+        # flush loop: `r` then a sign `X`, both walked southbound
+        g.put(3, t + 1, "v")
+        emit(3, t + 2, "r", "rom")
+        g.put(3, t + 3, "X")
+        g.put(2, t + 3, "^")  # A>0: keep flushing
+        g.put(2, t + 2, "^")
+        g.put(2, t + 1, ">")
+        g.put(3, t + 4, "<")  # A==0: keep flushing
+        g.put(2, t + 4, "^")
+        # A<0 — the sentinel: read the remainder, park it in BP, drop to the
+        # counted discard. Every seek offset is even (rows pack even word
+        # counts), which is exactly the 2x4 burst loop's invariant.
+        emit(4, t + 3, "r", "rom")
+        g.put(5, t + 3, "b")
+        g.put(6, t + 3, "v")
+        g.put(6, t + 4, ".")
+        g.put(6, t + 5, "<")
+        g.soft(5, t + 5, ".")
+        g.soft(4, t + 5, ".")
+        _discard_loop(g, 2, t + 5, pipe_glyphs)
+        # the loop leaves westbound with BP == 0; rise column 1 to the collector
+        g.put(1, t + 5, "^")
+        for yy in range(collector + 1, t + 5):
+            g.soft(1, yy, ".")
+    else:
+        for m in order:
+            struct_drops |= _slab(
+                g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
+            )
+
+        # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place
+        # and only fills the genuinely free cells with `<`.
+        for m in order:
+            s0, dx = slab_at[m], drop_x[row_of[m]]
+            base = slab_base[m]
+            g.put(dx, s0, "<")
+            if p.sem[m] in _JUMP_SEMS:
+                # The compact discard loop owns `a<` at base..base+1 and is entered
+                # directly from the westbound slab-entry corridor.
+                for x in range(base + 2, dx):
+                    g.soft(x, s0, "<")
+            else:
+                for x in range(base + 1, dx):
+                    g.soft(x, s0, "<")
+                g.put(base, s0, "v")
 
     # ── collector -> west riser -> back into the fetch cell ──────────────────
     # `soft` after the drops, so a slab-entry column that has to pass *through* the
     # collector keeps its `.` and is not turned west by a `<`.
     ret_x = max([*drop_x.values(), *struct_drops, lane_x0])
+    if seek:
+        ret_x = max(ret_x, struct_east + 3)  # the taken row's send site + its `v`
     for x in range(3, ret_x + 1):
         g.soft(x, collector, "<")
     g.put(1, collector, "^")
@@ -2251,6 +2514,9 @@ def build(
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
+    seek: bool = False,
+    seek_threshold: int = SEEK_THRESHOLD,
+    seek_ops: Sequence[str] = SEEK_OPS,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -2335,8 +2601,50 @@ def build(
         raise MachineError("tape_relay_size applies only to store='tape'")
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
+    if seek:
+        # Build-time only: long jumps become JMPS/BRZS/BRNS, which plan() then
+        # gives lanes of their own. A registered LANE_ORDER is a permutation of
+        # the *unpinned* lanes, so each new mnemonic is spliced in beside the
+        # classic opcode it was split from rather than invalidating the order.
+        program = seek_split(program, threshold=seek_threshold, ops=seek_ops)
+        if middle_order is not None:
+            # A registered LANE_ORDER is a permutation of the unpinned lanes, so
+            # the new mnemonics have to be spliced in. **Above every classic
+            # structured lane**, deliberately: a lane's slab index follows its
+            # drop column, which grows upward through the band, so putting the
+            # seek lanes higher leaves the classic slabs hugging the west wall —
+            # and a classic slab's discard `r` must stay nearer the ROM pipe
+            # there than the STORE's response pipe on the east (§7.1). A seek
+            # slab has no `r` at all, so it is free to sit east.
+            used = {op.mnemonic for op in program.ops_used}
+            classic = ("JMPF", "BRZ", "BRN")
+            order = list(middle_order)
+            at = min(
+                (order.index(c) for c in classic if c in order),
+                default=len(order),
+            )
+            for new in ("JMPS", "BRZS", "BRNS"):
+                if new in used and new not in order:
+                    order.insert(at, new)
+                    at += 1
+            middle_order = order
     p = plan(program, middle_order=middle_order)
-    words = rom_words(program, p)
+    seek_layout = None
+    if seek:
+        # The seek drum resolves jump operands as row*K+offset in its own packed
+        # layout, so the words and the drum are built together (fixed point).
+        # Its side margins and fixed-width jump literals make each row wider
+        # than the plain packed drum's, so the fold deepens until the drum fits
+        # the same width budget the registry's row count bought.
+        plain = rom_words(program, p)
+        seek_fold = rom_rows if rom_rows is not None else max(2, _packed_fold(plain, 60))
+        budget = rommod.build_packed_rom(plain, rows=seek_fold).width + 4
+        for extra in range(0, 24):
+            words, seek_layout = seek_words(program, p, rows=seek_fold + extra)
+            if seek_layout.width <= budget:
+                break
+    else:
+        words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
     effective_skip_batch = _resolve_tape_skip_batch(
         tape_n,
@@ -2391,6 +2699,7 @@ def build(
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
+                    seek_layout=seek_layout,
                 )
             except MachineError as exc:
                 last = exc
@@ -2443,6 +2752,7 @@ def build(
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
+                    seek_layout=seek_layout,
                 )
             except MachineError:
                 continue
@@ -2517,22 +2827,30 @@ def _assemble(
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
+    seek_layout=None,
 ) -> Machine:
+    seek = seek_layout is not None
+    if seek and not short_return:
+        raise MachineError("the seek drum requires the short-return drop rule")
     cpu = build_cpu(
         program,
         p,
         mem_pad=mem_pad,
         stream_pad=stream_pad,
         short_return=short_return,
-        drain_unit_bits=DRAIN_UNIT_BITS.get(program.name, 0),
+        drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
         trim_dead=trim_dead,
         top_bus=top_bus,
+        seek=seek,
     )
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
     # from the other (footprint is max(w, h)^2, ARCH.md §7.4).
-    if packed_rom:
+    if seek:
+        romlay = seek_layout  # built (with the operand fixpoint) by the caller
+        nrows = seek_layout.rows_used
+    elif packed_rom:
         # Packed tokens are ~half the cells, so the same column budget swallows
         # roughly twice as many words per row and the default fold is that much
         # shallower (rom.build_packed_rom).
@@ -2563,9 +2881,16 @@ def _assemble(
 
     # ── ROM room, top-left ───────────────────────────────────────────────────
     RX, RY = 0, 0
-    g.room(RX, RY, RX + romlay.width, RY + romlay.height + 1)
-    g.blit(RX, RY + 1, romlay.cells)
-    rom_bottom = RY + romlay.height + 1
+    if seek:
+        # The seek drum's cells span x 0..width-1 (col 0 is the seek riser), so
+        # its interior starts one cell east of the wall.
+        g.room(RX, RY, RX + romlay.width + 1, RY + romlay.height + 1)
+        g.blit(RX + 1, RY + 1, romlay.cells)
+        rom_bottom = RY + romlay.height + 1
+    else:
+        g.room(RX, RY, RX + romlay.width, RY + romlay.height + 1)
+        g.blit(RX, RY + 1, romlay.cells)
+        rom_bottom = RY + romlay.height + 1
 
     # ── CPU room ─────────────────────────────────────────────────────────────
     # The west margin carries two pipes that must not cross: the ROM corridor runs
@@ -2959,6 +3284,40 @@ def _assemble(
             )
         blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
 
+    # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
+    # Drawn last so its northbound leg can clear everything already placed. Its
+    # length is only jump-notice latency; the drum's q sees the value the tick
+    # it enters the pipe, so the man parks on the station's r rather than
+    # emitting words the CPU would flush.
+    if seek:
+        cmd_y = CY + (H - 9)  # build_cpu: bottom = taken_row + 9
+        x_e = max(x for x, _ in g.c) + 2
+        rom_east = RX + romlay.width + 1
+        ry = RY + 2
+        if blk is not None:
+            # Cross in the gap between the store block's bottom and the STREAM
+            # unit's top (both exist on the machines that hang a unit below).
+            y_b = SY - 2
+            if hot is None and y_b <= TY + tape.height - 1:
+                raise MachineError(
+                    f"seek: no clear row between the store block and the unit "
+                    f"(y_b={y_b}, store bottom cell={TY + tape.height - 1})"
+                )
+            if y_b <= cmd_y + 1:
+                raise MachineError("seek: the unit sits too high for the cmd dive")
+        else:
+            y_b = max(y for _, y in g.c) + 2
+        route_lengths["cpu->drum"] = g.draw_pipe(
+            [
+                (CX + W + 2, cmd_y),
+                (CX + W + 3, cmd_y),  # east out of the wall, then dive south
+                (CX + W + 3, y_b),
+                (x_e, y_b),
+                (x_e, ry),
+                (rom_east + 1, ry),
+            ]
+        )
+
     rows = g.rows()
 
     # ── name every block in grid coordinates ─────────────────────────────────
@@ -3010,6 +3369,8 @@ def _assemble(
         touches["in"] = (in_x, CY - 1) if in_north else (CX - 1, iy)
     if cpu.has_out:
         touches["out"] = (CX + cpu.out_col, CY + H + 2)
+    if seek:
+        touches["cmd"] = (CX + W + 2, CY + (H - 9))
     check_bindings(
         [(CX + x, CY + y, glyph, band) for x, y, glyph, band in cpu.pipe_glyphs], touches
     )
@@ -4299,6 +4660,33 @@ INPUT_NORTH: set[str] = {"deadman-3d"}
 #: machine's checked-in grid stays byte-identical.
 TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the gate
 
+#: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
+#: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
+#: ladders, so a **long** taken jump seeks the target's row instead of
+#: recirculating every word before it. ``seek_split`` decides per instruction —
+#: short jumps keep the counted discard, which they are already good at.
+#:
+#: Empty by default, so every machine not named here is byte-identical. Measured
+#: on ``deadman-3d`` (native, round-gated, frames matched):
+#:
+#: | build | box | fp | per gameplay frame |
+#: |---|---|---|---|
+#: | drum (canonical) | 374x376 | 141,376 | 5,826,361 |
+#: | seek, JMPF only | 379x382 | 145,924 | **4,916,381 (-15.6%)** |
+#: | seek, JMPF+BRZ | 393x382 | 154,449 | 4,946,150 (-15.1%) |
+#: | seek, all three | 407x382 | 165,649 | 5,375,802 (-7.7%) |
+#:
+#: Splitting more than ``JMPF`` is a *loss*: each extra family costs a lane and
+#: a 13-column slab, the slab band is what pushes the memory block east, and the
+#: pad it forces (17 -> 22 -> 29 -> 36) charges every memory instruction the
+#: extra walk twice. Hence :data:`SEEK_OPS` defaults to ``JMPF`` alone.
+SEEK_DRUM: set[str] = set()
+
+#: ``MEM_PAD``'s replacement while the seek drum is on: the extra lane and slab
+#: move the band, so the pinned pad no longer binds. Searched once and recorded
+#: here so a seek build stays deterministic (and fast).
+SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
+
 #: Slugs whose CPU gets a **second return bus above the band**: a simple lane
 #: returns over whichever bus is cheaper — the classic drop to the collector
 #: below, or an ascent to row 1 and a walk west into a column-1 drop onto the
@@ -4424,6 +4812,7 @@ def build_for(
     compact: bool = False,
     trim_dead: bool | None = None,
     top_bus: bool | None = None,
+    seek: bool | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -4452,11 +4841,12 @@ def build_for(
         raise MachineError(
             f"tape_skip_batch must be 1, 2, 4, None, or 'task', got {tape_skip_batch!r}"
         )
+    _seek = (slug in SEEK_DRUM) if seek is None else seek
     return build(
         program if program is not None else programs.load(slug),
         tape_n=TAPE_SIZE[slug],
         rom_rows=ROM_ROWS.get(slug),
-        mem_pad=MEM_PAD.get(slug),
+        mem_pad=(SEEK_MEM_PAD.get(slug, MEM_PAD.get(slug)) if _seek else MEM_PAD.get(slug)),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
@@ -4471,6 +4861,7 @@ def build_for(
         in_north=slug in INPUT_NORTH,
         store_teleport=slug in STORE_TELEPORT,
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
+        seek=_seek,
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
     )

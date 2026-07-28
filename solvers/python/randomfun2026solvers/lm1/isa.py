@@ -131,6 +131,16 @@ class Sem(StrEnum):
     JUMP = "jump"
     BR_ZERO = "br-zero"
     BR_NEG = "br-neg"
+    #: The seek-drum variants (``seekrom``). Same source-level meaning as the
+    #: three above — the *hardware* differs: instead of recirculating the words
+    #: it skips, the lane hands the drum a ``row * K + offset`` seek request and
+    #: flushes the fetch corridor to the drum's sentinel. Chosen per instruction
+    #: at build time by ``machine.seek_split`` from the static skip distance,
+    #: because a seek is a flat few-hundred ticks while a discard is ~4.5 a word:
+    #: long jumps want the seek, short ones the counted discard.
+    JUMP_SEEK = "jump-seek"
+    BR_ZERO_SEEK = "br-zero-seek"
+    BR_NEG_SEEK = "br-neg-seek"
     DISPLAY = "display"
     DISPLAY_ADDR = "display-addr"
     DISPLAY_DATA = "display-data"
@@ -139,7 +149,25 @@ class Sem(StrEnum):
 
 
 #: Tags whose operand word is a *skip count* the assembler computes from a label.
-TARGET_SEMS = frozenset({Sem.JUMP, Sem.BR_ZERO, Sem.BR_NEG})
+TARGET_SEMS = frozenset(
+    {
+        Sem.JUMP,
+        Sem.BR_ZERO,
+        Sem.BR_NEG,
+        Sem.JUMP_SEEK,
+        Sem.BR_ZERO_SEEK,
+        Sem.BR_NEG_SEEK,
+    }
+)
+
+#: The seek-drum halves of :data:`TARGET_SEMS`, and the map back to the classic
+#: opcode each one replaces (used by ``machine.seek_split``).
+SEEK_SEMS = frozenset({Sem.JUMP_SEEK, Sem.BR_ZERO_SEEK, Sem.BR_NEG_SEEK})
+SEEK_OF: dict[Sem, Sem] = {
+    Sem.JUMP: Sem.JUMP_SEEK,
+    Sem.BR_ZERO: Sem.BR_ZERO_SEEK,
+    Sem.BR_NEG: Sem.BR_NEG_SEEK,
+}
 
 
 # ── the table ────────────────────────────────────────────────────────────────
@@ -770,6 +798,37 @@ _EXT_OPS: tuple[Op, ...] = (
         description="ACC = pop from the SPILL ring",
         micro=(Micro.READ_SPILL, Micro.MOV),
         sem=Sem.SPILL_POP,
+        ext=True,
+    ),
+    # ── the seek-drum jump family ────────────────────────────────────────────
+    # Never written in source: ``machine.seek_split`` rewrites a long JMPF/BRZ/
+    # BRN into these when the machine is built with ``seek=True``, so the
+    # assembler, the emulator and every listing keep talking about JMPF.
+    Op(
+        code=36,
+        mnemonic="JMPS",
+        operands=1,
+        description="jump by seeking the drum to the target's row (long JMPF)",
+        micro=(Micro.RING_READ, Micro.BP_LOAD, Micro.SKIP_CYCLE),
+        sem=Sem.JUMP_SEEK,
+        ext=True,
+    ),
+    Op(
+        code=37,
+        mnemonic="BRZS",
+        operands=1,
+        description="seek to the target if ACC == 0 (long BRZ)",
+        micro=(Micro.RING_READ, Micro.SWAP, Micro.SIGN_BRANCH, Micro.THREE_WAY),
+        sem=Sem.BR_ZERO_SEEK,
+        ext=True,
+    ),
+    Op(
+        code=38,
+        mnemonic="BRNS",
+        operands=1,
+        description="seek to the target if ACC < 0 (long BRN)",
+        micro=(Micro.RING_READ, Micro.SWAP, Micro.SIGN_BRANCH, Micro.THREE_WAY),
+        sem=Sem.BR_NEG_SEEK,
         ext=True,
     ),
 )

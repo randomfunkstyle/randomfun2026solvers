@@ -194,12 +194,27 @@ def _width_for_rows_even(tokens: list[str], rows: int) -> int:
     return lo
 
 
-def build_seek_rom(words: list[int] | tuple[int, ...], *, rows: int = 2) -> SeekRom:
-    """Lay the seek-drum. Emits the same word stream as the packed drum."""
+def build_seek_rom(
+    words: list[int] | tuple[int, ...],
+    *,
+    rows: int = 2,
+    wide: frozenset[int] | set[int] = frozenset(),
+    wide_digits: int = 0,
+) -> SeekRom:
+    """Lay the seek-drum. Emits the same word stream as the packed drum.
+
+    ``wide`` word indexes are emitted as zero-padded ``wide_digits`` literals,
+    so their token width is independent of their value — which is what lets
+    :func:`machine.seek_words` resolve jump operands in one repack instead of
+    chasing a moving layout.
+    """
     if not words:
         raise ValueError("a ROM needs at least one word")
     rows = max(1, rows)
-    tokens = [token_cells(w) for w in words]
+    tokens = [
+        (f"`{w:0{wide_digits}d}`s" if i in wide else token_cells(w))
+        for i, w in enumerate(words)
+    ]
     data_w = _width_for_rows_even(tokens, rows)
     lit = pack_rows_even(tokens, data_w)
     R = len(lit)
