@@ -2946,7 +2946,14 @@ def _assemble(
         # The I room moves into the corridor band above the CPU (INPUT_NORTH),
         # so the band must be deep enough to hold a 3x3 room plus its two-cell
         # pipe into the north wall.
-        cpu_gap = max(cpu_gap, 6)
+        #
+        # ROM-PLUS puts a boustrophedon in the same band, and its rows run the
+        # *whole* width — straight through the I room's columns. At gap 6 the
+        # room's top wall lands on exactly the snake's last row (the collision is
+        # `'-' vs '+'` at the room's west wall). One extra row of gap drops the
+        # room clear of it; the corridor's own descent is in column 1, far west of
+        # the room, so nothing else in the band moves.
+        cpu_gap = max(cpu_gap, 7 if band_rows else 6)
     CY = rom_bottom + cpu_gap + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
     g.blit(CX, CY, cpu.cells)
@@ -4777,6 +4784,10 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: is the trade — re-check it before the next taped sweep.
 SEEK_DRUM: set[str] = {"deadman-3d"}
 
+#: Per-slug override for :data:`SEEK_OPS`. Absent slugs keep the ``JMPF``-only
+#: default, so this is byte-identical for everything not named here.
+SEEK_OPS_FOR: dict[str, tuple[str, ...]] = {}
+
 #: ``MEM_PAD``'s replacement while the seek drum is on: the extra lane and slab
 #: move the band, so the pinned pad no longer binds. Searched once and recorded
 #: here so a seek build stays deterministic (and fast).
@@ -5008,6 +5019,7 @@ def build_for(
         store_teleport=slug in STORE_TELEPORT,
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
+        seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
     )
