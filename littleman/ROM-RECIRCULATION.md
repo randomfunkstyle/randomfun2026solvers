@@ -399,6 +399,133 @@ Ring capacity must be an exact multiple of the program length, or the window tha
 recirculates is not a whole image and the CPU sees a rotation that never
 resynchronises.
 
+## The drum's *contents*: where DOOM's 4,304 words actually go (2026-07-29)
+
+Everything above is about the lap's *length* as a thing to buffer, skip or
+re-emit faster. This section profiles what is in the lap. Measured on
+`deadman-3d`, taped tier, the shipped seek drum
+(`scratch/rom-opt/{words,words2,pack,bound}.py`).
+
+**The image, before anything was changed.** P = 4,304 words = 2,152 fixed-width
+`(opcode, operand)` pairs, in 19,912 token cells — **4.626 cells a word**, not the
+3.36 the cost model above was written against. The 3.36 was `sudoku-validity`'s;
+a program with 599 store slots and 4,304-word jump distances has wider operands
+than one with 31.
+
+| token | words | cells | share |
+|---|---|---|---|
+| `Ns` — one digit | 1,138 | 2,276 | 11.4% |
+| `` `NN`s `` | 1,862 | 9,310 | **46.8%** |
+| `` `NNN`s `` | 1,143 | 6,858 | **34.4%** |
+| 4–5 digits | 141 | 1,070 | 5.4% |
+| 7–10 digits | 4 | 46 | 0.2% |
+| 19 digits (16 × 2⁶⁰) | 16 | 352 | 1.8% |
+
+Split by glyph rather than by token: **digits 48%, the `s` 25%, backticks 27%**.
+The `s` is one per word and structural. Split by half-word:
+
+* **opcodes: 8,930 cells, 44.8% of the drum.** Twenty-two opcodes need `k = 5`,
+  so codes run 0..31 and a code of ten or more costs `` `NN`s `` = 5 cells
+  against `Ns` = 2. The default numbering left **1,542 of 2,152** opcode words
+  two-digit. That is the whole of §`OPCODE_SLOTS` below.
+* **operands: 10,982 cells.** 961 of them are store addresses, every one in
+  **353..599** and therefore three digits — 5,766 cells, **29% of the drum, in
+  one shape.** 302 more are the mandatory zero of a zero-operand opcode
+  (`SND` 220, `LDA` 55, `IN` 25, `NEG` 2), which the two-word fetch requires and
+  which already cost the minimum 2 cells.
+
+### `OPCODE_SLOTS`: relabel the trie's leaves, keep every lane where it is
+
+Under `TRIM_DEAD_LANES` a lane's row is its leaf slot's **rank** among the used
+slots, not the slot itself — so *any rank-preserving relabelling of the slots
+leaves every row, drop column and lane tick exactly where it was* and moves only
+`number = _bitrev(slot, k)`. DOOM uses 22 of 32 slots; the ten spare ones are
+free to spend, and exactly ten slots — `0, 2, 4, 8, 12, 16, 18, 20, 24, 28` —
+bit-reverse below ten. The contiguous default (`0..N-1`, plus the pinned tail at
+31) cannot aim at that spread; a DP over slot × rank against the **static**
+opcode histogram can.
+
+| quantity | default | relabelled |
+|---|---|---|
+| one-digit opcode words | 610 of 2,152 | **1,401 of 2,152** |
+| opcode cells | 8,930 | **6,557** |
+| whole drum | 19,912 cells, 4.626/word | **17,539, 4.075/word** |
+| drum block | 284x94 | **252x93** |
+| drum lap | 23,048 cells | **20,060** |
+
+Ticks, native/fast engine, `passed=True` throughout:
+
+| gate | before | after | Δ |
+|---|---|---|---|
+| 8-command (boot + 8 frames) | 61,826,043 | 61,570,950 | **-0.41%** |
+| 115-frame tour, 116 rounds | 839,384,674 | **838,737,298** | **-0.077%** |
+| taped box | 287x271 | **287x270** | width store-floored |
+
+It is also *not* paid back at the decode: the pruned trie's execution-weighted
+walk **falls** 64,444 → 54,722 cells, because the spread leaves fewer contracted
+single-child chains to unwind (`scratch/rom-opt/trie.py`). Eighty-one slot sets
+reach the same 6,557; their walks span 53,539..55,371, i.e. 3.4%, so which one is
+picked is worth ~0.02% of the tour and the DP's first answer was shipped as-is.
+
+### What the two Δs above actually say about the drum
+
+**The 13% shorter lap bought 0.077% of the tour.** That is the finding, and it is
+worth more than the win. The `+1 blank cell per token` control — a pure lap
+inflation, no other change — costs **+1.09% on the 8-command gate for +18.2% of
+lap**, so the drum is ~6% of a *boot-heavy* gate; across the 115-frame tour it is
+**~0.6% of ticks in total.** `max(6 ticks CPU loop, ROM ticks/word)` is
+comfortably CPU-bound here at 4.6 cells a word, exactly as the model says, and
+DOOM's real workload is store-bound rather than fetch-bound besides. **Density in
+the drum is an area knob for this machine and very nearly nothing else.**
+
+And the area is not binding either. The taped machine's width floors at
+`TX 61 + the store's 224 columns + the east return pipe` = **287**; the drum's
+east edge was 284, one column under it, and is now 252. So the ROM block, which
+is the largest single block on the grid, has **35 columns of slack** and the next
+column of width has to come from the store. What the relabelling really bought is
+that reserve: before it, a store narrow enough to matter would have hit a ROM
+floor at 286; now that floor is 254.
+
+### Three things that do not pay, with the arithmetic
+
+**1. Re-numbering the store's addresses. Worth ~3,400 cells; unsound.** All 961
+static addresses sit in 353..599 because slots 1..352 are the map. Moved to
+1..247 and assigned by static frequency, ~99 of them would fall to `` `NN`s ``
+and nine to `Ns`. It cannot be done as a build-time image rewrite the way
+`seek_split` is, because `LDA` (`ACC = store[ACC]`, 55 uses) and `MOVA`
+(`store[ACC] = store[addr]`, 10 uses) compute addresses **at run time** from
+values the rewrite cannot see; and it cannot be done in the source, because
+`deadman-3d.asm` is shared with the canonical tier, which must stay
+byte-identical. Recorded so it is not re-derived: the prize is real, the
+mechanism is not available.
+
+**2. A smarter packer. The 12% blank is the vertical-backtick rule, and it is not
+slide-waste.** `pack_rows_even` leaves 2,671 of 20,210 cells blank. Decomposed by
+turning each rule off in turn (`scratch/rom-opt/bound.py`, same tokens, same
+`data_w = 235`):
+
+| rules | rows | area | blank |
+|---|---|---|---|
+| parity + even-word (shipped) | 86 | 20,210 | 2,671 (13.2%) |
+| parity only | 86 | 20,210 | 2,671 (13.2%) |
+| even-word only | **76** | 17,860 | **321 (1.8%)** |
+| neither | 76 | 17,860 | 321 (1.8%) |
+
+So the even-words-per-row rule the seek protocol needs costs **nothing**, the
+row ends cost 321 cells, and the vertical pairing hazard — a column whose running
+backtick parity is odd may not take an `s` — costs **ten rows, 2,350 cells**. A
+lookahead packer does not recover them: scoring the leftmost feasible start
+against the next 4 and next 12 tokens, over five widths, returns the **identical**
+row count in all fifteen combinations (`scratch/rom-opt/beam.py`). Greedy
+leftmost is already optimal for this token stream; the loss is the constraint
+itself, not the search. At 0.6% of tour ticks for the whole lap, those 2,350
+cells are worth ~0.07% — against a change to a shared packer whose failure mode
+is a *load error* rather than a slow grid.
+
+**3. `SEEK_K` 128 → 64, to shave a digit off the 39 wide jump literals.** Worth 39
+cells. `SEEK_K` must exceed the words on any packed row and the widest row holds
+66. Not available, and would be 0.2% of the drum if it were.
+
 ## Still open
 
 **1. Unroll the discard loop two words to a lap. — DONE, and the residual idea is

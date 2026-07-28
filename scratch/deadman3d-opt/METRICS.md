@@ -404,3 +404,59 @@ values ("every value in the language is a signed 64-bit integer"). That is why
 | taped, 115-frame tour | 1,018,297,264 | **839,384,674** (**-17.57%**) |
 | taped census | 18 static men | 18 static men |
 | width headroom vs the 300 ceiling | 11 | 13 |
+
+## M10 — the ROM block: what its 4,304 words are made of, and one knob
+
+Taped tier only, opt-in per `(slug, tier)`; `deadman-3d.man`, `deadman-3d_trim.man`
+(both `f62d63fd`) and `deadman-3d.input.txt` (`654d35d6`) are byte-identical.
+Baseline `merge-staging` `6a21275`: taped **287x271**, 8-command native gate
+**61,826,043**, 115-frame tour **839,384,674**.
+
+The full profile, the two other levers costed and rejected, and the packer
+decomposition live in `littleman/ROM-RECIRCULATION.md` §"The drum's *contents*".
+The short version:
+
+* The drum was **4.626 cells a word**, not the 3.36 the old cost model quoted
+  (that was `sudoku-validity`'s). Opcodes were **44.8%** of it: 22 opcodes need
+  `k = 5`, and 1,542 of 2,152 opcode words were two-digit at 5 cells against a
+  one-digit word's 2.
+* Under `TRIM_DEAD_LANES` a lane's row is its slot's **rank**, so relabelling the
+  slots is row-neutral. Ten of the 32 slots bit-reverse below ten;
+  :data:`machine.OPCODE_SLOTS` spends the ten spare slots on the hot opcodes
+  (DP over slot x rank, `scratch/rom-opt/slots.py`).
+
+| quantity | before | after |
+|---|---|---|
+| one-digit opcode words | 610 / 2,152 | **1,401 / 2,152** |
+| drum cells / word | 4.626 | **4.075** |
+| ROM block | 284x94 (34.3% of the grid) | **252x93** |
+| ROM lap | 23,048 cells | **20,060** |
+| trie walk (execution-weighted) | 64,444 | **54,722** |
+| taped box | 287x271 | **287x270** |
+| 8-command gate | 61,826,043 | **61,570,950** (-0.41%) |
+| 115-frame tour | 839,384,674 | **838,737,298** (**-0.077%**) |
+
+**The number worth keeping is the last one.** A 13% shorter lap bought 0.077% of
+the tour, and the control (one blank cell added per token: +18.2% of lap for
++1.09% on the 8-command gate) prices the whole drum at **~0.6% of tour ticks**.
+`max(6 ticks CPU loop, ROM ticks/word)` is CPU-bound at 4.6 cells a word, and
+DOOM's taped tier is store-bound besides — so ROM density is an **area** knob for
+this machine and essentially nothing else.
+
+And the area is not binding: the taped width floors at `TX 61 + 224 store columns
++ the east return pipe` = 287, so the drum's 284 was one column under the floor
+and its 252 is 35 under. **The ROM's own width floor fell 286 -> 254.** That
+reserve, not the 0.077%, is what this change is for: the next column of taped
+width has to come from the store, and when it does the drum will not be what
+stops it.
+
+Rejected here, with the arithmetic (see ROM-RECIRCULATION.md):
+* **Store-address renumbering** (961 static addresses, all 353..599, all three
+  digits = 29% of the drum): worth ~3,400 cells, unsound — `LDA`/`MOVA` compute
+  addresses at run time, and the `.asm` is shared with the canonical tier.
+* **A smarter packer**: the 12% blank is the vertical-backtick parity rule
+  (10 rows, 2,350 cells); the even-words-per-row rule costs **zero** and row ends
+  321 cells. A lookahead packer returns the identical row count in 15 of 15
+  width x depth combinations, so greedy leftmost is already optimal here.
+* **`SEEK_K` 128 -> 64**: 39 cells, and unavailable anyway — the widest packed row
+  holds 66 words.

@@ -485,14 +485,18 @@ def _relabel_slots(
     Every failure mode here is one that would silently move a lane — a missing
     mnemonic, a duplicate slot, or a map that permutes the north-to-south order —
     so all three are errors rather than a best effort. See :func:`plan`.
+
+    A map may name opcodes this build does not use, and only those: whether
+    ``JMPS``/``BRZS``/``BRNS`` exist at all is :func:`seek_split`'s decision, made
+    from a threshold the registry cannot evaluate, so one registered map has to
+    serve ``seek=True`` and ``seek=False`` alike. Dropping names from both sides
+    of a sorted comparison cannot reorder what is left, so the rank check below
+    still holds on the subset.
     """
-    if set(want) != set(placed):
-        missing = sorted(set(placed) - set(want))
-        extra = sorted(set(want) - set(placed))
-        raise MachineError(
-            "opcode slot map must name exactly the used opcodes; "
-            f"missing {missing}, unknown {extra}"
-        )
+    missing = sorted(set(placed) - set(want))
+    if missing:
+        raise MachineError(f"opcode slot map does not name the used opcodes {missing}")
+    want = {m: s for m, s in want.items() if m in placed}
     if len(set(want.values())) != len(want):
         raise MachineError("opcode slot map assigns one slot twice")
     bad = sorted(m for m, s in want.items() if not 0 <= s < lanes)
