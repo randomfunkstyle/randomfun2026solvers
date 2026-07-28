@@ -102,20 +102,55 @@ All numbers are the **native/fast engine** (`fast_littleman`), taped tier, the s
 fixed 57-command `WALK` on every arm, all `passed=True`. The reference engine cannot
 referee any of this: it OOMs its 4 GB Go/wasm heap on DOOM.
 
+The full length sweep, because one extreme point gives a direction but not a shape,
+and "a shorter buffer might still win" is the obvious next question. DOOM's image is
+**P = 4,002 words**, and the corridor it already has by accident of routing is **44
+cells**, so that is the zero of this curve rather than nothing. Corridor capacity is
+quantised to ~130 words (the boustrophedon takes two rows at a time across a
+65-column span), so 130 is the *shortest buffer that can be built at all*.
+
+| corridor | ≈ of P | box | ticks | Δ |
+|---|---|---|---|---|
+| 44 (routing accident) | 1/91 | 295x269 | 591,485,564 | — |
+| 130 | 1/32 | 295x272 | 593,636,532 | **+0.36%** |
+| 250 | 1/16 | 295x274 | 599,111,202 | **+1.29%** |
+| 500 | 1/8 | 295x278 | 611,878,828 | **+3.45%** |
+| 1,000 | 1/4 | 295x286 | 639,137,034 | **+8.06%** |
+| 1,677 | 2/5 | 295x296 | 675,651,202 | **+14.23%** |
+| 2,000 | 1/2 | 295x300 | 690,875,164 | **+16.80%** |
+
+**There is no dip, and no optimum: cost rises monotonically from the first buildable
+row-pair.** Even the shortest possible buffer is already a loss. Canonical at 1,677
+is **+30.3%** on the same change.
+
+The curve is not merely monotone, it is *linear*, to within 0.5% over a 45× range of
+length — slope **50,813 ticks per corridor word**. That slope is the whole
+explanation. DOOM takes 186 long jumps a gameplay frame and this input runs 57 of
+them, so:
+
+    50,813 ticks/word / (186 x 57 seeks) = 4.79 ticks per word per seek
+
+which is the **4.8 ticks a recirculated word** measured at the top of this document.
+The flush drains at exactly the rate ordinary recirculation does, so a buffer does
+not trade discard for anything — it converts discard the seek drum had *removed*
+straight back into discard the CPU pays, one word for one word. There is no length
+at which that trade is favourable, which is why the curve has no knee to find.
+
+The classic-drum control, for contrast — same program, same input, seek drum off:
+
 | build | seek drum | box | ticks | Δ |
 |---|---|---|---|---|
-| corridor 29 (routing accident) | on | 295x269 | 591,485,564 | — |
-| corridor 500 | on | 295x278 | 611,878,828 | **+3.4%** |
-| corridor 1,677 | on | 295x296 | 675,651,202 | **+14.2%** |
-| corridor 29 | **off** | 279x258 | 653,734,716 | — |
+| corridor 44 | **off** | 279x258 | 653,734,716 | — |
 | corridor 1,677 | **off** | 279x291 | 629,578,991 | **-3.7%** |
-
-Canonical at corridor 1,677 is **+30.3%** on the same change.
 
 **On the classic drum the buffer works.** −3.7% is small but it is the first
 positive reading this feature has ever produced, and it is on the one program big
 enough for its discard bill to matter. The three flat rows above were measured on
-programs whose whole image is smaller than DOOM's corridor.
+programs whose whole image is smaller than the buffer under test. Note this does
+*not* contradict the `max(6 ticks CPU loop, ROM ticks/word)` model below: the model
+says buffering cannot expose a saving, and −3.7% against the drum's −9.5% is
+consistent with it being a second-order smoothing effect, not the first-order win
+the feature was proposed for.
 
 **On the seek drum the same corridor costs +14.2%, and the mechanism is in
 `seekrom.py`'s own protocol.** A seek is not free of the corridor — the docstring

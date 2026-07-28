@@ -4597,22 +4597,32 @@ ROM_ROWS = {
 #: jump. A buffer is precisely a longer corridor, so it prices every seek at its
 #: own capacity (native/fast engine, taped, the 57-command ``WALK``):
 #:
-#: | corridor | seek drum | ticks | Δ |
-#: |---|---|---|---|
-#: | 29 (routing accident) | on | 591,485,564 | — |
-#: | 500 | on | 611,878,828 | **+3.4%** |
-#: | 1,677 | on | 675,651,202 | **+14.2%** |
-#: | 29 | **off** | 653,734,716 | — |
-#: | 1,677 | **off** | 629,578,991 | **-3.7%** |
+#: | corridor | ≈ of P=4,002 | seek drum | ticks | Δ |
+#: |---|---|---|---|---|
+#: | 44 (routing accident) | 1/91 | on | 591,485,564 | — |
+#: | 130 (shortest buildable) | 1/32 | on | 593,636,532 | **+0.36%** |
+#: | 250 | 1/16 | on | 599,111,202 | **+1.29%** |
+#: | 500 | 1/8 | on | 611,878,828 | **+3.45%** |
+#: | 1,000 | 1/4 | on | 639,137,034 | **+8.06%** |
+#: | 1,677 | 2/5 | on | 675,651,202 | **+14.23%** |
+#: | 2,000 | 1/2 | on | 690,875,164 | **+16.80%** |
+#: | 44 | — | **off** | 653,734,716 | — |
+#: | 1,677 | 2/5 | **off** | 629,578,991 | **-3.7%** |
+#:
+#: **No dip and no optimum** — cost rises from the first buildable row-pair, so a
+#: shorter buffer does not rescue it. The curve is *linear* to within 0.5% over a
+#: 45x range, slope **50,813 ticks per corridor word**; against 186 long jumps a
+#: frame over 57 frames that is **4.79 ticks per word per seek**, i.e. exactly the
+#: 4.8 ticks a recirculated word ``ROM-RECIRCULATION.md`` measures. The flush
+#: drains at the ordinary discard rate, so a buffer converts discard the drum had
+#: *removed* straight back into discard the CPU pays, one word for one word.
 #:
 #: The last two rows are the control, and they are what makes this a *conflict*
 #: rather than a dead feature: on the classic drum the buffer does what it was
 #: designed to do and is worth -3.7%; on the seek drum the same corridor costs
-#: +14.2%. Canonical at 1,677 is **+30.3%**. The regression is monotone in
-#: corridor length in both tiers — the flush model, not noise — and combining it
-#: with a wider :data:`SEEK_OPS` is *super*-additive (+17.3%, against +13.8%
-#: predicted from the two alone), because each extra split family adds seeks and
-#: every seek pays the flush again.
+#: +14.2%. Canonical at 1,677 is **+30.3%**. Combining it with a wider
+#: :data:`SEEK_OPS` is *super*-additive (+17.3%, against +13.8% predicted from the
+#: two alone), because each extra split family adds seeks and every seek flushes.
 ROM_BUFFER: dict[str, int] = {}
 
 
