@@ -88,7 +88,7 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -477,7 +477,45 @@ class _Plan:
     sem: dict[str, Sem] = field(default_factory=dict)
 
 
-def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Plan:
+def _relabel_slots(
+    placed: dict[str, int], want: Mapping[str, int], lanes: int
+) -> dict[str, int]:
+    """Apply a rank-preserving leaf relabelling to ``placed``.
+
+    Every failure mode here is one that would silently move a lane — a missing
+    mnemonic, a duplicate slot, or a map that permutes the north-to-south order —
+    so all three are errors rather than a best effort. See :func:`plan`.
+
+    A map may name opcodes this build does not use, and only those: whether
+    ``JMPS``/``BRZS``/``BRNS`` exist at all is :func:`seek_split`'s decision, made
+    from a threshold the registry cannot evaluate, so one registered map has to
+    serve ``seek=True`` and ``seek=False`` alike. Dropping names from both sides
+    of a sorted comparison cannot reorder what is left, so the rank check below
+    still holds on the subset.
+    """
+    missing = sorted(set(placed) - set(want))
+    if missing:
+        raise MachineError(f"opcode slot map does not name the used opcodes {missing}")
+    want = {m: s for m, s in want.items() if m in placed}
+    if len(set(want.values())) != len(want):
+        raise MachineError("opcode slot map assigns one slot twice")
+    bad = sorted(m for m, s in want.items() if not 0 <= s < lanes)
+    if bad:
+        raise MachineError(f"opcode slot map is outside 0..{lanes - 1} for {bad}")
+    if sorted(placed, key=lambda m: want[m]) != sorted(placed, key=lambda m: placed[m]):
+        raise MachineError(
+            "opcode slot map must preserve the lanes' north-to-south order — it "
+            "re-labels leaves, it does not re-order lanes; use middle_order for that"
+        )
+    return dict(want)
+
+
+def plan(
+    program: Program,
+    *,
+    middle_order: Sequence[str] | None = None,
+    slots: Mapping[str, int] | None = None,
+) -> _Plan:
     """Assign lane rows by pipe need, then derive opcode numbers from the trie.
 
     The trie sorts its leaves in **bit-reversed** order (``ARCH.md`` §2.4), so
@@ -494,6 +532,21 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
     ``2 * drop_x - row`` (east to the drop column, south to the collector, west
     along it), so a hot lane wants to be *low* on both terms at once. See
     ``LANE_ORDER`` for the per-program orders this bought and §7.6 for the method.
+
+    ``slots`` re-labels the *leaf slots* the lanes land on without moving a single
+    lane. Under ``trim_dead`` a lane's row is ``y0 + 2 * rank(slot)`` — the rank of
+    its slot among the used ones, not the slot itself — so any **rank-preserving**
+    relabelling leaves every row, every drop column and every measured lane tick
+    exactly where they were, and changes only ``number = _bitrev(slot, k)``. That
+    is a pure *ROM-encoding* knob: an opcode below 10 is one digit and costs the
+    drum ``Ns`` = 2 cells, one at 10 or above costs ```NN`s`` = 5, and which ten of
+    the ``1 << k`` slots bit-reverse below 10 is fixed geometry the default
+    contiguous packing has no way to aim at. See :data:`OPCODE_SLOTS`.
+
+    The rank-preserving condition is *enforced*, not documented: a map that
+    reorders the lanes is rejected, so this can never silently undo a tuned
+    ``LANE_ORDER``. It is only row-neutral under ``trim_dead`` (:func:`build`
+    checks that), because the untrimmed band puts a lane at ``2 * slot + 1``.
     """
     used = [op.mnemonic for op in program.ops_used]
     sems = {op.mnemonic: op.sem for op in program.ops_used}
@@ -536,13 +589,13 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
         return (group(m), -width(m), m)
 
     order = sorted(used, key=rank)
-    slots = list(range(lanes))
+    free = list(range(lanes))
     placed: dict[str, int] = {}
     for m in [n for n in order if group(n) == 0]:
-        placed[m] = slots.pop(0)
+        placed[m] = free.pop(0)
     for g in (3, 2):
         for m in reversed([n for n in order if group(n) == g]):
-            placed[m] = slots.pop()
+            placed[m] = free.pop()
     middle = [n for n in order if group(n) == 1]
     if middle_order is not None:
         want = list(middle_order)
@@ -553,7 +606,10 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
             )
         middle = want
     for m in middle:
-        placed[m] = slots.pop(0)
+        placed[m] = free.pop(0)
+
+    if slots is not None:
+        placed = _relabel_slots(placed, slots, lanes)
 
     return _Plan(
         k=k,
@@ -2754,6 +2810,7 @@ def build(
     tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     middle_order: Sequence[str] | None = None,
+    opcode_slots: Mapping[str, int] | None = None,
     rom_buffer: int | None = None,
     compact: bool = False,
     hot: tuple[int, int] | None = None,
@@ -2770,6 +2827,7 @@ def build(
     seek: bool = False,
     seek_threshold: int = SEEK_THRESHOLD,
     seek_ops: Sequence[str] = SEEK_OPS,
+    doom_loop_row: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -2881,7 +2939,11 @@ def build(
                     order.insert(at, new)
                     at += 1
             middle_order = order
-    p = plan(program, middle_order=middle_order)
+    if opcode_slots is not None and not trim_dead:
+        # Untrimmed, a lane sits at ``2 * slot + 1``, so relabelling the leaves
+        # *moves* it — the whole point of the knob is that it does not.
+        raise MachineError("opcode_slots is row-neutral only with trim_dead")
+    p = plan(program, middle_order=middle_order, slots=opcode_slots)
     seek_layout = None
     if seek:
         # The seek drum resolves jump operands as row*K+offset in its own packed
@@ -2956,6 +3018,7 @@ def build(
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    doom_loop_row=doom_loop_row,
                 )
             except MachineError as exc:
                 last = exc
@@ -3012,6 +3075,7 @@ def build(
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    doom_loop_row=doom_loop_row,
                 )
             except MachineError:
                 continue
@@ -3090,6 +3154,7 @@ def _assemble(
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
     seek_layout=None,
+    doom_loop_row: int | None = None,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -3582,7 +3647,9 @@ def _assemble(
                 "the program drives the STREAM block but no ring sizes were given; "
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
-        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
+        blk, stream_touches, (SX, SY) = _stream(
+            g, cpu, CX, CY + H + 1, stream, unit=program.unit, doom_loop_row=doom_loop_row
+        )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
     # Drawn last so its northbound leg can clear everything already placed. Its
@@ -4253,6 +4320,7 @@ def _stream(
     sizes: tuple[int, int, int] | None,
     *,
     unit: str = "stream",
+    doom_loop_row: int | None = None,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -4283,7 +4351,12 @@ def _stream(
         # the CPU keeps its jumps and there is no separate `_display` call.
         from . import d3_unit
 
-        blk = d3_unit.build_doom()
+        # ``doom_loop_row`` lifts the unit's loop corridor and with it the panel,
+        # which is the machine's own floor — see ``DOOM_LOOP_ROW``. None keeps the
+        # shipped row, so the canonical artifacts do not move.
+        blk = d3_unit.build_doom(
+            loop_row=d3_unit.R_LOOP if doom_loop_row is None else doom_loop_row
+        )
     elif unit == "doom4":
         # The tiled wall: four unmodified DOOM blocks behind a 1-of-4 router, so
         # one command lane paints a 128x96 framebuffer across four 64x48 panels
@@ -5139,13 +5212,98 @@ SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 #: * canonical, ``rom_rows`` 59/60/61/62/63: 386x381 / **382x382** / 379x383 /
 #:   379x385 / 379x386. 60 is the crossing and it lands exactly square, so the
 #:   seek build folds one row *shallower* than the classic 61.
-#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / **295x269** /
+#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / 295x269 /
 #:   295x272 .. 295x286. The width floors at 295 (the store binds, and
 #:   ``store_offset`` dx -20 is still the last value that routes), so the fold
 #:   stops at the first row that reaches the floor rather than the classic 83.
+#:
+#: **The taped fold re-swept once the width floor moved.** That sweep's floor of
+#: 295 was the answer-path's, not the store's: the STORE teleport L room sat at
+#: ``rom_bottom+1..+4`` and its collector reached to 293. :data:`STORE_ANSWER_WEST`
+#: deleted the room and :data:`SEEK_SLAB_PITCH` narrowed the slabs, and the floor
+#: fell to **287** — ``TX 61 + the block's 224 columns + the east return pipe`` —
+#: but ``rom_rows`` was left at 80, which is one row *short* of reaching it. The
+#: curve, re-measured build-only and then on the 8-command native gate under the
+#: current bank plan:
+#:
+#: ::
+#:
+#:     rom_rows   box        ticks (8-cmd gate)
+#:     76         304x265    61,698,016
+#:     78         299x266    61,613,459
+#:     79         292x268    61,714,266
+#:     80         289x269    61,799,020   (was shipped)
+#:     81         287x271    61,826,043   <- the floor, at the least height
+#:     82, 83     287x272    do not RUN (see below)
+#:     84         287x274    61,689,668
+#:     85..87     287x275/6  do not RUN
+#:     88         287x278    61,666,460
+#:     92         287x282    61,598,564
+#:     96         287x286    61,522,369
+#:     100        287x291    (width floored, height now over)
+#:
+#: 81 is the crossing: every deeper fold buys nothing in width and costs rows.
+#: Ticks are flat across the whole range — the entire 76..96 span is 0.5% — so
+#: this is a size number and only a size number; the +0.08% at 81 against 80 is
+#: inside that band. On the 115-frame tour: 838,732,969 at 80 (289x269) against
+#: 839,384,674 at 81 (287x271).
+#:
+#: **Folds 82, 83, 85, 86 and 87 build but do not run.** At those depths the
+#: ROM's packed words land so that a literal's *reverse* reading exceeds 63 bits
+#: — a ``` ` ``` pair is readable from either end, so both readings have to be
+#: values, and "every value in the language is a signed 64-bit integer"
+#: (``littleman/reference/language-reference.txt``). ``fast_littleman`` checks
+#: both directions and rejects the grid. It is a property of the fold's word
+#: packing, not of anything here, and it is why 84 — 0.2% faster than 81 and
+#: equally narrow — is not the pin: it sits in a hole between folds that do not
+#: run at all.
 SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
-    ("deadman-3d", "taped"): {"rom_rows": 80},
+    ("deadman-3d", "taped"): {"rom_rows": 81},
+}
+
+#: Per-``(slug, tier)`` **leaf relabelling** for the decode trie: which slot each
+#: opcode's lane occupies, north to south. Absent keys keep the contiguous default
+#: and every other machine stays byte-identical.
+#:
+#: This is a *ROM-encoding* knob and nothing else. A lane's row is its slot's
+#: **rank** under :data:`TRIM_DEAD_LANES`, so a rank-preserving relabelling leaves
+#: every row, drop column and lane tick untouched (:func:`plan` enforces that) and
+#: only moves ``number = _bitrev(slot, k)``. The drum charges an opcode below ten
+#: ``Ns`` = 2 cells and one from ten up ```NN`s`` = 5, and the ten slots that
+#: bit-reverse below ten are ``0, 2, 4, 8, 12, 16, 18, 20, 24, 28`` — a spread the
+#: default packing (``0..N-1`` plus the pinned tail) cannot aim at. With 22 lanes in
+#: 32 slots there are ten spare, and spending them to land the hot opcodes on those
+#: ranks is a pure win in cells.
+#:
+#: DOOM's map is the exact optimum of that assignment (``scratch/rom-opt/slots.py``
+#: — a DP over slot x rank against the **static** opcode histogram, which is what
+#: the drum's cells and its lap length are both counted in, not the execution
+#: profile ``LANE_ORDER`` is weighted by). Measured on the taped tier:
+#:
+#: | quantity | default | relabelled |
+#: |---|---|---|
+#: | one-digit opcode words | 610 of 2,152 | **1,401 of 2,152** |
+#: | opcode cells | 8,930 | **6,557** (-2,373) |
+#: | whole drum, cells/word | 4.626 | **4.075** |
+#: | drum data columns | 267 | **236** |
+#:
+#: **What those cells are worth in ticks is almost nothing, and that is the
+#: finding.** The 13% shorter lap moves the 115-frame tour 839,384,674 ->
+#: 838,737,298, **-0.077%**; a `+1 blank cell per token` control prices the whole
+#: drum at ~0.6% of tour ticks. The taped width floors at 287 on the *store*
+#: (``TX 61 + 224 + the east return pipe``), so the drum's 284 was one column
+#: under the floor and its 252 is 35 under: what this bought is a **32-column
+#: reserve** for whoever narrows the store, not the tick. Full profile, and the
+#: three levers costed and rejected beside it, in ``ROM-RECIRCULATION.md``
+#: §"The drum's *contents*".
+OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
+    ("deadman-3d", "taped"): {
+        "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5,
+        "LDA": 8, "DIV": 9, "SUB": 10, "ADD": 11, "ST": 12, "LD": 16,
+        "MODI": 18, "DIVI": 20, "SUBI": 21, "MULI": 22, "LDI": 24,
+        "JMPS": 25, "BRN": 26, "BRZ": 28, "JMPF": 29, "SND": 30,
+    },
 }
 
 #: Slugs whose CPU gets a **second return bus above the band**: a simple lane
@@ -5275,6 +5433,50 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
 }
 
+#: ``(slug, tier)`` -> the DOOM unit's loop-corridor row (``d3_unit.R_LOOP``,
+#: shipped 27). Absent means "keep the shipped row", which is what holds
+#: ``deadman-3d``, ``deadman-3d_trim`` and ``deadman-3d_hires`` byte-identical.
+#:
+#: **The unit's height is the machine's floor, and seventeen rows of it were
+#: doing nothing.**
+#: The DOOM block hangs below everything (``rom`` rows 0..93, CPU/tape 94..168,
+#: the block 170..270), so the machine's last row *is* the block's, and the
+#: block's height is ``R_ADDR + PANEL_H + 6`` — the panel hangs two rows below
+#: ADDR's band row and the SWAP under-run three below the panel. The unit's own
+#: interior bottom (``R_COLLECT``) is 16 rows clear of that, so it is ADDR, and
+#: only ADDR, that sets the floor.
+#:
+#: Every row below the loop corridor is a fixed offset from it
+#: (``d3_unit.BELOW_LOOP``) because the two counted-loop bodies are rigid
+#: ladders and the band rows are where their ``r``/``s`` glyphs land. So the
+#: whole lower half translates as one piece, every ``_send_band`` decision (a
+#: comparison of row *differences*) is invariant, and all four pipe lengths —
+#: which depend on ``ADDR-DATA`` and ``ADDR-SWAP``, not on ADDR — are unchanged.
+#: Rows 19..26 of the shipped map hold no cell at all, and rows 10..18 come free
+#: once RUN's ``>`` steps into a climb column of its own — COL already does this,
+#: which is why COL's leaf column may carry machinery on the corridor row and
+#: RUN's could not. Below 10 the limit stops being a collision and becomes rule 1:
+#: COL's seed push sits at a fixed row 20, *above* the corridor, and must stay
+#: nearer the ring band (``loop+3``) than ADDR (``loop+19``); their midpoint is
+#: ``loop+11``. 9 is the reading-order tie the builder refuses, 8 and below would
+#: send the wall seed to the panel.
+#:
+#: Measured. Block 235x101 -> 235x84 at ``loop_row`` 10; pipe lengths (addr 15,
+#: data 15, swap 35) and binding margins (min 2) are identical at every value in
+#: 10..27, and the standalone probe — every arm, a negative-seed COL, both
+#: sprites, the banding masks — passes pixel-for-pixel on the native engine at
+#: all eighteen, in 44,054 steps at 10 against 45,447 at 27 (the arms' descents
+#: to the corridor are shorter, so the lift is very slightly *cheaper* too).
+#:
+#: The taped machine then goes **287x271 -> 287x254**, 839,384,674 ->
+#: 839,158,874 ticks on the 116-round tour (-0.03%, i.e. flat). The width is the
+#: taped store's floor (see :data:`SEEK_TIER_LAYOUT`) and the unit never reached
+#: it — the block's east edge is column 235 — so this is height and only height.
+#: It is banked height as well: ``rom_rows`` 81 is the shallowest fold that
+#: reaches the 287 floor, and the seventeen rows come off the total that fold has
+#: to fit under.
+DOOM_LOOP_ROW: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 10}
+
 #: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
 #: different from :data:`TAPED_BANKS`' address order. The value is a permutation
 #: of the bank indices; :func:`memory_taped.gate_chain` turns it into a per-gate
@@ -5327,8 +5529,25 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {
 #: glyph where the low form's ``+`` restores, and the high form's pass-through
 #: arms are two cells *shorter* — so the block is 224x58 and the machine
 #: 295x269 both ways.
+#:
+#: **Re-derived when :data:`TAPED_BANKS` was re-swept**, because an order is only
+#: correct for the split it was fitted to. Under ``(352, 164, 15, 69)`` the hot
+#: addresses are two banks, not one — the DDA scalars (bank 2) and ``PW``/
+#: ``WADDR`` (bank 3) — and both have to lead. ``(3, 2, 0, 1)`` is the descending
+#: traffic order and it is still an end-peeling: 3 and 2 come off the top, then 0
+#: off the bottom, leaving 1 terminal. Two high gates now instead of one; the
+#: block is 224x60 (bank 0's 352-slot ring is two rows deeper than the old 256)
+#: and the machine is unchanged at 289x269.
+#:
+#: The alternatives, on the 8-command native gate, ticks against
+#: ``(3, 2, 0, 1)``'s 61,799,020:
+#:
+#: * ``(3, 2, 1, 0)``  61,979,795  (+0.29%, the two cold banks swapped)
+#: * ``(3, 0, 2, 1)``  63,602,816  (+2.9%, the DDA ring behind the map)
+#: * ``(0, 3, 2, 1)``  64,478,669  (+4.3%)
+#: * address order     67,253,690  (+8.8%)
 TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
-    ("deadman-3d", "taped"): (3, 0, 1, 2),
+    ("deadman-3d", "taped"): (3, 2, 0, 1),
     # **Re-derived, not copied.** hires has no `TAPED_BANKS` entry, so it takes
     # `taped_plan`'s uniform quarters `(226, 226, 226, 223)` rather than
     # `deadman-3d`'s hand-cut `(256, 195, 64, 85)`, and its tape is 902 slots
@@ -5442,8 +5661,69 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: same fold — one fewer gate on every access beats the merged cold rings' laps.
 #: Merging the hot pair too (three banks, ``(256, 195, 149)``) is the wrong
 #: direction and re-proves the original lesson: 121,458,179, +29%.
+#:
+#: **Re-swept against the traffic once the chain order came free**
+#: (:data:`TAPED_BANK_ORDER`). ``(256, 195, 64, 85)`` was fitted while the chain
+#: was forced into address order, so the hot bank was pinned *last* and the only
+#: lever left was its size. With the order free the two questions separate: the
+#: order decides how many gates a bank is behind, and the sizes decide the ring
+#: tax — and the sizes turn out to have been fitted to the wrong boundary.
+#:
+#: Per-**address** traffic, on the emulator's abstract wire, differencing a
+#: four-command run against the boot round alone (``scratch/deadman3d-opt/
+#: traffic.py``; 11,222 reads and 3,416 writes a gameplay frame):
+#:
+#: ::
+#:
+#:     addresses                       reads    writes   what
+#:     517..531  XCOL..COLOR          56.2%     56.2%    the DDA inner loop
+#:     532..533  PW, WADDR            25.6%     31.2%    the texture inner loop
+#:     1..352    MAPB + POSX..PLANEY   8.4%      0.0%    the map, scanned
+#:     353..516  MONB/SPRB/ZBUF/CMD    3.5%      2.0%    boot-mostly + ZBUF
+#:     534..600  FRACX..PTR            6.3%     10.6%    the rest of the scalars
+#:
+#: The old plan's seam at 515/516 cut straight through that: **every** one of
+#: those addresses sat in one 85-slot ring. The new plan puts the fifteen
+#: DDA scalars in a ring of their own and leaves ``PW``/``WADDR`` — the two
+#: hottest single addresses in the machine — in the bank the chain reaches
+#: with no gate at all:
+#:
+#: ::
+#:
+#:     bank  addresses    M    chain pos   share of accesses
+#:     0     1..352      352      2          6.45%
+#:     1     353..516    164      3          3.10%
+#:     2     517..531     15      1         56.19%
+#:     3     532..600     69      0         34.26%
+#:
+#: Both seams are knife-edges, and both were measured, not derived — the
+#: 8-command native gate, ticks against ``(256, 195, 64, 85)``'s 75,782,738:
+#:
+#: * ``(352, 164, 15, 69)`` (this)  61,799,020  **-18.5%**
+#: * ``(352, 164, 16, 68)``         62,405,534  (``WADDR`` moved to the small
+#:   ring: one gate hop costs it more than the 54 slots it saves)
+#: * ``(352, 164, 14, 70)``         62,132,237
+#: * ``(352, 165, 14, 69)``         63,382,964  (``XCOL`` out of the small ring)
+#: * ``(352, 163, 16, 69)``         61,943,676
+#: * ``(352, 164, 17, 67)``         63,237,686
+#: * ``(256, 260, 17, 67)``         64,365,449  (the old bank-0 seam)
+#: * ``(160, 356, 17, 67)``         66,243,101
+#:
+#: Bank 0 wants to be **big**, which the ring-tax model gets exactly backwards:
+#: the map is walked in address order, so its ring is already turned to the next
+#: word and the tax is not paid. 352 is where that stops — the next seam up
+#: (354) costs +0.9% and 358 costs +6.0%, and past ~356 the block outgrows the
+#: 60 rows :func:`build` can place it in (370 and up fail to route at every
+#: fold, so bank 0 has a hard ceiling here as well as a soft one).
+#:
+#: Five banks would be the obvious next question and the answer is the width:
+#: ``48*5 + 32 = 272`` columns from the store's west wall at x=61 is an east
+#: edge of 333, past the 300-column ceiling ``tests/test_deadman3d.py`` pins.
+#: Three banks (176 columns, and it would fit) needs bank 0 to swallow
+#: everything below 517 — 516 slots, a block 66 rows deep, which does not route
+#: at any fold either. Four is what the geometry allows.
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
-    "deadman-3d": (256, 195, 64, 85)}
+    "deadman-3d": (352, 164, 15, 69)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
@@ -5538,6 +5818,7 @@ def build_for(
         tape_relay_size=tape_relay_size,
         tape_jump_threshold=tape_jump_threshold,
         middle_order=LANE_ORDER.get(slug),
+        opcode_slots=OPCODE_SLOTS.get((slug, store)),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
         mem_offset=tier.get("mem_offset", mem_offset),
@@ -5552,6 +5833,7 @@ def build_for(
         seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
+        doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
     )
 
 

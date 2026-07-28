@@ -1039,6 +1039,49 @@ def test_doom_unit_codes_pin_the_trie() -> None:
     assert blk.lengths["swap"] > blk.lengths["data"]
 
 
+def test_doom_loop_row_lifts_the_block_and_nothing_else() -> None:
+    """``loop_row`` is a rigid translation of the unit's whole lower half.
+
+    The block's height is ``R_ADDR + PANEL_H + 6`` — the panel hangs two rows
+    below ADDR's band row and the SWAP under-run three below the panel — so a
+    row off the corridor is a row off the machine's floor. What must *not* move
+    is everything the geometry rules constrain: the pipe lengths (rule 3, which
+    depends on differences of band rows, not on their absolute values), the
+    binding margins (rules 1 and 2, likewise), the arm codes, and the width.
+    """
+    from randomfun2026solvers.lm1 import d3_unit
+
+    base = d3_unit.build_doom()
+    # The floor is a binding limit, not a collision one: COL's seed push stays at
+    # row 20 while the corridor rises, and it must stay nearer ring than ADDR.
+    assert d3_unit.SEED_PUSH_ROW == 20
+    assert d3_unit.MIN_LOOP_ROW == 10
+    assert d3_unit.SEED_PUSH_ROW < d3_unit.MIN_LOOP_ROW + 11
+    heights = {}
+    for lr in range(d3_unit.MIN_LOOP_ROW, d3_unit.R_LOOP + 1):
+        blk = d3_unit.build_doom(loop_row=lr)
+        heights[lr] = blk.height
+        assert blk.width == base.width, lr
+        assert blk.lengths == base.lengths, lr
+        assert blk.codes == base.codes, lr
+        assert min(d3_unit.binding_margins(d3_unit.unit_interior(loop_row=lr)).values()) >= 1
+
+    # One row of corridor is exactly one row of block, all the way down.
+    assert heights == {lr: base.height - (d3_unit.R_LOOP - lr) for lr in heights}
+    assert heights[d3_unit.R_LOOP] == base.height
+    assert heights[d3_unit.MIN_LOOP_ROW] == base.height - 17
+
+    # Below the floor the builder refuses rather than letting the seed push bind
+    # to ADDR, which would send the wall seed to the panel instead of the ring.
+    with pytest.raises(d3_unit.DoomUnitError, match="seed push"):
+        d3_unit.build_doom(loop_row=d3_unit.MIN_LOOP_ROW - 1)
+
+
+def test_doom_loop_row_is_opt_in_per_tier() -> None:
+    """Only the taped tier lifts the corridor; the canonical build must not."""
+    assert machine.DOOM_LOOP_ROW == {("deadman-3d", "taped"): 10}
+
+
 @slow
 def test_doom_unit_probe_paints_like_the_model() -> None:
     """The placed block plus a feeder, judged on the native engine against the
@@ -1075,10 +1118,14 @@ def test_doom_unit_probe_paints_like_the_model() -> None:
         unit.send(w)
     expected = frames_from_writes(writes, width=64, height=48)
     assert len(expected) == 3
-    rows, _dbg, _blk = d3_unit.build_probe(cmds)
-    res = FastLittleman(rows).run([], frames=[expected], max_ticks=5_000_000)
-    assert res.fatal is None, (res.fatal, res.fatal_pos)
-    assert res.passed is True
+    # Both geometries the registries ship: the canonical corridor row and the
+    # taped tier's lifted one. The lift is a pixel-level claim, so it is judged
+    # as one — the model's frames do not depend on where the corridor sits.
+    for loop_row in (d3_unit.R_LOOP, machine.DOOM_LOOP_ROW[("deadman-3d", "taped")]):
+        rows, _dbg, _blk = d3_unit.build_probe(cmds, loop_row=loop_row)
+        res = FastLittleman(rows).run([], frames=[expected], max_ticks=5_000_000)
+        assert res.fatal is None, (loop_row, res.fatal, res.fatal_pos)
+        assert res.passed is True, loop_row
 
 
 # ── the checked-in machine, judged for real ──────────────────────────────────
@@ -1229,31 +1276,42 @@ def test_the_compact_gate_is_keyed_by_tier_and_only_the_taped_tier_takes_it() ->
 
 
 def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -> None:
-    """The hot bank leads the chain, and the order is one the chain can express.
+    """The hot banks lead the chain, and the order is one the chain can express.
 
-    ``TAPED_BANKS``' sizes are in ADDRESS order and the hot 85 — the per-frame
-    scalars at 516..600, 88% of reads and 98% of writes — is last, so under the
-    default chain it pays three gate traversals while the coldest pays none.
-    The registry turns that around. The check that it is *sound* lives in
-    ``test_memory_taped.py`` (the engine reads back all 329 addresses through
-    both chains); this one pins the registry's scope and its keying.
+    ``TAPED_BANKS``' sizes are in ADDRESS order, and the traffic is not in
+    address order: the raycaster's inner loops live at 517..533, so under the
+    default chain they would pay two and three gate traversals while the map —
+    8% of reads and none of the writes — pays none. The registry turns that
+    around. The check that it is *sound* lives in ``test_memory_taped.py`` (the
+    engine reads back every address of the real 601-slot plan through both
+    chains); this one pins the registry's scope and its keying.
     """
-    from randomfun2026solvers.memory_taped import gate_chain
-
-    from randomfun2026solvers.memory_taped import taped_plan
+    from randomfun2026solvers.memory_taped import gate_chain, taped_plan
 
     assert machine.TAPED_BANK_ORDER == {
-        ("deadman-3d", "taped"): (3, 0, 1, 2),
+        ("deadman-3d", "taped"): (3, 2, 0, 1),
         ("deadman-3d_hires", "taped"): (3, 0, 1, 2),
     }
     assert all(tier == "taped" for _slug, tier in machine.TAPED_BANK_ORDER)
     sizes = list(machine.TAPED_BANKS["deadman-3d"])
-    assert sizes == [256, 195, 64, 85]
+    assert sizes == [352, 164, 15, 69]
     order = machine.TAPED_BANK_ORDER[("deadman-3d", "taped")]
-    # the hot bank leads, and only its gate is the high-end form
+    # The two hot banks lead, and they are the two peeled off the TOP of the
+    # space, so exactly their gates take the high-end form; the cold pair below
+    # them is reached in address order and needs none.
     chain = gate_chain(sizes, order)
-    assert chain[0] == (3, sum(sizes))
-    assert [top for _k, top in chain[1:]] == [None, None, None]
+    assert chain[0] == (3, sum(sizes))                       # 532..600, no gate ahead
+    assert chain[1] == (2, sum(sizes) - sizes[3])            # 517..531, one
+    assert [top for _k, top in chain[2:]] == [None, None]
+
+    # The seams are the traffic's, not the address space's: the fifteen DDA
+    # scalars are a bank, and PW/WADDR are the tail of the one with no gate.
+    slots = d3.tape_slots()
+    bounds = [0]
+    for m in sizes:
+        bounds.append(bounds[-1] + m)
+    assert (bounds[2] + 1, bounds[3]) == (slots["XCOL"], slots["COLOR"])
+    assert bounds[3] + 1 == slots["PW"] and slots["WADDR"] == slots["PW"] + 1
 
     # hires' order is the same permutation for a *different* reason, and the
     # thing that makes it non-transferable is that its banks are not these: it

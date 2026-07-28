@@ -295,3 +295,298 @@ men. `deadman-3d.input.txt`, `.cases.json` and `_tour.input.txt` are unchanged
 (the program never moved) — `plan_tour.py <out> 2 5` reproduces the checked-in
 tour byte-identically. Test ceilings tightened 400 -> 390 (canonical/trim) and
 400 -> 300 (taped).
+
+## M9 — the two knobs the earlier passes left on the table
+
+Both sweeps are on the taped tier only, native/fast engine, `passed=True`
+throughout, and are opt-in per `(slug, tier)` — the canonical machine's
+`deadman-3d.man`, `deadman-3d_trim.man` and `deadman-3d.input.txt` are
+byte-identical across both.
+
+Baseline for this pass (merge-staging `cf0effc`, taped, 115-frame tour,
+116 rounds): **1,018,297,264 ticks at 289x269**. (Reproduce with
+`scratch/deadman3d-opt/tour6.py`, which recovers the command list from
+`littleman/examples/deadman-3d_tour.input.txt` instead of needing a chords
+file. The 1,022,496,076 quoted in the hand-off is 0.4% off this and does not
+reproduce; the checked-in `deadman-3d_taped.man` and a fresh `build_for` both
+give 1,018,297,264 exactly, so the discrepancy is in the older harness, not
+the machine.)
+
+### The bank split, re-swept against per-ADDRESS traffic
+
+The earlier passes profiled per BANK, which cannot see a seam in the wrong
+place. `scratch/deadman3d-opt/traffic.py` counts on the emulator's abstract
+wire per address (four-command run differenced against the boot round;
+11,222 reads and 3,416 writes a gameplay frame):
+
+| addresses | what | reads | writes |
+|---|---|---|---|
+| 517..531 `XCOL..COLOR` | the DDA inner loop | 56.2% | 56.2% |
+| 532..533 `PW`, `WADDR` | the texture inner loop | 25.6% | 31.2% |
+| 1..352 `MAPB`, `POSX..PLANEY` | the map, walked in address order | 8.4% | 0.0% |
+| 353..516 `MONB`/`SPRB`/`ZBUF`/`CMD` | boot-mostly + the ZBUF | 3.5% | 2.0% |
+| 534..600 `FRACX..PTR` | the rest of the scalars | 6.3% | 10.6% |
+
+`(256, 195, 64, 85)`'s seam at 515/516 put all of that in one 85-slot ring.
+
+8-command native gate, against `(256, 195, 64, 85)` + order `(3, 0, 1, 2)` =
+75,782,738:
+
+| plan | order | ticks | |
+|---|---|---|---|
+| **(352, 164, 15, 69)** | **(3, 2, 0, 1)** | **61,799,020** | **-18.5%** |
+| (352, 164, 16, 68) | (3, 2, 0, 1) | 62,405,534 | `WADDR` into the small ring |
+| (352, 164, 14, 70) | (3, 2, 0, 1) | 62,132,237 | |
+| (352, 165, 14, 69) | (3, 2, 0, 1) | 63,382,964 | `XCOL` out of it |
+| (352, 164, 17, 67) | (3, 2, 0, 1) | 63,237,686 | |
+| (256, 260, 17, 67) | (3, 2, 0, 1) | 64,365,449 | the old bank-0 seam |
+| (160, 356, 17, 67) | (3, 2, 0, 1) | 66,243,101 | |
+| (352, 164, 15, 69) | (3, 2, 1, 0) | 61,979,795 | +0.29% |
+| (352, 164, 15, 69) | (3, 0, 2, 1) | 63,602,816 | +2.9% |
+| (352, 164, 15, 69) | address order | 67,253,690 | +8.8% |
+
+Bank 0 wants to be BIG, which the `~8 ticks per slot per access` ring-tax model
+gets exactly backwards (the model's own optimum, `(126, 390, 17, 67)`, does not
+even build). The map is walked in address order, so its ring is already turned
+to the next word and the tax is not paid. `b1` sweep at `b2=516, b3=531`:
+300 62,614,448 · 310 62,461,570 · 330 62,146,070 · 340 61,988,320 ·
+344 61,925,220 · 348 61,862,120 · **352 61,799,020** · 354 62,333,591 ·
+356 63,269,295 · 358 65,506,462 · 360 66,641,970 · 370+ do not build.
+
+Bank COUNT is fixed at four by geometry: five is `48*5+32 = 272` columns from
+the store's west wall at x=61, an east edge of 333 against the 300-column
+ceiling; three needs bank 0 to swallow everything below 517 (516 slots, block
+66 rows) and does not route at any fold. Blocks deeper than 60 rows fail
+`build`'s pipe binding at the store's own southwest corner (`collision at
+(61..62, 149..179)`) at **every** fold, which is what caps bank 0 near 356.
+
+Tour: **1,018,297,264 -> 838,732,969, -17.63%**, 289x269 both ways.
+
+### The fold, re-swept onto the freed width
+
+`SEEK_TIER_LAYOUT`'s taped `rom_rows` 80 was chosen when the width floored at
+295. That floor was the ANSWER PATH's, not the store's — the STORE teleport L
+room at `rom_bottom+1..+4` reached out to 293. `STORE_ANSWER_WEST` deleted the
+room and `SEEK_SLAB_PITCH` narrowed the slabs; the floor is now **287** =
+`TX 61 + 224 store columns + the east return pipe`, and 80 was one row short of
+reaching it. Curve (build-only box; ticks on the 8-command gate under the new
+bank plan):
+
+| `rom_rows` | box | ticks |
+|---|---|---|
+| 76 | 304x265 | 61,698,016 |
+| 78 | 299x266 | 61,613,459 |
+| 79 | 292x268 | 61,714,266 |
+| 80 | 289x269 | 61,799,020 (was shipped) |
+| **81** | **287x271** | **61,826,043** |
+| 82, 83 | 287x272 | build, do not run |
+| 84 | 287x274 | 61,689,668 |
+| 85..87 | 287x275/6 | build, do not run |
+| 88 | 287x278 | 61,666,460 |
+| 92 | 287x282 | 61,598,564 |
+| 96 | 287x286 | 61,522,369 |
+| 100 | 287x291 | width floored, height now over |
+
+81 is the crossing. The fold is a size knob and nothing else — the whole 76..96
+span is 0.5% of ticks. Tour at 81: 839,384,674 (287x271) against 838,732,969 at
+80 (289x269), +0.08%.
+
+Folds 82, 83, 85, 86 and 87 BUILD but do not RUN: at those depths a ROM literal
+read in reverse exceeds 63 bits, and both readings of a backtick pair have to be
+values ("every value in the language is a signed 64-bit integer"). That is why
+84 — 0.2% faster than 81 and equally narrow — is not the pin.
+
+### Combined
+
+| | before | after |
+|---|---|---|
+| taped box | 289x269 (max 289) | **287x271** (max **287**) |
+| taped, 115-frame tour | 1,018,297,264 | **839,384,674** (**-17.57%**) |
+| taped census | 18 static men | 18 static men |
+| width headroom vs the 300 ceiling | 11 | 13 |
+
+## M10 — the ROM block: what its 4,304 words are made of, and one knob
+
+Taped tier only, opt-in per `(slug, tier)`; `deadman-3d.man`, `deadman-3d_trim.man`
+(both `f62d63fd`) and `deadman-3d.input.txt` (`654d35d6`) are byte-identical.
+Baseline `merge-staging` `6a21275`: taped **287x271**, 8-command native gate
+**61,826,043**, 115-frame tour **839,384,674**.
+
+The full profile, the two other levers costed and rejected, and the packer
+decomposition live in `littleman/ROM-RECIRCULATION.md` §"The drum's *contents*".
+The short version:
+
+* The drum was **4.626 cells a word**, not the 3.36 the old cost model quoted
+  (that was `sudoku-validity`'s). Opcodes were **44.8%** of it: 22 opcodes need
+  `k = 5`, and 1,542 of 2,152 opcode words were two-digit at 5 cells against a
+  one-digit word's 2.
+* Under `TRIM_DEAD_LANES` a lane's row is its slot's **rank**, so relabelling the
+  slots is row-neutral. Ten of the 32 slots bit-reverse below ten;
+  :data:`machine.OPCODE_SLOTS` spends the ten spare slots on the hot opcodes
+  (DP over slot x rank, `scratch/rom-opt/slots.py`).
+
+| quantity | before | after |
+|---|---|---|
+| one-digit opcode words | 610 / 2,152 | **1,401 / 2,152** |
+| drum cells / word | 4.626 | **4.075** |
+| ROM block | 284x94 (34.3% of the grid) | **252x93** |
+| ROM lap | 23,048 cells | **20,060** |
+| trie walk (execution-weighted) | 64,444 | **54,722** |
+| taped box | 287x271 | **287x270** |
+| 8-command gate | 61,826,043 | **61,570,950** (-0.41%) |
+| 115-frame tour | 839,384,674 | **838,737,298** (**-0.077%**) |
+
+**The number worth keeping is the last one.** A 13% shorter lap bought 0.077% of
+the tour, and the control (one blank cell added per token: +18.2% of lap for
++1.09% on the 8-command gate) prices the whole drum at **~0.6% of tour ticks**.
+`max(6 ticks CPU loop, ROM ticks/word)` is CPU-bound at 4.6 cells a word, and
+DOOM's taped tier is store-bound besides — so ROM density is an **area** knob for
+this machine and essentially nothing else.
+
+And the area is not binding: the taped width floors at `TX 61 + 224 store columns
++ the east return pipe` = 287, so the drum's 284 was one column under the floor
+and its 252 is 35 under. **The ROM's own width floor fell 286 -> 254.** That
+reserve, not the 0.077%, is what this change is for: the next column of taped
+width has to come from the store, and when it does the drum will not be what
+stops it.
+
+Rejected here, with the arithmetic (see ROM-RECIRCULATION.md):
+* **Store-address renumbering** (961 static addresses, all 353..599, all three
+  digits = 29% of the drum): worth ~3,400 cells, unsound — `LDA`/`MOVA` compute
+  addresses at run time, and the `.asm` is shared with the canonical tier.
+* **A smarter packer**: the 12% blank is the vertical-backtick parity rule
+  (10 rows, 2,350 cells); the even-words-per-row rule costs **zero** and row ends
+  321 cells. A lookahead packer returns the identical row count in 15 of 15
+  width x depth combinations, so greedy leftmost is already optimal here.
+* **`SEEK_K` 128 -> 64**: 39 cells, and unavailable anyway — the widest packed row
+  holds 66 words.
+# M10 — the DOOM unit (`stream:unit`), profiled and then lifted
+
+Scripts: `unit_traffic.py` (per-arm command words per frame), `unit_occupancy.py`
+(what each arm actually occupies against the 20 columns it is granted),
+`unit_loop_gate.py` (a candidate `loop_row` judged pixel-for-pixel on the native
+engine via `d3_unit.build_probe`'s standalone grid).
+
+## The traffic profile: three narrow arms carry 99%
+
+24 gameplay frames of `WALK`, bucketed by COMMIT, boot round separated.
+
+| arm | words/frame | share | pixels/frame | frames used | columns it occupies |
+|---|---|---|---|---|---|
+| RUN | 85.54 | 46.6% | 641.6 | 24/24 | 4 |
+| COL | 64.00 | 34.9% | 1,719.2 | 24/24 | 11 |
+| CURS | 31.92 | 17.4% | 0 | 24/24 | 1 |
+| COMMIT | 1.00 | 0.55% | 0 | 24/24 | 1 |
+| GUN | 0.88 | 0.48% | 57.8 | 21/24 | 23 |
+| GUNF | 0.12 | 0.07% | 11.0 | 3/24 | 33 |
+
+The boot round (preamble + title screen) is 429 RUN + 1 COMMIT and touches
+nothing else. COL is a flat 64 words — one per viewport column, every frame.
+RUN and CURS track the HUD's live bars (16 CURS on a quiet frame, 79 on a busy
+one). GUN and GUNF are mutually exclusive and exactly one fires per frame.
+
+**The arms are inverted with respect to their traffic.** The three that carry
+98.9% of the words occupy 16 columns between them; the two sprite arms carry
+0.55% and occupy 56. That is not a defect — a baked sprite is one command word
+instead of ~130 CPU sends, which is the whole reason the arms exist — but it
+does mean the block's *width* is bought almost entirely by its coldest arms.
+
+## Width: the block does not bind, so there is nothing to win
+
+Real column span, summed over the arms: **73 of the 156-wide interior (47%)**.
+COMMIT uses 1 of its 20, CURS 1 of 20, RUN 4 of 20; the sprite chains use 23 and
+33 of the 40 each gets by riding over a spare leaf. A variable-pitch trie (the
+codes are the west/east branch path, not the distances, so leaves may sit at
+arbitrary columns) would pack the interior to roughly 80 and the block from
+235 to about 160.
+
+**It would be worth exactly zero.** The taped machine is 287 wide and the DOOM
+block's east edge is column 235 — it is 50 columns clear of the box. The width
+floor is the taped store's (`TX 61 + the block's 224 columns + the east return
+pipe`, see `SEEK_TIER_LAYOUT`), and no amount of unit narrowing touches it. The
+block would have to *grow* by 52 columns before its width mattered at all.
+
+So: merging GUN/GUNF onto a shared slab (GUN_FIRE's rows 29..38 are literally
+GUN_IDLE's rows 30..39 shifted up one row, so the body could be shared behind a
+±64 address offset), merging COMMIT/CURS, and re-pitching the trie are all real
+and all pay nothing on this machine. Measured negative — recorded so the next
+person does not build it.
+
+## Height: the block IS the machine's floor, and eight rows of it were empty
+
+The DOOM block hangs below everything (`rom` rows 0..93, CPU/tape 94..168, the
+block 170..270), so the machine's last row is the block's. The block's height is
+`R_ADDR + PANEL_H + 6`: the panel hangs two rows below ADDR's band row, and the
+SWAP under-run three below the panel. The unit's own interior bottom
+(`R_COLLECT`) is *sixteen rows clear* of that — it hides in the panel's shadow —
+so **ADDR alone sets the height**.
+
+Every band row is a fixed offset from the loop corridor (`d3_unit.BELOW_LOOP`),
+and that is forced rather than chosen: the two counted-loop bodies are rigid
+ladders hung off `R_LOOP + 1`, and each band row is where one of their `r`/`s`
+glyphs lands. So the whole lower half translates as one rigid piece, every
+`_send_band` decision (a comparison of row *differences*) is invariant, and all
+four pipe lengths — which depend on `ADDR-DATA` and `ADDR-SWAP`, not on ADDR —
+are unchanged.
+
+Rows 19..26 of the shipped map hold no cell at all, so 19 is free immediately.
+Below that the floor moved twice:
+
+**19 was RUN's arm.** COL has the longer unpack but its corridor cell sits in the
+*climb* column one east, so its leaf column may carry machinery on the corridor
+row; RUN's `>` was in its own leaf column directly under `/bW`, and 18 collided
+on that `W`. Giving RUN the same climb — one turn east, one column up, and its
+counted loop shifts one column into the 16 spare it already had — costs three
+cells and unlocks nine more rows.
+
+**10 is rule 1, and it is a real floor.** Nothing collides below 10; what fails
+is binding. COL's seed push sits at a *fixed* row 20 — it is above the corridor,
+anchored to `R_ARG` — while the bands rise with the corridor beneath it, so the
+two are driven together. The push must stay nearer the ring band (`loop+3`) than
+ADDR (`loop+19`), whose midpoint is `loop+11`, giving `20 < loop+11`. Swept: 10
+builds with margin 2, 9 is the reading-order tie `_check_unit` refuses, and 8 and
+below bind the seed push to ADDR outright — the wall seed would go to the panel.
+
+| loop_row | block | probe steps | probe |
+|---|---|---|---|
+| 9 | — | — | refused (margin 0 at (143,20)) |
+| 10 | 235x84 | 44,054 | PASS |
+| 14 | 235x88 | 44,362 | PASS |
+| 19 | 235x93 | 44,735 | PASS |
+| 24 | 235x98 | 45,180 | PASS |
+| 27 (shipped) | 235x101 | 45,447 | PASS |
+
+Pipe lengths (addr 15, data 15, swap 35) and binding margins (min 2) are
+identical at every value in 10..27. The probe mix is every arm, a negative-seed
+COL, both sprites and the banding masks, judged against `store.DoomUnit`'s own
+frames on the native engine. The lift is very slightly *cheaper* as well — the
+arms' descents to the corridor are shorter.
+
+The fold was re-checked and does not move: 78 -> 299x249, 79 -> 292x251,
+80 -> 289x252, **81 -> 287x254**, 84 -> 287x257, 88 -> 287x261. 81 is still the
+shallowest fold that reaches the 287 width floor, now at seventeen fewer rows.
+
+## Combined (M10)
+
+| | before | after |
+|---|---|---|
+| DOOM block | 235x101 | **235x84** |
+| taped box | 287x271 | **287x254** |
+| taped, 116-round tour | 839,384,674 | **839,158,874** (-0.03%) |
+| `deadman-3d` / `_trim` | `f62d63fd…` | `f62d63fd…` (unmoved) |
+| `deadman-3d_hires` wall | 572x228 | 572x228 (unmoved) |
+
+### What is left
+
+The unit's own interior bottom (`R_COLLECT` = `loop+55` = 65) is now 20 rows
+clear of the panel's under-run, so it still is not binding — the next row would
+still come off ADDR. Getting one needs the `ADDR-RET` gap of 19 to shrink, and
+that gap is `BAND_BODY`'s own 18 ops of unpack before it can send ADDR. It has
+exactly two blank cells (indices 17 and 21); removing the first moves the
+mask-pop `r` one row closer to `ring_ret` and one further from `ring2_ret`, which
+is a 21-vs-21 tie. So the next row costs a re-tune of the band body, for one row.
+
+Opt-in via `machine.DOOM_LOOP_ROW`; absent means the shipped row 27, which is
+what holds the canonical and hi-res families byte-identical. `deadman-3d_hires`
+stacks four of these blocks two deep, so opting it in is worth ~16 rows there —
+untested here, and its own layout would want a re-sweep.

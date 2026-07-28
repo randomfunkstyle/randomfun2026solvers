@@ -285,6 +285,55 @@ def test_the_hot_first_chain_resolves_every_address_to_the_same_data(compact: bo
     assert readback((3, 0, 1, 2)) == shipped
 
 
+def test_the_shipped_deadman3d_plan_routes_every_one_of_its_600_addresses() -> None:
+    """The same load-bearing check, but against the **registry's own** numbers.
+
+    ``PLAN`` above is a scaled-down stand-in; the machine ships a different
+    split and a different chain order, and a size or an order that routes at 330
+    slots says nothing about one that routes at 601. A wrong gate literal is
+    silent — it hands a read to the wrong bank and the bank answers — so this
+    reads back every address of the real plan and compares address by address,
+    never bank by bank. It takes the numbers from :mod:`lm1.machine` so it
+    cannot drift from what ``build_for`` actually places.
+    """
+    from randomfun2026solvers.lm1 import machine
+
+    n = machine.TAPE_SIZE["deadman-3d"]
+    plan = machine.TAPED_BANKS["deadman-3d"]
+    order = machine.TAPED_BANK_ORDER[("deadman-3d", "taped")]
+    compact = ("deadman-3d", "taped") in machine.TAPED_COMPACT_GATE
+    skip = machine.TAPED_SKIP_BATCH["deadman-3d"]
+
+    def readback(order: tuple[int, ...] | None) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(n, plan, skip_batch=skip, compact_gate=compact, order=order)
+        )
+        writes = [x for a in range(1, n) for x in (1, a, a * 13 + 7)]
+        bounds = [1]
+        for m in taped_plan(n, plan):
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, n)
+            if lo >= hi:
+                continue
+            reads = [x for a in range(lo, hi) for x in (0, a)]
+            want = [a * 13 + 7 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=400_000_000)
+            assert res.fatal is None, (order, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    want = {a: a * 13 + 7 for a in range(1, n)}
+    address_order = readback(None)
+    assert address_order == want, "the plan itself mis-routes before any reorder"
+    hot_first = readback(order)
+    assert hot_first == want
+    # ... and the two chains agree address for address, which is the property
+    # the reorder has to preserve and the one a wrong literal breaks quietly.
+    assert hot_first == address_order
+
+
 def test_fresh_slots_read_zero_and_extremes_survive() -> None:
     engine = _standalone(taped_store_block(330, PLAN, skip_batch=2))
     addrs = [1, 128, 129, 256, 257, 296, 297, 329]  # both sides of every seam
