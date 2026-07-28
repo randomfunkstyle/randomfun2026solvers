@@ -4535,6 +4535,24 @@ ROM_ROWS = {
     # store the 373-wide box holds (11 floors the width at 391) and 600 slots
     # then force 60 rows, so store_h is not a free variable at all.
     "deadman-3d": 61,
+    # deadman-3d_hires had no entry at all, and `_packed_fold`'s default is the
+    # wrong shape for it by two orders of magnitude: at P=8,895 words it laid the
+    # ROM out **68 columns wide and 800 rows tall** — 69% of a 573x1155 machine's
+    # height in 12% of its width. Nobody had swept it, because the program grew
+    # from P=6,215 to 8,895 in one session (the monster billboards ~2,453 words,
+    # the numerals ~227) and the family only just moved to the taped store.
+    #
+    # The trade is `deadman-3d`'s own, run much further: the machine is
+    # width = max(rom_w(rows), wall_w + 1) by height = rows + 304, and the ROM's
+    # own width goes as ~49,700/rows (measured: 35 -> 1417x339, 50 -> 996x354,
+    # 65 -> 769x369, 80 -> 626x384, 90 -> 573x394, 110 -> 573x414, 150 ->
+    # 573x453, 190 -> 573x494, 230 -> 573x533, and the un-folded default ->
+    # 573x1155). `Machine.area2` is max(w, h)**2, so the objective is the larger
+    # side, and from 90 rows down the ROM itself sets the width while from 90 up
+    # the tiled wall's 573 does. 90 is that crossing: **573x394**, and every row
+    # deeper is a row of pure height. Re-sweep it if the wall ever narrows —
+    # the crossing moves with the wall, not with the program.
+    "deadman-3d_hires": 90,
 }
 
 
