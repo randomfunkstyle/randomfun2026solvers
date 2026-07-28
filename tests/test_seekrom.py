@@ -81,8 +81,23 @@ def test_seek_of_covers_every_classic_target_sem() -> None:
     assert set(SEEK_OF.values()) == SEEK_SEMS
 
 
-def test_registry_is_off_so_every_machine_stays_byte_identical() -> None:
-    assert machine.SEEK_DRUM == set()
+def test_registry_is_narrow_so_every_other_machine_stays_byte_identical() -> None:
+    """Only ``deadman-3d`` seeks; the seek path must be unreachable elsewhere.
+
+    The seek drum is a per-slug opt-in precisely so that turning it on for the
+    DOOM demo cannot move any other checked-in grid. Assert the *scope*, not
+    emptiness — the registry stopped being empty when the re-measured drum
+    landed (canonical 372x377 -> 382x382 for -18.7% on the tour).
+    """
+    assert machine.SEEK_DRUM == {"deadman-3d"}
+    # Every other registered slug builds the classic drum: `seek=None` (the
+    # registry's own answer) must agree with an explicit `seek=False`.
+    for slug in sorted(machine.TAPE_SIZE):
+        if slug == "deadman-3d":
+            continue
+        assert slug not in machine.SEEK_DRUM
+        assert slug not in machine.SEEK_MEM_PAD
+        assert not any(k[0] == slug for k in machine.SEEK_TIER_LAYOUT)
     assert (
         machine.build(load("brackets")).rows
         == machine.build(load("brackets"), seek=False).rows
@@ -116,7 +131,10 @@ def test_brackets_seek_variants_pass_public_cases() -> None:
 @pytest.mark.slow
 def test_deadman_seek_variant_is_near_square() -> None:
     m = machine.build_for("deadman-3d", trim_dead=True, seek=True)
-    assert max(m.width, m.height) <= 420
+    # Same ceiling as the canonical/trim artifacts (test_deadman3d*): the seek
+    # drum is the shipped build now, so it does not get a looser bar. It lands
+    # exactly square at 382x382, five under the ceiling.
+    assert max(m.width, m.height) <= 390
     assert (
         max(m.width, m.height) - min(m.width, m.height) <= max(m.width, m.height) // 10
     )

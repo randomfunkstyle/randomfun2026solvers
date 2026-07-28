@@ -996,7 +996,13 @@ def test_the_ansi_play_rendering_shape() -> None:
 def test_the_machine_synthesizes_with_the_men_v3_store() -> None:
     """`build_for` binds every pipe: the DOOM unit's 64x48 panel + men-v3 STORE."""
     m = machine.build_for("deadman-3d")
-    assert m.mem_pad == machine.MEM_PAD["deadman-3d"]
+    # The pad comes from the registry the shipped build actually reads: the
+    # seek drum's slabs move the memory band, so a seek build takes
+    # SEEK_MEM_PAD and a classic one MEM_PAD.
+    assert m.mem_pad == machine.SEEK_MEM_PAD["deadman-3d"]
+    assert machine.build_for("deadman-3d", seek=False).mem_pad == (
+        machine.MEM_PAD["deadman-3d"]
+    )
     # The panel belongs to the DOOM unit now, not the CPU: the machine carries
     # exactly one display room, 64x48 plus its walls.
     _px, _py, pw, ph = m.regions["display"]

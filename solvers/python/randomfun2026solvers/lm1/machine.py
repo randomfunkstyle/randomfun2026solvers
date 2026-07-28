@@ -668,17 +668,39 @@ def _target_index(program: Program, instrs: Sequence, index_of_word: dict, k: in
 #: putting the break-even near 250 words. 256 is that, rounded to a power of two.
 #:
 #: The distribution is what makes the split worth having rather than a tuning
-#: knob: in a ``deadman-3d`` frame **186 jumps of 2,609 skip 84% of all the
+#: knob: in a ``deadman-3d`` frame **186 jumps of 2,610 skip 84.5% of all the
 #: words**, so seeking only those buys nearly the whole discard bill while the
-#: 2,423 tight-loop jumps keep the counted discard they are already good at.
+#: 2,424 tight-loop jumps keep the counted discard they are already good at.
+#:
+#: Re-derived after M7b/M8 changed the image (P 3,957 -> 4,002 words, 2,152
+#: instructions) — the shape is unmoved. Frame 1 of the demo walk, 2,610 taken
+#: jumps discarding 387,532 ring words (``scratch/ram-program/jump_hist.py``):
+#:
+#: | skip (ring words) | jumps | words | share of the bill |
+#: |---|---|---|---|
+#: | 0-64 | 2,418 | 58,952 | 15.2% |
+#: | 64-256 | 6 | 1,151 | 0.3% |
+#: | 256-1024 | 58 | 34,796 | 9.0% |
+#: | 1024+ | 128 | 292,633 | **75.5%** |
+#:
+#: The threshold sweep is a *plateau*, which is why the exact value does not
+#: matter much and why 256 is still the right corner. In fixed-image units,
+#: ``JMPF`` alone: thr 64 -> 68.1% of the bill, 128 -> 68.1%, 192 -> 68.0%,
+#: **256 -> 67.9%**, 384 -> 66.4%, 512 -> 65.5%, 1024 -> 59.0%. Dropping below
+#: 256 buys 0.2 points of bill while paying a flat ~1,140-tick seek for jumps
+#: whose discard was under ~1,150 — i.e. nothing, at real risk. Above 384 the
+#: cliff starts.
 SEEK_THRESHOLD = 256
 
 
 #: Which classic opcodes ``seek_split`` may rewrite. Every extra family costs a
 #: lane *and* a 13-column slab, and the slab band is what pushes the memory
 #: block east, so restricting this is the footprint knob. Measured on
-#: ``deadman-3d``: ``JMPF`` alone carries 80% of the long-jump words (258,110 of
-#: 322,756 in a frame), for a third of the width the full set costs.
+#: ``deadman-3d``: ``JMPF`` alone carries 80% of the long-jump words — re-derived
+#: post-M8 as **263,260 of 327,429** in frame 1, i.e. 67.9% of the frame's whole
+#: 387,532-word discard bill, for a third of the width the full set costs. The
+#: only other family with long jumps is ``BRZ`` (25 jumps, 64,169 words); ``BRN``
+#: has none in steady state (its 107 long jumps are all boot's).
 SEEK_OPS: tuple[str, ...] = ("JMPF",)
 
 
@@ -4722,7 +4744,23 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the 
 #: a 13-column slab, the slab band is what pushes the memory block east, and the
 #: pad it forces (17 -> 22 -> 29 -> 36) charges every memory instruction the
 #: extra walk twice. Hence :data:`SEEK_OPS` defaults to ``JMPF`` alone.
-SEEK_DRUM: set[str] = set()
+#:
+#: **Re-measured against the M7c layout re-sweep** (native, round-gated on the
+#: checked-in 115-frame tour, 116 rounds, both ``passed=True``); the table above
+#: is the pre-M7c reading and is kept only for the shape of the effect:
+#:
+#: | tier | box (classic -> seek) | tour ticks | Δ |
+#: |---|---|---|---|
+#: | canonical (men-v3) | 372x377 -> **382x382** | 640,512,397 -> **520,564,274** | **-18.7%** |
+#: | taped | 279x258 -> **295x269** | 1,250,728,623 -> **1,113,752,187** | **-11.0%** |
+#:
+#: The canonical machine comes out *exactly square*, five columns under the
+#: pre-existing 390 ceiling. The taped tier is the one that pays: its width is
+#: store-bound and the seek slabs push the block 16 columns east, which
+#: ``store_offset`` cannot claw back (dx -20 is still the last value that
+#: routes). It stays inside its 300 ceiling and the 10% skew doctrine, but that
+#: is the trade — re-check it before the next taped sweep.
+SEEK_DRUM: set[str] = {"deadman-3d"}
 
 #: ``MEM_PAD``'s replacement while the seek drum is on: the extra lane and slab
 #: move the band, so the pinned pad no longer binds. Searched once and recorded
@@ -4734,7 +4772,22 @@ SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 #: width/height crossing the classic sweep found is no longer where it was and
 #: the fold has to be re-picked per tier. Empty means "keep the classic tier
 #: layout"; a key here wins over :data:`TIER_LAYOUT`'s for the same tier.
-SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {}
+#:
+#: Both folds re-swept build-only against the seek slabs (``mem_pad`` 22 is the
+#: floor on both tiers — at 21 and below the classic slabs' ``r`` can no longer
+#: beat ``mem_resp`` to the ROM pipe and nothing binds):
+#:
+#: * canonical, ``rom_rows`` 59/60/61/62/63: 386x381 / **382x382** / 379x383 /
+#:   379x385 / 379x386. 60 is the crossing and it lands exactly square, so the
+#:   seek build folds one row *shallower* than the classic 61.
+#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / **295x269** /
+#:   295x272 .. 295x286. The width floors at 295 (the store binds, and
+#:   ``store_offset`` dx -20 is still the last value that routes), so the fold
+#:   stops at the first row that reaches the floor rather than the classic 83.
+SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
+    ("deadman-3d", "men-v3"): {"rom_rows": 60},
+    ("deadman-3d", "taped"): {"rom_rows": 80},
+}
 
 #: Slugs whose CPU gets a **second return bus above the band**: a simple lane
 #: returns over whichever bus is cheaper — the classic drop to the collector

@@ -407,3 +407,101 @@ exactly; the flip is one line when the coordinator wants it.
 - `tests/test_seekrom.py` — 7 fast + 2 slow.
 - `scratch/ram-program/`: `toy_seek.py` (standalone drum), `gate_frames.py`
   (the A/B harness), `deadman_seek.man`, `brackets_seek.man`.
+
+## Re-baselined against M7c (the layout re-sweep) — and shipped
+
+Everything above was measured before three things landed on main: M7b
+(shootable monsters, tape 600), M8 (DOOM's real STBAR art, ROM 4,023 -> 4,002
+words) and the **M7c CPU layout re-sweep** (`ROM_ROWS` 60 -> 61, the per-tier
+`TIER_LAYOUT`, `TAPED_BANKS` 6 -> 4). M7c is the one that mattered: the seek
+slabs add a lane and 13 columns, so the fold arithmetic the -15.6% was measured
+against had moved under it.
+
+### The harness, and one honest caveat
+
+Anchor gate: the checked-in 115-frame tour (116 rounds, native, round-gated,
+`passed=True` on every run) — `scratch/deadman3d-opt/tour_gate.py` and the new
+`scratch/ram-program/seek_gate.py`. **Both tour baselines reproduce the
+coordinator's numbers exactly** (canonical 640,512,397; taped 1,250,728,623).
+The two *walk* baselines do not, by a hair — 327,726,821 vs a quoted
+327,860,446 (-0.04%) and 653,734,716 vs 654,884,941 (-0.18%). A fresh
+`build_for` is byte-identical to every checked-in artifact at that commit, so
+the machine under test was provably the shipped one; the walk gap is a harness
+difference upstream of this work, not drift. The A/B below uses one harness for
+both arms either way.
+
+### Re-derived histogram (`scratch/ram-program/jump_hist.py`)
+
+P = 4,002 words / 2,152 instructions. Frame 1 of the demo walk: **2,610 taken
+jumps discarding 387,532 ring words**.
+
+| skip (ring words) | jumps | words | share |
+|---|---|---|---|
+| 0-64 | 2,418 | 58,952 | 15.2% |
+| 64-256 | 6 | 1,151 | 0.3% |
+| 256-1024 | 58 | 34,796 | 9.0% |
+| 1024+ | 128 | 292,633 | **75.5%** |
+
+**186 jumps of 2,610 still carry 84.5% of the bill** — the pre-M8 reading was
+186 of 2,609 carrying 84%, i.e. the distribution did not move at all. `JMPF`
+alone at threshold 256 takes 161 jumps / 263,260 words = 80.4% of the long
+words and 67.9% of the whole frame's discard.
+
+The threshold is a **plateau**, not a knee, which is why 256 survives: in
+fixed-image units the JMPF share is 68.1% at thr 64, 68.1% at 128, 68.0% at
+192, 67.9% at 256, then 66.4% at 384, 65.5% at 512, 59.0% at 1024. Going below
+256 buys 0.2 points while paying a flat ~1,140-tick seek for jumps whose
+discard was under ~1,150 — nothing, at real risk. The cliff starts past 384.
+One new fact worth keeping: **`BRN` has no long jumps in steady state at all**
+(its 107 long jumps are all boot's), so the JMPF-only default is if anything
+better justified now than it was.
+
+### Re-swept folds (build-only; `seek_sweep.py`, `seek_dx_sweep.py`)
+
+`mem_pad` 22 is the floor on both tiers — at 21 and below the classic slabs'
+`r` can no longer beat `mem_resp` to the ROM pipe. Above 22 nothing changes.
+
+| tier | `rom_rows` sweep | pick |
+|---|---|---|
+| canonical | 59 386x381 · **60 382x382** · 61 379x383 · 62 379x385 · 63 379x386 | **60** — the crossing, and it lands *exactly square* |
+| taped | 76 304x265 · 78 299x266 · **80 295x269** · 82..96 295x272..295x286 | **80** — the first row that reaches the width floor |
+
+The seek build folds *shallower* than the classic one on both tiers (60 vs 61,
+80 vs 83): the slabs widen the CPU band, so the ROM stops being the width
+binder sooner. Taped `store_offset` dx -20 is still the last value that routes
+(-24 collides `'|'` vs `'>'`), so the taped width floor of 295 cannot be
+clawed back — that is the whole of the taped tier's cost.
+
+### The result
+
+| tier | box | max | skew | tour ticks | Δ |
+|---|---|---|---|---|---|
+| canonical, classic | 372x377 | 377 | 1.3% | 640,512,397 | — |
+| **canonical, seek** | **382x382** | 382 | **0.0%** | **520,564,274** | **-18.7%** |
+| taped, classic | 279x258 | 279 | 7.5% | 1,250,728,623 | — |
+| **taped, seek** | **295x269** | 295 | 8.8% | **1,113,752,187** | **-11.0%** |
+
+Cross-check on the 57-command walk (58 rounds), canonical: 327,726,821 ->
+274,139,241, **-16.4%** — the tour is the bigger win because it is 115 gameplay
+frames against 57, so boot's one-time +2.8% is diluted further.
+
+### Go / no-go
+
+**(a) >= 5% ticks: PASS on both tiers** (-18.7% canonical, -11.0% taped).
+
+**(b) squareness survives: PASS on both, but they are not the same story.**
+Canonical goes from 1.3% off square to **exactly square**, and its binding
+dimension grows 5 (377 -> 382), 8 under the pre-existing 390 ceiling — the
+shape strictly improves. Taped is the one that pays: max 279 -> 295 (+5.7%),
+area² 71,982 -> 79,355 (+10.2%), skew 7.5% -> 8.8%. It stays inside its own 300
+ceiling and the 10% skew doctrine, but it eats most of the slack the M7c sweep
+had just won there. **Neither ceiling needed raising.** If the taped trade is
+judged too dear, `SEEK_TIER_LAYOUT`/`build_for(..., seek=False)` back it out per
+tier without touching canonical.
+
+**Verdict: GO on both tiers**, flipped: `SEEK_DRUM = {"deadman-3d"}` with
+`SEEK_TIER_LAYOUT` carrying the two re-swept folds. Every deadman-3d artifact
+family regenerated; `plan_tour.py /tmp/t.input.txt 2 5` still reproduces
+`littleman/examples/deadman-3d_tour.input.txt` byte-identically (a ROM-supply
+change must not move the program — and it does not). No other machine's
+artifact moved.

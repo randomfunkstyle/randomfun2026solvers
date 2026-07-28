@@ -12,7 +12,10 @@ man = EX / ("deadman-3d.man" if tier == "men-v3" else "deadman-3d_taped.man")
 src = man.read_text().rstrip("\n")
 rows = src.split("\n")
 
-chords = Path("/private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers/cf000cb3-3519-4e57-9129-649060c9b509/scratchpad/chords.txt").read_text().strip()
+# The chords `plan_tour.py` last wrote (it drops a sibling `.chords.txt`);
+# pass a path to override. The assert below is what actually pins the tour.
+chords_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("/tmp/t.chords.txt")
+chords = chords_path.read_text().strip()
 cmds = [d3.keys("." if c == "," else c) for c in chords]
 case = d3.cases_json(cmds)["publicTestData"][0]
 inp = " / ".join(" ".join(r["in"]) for r in case["rounds"])
