@@ -67,9 +67,12 @@ from pathlib import Path
 
 __all__ = [
     "PALETTE", "Wad", "MapData", "Level", "DAMAGE_SPECIALS",
+    "MONSTER_TYPES", "MAX_MONSTERS", "MON_BANDS",
     "read_wad", "parse_map", "supercover", "rasterize",
     "decode_png", "decode_picture", "srgb_to_lab", "family_of",
     "quantize_title", "despeckle", "quantize_sprite", "sprite_runs",
+    "quantize_monster", "pack_sprite_columns", "monster_band_words",
+    "monster_sprite_words",
     "gun_tables", "face_tables", "iwad_art",
     "load_freedoom", "load_iwad", "emit", "main",
 ]
@@ -124,6 +127,15 @@ class MapData:
 #: 20% + light blink, 16 is 20%; 11 — end-level — deliberately excluded: at
 #: this resolution it is an exit pad, not a pool).
 DAMAGE_SPECIALS = frozenset({4, 5, 7, 16})
+
+#: THINGS type -> monster species (M7): former humans (3004 zombieman, 9
+#: shotgun guy — same species at this resolution, POSS art) are species 0,
+#: imps (3001, TROO art) species 1.  Barrels and decorations are out of scope.
+MONSTER_TYPES = {3004: 0, 9: 0, 3001: 1}
+
+#: The monster table cap — the tape's ``MONB`` block is sized to it, and
+#: E1M1's medium-skill single-player monster count fits.
+MAX_MONSTERS = 16
 
 
 def read_wad(data: bytes | Path) -> Wad:
@@ -235,6 +247,10 @@ class Raster:
     #: open cells standing on a damage floor (sector special 4/5/7/16)
     nukage: set[tuple[int, int]] = field(default_factory=set)
     nukage_stats: dict = field(default_factory=dict)
+    #: ``(cx, cy, species)`` per kept monster THING (M7): medium-skill,
+    #: single-player, open-cell, deduped, capped at :data:`MAX_MONSTERS`.
+    monsters: list[tuple[int, int, int]] = field(default_factory=list)
+    monster_stats: dict = field(default_factory=dict)
 
 
 def rasterize(m: MapData, grid: int = 64, min_len: float = 32.0) -> Raster:
@@ -303,6 +319,7 @@ def rasterize(m: MapData, grid: int = 64, min_len: float = 32.0) -> Raster:
     assert not leaks, f"map leaks into the void at {sorted(leaks)[:8]}"
 
     nukage, nstats = _damage_floors(m, to_grid, grid, open_cells)
+    monsters, mstats = _monster_things(m, to_grid, open_cells)
 
     void = 0
     for x in range(grid):
@@ -311,7 +328,48 @@ def rasterize(m: MapData, grid: int = 64, min_len: float = 32.0) -> Raster:
                 cells[(x, y)] = "#VOID"
                 void += 1
     return Raster(grid, cells, open_cells, spawn, heading,
-                  (minx, miny, maxx, maxy), void, nukage, nstats)
+                  (minx, miny, maxx, maxy), void, nukage, nstats,
+                  monsters, mstats)
+
+
+def _monster_things(m: MapData, to_grid,
+                    open_cells: set[tuple[int, int]],
+                    ) -> tuple[list[tuple[int, int, int]], dict]:
+    """The kept monster THINGS (M7): ``(cx, cy, species)`` in THINGS order.
+
+    The filter, in order: a :data:`MONSTER_TYPES` type; present on medium
+    skill (``flags & 2``); not multiplayer-only (``flags & 0x10`` clear); its
+    grid cell open (a monster inside a supercovered wall cell would never be
+    reachable or visible); the cell not already taken (one billboard per
+    cell); capped at :data:`MAX_MONSTERS` in THINGS order.
+    """
+    stats = {"monster_things": 0, "skill_dropped": 0, "closed_dropped": 0,
+             "dupe_dropped": 0, "cap_dropped": 0}
+    kept: list[tuple[int, int, int]] = []
+    taken: set[tuple[int, int]] = set()
+    for x, y, _angle, mtype, flags in m.things:
+        species = MONSTER_TYPES.get(mtype)
+        if species is None:
+            continue
+        stats["monster_things"] += 1
+        if not (flags & 2) or (flags & 0x10):
+            stats["skill_dropped"] += 1
+            continue
+        gx, gy = to_grid(x, y)
+        cell = (int(gx), int(gy))
+        if cell not in open_cells:
+            stats["closed_dropped"] += 1
+            continue
+        if cell in taken:
+            stats["dupe_dropped"] += 1
+            continue
+        if len(kept) >= MAX_MONSTERS:
+            stats["cap_dropped"] += 1
+            continue
+        taken.add(cell)
+        kept.append((cell[0], cell[1], species))
+    stats["monsters_kept"] = len(kept)
+    return kept, stats
 
 
 def _damage_floors(m: MapData, to_grid, grid: int,
@@ -754,6 +812,135 @@ def _crop_alpha(rgba: list[list[tuple[int, int, int, int]]]):
     return [row[min(xs):max(xs) + 1] for row in rgba[min(ys):max(ys) + 1]]
 
 
+#: The three baked billboard scale bands (M7): ``(width, height)`` near, mid,
+#: far.  Heights <= 14 keep a whole sprite column in ONE packed word (16
+#: nibbles max, top nibble below 2**63 by construction); the golden model's
+#: ``BAND_T`` thresholds pick the band from the projected depth.
+MON_BANDS = ((10, 14), (6, 9), (4, 5))
+
+#: A monster billboard cannot paint black: colour 0 doubles as transparent in
+#: the packed columns, so an opaque near-black block maps to dark gray 8.
+MON_BLACK = 8
+
+
+#: Below this CIELAB chroma a billboard block is achromatic; DOOM-era monster
+#: skin sits at 7..19, deep shadows below.  Lower than the wall families'
+#: gate (10) on purpose: a billboard must READ against the gray floor 8 and
+#: walls 7, so faint hues are kept rather than flattened.
+MON_CHROMA_GATE = 6.0
+#: An achromatic block lighter than this CIELAB L is light gray 7, else 8.
+MON_L_GRAY = 45.0
+#: A chromatic block lighter than this L takes the bright ANSI variant (+8).
+MON_L_BRIGHT = 55.0
+
+
+def quantize_monster(rgba: list[list[tuple[int, int, int, int]]],
+                     tw: int, th: int, *, brightness: float = 1.0,
+                     ) -> list[list[int]]:
+    """Hue-forward block quantize of a monster sprite to ``tw`` x ``th``.
+
+    Billboard rules: a mostly-transparent block is colour 0 (the packed
+    columns' transparency); an opaque block takes its alpha-weighted average
+    colour through the wall families' hue logic — gray (7 light / 8 dark)
+    under :data:`MON_CHROMA_GATE`, else the hue-nearest chromatic ANSI colour
+    (bright variant above :data:`MON_L_BRIGHT`).  Plain block-Lab was tried
+    first and flattens Freedoom's dark-brown imps and olive zombimen into the
+    floor's own gray 8; hue-forward keeps them readable, exactly as
+    :func:`family_of` keeps the desaturated wall textures apart.  Black is
+    never produced (colour 0 is transparency): a black-ish block is 8.
+    """
+    hh, ww = len(rgba), len(rgba[0])
+    grid: list[list[int]] = []
+    for ty in range(th):
+        y0, y1 = int(ty * hh / th), max(int(ty * hh / th) + 1, int((ty + 1) * hh / th))
+        row: list[int] = []
+        for tx in range(tw):
+            x0, x1 = int(tx * ww / tw), max(int(tx * ww / tw) + 1, int((tx + 1) * ww / tw))
+            rs = gs = bs = opaque = total = 0
+            for yy in range(y0, y1):
+                for xx in range(x0, x1):
+                    r, g, b, a = rgba[yy][xx]
+                    total += 1
+                    if a > 128:
+                        opaque += 1
+                        rs += r
+                        gs += g
+                        bs += b
+            if opaque * 2 < total:
+                row.append(0)
+                continue
+            avg = tuple(min(255.0, c / opaque * brightness) for c in (rs, gs, bs))
+            l, a_, b_ = srgb_to_lab(avg)
+            if math.hypot(a_, b_) < MON_CHROMA_GATE:
+                row.append(7 if l > MON_L_GRAY else MON_BLACK)
+                continue
+            hue = math.atan2(b_, a_)
+
+            def dist(i: int) -> float:
+                d = abs(hue - _HUES[i])
+                return min(d, 2 * math.pi - d)
+
+            fam = min(range(1, 7), key=dist)
+            row.append(fam + 8 if l > MON_L_BRIGHT else fam)
+        grid.append(row)
+    return grid
+
+
+def pack_sprite_columns(grid: list[list[int]]) -> list[int]:
+    """One packed word per sprite column, **bottom pixel = nibble 0**.
+
+    The paint chain's bottom-up nibble walk (``c = Q % 16; Q //= 16``) reads
+    these; height <= 14 keeps every word under 2**63 (16**14 == 2**56).
+    """
+    h, w = len(grid), len(grid[0])
+    assert h <= 14, f"sprite height {h} > 14 would overflow a packed word"
+    words = []
+    for x in range(w):
+        word = 0
+        for j in range(h):  # j = rows above the bottom
+            word += grid[h - 1 - j][x] * 16 ** j
+        assert 0 <= word < 2 ** 63
+        words.append(word)
+    return words
+
+
+def monster_band_words(rgba: list[list[tuple[int, int, int, int]]],
+                       *, pad_to_bands: bool = False,
+                       brightness: float = 1.0) -> list[int]:
+    """The 20 packed words of one sprite's three bands (10+6+4 columns).
+
+    ``pad_to_bands`` is the corpse path: the source (a low, wide death frame)
+    is quantized to the band width at its own proportional height (floor 2)
+    and padded with transparent top rows to the band height, so the paint
+    chain needs no extra entry points.
+    """
+    src = _crop_alpha(rgba)
+    sh, sw = len(src), len(src[0])
+    words: list[int] = []
+    for bw, bh in MON_BANDS:
+        if pad_to_bands:
+            ch = max(2, min(bh, round(bw * sh / sw)))
+            grid = quantize_monster(src, bw, ch, brightness=brightness)
+            grid = [[0] * bw for _ in range(bh - ch)] + grid
+        else:
+            grid = quantize_monster(src, bw, bh, brightness=brightness)
+        words += pack_sprite_columns(grid)
+    assert len(words) == sum(w for w, _h in MON_BANDS) == 20
+    return words
+
+
+def monster_sprite_words(mon0_rgba, mon1_rgba, corpse_rgba,
+                         *, brightness: float = 1.0) -> list[int]:
+    """The whole 60-word ``SPRB`` table: species 0 (POSS art) bands, species 1
+    (TROO art) bands, then the shared corpse frame padded to the band boxes.
+    Column base offsets are ``species * 20 + (0, 10, 16)[band]`` (corpse:
+    ``40 + ...``, an M7b consumer)."""
+    return (monster_band_words(mon0_rgba, brightness=brightness)
+            + monster_band_words(mon1_rgba, brightness=brightness)
+            + monster_band_words(corpse_rgba, pad_to_bands=True,
+                                 brightness=brightness))
+
+
 def gun_tables(idle_rgba, flash_rgba, *, width: int = 11, height: int = 10,
                brightness: float = 1.0):
     """``(GUN_IDLE, GUN_FIRE)`` run tables from a pistol + muzzle-flash pair.
@@ -816,6 +1003,7 @@ IWAD_ART_LUMPS = {
     "gun_idle": "PISGA0", "gun_flash": "PISFA0",
     "face_healthy": "STFST01", "face_hurt": "STFST21",
     "face_bloody": "STFST41", "face_grim": "STFEVL0",
+    "mon0": "POSSA1", "mon1": "TROOA1", "corpse": "POSSL0",
 }
 
 
@@ -834,7 +1022,9 @@ def iwad_art(path: Path) -> dict:
         "healthy": pic("face_healthy"), "hurt": pic("face_hurt"),
         "bloody": pic("face_bloody"), "grim": pic("face_grim"),
     })
-    return {"gun_idle": gun_idle, "gun_fire": gun_fire, "faces": faces}
+    sprites = monster_sprite_words(pic("mon0"), pic("mon1"), pic("corpse"))
+    return {"gun_idle": gun_idle, "gun_fire": gun_fire, "faces": faces,
+            "monster_sprites": sprites}
 
 
 # ── the Level bundle ─────────────────────────────────────────────────────────
@@ -850,6 +1040,8 @@ class Level:
     #: 64 printed rows, same orientation as ``map_rows``: ``N`` = an open cell
     #: on a damage floor, ``.`` = anything else (M5's nukage bit plane).
     nukage_rows: list[str] = field(default_factory=list)
+    #: ``[cx, cy, species]`` per kept monster (M7; see ``_monster_things``).
+    monsters: list[list[int]] = field(default_factory=list)
     avg_colours: dict[str, tuple[int, int, int]] = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
 
@@ -901,9 +1093,11 @@ def _finish_level(raster: Raster, avg: dict[str, tuple[int, int, int] | None],
         "title_runs": _run_count(title_rows),
         **{f"nukage_{k}" if not k.startswith("nukage") else k: v
            for k, v in raster.nukage_stats.items()},
+        **raster.monster_stats,
     }
     return Level(rows, raster.spawn, raster.heading, title_rows,
                  families, nrows,
+                 [list(mon) for mon in raster.monsters],
                  {k: tuple(round(c) for c in v) for k, v in avg.items()
                   if v is not None}, stats)
 
@@ -1055,6 +1249,7 @@ def emit(level: Level, out_dir: Path) -> None:
         "title_rows": level.title_rows,
         "families": level.families,
         "nukage_rows": level.nukage_rows,
+        "monsters": level.monsters,
         "stats": level.stats,
     }, indent=1) + "\n", encoding="utf-8")
     (out_dir / "map.txt").write_text(level.map_str(), encoding="utf-8")
@@ -1064,6 +1259,7 @@ def emit(level: Level, out_dir: Path) -> None:
     (out_dir / "title.txt").write_text("\n".join(level.title_rows) + "\n", encoding="utf-8")
     (out_dir / "families.txt").write_text(level.family_table() + "\n", encoding="utf-8")
     grid = len(level.map_rows)
+    mon_cells = {(mx, my) for mx, my, _sp in level.monsters}
     overhead = []
     for p in range(grid):
         row = []
@@ -1072,6 +1268,8 @@ def emit(level: Level, out_dir: Path) -> None:
             ch = level.map_rows[p][x]
             if (x, y) == level.spawn:
                 row.append((255, 255, 0))
+            elif (x, y) in mon_cells:
+                row.append((255, 0, 0))
             elif ch == ".":
                 nuk = level.nukage_rows and level.nukage_rows[p][x] == "N"
                 row.append((0, 130, 0) if nuk else (40, 40, 40))
