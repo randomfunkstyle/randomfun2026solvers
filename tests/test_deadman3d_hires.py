@@ -259,6 +259,69 @@ def test_the_machine_builds_with_four_display_rooms(wad_installed, tmp_path) -> 
     assert (tmp_path / "deadman-3d_hires.man").is_file()
 
 
+def test_the_loop_lift_reaches_all_four_blocks_and_keeps_its_floor() -> None:
+    """``DOOM_LOOP_ROW`` pays twice here, and that needs the wall to forward it.
+
+    The registry hands ``build_wall`` a row and ``build_wall`` hands it to four
+    *unmodified* blocks; the 2x2 stacks two of them, so one seventeen-row lift
+    comes off the wall's height at both levels. This is the pin that the
+    forwarding exists at all — before the consolidation pass ``build_wall()``
+    took no argument and hires' opt-in would have been silently inert. No IWAD
+    needed: the wall is program-independent.
+    """
+    from randomfun2026solvers.lm1 import d3_router, d3_unit, machine
+
+    row = machine.DOOM_LOOP_ROW[("deadman-3d_hires", "taped")]
+    assert row == d3_unit.MIN_LOOP_ROW  # the floor is what we opted into
+
+    shipped = d3_router.build_wall()
+    assert shipped.height == d3_router.build_wall(d3_unit.R_LOOP).height
+    lifted = d3_router.build_wall(row)
+    assert lifted.width == shipped.width  # height only; the 496 floor is the wall's
+    assert shipped.height - lifted.height == 2 * (d3_unit.R_LOOP - row)  # 34
+
+    # ...and the floor is still a floor, four blocks or one.
+    with pytest.raises(d3_unit.DoomUnitError, match="MIN_LOOP_ROW"):
+        d3_router.build_wall(d3_unit.MIN_LOOP_ROW - 1)
+
+
+@needs_iwad
+def test_the_hires_opcode_map_is_its_own_and_a_win(wad_installed) -> None:
+    """``OPCODE_SLOTS``' two properties, for the one key whose program is
+    IWAD-only and so cannot be checked in ``test_lm1_opcode_slots.py``.
+
+    Row-neutrality first (the knob's whole claim), then the strict win in drum
+    cells (the only reason it exists) — and then the thing that made it worth
+    re-deriving rather than copying: it is *not* ``deadman-3d``'s map.
+    """
+    from randomfun2026solvers.lm1 import machine
+    from randomfun2026solvers.lm1 import rom as rommod
+    from randomfun2026solvers.lm1.asm import assemble
+
+    key = ("deadman-3d_hires", "taped")
+    slots = machine.OPCODE_SLOTS[key]
+    program = assemble(wad_installed.hires_source(), name="deadman-3d_hires")
+    # exactly what `build_for` plans with: no LANE_ORDER entry, no seek split
+    assert machine.LANE_ORDER.get("deadman-3d_hires") is None
+    assert "deadman-3d_hires" not in machine.SEEK_DRUM
+    base = machine.plan(program, middle_order=None)
+    relabelled = machine.plan(program, middle_order=None, slots=slots)
+
+    by_rank = sorted(base.number, key=lambda m: base.row[m])
+    assert sorted(relabelled.number, key=lambda m: relabelled.row[m]) == by_rank
+    assert relabelled.number != base.number
+
+    def cells(p) -> int:
+        return sum(len(rommod.token_cells(w)) for w in machine.rom_words(program, p))
+
+    assert cells(relabelled) < cells(base)
+
+    # not deadman-3d's: no JMPS lane at all, and a different assignment besides
+    other = machine.OPCODE_SLOTS[("deadman-3d", "taped")]
+    assert "JMPS" in other and "JMPS" not in slots
+    assert slots != other
+
+
 @needs_iwad
 def test_the_family_commits_nothing() -> None:
     """Everything it generates carries IWAD data, so none of it is in the tree.

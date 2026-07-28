@@ -40,7 +40,26 @@ def _seek_plan(slug: str, slots: dict[str, int] | None):
     return program, machine.plan(program, middle_order=order, slots=slots)
 
 
-@pytest.mark.parametrize("key", sorted(machine.OPCODE_SLOTS))
+#: Keys whose program is a checked-in one, which is what ``_seek_plan`` can
+#: reach.  ``deadman-3d_hires``' program is assembled from a locally owned IWAD
+#: at build time and exists nowhere in the tree, so the same two properties are
+#: pinned for it in ``tests/test_deadman3d_hires.py``, behind that file's IWAD
+#: skip.  Listed by exclusion rather than inclusion so a new entry is checked
+#: here by default and only leaves on purpose.
+_WAD_ONLY = {("deadman-3d_hires", "taped")}
+LOADABLE = sorted(set(machine.OPCODE_SLOTS) - _WAD_ONLY)
+
+
+def test_every_registered_map_is_checked_somewhere() -> None:
+    """The exclusion above is a routing decision, not an escape hatch."""
+    assert set(machine.OPCODE_SLOTS) - set(LOADABLE) == _WAD_ONLY
+    for slug, _tier in _WAD_ONLY:
+        assert slug not in programs.available(), (
+            f"{slug} has a checked-in program now; drop the exclusion"
+        )
+
+
+@pytest.mark.parametrize("key", LOADABLE)
 def test_the_registered_map_moves_no_lane_and_only_moves_the_numbers(key) -> None:
     slug, _tier = key
     slots = machine.OPCODE_SLOTS[key]
@@ -54,7 +73,7 @@ def test_the_registered_map_moves_no_lane_and_only_moves_the_numbers(key) -> Non
     assert relabelled.number != base.number
 
 
-@pytest.mark.parametrize("key", sorted(machine.OPCODE_SLOTS))
+@pytest.mark.parametrize("key", LOADABLE)
 def test_the_registered_map_is_a_strict_win_in_drum_cells(key) -> None:
     """The knob exists for one number: cells in the drum's lap. A map that does
     not lower it is a retune of the trie for nothing."""

@@ -90,7 +90,9 @@ lifting the corridor lifts ADDR one for one. The shipped
 ``R_LOOP`` of 27 leaves rows 19..26 wholly empty, and below that the arms' own
 pre-loop machinery gives way: RUN's ``>`` steps into a climb column like COL's,
 and the corridor runs down to :data:`MIN_LOOP_ROW`, seventeen rows in all.
-``machine.DOOM_LOOP_ROW`` is where a tier opts in.
+``machine.DOOM_LOOP_ROW`` is where a tier opts in; ``d3_router.build_wall``
+hands the same row to all four of its blocks, and its 2x2 stacks two block
+heights, so on ``deadman-3d_hires`` the seventeen come off twice.
 
 The sprite arms and the backtick discipline
 -------------------------------------------

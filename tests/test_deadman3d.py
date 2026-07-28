@@ -1078,8 +1078,22 @@ def test_doom_loop_row_lifts_the_block_and_nothing_else() -> None:
 
 
 def test_doom_loop_row_is_opt_in_per_tier() -> None:
-    """Only the taped tier lifts the corridor; the canonical build must not."""
-    assert machine.DOOM_LOOP_ROW == {("deadman-3d", "taped"): 10}
+    """Only the taped tier lifts the corridor; the canonical build must not.
+
+    Both taped machines take the lift, and both take it to the floor — for
+    ``deadman-3d_hires`` it is worth twice as much (its wall is a 2x2, so the
+    seventeen rows come off two stacked block heights), which
+    ``tests/test_deadman3d_hires.py`` pins. What matters here is that the
+    canonical ``deadman-3d`` and ``deadman-3d_trim`` builds are keyed out.
+    """
+    from randomfun2026solvers.lm1 import d3_unit
+
+    assert machine.DOOM_LOOP_ROW == {
+        ("deadman-3d", "taped"): 10,
+        ("deadman-3d_hires", "taped"): 10,
+    }
+    assert all(tier == "taped" for _slug, tier in machine.DOOM_LOOP_ROW)
+    assert set(machine.DOOM_LOOP_ROW.values()) == {d3_unit.MIN_LOOP_ROW}
 
 
 @slow

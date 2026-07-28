@@ -1913,6 +1913,16 @@ TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
 #:
 #: Every column of pitch buys back a column of ``mem_pad`` and then some. Empty by
 #: default, so every machine not named here is byte-identical.
+#:
+#: **Declined for ``deadman-3d_hires``, twice, and the reason is structural.** A
+#: narrower pitch does move that grid (pitch 11 and 12 both build, both differ
+#: byte-for-byte from the default) — it just cannot move the *box*: hires is
+#: 496 wide on the router wall's 495 columns, not on its CPU, at both the old
+#: fold (496x401 either way) and the new one (496x353 either way). The knob's
+#: whole payoff is trading CPU columns for ``mem_pad``, and on a machine whose
+#: width floor is set 200 columns further east there is nothing to trade into.
+#: Left off rather than added dead; revisit if the wall ever narrows past the
+#: CPU.
 SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
 
 #: :data:`SLAB_PITCH`'s replacement while the seek drum is on — the same split
@@ -4362,9 +4372,13 @@ def _stream(
         # one command lane paints a 128x96 framebuffer across four 64x48 panels
         # (the LM-75's interior is capped at 64x64 — SPEC.md). It presents exactly
         # the `doom` interface: one command pipe in, nothing back.
+        #
+        # ``doom_loop_row`` reaches all four blocks at once, and the 2x2 stacks
+        # two of them — so the lift comes off the wall's height twice over. See
+        # ``DOOM_LOOP_ROW``.
         from . import d3_router
 
-        blk = d3_router.build_wall()
+        blk = d3_router.build_wall(loop_row=doom_loop_row)
     else:
         from . import stream as streammod
 
@@ -4911,7 +4925,28 @@ ROM_ROWS = {
     # pure height. Re-sweep whenever the wall narrows again (the packed panel
     # cluster would take it to ~482), the store block changes shape, or the
     # program grows — all three have moved this number already.
-    "deadman-3d_hires": 102,
+    #
+    # And a fourth time, after the two knobs of the consolidation pass. They act
+    # on opposite sides of the trade and so had to be swept together:
+    # :data:`OPCODE_SLOTS` takes 36% out of the drum's opcode cells, which moves
+    # the ROM's own width curve *left*, and :data:`DOOM_LOOP_ROW` takes 34 rows
+    # out of the wall, which drops the whole height curve by a constant. Neither
+    # moves the 496 floor — that is the router wall's — so the crossing is still
+    # "the shallowest fold whose ROM is no wider than the wall", just reached
+    # sooner. Both on, height = rom_rows + 265:
+    #   80 -> 540x345   84 -> 514x349   86 -> 503x351   87 -> 497x352
+    #   **88 -> 496x353**   89 -> 496x354   90 -> 496x355   95 -> 496x360
+    #  102 -> 496x367
+    # 87 misses by one column, so 88 is the crossing and every row past it is
+    # pure height. Separately the knobs give 88 -> 496x387 (slots alone, the
+    # crossing already at 88) and 102 -> 496x367 (the lift alone, the crossing
+    # unmoved at 102); together, 496x353.
+    #
+    # The box is now 143 columns wider than it is tall, which is worth writing
+    # down: `area2` is max(w, h)**2, so from here every row this family saves is
+    # worth nothing at all and every column is the whole score. The next thing
+    # to attack is the wall's 495 columns; nothing above it can pay.
+    "deadman-3d_hires": 88,
 }
 
 
@@ -5297,12 +5332,44 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: reserve** for whoever narrows the store, not the tick. Full profile, and the
 #: three levers costed and rejected beside it, in ``ROM-RECIRCULATION.md``
 #: §"The drum's *contents*".
+#:
+#: **A map is an assignment fitted to one histogram, so it does not travel.**
+#: ``deadman-3d_hires``'s entry is its own DP solution over its own program
+#: (``scratch/deadman3d-opt/hires_slots.py``), and it agrees with
+#: ``deadman-3d``'s on six of twenty-one lanes. It could not have been copied
+#: even in principle: hires is not in :data:`SEEK_DRUM`, so there is no
+#: ``seek_split`` and no ``JMPS`` lane at all — 21 lanes against 22 — and its
+#: rank order is ``plan``'s length-descending default rather than a tuned
+#: :data:`LANE_ORDER`, so the *ranks* the DP assigns to differ too. Its
+#: histogram is a different shape besides: ``SND`` is 1,251 of 5,116 instructions
+#: (a 28-block billboard chain and a numeral painter ``deadman-3d`` has no
+#: equivalent of), where the committed program's paint traffic is a fraction of
+#: that.
+#:
+#: | quantity | default | relabelled |
+#: |---|---|---|
+#: | one-digit opcode instrs | 2,046 of 5,116 | **4,392 of 5,116** |
+#: | opcode cells | 19,442 | **12,404** (-7,038, -36%) |
+#:
+#: What that is worth is **height, via the fold**. hires' width floors at 496 on
+#: the router wall (:data:`d3_router.BLOCK_X0`'s 495, plus one), never on the
+#: drum, so a narrower drum buys no column directly — it lets a *shallower*
+#: ``rom_rows`` reach the same floor, and hires' height is ``rom_rows`` plus a
+#: constant. The crossing moves 102 -> **88** and the machine 496x401 ->
+#: 496x387 on this knob alone (see :data:`ROM_ROWS`, where the two knobs are
+#: swept together).
 OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
     ("deadman-3d", "taped"): {
         "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5,
         "LDA": 8, "DIV": 9, "SUB": 10, "ADD": 11, "ST": 12, "LD": 16,
         "MODI": 18, "DIVI": 20, "SUBI": 21, "MULI": 22, "LDI": 24,
         "JMPS": 25, "BRN": 26, "BRZ": 28, "JMPF": 29, "SND": 30,
+    },
+    ("deadman-3d_hires", "taped"): {
+        "IN": 0, "INCM": 1, "MOVA": 2, "DIV": 3, "ST": 4, "SUB": 5,
+        "ADD": 8, "LDA": 9, "MUL": 10, "DIVI": 11, "LD": 12, "MODI": 13,
+        "NEG": 14, "SUBI": 16, "ADDI": 17, "MULI": 18, "LDI": 20, "BRN": 21,
+        "BRZ": 22, "JMPF": 24, "SND": 28,
     },
 }
 
@@ -5364,6 +5431,12 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: The collapse therefore needs store-placement surgery on this machine, not a
 #: registry key, and the entry is left off rather than added dead. hires keeps
 #: its `STORE_TELEPORT` room pair, which is what `build_for` falls back to.
+#: **Re-swept after the consolidation pass** (fold 102 -> 88, the wall 34 rows
+#: shorter): identical failures at every offset — ``-18`` still ``answer_west
+#: 0``, ``-19``/``-20``/``-24``/``-30`` still "no pad pair makes every pipe
+#: bind". Neither knob touches the CPU's width or the adapter gap, so the
+#: column arithmetic never moved, which is the expected result and now a
+#: measured one.
 STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
@@ -5475,7 +5548,26 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {
 #: It is banked height as well: ``rom_rows`` 81 is the shallowest fold that
 #: reaches the 287 floor, and the seventeen rows come off the total that fold has
 #: to fit under.
-DOOM_LOOP_ROW: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 10}
+#:
+#: **``deadman-3d_hires`` collects it twice.** Its wall is four blocks in a 2x2
+#: (``d3_router.build_wall``), and the wall's height — which is what adds to the
+#: machine's, the wall hanging below everything — is *two* block heights plus the
+#: router and the gaps. So one lift of seventeen rows comes off it at both
+#: levels: measured, 496x401 -> **496x367** at the same fold, exactly 34 rows,
+#: and the sweep 27, 20, 15, 12, 11, 10 -> 401, 387, 377, 371, 369, 367 is 2 rows
+#: per row of corridor throughout, with no plateau and no floor of its own.
+#: :data:`d3_unit.MIN_LOOP_ROW` is still the binding constraint — 9 raises
+#: ``DoomUnitError`` on COL's seed push, unchanged by the tiling, because
+#: ``build_wall`` hands the same row to four *unmodified* blocks and each one
+#: re-checks it.
+#:
+#: The lift and :data:`OPCODE_SLOTS` are independent (one is the wall's height,
+#: the other the drum's width) and they compose exactly: together the fold
+#: crosses at 88 and the machine is **496x353**, 48 rows off 496x401.
+DOOM_LOOP_ROW: dict[tuple[str, str], int] = {
+    ("deadman-3d", "taped"): 10,
+    ("deadman-3d_hires", "taped"): 10,
+}
 
 #: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
 #: different from :data:`TAPED_BANKS`' address order. The value is a permutation

@@ -368,7 +368,7 @@ class Wall:
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
 
-def build_wall() -> Wall:
+def build_wall(loop_row: int | None = None) -> Wall:
     """Place the router and the four unmodified DOOM blocks, and wire the fan-out.
 
     The blocks go in a 2x2 — tile 0 top-left, tile 3 bottom-right.  *Nothing*
@@ -394,11 +394,22 @@ def build_wall() -> Wall:
     ``(by - south_wall) + (cmd_x - outlet)`` — the vertical legs telescope — so
     the lane rows are free and only the block corners and the outlet order
     decide it.  :data:`DEST_LEAF` explains why that order is what it is.
+
+    ``loop_row`` is :func:`d3_unit.build_doom`'s, handed to all four blocks at
+    once — and this is the one arrangement where it pays **twice**, because the
+    2x2 stacks two block heights and the wall's own height is what adds to the
+    machine's.  ``None`` keeps ``d3_unit.R_LOOP``, so the standalone probe and
+    any wall built without an opt-in stay byte-identical.  ``machine.
+    DOOM_LOOP_ROW`` is where a tier opts in; the wall does not choose for
+    itself, because the row is only worth anything against a *particular*
+    machine's fold (see ``ROM_ROWS``).
     """
     from . import d3_unit
     from .machine import _Grid
 
-    blocks = [d3_unit.build_doom(row) for row in TILE_FLOOR_ROW]
+    if loop_row is None:
+        loop_row = d3_unit.R_LOOP
+    blocks = [d3_unit.build_doom(row, loop_row) for row in TILE_FLOOR_ROW]
     blk = blocks[0]  # every variant has the same footprint and the same ports
     if {(b.width, b.height, b.cmd_cell, b.panel, b.pipes) for b in blocks} != {
         (blk.width, blk.height, blk.cmd_cell, blk.panel, blk.pipes)
