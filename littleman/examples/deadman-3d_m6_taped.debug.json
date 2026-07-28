@@ -380,7 +380,7 @@
     {
       "name": "display",
       "x": 170,
-      "y": 219,
+      "y": 211,
       "w": 66,
       "h": 50,
       "note": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -416,7 +416,7 @@
     {
       "name": "stream:panel",
       "x": 170,
-      "y": 219,
+      "y": 211,
       "w": 66,
       "h": 50,
       "note": "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP",
@@ -428,7 +428,7 @@
     {
       "name": "stream:relay",
       "x": 162,
-      "y": 198,
+      "y": 190,
       "w": 5,
       "h": 5,
       "note": "",
@@ -440,7 +440,7 @@
     {
       "name": "stream:relay2",
       "x": 162,
-      "y": 240,
+      "y": 232,
       "w": 5,
       "h": 5,
       "note": "",
@@ -454,7 +454,7 @@
       "x": 1,
       "y": 171,
       "w": 158,
-      "h": 84,
+      "h": 76,
       "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / RLE run / cursor move / gun sprite / COMMIT, 8*arg + code. The map, the title screen, the status bar and the baked pistol sprites are all derived from the Freedoom project (https://github.com/freedoom/freedoom @ d14dbbe: levels/e1m1.wad + its textures, graphics/titlepic, graphics/stbar, sprites/pisga0+pisfa0; BSD-style licence) \u2014 see deadman3d.py's art credits.",
       "color": "#f59e0b",
       "tags": [
@@ -466,7 +466,7 @@
       "x": 143,
       "y": 176,
       "w": 12,
-      "h": 78,
+      "h": 70,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -478,7 +478,7 @@
       "x": 3,
       "y": 176,
       "w": 20,
-      "h": 78,
+      "h": 70,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -490,7 +490,7 @@
       "x": 63,
       "y": 176,
       "w": 20,
-      "h": 78,
+      "h": 70,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -502,7 +502,7 @@
       "x": 23,
       "y": 176,
       "w": 20,
-      "h": 78,
+      "h": 70,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -514,7 +514,7 @@
       "x": 83,
       "y": 176,
       "w": 20,
-      "h": 78,
+      "h": 70,
       "note": "",
       "color": "#f59e0b",
       "tags": [
@@ -526,7 +526,7 @@
       "x": 123,
       "y": 176,
       "w": 20,
-      "h": 78,
+      "h": 70,
       "note": "",
       "color": "#f59e0b",
       "tags": [

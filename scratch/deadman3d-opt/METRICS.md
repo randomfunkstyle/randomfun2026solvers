@@ -404,3 +404,110 @@ values ("every value in the language is a signed 64-bit integer"). That is why
 | taped, 115-frame tour | 1,018,297,264 | **839,384,674** (**-17.57%**) |
 | taped census | 18 static men | 18 static men |
 | width headroom vs the 300 ceiling | 11 | 13 |
+
+# M10 — the DOOM unit (`stream:unit`), profiled and then lifted
+
+Scripts: `unit_traffic.py` (per-arm command words per frame), `unit_occupancy.py`
+(what each arm actually occupies against the 20 columns it is granted),
+`unit_loop_gate.py` (a candidate `loop_row` judged pixel-for-pixel on the native
+engine via `d3_unit.build_probe`'s standalone grid).
+
+## The traffic profile: three narrow arms carry 99%
+
+24 gameplay frames of `WALK`, bucketed by COMMIT, boot round separated.
+
+| arm | words/frame | share | pixels/frame | frames used | columns it occupies |
+|---|---|---|---|---|---|
+| RUN | 85.54 | 46.6% | 641.6 | 24/24 | 4 |
+| COL | 64.00 | 34.9% | 1,719.2 | 24/24 | 11 |
+| CURS | 31.92 | 17.4% | 0 | 24/24 | 1 |
+| COMMIT | 1.00 | 0.55% | 0 | 24/24 | 1 |
+| GUN | 0.88 | 0.48% | 57.8 | 21/24 | 23 |
+| GUNF | 0.12 | 0.07% | 11.0 | 3/24 | 33 |
+
+The boot round (preamble + title screen) is 429 RUN + 1 COMMIT and touches
+nothing else. COL is a flat 64 words — one per viewport column, every frame.
+RUN and CURS track the HUD's live bars (16 CURS on a quiet frame, 79 on a busy
+one). GUN and GUNF are mutually exclusive and exactly one fires per frame.
+
+**The arms are inverted with respect to their traffic.** The three that carry
+98.9% of the words occupy 16 columns between them; the two sprite arms carry
+0.55% and occupy 56. That is not a defect — a baked sprite is one command word
+instead of ~130 CPU sends, which is the whole reason the arms exist — but it
+does mean the block's *width* is bought almost entirely by its coldest arms.
+
+## Width: the block does not bind, so there is nothing to win
+
+Real column span, summed over the arms: **73 of the 156-wide interior (47%)**.
+COMMIT uses 1 of its 20, CURS 1 of 20, RUN 4 of 20; the sprite chains use 23 and
+33 of the 40 each gets by riding over a spare leaf. A variable-pitch trie (the
+codes are the west/east branch path, not the distances, so leaves may sit at
+arbitrary columns) would pack the interior to roughly 80 and the block from
+235 to about 160.
+
+**It would be worth exactly zero.** The taped machine is 287 wide and the DOOM
+block's east edge is column 235 — it is 50 columns clear of the box. The width
+floor is the taped store's (`TX 61 + the block's 224 columns + the east return
+pipe`, see `SEEK_TIER_LAYOUT`), and no amount of unit narrowing touches it. The
+block would have to *grow* by 52 columns before its width mattered at all.
+
+So: merging GUN/GUNF onto a shared slab (GUN_FIRE's rows 29..38 are literally
+GUN_IDLE's rows 30..39 shifted up one row, so the body could be shared behind a
+±64 address offset), merging COMMIT/CURS, and re-pitching the trie are all real
+and all pay nothing on this machine. Measured negative — recorded so the next
+person does not build it.
+
+## Height: the block IS the machine's floor, and eight rows of it were empty
+
+The DOOM block hangs below everything (`rom` rows 0..93, CPU/tape 94..168, the
+block 170..270), so the machine's last row is the block's. The block's height is
+`R_ADDR + PANEL_H + 6`: the panel hangs two rows below ADDR's band row, and the
+SWAP under-run three below the panel. The unit's own interior bottom
+(`R_COLLECT`) is *sixteen rows clear* of that — it hides in the panel's shadow —
+so **ADDR alone sets the height**.
+
+Every band row is a fixed offset from the loop corridor (`d3_unit.BELOW_LOOP`),
+and that is forced rather than chosen: the two counted-loop bodies are rigid
+ladders hung off `R_LOOP + 1`, and each band row is where one of their `r`/`s`
+glyphs lands. So the whole lower half translates as one rigid piece, every
+`_send_band` decision (a comparison of row *differences*) is invariant, and all
+four pipe lengths — which depend on `ADDR-DATA` and `ADDR-SWAP`, not on ADDR —
+are unchanged.
+
+Rows 19..26 of the shipped map hold no cell at all. The floor is 19, and **RUN's
+arm sets it, not COL's**: COL has the longer unpack but its corridor cell sits in
+the *climb* column one east, so its leaf column may carry machinery on the
+corridor row; RUN's `>` is in its own leaf column directly under `/bW`. 18 and
+below collide on RUN's `W` at column 123.
+
+| loop_row | block | probe steps | probe |
+|---|---|---|---|
+| 19 | 235x93 | 44,735 | PASS |
+| 21 | 235x95 | 44,913 | PASS |
+| 24 | 235x98 | 45,180 | PASS |
+| 27 (shipped) | 235x101 | 45,447 | PASS |
+
+Pipe lengths (addr 15, data 15, swap 35) and binding margins (min 2) are
+identical at every value in 19..27. The probe mix is every arm, a negative-seed
+COL, both sprites and the banding masks, judged against `store.DoomUnit`'s own
+frames on the native engine. The lift is very slightly *cheaper* as well — the
+arms' descents to the corridor are shorter.
+
+The fold was re-checked and does not move: 79 -> 292x260, 80 -> 289x261,
+**81 -> 287x263**, 84 -> 287x266. 81 is still the shallowest fold that reaches
+the 287 width floor, now at eight fewer rows.
+
+## Combined (M10)
+
+| | before | after |
+|---|---|---|
+| DOOM block | 235x101 | **235x93** |
+| taped box | 287x271 | **287x263** |
+| taped, 116-round tour | 839,384,674 | **839,202,914** (-0.02%) |
+| `deadman-3d` / `_trim` | `f62d63fd…` | `f62d63fd…` (unmoved) |
+| `deadman-3d_hires` wall | 572x228 | 572x228 (unmoved) |
+
+Opt-in via `machine.DOOM_LOOP_ROW`; absent means the shipped row 27, which is
+what holds the canonical and hi-res families byte-identical. `deadman-3d_hires`
+stacks four of these blocks two deep, so opting it in is worth ~16 rows there —
+untested here, and its own layout would want a re-sweep.
