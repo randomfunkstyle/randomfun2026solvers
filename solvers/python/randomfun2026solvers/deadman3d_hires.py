@@ -126,6 +126,7 @@ def hires_art(
     faces: dict[str, list[tuple[int, int, str]]],
     face_box: tuple[int, int, int, int],
     sprites: Sequence[int],
+    digits: Sequence[int],
 ) -> Art:
     """The 128x96 screen-space tables.  Every one is required, and on purpose.
 
@@ -138,7 +139,9 @@ def hires_art(
     they are geometry, not art: the bar is twice as wide, so a well is twice as
     many pixels for the same 50 rounds and 100 health and the per-pixel divisor
     halves.  Rounded up from the well's own width, so a full clip fills it
-    exactly and never overruns it.
+    exactly and never overruns it.  They are kept for the record and painted by
+    nothing: at 128x16 the wells carry DOOM's real ``STTNUM`` numerals instead
+    (:attr:`deadman3d.Geom.digits`), which is what a strip this tall is *for*.
     """
     g = GEOM
     ammo_cols = (d3.AMMO_BAR_COLS[0] * SCALE, d3.AMMO_BAR_COLS[1] * SCALE)
@@ -156,6 +159,9 @@ def hires_art(
         health_cols=health_cols,
         ammo_per_px=-(-d3.AMMO_START // (ammo_cols[1] - ammo_cols[0])),
         health_per_px=-(-d3.HEALTH_START // (health_cols[1] - health_cols[0])),
+        digits=list(digits),
+        dig_box=wi.digit_box(g.width, g.hud_h),
+        dig_slots=wi.digit_slots(g.width, g.hud_h, g.h3d),
     )
     if len(art.title) != g.height or any(len(r) != g.width for r in art.title):
         raise ValueError(f"the title is not {g.width}x{g.height}")
@@ -165,6 +171,9 @@ def hires_art(
     if len(art.sprites) != want:
         raise ValueError(f"{len(art.sprites)} sprite words, {want} expected "
                          f"({g.mon_stride} columns x {g.mon_words} a column, 3 stripes)")
+    if len(art.digits) != g.dig_words:
+        raise ValueError(f"{len(art.digits)} numeral words, {g.dig_words} expected "
+                         f"({d3.DIGIT_GLYPHS} glyphs x {art.dig_box[0]} columns)")
     return art
 
 
@@ -229,7 +238,7 @@ def install_wad(wad: Path, *, brightness: float | None = None) -> dict:
         # the CPU draws the pistol at this geometry (deadman3d._pistol_asm), so
         # there is no sprite arm to spill and no descent window to fit
         max_runs=None, max_body=64,
-        bands=wi.HIRES_BANDS, words_per_col=2,
+        bands=wi.HIRES_BANDS, words_per_col=2, digits=True,
         **kw,
     )
     box = wi.face_box(g.width, g.hud_h, g.h3d)
@@ -238,7 +247,7 @@ def install_wad(wad: Path, *, brightness: float | None = None) -> dict:
     install(hires_art(title=level.title_rows, hud_bg=art["hud_bg"],
                       gun_idle=art["gun_idle"], gun_fire=art["gun_fire"],
                       faces=art["faces"], face_box=box,
-                      sprites=art["monster_sprites"]))
+                      sprites=art["monster_sprites"], digits=art["digits"]))
     return art
 
 

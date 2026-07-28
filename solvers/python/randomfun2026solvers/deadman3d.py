@@ -487,7 +487,8 @@ GEOM64 = Geom(width=WIDTH, height=HEIGHT, h3d=H3D, tile_w=WIDTH, tile_h=HEIGHT)
 
 #: The tiled machine: 128x96 as a 2x2 of 64x48 panels, an 80-row viewport over a
 #: 16-row bar.  ``lm1/d3_router.py`` is the hardware; ``deadman3d_hires`` drives it.
-GEOM128 = Geom(width=128, height=96, h3d=80, tile_w=64, tile_h=48, art="hires")
+GEOM128 = Geom(width=128, height=96, h3d=80, tile_w=64, tile_h=48, art="hires",
+               digits=True)
 
 
 @dataclass(frozen=True)
@@ -1617,6 +1618,48 @@ def hud_bg_runs(geom: Geom = GEOM64) -> list[tuple[int, int]]:
     return _rle("".join(hud_bg_rows(geom)))
 
 
+def _paint_glyph(rows: list[list[int]], art: Art, geom: Geom,
+                 glyph: int, slot: int) -> None:
+    """One numeral into the strip, column by column, bottom nibble first.
+
+    The same walk as a monster billboard's — ``c = Q % 16; Q //= 16``, colour 0
+    transparent — because the glyphs are packed the same way, which is what
+    makes the strokes' gaps show the bar art instead of a box of background.
+    """
+    dw, dh = art.dig_box
+    col, bottom = art.dig_slots[slot]
+    for k in range(dw):
+        q = art.digits[glyph * dw + k]
+        row = bottom
+        for _j in range(dh):
+            c = sign_mod(q, 16)
+            q = div(q, 16)
+            if c != 0:
+                rows[row - geom.h3d][col + k] = c
+            row -= 1
+
+
+def _paint_digits(rows: list[list[int]], art: Art, geom: Geom,
+                  ammo: int, health: int) -> None:
+    """The live readouts as DOOM's own numbers — the golden twin of the machine's
+    digit chain.
+
+    ``STlib_drawNum`` draws right-aligned and **blanks a leading zero**, which
+    is one compare per digit here and one ``BRN`` there: a well's hundreds box
+    is painted only when the number reaches 100, its tens only at 10, and the
+    units box always (so a health of 0 still reads ``0``).  ``STTPRCNT`` then
+    goes in the box after the health number, exactly as
+    ``STlib_updatePercent`` puts it.
+    """
+    for base, value in ((0, ammo), (3, health)):
+        d = 100
+        for k in range(3):
+            if d == 1 or value - d >= 0:
+                _paint_glyph(rows, art, geom, sign_mod(div(value, d), 10), base + k)
+            d = div(d, 10)
+    _paint_glyph(rows, art, geom, 10, 6)
+
+
 def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START,
              fire: bool = False, *, geom: Geom = GEOM64) -> list[str]:
     """Rows 40..47: the status bar plus the live readouts and the mugshot,
@@ -1628,13 +1671,16 @@ def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START,
     :func:`face_for` variant's rows in the mugshot inset."""
     art = art_for(geom)
     rows = [[int(ch, 16) for ch in r] for r in hud_bg_rows(geom)]
-    for (col0, _col1), px in (
-        (art.ammo_cols, div(ammo, art.ammo_per_px)),
-        (art.health_cols, div(health, art.health_per_px)),
-    ):
-        for row in range(*art.bar_rows):
-            for c in range(col0, col0 + px):
-                rows[row - geom.h3d][c] = BAR_COLOR
+    if geom.digits:
+        _paint_digits(rows, art, geom, ammo, health)
+    else:
+        for (col0, _col1), px in (
+            (art.ammo_cols, div(ammo, art.ammo_per_px)),
+            (art.health_cols, div(health, art.health_per_px)),
+        ):
+            for row in range(*art.bar_rows):
+                for c in range(col0, col0 + px):
+                    rows[row - geom.h3d][c] = BAR_COLOR
     for r, c, colors in face_for(health, fire, geom=geom):
         for i, ch in enumerate(colors):
             rows[r - geom.h3d][c + i] = int(ch, 16)
@@ -1773,11 +1819,13 @@ def preamble_words(geom: Geom = GEOM64) -> list[int]:
     scalars) is unchanged through slot 359; M7a appends the monster table
     (``MONB``), the initial HP block (``MHPB``, an M7b consumer boot-loaded
     now so the tape never moves again) and the 60 packed sprite columns
-    (``SPRB``).  The boot loop's 8x-unrolled body adapts to the length; the
-    ZBUF slots after SPRB are NOT preamble — every one is written each frame
-    before the sprite pass reads any.
+    (``SPRB``).  ``DIGB``'s eleven packed numerals follow when the screen is big
+    enough to read one (:attr:`Geom.digits`).  The boot loop's 8x-unrolled body
+    adapts to the length; the ZBUF slots after all of it are NOT preamble —
+    every one is written each frame before the sprite pass reads any.
     """
     dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[SPAWN.heading])
+    art = art_for(geom)
     return (
         _MAP_WORDS
         + POW16
@@ -1786,7 +1834,8 @@ def preamble_words(geom: Geom = GEOM64) -> list[int]:
         + [SPAWN.posX, SPAWN.posY, SPAWN.heading, dirX, dirY, planeX, planeY]
         + _MON_WORDS
         + _MHP_WORDS
-        + art_for(geom).sprites
+        + art.sprites
+        + (art.digits if geom.digits else [])
     )
 
 
@@ -1916,9 +1965,14 @@ _TILE_SCALARS = ("TXT", "TSELT", "TSELB", "TTE", "TBS", "TBE",
                  # panel's router selector, and the column inside it
                  "Q2", "WROW", "WSEL", "WXT")
 
+#: The numeral chain's own scalars (:attr:`Geom.digits`), appended after the
+#: tiled ones for the same reason: every committed slot number stays put.
+_DIGIT_SCALARS = ("DSRC", "DDIV", "DRET", "DVAL", "DPTR", "DKN", "DA", "DAC")
+
 
 def _scalars_for(geom: Geom) -> tuple[str, ...]:
-    return _SCALARS + (_TILE_SCALARS if geom.tiled else ())
+    return (_SCALARS + (_TILE_SCALARS if geom.tiled else ())
+            + (_DIGIT_SCALARS if geom.digits else ()))
 
 #: How many copies of the DDA step the generated asm unrolls. A backward jump
 #: costs ``8 * (P - loop)`` ticks on this machine, and a frame walks ~1,000 DDA
@@ -2551,6 +2605,159 @@ def _sel_suffix(geom: Geom, col: int, row: int) -> list[str]:
     return ["        MULI 8", f"        ADDI {d3_router.SEL[f'T{tile}']}    ; ... to panel T{tile}"]
 
 
+def _digits_asm(geom: Geom, art: Art) -> list[str]:
+    """The live readouts as DOOM's own numerals, lowered from :func:`_paint_digits`.
+
+    Seven glyph boxes — ammo's three, health's three and ``STTPRCNT`` — painted
+    by **one** chain, because a glyph is packed exactly like a billboard column
+    (a nibble a row, bottom row first, 0 transparent) and the only thing that
+    differs between boxes is where the cursor starts.  ``DA`` carries that, and
+    the chain leaves it on the *next* box, which is what makes a three-digit
+    well a three-lap loop rather than three copies of the art.
+
+    That sharing is the whole reason the numerals fit.  Baking a CURS+RUN table
+    per glyph per box is 10 glyphs x 6 boxes x 8 rows of art — thousands of ROM
+    words, and on this machine a ROM word is a per-frame tick tax forever.
+    Packed columns put the art in the *tape* (11 x ``dw`` words, boot-loaded
+    with the rest of the preamble) and leave the ROM one loop.
+
+    Blanking is ``STlib_drawNum``'s: the hundreds box paints only from 100, the
+    tens only from 10, the units always — so 50 rounds reads ``50`` and not
+    ``050``, and 0 health still reads ``0``.
+    """
+    dw, dh = art.dig_box
+    boxes = art.dig_slots
+    if len(boxes) != 7 or not art.digits:
+        raise ValueError("the numerals need seven boxes and a packed glyph table")
+    if len(art.digits) != DIGIT_GLYPHS * dw:
+        raise ValueError(f"{len(art.digits)} glyph words, {DIGIT_GLYPHS * dw} expected")
+    for base in (0, 3):
+        want = [(boxes[base][0] + k * dw, boxes[base][1]) for k in range(3)]
+        if list(boxes[base:base + 3]) != want:
+            raise ValueError(
+                f"the three numeral boxes at {base} are not consecutive ({want} "
+                "wanted): the digit loop advances the cursor by one box a lap")
+    # One panel for every pixel of every glyph, so the selector is a constant and
+    # a RUN word can be built with an ADDI rather than the sprite chain's ADD.
+    tiles = {geom.tile_of(col + k, row - j)
+             for col, row in boxes for k in range(dw) for j in range(dh)}
+    if len(tiles) != 1:
+        raise ValueError(f"the numerals straddle panels {sorted(tiles)}; the "
+                         "digit chain builds one selector into its words")
+    tile = tiles.pop()
+    step = 64 if geom.tiled else 8       # one ADDR column, or one colour index
+    rstep = step * geom.tile_w           # one panel row UP
+    run1 = unit_word("RUN", 16, tile, geom)   # RUN 1 x colour 0
+    r0 = boxes[0][1] - dh + 1
+    lines = f"""
+; ── the live readouts (M10): DOOM's REAL numerals ────────────────────────────
+; STTNUM0..9 and STTPRCNT, {dw}x{dh} cells on rows {r0}..{boxes[0][1]} — three
+; digits ending at ST_AMMOX (columns {boxes[0][0]}..{boxes[2][0] + dw - 1}) and three plus the
+; percent sign at ST_HEALTHX ({boxes[3][0]}..{boxes[6][0] + dw - 1}), which is
+; wadimport.STBAR_REGIONS scaled onto this strip and so id's own placement.
+; A glyph is packed like a billboard column (DIGB: one word per glyph column, a
+; nibble a row, bottom first, 0 transparent) and ONE chain paints all seven
+; boxes: DA is the cursor of the box being painted and the chain leaves it on
+; the next one. Blanking is STlib_drawNum's — hundreds from 100, tens from 10,
+; units always.
+dnums:  LD  AMMO
+        ST  DSRC
+        LDI {_curs_word(geom, *boxes[0])}
+        ST  DA              ; the ammo number's leftmost numeral box
+        LDI 0
+        ST  DRET
+dnum:   LDI 100
+        ST  DDIV            ; three digits, most significant first
+dnd:    LD  DDIV
+        SUBI 1
+        BRZ dndraw          ; the units box draws even for a 0
+        LD  DSRC
+        SUB DDIV
+        BRN dnskip          ; a leading zero: DOOM draws nothing there
+dndraw: LD  DSRC
+        DIV DDIV
+        MODI 10
+        ST  DVAL
+        JMP dglyph
+dnskip: LD  DA
+        ADDI {step * dw}
+        ST  DA              ; the blank box is stepped over, not painted
+dnnext: LD  DDIV
+        DIVI 10
+        ST  DDIV
+        BRZ dnend           ; 100, 10, 1, then 0: the number is done
+        JMP dnd
+dnend:  LD  DRET
+        BRZ dnhp
+        JMP dpct
+dnhp:   LD  HEALTH
+        ST  DSRC
+        LDI {_curs_word(geom, *boxes[3])}
+        ST  DA              ; the health number's own well
+        LDI 1
+        ST  DRET
+        JMP dnum
+dpct:   LDI {DIGIT_GLYPHS - 1}
+        ST  DVAL            ; STTPRCNT, the glyph after the health number
+        LDI {_curs_word(geom, *boxes[6])}
+        ST  DA
+        LDI 2
+        ST  DRET
+; the shared glyph chain: {dw} columns of {dh} bottom-up nibbles
+dglyph: LD  DVAL
+        MULI {dw}
+        ADDI DIGB
+        ST  DPTR            ; this glyph's first packed column
+        LDI {dw}
+        ST  DKN
+dgcol:  LD  DPTR
+        LDA
+        ST  Q               ; the whole column in one packed word
+        LD  DA
+        ST  DAC             ; the cursor climbing it
+""".splitlines()
+    for j in range(dh):
+        lines += f"""\
+        LD  Q
+        MODI 16
+        BRZ dgs{j}            ; nibble 0: the bar art shows through
+        ST  TMP
+        LD  DAC
+        SND
+        LD  TMP
+        MULI {step}
+        ADDI {run1}
+        SND                 ; RUN word: 1 pixel of the nibble's colour
+""".splitlines()
+        if j == dh - 1:
+            lines.append(f"dgs{j}:")
+            continue
+        lines += f"""\
+dgs{j}:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  DAC
+        SUBI {rstep}
+        ST  DAC             ; up one panel row
+""".splitlines()
+    lines += f"""\
+        LD  DA
+        ADDI {step}
+        ST  DA              ; the glyph's next column — and, after the last of
+        INCM DPTR           ; them, the next numeral box
+        LD  DKN
+        SUBI 1
+        ST  DKN
+        BRZ dgend
+        JMP dgcol
+dgend:  LD  DRET
+        SUBI 2
+        BRZ face            ; the percent sign was the last thing on the strip
+        JMP dnnext
+""".splitlines()
+    return lines
+
+
 def _hud_bg_words(geom: Geom) -> list[tuple[int, str]]:
     """The status bar's static art as ``CURS`` + ``RUN`` words, per panel.
 
@@ -2944,6 +3151,20 @@ def deadman3d_source(geom: Geom = GEOM64) -> str:
             "WROW": "the row the billboard chain is climbing, inside its panel",
             "WSEL": "that panel's router selector",
             "WXT": f"the billboard column inside its panel: x mod {geom.tile_w}",
+        }
+    if geom.digits:
+        dw, dh = geom.dig_box
+        equ_notes |= {
+            "DIGB": f"..{slots['DIGB'] + geom.dig_words - 1:<3} DOOM's {DIGIT_GLYPHS} numerals "
+                    f"({dw}x{dh}), packed like a sprite column",
+            "DSRC": "the number being drawn: AMMO, then HEALTH",
+            "DDIV": "which digit of it: 100, then 10, then 1",
+            "DRET": "which readout the glyph chain came from (0/1/2)",
+            "DVAL": f"the glyph to paint: 0..9, or {DIGIT_GLYPHS - 1} for STTPRCNT",
+            "DPTR": "the glyph's current packed column slot",
+            "DKN": "columns of it left to paint",
+            "DA": "the CURS word of the numeral box being painted",
+            "DAC": "that cursor, climbing one column of it",
         }
     lines = [
         "; deadman-3d — GENERATED from randomfun2026solvers/deadman3d.py, do not hand-edit.",
@@ -3563,11 +3784,11 @@ colnxt: INCM XCOL           ; ACC = the old column number
     lines += (_sprite_phase_asm(slots, n_mon, codes, geom) if geom.sprites
               else ["", "; ── no sprite phase: see Geom.sprites ──", "spsel:"])
     lines += _pistol_asm(geom, art)
-    bg = hud_bg_runs()
-    lines += [
-        "",
-        f"; ── HUD (M8): cursor to slot {H3D * WIDTH}, then DOOM's REAL status bar as",
-        f"; {len(bg)} pre-encoded RUN words (hud_bg_runs() — STBAR block-quantized 5x4",
+    bg = hud_bg_runs(geom)
+    readout = ([
+        "; onto the strip), then the LIVE readouts as DOOM's OWN numerals — see",
+        "; the dnums block below.",
+    ] if geom.digits else [
         "; onto the strip), then the LIVE readouts in the bar's OWN number wells:",
         f"; ammo columns {AMMO_BAR_COLS[0]}..{AMMO_BAR_COLS[1] - 1} "
         f"(1px per {AMMO_PER_PX} rounds), health",
@@ -3575,14 +3796,22 @@ colnxt: INCM XCOL           ; ACC = the old column number
         f"(1px per {HEALTH_PER_PX}), both on rows {BAR_ROWS[0]}..{BAR_ROWS[1] - 1}",
         f"; in the digits' own red {BAR_COLOR}; an empty bar sends nothing and",
         "; the bar art shows through",
+    ])
+    lines += [
+        "",
+        f"; ── HUD (M8): cursor to slot {H3D * WIDTH}, then DOOM's REAL status bar as",
+        f"; {len(bg)} pre-encoded RUN words (hud_bg_runs() — STBAR block-quantized 5x4",
+        *readout,
         "hud:",
     ]
     for i, (word, note) in enumerate(_hud_bg_words(geom)):
         head = "hud:" if i == 0 else ""
         lines += [f"{head:<8}LDI {word}", f"        SND                 ; {note}"]
     del lines[lines.index("hud:")]
+    if geom.digits:
+        lines += _digits_asm(geom, art)
     bar_rows, sel_suffix = art.bar_rows, _sel_suffix(geom, 0, art.bar_rows[0])
-    bars = (
+    bars = () if geom.digits else (
         ("hbar", "abar", "HEALTH", art.health_per_px, art.health_cols[0], "health"),
         ("abar", "face", "AMMO", art.ammo_per_px, art.ammo_cols[0], "ammo"),
     )

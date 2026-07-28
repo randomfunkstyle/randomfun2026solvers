@@ -389,6 +389,64 @@ def test_a_billboard_paints_and_the_machine_agrees_across_both_seams(
     assert min(x for _r, x in cells) < 64 <= max(x for _r, x in cells)
 
 
+# ── the numerals ─────────────────────────────────────────────────────────────
+def test_the_numeral_geometry_is_the_bars_own_and_needs_no_wad() -> None:
+    """``Geom`` and ``wadimport`` derive a numeral's size the same way.
+
+    The tape layout has to be answerable without an IWAD (that is what makes the
+    resolution-only tests run everywhere), so ``Geom`` scales DOOM's 14x16
+    numeral onto the strip itself; ``wadimport`` does it again to cut the art.
+    Two copies of one rule, pinned equal here — the repo's usual bargain.
+    """
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers import wadimport as wi
+
+    assert (d3.STBAR_W, d3.STBAR_H) == (wi.STBAR_W, wi.STBAR_H)
+    assert (d3.DIGIT_W, d3.DIGIT_H) == (wi.DIGIT_W, wi.DIGIT_H)
+    assert d3.DIGIT_GLYPHS == len(wi.IWAD_DIGIT_LUMPS)
+
+    g = d3.GEOM128
+    assert g.digits and g.dig_box == wi.digit_box(g.width, g.hud_h) == (6, 8)
+    assert g.dig_words == d3.DIGIT_GLYPHS * 6 == 66
+    # …and the committed strip is exactly why it keeps its bars: 3x4 is mush
+    assert not d3.GEOM64.digits and d3.GEOM64.dig_words == 0
+    assert wi.digit_box(d3.GEOM64.width, d3.GEOM64.hud_h) == (3, 4)
+
+    # id's own placement: three numeral boxes ending at ST_AMMOX, three more
+    # plus STTPRCNT at ST_HEALTHX, all on one row band and all on one panel
+    slots = wi.digit_slots(g.width, g.hud_h, g.h3d)
+    assert slots == tuple((c, 89) for c in (0, 6, 12, 18, 24, 30, 36))
+    assert {g.tile_of(c + k, 89 - j) for c, _r in slots
+            for k in range(6) for j in range(8)} == {2}
+
+
+@needs_iwad
+def test_the_numerals_are_live_and_the_machine_paints_the_same_ones(
+        wad_installed) -> None:
+    """The readouts track the state, and blank a leading zero as DOOM does."""
+    from randomfun2026solvers import deadman3d as d3
+
+    g = d3.GEOM128
+    art = d3.art_for(g)
+    assert len(art.digits) == g.dig_words
+
+    def boxes(rows: list[str]) -> set[int]:
+        """Which of the seven numeral boxes have any glyph pixel in them."""
+        bg = d3.hud_bg_rows(g)
+        return {i for i, (col, bottom) in enumerate(art.dig_slots)
+                if any(rows[r - g.h3d][col + k] != bg[r - g.h3d][col + k]
+                       for k in range(6) for r in range(bottom - 7, bottom + 1))}
+
+    # 50 rounds and 100 health: the ammo hundreds box stays blank, health's
+    # does not, and the percent sign is always there
+    assert boxes(d3.hud_rows(100, 50, geom=g)) == {1, 2, 3, 4, 5, 6}
+    # a spent clip and a dying marine: single digits, and a 0 still draws
+    assert boxes(d3.hud_rows(7, 0, geom=g)) == {2, 5, 6}
+    # and the numbers really are different pictures, not the same one moved
+    assert d3.hud_rows(100, 50, geom=g) != d3.hud_rows(100, 49, geom=g)
+    assert d3.hud_rows(100, 50, geom=g) != d3.hud_rows(95, 50, geom=g)
+
+
 def test_composition_refuses_a_frame_stitched_from_mismatched_halves() -> None:
     """The invariant the broadcast COMMIT exists to keep, made checkable."""
     from randomfun2026solvers.lm1 import display
