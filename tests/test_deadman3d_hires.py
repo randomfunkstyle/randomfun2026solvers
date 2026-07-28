@@ -169,6 +169,20 @@ def test_composition_refuses_a_frame_stitched_from_mismatched_halves() -> None:
 
 
 # ── the machine ──────────────────────────────────────────────────────────────
+def test_the_checked_in_artifacts_match_their_builders() -> None:
+    """The committed grid and input stream are regenerable, byte for byte."""
+    from randomfun2026solvers import deadman3d_hires as hires
+    from randomfun2026solvers.lm1 import machine
+    from randomfun2026solvers.lm1.programs import PROGRAM_DIR
+
+    m = machine.build_for("deadman-3d_hires")
+    man = EXAMPLES / "deadman-3d_hires.man"
+    assert man.read_text().rstrip("\n").split("\n") == m.rows
+    assert (PROGRAM_DIR / "deadman-3d_hires.asm").read_text() == hires.hires_source()
+    stream = (EXAMPLES / "deadman-3d_hires.input.txt").read_text().split()
+    assert [int(v) for v in stream] == hires.input_words()
+
+
 def test_the_machine_builds_with_four_display_rooms() -> None:
     from randomfun2026solvers.littleman import Littleman
     from randomfun2026solvers.lm1 import machine
