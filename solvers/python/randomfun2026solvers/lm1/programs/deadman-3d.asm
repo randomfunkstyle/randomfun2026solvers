@@ -13,7 +13,7 @@
 ; cancel), then move along the new heading (W/S cancel), then render.
 ; An ungraded demo — the slug borrows plotter's problem JSON for nothing
 ; but registration; its 64x48 panel belongs to the DOOM unit (.unit doom,
-; lm1/d3_unit.py), its input is its own, and its 597-slot STORE rides the
+; lm1/d3_unit.py), its input is its own, and its 600-slot STORE rides the
 ; men-v3 man-memory (STORE_TIER), ~11 ticks an access.
 ;
 ; The CPU never touches the display: each viewport column is ONE command
@@ -90,53 +90,56 @@
 .equ AMMO   547          ; live rounds left: starts 50, -1 per shot, floor 0
 .equ HEALTH 548          ; live health: starts 100, nukage -5 a frame, floor 0
 .equ NUKE   549          ; 1 when this frame stands on nukage: green floor, health drain
-.equ DET    550          ; planeX*dirY - dirX*planeY (Q20) — the projection divisor, > 0
-.equ MI     551          ; the selection loop's monster index
-.equ MSP    552          ; the candidate's species (0 POSS / 1 TROO)
-.equ MDX    553          ; monster cell centre - posX, Q10
-.equ MDY    554          ; … - posY
-.equ TXN    555          ; camera x numerator dirY*MDX - dirX*MDY (Q20)
-.equ TYN    556          ; camera depth numerator planeX*MDY - planeY*MDX (Q20)
-.equ CTY    557          ; the candidate's depth TY = TYN*1024/DET — ZBUF's own units
-.equ CBAND  558          ; the candidate's scale band 0/1/2
-.equ COFF   559          ; the band's column offset in the sprite stripe (0/10/16)
-.equ CHW    560          ; the band's half width (5/3/2)
-.equ CW1    561          ; the band's width - 1 (9/5/3)
-.equ CSX0   562          ; the candidate's first screen column (may be < 0)
-.equ CSX1   563          ; the candidate's last screen column (may be > 63)
-.equ CBOT   564          ; the candidate's bottom row: the floor line at TY, clamped 39
-.equ CBASE  565          ; SPRB + species*20 + band offset: the column words' base slot
-.equ STY0   566          ; slot 0 (farthest kept) depth; FAR = empty
-.equ STY1   567          ; slot 1 depth
-.equ STY2   568          ; slot 2 (nearest kept) depth
-.equ SSX0   569          ; slot 0 first column
-.equ SSX1   570          ; slot 1 first column
-.equ SSX2   571          ; slot 2 first column
-.equ SEX0   572          ; slot 0 last column
-.equ SEX1   573          ; slot 1 last column
-.equ SEX2   574          ; slot 2 last column
-.equ SBA0   575          ; slot 0 sprite base
-.equ SBA1   576          ; slot 1 sprite base
-.equ SBA2   577          ; slot 2 sprite base
-.equ SBO0   578          ; slot 0 bottom row
-.equ SBO1   579          ; slot 1 bottom row
-.equ SBO2   580          ; slot 2 bottom row
-.equ SBN0   581          ; slot 0 band
-.equ SBN1   582          ; slot 1 band
-.equ SBN2   583          ; slot 2 band
-.equ SID0   584          ; slot 0 monster index + 1; 0 = empty (M7b's hit candidate)
-.equ SID1   585          ; slot 1 monster index + 1
-.equ SID2   586          ; slot 2 monster index + 1
-.equ SLOT   587          ; the paint loop's slot cursor 0..2 (far -> near)
-.equ WTY    588          ; the painting slot's depth (the ZBUF compare term)
-.equ WX     589          ; the painting column
-.equ WX1    590          ; the painting slot's last column
-.equ WPTR   591          ; the painting column's sprite word slot (BASE + column)
-.equ WBOT   592          ; the painting slot's bottom row
-.equ WBAND  593          ; the painting slot's band — picks the chain entry
-.equ Q      594          ; the column's packed nibbles, shifted down as the chain climbs
-.equ ADDRV  595          ; the pre-encoded CURS word of the pixel being painted
-.equ PTR    596          ; the boot loop's tape cursor
+.equ LIVE   550          ; 1 when this frame's FIRE actually spent a round (M7b): a dry fire flashes but kills nothing
+.equ HIT    551          ; the monster the crosshair (column 32) caught, index + 1; 0 = none
+.equ DET    552          ; planeX*dirY - dirX*planeY (Q20) — the projection divisor, > 0
+.equ MI     553          ; the selection loop's monster index
+.equ MSP    554          ; the candidate's species (0 POSS / 1 TROO)
+.equ MDX    555          ; monster cell centre - posX, Q10
+.equ MDY    556          ; … - posY
+.equ TXN    557          ; camera x numerator dirY*MDX - dirX*MDY (Q20)
+.equ TYN    558          ; camera depth numerator planeX*MDY - planeY*MDX (Q20)
+.equ CTY    559          ; the candidate's depth TY = TYN*1024/DET — ZBUF's own units
+.equ CBAND  560          ; the candidate's scale band 0/1/2
+.equ COFF   561          ; the band's column offset in the sprite stripe (0/10/16)
+.equ CHW    562          ; the band's half width (5/3/2)
+.equ CW1    563          ; the band's width - 1 (9/5/3)
+.equ CSX0   564          ; the candidate's first screen column (may be < 0)
+.equ CSX1   565          ; the candidate's last screen column (may be > 63)
+.equ CBOT   566          ; the candidate's bottom row: the floor line at TY, clamped 39
+.equ CBASE  567          ; SPRB + frame*20 + band offset: the column words' base slot
+.equ CID    568          ; the candidate's hit id: monster index + 1, or 0 for a corpse
+.equ STY0   569          ; slot 0 (farthest kept) depth; FAR = empty
+.equ STY1   570          ; slot 1 depth
+.equ STY2   571          ; slot 2 (nearest kept) depth
+.equ SSX0   572          ; slot 0 first column
+.equ SSX1   573          ; slot 1 first column
+.equ SSX2   574          ; slot 2 first column
+.equ SEX0   575          ; slot 0 last column
+.equ SEX1   576          ; slot 1 last column
+.equ SEX2   577          ; slot 2 last column
+.equ SBA0   578          ; slot 0 sprite base
+.equ SBA1   579          ; slot 1 sprite base
+.equ SBA2   580          ; slot 2 sprite base
+.equ SBO0   581          ; slot 0 bottom row
+.equ SBO1   582          ; slot 1 bottom row
+.equ SBO2   583          ; slot 2 bottom row
+.equ SBN0   584          ; slot 0 band
+.equ SBN1   585          ; slot 1 band
+.equ SBN2   586          ; slot 2 band
+.equ SID0   587          ; slot 0 hit id: monster index + 1, 0 = a corpse (M7b)
+.equ SID1   588          ; slot 1 hit id
+.equ SID2   589          ; slot 2 hit id
+.equ SLOT   590          ; the paint loop's slot cursor 0..2 (far -> near)
+.equ WTY    591          ; the painting slot's depth (the ZBUF compare term)
+.equ WX     592          ; the painting column
+.equ WX1    593          ; the painting slot's last column
+.equ WPTR   594          ; the painting column's sprite word slot (BASE + column)
+.equ WBOT   595          ; the painting slot's bottom row
+.equ WBAND  596          ; the painting slot's band — picks the chain entry
+.equ Q      597          ; the column's packed nibbles, shifted down as the chain climbs
+.equ ADDRV  598          ; the pre-encoded CURS word of the pixel being painted
+.equ PTR    599          ; the boot loop's tape cursor
 
 ; ── the DOOM unit (lm1/d3_unit.py): 8*arg + code, codes read off its trie ────
 .unit doom
@@ -255,6 +258,10 @@ title:  IN                  ; the next pre-encoded RUN word
 ; model's step() does.
 round:  IN                  ; blocks here when the walk is over (the legal end)
         ST  CMD             ; ST preserves ACC
+        LDI 0
+        ST  LIVE            ; both cleared every frame: only a round actually
+        ST  HIT             ; spent arms the shot, and HIT is this frame's
+        LD  CMD
         MODI 2
         ST  BW              ; bit 0 (1): W, forward
         LD  CMD
@@ -281,6 +288,8 @@ round:  IN                  ; blocks here when the walk is over (the legal end)
         BRZ turn0           ; dry-fire on an empty clip: the counter stays 0
         SUBI 1
         ST  AMMO            ; one live round spent — the HUD bar shrinks
+        LDI 1
+        ST  LIVE            ; … and THIS is the shot that can kill (M7b)
 
 ; ── turn first (lodev's order): heading += A - D, cancelling when both held ──
 turn0:  LD  BA
@@ -1587,8 +1596,19 @@ mbot:   LDI 81920
         BRN mbase
         LDI 39
         ST  CBOT            ; near clamp: the sprite slides up, stays whole
-mbase:  LD  MSP
-        MULI 20
+mbase:  LD  MI
+        ADDI MHPB
+        LDA                 ; this monster's live HP (M7b's ledger)
+        BRZ mdead
+        LD  MI
+        ADDI 1
+        ST  CID             ; alive: a hit candidate, THINGS index + 1
+        LD  MSP
+        JMP mstrip
+mdead:  LDI 0
+        ST  CID             ; a corpse: still selected, still painted, still
+        LDI 2               ; z-tested — but never a hit candidate again …
+mstrip: MULI 20   ; … and it paints from the shared corpse stripe
         ADD COFF
         ADDI SPRB
         ST  CBASE           ; the band's column words start here
@@ -1646,9 +1666,8 @@ sh12:   LD  STY2            ; … slot 2 retreats to slot 1 …
         ST  SBO2
         LD  CBAND
         ST  SBN2
-        LD  MI
-        ADDI 1
-        ST  SID2            ; monster index + 1; 0 stays "empty"
+        LD  CID
+        ST  SID2            ; the hit id (0 for a corpse — occupancy is STY)
         JMP mnext
 put1:   LD  CTY
         ST  STY1
@@ -1662,8 +1681,7 @@ put1:   LD  CTY
         ST  SBO1
         LD  CBAND
         ST  SBN1
-        LD  MI
-        ADDI 1
+        LD  CID
         ST  SID1
         JMP mnext
 put0:   LD  CTY
@@ -1678,8 +1696,7 @@ put0:   LD  CTY
         ST  SBO0
         LD  CBAND
         ST  SBN0
-        LD  MI
-        ADDI 1
+        LD  CID
         ST  SID0
 mnext:  INCM MI
         JMP msel
@@ -1692,14 +1709,13 @@ mnext:  INCM MI
 mpaint: LDI 0
         ST  SLOT
 mslot:  LD  SLOT
-        ADDI SID0
-        LDA
-        BRZ mslotn          ; an empty slot paints nothing
-        LD  SLOT
         ADDI STY0
         LDA
         ST  WTY
-        LD  SLOT
+        SUBI 12288
+        BRN mslotv          ; occupied: a kept candidate is strictly nearer
+        JMP mslotn          ; … than the far cull an empty slot still holds
+mslotv: LD  SLOT
         ADDI SSX0
         LDA
         ST  WX
@@ -1737,7 +1753,21 @@ mcz:    LD  WX
         SUB TMP
         BRN mcvis
         JMP mcadv           ; the wall is nearer: occluded, per column
-mcvis:  LD  WPTR
+; the hit test (M7b) rides HERE — the crosshair column, on the far side of the
+; occlusion test, so a wall between the pistol and the monster saves it. Slots
+; run far -> near, so the LAST write is the nearest live billboard under it.
+mcvis:  LD  LIVE
+        BRZ mcpix           ; no round spent this frame: nothing can be hit
+        LD  WX
+        SUBI 32
+        BRZ mchit
+        JMP mcpix
+mchit:  LD  SLOT
+        ADDI SID0
+        LDA                 ; the slot's hit id — 0 for a corpse
+        BRZ mcpix
+        ST  HIT
+mcpix:  LD  WPTR
         LDA
         ST  Q               ; the whole sprite column in one packed word
         LD  WBOT
@@ -1985,8 +2015,25 @@ mcadv:  INCM WPTR
         JMP mcol
 mslotn: INCM SLOT           ; ACC = the slot just finished
         SUBI 2
-        BRZ gun             ; that was slot 2: all billboards painted
+        BRZ mhitap          ; that was slot 2: all billboards painted
         JMP mslot
+
+; ── the shot lands (M7b): one HP off the monster the crosshair caught ───────
+; AFTER the phase that drew it, so this frame still shows the live sprite under
+; the muzzle flash and the corpse appears in the NEXT one — the selection loop
+; above read MHPB before this decrement ever ran. hp 0 is a corpse: the ladder
+; never re-selects it as a candidate, so a second shot at the same spot is
+; spent on nothing.
+mhitap: LD  HIT
+        BRZ gun             ; a dry fire, a miss, or a corpse under the sight
+        ADDI MHPB
+        SUBI 1
+        ST  TMP2            ; the victim's HP slot
+        LDA
+        SUBI 1
+        ST  TMP
+        LD  TMP2
+        MOVA TMP            ; store[MHPB + HIT - 1] -= 1
 
 ; ── the pistol (V4): ONE command word — the unit bakes both sprites ──────────
 gun:    LD  FIRE

@@ -177,15 +177,19 @@ played live (chords remain reachable by script).
 The demo walk (``WALK``)
 ------------------------
 Spawn view (no-op) at Freedoom E1M1's real start: east down the striped
-start hall.  Ten steps east; a 90° left turn and seven steps north up the
-brown concrete corridor into the great cavern's south-west lobe; back right
-to east and two steps onto the cavern floor, where a half-look right FIREs
-at the sunlit south rim; six steps east across the cavern, the ZIMMER cliffs
-and green MCSTAT screens growing ahead; a quiet half-look right at the north
-rim; two steps on, a 90° left turn to north, and two steps toward the slime
-fall — then a *firing* step (the ``"w "`` chord — the MUX at work) and one
-last FIRE standing before the bright green fall.  Two-cell steps (DOOM's run
-on the 64x64 grid); 50 words, spelled ``WALK_CHORDS``.
+start hall.  Ten steps east; a 90° left turn and four steps north up the
+brown concrete corridor, where two imps are queued — two shots drop the
+first (M7b: the sprite is still standing under the muzzle flash on the frame
+that kills it, the corpse heap appears on the next), and a third shot at the
+same spot passes through the corpse into the imp behind it; three steps on
+past the body into the great cavern's south-west lobe; back right to east and
+two steps onto the cavern floor, where a half-look right FIREs at the sunlit
+south rim; six steps east across the cavern, the ZIMMER cliffs and green
+MCSTAT screens growing ahead; a quiet half-look right at the north rim; two
+steps on, a 90° left turn to north, and two steps toward the slime fall —
+then a *firing* step (the ``"w "`` chord — the MUX at work) and one last FIRE
+standing before the bright green fall.  Two-cell steps (DOOM's run on the
+64x64 grid); 57 words, spelled ``WALK_CHORDS``.
 
 ``deadman3d_source()`` emits the LM-1 assembly lowered from this model;
 ``tape_slots()`` is its ``.equ`` table (the docstring's slot map plus the
@@ -214,8 +218,8 @@ https://freedoom.github.io/), fetched at commit ``d14dbbe``:
 * the monster billboards (M7a: :data:`MON_SPRITES`, placed at
   :data:`MONSTERS` — the level's own THINGS lump) — ``sprites/possa1.png``
   (the former human), ``sprites/trooa1.png`` (the imp) and ``possl0.png``
-  (the corpse frame M7b will use), hue-forward quantized at three scale
-  bands by ``wadimport.monster_sprite_words``;
+  (the corpse frame a shot monster drops into, M7b), hue-forward quantized at
+  three scale bands by ``wadimport.monster_sprite_words``;
 * the damage floors (:data:`NUKAGE_STR`) — the level's own SECTORS lump
   (specials 4/5/7/16), region-resolved by ``wadimport``'s flood fill.
 
@@ -576,7 +580,7 @@ def nukage_cell(x: int, y: int) -> int:
     return sign_mod(div(t, _POW2[sign_mod(y, 4)]), 2)
 
 
-# ── monsters (M7a): static occluded billboards ───────────────────────────────
+# ── monsters (M7a billboards, M7b shootable) ───────────────────────────────
 #: The monster table cap: the tape's ``MONB``/``MHPB`` blocks are sized to it.
 MAX_MON = 16
 
@@ -628,6 +632,10 @@ MON_NEAR = UNITS
 MON_FAR = 12 * UNITS
 #: Initial HP per species (boot-loads ``MHPB``; consumed by M7b's hit logic).
 MON_HP = (1, 2)
+#: The crosshair column: the pistol's hitscan is the one screen column the
+#: barrel points down, so a shot hits whatever billboard covers column 32
+#: and survives that column's wall depth test (M7b).
+CROSSHAIR = WIDTH // 2
 
 #: The packed sprite columns, one word each, 60 words: species 0's three
 #: bands (10+6+4 columns), species 1's, then the shared corpse frame padded
@@ -908,24 +916,39 @@ def face_for(health: int, fire: bool) -> list[tuple[int, int, str]]:
     return FACE_BLOODY
 
 
-# ── the sprite pass (M7a): selection, occlusion, banded billboard paint ──────
+# ── the sprite pass: selection, occlusion, billboard paint, the hit test ──────
 def _paint_monsters(cols: list[list[int]], zbuf: list[int],
                     posX: int, posY: int, dirX: int, dirY: int,
-                    planeX: int, planeY: int) -> None:
+                    planeX: int, planeY: int,
+                    hp: list[int] | None = None, live: bool = False) -> int:
     """Paint up to three monster billboards over the finished columns.
 
     Written in the generated asm's exact operation order — this function IS
-    the sprite pixel contract.  Selection: unpack each ``MONB`` word, cull
-    (behind the plane, nearer than :data:`MON_NEAR`, past :data:`MON_FAR`,
-    off screen), pick the scale band and floor line, and keep the nearest
-    three in a far-first slot file (slot 0 = farthest; strict ``<``
-    everywhere, so an equal-depth later THINGS index never displaces an
-    earlier one).  Paint: slots 0 -> 2 (back to front), per column the wall
-    depth test ``TY < ZBUF[x]``, then the bottom-up MODI 16 / DIVI 16 nibble
-    walk of the column's one packed word (colour 0 transparent).
+    the sprite pixel contract.  Selection: unpack each ``MONB`` word, read its
+    live HP (0 ⇒ a corpse: the shared corpse stripe, and never a hit
+    candidate), cull (behind the plane, nearer than :data:`MON_NEAR`, past
+    :data:`MON_FAR`, off screen), pick the scale band and floor line, and keep
+    the nearest three in a far-first slot file (slot 0 = farthest; strict
+    ``<`` everywhere, so an equal-depth later THINGS index never displaces an
+    earlier one — a slot is occupied when its depth is strictly nearer than
+    the far cull, which is what an empty slot holds).  Paint: slots 0 -> 2
+    (back to front), per column the wall depth test ``TY < ZBUF[x]``, then the
+    bottom-up MODI 16 / DIVI 16 nibble walk of the column's one packed word
+    (colour 0 transparent).
+
+    Returns the **hit** (M7b): with ``live`` (a shot that actually spent a
+    round) the crosshair column ``x == 32`` records the slot's monster index +
+    1 the moment that column survives the wall depth test — so the hit is the
+    nearest *unoccluded, still-alive* monster under the crosshair, because
+    slots paint far -> near and the last write wins.  0 = nothing hit.  The
+    caller applies it AFTER this frame renders (see
+    :func:`frames_for_commands`): the corpse appears from the next frame.
     """
     det = planeX * dirY - dirX * planeY  # Q20 — the asm's per-frame prologue
     assert det > 0, f"DET {det} must be positive (plane = dir rotated -90 deg)"
+    if hp is None:
+        hp = _MHP_WORDS
+    hit = 0
     empty = {"ty": MON_FAR, "sx0": 0, "sx1": 0, "base": 0, "bot": 0,
              "band": 0, "idx": 0}
     slots = [dict(empty) for _ in range(3)]
@@ -955,9 +978,15 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
         bot = div(div(WALL_H * H3D * UNITS, ty), 2) + MID  # the floor line
         if bot > H3D - 1:
             bot = H3D - 1                            # near clamp: slides up whole
+        if hp[i] == 0:                               # a corpse (M7b)
+            cid = 0                                  # never a hit candidate
+            frame = 2                                # the shared corpse stripe
+        else:
+            cid = i + 1                              # alive: index + 1
+            frame = sp
         cand = {"ty": ty, "sx0": sx0, "sx1": sx1,
-                "base": sp * MON_STRIDE + MON_BAND_OFF[band],
-                "bot": bot, "band": band, "idx": i + 1}
+                "base": frame * MON_STRIDE + MON_BAND_OFF[band],
+                "bot": bot, "band": band, "idx": cid}
         # Far-first 3-slot insertion, strict < (the asm's branch ladder).
         if not ty < slots[0]["ty"]:
             continue                                 # not nearer than the farthest kept
@@ -971,8 +1000,8 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
         else:
             slots[0] = cand
     for s in slots:                                  # slot 0 first: back to front
-        if s["idx"] == 0:
-            continue
+        if not s["ty"] < MON_FAR:
+            continue                                 # an empty slot paints nothing
         h_band = MON_BANDS[s["band"]][1]
         x = s["sx0"]
         ptr = 0
@@ -984,6 +1013,8 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
             if x > WIDTH - 1:
                 break                                # clipped off the right edge
             if s["ty"] < zbuf[x]:                    # the wall depth test
+                if live and x == CROSSHAIR and s["idx"] != 0:
+                    hit = s["idx"]                   # far -> near: nearest wins
                 q = _SPR_WORDS[s["base"] + ptr]
                 row = s["bot"]
                 for _j in range(h_band):             # bottom-up nibble walk
@@ -994,12 +1025,14 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
                     row -= 1
             x += 1
             ptr += 1
+    return hit
 
 
 # ── the renderer (lodev raycaster_flat.cpp, in Q10) ──────────────────────────
 def render(state: State, *, fire: bool = False,
            ammo: int = AMMO_START, health: int = HEALTH_START,
-           nukage: bool = False) -> list[str]:
+           nukage: bool = False, hp: list[int] | None = None,
+           live: bool = False, hit_out: list[int] | None = None) -> list[str]:
     """One frame: 48 rows of 64 hex chars (rows 0..39 the 3D view, 40..47 HUD).
 
     The pistol (:data:`GUN_IDLE`, or :data:`GUN_FIRE` when ``fire``) paints
@@ -1010,6 +1043,12 @@ def render(state: State, *, fire: bool = False,
     :data:`FLOOR_NUKE` green instead of the gray 8 — DOOM's palette-shift
     homage, and exactly what the machine's per-column green overlay COL word
     repaints (colour 2 is mask-invariant: ``2 & 7 == 2 & 15 == 2``).
+
+    ``hp`` is the live monster HP ledger (default: the boot values, i.e. all
+    16 alive); a zeroed entry paints the corpse frame.  ``live`` says this
+    frame's shot actually spent a round, and ``hit_out``, when given, receives
+    the one monster the crosshair hit (index + 1, 0 for none) — the render is
+    pure, the caller applies the hit afterwards (M7b's timing contract).
     """
     posX, posY = state.posX, state.posY
     dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[state.heading])
@@ -1102,7 +1141,10 @@ def render(state: State, *, fire: bool = False,
         ]
         floor_c = FLOOR_NUKE if nukage else 8
         cols.append([0] * drawStart + run + [floor_c] * (H3D - 1 - drawEnd))
-    _paint_monsters(cols, zbuf, posX, posY, dirX, dirY, planeX, planeY)
+    hit = _paint_monsters(cols, zbuf, posX, posY, dirX, dirY, planeX, planeY,
+                          hp, live)
+    if hit_out is not None:
+        hit_out.append(hit)
     for r, c, colors in (GUN_FIRE if fire else GUN_IDLE):
         for i, ch in enumerate(colors):
             cols[c + i][r] = int(ch, 16)
@@ -1166,24 +1208,34 @@ def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START,
 # ── the demo walk ────────────────────────────────────────────────────────────
 #: One chord per frame, each encoded by :func:`keys`.  The beats: hold the
 #: spawn view down the start hall; ten ``w`` east along it, the striped BASE2
-#: columns sliding by; four ``a`` to face north and seven ``w`` up the brown
-#: concrete corridor at x=25 (three of them past its mouth into the cavern's
-#: south-west lobe); four ``d`` back to east and two ``w`` into the great
-#: cavern proper; ``d``, FIRE, ``a`` — a half-look right at the sunlit south
-#: rim, the shot lighting the muzzle; six ``w`` east across the cavern floor,
-#: the ZIMMER cliffs and green MCSTAT screens far ahead; ``d``, hold, ``a`` —
-#: the quiet half-look at the north rim; two ``w`` on to x=45, four ``a``
-#: round to north, two ``w`` INTO the slime moat that rings the fall (M5:
-#: the floor floods green and health drains 5 a frame, the red bar visibly
-#: shrinking); three held beats standing in the slime, the fall dead ahead,
-#: the face degrading to bloodied; then a *firing* step OUT of the moat
-#: (``"w "`` — the MUX at work) and one last FIRE standing clean before the
-#: bright green fall.  The cavern crossing at frames 32..35 already forded
-#: the moat's west lobe, so the bar drains in two episodes — 14 nukage
-#: frames in all, health 100 -> 30.  Two-cell steps on the 64x64 grid; 53
-#: words, spelled ``WALK_CHORDS``.
+#: columns sliding by; four ``a`` to face north and four ``w`` up the brown
+#: concrete corridor at x=25 — where **the shooting gallery** stands (M7b):
+#: two of Freedoom E1M1's imps queue up the corridor at (25, 38) and (25, 40),
+#: and from (25, 34) the first is dead under the crosshair.  Two FIREs drop it
+#: (an imp is :data:`MON_HP` 2): frame 19 takes it to 1, frame 20 to 0 with the
+#: sprite still standing under the muzzle flash — the hit is applied after the
+#: frame it was resolved in — and the held beat at frame 21 shows the corpse
+#: heap on the floor where the billboard was.  Frame 22 fires at the SAME spot
+#: again: the corpse is not a hit candidate any more, so that round carries on
+#: through it and wounds the second imp behind.  Then three ``w`` past the body
+#: and out of the corridor mouth into the cavern's south-west lobe; four ``d``
+#: back to east and two ``w`` into the great cavern proper; ``d``, FIRE, ``a``
+#: — a half-look right at the sunlit south rim, the shot lighting the muzzle;
+#: six ``w`` east across the cavern floor, the ZIMMER cliffs and green MCSTAT
+#: screens far ahead; ``d``, hold, ``a`` — the quiet half-look at the north
+#: rim; two ``w`` on to x=45, four ``a`` round to north, two ``w`` INTO the
+#: slime moat that rings the fall (M5: the floor floods green and health
+#: drains 5 a frame, the red bar visibly shrinking); three held beats standing
+#: in the slime, the fall dead ahead, the face degrading to bloodied; then a
+#: *firing* step OUT of the moat (``"w "`` — the MUX at work) and one last
+#: FIRE standing clean before the bright green fall.  The cavern crossing at
+#: frames 36..39 already forded the moat's west lobe, so the bar drains in two
+#: episodes — 14 nukage frames in all, health 100 -> 30, unchanged by M7b's
+#: three extra beats (they stand on dry concrete).  Two-cell steps on the
+#: 64x64 grid; 57 words, spelled ``WALK_CHORDS``.
 WALK_CHORDS: list[str] = (
-    ["."] + ["w"] * 10 + ["a"] * 4 + ["w"] * 7 + ["d"] * 4 + ["w"] * 2
+    ["."] + ["w"] * 10 + ["a"] * 4 + ["w"] * 4 + [" ", " ", ".", " "]
+    + ["w"] * 3 + ["d"] * 4 + ["w"] * 2
     + ["d", " ", "a"] + ["w"] * 6 + ["d", ".", "a"] + ["w"] * 2 + ["a"] * 4
     + ["w"] * 2 + ["."] * 3 + ["w ", " "]
 )
@@ -1319,19 +1371,40 @@ def frames_for_commands(cmds: list[int]) -> list[list[str]]:
     """Apply each command in turn and render after it — one frame per command.
 
     Threads the live counters exactly as the asm does: a FIRE with rounds left
-    decrements ammo BEFORE the render (the decode ladder runs first), an empty
-    clip dry-fires at 0 and still flashes; then the move lands, and standing
+    decrements ammo BEFORE the render (the decode ladder runs first) and is
+    the ONLY thing that arms the shot (``live`` — an empty clip dry-fires at
+    0, still flashes, and kills nothing); then the move lands, and standing
     on nukage costs :data:`NUKE_DAMAGE` health (floor 0) before the frame is
     drawn — the frame you take damage on already shows the green floor, the
     shorter bar and the degraded face.
+
+    The **hit timing contract** (M7b, mirrored line for line in the asm): the
+    shot is resolved against *this* frame's post-move geometry, inside the
+    sprite pass, but the HP it costs is applied only after the frame has been
+    rendered — so the frame you fire on shows the monster alive under the
+    muzzle flash and the corpse appears from the NEXT frame.
+    """
+    return [beat[0] for beat in walk_beats(cmds)]
+
+
+def walk_beats(cmds: list[int]) -> list[tuple[list[str], bool, int, tuple[int, ...]]]:
+    """:func:`frames_for_commands`' engine, with the state it threads exposed.
+
+    One ``(frame, live, hit, hp)`` per command: ``live`` is the armed-shot
+    flag, ``hit`` the monster the crosshair caught in that frame (index + 1,
+    0 for none) and ``hp`` the HP ledger **after** the hit is applied — i.e.
+    the ledger the next frame renders from, which is what makes the corpse a
+    frame late.  The tests read the kill this way; nothing else needs it.
     """
     state = SPAWN
     ammo = AMMO_START
     health = HEALTH_START
-    frames = []
+    hp = list(_MHP_WORDS)          # the live ledger: the asm's MHPB slots
+    beats = []
     for cmd in cmds:
         fire = fire_bit(cmd)
-        if fire and ammo > 0:
+        live = fire and ammo > 0   # exactly where the asm spends the round
+        if live:
             ammo -= 1
         state = step(state, cmd)
         nuk = nukage_cell(div(state.posX, UNITS), div(state.posY, UNITS)) == 1
@@ -1339,8 +1412,13 @@ def frames_for_commands(cmds: list[int]) -> list[list[str]]:
             health -= NUKE_DAMAGE
             if health < 0:
                 health = 0
-        frames.append(render(state, fire=fire, ammo=ammo, health=health, nukage=nuk))
-    return frames
+        hit_out: list[int] = []
+        frame = render(state, fire=fire, ammo=ammo, health=health,
+                       nukage=nuk, hp=hp, live=live, hit_out=hit_out)
+        if hit_out[0]:             # applied AFTER the render: next frame dies
+            hp[hit_out[0] - 1] -= 1
+        beats.append((frame, live, hit_out[0], tuple(hp)))
+    return beats
 
 
 def cases_json(cmds: list[int]) -> dict:
@@ -1373,10 +1451,14 @@ _SCALARS = (
     "COLOR", "PW", "WADDR", "FRACX", "FRACY", "PW0", "WADDR0",
     "TMP", "TMP2", "NEWX", "NEWY",
     "BW", "BS", "BA", "BD", "FIRE", "AMMO", "HEALTH", "NUKE",
+    # M7b's two frame-scoped shot scalars: LIVE arms the hit test exactly
+    # where the round is spent, HIT collects the crosshair's victim.
+    "LIVE", "HIT",
     # M7a, the sprite pass: the per-frame projection divisor, the selection
     # loop's candidate scalars ...
     "DET", "MI", "MSP", "MDX", "MDY", "TXN", "TYN",
     "CTY", "CBAND", "COFF", "CHW", "CW1", "CSX0", "CSX1", "CBOT", "CBASE",
+    "CID",
     # ... the three kept slots, field-major triples (slot k at base + k, so
     # the paint loop LDAs them by SLOT; slot 0 = farthest, painted first) ...
     "STY0", "STY1", "STY2", "SSX0", "SSX1", "SSX2", "SEX0", "SEX1", "SEX2",
@@ -1423,16 +1505,22 @@ def tape_slots() -> dict[str, int]:
 
 
 def _sprite_phase_asm(slots: dict[str, int], n_mon: int, codes: dict[str, int]) -> list[str]:
-    """The sprite phase (M7a), lowered line for line from :func:`_paint_monsters`.
+    """The sprite phase, lowered line for line from :func:`_paint_monsters`.
 
-    Selection loop over the ``MONB`` table (cull chain, band pick, far-first
-    3-slot insertion with strict compares), then the far->near paint: per
-    slot the field-major scalars are LDA'd by SLOT, per column the ZBUF
-    occlusion test picks whether the column's one packed word enters the
-    **shared unrolled 14-block chain** — three static entry labels
+    Selection loop over the ``MONB`` table (cull chain, band pick, the live
+    HP read that picks the species stripe or the corpse one, far-first 3-slot
+    insertion with strict compares), then the far->near paint: per slot the
+    field-major scalars are LDA'd by SLOT, per column the ZBUF occlusion test
+    picks whether the column's one packed word enters the **shared unrolled
+    14-block chain** — three static entry labels
     (``chain_h14``/``chain_h9``/``chain_h5``, the last 5 blocks common to
     all), each block one bottom-up nibble: MODI 16, transparent-skip, a CURS
     word from ADDRV and a 1-pixel RUN word, then DIVI 16 and the row step.
+
+    M7b rides in the same pass: the crosshair column's hit candidacy sits on
+    the far side of the occlusion test (so a wall saves the monster), and the
+    one HP decrement runs after the last slot has painted — the frame that
+    kills still shows the living sprite.
     """
     lh_num = WALL_H * H3D * UNITS
     run1 = 8 * 16 + codes["RUN"]  # a 1-pixel RUN word is 8*(16 + c) + C_RUN
@@ -1570,8 +1658,19 @@ mbot:   LDI {lh_num}
         BRN mbase
         LDI {H3D - 1}
         ST  CBOT            ; near clamp: the sprite slides up, stays whole
-mbase:  LD  MSP
-        MULI {MON_STRIDE}
+mbase:  LD  MI
+        ADDI MHPB
+        LDA                 ; this monster's live HP (M7b's ledger)
+        BRZ mdead
+        LD  MI
+        ADDI 1
+        ST  CID             ; alive: a hit candidate, THINGS index + 1
+        LD  MSP
+        JMP mstrip
+mdead:  LDI 0
+        ST  CID             ; a corpse: still selected, still painted, still
+        LDI 2               ; z-tested — but never a hit candidate again …
+mstrip: MULI {MON_STRIDE}   ; … and it paints from the shared corpse stripe
         ADD COFF
         ADDI SPRB
         ST  CBASE           ; the band's column words start here
@@ -1629,9 +1728,8 @@ sh12:   LD  STY2            ; … slot 2 retreats to slot 1 …
         ST  SBO2
         LD  CBAND
         ST  SBN2
-        LD  MI
-        ADDI 1
-        ST  SID2            ; monster index + 1; 0 stays "empty"
+        LD  CID
+        ST  SID2            ; the hit id (0 for a corpse — occupancy is STY)
         JMP mnext
 put1:   LD  CTY
         ST  STY1
@@ -1645,8 +1743,7 @@ put1:   LD  CTY
         ST  SBO1
         LD  CBAND
         ST  SBN1
-        LD  MI
-        ADDI 1
+        LD  CID
         ST  SID1
         JMP mnext
 put0:   LD  CTY
@@ -1661,8 +1758,7 @@ put0:   LD  CTY
         ST  SBO0
         LD  CBAND
         ST  SBN0
-        LD  MI
-        ADDI 1
+        LD  CID
         ST  SID0
 mnext:  INCM MI
         JMP msel
@@ -1675,14 +1771,13 @@ mnext:  INCM MI
 mpaint: LDI 0
         ST  SLOT
 mslot:  LD  SLOT
-        ADDI SID0
-        LDA
-        BRZ mslotn          ; an empty slot paints nothing
-        LD  SLOT
         ADDI STY0
         LDA
         ST  WTY
-        LD  SLOT
+        SUBI {MON_FAR}
+        BRN mslotv          ; occupied: a kept candidate is strictly nearer
+        JMP mslotn          ; … than the far cull an empty slot still holds
+mslotv: LD  SLOT
         ADDI SSX0
         LDA
         ST  WX
@@ -1720,7 +1815,21 @@ mcz:    LD  WX
         SUB TMP
         BRN mcvis
         JMP mcadv           ; the wall is nearer: occluded, per column
-mcvis:  LD  WPTR
+; the hit test (M7b) rides HERE — the crosshair column, on the far side of the
+; occlusion test, so a wall between the pistol and the monster saves it. Slots
+; run far -> near, so the LAST write is the nearest live billboard under it.
+mcvis:  LD  LIVE
+        BRZ mcpix           ; no round spent this frame: nothing can be hit
+        LD  WX
+        SUBI {CROSSHAIR}
+        BRZ mchit
+        JMP mcpix
+mchit:  LD  SLOT
+        ADDI SID0
+        LDA                 ; the slot's hit id — 0 for a corpse
+        BRZ mcpix
+        ST  HIT
+mcpix:  LD  WPTR
         LDA
         ST  Q               ; the whole sprite column in one packed word
         LD  WBOT
@@ -1769,8 +1878,25 @@ mcadv:  INCM WPTR
         JMP mcol
 mslotn: INCM SLOT           ; ACC = the slot just finished
         SUBI 2
-        BRZ gun             ; that was slot 2: all billboards painted
+        BRZ mhitap          ; that was slot 2: all billboards painted
         JMP mslot
+
+; ── the shot lands (M7b): one HP off the monster the crosshair caught ───────
+; AFTER the phase that drew it, so this frame still shows the live sprite under
+; the muzzle flash and the corpse appears in the NEXT one — the selection loop
+; above read MHPB before this decrement ever ran. hp 0 is a corpse: the ladder
+; never re-selects it as a candidate, so a second shot at the same spot is
+; spent on nothing.
+mhitap: LD  HIT
+        BRZ gun             ; a dry fire, a miss, or a corpse under the sight
+        ADDI MHPB
+        SUBI 1
+        ST  TMP2            ; the victim's HP slot
+        LDA
+        SUBI 1
+        ST  TMP
+        LD  TMP2
+        MOVA TMP            ; store[MHPB + HIT - 1] -= 1
 """.splitlines()
     return lines
 
@@ -1788,9 +1914,10 @@ def deadman3d_source() -> str:
     the :data:`DDA_UNROLL`-way unrolled DDA maintaining PW/WADDR incrementally,
     per-arm hit tails ``whx``/``why`` that bake the sunlit/dark shading,
     projection, the M7a ZBUF depth store, and ONE ``SND`` command word to the
-    DOOM unit) -> the sprite phase (M7a: :func:`_sprite_phase_asm` — monster
-    selection over MONB, the far-first slot file, and the ZBUF-occluded
-    banded billboard paint through the shared unrolled nibble chain) -> the
+    DOOM unit) -> the sprite phase (:func:`_sprite_phase_asm` — monster
+    selection over MONB/MHPB, the far-first slot file, the ZBUF-occluded
+    banded billboard paint through the shared unrolled nibble chain, M7b's
+    crosshair hit test inside it and the HP decrement after it) -> the
     FIRE pistol sprite (GUN or GUNF by the FIRE bit), the HUD (one CURS, the
     background RUN constants, then the live bars) and the commit -> back to
     ``round:``.  The lodev variable each block computes is named in its
@@ -1849,6 +1976,10 @@ def deadman3d_source() -> str:
         "AMMO": f"live rounds left: starts {AMMO_START}, -1 per shot, floor 0",
         "HEALTH": f"live health: starts {HEALTH_START}, nukage -{NUKE_DAMAGE} a frame, floor 0",
         "NUKE": "1 when this frame stands on nukage: green floor, health drain",
+        "LIVE": "1 when this frame's FIRE actually spent a round (M7b): a dry "
+                "fire flashes but kills nothing",
+        "HIT": f"the monster the crosshair (column {CROSSHAIR}) caught, index + 1; "
+               "0 = none",
         "MONB": f"..{slots['MONB'] + max(n_mon - 1, 0):<3} monster table (M7a): ((cx*64)+cy)*2 + species",
         "MHPB": f"..{slots['MHPB'] + max(n_mon - 1, 0):<3} initial monster HP (M7b's hit ledger)",
         "SPRB": f"..{slots['SPRB'] + 3 * MON_STRIDE - 1:<3} packed sprite columns: nibble 0 = bottom px, 0 = clear",
@@ -1867,7 +1998,8 @@ def deadman3d_source() -> str:
         "CSX0": "the candidate's first screen column (may be < 0)",
         "CSX1": "the candidate's last screen column (may be > 63)",
         "CBOT": "the candidate's bottom row: the floor line at TY, clamped 39",
-        "CBASE": "SPRB + species*20 + band offset: the column words' base slot",
+        "CBASE": "SPRB + frame*20 + band offset: the column words' base slot",
+        "CID": "the candidate's hit id: monster index + 1, or 0 for a corpse",
         "STY0": "slot 0 (farthest kept) depth; FAR = empty",
         "STY1": "slot 1 depth", "STY2": "slot 2 (nearest kept) depth",
         "SSX0": "slot 0 first column", "SSX1": "slot 1 first column",
@@ -1879,8 +2011,8 @@ def deadman3d_source() -> str:
         "SBO0": "slot 0 bottom row", "SBO1": "slot 1 bottom row",
         "SBO2": "slot 2 bottom row",
         "SBN0": "slot 0 band", "SBN1": "slot 1 band", "SBN2": "slot 2 band",
-        "SID0": "slot 0 monster index + 1; 0 = empty (M7b's hit candidate)",
-        "SID1": "slot 1 monster index + 1", "SID2": "slot 2 monster index + 1",
+        "SID0": "slot 0 hit id: monster index + 1, 0 = a corpse (M7b)",
+        "SID1": "slot 1 hit id", "SID2": "slot 2 hit id",
         "SLOT": "the paint loop's slot cursor 0..2 (far -> near)",
         "WTY": "the painting slot's depth (the ZBUF compare term)",
         "WX": "the painting column", "WX1": "the painting slot's last column",
@@ -2018,6 +2150,10 @@ def deadman3d_source() -> str:
 ; model's step() does.
 round:  IN                  ; blocks here when the walk is over (the legal end)
         ST  CMD             ; ST preserves ACC
+        LDI 0
+        ST  LIVE            ; both cleared every frame: only a round actually
+        ST  HIT             ; spent arms the shot, and HIT is this frame's
+        LD  CMD
         MODI 2
         ST  BW              ; bit 0 (1): W, forward
         LD  CMD
@@ -2044,6 +2180,8 @@ round:  IN                  ; blocks here when the walk is over (the legal end)
         BRZ turn0           ; dry-fire on an empty clip: the counter stays 0
         SUBI 1
         ST  AMMO            ; one live round spent — the HUD bar shrinks
+        LDI 1
+        ST  LIVE            ; … and THIS is the shot that can kill (M7b)
 
 ; ── turn first (lodev's order): heading += A - D, cancelling when both held ──
 turn0:  LD  BA
@@ -2897,19 +3035,24 @@ def _play_frame(player: "_MachinePlayer | None", state: State, code: int,
                 counters: dict) -> tuple[State, str]:
     """One keypress against whichever engine: returns (state, terminal text).
 
-    ``counters`` threads the golden path's live ammo/health between frames
-    (the machine keeps its own on the tape).
+    ``counters`` threads the golden path's live ammo/health — and M7b's
+    monster HP ledger — between frames (the machine keeps its own on the tape).
     """
     fire = fire_bit(code)
-    if fire and counters["ammo"] > 0:
+    live = fire and counters["ammo"] > 0
+    if live:
         counters["ammo"] -= 1
     state = step(state, code)
     nuk = nukage_cell(div(state.posX, UNITS), div(state.posY, UNITS)) == 1
     if nuk:
         counters["health"] = max(0, counters["health"] - NUKE_DAMAGE)
     if player is None:  # --golden: the model, instant
+        hit_out: list[int] = []
         frame = render(state, fire=fire, ammo=counters["ammo"],
-                       health=counters["health"], nukage=nuk)
+                       health=counters["health"], nukage=nuk,
+                       hp=counters["hp"], live=live, hit_out=hit_out)
+        if hit_out[0]:  # applied after the frame: the corpse shows up next
+            counters["hp"][hit_out[0] - 1] -= 1
         n = None
     else:
         frame = player.feed(code)
@@ -2933,7 +3076,8 @@ def _play_script(script: str, golden: bool) -> None:
     player = None if golden else _MachinePlayer()
     print(_title_text(player))
     state = SPAWN
-    counters = {"ammo": AMMO_START, "health": HEALTH_START}
+    counters = {"ammo": AMMO_START, "health": HEALTH_START,
+                "hp": list(_MHP_WORDS)}
     for ch in script:
         state, text = _play_frame(player, state, keys(ch), counters)
         print(text)
@@ -2948,7 +3092,8 @@ def _play(golden: bool) -> None:
 
     player = None if golden else _MachinePlayer()
     state = SPAWN
-    counters = {"ammo": AMMO_START, "health": HEALTH_START}
+    counters = {"ammo": AMMO_START, "health": HEALTH_START,
+                "hp": list(_MHP_WORDS)}
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     print("\x1b[2J", end="")

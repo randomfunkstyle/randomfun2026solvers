@@ -130,16 +130,19 @@ def test_hud_background_and_live_bars() -> None:
 def test_walk_is_its_chords_and_keys_encodes_the_mux() -> None:
     """The walk is spelled as chords; keys() encodes held-key bitmasks."""
     assert d3.WALK == [d3.keys(ch) for ch in d3.WALK_CHORDS]
-    assert len(d3.WALK) == 53
+    assert len(d3.WALK) == 57
     assert (d3.KEY_FWD, d3.KEY_BACK, d3.KEY_LEFT, d3.KEY_RIGHT, d3.KEY_FIRE) == (
         1, 2, 4, 8, 16)
     assert d3.keys("wa ") == 21 and d3.keys(".") == 0 and d3.keys("ww") == 1
-    # The FIRE beats: at the cavern's south rim, chorded with the step OUT of
-    # the slime moat, and standing clean before the fall.
-    assert [i for i, c in enumerate(d3.WALK) if d3.fire_bit(c)] == [29, 51, 52]
-    assert d3.WALK[51] == d3.keys("w ") == 17  # fire while moving: the MUX
+    # The FIRE beats: M7b's corridor gallery (two shots to drop the first imp,
+    # then one more at the same spot, through its corpse, into the second), the
+    # cavern's south rim, the step OUT of the slime moat, and standing clean
+    # before the fall.
+    assert [i for i, c in enumerate(d3.WALK) if d3.fire_bit(c)] == [
+        19, 20, 22, 33, 55, 56]
+    assert d3.WALK[55] == d3.keys("w ") == 17  # fire while moving: the MUX
     # The M5 beats: three held frames standing in the moat before stepping out.
-    assert d3.WALK[48:51] == [0, 0, 0]
+    assert d3.WALK[52:55] == [0, 0, 0]
 
 
 def test_chord_semantics_turn_then_move_and_cancelling() -> None:
@@ -155,7 +158,7 @@ def test_chord_semantics_turn_then_move_and_cancelling() -> None:
 
 def test_one_frame_per_command() -> None:
     frames = d3.frames_for_commands(d3.WALK)
-    assert len(frames) == len(d3.WALK) == 53
+    assert len(frames) == len(d3.WALK) == 57
 
 
 def test_walk_stays_inside_open_cells() -> None:
@@ -201,21 +204,21 @@ def test_walk_fords_the_moat_and_health_drains() -> None:
         state = d3.step(state, cmd)
         if d3.nukage_cell(d3.div(state.posX, d3.UNITS), d3.div(state.posY, d3.UNITS)):
             nuk_idx.append(i)
-    assert nuk_idx == [32, 33, 34, 35, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+    assert nuk_idx == [36, 37, 38, 39, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54]
     frames = d3.frames_for_commands(d3.WALK)
 
     def health_px(fr: list[str]) -> int:
         return fr[41][4:29].count("9")
 
-    assert health_px(frames[31]) == 25          # full bar before the moat
-    assert health_px(frames[35]) == 20          # 4 frames in: health 80
-    assert health_px(frames[50]) == 7           # 14 frames in: health 30
-    assert health_px(frames[52]) == 7           # out of the moat: no more drain
+    assert health_px(frames[35]) == 25          # full bar before the moat
+    assert health_px(frames[39]) == 20          # 4 frames in: health 80
+    assert health_px(frames[54]) == 7           # 14 frames in: health 30
+    assert health_px(frames[56]) == 7           # out of the moat: no more drain
     # The floor floods green exactly on the standing-in-slime frames.
-    assert frames[46][39][5] == "2" and frames[40][39][5] == "8"
+    assert frames[50][39][5] == "2" and frames[44][39][5] == "8"
     # And the face degrades: healthy at the spawn, bloodied in the soak.
     assert frames[0][41][33:43] == d3.FACE_HEALTHY[0][2]
-    assert frames[50][46][33:43] == d3.FACE_BLOODY[5][2]
+    assert frames[54][46][33:43] == d3.FACE_BLOODY[5][2]
 
 
 def test_install_art_swaps_gun_face_and_unit_model() -> None:
@@ -347,18 +350,198 @@ def _painted_and_hidden(state: d3.State) -> tuple[set, set]:
 
 
 def test_walls_occlude_monsters_per_column() -> None:
-    """The z-buffer is load-bearing, not decorative: at WALK[20] a monster is
+    """The z-buffer is load-bearing, not decorative: at WALK[24] a monster is
     cut down the middle — some of its columns pass the wall depth test and
     some do not — and pretending the walls are infinitely far away paints the
     pixels the wall is hiding."""
     state = d3.SPAWN
-    for cmd in d3.WALK[:21]:
+    for cmd in d3.WALK[:25]:
         state = d3.step(state, cmd)
     painted, hidden = _painted_and_hidden(state)
     assert painted and hidden
     # The same columns carry both: this is one sprite clipped, not one sprite
     # drawn and a second one wholly behind a wall.
     assert {x for x, _y in painted} & {x for x, _y in hidden}
+
+
+# ── M7b: the shot, the hit test, the corpse ──────────────────────────────────
+#: The corridor gallery: the walk stands at (25, 34) and the imp at (25, 38) is
+#: dead under the crosshair.  ``KILL`` is the frame whose shot takes it to 0 HP
+#: — it still shows the living sprite, because the hit is applied only after
+#: the frame that resolved it — and ``KILL + 1`` is the first corpse frame.
+KILL = 20
+GALLERY = 0     # the imp the walk drops: MONSTERS[0], hit id 1
+BEHIND = 1      # the second imp in the queue, MONSTERS[1], hit id 2
+
+
+def _own_pixels(state: d3.State, hp: list[int], which: int) -> set:
+    """The screen cells monster ``which`` paints in this state: the frame with
+    it in the table against the same frame with it never placed."""
+    hit: list[int] = []
+    with_it = d3.render(state, hp=hp, hit_out=hit)
+    words = d3._MON_WORDS
+    d3._MON_WORDS = [w for i, w in enumerate(words) if i != which]
+    try:
+        without = d3.render(state, hp=[h for i, h in enumerate(hp) if i != which])
+    finally:
+        d3._MON_WORDS = words
+    return {(x, y) for y in range(d3.H3D) for x in range(d3.WIDTH)
+            if with_it[y][x] != without[y][x]}
+
+
+def _state_after(n: int) -> d3.State:
+    state = d3.SPAWN
+    for cmd in d3.WALK[:n]:
+        state = d3.step(state, cmd)
+    return state
+
+
+def test_monster_hp_and_species_tables_pin_the_ledger() -> None:
+    """One HP word per monster by species, and a third sprite stripe for the
+    corpse every species falls into — the shared frame the paint chain reaches
+    with no extra entry point."""
+    assert d3.MON_HP == (1, 2)  # a zombieman drops to one shot, an imp to two
+    hp = d3.monster_hp_words()
+    assert hp == [d3.MON_HP[sp] for _cx, _cy, sp in d3.MONSTERS]
+    assert all(h > 0 for h in hp), "a monster may not boot dead"
+    # The ledger is boot-loaded (input-borne, never ROM) right after MONB …
+    slots = d3.tape_slots()
+    pre = d3.preamble_words()
+    assert pre[slots["MHPB"] - 1:slots["MHPB"] - 1 + len(hp)] == hp
+    assert slots["MHPB"] == slots["MONB"] + len(d3.MONSTERS)
+    # … and the corpse rides stripe 2, the same 20 words wide as a species.
+    assert len(d3.MON_SPRITES) == 3 * d3.MON_STRIDE
+    corpse = d3.MON_SPRITES[2 * d3.MON_STRIDE:]
+    assert any(corpse), "the corpse stripe cannot be blank"
+    for band, (bw, bh) in enumerate(d3.MON_BANDS):
+        off = d3.MON_BAND_OFF[band]
+        assert all(w < 16 ** bh for w in corpse[off:off + bw])
+
+
+def test_the_frame_that_kills_still_shows_the_living_monster() -> None:
+    """The timing contract: the shot is resolved against THIS frame's geometry
+    and applied after it renders, so the kill frame carries the standing sprite
+    under the muzzle flash and the corpse arrives on the next one."""
+    beats = d3.walk_beats(d3.WALK)
+    frames = [b[0] for b in beats]
+    # Two shots into the same imp: HP 2 -> 1 -> 0, both crediting hit id 1.
+    assert d3.fire_bit(d3.WALK[KILL - 1]) and d3.fire_bit(d3.WALK[KILL])
+    assert beats[KILL - 1][2] == beats[KILL][2] == GALLERY + 1
+    assert beats[KILL - 1][3][GALLERY] == 1
+    assert beats[KILL][3][GALLERY] == 0, "the second shot drops it"
+    assert not d3.fire_bit(d3.WALK[KILL + 1]), "the corpse frame holds still"
+    # The kill frame is the LIVE render: it paints exactly what the same frame
+    # painted before the ledger moved, and the flash is on.
+    stand = _state_after(KILL + 1)
+    alive_px = _own_pixels(stand, [1] * len(d3.MONSTERS), GALLERY)
+    assert alive_px, "the imp must be visible when it is shot"
+    assert all(frames[KILL][y][x] == d3.render(
+        stand, fire=True, ammo=48, health=100)[y][x] for x, y in alive_px)
+    for r, c, colours in d3.GUN_FIRE:       # the muzzle flash, over the top
+        assert frames[KILL][r][c:c + len(colours)] == colours
+    assert frames[KILL][46][33:43] == d3.FACE_GRIM[5][2]
+    # The next frame is the corpse: the standing sprite's pixels are gone …
+    corpse_px = _own_pixels(stand, list(beats[KILL][3]), GALLERY)
+    assert corpse_px != alive_px
+    assert len(corpse_px) < len(alive_px), "a corpse is a heap, not a body"
+    # … and what remains sits at the sprite's feet, on the floor line.
+    assert min(y for _x, y in corpse_px) > min(y for _x, y in alive_px)
+    assert corpse_px <= alive_px | {(x, y) for x, y in corpse_px}
+    assert all(frames[KILL + 1][y][x] == d3.render(
+        stand, ammo=48, health=100, hp=list(beats[KILL][3]))[y][x]
+        for x, y in corpse_px)
+
+
+def test_a_corpse_can_never_be_shot_again() -> None:
+    """hp == 0 is the whole of "stops occluding gameplay": the corpse is still
+    selected, still painted and still z-tested, but it is not a hit candidate,
+    so the next round at the very same crosshair carries on into the imp queued
+    behind it."""
+    beats = d3.walk_beats(d3.WALK)
+    assert beats[KILL][3][GALLERY] == 0
+    # The walk fires again from the identical stand two frames later …
+    assert d3.WALK[KILL + 2] == d3.KEY_FIRE
+    assert _state_after(KILL + 1) == _state_after(KILL + 3)
+    # … and the round goes THROUGH the corpse into the second imp.
+    assert beats[KILL + 2][2] == BEHIND + 1
+    assert beats[KILL + 2][3][GALLERY] == 0, "the corpse takes no more damage"
+    assert beats[KILL + 2][3][BEHIND] == d3.MON_HP[1] - 1
+    # The corpse is still on screen while that happens (painted, z-tested).
+    assert _own_pixels(_state_after(KILL + 3), list(beats[KILL][3]), GALLERY)
+    # And with the corpse alone in the table, the same shot hits nothing.
+    hit: list[int] = []
+    words = d3._MON_WORDS
+    d3._MON_WORDS = [words[GALLERY]]
+    try:
+        d3.render(_state_after(KILL + 1), fire=True, hp=[0], live=True,
+                  hit_out=hit)
+    finally:
+        d3._MON_WORDS = words
+    assert hit == [0]
+
+
+def test_a_dry_fire_kills_nothing() -> None:
+    """LIVE is set exactly where AMMO is spent: an empty clip still flashes the
+    muzzle, and nothing on the far end of the crosshair notices."""
+    stand = _state_after(KILL + 1)
+    alive = [1] * len(d3.MONSTERS)
+    armed: list[int] = []
+    d3.render(stand, fire=True, ammo=1, hp=alive, live=True, hit_out=armed)
+    assert armed == [GALLERY + 1], "the stand must have a monster under the sight"
+    for kwargs in ({"fire": True, "ammo": 0}, {"fire": False}, {}):
+        dry: list[int] = []
+        d3.render(stand, hp=alive, live=False, hit_out=dry, **kwargs)
+        assert dry == [0]
+    # The pixels do not care either way: the hit test is pure bookkeeping.
+    assert d3.render(stand, fire=True, ammo=0, hp=alive, live=True) == \
+        d3.render(stand, fire=True, ammo=0, hp=alive, live=False)
+
+
+@slow
+def test_an_emptied_clip_stops_killing() -> None:
+    """The same gate end to end: park on the gallery stand and hold fire until
+    the clip runs dry — the last live round kills, the dry ones do not."""
+    cmds = list(d3.WALK[:KILL - 1]) + [d3.KEY_FIRE] * (d3.AMMO_START + 2)
+    beats = d3.walk_beats(cmds)
+    live = [i for i, b in enumerate(beats) if b[1]]
+    assert len(live) == d3.AMMO_START, "50 rounds, then the clip is empty"
+    hits = [b[2] for b in beats]
+    assert hits[live[-1] + 1:] == [0] * (len(beats) - live[-1] - 1)
+    assert any(hits[i] for i in live), "the live rounds did land"
+    # Both corridor imps end up dead, and the dry rounds change no HP at all.
+    assert beats[-1][3][GALLERY] == beats[-1][3][BEHIND] == 0
+    assert beats[live[-1]][3] == beats[-1][3]
+
+
+def test_a_wall_at_the_crosshair_saves_the_monster() -> None:
+    """The hit test rides on the far side of the ZBUF compare, so a wall
+    between the pistol and the monster is a miss — even though the billboard
+    is centred on the crosshair and paints all its other columns."""
+    stand = _state_after(KILL + 1)
+    args = (stand.posX, stand.posY,
+            *d3.unpack_heading(d3._HDG_WORDS[stand.heading]))
+    alive = [1] * len(d3.MONSTERS)
+    free = [10 ** 9] * d3.WIDTH
+    open_cols = [[0] * d3.H3D for _ in range(d3.WIDTH)]
+    assert d3._paint_monsters(open_cols, free, *args, alive, True) == GALLERY + 1
+    walled = list(free)
+    walled[d3.CROSSHAIR] = 1                    # one wall column, at the sight
+    cols = [[0] * d3.H3D for _ in range(d3.WIDTH)]
+    assert d3._paint_monsters(cols, walled, *args, alive, True) == 0
+    # It is only that column that goes: the rest of the sprite still paints.
+    painted = {(x, y) for x in range(d3.WIDTH) for y in range(d3.H3D)
+               if cols[x][y]}
+    assert painted and all(x != d3.CROSSHAIR for x, _y in painted)
+    # And on the real map: a stand where a wall stands between the pistol and
+    # a zombieman that the crosshair otherwise covers.
+    blocked = d3.State(7 * 1024 + 512, 45 * 1024 + 512, 2)
+    shot: list[int] = []
+    d3.render(blocked, fire=True, hp=alive, live=True, hit_out=shot)
+    assert shot == [0]
+    cols = [[0] * d3.H3D for _ in range(d3.WIDTH)]
+    assert d3._paint_monsters(
+        cols, free, blocked.posX, blocked.posY,
+        *d3.unpack_heading(d3._HDG_WORDS[blocked.heading]), alive, True) == 10
 
 
 # ── pinned frames (hand-checked against the scratchpad PNGs) ─────────────────
@@ -417,11 +600,11 @@ SPAWN_FRAME = [
     "8888888888888888888888888888888888888888888888888888888888888888",
 ]
 
-#: The cavern half-look (WALK[38] holds after the ``d`` turn: heading 15 at
+#: The cavern half-look (WALK[42] holds after the ``d`` turn: heading 15 at
 #: cell (41, 40)): the great cavern's north-east rim — the green MCSTAT
 #: screens and gold-brown ZIMMER cliffs banded across the horizon, the
 #: cavern floor sweeping to the dark distance.  By this frame the walk has
-#: forded the moat's west lobe (frames 32..35): health 80, the red bar 20px,
+#: forded the moat's west lobe (frames 36..39): health 80, the red bar 20px,
 #: the face still in its healthy band.
 CAVERN_LOOK_FRAME = [
     "0000000000000000000000000000000000000000000000000000000000000000",
@@ -468,8 +651,8 @@ CAVERN_LOOK_FRAME = [
     "88889999999999999999999988888888800088000008888888ccccccccc88888",
     "88889999999999999999999988888888808333373808888888ccccccccc88888",
     "88888888888888888888888888888888803377378308888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbb888888333333f388888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbb8888888337733888888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbb8888888333333f388888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbb88888888337733888888888ccccccccc88888",
     "88888888888888888888888888888888888083380888888888ccccccccc88888",
     "8888888888888888888888888888888888888888888888888888888888888888",
 ]
@@ -480,24 +663,34 @@ def test_pinned_spawn_frame() -> None:
 
 
 def test_pinned_cavern_look_frame() -> None:
-    assert d3.WALK[37] == d3.KEY_RIGHT, "the pin is the held frame of the half-look"
-    assert d3.WALK[38] == 0
-    assert d3.frames_for_commands(d3.WALK)[38] == CAVERN_LOOK_FRAME
+    assert d3.WALK[41] == d3.KEY_RIGHT, "the pin is the held frame of the half-look"
+    assert d3.WALK[42] == 0
+    assert d3.frames_for_commands(d3.WALK)[42] == CAVERN_LOOK_FRAME
 
 
 def test_pinned_fire_frame() -> None:
-    """WALK[29] FIREs at the cavern's sunlit south rim: the recoil sprite,
-    the muzzle flash blooming above it, and the ammo bar one round shorter."""
-    assert d3.WALK[29] == d3.KEY_FIRE == 16
-    fire = d3.frames_for_commands(d3.WALK)[29]
+    """WALK[33] FIREs at the cavern's sunlit south rim: the recoil sprite,
+    the muzzle flash blooming above it, and the ammo bar one round shorter.
+
+    Four rounds are already gone by then — M7b's three corridor shots plus
+    this one — and the shot hits nothing: the rim is empty, so the HP ledger
+    is untouched and the render is the plain fired frame."""
+    assert d3.WALK[33] == d3.KEY_FIRE == 16
+    fire = d3.frames_for_commands(d3.WALK)[33]
     state = d3.SPAWN
-    for cmd in d3.WALK[:30]:
+    for cmd in d3.WALK[:34]:
         state = d3.step(state, cmd)
+    hp = list(d3.monster_hp_words())
+    hp[0] = 0  # the corridor imp the walk already dropped
+    hp[1] = 1  # … and the one behind it, wounded through its corpse
     # The frame is exactly the fired render at the post-shot ammo count …
-    assert fire == d3.render(state, fire=True, ammo=49, health=100)
+    hit: list[int] = []
+    assert fire == d3.render(state, fire=True, ammo=46, health=100, hp=hp,
+                             live=True, hit_out=hit)
+    assert hit == [0], "nothing stands on the south rim"
     # … the viewport differs from the idle render only where the two sprites
     # differ (GUN_FIRE where it paints, GUN_IDLE's cells restored elsewhere) …
-    plain = d3.render(state, ammo=49, health=100)
+    plain = d3.render(state, ammo=46, health=100, hp=hp)
     fire_px = {(r, c + i) for r, c, cs in d3.GUN_FIRE for i in range(len(cs))}
     idle_px = {(r, c + i) for r, c, cs in d3.GUN_IDLE for i in range(len(cs))}
     diff = {
@@ -625,10 +818,12 @@ def test_tape_slots_are_the_documented_map() -> None:
     # The scalars run consecutively after ZBUF, PTR last; the sprite pass's
     # slot file is field-major triples (slot k's field at base + k).
     scalars = sorted(v for k, v in slots.items() if v >= slots["CMD"])
-    assert scalars == list(range(452 + 64, 452 + 64 + 81))
+    assert scalars == list(range(452 + 64, 452 + 64 + len(d3._SCALARS)))
     assert slots["AMMO"] == 547 and slots["HEALTH"] == 548 and slots["NUKE"] == 549
+    # M7b's shot scalars sit right after the frame counters they extend.
+    assert slots["LIVE"] == 550 and slots["HIT"] == 551
     assert slots["STY1"] == slots["STY0"] + 1 and slots["SID2"] == slots["SID0"] + 2
-    assert slots["PTR"] == max(slots.values()) == 596
+    assert slots["PTR"] == max(slots.values()) == 599
 
 
 def test_registry_pins() -> None:
@@ -685,9 +880,9 @@ def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
 
 @slow
 def test_the_full_demo_walk_is_pixel_equal_to_golden() -> None:
-    """The title plus all 53 WALK commands — the moat crossing included, so
-    this covers the green floor, the damage drain and the face bands on the
-    real machine."""
+    """The title plus all 57 WALK commands — the corridor gallery and the moat
+    crossing included, so this covers the kill, the corpse, the green floor,
+    the damage drain and the face bands on the real machine."""
     assert _emulator_frames(d3.WALK) == [d3.title_frame()] + d3.frames_for_commands(d3.WALK)
 
 
@@ -703,13 +898,27 @@ def test_a_seeded_fuzz_walk_is_pixel_equal_to_golden() -> None:
 
 
 @slow
+def test_a_seeded_gallery_fuzz_shoots_the_monsters() -> None:
+    """The scripted climb into the corridor plus 24 seeded chords fired at the
+    imps queued in it: kills, corpses, shots through corpses and misses, all
+    pixel-equal on the emulator — the net under M7b's hit ladder."""
+    rng = random.Random(5)
+    pool = [16, 16, 17, 1, 4, 8, 21, 0, 255]
+    cmds = list(d3.WALK[:19]) + [rng.choice(pool) for _ in range(24)]
+    beats = d3.walk_beats(cmds)
+    assert sum(1 for b in beats if b[2]) >= 4, "the fuzz must land shots"
+    assert any(h == 0 for h in beats[-1][3]), "and it must kill something"
+    assert _emulator_frames(cmds) == [d3.title_frame()] + [b[0] for b in beats]
+
+
+@slow
 def test_a_seeded_moat_fuzz_stands_in_nukage() -> None:
     """The scripted walk to the moat plus 20 seeded chords stirred inside it:
     random keys while standing on damage floors — green floods, the drain,
     the face bands, fire-in-slime — all pixel-equal on the emulator."""
     rng = random.Random(45)
     pool = [0, 1, 2, 4, 8, 16, 17, 21, 3, 255]
-    cmds = list(d3.WALK[:48]) + [rng.choice(pool) for _ in range(20)]
+    cmds = list(d3.WALK[:52]) + [rng.choice(pool) for _ in range(20)]
     state, nuk_frames = d3.SPAWN, 0
     for cmd in cmds:
         state = d3.step(state, cmd)

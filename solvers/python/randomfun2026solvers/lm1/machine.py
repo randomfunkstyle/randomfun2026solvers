@@ -3952,12 +3952,12 @@ TAPE_SIZE = {
     # map quarter-columns for the 64x64 grid, POW16, 16 packed heading words,
     # M5's 64-word nukage bit plane, spawn state, and M7a's 16-monster table +
     # HP block + 60 packed sprite columns), runs the 64-slot per-frame ZBUF
-    # after them and 81 scalars after that (the sprite pass's selection slots
-    # and paint cursors among them), so the highest address is PTR = 596 —
-    # see `deadman3d.tape_slots()`, which the tests pin this against. Highest
-    # address + 1, as everywhere: an exactly-sized tape stalls silently
-    # rather than faulting.
-    "deadman-3d": 597,
+    # after them and 84 scalars after that (the sprite pass's selection slots
+    # and paint cursors among them, plus M7b's LIVE/HIT/CID shot scalars), so
+    # the highest address is PTR = 599 — see `deadman3d.tape_slots()`, which
+    # the tests pin this against. Highest address + 1, as everywhere: an
+    # exactly-sized tape stalls silently rather than faulting.
+    "deadman-3d": 600,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -4361,7 +4361,7 @@ STORE_OPS: dict[str, int] = {"deadman-3d": 1}
 STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
 
 #: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
-#: 597 slots as banked pipe tapes behind a gate chain. This tier exists for the
+#: 600 slots as banked pipe tapes behind a gate chain. This tier exists for the
 #: *little-man census* — a bank is two men (worker + relay) and a gate one,
 #: against the man-memory's ~two per slot — so the visualizer renders ~20 men
 #: instead of ~700. The price is the ring tax (~5-8 ticks per slot per read),
@@ -4371,7 +4371,7 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
 #: The plan is a tuple of bank sizes in address order (an int means uniform).
 #: deadman-3d's is traffic-shaped, swept on the native frame gate: the high
 #: addresses are the hot ones (POWB 257..272, HDG 273..288, then POSX and the
-#: per-frame scalars up to PTR — 596 since M7a), so they get SMALL rings —
+#: per-frame scalars up to PTR — 599 since M7b), so they get SMALL rings —
 #: bank locals, and so the ring tax, stay tiny where the traffic is — and the
 #: 256 map words split across two 128s. Uniform 4x83 measured 23.7M ticks on
 #: rounds 0..1 of the 330-slot machine; the traffic-shaped plan 18.6M at the
@@ -4381,9 +4381,10 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
 #: read only while a billboard paints) and the HOT 64-slot ZBUF as its own
 #: cheap ring (64 depth writes plus the occlusion reads every frame must not
 #: pay a big ring's lap), with the per-frame scalars keeping a small last
-#: ring (81).
+#: ring (84 since M7b's three shot scalars — the last bank grows with them, so
+#: the plan keeps covering the whole tape; a plan that under-covers stalls).
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
-    "deadman-3d": (128, 128, 96, 99, 64, 81)}
+    "deadman-3d": (128, 128, 96, 99, 64, 84)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
