@@ -421,6 +421,14 @@ than one with 31.
 | 7–10 digits | 4 | 46 | 0.2% |
 | 19 digits (16 × 2⁶⁰) | 16 | 352 | 1.8% |
 
+**The widest literal costs nothing here, which is worth saying because on the
+*unpacked* ROM it would cost everything.** `rom.digit_width` sizes `build_rom`'s
+every group by the widest word in the image, so DOOM's sixteen `2⁶⁰` constants
+would set a 19-digit width and charge all 4,304 words 23 cells — a 99,000-cell
+lap. The packed drum prices each token on its own value, so the same sixteen
+outliers cost 352 cells in total, 1.8%. There is no width-outlier problem on this
+machine and no restructuring of those constants to do.
+
 Split by glyph rather than by token: **digits 48%, the `s` 25%, backticks 27%**.
 The `s` is one per word and structural. Split by half-word:
 
@@ -483,8 +491,10 @@ And the area is not binding either. The taped machine's width floors at
 east edge was 284, one column under it, and is now 252. So the ROM block, which
 is the largest single block on the grid, has **35 columns of slack** and the next
 column of width has to come from the store. What the relabelling really bought is
-that reserve: before it, a store narrow enough to matter would have hit a ROM
-floor at 286; now that floor is 254.
+that reserve: the box is the widest block's east edge plus its two walls (store
+east 285 → 287, measured both before and after), so the *drum's* floor on the
+taped width was 286 and is now **254**. A store narrow enough to matter would
+have run straight into the old one.
 
 ### Three things that do not pay, with the arithmetic
 
