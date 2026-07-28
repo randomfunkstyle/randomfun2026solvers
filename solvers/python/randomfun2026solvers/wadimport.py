@@ -47,6 +47,12 @@ The pipeline:
    colour minimizing the sum of CIELAB distances over the source block's
    pixels — after a fixed x1.6 brightness lift (DOOM-era title art is dark;
    measured on both sources), then a single isolated-dot despeckle pass.
+6. Dithering (M9, **opt-in**): every quantizer takes ``dither=`` (default
+   ``"none"`` — the method above, unchanged to the byte), selecting CIELAB
+   Floyd–Steinberg or ordered Bayer 4x4/8x8 instead (:data:`DITHER_MODES`).
+   Art ships as row-major RLE at one command word per run, so the price is
+   measured with :func:`rom_words`; the hi-res panel constants
+   (:data:`HIRES_W` x :data:`HIRES_H`) give a dither room to read as shading.
 
 The output bundle (``--out DIR``) is ``level.json`` (map rows, spawn, heading,
 title rows, the texture->family table) plus eyeball artifacts: ``map.txt``,
@@ -74,6 +80,9 @@ __all__ = [
     "quantize_title", "despeckle", "quantize_sprite", "sprite_runs",
     "quantize_monster", "pack_sprite_columns", "monster_band_words",
     "monster_sprite_words",
+    "DITHER_MODES", "bayer_matrix", "block_lab", "dither_lab",
+    "rle_runs", "rom_words",
+    "HIRES_W", "HIRES_H", "HIRES_H3D", "HIRES_HUD_W", "HIRES_HUD_H", "face_box",
     "gun_tables", "face_tables", "iwad_art",
     "STBAR_REGIONS", "STBAR_MEAN_GREY", "stbar_cells", "stbar_rows",
     "iwad_stbar",
@@ -665,6 +674,175 @@ def decode_picture(data: bytes, playpal: bytes) -> list[list[tuple[int, int, int
     return rows
 
 
+# ── dithering (M9, OPT-IN) ───────────────────────────────────────────────────
+#: The dither algorithms :func:`dither_lab` understands.  ``"none"`` is the
+#: committed art's method (block-Lab nearest colour, no diffusion) and is the
+#: default everywhere: turning dithering on is always an explicit choice, so
+#: no committed byte moves.
+#:
+#: * ``"fs"`` — Floyd–Steinberg error diffusion, serpentine, **in CIELAB**.
+#:   Best gradients; shreds flat areas, so the RLE run count explodes.
+#: * ``"bayer4"`` / ``"bayer8"`` — ordered dithering against the 4x4 / 8x8
+#:   Bayer matrix, also in CIELAB (nearest colour + its overshoot partner,
+#:   mixed by the ordered threshold).  Temporally stable and far kinder to the
+#:   row-major RLE: a periodic pattern repeats runs instead of inventing new
+#:   ones, and a cell whose colour is unambiguous never dithers at all.
+DITHER_MODES = ("none", "fs", "bayer4", "bayer8")
+
+
+def bayer_matrix(n: int) -> list[list[int]]:
+    """The ``n`` x ``n`` (n a power of two) Bayer index matrix, values
+    ``0..n*n-1``; ``M_2n = [[4M, 4M+2], [4M+3, 4M+1]]``."""
+    if n < 1 or n & (n - 1):
+        raise ValueError(f"a Bayer matrix side must be a power of two, not {n}")
+    m = [[0]]
+    size = 1
+    while size < n:
+        m = ([[4 * v for v in row] + [4 * v + 2 for v in row] for row in m]
+             + [[4 * v + 3 for v in row] + [4 * v + 1 for v in row] for row in m])
+        size *= 2
+    return m
+
+
+def _nearest_lab(lab: tuple[float, float, float]) -> int:
+    return min(range(16), key=lambda i: math.dist(lab, _LAB[i]))
+
+
+def block_lab(rgba: list[list[tuple[int, int, int, int]]], tw: int, th: int,
+              *, brightness: float = 1.0,
+              background: tuple[int, int, int] | None = None,
+              ) -> list[list[tuple[float, float, float] | None]]:
+    """Per target cell, the MEAN CIELAB of its source block.
+
+    The same block grid the undithered path walks, but reduced to one Lab
+    value per cell instead of a per-palette distance sum — dithering needs a
+    continuous colour to push error around.  Alpha follows
+    :func:`quantize_sprite`: with ``background`` the block is composited onto
+    it and every cell is a colour; without one, a mostly-transparent block is
+    ``None`` and only opaque pixels vote.
+    """
+    hh, ww = len(rgba), len(rgba[0])
+    cache: dict[tuple[int, int, int], tuple[float, float, float]] = {}
+
+    def lab_of(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
+        key = tuple(min(255, round(c * brightness)) for c in rgb)
+        if key not in cache:
+            cache[key] = srgb_to_lab(key)
+        return cache[key]
+
+    out: list[list[tuple[float, float, float] | None]] = []
+    for ty in range(th):
+        y0, y1 = int(ty * hh / th), max(int(ty * hh / th) + 1, int((ty + 1) * hh / th))
+        row: list[tuple[float, float, float] | None] = []
+        for tx in range(tw):
+            x0, x1 = int(tx * ww / tw), max(int(tx * ww / tw) + 1, int((tx + 1) * ww / tw))
+            acc = [0.0, 0.0, 0.0]
+            n = opaque = total = 0
+            for yy in range(y0, y1):
+                for xx in range(x0, x1):
+                    r, g, b, a = rgba[yy][xx]
+                    total += 1
+                    if a > 128:
+                        opaque += 1
+                        lab = lab_of((r, g, b))
+                    elif background is not None:
+                        lab = lab_of(background)
+                    else:
+                        continue
+                    for i in range(3):
+                        acc[i] += lab[i]
+                    n += 1
+            if not n or (background is None and opaque * 2 < total):
+                row.append(None)
+            else:
+                row.append((acc[0] / n, acc[1] / n, acc[2] / n))
+        out.append(row)
+    return out
+
+
+#: Floyd–Steinberg's kernel, ``(dx, dy, weight/16)`` for a left-to-right row
+#: (the serpentine pass mirrors dx).
+_FS_KERNEL = ((1, 0, 7 / 16), (-1, 1, 3 / 16), (0, 1, 5 / 16), (1, 1, 1 / 16))
+
+
+def dither_lab(cells: list[list[tuple[float, float, float] | None]],
+               mode: str = "none", *, strength: float = 1.0,
+               ) -> list[list[int | None]]:
+    """Quantize a grid of CIELAB cells (:func:`block_lab`) to ANSI-16 indices.
+
+    ``mode`` is one of :data:`DITHER_MODES`.  ``None`` cells (transparent
+    sprite blocks) pass through untouched and neither receive nor emit error.
+
+    *Floyd–Steinberg* runs serpentine (alternate rows right-to-left), which
+    kills the diagonal "worming" a single scan direction leaves on the long
+    horizontal gradients DOOM title art is made of.  The residual is carried
+    in Lab, so the diffusion is perceptual, exactly like the nearest-colour
+    search it feeds.
+
+    *Ordered Bayer* does not threshold a single channel (meaningless against a
+    16-colour non-ramp palette).  Per cell it takes the nearest palette colour
+    ``c1``, reflects the cell through it to get the overshoot ``2p - c1`` and
+    takes that colour's nearest ``c2`` — the two entries the cell actually
+    lies between — then projects the cell onto the ``c1``->``c2`` segment for a
+    mix fraction ``t`` and paints ``c2`` where the Bayer threshold falls under
+    ``t``.  A cell that is already ON a palette colour has ``t == 0`` and never
+    dithers, which is what keeps flat areas (and their RLE runs) intact.
+
+    ``strength`` < 1 damps the dither toward the undithered result: it scales
+    the diffused residual (Floyd–Steinberg) or the mix fraction (Bayer).  Full
+    strength is textbook, and on a palette this sparse it lets chroma error run
+    away — a flat dark red diffuses into magenta specks.  Lower it when the
+    stipple reads as noise rather than as shading.
+    """
+    if mode not in DITHER_MODES:
+        raise ValueError(f"unknown dither mode {mode!r}; pick one of {DITHER_MODES}")
+    h = len(cells)
+    w = len(cells[0]) if h else 0
+    if mode == "none":
+        return [[None if c is None else _nearest_lab(c) for c in row] for row in cells]
+    if mode == "fs":
+        err = [[[0.0, 0.0, 0.0] for _ in range(w)] for _ in range(h)]
+        out: list[list[int | None]] = [[None] * w for _ in range(h)]
+        for y in range(h):
+            xs = range(w) if not y % 2 else range(w - 1, -1, -1)
+            flip = -1 if y % 2 else 1
+            for x in xs:
+                cell = cells[y][x]
+                if cell is None:
+                    continue
+                want = tuple(cell[i] + err[y][x][i] for i in range(3))
+                idx = _nearest_lab(want)
+                out[y][x] = idx
+                resid = [want[i] - _LAB[idx][i] for i in range(3)]
+                for dx, dy, wgt in _FS_KERNEL:
+                    nx, ny = x + flip * dx, y + dy
+                    if 0 <= nx < w and 0 <= ny < h and cells[ny][nx] is not None:
+                        for i in range(3):
+                            err[ny][nx][i] += resid[i] * wgt * strength
+        return out
+    n = 4 if mode == "bayer4" else 8
+    matrix = bayer_matrix(n)
+    thresh = [[(v + 0.5) / (n * n) for v in row] for row in matrix]
+    out = [[None] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            cell = cells[y][x]
+            if cell is None:
+                continue
+            c1 = _nearest_lab(cell)
+            over = tuple(2 * cell[i] - _LAB[c1][i] for i in range(3))
+            c2 = _nearest_lab(over)
+            if c2 == c1:
+                out[y][x] = c1
+                continue
+            d = [_LAB[c2][i] - _LAB[c1][i] for i in range(3)]
+            dd = sum(v * v for v in d)
+            t = sum((cell[i] - _LAB[c1][i]) * d[i] for i in range(3)) / dd if dd else 0.0
+            t = min(1.0, max(0.0, t)) * strength
+            out[y][x] = c2 if thresh[y % n][x % n] < t else c1
+    return out
+
+
 # ── the title screen ─────────────────────────────────────────────────────────
 #: DOOM-era title art is dark; a fixed linear brightness lift keeps the marine
 #: (and the shareware IWAD's title) out of the black/dark-gray sump when the
@@ -675,10 +853,23 @@ TITLE_BRIGHTNESS = 1.6
 
 def quantize_title(rgba: list[list[tuple[int, int, int, int]]],
                    tw: int = 64, th: int = 48,
-                   brightness: float = TITLE_BRIGHTNESS) -> list[str]:
+                   brightness: float = TITLE_BRIGHTNESS,
+                   *, dither: str = "none",
+                   dither_strength: float = 1.0) -> list[str]:
     """The repo's block-Lab method at ``tw`` x ``th``: per target block pick
     the ANSI-16 colour minimizing the summed CIELAB distance over the source
-    block's (brightness-lifted) pixels; then one despeckle pass."""
+    block's (brightness-lifted) pixels; then one despeckle pass.
+
+    ``dither`` (default ``"none"`` — the committed art's exact method) switches
+    to the M9 path: the block is reduced to its mean CIELAB (:func:`block_lab`)
+    and quantized by :func:`dither_lab`.  Despeckling is then skipped on
+    purpose: it exists to kill isolated dots, and a dither pattern IS isolated
+    dots.
+    """
+    if dither != "none":
+        grid = dither_lab(block_lab(rgba, tw, th, brightness=brightness), dither,
+                          strength=dither_strength)
+        return ["".join(f"{c:x}" for c in row) for row in grid]
     hh, ww = len(rgba), len(rgba[0])
     cache: dict[tuple[int, int, int], list[float]] = {}
 
@@ -724,7 +915,8 @@ def despeckle(grid: list[list[int]]) -> list[list[int]]:
 # ── sprite art (M5: the HUD face; the --wad art overrides) ───────────────────
 def quantize_sprite(rgba: list[list[tuple[int, int, int, int]]], tw: int, th: int,
                     *, background: tuple[int, int, int] | None = None,
-                    brightness: float = 1.0,
+                    brightness: float = 1.0, dither: str = "none",
+                    dither_strength: float = 1.0,
                     ) -> list[list[int | None]]:
     """Block-Lab quantize a sprite to ``tw`` x ``th``.
 
@@ -732,7 +924,15 @@ def quantize_sprite(rgba: list[list[tuple[int, int, int, int]]], tw: int, th: in
     cell is opaque (the HUD face on the field gray).  Without it, a target cell
     whose source block is mostly transparent stays ``None`` (the pistol's
     outline), and only opaque pixels vote.
+
+    ``dither`` (default ``"none"``, the committed art's method) routes through
+    :func:`block_lab` + :func:`dither_lab`; transparency is decided by the same
+    half-block rule either way.
     """
+    if dither != "none":
+        return dither_lab(block_lab(rgba, tw, th, brightness=brightness,
+                                    background=background), dither,
+                          strength=dither_strength)
     hh, ww = len(rgba), len(rgba[0])
     cache: dict[tuple[int, int, int], list[float]] = {}
 
@@ -1027,24 +1227,51 @@ STBAR_MEAN_GREY = 95
 
 def stbar_rows(rgba: list[list[tuple[int, int, int, int]]],
                tw: int = HUD_W, th: int = HUD_H,
-               target: int = STBAR_MEAN_GREY) -> list[str]:
+               target: int = STBAR_MEAN_GREY, *, dither: str = "none",
+               dither_strength: float = 1.0) -> list[str]:
     """The status bar quantized to the HUD strip: ``th`` rows of ``tw`` hex
     digits, the repo's block-Lab method (:func:`quantize_title`) after the
-    auto-exposure lift of :data:`STBAR_MEAN_GREY`."""
+    auto-exposure lift of :data:`STBAR_MEAN_GREY`.
+
+    ``dither`` (default ``"none"``) is forwarded to :func:`quantize_title`; at
+    the hi-res strip (:data:`HIRES_HUD_H` rows) it is what stops the bar
+    collapsing into one flat slab of colour 8.
+    """
     n = len(rgba) * len(rgba[0])
     mean = sum(sum(px[:3]) / 3 for row in rgba for px in row) / n
     if mean <= 0:
         raise ValueError("the status bar art is black")
-    return quantize_title(rgba, tw, th, brightness=target / mean)
+    return quantize_title(rgba, tw, th, brightness=target / mean, dither=dither,
+                          dither_strength=dither_strength)
+
+
+#: The hi-res panel (M9, opt-in): 128x96 — twice 64x48 in both axes, so the
+#: viewport is 80 rows and the HUD strip 16.  At this size the 320x32 bar is
+#: 2.5x2 source pixels per cell (against 5x4) and the mugshot inset roughly
+#: doubles, which is the resolution dithering needs to read as shading rather
+#: than noise.
+HIRES_W, HIRES_H, HIRES_H3D = 128, 96, 80
+HIRES_HUD_W, HIRES_HUD_H = HIRES_W, HIRES_H - HIRES_H3D
+
+
+def face_box(hud_w: int = HUD_W, hud_h: int = HUD_H, h3d: int = 40,
+             ) -> tuple[int, int, int, int]:
+    """``(col, panel_row, w, h)`` of the mugshot, DERIVED from the bar's own
+    face inset (:data:`STBAR_REGIONS`) at the given strip geometry.
+
+    At 64x8 over a 40-row viewport this is the committed ``(29, 40, 6, 7)``;
+    at the hi-res strip (:data:`HIRES_HUD_W` x :data:`HIRES_HUD_H` over
+    :data:`HIRES_H3D`) it is ``(58, 80, 13, 14)``.
+    """
+    c0, r0, c1, r1 = stbar_cells("face", hud_w, hud_h)
+    return c0, h3d + r0, c1 - c0, r1 - r0
 
 
 #: The HUD face's box, DERIVED from the bar's own face inset
 #: (:data:`STBAR_REGIONS`): 6x7 at panel rows 40..46, columns 29..34 — where
 #: DOOM's mugshot actually sits, not a hand-picked hole in an invented bezel.
 #: The panel's 3D view is 40 rows tall, so the strip's row 0 is panel row 40.
-_FC0, _FR0, _FC1, _FR1 = stbar_cells("face")
-FACE_COL, FACE_ROW = _FC0, 40 + _FR0
-FACE_W, FACE_H = _FC1 - _FC0, _FR1 - _FR0
+FACE_COL, FACE_ROW, FACE_W, FACE_H = face_box()
 #: The face-core crop (top, bottom, left, right fractions).  M5's 10x6 box was
 #: twice DOOM's aspect, so it kept only the brow-to-chin band; the real inset
 #: is taller than it is wide, like the 24x29 portrait, so the WHOLE mugshot
@@ -1055,22 +1282,30 @@ FACE_CROP = (0.0, 0.0, 0.0, 0.0)
 def face_tables(faces: dict[str, list[list[tuple[int, int, int, int]]]],
                 *, brightness: float = 1.4,
                 background: tuple[int, int, int] = PALETTE[8],
+                box: tuple[int, int, int, int] | None = None,
+                dither: str = "none", dither_strength: float = 1.0,
                 ) -> dict[str, list[tuple[int, int, str]]]:
     """``{state: runs}`` for the status-bar face: each source cropped to
     :data:`FACE_CROP`, composited onto the bar's own colour under the inset
     and block-Lab quantized to the face box — one opaque run per row (the CPU
-    paints them as CURS + RUN words, so there is no arm budget to honour)."""
+    paints them as CURS + RUN words, so there is no arm budget to honour).
+
+    ``box`` is a :func:`face_box` tuple, defaulting to the committed 6x7 slot;
+    ``dither`` (default ``"none"``) is the M9 opt-in.
+    """
     out = {}
+    col, row0, fw, fh = box if box is not None else (FACE_COL, FACE_ROW, FACE_W, FACE_H)
     t, b, lft, rgt = FACE_CROP
     for name, rgba in faces.items():
         src = _crop_alpha(rgba)
         h, w = len(src), len(src[0])
         src = [row[int(w * lft):w - int(w * rgt)]
                for row in src[int(h * t):h - int(h * b)]]
-        grid = quantize_sprite(src, FACE_W, FACE_H,
-                               background=background, brightness=brightness)
-        out[name] = [(FACE_ROW + r, FACE_COL, "".join("%x" % c for c in grid[r]))
-                     for r in range(FACE_H)]
+        grid = quantize_sprite(src, fw, fh, background=background,
+                               brightness=brightness, dither=dither,
+                               dither_strength=dither_strength)
+        out[name] = [(row0 + r, col, "".join("%x" % c for c in grid[r]))
+                     for r in range(fh)]
     return out
 
 
@@ -1102,11 +1337,16 @@ def iwad_stbar(wad: Wad, playpal: bytes) -> list[list[tuple[int, int, int, int]]
     return [halves[0][y] + halves[1][y] for y in range(len(halves[0]))]
 
 
-def iwad_art(path: Path) -> dict:
+def iwad_art(path: Path, *, dither: str = "none",
+             hud_size: tuple[int, int] = (HUD_W, HUD_H), h3d: int = 40) -> dict:
     """The --wad art override bundle: WAD-derived pistol, status bar and face
     run tables (M5/M8: the local machines' GUN/GUNF arms, HUD background and
     FACE paint carry the user's own art; nothing from this path may be
-    committed)."""
+    committed).
+
+    ``dither``/``hud_size``/``h3d`` are the M9 opt-ins (the defaults are the
+    64x8 strip over the 40-row viewport, undithered).  The pistol is left at
+    the 64-column geometry its arm budget is sized for."""
     wad = read_wad(path)
     playpal = wad.lump("PLAYPAL")[:768]
 
@@ -1114,11 +1354,13 @@ def iwad_art(path: Path) -> dict:
         return decode_picture(wad.lump(IWAD_ART_LUMPS[key]), playpal)
 
     gun_idle, gun_fire = gun_tables(pic("gun_idle"), pic("gun_flash"))
-    hud_bg = stbar_rows(iwad_stbar(wad, playpal))
+    hud_bg = stbar_rows(iwad_stbar(wad, playpal), *hud_size, dither=dither)
+    box = face_box(*hud_size, h3d)
     faces = face_tables({
         "healthy": pic("face_healthy"), "hurt": pic("face_hurt"),
         "bloody": pic("face_bloody"), "grim": pic("face_grim"),
-    }, background=PALETTE[int(hud_bg[FACE_ROW - 40][FACE_COL], 16)])
+    }, background=PALETTE[int(hud_bg[box[1] - h3d][box[0]], 16)],
+        box=box, dither=dither)
     sprites = monster_sprite_words(pic("mon0"), pic("mon1"), pic("corpse"))
     return {"gun_idle": gun_idle, "gun_fire": gun_fire, "faces": faces,
             "hud_bg": hud_bg, "monster_sprites": sprites}
@@ -1199,6 +1441,27 @@ def _finish_level(raster: Raster, avg: dict[str, tuple[int, int, int] | None],
                   if v is not None}, stats)
 
 
+def rle_runs(rows: list[str]) -> list[tuple[int, int]]:
+    """The art's row-major RLE, ``(colour, count)`` — the same encoding
+    ``deadman3d.title_runs`` produces, computed straight off the hex rows so
+    the importer can price art it has not installed."""
+    runs: list[tuple[int, int]] = []
+    for ch in "".join(rows):
+        c = int(ch, 16)
+        if runs and runs[-1][0] == c:
+            runs[-1] = (c, runs[-1][1] + 1)
+        else:
+            runs.append((c, 1))
+    return runs
+
+
+def rom_words(rows: list[str]) -> int:
+    """The ROM/tape cost of a piece of art: ONE pre-encoded RUN command word
+    per RLE run (``deadman3d.title_words``: ``8*(count*16 + colour) + C_RUN``).
+    This is the number dithering has to buy — see :data:`DITHER_MODES`."""
+    return len(rle_runs(rows))
+
+
 def _run_count(rows: list[str]) -> int:
     flat = "".join(rows)
     return 1 + sum(1 for a, b in zip(flat, flat[1:], strict=False) if a != b) if flat else 0
@@ -1236,9 +1499,13 @@ def _png_avg(rgba: list[list[tuple[int, int, int, int]]]) -> tuple[float, float,
 
 
 def load_freedoom(root: Path, mapname: str = "E1M1", grid: int = 64,
-                  min_len: float = 32.0) -> Level:
+                  min_len: float = 32.0, *, title_size: tuple[int, int] = (64, 48),
+                  dither: str = "none") -> Level:
     """Import from a Freedoom checkout: levels/<map>.wad + textures.cfg +
-    patches/*.png + graphics/titlepic/titlepic.png."""
+    patches/*.png + graphics/titlepic/titlepic.png.
+
+    ``title_size``/``dither`` are the M9 opt-ins; the defaults reproduce the
+    committed art byte for byte."""
     wad = read_wad(root / "levels" / f"{mapname.lower()}.wad")
     raster = rasterize(parse_map(wad, mapname), grid=grid, min_len=min_len)
     texs = _parse_textures_cfg(
@@ -1260,7 +1527,8 @@ def load_freedoom(root: Path, mapname: str = "E1M1", grid: int = 64,
                 n += 1
         avg[name] = tuple(c / n for c in acc) if n else None
     title = quantize_title(decode_png(
-        (root / "graphics" / "titlepic" / "titlepic.png").read_bytes()))
+        (root / "graphics" / "titlepic" / "titlepic.png").read_bytes()),
+        *title_size, dither=dither)
     return _finish_level(raster, avg, title, f"freedoom:{mapname}")
 
 
@@ -1292,7 +1560,8 @@ def _iwad_textures(wad: Wad) -> dict[str, list[str]]:
 
 
 def load_iwad(path: Path, mapname: str = "E1M1", grid: int = 64,
-              min_len: float = 32.0) -> Level:
+              min_len: float = 32.0, *, title_size: tuple[int, int] = (64, 48),
+              dither: str = "none") -> Level:
     """Import from a retail-format IWAD (everything from inside the WAD)."""
     wad = read_wad(path)
     raster = rasterize(parse_map(wad, mapname), grid=grid, min_len=min_len)
@@ -1311,7 +1580,8 @@ def load_iwad(path: Path, mapname: str = "E1M1", grid: int = 64,
                     acc[i] += one[i]
                 n += 1
         avg[name] = tuple(c / n for c in acc) if n else None
-    title = quantize_title(decode_picture(wad.lump("TITLEPIC"), playpal))
+    title = quantize_title(decode_picture(wad.lump("TITLEPIC"), playpal),
+                           *title_size, dither=dither)
     return _finish_level(raster, avg, title, f"iwad:{path.name}:{mapname}")
 
 
@@ -1391,12 +1661,22 @@ def main(argv: list[str] | None = None) -> None:
                              " supports future 128)")
     parser.add_argument("--min-len", type=float, default=32.0,
                         help="ignore one-sided linedefs shorter than this many map units")
+    parser.add_argument("--dither", choices=DITHER_MODES, default="none",
+                        help="title dithering (M9 opt-in; default none — the "
+                             "committed art's exact method)")
+    parser.add_argument("--title-size", default="64x48", metavar="WxH",
+                        help="title art size (default 64x48; 128x96 is the "
+                             "hi-res panel)")
     parser.add_argument("--out", type=Path, required=True, help="output directory")
     args = parser.parse_args(argv)
+    tw, _, th = args.title_size.partition("x")
+    title_size = (int(tw), int(th))
     if args.freedoom:
-        level = load_freedoom(args.freedoom, args.map, args.grid, args.min_len)
+        level = load_freedoom(args.freedoom, args.map, args.grid, args.min_len,
+                              title_size=title_size, dither=args.dither)
     else:
-        level = load_iwad(args.wad, args.map, args.grid, args.min_len)
+        level = load_iwad(args.wad, args.map, args.grid, args.min_len,
+                          title_size=title_size, dither=args.dither)
     emit(level, args.out)
     print(json.dumps(level.stats))
     print(level.family_table())

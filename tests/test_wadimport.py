@@ -528,3 +528,152 @@ def test_iwad_art_extracts_the_named_lumps() -> None:
     assert 1 <= len(art["gun_idle"]) <= 20 and 1 <= len(art["gun_fire"]) <= 20
     for runs in art["faces"].values():
         assert len(runs) == wi.FACE_H and all(len(s) == wi.FACE_W for _r, _c, s in runs)
+
+
+# ── M9: dithering (opt-in) and the hi-res art geometry ───────────────────────
+def _gradient(w: int = 320, h: int = 200) -> list[list[tuple[int, int, int, int]]]:
+    """A horizontal black->white ramp: the case a 16-colour palette bands."""
+    return [[(round(255 * x / (w - 1)),) * 3 + (255,) for x in range(w)]
+            for _ in range(h)]
+
+
+def test_bayer_matrix_is_the_recursive_index_matrix() -> None:
+    """M_2n = [[4M, 4M+2], [4M+3, 4M+1]]: every side is a permutation of
+    0..n*n-1, so the thresholds are evenly spread."""
+    assert wi.bayer_matrix(1) == [[0]]
+    assert wi.bayer_matrix(2) == [[0, 2], [3, 1]]
+    assert wi.bayer_matrix(4)[0] == [0, 8, 2, 10]
+    for n in (2, 4, 8):
+        m = wi.bayer_matrix(n)
+        assert len(m) == n and all(len(row) == n for row in m)
+        assert sorted(v for row in m for v in row) == list(range(n * n))
+    with pytest.raises(ValueError):
+        wi.bayer_matrix(6)
+
+
+def test_dithering_is_opt_in_and_off_by_default() -> None:
+    """The M9 path must never move a committed byte: the default call, an
+    explicit ``dither="none"`` and ``strength=0`` all agree, and every
+    quantizer defaults to off."""
+    src = _gradient()
+    base = wi.quantize_title(src)
+    assert base == wi.quantize_title(src, dither="none")
+    cells = wi.block_lab(src, 64, 48, brightness=wi.TITLE_BRIGHTNESS)
+    flat = wi.dither_lab(cells, "none")
+    for mode in ("fs", "bayer4", "bayer8"):
+        assert wi.dither_lab(cells, mode, strength=0.0) == flat, mode
+    sprite = [[(90, 40, 20, 255)] * 8 for _ in range(8)]
+    assert wi.quantize_sprite(sprite, 4, 4) == \
+        wi.quantize_sprite(sprite, 4, 4, dither="none")
+    assert wi.stbar_rows(_flat_bar(70)) == wi.stbar_rows(_flat_bar(70), dither="none")
+    with pytest.raises(ValueError):
+        wi.dither_lab(cells, "sierra")
+
+
+def test_dithering_buys_colours_on_a_gradient() -> None:
+    """The point of the exercise: on a ramp the undithered art bands into flat
+    slabs, and every dither mode MIXES the band boundaries (so 16 colours read
+    as more) and reproduces the ramp's mean better."""
+    src = _gradient()
+    rows = {m: wi.quantize_title(src, dither=m) for m in wi.DITHER_MODES}
+
+    def mixes(hexrows: list[str]) -> int:
+        """Cells whose left and right neighbours agree with each other but not
+        with them — a stipple; a banded ramp has none."""
+        return sum(1 for row in hexrows for x in range(1, len(row) - 1)
+                   if row[x - 1] == row[x + 1] != row[x])
+
+    assert mixes(rows["none"]) == 0, "the committed method bands, it never mixes"
+    for mode in ("fs", "bayer4", "bayer8"):
+        assert mixes(rows[mode]) > 100, mode
+        assert len(rows[mode]) == 48 and all(len(r) == 64 for r in rows[mode])
+
+    def mean_l(hexrows: list[str]) -> float:
+        vals = [wi._LAB[int(c, 16)][0] for row in hexrows for c in row]
+        return sum(vals) / len(vals)
+
+    want = sum(v[0] for row in wi.block_lab(src, 64, 48,
+                                            brightness=wi.TITLE_BRIGHTNESS)
+               for v in row) / (64 * 48)
+    for mode in ("fs", "bayer4", "bayer8"):
+        assert abs(mean_l(rows[mode]) - want) < abs(mean_l(rows["none"]) - want), mode
+
+
+def test_a_flat_palette_colour_never_dithers() -> None:
+    """A field that is EXACTLY a palette entry has nothing to mix, so no mode
+    breaks it up — which is what keeps flat art's RLE runs intact."""
+    for idx in (1, 7, 8):
+        flat = [[wi.PALETTE[idx] + (255,)] * 64 for _ in range(64)]
+        for mode in wi.DITHER_MODES:
+            rows = wi.quantize_title(flat, 16, 16, brightness=1.0, dither=mode)
+            assert set("".join(rows)) == {format(idx, "x")}, (idx, mode)
+            assert wi.rom_words(rows) == 1
+
+
+def test_ordered_dither_is_periodic_and_floyd_steinberg_is_not() -> None:
+    """On a uniform field between two palette entries, Bayer repeats with the
+    matrix period (the property that makes it RLE- and flicker-friendly);
+    Floyd–Steinberg's diffusion does not."""
+    mid = tuple(round((a + b) / 2) for a, b in zip(wi.PALETTE[8], wi.PALETTE[7], strict=True))
+    field = [[mid + (255,)] * 128 for _ in range(128)]
+    for mode, n in (("bayer4", 4), ("bayer8", 8)):
+        rows = wi.quantize_title(field, 32, 32, brightness=1.0, dither=mode)
+        assert len(set("".join(rows))) == 2, mode
+        for y in range(32 - n):
+            assert rows[y] == rows[y + n], mode
+        assert rows[0][:n] * (32 // n) == rows[0]
+    fs = wi.quantize_title(field, 32, 32, brightness=1.0, dither="fs")
+    assert len(set("".join(fs))) >= 2
+    assert wi.rom_words(fs) > wi.rom_words(
+        wi.quantize_title(field, 32, 32, brightness=1.0, dither="bayer8"))
+
+
+def test_dithered_sprites_keep_their_transparency() -> None:
+    """A dithered sprite still reports ``None`` for a mostly-transparent
+    block, so ``sprite_runs`` sees the same outline."""
+    src = [[(200, 60, 30, 255 if 4 <= x < 12 else 0) for x in range(16)]
+           for _ in range(16)]
+    for mode in wi.DITHER_MODES:
+        grid = wi.quantize_sprite(src, 8, 8, dither=mode)
+        assert all(row[:2] == [None, None] and row[6:] == [None, None]
+                   for row in grid), mode
+        assert all(c is not None for row in grid for c in row[2:6]), mode
+
+
+def test_rom_words_is_the_consumers_own_run_encoding() -> None:
+    """The cost model dithering is priced against: one pre-encoded RUN command
+    word per row-major RLE run — exactly ``deadman3d.title_words``."""
+    assert wi.rle_runs(["11", "12"]) == [(1, 3), (2, 1)]
+    assert wi.rom_words([]) == 0
+    assert wi.rom_words(d3.TITLE_HEX_ROWS) == len(d3.title_words())
+    assert [(c, n) for c, n in wi.rle_runs(d3.TITLE_HEX_ROWS)] == d3.title_runs()
+
+
+def test_hires_art_geometry_doubles_the_panel() -> None:
+    """The 128x96 constants and the face box derived for them: DOOM's own
+    inset scaled onto a 16-row strip, roughly twice the 6x7 slot."""
+    assert (wi.HIRES_W, wi.HIRES_H, wi.HIRES_H3D) == (128, 96, 80)
+    assert (wi.HIRES_HUD_W, wi.HIRES_HUD_H) == (128, 16)
+    assert wi.face_box() == (wi.FACE_COL, wi.FACE_ROW, wi.FACE_W, wi.FACE_H)
+    assert wi.face_box() == (29, 40, 6, 7)
+    col, row, fw, fh = wi.face_box(wi.HIRES_HUD_W, wi.HIRES_HUD_H, wi.HIRES_H3D)
+    assert (col, row, fw, fh) == (58, 80, 13, 14)
+    assert row == wi.HIRES_H3D and col + fw <= wi.HIRES_W
+    assert fw >= 2 * wi.FACE_W - 1 and fh >= 2 * wi.FACE_H - 1
+    # the hi-res title and strip come out at the sizes asked for
+    rows = wi.quantize_title(_gradient(), wi.HIRES_W, wi.HIRES_H, dither="bayer8")
+    assert len(rows) == wi.HIRES_H and all(len(r) == wi.HIRES_W for r in rows)
+    bar = wi.stbar_rows(_flat_bar(70), wi.HIRES_HUD_W, wi.HIRES_HUD_H)
+    assert len(bar) == wi.HIRES_HUD_H and all(len(r) == wi.HIRES_HUD_W for r in bar)
+
+
+def test_face_tables_take_a_box_and_a_dither() -> None:
+    """The hi-res face lands in the hi-res inset, one run string per row."""
+    faces = {n: [[(150, 80, 60, 255)] * 24 for _ in range(29)]
+             for n in ("healthy", "hurt", "bloody", "grim")}
+    box = wi.face_box(wi.HIRES_HUD_W, wi.HIRES_HUD_H, wi.HIRES_H3D)
+    tabs = wi.face_tables(faces, box=box, dither="bayer8")
+    for runs in tabs.values():
+        assert len(runs) == box[3]
+        assert [r for r, _c, _s in runs] == list(range(box[1], box[1] + box[3]))
+        assert all(c == box[0] and len(s) == box[2] for _r, c, s in runs)
