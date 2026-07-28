@@ -5111,13 +5111,54 @@ SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 #: * canonical, ``rom_rows`` 59/60/61/62/63: 386x381 / **382x382** / 379x383 /
 #:   379x385 / 379x386. 60 is the crossing and it lands exactly square, so the
 #:   seek build folds one row *shallower* than the classic 61.
-#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / **295x269** /
+#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / 295x269 /
 #:   295x272 .. 295x286. The width floors at 295 (the store binds, and
 #:   ``store_offset`` dx -20 is still the last value that routes), so the fold
 #:   stops at the first row that reaches the floor rather than the classic 83.
+#:
+#: **The taped fold re-swept once the width floor moved.** That sweep's floor of
+#: 295 was the answer-path's, not the store's: the STORE teleport L room sat at
+#: ``rom_bottom+1..+4`` and its collector reached to 293. :data:`STORE_ANSWER_WEST`
+#: deleted the room and :data:`SEEK_SLAB_PITCH` narrowed the slabs, and the floor
+#: fell to **287** — ``TX 61 + the block's 224 columns + the east return pipe`` —
+#: but ``rom_rows`` was left at 80, which is one row *short* of reaching it. The
+#: curve, re-measured build-only and then on the 8-command native gate under the
+#: current bank plan:
+#:
+#: ::
+#:
+#:     rom_rows   box        ticks (8-cmd gate)
+#:     76         304x265    61,698,016
+#:     78         299x266    61,613,459
+#:     79         292x268    61,714,266
+#:     80         289x269    61,799,020   (was shipped)
+#:     81         287x271    61,826,043   <- the floor, at the least height
+#:     82, 83     287x272    do not RUN (see below)
+#:     84         287x274    61,689,668
+#:     85..87     287x275/6  do not RUN
+#:     88         287x278    61,666,460
+#:     92         287x282    61,598,564
+#:     96         287x286    61,522,369
+#:     100        287x291    (width floored, height now over)
+#:
+#: 81 is the crossing: every deeper fold buys nothing in width and costs rows.
+#: Ticks are flat across the whole range — the entire 76..96 span is 0.5% — so
+#: this is a size number and only a size number; the +0.08% at 81 against 80 is
+#: inside that band. On the 115-frame tour: 838,732,969 at 80 (289x269) against
+#: 839,384,674 at 81 (287x271).
+#:
+#: **Folds 82, 83, 85, 86 and 87 build but do not run.** At those depths the
+#: ROM's packed words land so that a literal's *reverse* reading exceeds 63 bits
+#: — a ``` ` ``` pair is readable from either end, so both readings have to be
+#: values, and "every value in the language is a signed 64-bit integer"
+#: (``littleman/reference/language-reference.txt``). ``fast_littleman`` checks
+#: both directions and rejects the grid. It is a property of the fold's word
+#: packing, not of anything here, and it is why 84 — 0.2% faster than 81 and
+#: equally narrow — is not the pin: it sits in a hole between folds that do not
+#: run at all.
 SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
-    ("deadman-3d", "taped"): {"rom_rows": 80},
+    ("deadman-3d", "taped"): {"rom_rows": 81},
 }
 
 #: Slugs whose CPU gets a **second return bus above the band**: a simple lane

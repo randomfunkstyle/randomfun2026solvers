@@ -102,7 +102,7 @@ def test_the_pitch_registry_is_read_only_on_a_seek_build() -> None:
     seek_m = machine.build_for("deadman-3d", store="taped")
     classic = machine.build_for("deadman-3d", store="taped", seek=False)
     # The seek build takes the narrowed pitch; the classic one is untouched by it.
-    assert seek_m.width == 289, seek_m.width
+    assert seek_m.width == 287, seek_m.width
     assert classic.mem_pad == machine.MEM_PAD["deadman-3d"]
 
 
