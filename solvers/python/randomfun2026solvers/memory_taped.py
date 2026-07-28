@@ -168,7 +168,13 @@ def taped_plan(n: int, banks: int | tuple[int, ...]) -> list[int]:
     return sizes + [last]
 
 
-def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int = 1) -> V3Store:
+def taped_store_block(
+    n: int,
+    banks: int | tuple[int, ...],
+    *,
+    skip_batch: int = 1,
+    answer_west: int | None = None,
+) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
 
     ``n`` is the machine's ``TAPE_SIZE`` (slot count; usable addresses
@@ -177,6 +183,15 @@ def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int =
     Returns the same :class:`V3Store` contract the men-v3 blocks use — request
     stub west, answer stub rising out of the top, exact pipe inventory — so
     ``lm1.machine`` places it through the identical branch, teleports and all.
+
+    ``answer_west`` moves the **answer collector's west wall** to that interior
+    column and turns its exit stub from a north riser into a south one. The
+    collector is already a teleport — ``R`` has no distance term, so widening it
+    is free — and the block's whole west end is empty for these rows, so pulling
+    the wall west carries the answer to the caller's doorstep for nothing. It is
+    what lets ``lm1.machine`` drop its own two forwarding rooms: with the answer
+    already beside the CPU, a stub pipe finishes the job. ``None`` keeps the
+    shipped north riser, so every existing caller's grid is byte-identical.
     """
     from .lm1.machine import tape_block
 
@@ -266,6 +281,10 @@ def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int =
 
     coll_x0 = bx[0] + tapes[0].out_cell[0] - 2
     coll_x1 = bx[-1] + tapes[-1].out_cell[0] + 2
+    if answer_west is not None:
+        if not 1 <= answer_west <= coll_x0:
+            raise ValueError(f"answer_west {answer_west} is not west of the collector")
+        coll_x0 = answer_west
     coll_rows, _ = teleport(coll_x1 - coll_x0 + 1)
 
     class _Grid:  # the tiny facade memory_men._room draws through
@@ -279,15 +298,26 @@ def taped_store_block(n: int, banks: int | tuple[int, ...], *, skip_batch: int =
         # extend the bank's own `^` stub up to the collector's south wall
         pipe([(ax, bank_y + t.out_cell[1] - 1), (ax, coll_y + 3)])
     out_x = coll_x0 + 2
-    pipe([(out_x, coll_y - 1), (out_x, 0)])
+    if answer_west is None:
+        pipe([(out_x, coll_y - 1), (out_x, 0)])
+    else:
+        # South instead of north: the collector's west end is now beside the
+        # caller's response row, which is *below* it, so the riser would only
+        # climb to be walked back down. One cell clear of the south wall is
+        # enough — the four bank answers attach to the same wall further east
+        # and `s` has one outgoing pipe to choose from either way.
+        pipe([(out_x, coll_y + 4), (out_x, coll_y + 5)])
 
     # ── the block's own ports ────────────────────────────────────────────────
     in_y = gate_y + GATE_IN_ROW
     pipe([(gx[0] - 2, in_y), (gx[0], in_y)])
     in_cell = (gx[0] - 2, in_y)
-    ox, oy = out_x, 0
-    while (ox, oy) not in cells:
-        oy += 1  # the stub draw stops one short: name the real topmost cell
+    if answer_west is None:
+        ox, oy = out_x, 0
+        while (ox, oy) not in cells:
+            oy += 1  # the stub draw stops one short: name the real topmost cell
+    else:
+        ox, oy = out_x, coll_y + 4  # ... and southward it is the bottommost
 
     width = max(x for x, _ in cells) + 1
     height = max(y for _, y in cells) + 1
