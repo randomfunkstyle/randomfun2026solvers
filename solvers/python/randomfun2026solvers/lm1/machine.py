@@ -2168,10 +2168,11 @@ class Machine:
             notes["stream:unit"] = (
                 "the DOOM column painter (lm1/d3_unit.py): one command word per "
                 "viewport column / RLE run / cursor move / gun sprite / COMMIT, "
-                "8*arg + code. The map, the title screen and the baked pistol "
-                "sprites are all derived from the Freedoom project "
-                "(https://github.com/freedoom/freedoom @ d14dbbe: levels/e1m1.wad "
-                "+ its textures, graphics/titlepic, sprites/pisga0+pisfa0; "
+                "8*arg + code. The map, the title screen, the status bar and "
+                "the baked pistol sprites are all derived from the Freedoom "
+                "project (https://github.com/freedoom/freedoom @ d14dbbe: "
+                "levels/e1m1.wad + its textures, graphics/titlepic, "
+                "graphics/stbar, sprites/pisga0+pisfa0; "
                 "BSD-style licence) — see deadman3d.py's art credits."
             )
         for name, (x, y, w, h) in sorted(self.regions.items()):

@@ -381,9 +381,9 @@
       "name": "rom",
       "x": 0,
       "y": 0,
-      "w": 379,
+      "w": 378,
       "h": 64,
-      "note": "looping ROM: 4023 words, 60 rows, re-emitted forever",
+      "note": "looping ROM: 4002 words, 60 rows, re-emitted forever",
       "color": "#a855f7",
       "tags": [
         "rom"
@@ -431,7 +431,7 @@
       "y": 276,
       "w": 158,
       "h": 84,
-      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / RLE run / cursor move / gun sprite / COMMIT, 8*arg + code. The map, the title screen and the baked pistol sprites are all derived from the Freedoom project (https://github.com/freedoom/freedoom @ d14dbbe: levels/e1m1.wad + its textures, graphics/titlepic, sprites/pisga0+pisfa0; BSD-style licence) \u2014 see deadman3d.py's art credits.",
+      "note": "the DOOM column painter (lm1/d3_unit.py): one command word per viewport column / RLE run / cursor move / gun sprite / COMMIT, 8*arg + code. The map, the title screen, the status bar and the baked pistol sprites are all derived from the Freedoom project (https://github.com/freedoom/freedoom @ d14dbbe: levels/e1m1.wad + its textures, graphics/titlepic, graphics/stbar, sprites/pisga0+pisfa0; BSD-style licence) \u2014 see deadman3d.py's art credits.",
       "color": "#f59e0b",
       "tags": [
         "stream"

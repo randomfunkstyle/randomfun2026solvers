@@ -24,6 +24,7 @@ if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
 from randomfun2026solvers import deadman3d as d3  # noqa: E402
+from randomfun2026solvers import wadimport as wi  # noqa: E402
 from randomfun2026solvers.lm1 import machine, programs  # noqa: E402
 from randomfun2026solvers.lm1.display import frames_from_writes  # noqa: E402
 from randomfun2026solvers.lm1.emulator import Emulator, Round  # noqa: E402
@@ -102,29 +103,56 @@ def test_frame_shape_is_48_rows_of_64_hex_chars() -> None:
         assert set(row) <= hexdigits
 
 
+def _bar_px(rows: list[str], cols: tuple[int, int]) -> int:
+    """How many cells of a readout well the live bar has claimed."""
+    col0, col1 = cols
+    return rows[d3.BAR_ROWS[0] - d3.H3D][col0:col1].count(f"{d3.BAR_COLOR:x}")
+
+
 def test_hud_background_and_live_bars() -> None:
-    """The HUD strip: static background (bezel + blue armor block) plus the
-    proportional bars — red health 1px/4, yellow ammo 1px/2, from column 4."""
+    """The HUD strip: DOOM's real STBAR as the background, plus the
+    proportional readouts inside the bar's OWN ammo and health wells."""
     bg = d3.hud_bg_rows()
-    assert len(bg) == 8
+    assert len(bg) == 8 and all(len(r) == d3.WIDTH for r in bg)
     # The background RLE is a faithful re-encoding — it is the asm's constant
     # table (one pre-encoded RUN word per run behind one CURS).
     replay = "".join("%x" % c * n for c, n in d3.hud_bg_runs())
     assert replay == "".join(bg)
     assert sum(n for _, n in d3.hud_bg_runs()) == 8 * d3.WIDTH
-    assert len(d3.hud_bg_runs()) == 14
-    # Full bars at the spawn state: 25px of each, over the background.
+    # The table must stay COMPACT (every run costs two ROM words on a loop the
+    # machine re-runs each frame). The exact count is an art outcome; the
+    # ceiling is the contract.
+    assert len(d3.hud_bg_runs()) <= 64
+    # The wells are DOOM's, not invented: wadimport scales st_stuff.c's own
+    # placement constants off the 320x32 bar, and the model reads that scaling.
+    assert d3.AMMO_BAR_COLS == wi.stbar_cells("ammo")[0::2]
+    assert d3.HEALTH_BAR_COLS == wi.stbar_cells("health")[0::2]
+    assert d3.BAR_ROWS == tuple(d3.H3D + r for r in wi.stbar_cells("ammo")[1::2])
+    # Neither bar can spill out of its own well, at any legal scalar value.
+    for ammo in range(d3.AMMO_START + 1):
+        assert d3.div(ammo, d3.AMMO_PER_PX) <= d3.AMMO_BAR_COLS[1] - d3.AMMO_BAR_COLS[0]
+    for hp in range(d3.HEALTH_START + 1):
+        assert (d3.div(hp, d3.HEALTH_PER_PX)
+                <= d3.HEALTH_BAR_COLS[1] - d3.HEALTH_BAR_COLS[0])
+    # Full readouts at the spawn state, in the digits' own red, over the bar.
     full = d3.hud_rows(100, 50)
-    assert full[1][4:29] == "9" * 25 and full[4][4:29] == "b" * 25
-    assert full[1][50:59] == "c" * 9  # the blue armor block, static
-    # A drained clip paints NO ammo bar: the background shows through.
+    assert _bar_px(full, d3.AMMO_BAR_COLS) == d3.div(50, d3.AMMO_PER_PX)
+    assert _bar_px(full, d3.HEALTH_BAR_COLS) == d3.div(100, d3.HEALTH_PER_PX)
+    for row in range(*d3.BAR_ROWS):     # the whole well band, not just its top
+        assert full[row - d3.H3D][d3.AMMO_BAR_COLS[0]:
+                                  d3.AMMO_BAR_COLS[0] + 8] == "1" * 8
+        assert full[row - d3.H3D][d3.HEALTH_BAR_COLS[0]:
+                                  d3.HEALTH_BAR_COLS[0] + 10] == "1" * 10
+    # A drained clip paints NO ammo bar: the status bar art shows through.
     empty = d3.hud_rows(100, 0)
-    assert empty[4][4:29] == "8" * 25
-    assert empty[1][4:29] == "9" * 25
-    # The render wires them through: two shots in, the bar is one px shorter.
+    assert _bar_px(empty, d3.AMMO_BAR_COLS) == 0
+    assert empty[d3.BAR_ROWS[0] - d3.H3D][slice(*d3.AMMO_BAR_COLS)] == \
+        bg[d3.BAR_ROWS[0] - d3.H3D][slice(*d3.AMMO_BAR_COLS)]
+    assert _bar_px(empty, d3.HEALTH_BAR_COLS) == 10
+    # The render wires them through: twelve shots in, the bar is one px shorter.
     assert d3.render(d3.SPAWN)[d3.H3D:] == d3.hud_rows(100, 50)
     assert d3.render(d3.SPAWN, ammo=48)[d3.H3D:] == d3.hud_rows(100, 48)
-    assert d3.hud_rows(100, 48)[4][4:28] == "b" * 24
+    assert _bar_px(d3.hud_rows(100, 42), d3.AMMO_BAR_COLS) == 7
 
 
 def test_walk_is_its_chords_and_keys_encodes_the_mux() -> None:
@@ -208,45 +236,58 @@ def test_walk_fords_the_moat_and_health_drains() -> None:
     frames = d3.frames_for_commands(d3.WALK)
 
     def health_px(fr: list[str]) -> int:
-        return fr[41][4:29].count("9")
+        return _bar_px(fr[d3.H3D:], d3.HEALTH_BAR_COLS)
 
-    assert health_px(frames[35]) == 25          # full bar before the moat
-    assert health_px(frames[39]) == 20          # 4 frames in: health 80
-    assert health_px(frames[54]) == 7           # 14 frames in: health 30
-    assert health_px(frames[56]) == 7           # out of the moat: no more drain
+    assert health_px(frames[35]) == 10          # full bar before the moat
+    assert health_px(frames[39]) == 8           # 4 frames in: health 80
+    assert health_px(frames[54]) == 3           # 14 frames in: health 30
+    assert health_px(frames[56]) == 3           # out of the moat: no more drain
     # The floor floods green exactly on the standing-in-slime frames.
     assert frames[50][39][5] == "2" and frames[44][39][5] == "8"
     # And the face degrades: healthy at the spawn, bloodied in the soak.
-    assert frames[0][41][33:43] == d3.FACE_HEALTHY[0][2]
-    assert frames[54][46][33:43] == d3.FACE_BLOODY[5][2]
+    r, c, colours = d3.FACE_HEALTHY[0]
+    assert frames[0][r][c:c + len(colours)] == colours
+    r, c, colours = d3.FACE_BLOODY[-1]
+    assert frames[54][r][c:c + len(colours)] == colours
 
 
-def test_install_art_swaps_gun_face_and_unit_model() -> None:
+def test_install_art_swaps_gun_face_bar_and_unit_model() -> None:
     """install_art (Mode B's art override) rebinds the golden's sprite tables,
-    the asm generator's face constants AND the emulator unit model — and a
-    restore puts the committed Freedoom art back exactly."""
+    the asm generator's face AND status-bar constants, and the emulator unit
+    model — and a restore puts the committed Freedoom art back exactly."""
     from randomfun2026solvers.lm1.store import DoomUnit
 
     keep_gun = (list(d3.GUN_IDLE), list(d3.GUN_FIRE))
     keep_faces = {"healthy": list(d3.FACE_HEALTHY), "hurt": list(d3.FACE_HURT),
                   "bloody": list(d3.FACE_BLOODY), "grim": list(d3.FACE_GRIM)}
+    keep_bg = list(d3.HUD_BG_ROWS)
     idle = [(30, 30, "7")]
     fire = [(25, 31, "9"), (29, 30, "7")]
-    faces = {k: [(41 + i, 33, "1111111111") for i in range(6)]
+    faces = {k: [(40 + i, 29, "444444") for i in range(7)]
              for k in ("healthy", "hurt", "bloody", "grim")}
+    # A synthetic bar whose RLE is a DIFFERENT length from the committed one:
+    # the background table is CPU-side RUN constants, so the asm just carries
+    # however many the imported art needs.
+    bg = ["5" * d3.WIDTH] * 4 + ["6" * d3.WIDTH] * 4
     try:
-        d3.install_art(idle, fire, faces)
+        d3.install_art(idle, fire, faces, None, bg)
         assert DoomUnit.GUN_IDLE == tuple(idle)  # the emulator model follows
+        assert len(d3.hud_bg_runs()) == 2 != len(keep_bg)
         frame = d3.render(d3.SPAWN)
         assert frame[30][30] == "7"              # the swapped gun paints
-        assert frame[41][33:43] == "1111111111"  # the swapped face paints
-        # … and the generated asm carries the swapped face's RUN constant.
-        word = 8 * (10 * 16 + 1) + DoomUnit.CODES["RUN"]
-        assert f"LDI {word}" in d3.deadman3d_source()
+        assert frame[40][29:35] == "444444"      # the swapped face paints
+        assert frame[47] == "6" * d3.WIDTH       # the swapped bar paints
+        # … and the generated asm carries the swapped face's RUN constant
+        # and the swapped bar's own two runs.
+        src = d3.deadman3d_source()
+        assert f"LDI {8 * (6 * 16 + 4) + DoomUnit.CODES['RUN']}" in src
+        assert f"LDI {8 * (4 * d3.WIDTH * 16 + 6) + DoomUnit.CODES['RUN']}" in src
     finally:
-        d3.install_art(keep_gun[0], keep_gun[1], keep_faces)
+        d3.install_art(keep_gun[0], keep_gun[1], keep_faces, None, keep_bg)
     assert DoomUnit.GUN_IDLE == tuple(d3.GUN_IDLE)
-    assert d3.render(d3.SPAWN)[41][33:43] == d3.FACE_HEALTHY[0][2]
+    assert d3.HUD_BG_ROWS == keep_bg
+    r, c, colours = d3.FACE_HEALTHY[0]
+    assert d3.render(d3.SPAWN)[r][c:c + len(colours)] == colours
 
 
 def test_face_bands_and_grimace() -> None:
@@ -439,7 +480,8 @@ def test_the_frame_that_kills_still_shows_the_living_monster() -> None:
         stand, fire=True, ammo=48, health=100)[y][x] for x, y in alive_px)
     for r, c, colours in d3.GUN_FIRE:       # the muzzle flash, over the top
         assert frames[KILL][r][c:c + len(colours)] == colours
-    assert frames[KILL][46][33:43] == d3.FACE_GRIM[5][2]
+    r, c, colours = d3.FACE_GRIM[-1]
+    assert frames[KILL][r][c:c + len(colours)] == colours
     # The next frame is the corpse: the standing sprite's pixels are gone …
     corpse_px = _own_pixels(stand, list(beats[KILL][3]), GALLERY)
     assert corpse_px != alive_px
@@ -590,22 +632,23 @@ SPAWN_FRAME = [
     "8888888888888888888888888888330880338888888888888888888888888888",
     "8888888888888888888888888880333333338888888888888888888888888888",
     "8888888888888888888888888880333333880888888888888888888888888888",
-    "7777777777777777777777777777777777777777777777777777777777777777",
-    "88889999999999999999999999999888800088000008888888ccccccccc88888",
-    "88889999999999999999999999999888808333373808888888ccccccccc88888",
-    "88888888888888888888888888888888803377378308888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbbb88888333333f388888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbbb888888337733888888888ccccccccc88888",
-    "88888888888888888888888888888888888083380888888888ccccccccc88888",
-    "8888888888888888888888888888888888888888888888888888888888888888",
+    "8888888888888888888888888888888800888888888888888888888888888888",
+    "1111111188111111111188888888800000088888888888888888888888888888",
+    "1111111188111111111188888888703338088888888888887788788888888888",
+    "1111111188111111111188888888783733088888888888888887788888888887",
+    "1111111188111111111188888888783333888888888888888877788888888887",
+    "7777777777777777777777777777783333888877777777778888788888888888",
+    "8877777888877878788888878877888888888877777778888888888888888888",
+    "0888888800088888888888888888888888888888888888888888888888888888",
 ]
 
 #: The cavern half-look (WALK[42] holds after the ``d`` turn: heading 15 at
 #: cell (41, 40)): the great cavern's north-east rim — the green MCSTAT
 #: screens and gold-brown ZIMMER cliffs banded across the horizon, the
 #: cavern floor sweeping to the dark distance.  By this frame the walk has
-#: forded the moat's west lobe (frames 36..39): health 80, the red bar 20px,
-#: the face still in its healthy band.
+#: forded the moat's west lobe (frames 36..39): health 80, so the bar in
+#: STBAR's health well is 8 of its 11 cells, the face still in its healthy
+#: band.
 CAVERN_LOOK_FRAME = [
     "0000000000000000000000000000000000000000000000000000000000000000",
     "0000000000000000000000000000000000000000000000000000000000000000",
@@ -647,14 +690,14 @@ CAVERN_LOOK_FRAME = [
     "8888888888888888888888888888330880338888888888888888888888888888",
     "8888888888888888888888888880333333338888888888888888888888888888",
     "8888888888888888888888888880333333880888888888888888888888888888",
-    "7777777777777777777777777777777777777777777777777777777777777777",
-    "88889999999999999999999988888888800088000008888888ccccccccc88888",
-    "88889999999999999999999988888888808333373808888888ccccccccc88888",
-    "88888888888888888888888888888888803377378308888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbb8888888333333f388888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbb88888888337733888888888ccccccccc88888",
-    "88888888888888888888888888888888888083380888888888ccccccccc88888",
-    "8888888888888888888888888888888888888888888888888888888888888888",
+    "8888888888888888888888888888888800888888888888888888888888888888",
+    "1111111888111111118888888888800000088888888888888888888888888888",
+    "1111111888111111118888888888703338088888888888887788788888888888",
+    "1111111888111111118888888888783733088888888888888887788888888887",
+    "1111111888111111118888888888783333888888888888888877788888888887",
+    "7777777777777777777777777777783333888877777777778888788888888888",
+    "8877777888877878788888878877888888888877777778888888888888888888",
+    "0888888800088888888888888888888888888888888888888888888888888888",
 ]
 
 

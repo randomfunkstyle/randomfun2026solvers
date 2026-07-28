@@ -2044,79 +2044,151 @@ gun:    LD  FIRE
 gidle:  LDI C_GUN
         SND                 ; the idle pistol, bottom-centre
 
-; ── HUD (V4): cursor to slot 2560, the background as 14 pre-encoded RUN
-; words (hud_bg_runs(): bezel, base field, the static blue armor block),
-; then the LIVE bars over it — red health rows 41..42 (1px per 4), yellow
-; ammo rows 44..45 (1px per 2), both from column 4; an empty bar
-; sends nothing and the background shows through
+; ── HUD (M8): cursor to slot 2560, then DOOM's REAL status bar as
+; 41 pre-encoded RUN words (hud_bg_runs() — STBAR block-quantized 5x4
+; onto the strip), then the LIVE readouts in the bar's OWN number wells:
+; ammo columns 0..8 (1px per 6 rounds), health
+; columns 10..20 (1px per 10), both on rows 41..44
+; in the digits' own red 1; an empty bar sends nothing and
+; the bar art shows through
 hud:    LDI 20481
         SND                 ; CURS: the panel cursor to the strip's top-left
-        LDI 8252
-        SND                 ; RUN 64 x colour 7
-        LDI 6468
-        SND                 ; RUN 50 x colour 8
-        LDI 1252
-        SND                 ; RUN 9 x colour 12
-        LDI 7108
-        SND                 ; RUN 55 x colour 8
-        LDI 1252
-        SND                 ; RUN 9 x colour 12
-        LDI 7108
-        SND                 ; RUN 55 x colour 8
-        LDI 1252
-        SND                 ; RUN 9 x colour 12
-        LDI 7108
-        SND                 ; RUN 55 x colour 8
-        LDI 1252
-        SND                 ; RUN 9 x colour 12
-        LDI 7108
-        SND                 ; RUN 55 x colour 8
-        LDI 1252
-        SND                 ; RUN 9 x colour 12
-        LDI 7108
-        SND                 ; RUN 55 x colour 8
-        LDI 1252
-        SND                 ; RUN 9 x colour 12
-        LDI 8900
-        SND                 ; RUN 69 x colour 8
-
-        LD  HEALTH
-        DIVI 4
+        LDI 20036
+        SND                 ; RUN 156 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 2500
+        SND                 ; RUN 19 x colour 8
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 5060
+        SND                 ; RUN 39 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 2884
+        SND                 ; RUN 22 x colour 8
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 1348
+        SND                 ; RUN 10 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 3652
+        SND                 ; RUN 28 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 2756
+        SND                 ; RUN 21 x colour 8
+        LDI 444
+        SND                 ; RUN 3 x colour 7
+        LDI 1348
+        SND                 ; RUN 10 x colour 8
+        LDI 3900
+        SND                 ; RUN 30 x colour 7
+        LDI 1220
+        SND                 ; RUN 9 x colour 8
+        LDI 1340
+        SND                 ; RUN 10 x colour 7
+        LDI 580
+        SND                 ; RUN 4 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 1732
+        SND                 ; RUN 13 x colour 8
+        LDI 700
+        SND                 ; RUN 5 x colour 7
+        LDI 580
+        SND                 ; RUN 4 x colour 8
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 836
+        SND                 ; RUN 6 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 324
+        SND                 ; RUN 2 x colour 8
+        LDI 316
+        SND                 ; RUN 2 x colour 7
+        LDI 1348
+        SND                 ; RUN 10 x colour 8
+        LDI 956
+        SND                 ; RUN 7 x colour 7
+        LDI 2500
+        SND                 ; RUN 19 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 964
+        SND                 ; RUN 7 x colour 8
+        LDI 388
+        SND                 ; RUN 3 x colour 0
+        LDI 6852
+        SND                 ; RUN 53 x colour 8
+hbar:   LD  HEALTH
+        DIVI 10
         ST  TMP             ; the health bar in pixels
-        BRZ abar
-        LDI 21025
-        SND                 ; CURS: row 41, column 4
+        BRZ abar           ; nothing to paint: the bar art shows through
+        LDI 21073
+        SND                 ; CURS: row 41, column 10
         LD  TMP
         MULI 16
-        ADDI 9
+        ADDI 1
         MULI 8
         ADDI C_RUN
-        ST  TMP2            ; the bar's RUN word — reused for its second row
+        ST  TMP2            ; the bar's RUN word — reused for its other rows
         SND
-        LDI 21537
+        LDI 21585
+        SND                 ; CURS: row 42, column 10
+        LD  TMP2
         SND
+        LDI 22097
+        SND                 ; CURS: row 43, column 10
+        LD  TMP2
+        SND
+        LDI 22609
+        SND                 ; CURS: row 44, column 10
         LD  TMP2
         SND
 abar:   LD  AMMO
-        DIVI 2
+        DIVI 6
         ST  TMP             ; the ammo bar in pixels
-        BRZ face            ; clip empty: no bar at all
-        LDI 22561
-        SND
+        BRZ face           ; nothing to paint: the bar art shows through
+        LDI 20993
+        SND                 ; CURS: row 41, column 0
         LD  TMP
         MULI 16
-        ADDI 11
+        ADDI 1
         MULI 8
         ADDI C_RUN
-        ST  TMP2
+        ST  TMP2            ; the bar's RUN word — reused for its other rows
         SND
-        LDI 23073
+        LDI 21505
+        SND                 ; CURS: row 42, column 0
+        LD  TMP2
         SND
+        LDI 22017
+        SND                 ; CURS: row 43, column 0
+        LD  TMP2
+        SND
+        LDI 22529
+        SND                 ; CURS: row 44, column 0
         LD  TMP2
         SND
 
-; ── the face (M5): the Freedoom status-bar face, 6x10 at rows 41..46,
-; columns 33..42 — four baked variants (face_for), each a constant list of
+; ── the face (M5/M8): the Freedoom mugshot, 6x7 in STBAR's own inset —
+; rows 40..46, columns 29..34;
+; four baked variants (face_for), each a constant list of
 ; CURS + RLE RUN words; the branch ladder picks FIRE's grimace first, then
 ; the HEALTH band (> 66 healthy, > 33 hurt, else bloodied)
 face:   LD  FIRE
@@ -2130,321 +2202,237 @@ fb2:    LD  HEALTH
         SUBI 34
         BRN fbld            ; health <= 33: the bloodied face
         JMP fhurt
-fwell:  LDI 21257          ; healthy (stfst00)
-        SND                 ; CURS: face row 41, column 33
-        LDI 388
-        SND                 ; RUN 3 x colour 0
-        LDI 324
-        SND                 ; RUN 2 x colour 8
-        LDI 644
-        SND                 ; RUN 5 x colour 0
-        LDI 21769
-        SND                 ; CURS: face row 42, column 33
+fwell:  LDI 20713          ; healthy (stfst00)
+        SND                 ; CURS: face row 40, column 29
+        LDI 452
+        SND                 ; RUN 3 x colour 8
+        LDI 260
+        SND                 ; RUN 2 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 21225
+        SND                 ; CURS: face row 41, column 29
+        LDI 772
+        SND                 ; RUN 6 x colour 0
+        LDI 21737
+        SND                 ; CURS: face row 42, column 29
         LDI 132
         SND                 ; RUN 1 x colour 0
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 540
-        SND                 ; RUN 4 x colour 3
-        LDI 188
-        SND                 ; RUN 1 x colour 7
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 22281
-        SND                 ; CURS: face row 43, column 33
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 316
-        SND                 ; RUN 2 x colour 7
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 188
-        SND                 ; RUN 1 x colour 7
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 22793
-        SND                 ; CURS: face row 44, column 33
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 796
-        SND                 ; RUN 6 x colour 3
-        LDI 252
-        SND                 ; RUN 1 x colour 15
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 23305
-        SND                 ; CURS: face row 45, column 33
-        LDI 324
-        SND                 ; RUN 2 x colour 8
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 316
-        SND                 ; RUN 2 x colour 7
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 324
-        SND                 ; RUN 2 x colour 8
-        LDI 23817
-        SND                 ; CURS: face row 46, column 33
-        LDI 324
-        SND                 ; RUN 2 x colour 8
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 324
-        SND                 ; RUN 2 x colour 8
-        JMP cmit
-fhurt:  LDI 21257          ; hurt (stfst20)
-        SND                 ; CURS: face row 41, column 33
-        LDI 1284
-        SND                 ; RUN 10 x colour 0
-        LDI 21769
-        SND                 ; CURS: face row 42, column 33
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 540
-        SND                 ; RUN 4 x colour 3
-        LDI 188
-        SND                 ; RUN 1 x colour 7
-        LDI 324
-        SND                 ; RUN 2 x colour 8
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 22281
-        SND                 ; CURS: face row 43, column 33
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 204
-        SND                 ; RUN 1 x colour 9
-        LDI 188
-        SND                 ; RUN 1 x colour 7
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 22793
-        SND                 ; CURS: face row 44, column 33
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 796
-        SND                 ; RUN 6 x colour 3
-        LDI 252
-        SND                 ; RUN 1 x colour 15
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 23305
-        SND                 ; CURS: face row 45, column 33
-        LDI 324
-        SND                 ; RUN 2 x colour 8
         LDI 412
         SND                 ; RUN 3 x colour 3
-        LDI 204
-        SND                 ; RUN 1 x colour 9
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 324
-        SND                 ; RUN 2 x colour 8
-        LDI 23817
-        SND                 ; CURS: face row 46, column 33
-        LDI 324
-        SND                 ; RUN 2 x colour 8
+        LDI 196
+        SND                 ; RUN 1 x colour 8
         LDI 132
         SND                 ; RUN 1 x colour 0
+        LDI 22249
+        SND                 ; CURS: face row 43, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 284
+        SND                 ; RUN 2 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22761
+        SND                 ; CURS: face row 44, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23273
+        SND                 ; CURS: face row 45, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23785
+        SND                 ; CURS: face row 46, column 29
+        LDI 836
+        SND                 ; RUN 6 x colour 8
+        JMP cmit
+fhurt:  LDI 20713          ; hurt (stfst20)
+        SND                 ; CURS: face row 40, column 29
+        LDI 452
+        SND                 ; RUN 3 x colour 8
+        LDI 260
+        SND                 ; RUN 2 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 21225
+        SND                 ; CURS: face row 41, column 29
+        LDI 772
+        SND                 ; RUN 6 x colour 0
+        LDI 21737
+        SND                 ; CURS: face row 42, column 29
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 412
+        SND                 ; RUN 3 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22249
+        SND                 ; CURS: face row 43, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22761
+        SND                 ; CURS: face row 44, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23273
+        SND                 ; CURS: face row 45, column 29
         LDI 196
         SND                 ; RUN 1 x colour 8
         LDI 284
         SND                 ; RUN 2 x colour 3
+        LDI 204
+        SND                 ; RUN 1 x colour 9
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23785
+        SND                 ; CURS: face row 46, column 29
+        LDI 452
+        SND                 ; RUN 3 x colour 8
         LDI 140
         SND                 ; RUN 1 x colour 1
-        LDI 132
-        SND                 ; RUN 1 x colour 0
         LDI 324
         SND                 ; RUN 2 x colour 8
         JMP cmit
-fbld:   LDI 21257          ; bloodied (stfst40)
-        SND                 ; CURS: face row 41, column 33
-        LDI 1284
-        SND                 ; RUN 10 x colour 0
-        LDI 21769
-        SND                 ; CURS: face row 42, column 33
+fbld:   LDI 20713          ; bloodied (stfst40)
+        SND                 ; CURS: face row 40, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
         LDI 516
         SND                 ; RUN 4 x colour 0
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 132
-        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 21225
+        SND                 ; CURS: face row 41, column 29
+        LDI 772
+        SND                 ; RUN 6 x colour 0
+        LDI 21737
+        SND                 ; CURS: face row 42, column 29
+        LDI 260
+        SND                 ; RUN 2 x colour 0
         LDI 196
         SND                 ; RUN 1 x colour 8
         LDI 388
         SND                 ; RUN 3 x colour 0
-        LDI 22281
-        SND                 ; CURS: face row 43, column 33
+        LDI 22249
+        SND                 ; CURS: face row 43, column 29
         LDI 196
         SND                 ; RUN 1 x colour 8
+        LDI 540
+        SND                 ; RUN 4 x colour 3
         LDI 132
         SND                 ; RUN 1 x colour 0
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 252
-        SND                 ; RUN 1 x colour 15
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 140
-        SND                 ; RUN 1 x colour 1
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 22793
-        SND                 ; CURS: face row 44, column 33
+        LDI 22761
+        SND                 ; CURS: face row 44, column 29
         LDI 196
         SND                 ; RUN 1 x colour 8
-        LDI 156
-        SND                 ; RUN 1 x colour 3
         LDI 204
         SND                 ; RUN 1 x colour 9
         LDI 412
         SND                 ; RUN 3 x colour 3
-        LDI 188
-        SND                 ; RUN 1 x colour 7
-        LDI 204
-        SND                 ; RUN 1 x colour 9
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 23305
-        SND                 ; CURS: face row 45, column 33
         LDI 196
         SND                 ; RUN 1 x colour 8
-        LDI 140
-        SND                 ; RUN 1 x colour 1
-        LDI 204
-        SND                 ; RUN 1 x colour 9
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 140
-        SND                 ; RUN 1 x colour 1
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 204
-        SND                 ; RUN 1 x colour 9
-        LDI 156
-        SND                 ; RUN 1 x colour 3
+        LDI 23273
+        SND                 ; CURS: face row 45, column 29
         LDI 196
         SND                 ; RUN 1 x colour 8
-        LDI 23817
-        SND                 ; CURS: face row 46, column 33
+        LDI 540
+        SND                 ; RUN 4 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23785
+        SND                 ; CURS: face row 46, column 29
         LDI 324
         SND                 ; RUN 2 x colour 8
-        LDI 140
-        SND                 ; RUN 1 x colour 1
-        LDI 156
-        SND                 ; RUN 1 x colour 3
         LDI 332
         SND                 ; RUN 2 x colour 9
-        LDI 140
-        SND                 ; RUN 1 x colour 1
-        LDI 204
-        SND                 ; RUN 1 x colour 9
         LDI 324
         SND                 ; RUN 2 x colour 8
         JMP cmit
-fgrim:  LDI 21257          ; the FIRE grimace (stfevl0)
-        SND                 ; CURS: face row 41, column 33
-        LDI 452
-        SND                 ; RUN 3 x colour 8
-        LDI 900
-        SND                 ; RUN 7 x colour 0
-        LDI 21769
-        SND                 ; CURS: face row 42, column 33
+fgrim:  LDI 20713          ; the FIRE grimace (stfevl0)
+        SND                 ; CURS: face row 40, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 260
+        SND                 ; RUN 2 x colour 0
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 21225
+        SND                 ; CURS: face row 41, column 29
+        LDI 324
+        SND                 ; RUN 2 x colour 8
         LDI 516
         SND                 ; RUN 4 x colour 0
+        LDI 21737
+        SND                 ; CURS: face row 42, column 29
+        LDI 260
+        SND                 ; RUN 2 x colour 0
         LDI 196
         SND                 ; RUN 1 x colour 8
-        LDI 644
-        SND                 ; RUN 5 x colour 0
-        LDI 22281
-        SND                 ; CURS: face row 43, column 33
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 540
-        SND                 ; RUN 4 x colour 3
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 132
-        SND                 ; RUN 1 x colour 0
-        LDI 22793
-        SND                 ; CURS: face row 44, column 33
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 316
-        SND                 ; RUN 2 x colour 7
-        LDI 284
-        SND                 ; RUN 2 x colour 3
-        LDI 316
-        SND                 ; RUN 2 x colour 7
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 196
-        SND                 ; RUN 1 x colour 8
-        LDI 23305
-        SND                 ; CURS: face row 45, column 33
+        LDI 388
+        SND                 ; RUN 3 x colour 0
+        LDI 22249
+        SND                 ; CURS: face row 43, column 29
         LDI 324
         SND                 ; RUN 2 x colour 8
+        LDI 412
+        SND                 ; RUN 3 x colour 3
+        LDI 132
+        SND                 ; RUN 1 x colour 0
+        LDI 22761
+        SND                 ; CURS: face row 44, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 188
+        SND                 ; RUN 1 x colour 7
+        LDI 412
+        SND                 ; RUN 3 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23273
+        SND                 ; CURS: face row 45, column 29
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 156
+        SND                 ; RUN 1 x colour 3
+        LDI 188
+        SND                 ; RUN 1 x colour 7
         LDI 284
         SND                 ; RUN 2 x colour 3
-        LDI 316
-        SND                 ; RUN 2 x colour 7
-        LDI 284
-        SND                 ; RUN 2 x colour 3
+        LDI 196
+        SND                 ; RUN 1 x colour 8
+        LDI 23785
+        SND                 ; CURS: face row 46, column 29
         LDI 324
         SND                 ; RUN 2 x colour 8
-        LDI 23817
-        SND                 ; CURS: face row 46, column 33
-        LDI 452
-        SND                 ; RUN 3 x colour 8
-        LDI 156
-        SND                 ; RUN 1 x colour 3
-        LDI 316
-        SND                 ; RUN 2 x colour 7
-        LDI 156
-        SND                 ; RUN 1 x colour 3
+        LDI 188
+        SND                 ; RUN 1 x colour 7
         LDI 452
         SND                 ; RUN 3 x colour 8
 

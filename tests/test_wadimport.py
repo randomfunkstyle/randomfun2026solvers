@@ -10,6 +10,8 @@ import sys
 import zlib
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).parents[1]
 PKG = REPO / "solvers" / "python"
 if str(PKG) not in sys.path:
@@ -373,7 +375,7 @@ def test_sprite_runs_split_to_the_descent_window() -> None:
 def test_gun_and_face_tables_fit_the_unit_budgets() -> None:
     """Synthetic pistol + flash quantize into <= 20 runs placed like the
     committed art (idle bottom row 39, flash above the recoiled gun), and the
-    face tables are one 10-wide opaque run per row in the face box."""
+    face tables are one full-width opaque run per row in the face box."""
     gun = [[(200, 60, 40, 255)] * 22 for _ in range(20)]
     flash = [[(255, 255, 120, 255)] * 8 for _ in range(6)]
     idle, fire = wi.gun_tables(gun, flash)
@@ -385,6 +387,96 @@ def test_gun_and_face_tables_fit_the_unit_budgets() -> None:
     runs = face["healthy"]
     assert [r for r, _c, _s in runs] == list(range(wi.FACE_ROW, wi.FACE_ROW + wi.FACE_H))
     assert all(c == wi.FACE_COL and len(s) == wi.FACE_W for _r, c, s in runs)
+
+
+# ── the status bar (M8) ──────────────────────────────────────────────────────
+def _flat_bar(grey: int = 70) -> list[list[tuple[int, int, int, int]]]:
+    return [[(grey, grey, grey, 255)] * wi.STBAR_W for _ in range(wi.STBAR_H)]
+
+
+def test_stbar_cells_scale_dooms_own_layout_onto_the_strip() -> None:
+    """Every region is st_stuff.c's real placement over 5 horizontally and 4
+    vertically — inside the strip, non-empty, and in DOOM's left-to-right
+    order (ammo, health, ARMS, the mugshot, armor, keys, the ammo table)."""
+    order = ["ammo", "health", "arms", "face", "armor", "keys", "ammos"]
+    assert list(wi.STBAR_REGIONS) == order
+    prev_x = -1
+    for name in order:
+        x0, y0, x1, y1 = wi.STBAR_REGIONS[name]
+        assert 0 <= x0 < x1 <= wi.STBAR_W and 0 <= y0 < y1 <= wi.STBAR_H
+        assert x0 > prev_x
+        prev_x = x0
+        c0, r0, c1, r1 = wi.stbar_cells(name)
+        assert 0 <= c0 < c1 <= wi.HUD_W and 0 <= r0 < r1 <= wi.HUD_H
+        # the scaling really is /5 and /4, to the nearest cell boundary
+        assert (c0, r0, c1, r1) == (round(x0 / 5), round(y0 / 4),
+                                    round(x1 / 5), round(y1 / 4))
+    # The two number wells the demo draws in cannot overlap, and the mugshot
+    # inset sits between the ARMS panel and the armor well.
+    assert wi.stbar_cells("ammo")[2] <= wi.stbar_cells("health")[0]
+    assert wi.stbar_cells("arms")[2] <= wi.stbar_cells("face")[0]
+    assert wi.stbar_cells("face")[2] <= wi.stbar_cells("armor")[0]
+
+
+def test_stbar_rows_quantize_the_bar_onto_the_strip() -> None:
+    """A synthetic 320x32 bar lands as 8 rows of 64 hex digits, and the
+    auto-exposure normalizes SOURCE BRIGHTNESS away: two flat bars of very
+    different greys quantize to the same strip."""
+    rows = wi.stbar_rows(_flat_bar(70))
+    assert len(rows) == wi.HUD_H and all(len(r) == wi.HUD_W for r in rows)
+    assert set("".join(rows)) <= set("0123456789abcdef")
+    assert rows == wi.stbar_rows(_flat_bar(40)) == wi.stbar_rows(_flat_bar(110))
+    # …and the exposure lands the mean where STBAR_MEAN_GREY asks: a flat bar
+    # scaled to 95 is nearest ANSI 8 (85,85,85), not black.
+    assert set("".join(rows)) == {"8"}
+
+
+def test_stbar_rows_keep_the_bars_own_structure() -> None:
+    """A bar with a dark inset where DOOM's mugshot sits quantizes with that
+    inset still dark, at the cells stbar_cells("face") predicts."""
+    src = _flat_bar(110)
+    x0, y0, x1, y1 = wi.STBAR_REGIONS["face"]
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            src[y][x] = (0, 0, 0, 255)
+    rows = wi.stbar_rows(src)
+    c0, r0, c1, r1 = wi.stbar_cells("face")
+    for r in range(r0, r1 - 1):          # the inset's last row is a part-cell
+        assert rows[r][c0:c1] == "0" * (c1 - c0)
+    assert rows[0][:c0] == "8" * c0      # the field around it is untouched
+    assert wi.stbar_rows(src) != wi.stbar_rows(_flat_bar(110))
+
+
+def test_stbar_rows_reject_a_black_bar() -> None:
+    with pytest.raises(ValueError):
+        wi.stbar_rows([[(0, 0, 0, 255)] * wi.STBAR_W for _ in range(wi.STBAR_H)])
+
+
+def test_iwad_stbar_prefers_the_whole_lump_over_the_v1_halves() -> None:
+    """v1.2+ IWADs carry one 320x32 STBAR; v1.0/v1.1 shareware has only the
+    104 + 216 halves.  iwad_stbar reads whichever is there, and both spell the
+    same geometry."""
+    playpal = bytes([0, 0, 0]) + bytes([200, 200, 200]) + bytes(762)
+
+    def flat(w: int, h: int, idx: int) -> bytes:
+        post = bytes([0, h]) + b"\0" + bytes([idx]) * h + b"\0" + b"\xff"
+        offs, at = [], 8 + 4 * w
+        for _ in range(w):
+            offs.append(at)
+            at += len(post)
+        return (struct.pack("<HHhh", w, h, 0, 0)
+                + b"".join(struct.pack("<I", o) for o in offs) + post * w)
+
+    halves = wi.Wad("IWAD", [("STMBARL", flat(104, 32, 0)),
+                             ("STMBARR", flat(216, 32, 1))])
+    bar = wi.iwad_stbar(halves, playpal)
+    assert len(bar) == wi.STBAR_H and len(bar[0]) == wi.STBAR_W
+    assert bar[0][0][:3] == (0, 0, 0) and bar[0][104][:3] == (200, 200, 200)
+    whole = wi.Wad("IWAD", [("STBAR", flat(320, 32, 1)),
+                            ("STMBARL", flat(104, 32, 0)),
+                            ("STMBARR", flat(216, 32, 0))])
+    got = wi.iwad_stbar(whole, playpal)
+    assert all(px[:3] == (200, 200, 200) for px in got[0]), "STBAR wins"
 
 
 def test_iwad_art_extracts_the_named_lumps() -> None:
@@ -407,6 +499,9 @@ def test_iwad_art_extracts_the_named_lumps() -> None:
     for key, name in wi.IWAD_ART_LUMPS.items():
         idx = 2 if key == "gun_flash" else 1
         lumps.append(_lump(name, picture(16, 16, idx)))
+    # M8: no STBAR here — the v1.0 shareware halves path has to carry the bar.
+    lumps.append(_lump(wi.IWAD_STBAR_HALVES[0], picture(104, 32, 1)))
+    lumps.append(_lump(wi.IWAD_STBAR_HALVES[1], picture(216, 32, 2)))
     body = b""
     directory = b""
     offset = 12 + 16 * len(lumps)
@@ -420,8 +515,13 @@ def test_iwad_art_extracts_the_named_lumps() -> None:
         art = wi.iwad_art(tmp)
     finally:
         tmp.unlink()
-    assert set(art) == {"gun_idle", "gun_fire", "faces", "monster_sprites"}
+    assert set(art) == {"gun_idle", "gun_fire", "faces", "hud_bg",
+                        "monster_sprites"}
     assert set(art["faces"]) == {"healthy", "hurt", "bloody", "grim"}
+    # M8: the status bar came out of the v1.0 halves, composited 104 + 216.
+    assert len(art["hud_bg"]) == wi.HUD_H
+    assert all(len(r) == wi.HUD_W for r in art["hud_bg"])
+    assert len(set(art["hud_bg"][0])) == 2, "the two halves must stay apart"
     # M7a: the same override path carries the monster billboards — one packed
     # word per sprite column, every word inside the signed range.
     assert all(0 <= w < 2**63 for w in art["monster_sprites"])
