@@ -306,3 +306,56 @@ def test_fresh_slots_read_zero_and_extremes_survive() -> None:
         max_ticks=10_000_000,
     )
     assert top.fatal is None and top.output == [-1000000, 1000000]
+
+
+#: ``deadman-3d_hires``'s configuration, and it is nothing like ``PLAN``: the
+#: hi-res family has no :data:`machine.TAPED_BANKS` entry, so it takes
+#: :func:`taped_plan`'s **uniform quarters** of its 902-slot tape, and no
+#: :data:`machine.TAPED_SKIP_BATCH` entry either, so its banks are batch-1
+#: rings.  Both differ from the shipped ``deadman-3d`` chain the tests above
+#: cover, and :data:`machine.TAPED_BANK_ORDER` now reorders it.
+HIRES_N = 902
+HIRES_PLAN = tuple(taped_plan(HIRES_N, 4))
+
+
+def test_the_hires_bank_plan_is_the_uniform_quarters_the_registry_assumes() -> None:
+    """The order in the registry is read off *these* bounds, so pin them."""
+    assert HIRES_PLAN == (226, 226, 226, 223)
+    assert sum(HIRES_PLAN) >= HIRES_N - 1
+    # and the measured traffic order is one the hardware can express: a gate
+    # peels a bank off an END of what it is handed, so most permutations do not
+    # exist. (scratch/deadman3d-opt/hires_banks.py measures the traffic itself.)
+    gate_chain(list(HIRES_PLAN), order=[3, 0, 1, 2])
+
+
+@pytest.mark.slow
+def test_the_hires_hot_first_chain_resolves_every_address_to_the_same_data() -> None:
+    """The load-bearing test for ``TAPED_BANK_ORDER["deadman-3d_hires"]``.
+
+    A wrong gate literal does not fail, it routes to the **wrong bank** — so
+    this compares address by address rather than bank by bank, over hires' own
+    plan and its own batch-1 rings, which no other test in this file exercises.
+    """
+
+    def readback(order: tuple[int, ...] | None) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(HIRES_N, HIRES_PLAN, skip_batch=1, compact_gate=True,
+                              order=list(order) if order else None)
+        )
+        writes = [x for a in range(1, HIRES_N) for x in (1, a, (a * 37 + 11) % 9973)]
+        bounds = [1]
+        for m in HIRES_PLAN:
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            reads = [x for a in range(lo, hi) for x in (0, a)]
+            want = [(a * 37 + 11) % 9973 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=400_000_000)
+            assert res.fatal is None, (order, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    address_order = readback(None)
+    assert address_order == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
+    assert readback((3, 0, 1, 2)) == address_order

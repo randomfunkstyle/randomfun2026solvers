@@ -4828,12 +4828,17 @@ ROM_ROWS = {
     # Against the 572-wide wall that was 90 rows (573x394); the wall then lost
     # its router column band (:data:`d3_router.BLOCK_X0`, 572 -> 495) and the
     # crossing moved with it, exactly as predicted — re-swept at 495:
-    #   95 -> 528x399   100 -> 503x404   **105 -> 496x409**
-    #  110 -> 496x414   120 -> 496x424
-    # Below 105 the ROM is wider than the wall; above it every row is a row of
+    #   95 -> 528x399   100 -> 503x404   105 -> 496x409   110 -> 496x414
+    # and then the compact tape gate (:data:`TAPED_COMPACT_GATE`) took five rows
+    # out of the store block, which moved the crossing again — re-swept a third
+    # time against 495 columns and the 224x58 block:
+    #  100 -> 503x399   **102 -> 496x401**   104 -> 496x403   105 -> 496x404
+    #  110 -> 496x409
+    # Below 102 the ROM is wider than the wall; above it every row is a row of
     # pure height. Re-sweep whenever the wall narrows again (the packed panel
-    # cluster would take it to ~482) or the program grows.
-    "deadman-3d_hires": 105,
+    # cluster would take it to ~482), the store block changes shape, or the
+    # program grows — all three have moved this number already.
+    "deadman-3d_hires": 102,
 }
 
 
@@ -5188,6 +5193,19 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: block's floor, ~190 rows below ``resp_row``, so widening it west does not
 #: shorten anything — the answer still has to climb. Keyed by tier for that
 #: reason; absent pairs keep the two-room build byte-identical.
+#: ``deadman-3d_hires`` is deliberately **not** here, and it is not an oversight.
+#: The collector's west wall is asked for at ``CX + W + 4 - tx_pre``; on hires
+#: that is **-18**, because its CPU is narrower (no seek drum, its own
+#: ``mem_pad``) while the store block sits at the same adapter gap — so the
+#: column the collapse wants is east of the store's own origin and there is no
+#: room to widen into. ``deadman-3d`` buys that room with a
+#: ``TIER_LAYOUT`` ``store_offset`` of ``(-20, 0)``; swept for hires, ``-18``
+#: still gives ``answer_west 0`` (the guard wants >= 1) and ``-19``/``-20``
+#: reach the guard but then fail placement outright — "no pad pair makes every
+#: pipe bind; collision at (82, 124)" — while ``-24``/``-30`` fail before that.
+#: The collapse therefore needs store-placement surgery on this machine, not a
+#: registry key, and the entry is left off rather than added dead. hires keeps
+#: its `STORE_TELEPORT` room pair, which is what `build_for` falls back to.
 STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
@@ -5247,7 +5265,15 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: of reads pay three gate traversals to reach the cheapest ring — is
 #: :data:`TAPED_BANK_ORDER`, and it is worth an order of magnitude more. The two
 #: do not add; see that entry.
-TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
+TAPED_COMPACT_GATE: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    # Same tier, same gate chain, and the spacer rows are a property of the gate
+    # room rather than of the program: the store block goes 224x63 -> 224x58 for
+    # hires exactly as it does for `deadman-3d`, and those five rows come
+    # straight off the machine's height (see `ROM_ROWS["deadman-3d_hires"]`,
+    # whose fold is chosen against that height).
+    ("deadman-3d_hires", "taped"),
+}
 
 #: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
 #: different from :data:`TAPED_BANKS`' address order. The value is a permutation
@@ -5303,6 +5329,28 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: 295x269 both ways.
 TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
     ("deadman-3d", "taped"): (3, 0, 1, 2),
+    # **Re-derived, not copied.** hires has no `TAPED_BANKS` entry, so it takes
+    # `taped_plan`'s uniform quarters `(226, 226, 226, 223)` rather than
+    # `deadman-3d`'s hand-cut `(256, 195, 64, 85)`, and its tape is 902 slots
+    # with a completely different middle (240 billboard words, 66 numerals, a
+    # 128-slot ZBUF). Measured on the same abstract wire, differencing a
+    # four-frame run against the boot round
+    # (`scratch/deadman3d-opt/hires_banks.py`) — 16,557 reads and 6,223 writes
+    # a gameplay frame:
+    #
+    #     bank  range        reads            writes
+    #      0     1.. 226      938   5.67%         0   0.00%
+    #      1   227.. 452      550   3.32%         2   0.04%
+    #      2   453.. 678       36   0.22%         7   0.11%
+    #      3   679.. 901   15,032  90.79%     6,214  99.85%
+    #
+    # Bank 3 holds the ZBUF, CMD and every per-frame scalar, and at 128x96 the
+    # scalar traffic doubles against the map traffic — so hires is *more*
+    # lopsided than `deadman-3d`, not less. The traffic order comes out the same
+    # permutation for a different reason, and `gate_chain` accepts it (each gate
+    # still peels an end). Mean gates walked: 2.76 -> **0.13** a read and
+    # 3.00 -> **0.00** a write, against `deadman-3d`'s 2.80 -> 1.15.
+    ("deadman-3d_hires", "taped"): (3, 0, 1, 2),
 }
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).

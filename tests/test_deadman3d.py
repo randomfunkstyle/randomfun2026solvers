@@ -1215,8 +1215,16 @@ def test_the_compact_gate_is_keyed_by_tier_and_only_the_taped_tier_takes_it() ->
     keyed at all so that the men-v3 machine, which shares the slug, cannot pick
     the flag up. The deletion is worth ~2 ticks a gate plus the bank's own arm.
     """
-    assert machine.TAPED_COMPACT_GATE == {("deadman-3d", "taped")}
-    # not the slug: the canonical build must not see it
+    assert machine.TAPED_COMPACT_GATE == {
+        ("deadman-3d", "taped"),
+        # hires rides the same tier and the spacers are a property of the gate
+        # ROOM, not of the program, so the deletion transfers unchanged: the
+        # store block goes 224x63 -> 224x58 there too, and those five rows come
+        # straight off the machine (496x409 -> 496x404 before the fold was
+        # re-swept onto them).
+        ("deadman-3d_hires", "taped"),
+    }
+    # not the slug: the canonical (men-v3) builds of both must not see it
     assert all(tier == "taped" for _slug, tier in machine.TAPED_COMPACT_GATE)
 
 
@@ -1232,7 +1240,12 @@ def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -
     """
     from randomfun2026solvers.memory_taped import gate_chain
 
-    assert machine.TAPED_BANK_ORDER == {("deadman-3d", "taped"): (3, 0, 1, 2)}
+    from randomfun2026solvers.memory_taped import taped_plan
+
+    assert machine.TAPED_BANK_ORDER == {
+        ("deadman-3d", "taped"): (3, 0, 1, 2),
+        ("deadman-3d_hires", "taped"): (3, 0, 1, 2),
+    }
     assert all(tier == "taped" for _slug, tier in machine.TAPED_BANK_ORDER)
     sizes = list(machine.TAPED_BANKS["deadman-3d"])
     assert sizes == [256, 195, 64, 85]
@@ -1241,6 +1254,19 @@ def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -
     chain = gate_chain(sizes, order)
     assert chain[0] == (3, sum(sizes))
     assert [top for _k, top in chain[1:]] == [None, None, None]
+
+    # hires' order is the same permutation for a *different* reason, and the
+    # thing that makes it non-transferable is that its banks are not these: it
+    # has no ``TAPED_BANKS`` entry, so it takes uniform quarters of a 902-slot
+    # tape. Measured (scratch/deadman3d-opt/hires_banks.py) its bank 3 —
+    # 679..901, the ZBUF, CMD and every per-frame scalar — takes 90.8% of reads
+    # and 99.9% of writes, so descending traffic is (3, 0, 1, 2) here too.
+    assert "deadman-3d_hires" not in machine.TAPED_BANKS
+    hires_sizes = taped_plan(902, 4)
+    assert hires_sizes == [226, 226, 226, 223]
+    hires_chain = gate_chain(hires_sizes,
+                             machine.TAPED_BANK_ORDER[("deadman-3d_hires", "taped")])
+    assert hires_chain[0] == (3, sum(hires_sizes))
 
 
 @slow
