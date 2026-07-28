@@ -17,6 +17,7 @@ across the seam.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -318,6 +319,74 @@ def test_the_machine_paints_what_the_model_says_across_the_seam(wad_installed) -
     view = frames[1]
     assert sum(1 for x in range(128)
                if view[47][x] not in "08" and view[48][x] not in "08") > 20
+
+
+def test_the_billboard_tables_are_two_words_a_column_and_padded_to_them() -> None:
+    """Resolution-only: why the hi-res sprite table is 240 words, not 120.
+
+    A packed column is a nibble a row and ``16**15`` is the last power inside 64
+    bits, so 14 rows is the ceiling and every doubled band (28, 18, 10) is past
+    it.  ``pack_sprite_columns_wide`` pads each column to a whole number of
+    14-row slices, which is what lets ONE chain serve all three bands.
+    """
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers import wadimport as wi
+
+    g = d3.GEOM128
+    assert g.mon_bands == ((20, 28), (12, 18), (8, 10)) == wi.HIRES_BANDS
+    assert (g.mon_words, g.mon_span) == (2, 28)
+    assert g.mon_stride == 40 and g.mon_band_off == (0, 20, 32)
+    assert d3.GEOM64.mon_words == 1 and d3.GEOM64.mon_stride == d3.MON_STRIDE
+    # a 10-row band padded to 28 is two words whose HIGH slice is all zeroes —
+    # the transparent padding the shared chain walks through
+    grid = [[1] * 3 for _ in range(10)]
+    words = wi.pack_sprite_columns_wide(grid, 2)
+    assert len(words) == 6
+    assert [words[1], words[3], words[5]] == [0, 0, 0]
+
+
+@needs_iwad
+def test_a_billboard_paints_and_the_machine_agrees_across_both_seams(
+        wad_installed) -> None:
+    """The acceptance test for the 2x billboards: a monster is actually THERE.
+
+    ``deadman3d.WALK`` is Freedoom's choreography and id's E1M1 puts its three
+    kept monsters twenty-seven cells from the spawn, so that walk never renders
+    one — which is exactly how the port could have looked finished while
+    painting nothing.  :data:`deadman3d_hires.WALK` is this level's own route:
+    it stands the sergeant in the near 20x28 band under the crosshair, across
+    the seam at x = 64 *and* the seam at y = 48, shoots him, and holds on the
+    corpse.
+    """
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers.lm1 import display
+    from randomfun2026solvers.lm1.asm import assemble
+    from randomfun2026solvers.lm1.emulator import Emulator, Round
+
+    hires = wad_installed
+    prog = assemble(hires.hires_source(), name="deadman-3d_hires")
+    res = Emulator(prog).run([Round(input=tuple(hires.input_words(hires.WALK)))],
+                             max_instructions=2_000_000_000)
+    frames = display.tiled_frames_from_writes(res.wall_writes)
+    want = [hires.title_frame()] + hires.frames_for_commands(hires.WALK)
+    assert frames == want
+
+    # What the billboards are worth, measured against the same walk with them
+    # switched off: the ONLY difference between the two renders is the monsters.
+    bare = d3.frames_for_commands(list(hires.WALK),
+                                  dataclasses.replace(d3.GEOM128, sprites=False))
+    painted = {k for k in range(1, len(want))
+               if any(want[k][r] != bare[k - 1][r] for r in range(96))}
+    assert painted, "no frame in the hi-res walk contains a monster"
+    assert {24, 25, 26} <= painted  # the shot, and two beats on the corpse
+
+    # and the one that matters spans both seams: rows either side of 48 and
+    # columns either side of 64 all carry sprite pixels
+    view = want[24]
+    cells = [(r, x) for r in range(96) for x in range(128)
+             if view[r][x] != bare[23][r][x]]
+    assert min(r for r, _x in cells) < 48 <= max(r for r, _x in cells)
+    assert min(x for _r, x in cells) < 64 <= max(x for _r, x in cells)
 
 
 def test_composition_refuses_a_frame_stitched_from_mismatched_halves() -> None:

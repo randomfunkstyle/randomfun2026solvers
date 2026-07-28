@@ -4864,9 +4864,16 @@ STORE_OPS: dict[str, int] = {"deadman-3d": 1, "deadman-3d_hires": 1}
 #: floors the width at 391, and 10-wide crosses rom-width against height
 #: at the 60-row fold.
 STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
-                                           # 670 slots against 600: one more column
-                                           # of the same 60-deep block.
-                                           "deadman-3d_hires": (12, 60)}
+                                           # The hi-res tape passed 828 slots when
+                                           # the billboards went two words a column
+                                           # (240 packed sprite words against 60) and
+                                           # the frame grew a 128-slot ZBUF; 12x60 =
+                                           # 720 no longer covers it, 14x60 = 840
+                                           # does, at the same 60-row fold. This tier
+                                           # is the fallback here — `deadman3d_hires`
+                                           # builds on the **taped** store, whose
+                                           # banks size themselves from TAPE_SIZE.
+                                           "deadman-3d_hires": (14, 60)}
 
 #: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
 #: 600 slots as banked pipe tapes behind a gate chain. This tier exists for the

@@ -250,7 +250,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from randomfun2026solvers.lm1.emulator import floor_div, sign_mod
@@ -300,6 +300,16 @@ WALL_H = 2
 NEAR_D = 16 * UNITS
 
 
+#: DOOM's status bar and its big numerals, in the bar's own pixels — the same
+#: numbers as ``wadimport.STBAR_W``/``STBAR_H``/``DIGIT_W``/``DIGIT_H``, and the
+#: tests pin them equal.  They are here so :class:`Geom` can answer how big a
+#: numeral is at a given strip without importing the art pipeline.
+STBAR_W, STBAR_H = 320, 32
+DIGIT_W, DIGIT_H = 14, 16
+#: ``STTNUM0``..``STTNUM9`` and ``STTPRCNT``.
+DIGIT_GLYPHS = 11
+
+
 @dataclass(frozen=True)
 class Geom:  # noqa: PLW1641
     """The screen the renderer and the generator are aiming at.
@@ -326,17 +336,20 @@ class Geom:  # noqa: PLW1641
     tile_h: int = 48
     #: which :data:`ART_REGISTRY` bundle the screen-space tables come from
     art: str = "committed"
-    #: Whether the monster billboards are painted at all.
-    #:
-    #: Off at 128x96, and the reason is the sprite *packing*, not the screen: a
-    #: billboard is one tape word per sprite column with a nibble per row, so a
-    #: column may be at most 15 rows before ``16**h`` leaves 64 bits
-    #: (:func:`_check_sprites` caps it at 14).  The committed bands are 14, 9 and
-    #: 5 rows tall; doubling them for a doubled screen needs 28 and 18, which do
-    #: not fit — a 2x billboard is a two-word column and a re-cut nibble chain,
-    #: which is its own piece of work.  Painting them at 1x on a 2x screen was
-    #: the alternative and it looks exactly as wrong as it sounds.
+    #: Whether the monster billboards are painted at all.  On everywhere now;
+    #: kept as a switch because it is the one part of a frame that can be turned
+    #: off without changing anything else, which is what made bringing the 2x
+    #: billboards up separately possible.
     sprites: bool = True
+    #: Whether the live readouts are DOOM's **numerals** rather than bar fills.
+    #:
+    #: The strip is ``hud_h`` rows and a ``STTNUM`` glyph is 16 of the bar's own
+    #: 32, so a numeral is ``hud_h / 2`` cells tall: 4 on the committed 8-row
+    #: strip, where a digit is unreadable and the well carries a proportional
+    #: bar instead (:data:`AMMO_BAR_COLS`), and 8 on the doubled one, where it
+    #: is DOOM's actual number.  Off by default for that reason, and because the
+    #: committed machine's assembly must not move.
+    digits: bool = False
 
     @property
     def mid(self) -> int:
@@ -376,6 +389,74 @@ class Geom:  # noqa: PLW1641
         return self.tiles != (1, 1)
 
     @property
+    def mon_scale(self) -> int:
+        """How much bigger a billboard is here than on the committed screen.
+
+        A billboard's size is a *projection*, so it scales with the viewport
+        exactly as a wall does — which is why :data:`BAND_T`, the depth
+        thresholds that pick a band, need no scaling at all: they are
+        ``lh_num / 2 // midpoint_height`` and both halves double together.
+        """
+        return self.width // 64
+
+    @property
+    def mon_bands(self) -> tuple[tuple[int, int], ...]:
+        """``(width, height)`` per scale band, near to far."""
+        k = self.mon_scale
+        return tuple((w * k, h * k) for w, h in MON_BANDS)
+
+    @property
+    def mon_words(self) -> int:
+        """Packed words per sprite column.
+
+        One nibble per row and ``16**15`` is the last power inside 64 bits, so a
+        column taller than 14 rows is more than one word.  The columns are cut
+        into 14-row slices from the bottom (``wadimport.pack_sprite_columns_wide``)
+        and padded to a whole number of them, which is what lets one paint chain
+        serve every band: the short ones walk into transparent padding and the
+        chain already branches over a 0 nibble.
+        """
+        return -(-max(h for _w, h in self.mon_bands) // 14)
+
+    @property
+    def mon_span(self) -> int:
+        """Rows one chain walks: ``14 * mon_words``, padding included."""
+        return 14 * self.mon_words
+
+    @property
+    def mon_band_off(self) -> tuple[int, ...]:
+        """Column offset of each band inside a sprite's stripe."""
+        offs, acc = [], 0
+        for w, _h in self.mon_bands:
+            offs.append(acc)
+            acc += w
+        return tuple(offs)
+
+    @property
+    def mon_stride(self) -> int:
+        """Columns per sprite stripe — species 0, species 1, then the corpse."""
+        return sum(w for w, _h in self.mon_bands)
+
+    @property
+    def dig_box(self) -> tuple[int, int]:
+        """``(w, h)`` of one ``STTNUM`` numeral in strip cells.
+
+        The strip is as wide as the frame and DOOM's bar is
+        :data:`STBAR_W` x :data:`STBAR_H`, so a :data:`DIGIT_W` x
+        :data:`DIGIT_H` numeral scales straight onto it: 6x8 at 128x16, 3x4 at
+        the committed 64x8 — which is the whole argument for :attr:`digits`.
+        The same arithmetic as ``wadimport.digit_box``, kept here so the tape
+        layout is answerable without an IWAD, and pinned equal by the tests.
+        """
+        return (round(DIGIT_W * self.width / STBAR_W),
+                round(DIGIT_H * self.hud_h / STBAR_H))
+
+    @property
+    def dig_words(self) -> int:
+        """Words in the ``DIGB`` table: one per column of each of the 11 glyphs."""
+        return DIGIT_GLYPHS * self.dig_box[0] if self.digits else 0
+
+    @property
     def hud_h(self) -> int:
         """Rows of status bar below the viewport."""
         return self.height - self.h3d
@@ -406,8 +487,7 @@ GEOM64 = Geom(width=WIDTH, height=HEIGHT, h3d=H3D, tile_w=WIDTH, tile_h=HEIGHT)
 
 #: The tiled machine: 128x96 as a 2x2 of 64x48 panels, an 80-row viewport over a
 #: 16-row bar.  ``lm1/d3_router.py`` is the hardware; ``deadman3d_hires`` drives it.
-GEOM128 = Geom(width=128, height=96, h3d=80, tile_w=64, tile_h=48,
-               art="hires", sprites=False)
+GEOM128 = Geom(width=128, height=96, h3d=80, tile_w=64, tile_h=48, art="hires")
 
 
 @dataclass(frozen=True)
@@ -431,11 +511,23 @@ class Art:
     gun_fire: list[tuple[int, int, str]]
     faces: dict[str, list[tuple[int, int, str]]]
     face_box: tuple[int, int, int, int]  # (col, row, w, h), STBAR's own inset
+    sprites: list[int]
     bar_rows: tuple[int, int]
     ammo_cols: tuple[int, int]
     health_cols: tuple[int, int]
     ammo_per_px: int
     health_per_px: int
+    #: DOOM's own ``STTNUM``/``STTPRCNT`` numerals, packed one word per glyph
+    #: column exactly like :attr:`sprites` (a nibble a row, bottom row first, 0
+    #: transparent).  Empty on the committed screen, where the strip is 8 rows
+    #: and a numeral would be 3x4 — see :attr:`Geom.digits`.
+    digits: list[int] = field(default_factory=list)
+    #: ``(w, h)`` of one numeral in cells (``wadimport.digit_box``).
+    dig_box: tuple[int, int] = (0, 0)
+    #: ``(col, bottom_row)`` per glyph slot in screen coordinates, in paint
+    #: order: ammo's three digits, health's three, then the percent sign
+    #: (``wadimport.digit_slots``).
+    dig_slots: tuple[tuple[int, int], ...] = ()
 
 
 #: Art bundles other than the committed one, keyed by :attr:`Geom.art`.
@@ -466,6 +558,7 @@ def art_for(geom: Geom = GEOM64) -> Art:
         faces={"healthy": FACE_HEALTHY, "hurt": FACE_HURT,
                "bloody": FACE_BLOODY, "grim": FACE_GRIM},
         face_box=(FACE_COL, FACE_ROW, FACE_W, FACE_H),
+        sprites=_SPR_WORDS,
         bar_rows=BAR_ROWS,
         ammo_cols=AMMO_BAR_COLS,
         health_cols=HEALTH_BAR_COLS,
@@ -1223,7 +1316,12 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
     :func:`frames_for_commands`): the corpse appears from the next frame.
     """
     if not geom.sprites:
-        return 0  # see Geom.sprites: the billboards do not survive a 2x screen
+        return 0
+    bands, band_off = geom.mon_bands, geom.mon_band_off
+    stride, wpc, span = geom.mon_stride, geom.mon_words, geom.mon_span
+    sprites = art_for(geom).sprites
+    WIDTH, H3D, MID = geom.width, geom.h3d, geom.mid  # noqa: N806 — the screen's
+    CROSSHAIR = geom.crosshair  # noqa: N806
     det = planeX * dirY - dirX * planeY  # Q20 — the asm's per-frame prologue
     assert det > 0, f"DET {det} must be positive (plane = dir rotated -90 deg)"
     if hp is None:
@@ -1247,15 +1345,16 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
         if ty - MON_FAR >= 0:
             continue                                 # beyond the far cull
         band = 0 if ty < BAND_T[0] else (1 if ty < BAND_T[1] else 2)
-        w_band = MON_BANDS[band][0]
-        sx = div(txn * 32, tyn) + 32                 # centre screen column
+        w_band = bands[band][0]
+        # the projected centre column: div(txn * (WIDTH/2), tyn) + WIDTH/2
+        sx = div(txn * (WIDTH // 2), tyn) + WIDTH // 2
         sx0 = sx - div(w_band, 2)
         sx1 = sx0 + w_band - 1
         if sx1 < 0:
             continue                                 # off the left edge
         if sx0 > WIDTH - 1:
             continue                                 # off the right edge
-        bot = div(div(WALL_H * H3D * UNITS, ty), 2) + MID  # the floor line
+        bot = div(div(geom.lh_num, ty), 2) + MID     # the floor line
         if bot > H3D - 1:
             bot = H3D - 1                            # near clamp: slides up whole
         if hp[i] == 0:                               # a corpse (M7b)
@@ -1265,7 +1364,7 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
             cid = i + 1                              # alive: index + 1
             frame = sp
         cand = {"ty": ty, "sx0": sx0, "sx1": sx1,
-                "base": frame * MON_STRIDE + MON_BAND_OFF[band],
+                "base": frame * stride + band_off[band],
                 "bot": bot, "band": band, "idx": cid}
         # Far-first 3-slot insertion, strict < (the asm's branch ladder).
         if not ty < slots[0]["ty"]:
@@ -1282,7 +1381,6 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
     for s in slots:                                  # slot 0 first: back to front
         if not s["ty"] < MON_FAR:
             continue                                 # an empty slot paints nothing
-        h_band = MON_BANDS[s["band"]][1]
         x = s["sx0"]
         ptr = 0
         while x <= s["sx1"]:
@@ -1295,9 +1393,19 @@ def _paint_monsters(cols: list[list[int]], zbuf: list[int],
             if s["ty"] < zbuf[x]:                    # the wall depth test
                 if live and x == CROSSHAIR and s["idx"] != 0:
                     hit = s["idx"]                   # far -> near: nearest wins
-                q = _SPR_WORDS[s["base"] + ptr]
+                # The bottom-up nibble walk, `span` rows of it whatever the
+                # band is: a column is padded to a whole number of 14-row
+                # slices and a 0 nibble is transparent, so a short band simply
+                # walks into its own padding. That is what lets ONE chain in
+                # the generated asm serve every band (see Geom.mon_words).
+                col_at = (s["base"] + ptr) * wpc
                 row = s["bot"]
-                for _j in range(h_band):             # bottom-up nibble walk
+                q = sprites[col_at]
+                for j in range(span):
+                    if row < 0:
+                        break
+                    if j and j % 14 == 0:            # this slice is spent
+                        q = sprites[col_at + j // 14]
                     c = sign_mod(q, 16)
                     q = div(q, 16)
                     if c != 0:
@@ -1658,7 +1766,7 @@ def title_words(geom: Geom = GEOM64) -> list[int]:
 
 
 # ── boot data and the cases file ─────────────────────────────────────────────
-def preamble_words() -> list[int]:
+def preamble_words(geom: Geom = GEOM64) -> list[int]:
     """Round 0's data burst, in exact tape order (slots 1..451; see docstring).
 
     The M5 order (map, POW16, headings, nukage plane, the seven named spawn
@@ -1678,7 +1786,7 @@ def preamble_words() -> list[int]:
         + [SPAWN.posX, SPAWN.posY, SPAWN.heading, dirX, dirY, planeX, planeY]
         + _MON_WORDS
         + _MHP_WORDS
-        + _SPR_WORDS
+        + art_for(geom).sprites
     )
 
 
@@ -1690,7 +1798,7 @@ def input_words(cmds: list[int], geom: Geom = GEOM64) -> list[int]:
     a 128x96 title is a different number of runs from a 64x48 one, and the CPU's
     title loop is generated against exactly this list.  Rebuild it, never reuse
     the other machine's."""
-    return preamble_words() + title_words(geom) + list(cmds)
+    return preamble_words(geom) + title_words(geom) + list(cmds)
 
 
 def frames_for_commands(cmds: list[int], geom: Geom = GEOM64) -> list[list[str]]:
@@ -1759,7 +1867,7 @@ def cases_json(cmds: list[int], geom: Geom = GEOM64,
     and no program output.
     """
     frames = frames_for_commands(cmds, geom)
-    boot = [str(w) for w in preamble_words() + title_words(geom)]
+    boot = [str(w) for w in preamble_words(geom) + title_words(geom)]
     rounds = [{"in": boot, "out": [], "frames": [title_frame(geom)]}]
     for k, cmd in enumerate(cmds):
         rounds.append({
@@ -1802,7 +1910,11 @@ _SCALARS = (
 #: panel above the seam and the panel below it), and the wall run is clipped
 #: once per tile — see the ``send:`` block.  Appended rather than interleaved so
 #: every committed slot number stays where it is.
-_TILE_SCALARS = ("TXT", "TSELT", "TSELB", "TTE", "TBS", "TBE")
+_TILE_SCALARS = ("TXT", "TSELT", "TSELB", "TTE", "TBS", "TBE",
+                 # the billboard chain: the second 14-row slice of the
+                 # column, the panel-local row it is climbing, that
+                 # panel's router selector, and the column inside it
+                 "Q2", "WROW", "WSEL", "WXT")
 
 
 def _scalars_for(geom: Geom) -> tuple[str, ...]:
@@ -1835,15 +1947,22 @@ def tape_slots(geom: Geom = GEOM64) -> dict[str, int]:
         "POSX": 353, "POSY": 354, "HDG": 355, "DIRX": 356, "DIRY": 357,
         "PLANEX": 358, "PLANEY": 359,
         "MONB": 360, "MHPB": 360 + n_mon, "SPRB": 360 + 2 * n_mon,
-        "ZBUF": len(preamble_words()) + 1,
     }
-    assert slots["SPRB"] + 3 * MON_STRIDE == slots["ZBUF"]
+    # Every block after SPRB is sized by *geometry*, not by the art itself, so
+    # the layout is answerable without an IWAD — which the resolution-only tests
+    # rely on. :func:`deadman3d_source` asserts it against the real preamble.
+    top = slots["SPRB"] + 3 * geom.mon_stride * geom.mon_words
+    if geom.digits:
+        slots["DIGB"] = top
+        top += geom.dig_words
+    slots["ZBUF"] = top
     for i, name in enumerate(_scalars_for(geom)):
         slots[name] = slots["ZBUF"] + geom.width + i
     return slots
 
 
-def _sprite_phase_asm(slots: dict[str, int], n_mon: int, codes: dict[str, int]) -> list[str]:
+def _sprite_phase_asm(slots: dict[str, int], n_mon: int, codes: dict[str, int],
+                      geom: Geom = GEOM64) -> list[str]:
     """The sprite phase, lowered line for line from :func:`_paint_monsters`.
 
     Selection loop over the ``MONB`` table (cull chain, band pick, the live
@@ -1861,8 +1980,36 @@ def _sprite_phase_asm(slots: dict[str, int], n_mon: int, codes: dict[str, int]) 
     one HP decrement runs after the last slot has painted — the frame that
     kills still shows the living sprite.
     """
-    lh_num = WALL_H * H3D * UNITS
+    lh_num = geom.lh_num
     run1 = 8 * 16 + codes["RUN"]  # a 1-pixel RUN word is 8*(16 + c) + C_RUN
+    WIDTH, H3D, MID = geom.width, geom.h3d, geom.mid  # noqa: N806 — the screen's
+    CROSSHAIR = geom.crosshair  # noqa: N806
+    MON_STRIDE = geom.mon_stride  # noqa: N806
+    bands, band_off = geom.mon_bands, geom.mon_band_off
+    span, wpc = geom.mon_span, geom.mon_words
+    half = WIDTH // 2
+    # CBASE is an ADDRESS and the band tables are in COLUMNS, so the scale from
+    # one to the other is `wpc` — one line, and the only one, because at the
+    # committed screen a column is one word and the scale is the identity.
+    colscale = "" if wpc == 1 else f"        MULI {wpc}             ; a column is {wpc} words\n"
+    TW, TH = geom.tile_w, geom.tile_h  # noqa: N806
+    sel: list[int] = []
+    up = 0
+    if geom.tiled:
+        from randomfun2026solvers.lm1 import d3_router
+
+        sel = [d3_router.SEL[f"T{t}"] for t in range(4)]
+        # A billboard climbing off a bottom panel lands on the one above it, and
+        # T2 -> T0 and T3 -> T1 happen to be the same step in selector space —
+        # which is what lets the crossing be one SUBI instead of a branch. It is
+        # a property of the router's leaf assignment, so it is checked, not
+        # assumed.
+        up = sel[2] - sel[0]
+        if up != sel[3] - sel[1] or up <= 0:
+            raise ValueError(
+                f"the panel-above step is not uniform ({sel}); the billboard "
+                "chain's seam crossing needs a branch per side"
+            )
     lines = f"""
 ; ── the sprite phase (M7a): static occluded monster billboards ───────────────
 ; Selection first: every MONB word is unpacked and run down the cull chain
@@ -1950,35 +2097,35 @@ mband:  LD  CTY
         LD  CTY
         SUBI {BAND_T[1]}
         BRN mb1
-        LDI 2               ; the far band: 4x5
+        LDI 2               ; the far band: {bands[2][0]}x{bands[2][1]}
         ST  CBAND
-        LDI 16
+        LDI {band_off[2]}
         ST  COFF
-        LDI 2
+        LDI {bands[2][0] // 2}
         ST  CHW
-        LDI 3
+        LDI {bands[2][0] - 1}
         ST  CW1
         JMP msx
-mb0:    LDI 0               ; the near band: 10x14
+mb0:    LDI 0               ; the near band: {bands[0][0]}x{bands[0][1]}
         ST  CBAND
         ST  COFF
-        LDI 5
+        LDI {bands[0][0] // 2}
         ST  CHW
-        LDI 9
+        LDI {bands[0][0] - 1}
         ST  CW1
         JMP msx
-mb1:    LDI 1               ; the mid band: 6x9
+mb1:    LDI 1               ; the mid band: {bands[1][0]}x{bands[1][1]}
         ST  CBAND
-        LDI 10
+        LDI {band_off[1]}
         ST  COFF
-        LDI 3
+        LDI {bands[1][0] // 2}
         ST  CHW
-        LDI 5
+        LDI {bands[1][0] - 1}
         ST  CW1
 msx:    LD  TXN
-        MULI 32
+        MULI {half}
         DIV TYN
-        ADDI 32             ; SX = 32 + 32*TXN/TYN (the DETs cancel)
+        ADDI {half}             ; SX = {half} + {half}*TXN/TYN (the DETs cancel)
         SUB CHW
         ST  CSX0            ; first screen column (ST preserves ACC)
         ADD CW1
@@ -2011,7 +2158,7 @@ mdead:  LDI 0
         LDI 2               ; but never a hit candidate again — and it paints
 mstrip: MULI {MON_STRIDE}   ; from the shared corpse stripe (frame 2)
         ADD COFF
-        ADDI SPRB
+{colscale}        ADDI SPRB
         ST  CBASE           ; the band's column words start here
 ; the 3-slot far-first insertion: nearest three kept, slot 0 = farthest;
 ; strict < everywhere, so ties keep the earlier THINGS index
@@ -2168,6 +2315,8 @@ mchit:  LD  SLOT
         LDA                 ; the slot's hit id — 0 for a corpse
         BRZ mcpix
         ST  HIT
+""".splitlines()
+    lines += f"""\
 mcpix:  LD  WPTR
         LDA
         ST  Q               ; the whole sprite column in one packed word
@@ -2184,16 +2333,55 @@ mcpix:  LD  WPTR
         JMP chain_h5
 mch0:   JMP chain_h14
 mch1:   JMP chain_h9
+""".splitlines() if not geom.tiled else f"""\
+mcpix:  LD  WPTR
+        LDA
+        ST  Q               ; slice 0: the column's bottom 14 rows
+        LD  WPTR
+        ADDI 1
+        LDA
+        ST  Q2              ; slice 1: the 14 above them
+        ; Which panel the bottom pixel is on, and where in it. The chain climbs
+        ; from here, so it may cross the seam at row {TH} once — never twice, and
+        ; never off the top: BOT >= {MID} and the walk is {span} rows.
+        LD  WBOT
+        SUBI {TH}
+        BRN mcup            ; BOT < {TH}: the bottom pixel is already on a top panel
+        ST  WROW
+        LD  WX
+        SUBI {TW}
+        BRN mcbl
+        LDI {sel[3]}
+        JMP mcgo
+mcbl:   LDI {sel[2]}
+        JMP mcgo
+mcup:   LD  WBOT
+        ST  WROW
+        LD  WX
+        SUBI {TW}
+        BRN mctl
+        LDI {sel[1]}
+        JMP mcgo
+mctl:   LDI {sel[0]}
+mcgo:   ST  WSEL
+        LD  WX
+        MODI {TW}
+        ST  WXT             ; the column inside its own panel
 """.splitlines()
-    # The shared unrolled chain: 14 blocks, entries 0 (h14) / 5 (h9) / 9 (h5).
-    for j in range(14):
-        entry = {0: "chain_h14:", 5: "chain_h9:", 9: "chain_h5:"}.get(j)
-        note = {0: " ; 14 blocks: the near band's strip",
-                5: "  ; enter here for the mid band's 9",
-                9: "  ; enter here for the far band's 5"}.get(j, "")
-        if entry:
-            lines.append(f"{entry}{note}")
-        lines += f"""\
+    # The shared unrolled chain. On one panel it is 14 blocks with three entry
+    # points, one per band height. On the wall it is {span} blocks with ONE
+    # entry: a column is padded to a whole number of 14-row slices, so a short
+    # band walks into its own transparent padding and the chain's existing
+    # branch over a 0 nibble is all the dispatch it needs.
+    for j in range(span):
+        if not geom.tiled:
+            entry = {0: "chain_h14:", 5: "chain_h9:", 9: "chain_h5:"}.get(j)
+            note = {0: " ; 14 blocks: the near band's strip",
+                    5: "  ; enter here for the mid band's 9",
+                    9: "  ; enter here for the far band's 5"}.get(j, "")
+            if entry:
+                lines.append(f"{entry}{note}")
+            lines += f"""\
         LD  Q
         MODI 16
         BRZ csk{j}            ; nibble 0: a transparent pixel
@@ -2210,6 +2398,50 @@ csk{j}:   LD  Q
         LD  ADDRV
         SUBI 512
         ST  ADDRV           ; up one panel row (64 cells * 8)
+""".splitlines()
+            continue
+        if j == 0:
+            lines.append(f"chain:  ; one entry, {span} blocks (see Geom.mon_words)")
+        if j and j % 14 == 0:
+            lines += f"""\
+        LD  Q2
+        ST  Q               ; slice {j // 14}: the packed word is spent, take the next
+""".splitlines()
+        lines += f"""\
+        LD  WROW
+        MULI {TW}
+        ADD WXT
+        MULI 8
+        ADDI C_CURS
+        MULI 8
+        ADD WSEL
+        ST  ADDRV           ; this pixel's router CURS word, panel and all
+        LD  Q
+        MODI 16
+        BRZ csk{j}            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND
+        LD  TMP
+        MULI 8
+        ADDI {run1}
+        MULI 8
+        ADD WSEL
+        SND                 ; RUN word: 1 pixel of the nibble's colour
+csk{j}:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  WROW
+        BRZ ccr{j}            ; row 0: the next step is on the panel above
+        SUBI 1
+        ST  WROW
+        JMP cdn{j}
+ccr{j}:   LDI {TH - 1}
+        ST  WROW
+        LD  WSEL
+        SUBI {up}
+        ST  WSEL            ; T2 -> T0 and T3 -> T1 are the same step
+cdn{j}:
 """.splitlines()
     lines += """\
 mcadv:  INCM WPTR
@@ -2237,6 +2469,14 @@ mhitap: LD  HIT
         LD  TMP2
         MOVA TMP            ; store[MHPB + HIT - 1] -= 1
 """.splitlines()
+    if wpc > 1:
+        # A column is `wpc` packed words now, so the cursor over them steps by
+        # that rather than by one. Patched rather than branched into the block
+        # above because it is one line of a hundred and the rest is identical.
+        i = lines.index("mcadv:  INCM WPTR")
+        lines[i:i + 1] = ["mcadv:  LD  WPTR",
+                          f"        ADDI {wpc}",
+                          f"        ST  WPTR            ; one column on = {wpc} words"]
     return lines
 
 
@@ -2602,7 +2842,7 @@ def deadman3d_source(geom: Geom = GEOM64) -> str:
     CROSSHAIR = geom.crosshair  # noqa: N806
     art = art_for(geom)
     slots = tape_slots(geom)
-    first_free = len(preamble_words()) + 1  # 452: the boot loop's stop address
+    first_free = len(preamble_words(geom)) + 1  # 452: the boot loop's stop address
     assert first_free == slots["ZBUF"], "the boot data ends where ZBUF begins"
     n_mon = len(MONSTERS)
     machine_tape = max(slots.values()) + 1  # the tape the registry must cover
@@ -2651,7 +2891,7 @@ def deadman3d_source(geom: Geom = GEOM64) -> str:
                "0 = none",
         "MONB": f"..{slots['MONB'] + max(n_mon - 1, 0):<3} monster table (M7a): ((cx*64)+cy)*2 + species",
         "MHPB": f"..{slots['MHPB'] + max(n_mon - 1, 0):<3} initial monster HP (M7b's hit ledger)",
-        "SPRB": f"..{slots['SPRB'] + 3 * MON_STRIDE - 1:<3} packed sprite columns: nibble 0 = bottom px, 0 = clear",
+        "SPRB": f"..{slots['SPRB'] + 3 * geom.mon_stride * geom.mon_words - 1:<3} packed sprite columns: nibble 0 = bottom px, 0 = clear",
         "ZBUF": f"..{slots['ZBUF'] + WIDTH - 1:<3} per-column wall depth, rewritten whole every frame",
         "DET": "planeX*dirY - dirX*planeY (Q20) — the projection divisor, > 0",
         "MI": "the selection loop's monster index",
@@ -2700,6 +2940,10 @@ def deadman3d_source(geom: Geom = GEOM64) -> str:
             "TTE": "the wall run's last row on the top panel (clipped at the seam)",
             "TBS": "the wall run's first row on the bottom panel",
             "TBE": "its last row; -1 when the wall ended above the seam",
+            "Q2": "the billboard column's second 14-row slice",
+            "WROW": "the row the billboard chain is climbing, inside its panel",
+            "WSEL": "that panel's router selector",
+            "WXT": f"the billboard column inside its panel: x mod {geom.tile_w}",
         }
     lines = [
         "; deadman-3d — GENERATED from randomfun2026solvers/deadman3d.py, do not hand-edit.",
@@ -2744,7 +2988,7 @@ def deadman3d_source(geom: Geom = GEOM64) -> str:
         "; inlined at its three sites (no stack, no calls): the two move-collision",
         "; tests and the DDA hit test.",
         "",
-        f"; ── tape slots (deadman3d.tape_slots(); slots 1..{len(preamble_words())} are the boot data) ──────",
+        f"; ── tape slots (deadman3d.tape_slots(); slots 1..{len(preamble_words(geom))} are the boot data) ──────",
     ]
     for name, addr in slots.items():
         lines.append(f".equ {name:<6} {addr:<4}         ; {equ_notes[name]}")
@@ -2777,7 +3021,7 @@ def deadman3d_source(geom: Geom = GEOM64) -> str:
         ]
         for arm in ("COL", "RUN", "CURS", "GUN", "GUNF", "COMMIT"):
             lines.append(f".equ C_{arm:<6} {codes[arm]}            ; {DoomUnit.ARM_NOTES[arm]}")
-    n_pre = len(preamble_words())
+    n_pre = len(preamble_words(geom))
     boot_full = (n_pre // 8) * 8  # the 8x-unrolled loop loads slots 1..boot_full
     addr_name = {v: k for k, v in slots.items()}
     lines += f"""
@@ -3316,7 +3560,7 @@ colnxt: INCM XCOL           ; ACC = the old column number
         BRZ spsel           ; that was column {WIDTH - 1}: the viewport is sent
         JMP colset
 """.splitlines()
-    lines += (_sprite_phase_asm(slots, n_mon, codes) if geom.sprites
+    lines += (_sprite_phase_asm(slots, n_mon, codes, geom) if geom.sprites
               else ["", "; ── no sprite phase: see Geom.sprites ──", "spsel:"])
     lines += _pistol_asm(geom, art)
     bg = hud_bg_runs()

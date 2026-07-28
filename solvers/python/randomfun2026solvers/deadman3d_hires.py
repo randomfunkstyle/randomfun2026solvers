@@ -38,15 +38,21 @@ Build it with::
 
     python -m randomfun2026solvers.deadman3d_hires --wad ~/DOOM1.WAD --build
 
-Not in this stage
------------------
+The monster billboards, and why they needed a re-cut
+----------------------------------------------------
 
-**The monster billboards.**  A billboard is one tape word per sprite column with
-a nibble per row, so a column is at most 15 rows before ``16**h`` leaves 64 bits.
-The committed bands are 14, 9 and 5 rows; doubling them needs 28 and 18, which do
-not fit a word — a 2x billboard is a two-word column and a re-cut nibble chain.
-:attr:`deadman3d.Geom.sprites` is the switch, off here, and the model and the
-machine agree about it: neither paints monsters.
+A billboard column is one tape word with a nibble per row, and ``16**15`` is the
+last power inside 64 bits — so 14 rows is the ceiling.  The committed bands are
+14, 9 and 5 rows tall; doubled for a doubled screen they are 28, 18 and 10, and
+none of the three fits a word.  ``wadimport.pack_sprite_columns_wide`` cuts a
+column into 14-row slices from the bottom and **pads every band to a whole
+number of them**, which is what buys the machine its one shared paint chain:
+a short band walks up into its own transparent padding and the chain's existing
+branch over a 0 nibble is all the dispatch it needs.  So the hi-res table is
+240 words (40 columns x 2 words x 3 stripes) against the committed 60, the
+chain is 28 blocks with one entry against 14 with three, and each block also
+carries the panel arithmetic — a 28-row billboard standing on the floor line
+crosses the seam at row 48, so the chain steps its selector as it climbs.
 """
 
 from __future__ import annotations
@@ -64,6 +70,8 @@ __all__ = [
     "GEOM",
     "LOCAL_DIR",
     "SCALE",
+    "WALK",
+    "WALK_CHORDS",
     "build_local",
     "cases_json",
     "frames_for_commands",
@@ -86,6 +94,29 @@ GEOM: Geom = GEOM128
 #: scale by: the status wells and the bar rows are geometry, not pictures.
 SCALE = 2
 
+#: This family's own demo walk, and it has to be its own: ``deadman3d.WALK`` was
+#: choreographed against **Freedoom's** E1M1, whose imps queue up a corridor two
+#: cells from the route.  id's E1M1 is a different level with three kept
+#: monsters — cells (54, 41), (56, 30) and (55, 18) — and the marine spawns at
+#: (27, 30) facing away from all of them, twenty-seven cells west of the nearest,
+#: which is more than twice ``MON_FAR``.  Walk ``deadman3d.WALK`` here and not one
+#: frame in fifty-seven contains a billboard.
+#:
+#: So the route below was searched rather than composed: the shortest sequence of
+#: turns and steps from id's own spawn that puts a monster in the **near** 20x28
+#: band **under the crosshair**.  It arrives at frame 20 with the sergeant at
+#: depth 3513 spanning columns 51..70 and rows 36..63 — across the seam at x = 64
+#: **and** the seam at y = 48, so the one billboard is a piece of all four
+#: panels — then FIREs (he has 1 HP: the frame that kills still shows him
+#: standing) and holds twice on the corpse.
+WALK_CHORDS: list[str] = (
+    ["."] + ["w"] * 2 + ["d"] * 2 + ["w", "d", "w", "d"] + ["w"] * 7 + ["d"]
+    + ["w"] * 5 + ["d"] + [" ", ".", "."]
+)
+
+#: :data:`WALK_CHORDS` encoded — the command words the machine reads.
+WALK: list[int] = [d3.keys(ch) for ch in WALK_CHORDS]
+
 
 def hires_art(
     title: Sequence[str],
@@ -94,6 +125,7 @@ def hires_art(
     gun_fire: Sequence[tuple[int, int, str]],
     faces: dict[str, list[tuple[int, int, str]]],
     face_box: tuple[int, int, int, int],
+    sprites: Sequence[int],
 ) -> Art:
     """The 128x96 screen-space tables.  Every one is required, and on purpose.
 
@@ -118,6 +150,7 @@ def hires_art(
         gun_fire=list(gun_fire),
         faces=faces,
         face_box=face_box,
+        sprites=list(sprites),
         bar_rows=(d3.BAR_ROWS[0] * SCALE, d3.BAR_ROWS[1] * SCALE),
         ammo_cols=ammo_cols,
         health_cols=health_cols,
@@ -128,6 +161,10 @@ def hires_art(
         raise ValueError(f"the title is not {g.width}x{g.height}")
     if len(art.hud_bg) != g.hud_h or any(len(r) != g.width for r in art.hud_bg):
         raise ValueError(f"the status bar is not {g.width}x{g.hud_h}")
+    want = 3 * g.mon_stride * g.mon_words
+    if len(art.sprites) != want:
+        raise ValueError(f"{len(art.sprites)} sprite words, {want} expected "
+                         f"({g.mon_stride} columns x {g.mon_words} a column, 3 stripes)")
     return art
 
 
@@ -200,13 +237,23 @@ def install_wad(wad: Path, *, brightness: float | None = None) -> dict:
                      level.nukage_rows or None, level.monsters or None, geom=g)
     install(hires_art(title=level.title_rows, hud_bg=art["hud_bg"],
                       gun_idle=art["gun_idle"], gun_fire=art["gun_fire"],
-                      faces=art["faces"], face_box=box))
+                      faces=art["faces"], face_box=box,
+                      sprites=art["monster_sprites"]))
     return art
+
+
+#: The store tier this family builds on.  The men-v3 store that ``deadman-3d``
+#: ships on is ~two little men a slot, and this machine's tape is over 800 —
+#: the block alone would set the whole silhouette.  The **taped** tier is banked
+#: pipe tapes behind a gate chain (a bank is two men), which is the tier this
+#: family is measured and optimised on from here on; the three committed
+#: 64x48 families are untouched and still ship on their own tiers.
+STORE_TIER = "taped"
 
 
 def build_local(wad: Path, out_dir: Path | None = None,
                 cmds: Sequence[int] | None = None,
-                *, pngs: bool = True) -> dict:
+                *, pngs: bool = True, store: str = STORE_TIER) -> dict:
     """The whole local artifact set for the IWAD-only hi-res family.
 
     Writes the assembly, the machine, its debug sidecars, the round-gated cases
@@ -222,7 +269,7 @@ def build_local(wad: Path, out_dir: Path | None = None,
     from randomfun2026solvers.lm1.asm import assemble
 
     out_dir = out_dir or LOCAL_DIR
-    cmds = list(d3.WALK[:16] if cmds is None else cmds)
+    cmds = list(WALK if cmds is None else cmds)
     install_wad(wad)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -230,7 +277,7 @@ def build_local(wad: Path, out_dir: Path | None = None,
     (out_dir / "deadman-3d_hires.asm").write_text(src, encoding="utf-8")
     prog = assemble(src, name="deadman-3d_hires")
     machine.TAPE_SIZE["deadman-3d_hires"] = max(d3.tape_slots(GEOM).values()) + 1
-    m = machine.build_for("deadman-3d_hires", program=prog)
+    m = machine.build_for("deadman-3d_hires", program=prog, store=store)
     (out_dir / "deadman-3d_hires.man").write_text("\n".join(m.rows) + "\n", encoding="utf-8")
     m.debug_map().write_html(m.rows, out_dir / "deadman-3d_hires.debug.html")
     m.debug_map().write_json(out_dir / "deadman-3d_hires.debug.json")
@@ -242,7 +289,8 @@ def build_local(wad: Path, out_dir: Path | None = None,
     if pngs:
         d3._write_pngs(frames, out_dir / "hires-frames", scale=6)
     print(f"wrote {out_dir}/deadman-3d_hires.* ({m.width}x{m.height}, "
-          f"P={prog.P}, tape={machine.TAPE_SIZE['deadman-3d_hires']}) "
+          f"store={store}, P={prog.P}, "
+          f"tape={machine.TAPE_SIZE['deadman-3d_hires']}) "
           f"and {len(frames)} frames")
     return {"machine": m, "program": prog, "frames": frames}
 
@@ -254,11 +302,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--build", action="store_true",
                     help=f"write the whole artifact set into {LOCAL_DIR}")
     ap.add_argument("--out", type=Path, help="override the output directory")
-    ap.add_argument("--frames", type=int, default=16, help="how many walk frames")
+    ap.add_argument("--frames", type=int, default=len(WALK),
+                    help="how many walk frames (the whole walk by default; the "
+                         "billboard arrives at frame 20, so a shorter run has no "
+                         "monster in it)")
     ap.add_argument("--no-pngs", action="store_true")
     args = ap.parse_args(argv)
 
-    cmds = list(d3.WALK[: args.frames])
+    cmds = list(WALK[: args.frames])
     if args.build:
         build_local(args.wad, args.out, cmds, pngs=not args.no_pngs)
         return 0

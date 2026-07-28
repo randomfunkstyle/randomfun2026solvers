@@ -87,6 +87,8 @@ __all__ = [
     "gun_tables", "face_tables", "iwad_art",
     "STBAR_REGIONS", "STBAR_MEAN_GREY", "stbar_cells", "stbar_rows",
     "iwad_stbar",
+    "DIGIT_W", "DIGIT_H", "IWAD_DIGIT_LUMPS", "digit_box", "digit_slots",
+    "stbar_digit_words",
     "load_freedoom", "load_iwad", "emit", "main",
 ]
 
@@ -1378,6 +1380,95 @@ def face_tables(faces: dict[str, list[list[tuple[int, int, int, int]]]],
     return out
 
 
+# ── the big status-bar numerals (M10) ────────────────────────────────────────
+#: ``STTNUM0``..``STTNUM9`` and the percent sign, in ``st_stuff.c``'s own order:
+#: the eleventh glyph is what ``STlib_updatePercent`` puts after a health or
+#: armor number.  All eleven are in v1.0 shareware (there is no ``STTMINUS`` in
+#: any IWAD and nothing here wants one — the demo's readouts never go negative).
+IWAD_DIGIT_LUMPS: tuple[str, ...] = (
+    *(f"STTNUM{d}" for d in range(10)), "STTPRCNT")
+
+#: One numeral's own cell in STBAR's 320x32 pixels.  ``STlib_drawNum`` lays a
+#: number out on the **``STTNUM0`` patch's** width whatever the digit's own is —
+#: a `1` is an 11-pixel patch and still occupies 14 — which is why the wells in
+#: :data:`STBAR_REGIONS` are exactly ``3 * 14`` wide and why the narrow glyphs
+#: are centred into this box before they are quantized.
+DIGIT_W, DIGIT_H = 14, 16
+
+
+def digit_box(hud_w: int = HIRES_HUD_W, hud_h: int = HIRES_HUD_H) -> tuple[int, int]:
+    """``(w, h)`` of one numeral in strip cells, scaled off the bar's own pixels.
+
+    At the hi-res 128x16 strip the bar is 2.5x2 source pixels a cell, so DOOM's
+    14x16 numeral is **6x8** — big enough to read a digit, which is the whole
+    reason the strip's live readouts can stop being bar fills at this size.  At
+    the committed 64x8 strip the same arithmetic gives 3x4 and that is exactly
+    the mush :data:`AMMO_BAR_COLS` exists to avoid.
+    """
+    sx, sy = STBAR_W / hud_w, STBAR_H / hud_h
+    return max(1, round(DIGIT_W / sx)), max(1, round(DIGIT_H / sy))
+
+
+def digit_slots(hud_w: int = HIRES_HUD_W, hud_h: int = HIRES_HUD_H,
+                h3d: int = HIRES_H3D) -> tuple[tuple[int, int], ...]:
+    """``(col, bottom_row)`` per glyph slot in **screen** coordinates.
+
+    Seven of them, in paint order: ammo's hundreds/tens/units, health's
+    hundreds/tens/units, then the percent sign.  Every column is derived, not
+    placed: ``STlib_drawNum`` draws right-aligned *ending* at ``ST_AMMOX`` /
+    ``ST_HEALTHX``, so a three-digit well is three numeral boxes back from the
+    region's east edge, and ``STlib_updatePercent`` puts ``STTPRCNT`` **at**
+    ``ST_HEALTHX`` — i.e. in the box the health region's east edge leaves over.
+    """
+    dw, dh = digit_box(hud_w, hud_h)
+    _, row0, ammo_end, _ = stbar_cells("ammo", hud_w, hud_h)
+    health_end = stbar_cells("health", hud_w, hud_h)[2] - dw  # the percent's box
+    bottom = h3d + row0 + dh - 1
+    cols = [ammo_end - dw * (3 - k) for k in range(3)]
+    cols += [health_end - dw * (3 - k) for k in range(3)]
+    cols.append(health_end)
+    return tuple((c, bottom) for c in cols)
+
+
+def _centre_in(rgba: list[list[tuple[int, int, int, int]]],
+               w: int, h: int) -> list[list[tuple[int, int, int, int]]]:
+    """A patch centred in a transparent ``w`` x ``h`` box (DOOM's own offsets do
+    this for the narrow `1`; the box is what makes every glyph the same size)."""
+    sh, sw = len(rgba), len(rgba[0])
+    if sw > w or sh > h:
+        raise ValueError(f"a {sw}x{sh} glyph does not fit a {w}x{h} numeral box")
+    pad, top = (w - sw) // 2, (h - sh) // 2
+    clear = (0, 0, 0, 0)
+    out = [[clear] * w for _ in range(h)]
+    for y, row in enumerate(rgba):
+        out[top + y][pad:pad + sw] = list(row)
+    return out
+
+
+def stbar_digit_words(wad: Wad, playpal: bytes, *,
+                      hud_size: tuple[int, int] = (HIRES_HUD_W, HIRES_HUD_H),
+                      brightness: float = 1.0) -> list[int]:
+    """The ``DIGB`` table: eleven glyphs, one packed word per glyph column.
+
+    Packed **exactly like a monster billboard column** — a nibble per row,
+    bottom row first, colour 0 transparent — because that is what lets the
+    machine paint a numeral with the same kind of bottom-up nibble chain, and
+    lets the bar art show through the strokes' gaps instead of the glyph
+    carrying a box of background with it.  The numerals are 8 rows at the hi-res
+    strip, so a column is one word (16**8 is well inside 64 bits) and there is
+    no slicing here at all.
+    """
+    dw, dh = digit_box(*hud_size)
+    words: list[int] = []
+    for name in IWAD_DIGIT_LUMPS:
+        src = _centre_in(decode_picture(wad.lump(name), playpal), DIGIT_W, DIGIT_H)
+        grid = quantize_sprite(src, dw, dh, brightness=brightness)
+        words += pack_sprite_columns([[0 if c is None else c for c in row]
+                                      for row in grid])
+    assert len(words) == len(IWAD_DIGIT_LUMPS) * dw
+    return words
+
+
 #: Which IWAD lumps feed the --wad art overrides: the pistol pair and the
 #: status-bar face family (centre gaze per pain band; EVL is the fire grimace).
 IWAD_ART_LUMPS = {
@@ -1411,7 +1502,7 @@ def iwad_art(path: Path, *, dither: str = "none",
              gun: tuple[int, int] = (11, 10), screen: tuple[int, int] | None = None,
              max_runs: int | None = 20, max_body: int = 12,
              bands: tuple[tuple[int, int], ...] = MON_BANDS,
-             words_per_col: int = 1) -> dict:
+             words_per_col: int = 1, digits: bool = False) -> dict:
     """The --wad art override bundle: WAD-derived pistol, status bar and face
     run tables (M5/M8: the local machines' GUN/GUNF arms, HUD background and
     FACE paint carry the user's own art; nothing from this path may be
@@ -1445,8 +1536,14 @@ def iwad_art(path: Path, *, dither: str = "none",
         box=box, dither=dither)
     sprites = monster_sprite_words(pic("mon0"), pic("mon1"), pic("corpse"),
                                    bands=bands, words_per_col=words_per_col)
-    return {"gun_idle": gun_idle, "gun_fire": gun_fire, "faces": faces,
-            "hud_bg": hud_bg, "monster_sprites": sprites}
+    out = {"gun_idle": gun_idle, "gun_fire": gun_fire, "faces": faces,
+           "hud_bg": hud_bg, "monster_sprites": sprites}
+    if digits:
+        # Opt-in, because a numeral is only worth reading at a strip big enough
+        # to hold one (:func:`digit_box`); the committed 64x8 bar keeps its bar
+        # fills and never asks.
+        out["digits"] = stbar_digit_words(wad, playpal, hud_size=hud_size)
+    return out
 
 
 # ── the Level bundle ─────────────────────────────────────────────────────────
