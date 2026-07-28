@@ -143,6 +143,70 @@ question, not a technical one:
 That is the entire reason for the two-mode pipeline. It is not that Freedoom is
 preferred — it is that Freedoom can be published.
 
+### From a clean clone to real DOOM, step by step
+
+Verified end to end on a fresh clone of this repository with a retail
+`DOOM1.WAD`; the numbers below are what that run printed.
+
+**1. Get the code and its dependencies.** Python 3.12 and
+[uv](https://docs.astral.sh/uv/) are all you need — there is no C toolchain
+step, no WAD library, nothing to compile.
+
+```sh
+git clone <this repo> randomfun2026solvers
+cd randomfun2026solvers
+uv sync
+```
+
+**2. Get a WAD.** Any DOOM IWAD works. The shareware `DOOM1.WAD` is the easiest
+and is enough for everything here — it contains E1M1, the title screen, the
+palette, the pistol, the status-bar faces and the monsters. If you own DOOM on
+Steam or GOG, the IWAD sits in that installation directory. On Windows-installer
+shareware distributions the WAD may be inside the installer archive; extract it
+with `7z` or similar first.
+
+**3. Build machines from it.**
+
+```sh
+cd solvers/python
+uv run python -m randomfun2026solvers.deadman3d \
+    --wad /path/to/DOOM1.WAD --build
+```
+
+It prints what it found and what it wrote:
+
+```
+installed iwad:DOOM1.WAD:E1M1: spawn (27, 30) heading 4, 467 wall cells,
+72 nukage cells, 3 monsters, 1120 title runs; WAD art: 11+14 pistol runs,
+4 faces, 60 monster sprite words
+wrote .../littleman/examples/local/deadman-3d_local.man (375x376)
+wrote .../littleman/examples/local/deadman-3d_local_taped.man (395x231)
+wrote .../littleman/examples/local/deadman-3d_local.cases.json, .input.txt, frames/
+```
+
+Three monsters is correct, not a bug: E1M1 "Hangar" really is that sparse on
+medium skill. Freedoom's first level has sixteen, which is why the committed
+demo is the busier one.
+
+**4. Look at what it made.** `littleman/examples/local/frames/` holds a PNG per
+frame; `frame-00.png` is the real `TITLEPIC` — the marine, the fire, the logo —
+quantized to 64×48.
+
+**5. Run it.**
+
+```sh
+cd ..    # back to the repository root
+PYTHONPATH=$PWD/solvers/python uv run python -m randomfun2026solvers.fast_littleman \
+    littleman/examples/local/deadman-3d_local.man \
+    littleman/examples/local/deadman-3d_local.cases.json --tick-cap 3000000000
+```
+
+Or paste `deadman-3d_local_taped.man` plus `deadman-3d_local.input.txt` into the
+web editor, with the console patch above.
+
+Everything under `littleman/examples/local/` is gitignored, so nothing you build
+this way can be committed by accident.
+
 ### Build time, not run time
 
 The WAD is **translated first, then the machine runs**. Nothing reads a WAD while
