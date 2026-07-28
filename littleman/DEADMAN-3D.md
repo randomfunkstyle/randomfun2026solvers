@@ -117,9 +117,53 @@ uv run python -m randomfun2026solvers.deadman3d --walk ".wwaa d" --png /tmp/fram
 
 ## Importing your own WAD
 
-The committed machines are built from **Freedoom** (BSD-licensed). If you own a
-copy of DOOM, you can build machines from *your* WAD locally — the output is
-git-ignored, and nothing IWAD-derived is ever committed.
+### You do not need a WAD to run this
+
+The machines in `littleman/examples/` are complete and standalone. Load one,
+feed it `deadman-3d.input.txt`, and it plays — no WAD, no assets, nothing else
+on disk. **A WAD is only needed if you want to build a machine from a different
+level or different art.**
+
+### What a WAD is for, and why it is not in this repo
+
+A WAD is DOOM's archive format: the level geometry, the wall textures, the
+palette, the title screen and every sprite live inside it. The demo needs that
+data to have anything to draw — but *which* WAD supplies it is a licensing
+question, not a technical one:
+
+* **Freedoom** is a BSD-licensed, from-scratch replacement for DOOM's data. It is
+  freely redistributable, so its level and art are what this repository ships,
+  already baked into the committed machines.
+* **id Software's IWADs** (`DOOM.WAD`, `DOOM2.WAD`, and the shareware
+  `DOOM1.WAD`) are not redistributable. Owning a copy and using it yourself is
+  fine; putting its data in a public repository is not. So none of it is here,
+  `littleman/examples/local/` is in `.gitignore`, and no test in the suite reads
+  an IWAD.
+
+That is the entire reason for the two-mode pipeline. It is not that Freedoom is
+preferred — it is that Freedoom can be published.
+
+### Build time, not run time
+
+The WAD is **translated first, then the machine runs**. Nothing reads a WAD while
+the program executes; the machine has no filesystem and no idea DOOM exists.
+
+```
+DOOM1.WAD ──> wadimport.py ──> deadman3d.py ──> lm1/machine.py ──> .man + input.txt
+   (lumps)      parse and       golden model      layout and         a standalone
+                quantize        + asm generator   synthesis          machine
+```
+
+The imported level becomes ordinary numbers: the map is packed into words that
+ride in over the **input pipe** as a boot preamble (451 words of map, tables,
+nukage plane, monster table and sprite columns, then 429 words of title-screen
+RLE — 880 in total), and the sprites the painter unit owns are baked into its
+arms as run tables. After that preamble, the machine takes exactly one word per
+frame, forever. That is why `input.txt` is long and why a hand-written input must
+begin with the same preamble.
+
+So `--wad` is a *compiler* invocation, not a *player* one. Run it once; the
+`.man` it produces is then as self-contained as the committed ones.
 
 ```sh
 cd solvers/python
@@ -168,14 +212,6 @@ sectors, the title screen (`TITLEPIC`), the palette (`PLAYPAL`), the pistol
 
 At 64×48 the original status bar's numbers would be two pixels wide, so the
 readouts are proportional bars rather than DOOM's digit font.
-
-### On legality
-
-Freedoom is BSD-licensed and safe to redistribute, which is why it is what the
-repository ships. id's IWADs are not: importing your own purchased or shareware
-copy for your own use is fine, redistributing its data is not. That is the whole
-reason for the two-mode pipeline — `littleman/examples/local/` is in
-`.gitignore`, and no test in the suite reads an IWAD.
 
 ---
 
