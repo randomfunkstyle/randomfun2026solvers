@@ -73,10 +73,37 @@ def _bases(cpu) -> dict[str, int]:
     }
 
 
-def test_both_registries_name_only_the_slug_that_measured_them() -> None:
-    """Every checked-in machine stays byte-identical unless its slug opts in."""
+def test_both_registries_name_only_the_slugs_that_measured_them() -> None:
+    """Every checked-in machine stays byte-identical unless its slug opts in.
+
+    ``deadman-3d`` opts into :data:`machine.SLAB_PITCH` but **not** into
+    :data:`machine.TIGHT_STRUCT_DROPS`, and the asymmetry is geometry, not
+    oversight: ``build`` computes ``tight_drops=not seek and name in
+    TIGHT_STRUCT_DROPS``, so the seek drum — which only ``deadman-3d`` has —
+    makes that registry unreachable for it. Naming it there would be dead config
+    reading as an intent nobody can act on.
+    """
     assert machine.TIGHT_STRUCT_DROPS == {SLUG}
     assert machine.SLAB_PITCH == {SLUG: 11}
+    assert machine.SEEK_SLAB_PITCH == {"deadman-3d": 11}
+
+
+def test_the_pitch_registry_is_read_only_on_a_seek_build() -> None:
+    """The guard that lets ``deadman-3d`` narrow its pitch without moving the
+    classic reference machine.
+
+    Pitch 11 pulls the CPU's east wall west, and §7.1 binds the deepest slab's
+    discard ``r`` against the memory-response pipe touching that wall — so a
+    narrower CPU is a *closer* rival. The seek build clears the tie because
+    :data:`machine.SEEK_MEM_PAD` already sits east of it; the classic build does
+    not, and at ``MEM_PAD`` 17 it cannot bind at all. Conditioning on ``seek``
+    is what keeps ``build_for(..., seek=False)`` buildable *and* byte-stable.
+    """
+    seek_m = machine.build_for("deadman-3d", store="taped")
+    classic = machine.build_for("deadman-3d", store="taped", seek=False)
+    # The seek build takes the narrowed pitch; the classic one is untouched by it.
+    assert seek_m.width == 289, seek_m.width
+    assert classic.mem_pad == machine.MEM_PAD["deadman-3d"]
 
 
 def test_the_default_floors_every_structured_drop_east_of_the_band(program) -> None:

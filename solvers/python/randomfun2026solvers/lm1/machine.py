@@ -1859,6 +1859,27 @@ TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
 #: default, so every machine not named here is byte-identical.
 SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
 
+#: :data:`SLAB_PITCH`'s replacement while the seek drum is on — the same split
+#: :data:`MEM_PAD` / :data:`SEEK_MEM_PAD` already make, and for the same reason: the
+#: drum reshapes the band, so a pitch swept against one form does not carry to the
+#: other.
+#:
+#: Why ``deadman-3d`` is here and not above. Narrowing the pitch pulls the CPU's east
+#: wall west, and §7.1 binds the deepest slab's discard ``r`` against the
+#: memory-response pipe touching that wall — so a *narrower* CPU is a **closer** rival.
+#: A seek build clears the tie because :data:`SEEK_MEM_PAD` (22) already sits east of
+#: it; the classic build does not, and ``deadman-3d`` at pitch 11 cannot bind at
+#: ``MEM_PAD`` 17 at all. Forcing it needs 30 — thirteen columns spent to buy back two
+#: per slab — and takes the classic machine 372x377 -> 378x377, which is the baseline in
+#: :data:`SEEK_DRUM`'s own "classic -> seek" table. Keeping the two registries apart
+#: gives the shipped build its 295x269 -> 289x269 and leaves that reference number
+#: reproducible.
+#:
+#: Note ``little-little-man`` must stay in :data:`SLAB_PITCH`: it has no drum, so a
+#: seek-only lookup would silently hand it back the default 13 and undo the -1.44% the
+#: registry exists for.
+SEEK_SLAB_PITCH: dict[str, int] = {"deadman-3d": 11}
+
 
 def _drain_block(
     g: _Grid,
@@ -3081,7 +3102,9 @@ def _assemble(
         short_return=short_return,
         drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
         tight_drops=not seek and program.name in TIGHT_STRUCT_DROPS,
-        slab_pitch=SLAB_PITCH.get(program.name, _SLAB_PITCH),
+        slab_pitch=(SEEK_SLAB_PITCH if seek else SLAB_PITCH).get(
+            program.name, _SLAB_PITCH
+        ),
         trim_dead=trim_dead,
         top_bus=top_bus,
         seek=seek,
