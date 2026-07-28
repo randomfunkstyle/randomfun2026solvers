@@ -53,7 +53,13 @@ __all__ = [
 #: ``lm1/snake_unit.py``'s body FIFO, which also owns the display and answers nothing.
 #: ``doom`` is ``lm1/d3_unit.py``'s column painter: the deadman-3d panel plus the
 #: baked HUD/FLASH patterns, write-only like ``snake`` and ``path``.
-UNITS = frozenset({"stream", "snake", "path", "doom"})
+#: ``doom4`` is ``lm1/d3_router.py``'s tiled wall — the *same* unit four times over
+#: behind a 1-of-4 router, so one ``SND`` lane drives a 128x96 framebuffer as four
+#: 64x48 panels.  The panel's interior is capped at 64x64 (``SPEC.md``), so tiling
+#: is the only way past it; the word carries a tile selector in its low three bits
+#: (:func:`d3_router.word`) and everything above that is the unmodified ``doom``
+#: protocol.
+UNITS = frozenset({"stream", "snake", "path", "doom", "doom4"})
 
 #: ``ARCH.md`` §2.1: ring capacity must be ``P + slack``; too small deadlocks,
 #: too large starves the CPU.

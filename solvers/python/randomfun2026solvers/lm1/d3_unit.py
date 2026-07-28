@@ -100,6 +100,7 @@ __all__ = [
     "BANDS",
     "DoomBlock",
     "DoomUnitError",
+    "FLOOR_ROW",
     "PANEL_H",
     "PANEL_W",
     "UNIT_IH",
@@ -188,6 +189,15 @@ ARMS: tuple[str, ...] = tuple(ARM_LEAF)
 PANEL_W, PANEL_H = 64, 48
 H3D = 40  # viewport rows 0..39; the HUD strip is rows 40..47
 FLOOR = 8
+
+#: The last panel row COL's floor run fills, baked into the arm as a two-digit
+#: literal.  On the 64x48 panel it is the viewport's own last row, 39.  It is a
+#: parameter only because the tiled wall (``d3_router.py``) needs a *different*
+#: one per tile row: at 128x96 the viewport is logical rows 0..79, so a top tile
+#: floors to its own row 47 and a bottom tile stops at 31 where the HUD begins.
+#: Two digits either way, so the arm's geometry below the literal never moves —
+#: which is what keeps the default build byte-identical.
+FLOOR_ROW = H3D - 1
 
 #: The COL arm's two counted-loop bodies (rows R_RET..; sends on their bands).
 #: The banded wall lap (V3): pop v from ring 1, v += 1024, push it back; split
@@ -310,8 +320,18 @@ def _send_band(row: int) -> str:
     return min(_S_BANDS, key=lambda b: abs(row - rows[b]))
 
 
-def unit_interior() -> Unit:
-    """Lay the unit: MAIN, the trie, four arms, the HUD field, the collector."""
+def unit_interior(floor_row: int = FLOOR_ROW) -> Unit:
+    """Lay the unit: MAIN, the trie, four arms, the HUD field, the collector.
+
+    ``floor_row`` is the last panel row COL's floor run fills; see
+    :data:`FLOOR_ROW` for why it is a parameter and why changing it moves no
+    other cell.
+    """
+    if not 10 <= floor_row <= 99:
+        raise DoomUnitError(
+            f"floor_row {floor_row} is not two digits: the literal's width sets "
+            "every row below it in the COL arm, and the arm is tuned around two"
+        )
     c = Circuit(UNIT_IW + 2, UNIT_IH + 2)
     glyphs: list[tuple[int, int, str, str]] = []
     col = arm_columns()
@@ -487,8 +507,8 @@ def unit_interior() -> Unit:
     c.set(ix, R_RET, "M")  # B = addr_last
     c.run(ix, R_RET + 1, "`64`", d=S)
     c.run(ix, R_RET + 5, "W/M", d=S)  # A = bot (addr/64), B = bot
-    c.run(ix, R_RET + 8, "`39`", d=S)
-    c.set(ix, R_RET + 12, "-")  # A = 39 - bot = the floor count
+    c.run(ix, R_RET + 8, f"`{floor_row}`", d=S)
+    c.set(ix, R_RET + 12, "-")  # A = floor_row - bot = the floor count
     c.set(ix, R_RET + 13, "b")
     c.run(ix, R_RET + 14, "`64`", d=S)
     c.set(ix, R_RET + 18, "M")  # B = 64, the floor lap's constant
@@ -611,11 +631,15 @@ FEED_AT = (0, 1)
 BLOCK_AT = (8, 4)
 
 
-def build_doom() -> DoomBlock:
-    """Place the unit, its value ring and relay, the panel, and three ports."""
+def build_doom(floor_row: int = FLOOR_ROW) -> DoomBlock:
+    """Place the unit, its value ring and relay, the panel, and three ports.
+
+    ``floor_row`` is passed straight to :func:`unit_interior`; the default is the
+    64x48 panel's own viewport bound and reproduces the checked-in block exactly.
+    """
     from .machine import _Grid
 
-    unit = unit_interior()
+    unit = unit_interior(floor_row)
     g = _Grid()
     g.room(UX, UY, UX + UNIT_IW + 1, UY + UNIT_IH + 1)
     g.blit(UX, UY, unit.cells)

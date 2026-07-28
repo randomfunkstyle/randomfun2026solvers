@@ -25,7 +25,20 @@ from collections.abc import Iterable
 
 from pydantic import BaseModel, ConfigDict
 
-__all__ = ["ADDR", "DATA", "SWAP", "Display", "frames_from_writes"]
+__all__ = [
+    "ADDR",
+    "DATA",
+    "SWAP",
+    "TILE_H",
+    "TILE_W",
+    "WALL_H",
+    "WALL_W",
+    "Display",
+    "frames_from_writes",
+    "tile_addr",
+    "tile_of",
+    "tiled_frames_from_writes",
+]
 
 ADDR, DATA, SWAP = 0, 1, 2
 
@@ -82,3 +95,58 @@ def frames_from_writes(
     for port, value in writes:
         panel.write(port, value)
     return panel.committed
+
+
+#: The tiled wall (``lm1/d3_router.py``): 128x96 as four 64x48 panels.
+#:
+#:     tile = (x >= 64) + 2 * (y >= 48)      in-tile = (x % 64, y % 48)
+TILE_W, TILE_H = 64, 48
+TILE_COLS, TILE_ROWS = 2, 2
+WALL_W, WALL_H = TILE_W * TILE_COLS, TILE_H * TILE_ROWS
+
+
+def tile_of(x: int, y: int) -> int:
+    """Which panel a logical 128x96 pixel lands on."""
+    if not (0 <= x < WALL_W and 0 <= y < WALL_H):
+        raise ValueError(f"({x}, {y}) is outside the {WALL_W}x{WALL_H} wall")
+    return (x >= TILE_W) + 2 * (y >= TILE_H)
+
+
+def tile_addr(x: int, y: int) -> int:
+    """The panel-local ADDR (``row * 64 + column``) for a logical pixel."""
+    return (y % TILE_H) * TILE_W + (x % TILE_W)
+
+
+def tiled_frames_from_writes(
+    writes: Iterable[tuple[int, int, int]],
+) -> list[list[str]]:
+    """Replay ``(tile, port, value)`` writes and compose the 128x96 frames.
+
+    **Composition is by frame index, not by tick**, and that is the whole reason
+    the router commits with ``S`` (send to *every* outgoing pipe at once).  Four
+    panels swap on four separate pipes, so their SWAPs can never be guaranteed to
+    land on the same tick — but ``S`` does guarantee every panel sees the same
+    COMMIT sequence, so tile frame *N* is always a piece of logical frame *N* and
+    the composed image is never half-old.  A panel that has committed a different
+    number of frames from its neighbours means a COMMIT went out on a tile
+    selector instead of the broadcast, and that is an error worth raising.
+    """
+    panels = [Display(width=TILE_W, height=TILE_H) for _ in range(TILE_COLS * TILE_ROWS)]
+    for tile, port, value in writes:
+        panels[tile].write(port, value)
+    counts = {len(p.committed) for p in panels}
+    if len(counts) != 1:
+        raise ValueError(
+            f"the four panels committed {sorted(counts)} frames: a tiled frame is "
+            "composed by index, so every COMMIT must go out on the router's "
+            "broadcast leaf"
+        )
+    out: list[list[str]] = []
+    for n in range(counts.pop()):
+        out.append(
+            [
+                "".join(panels[2 * (r // TILE_H) + c].committed[n][r % TILE_H] for c in range(2))
+                for r in range(WALL_H)
+            ]
+        )
+    return out

@@ -4008,6 +4008,14 @@ def _stream(
         from . import d3_unit
 
         blk = d3_unit.build_doom()
+    elif unit == "doom4":
+        # The tiled wall: four unmodified DOOM blocks behind a 1-of-4 router, so
+        # one command lane paints a 128x96 framebuffer across four 64x48 panels
+        # (the LM-75's interior is capped at 64x64 — SPEC.md). It presents exactly
+        # the `doom` interface: one command pipe in, nothing back.
+        from . import d3_router
+
+        blk = d3_router.build_wall()
     else:
         from . import stream as streammod
 
@@ -4015,7 +4023,7 @@ def _stream(
         a_slots, b_slots, c_slots = sizes
         blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
     bx, by = 1, wall_y + 5
-    if unit == "doom":
+    if unit in ("doom", "doom4"):
         # The DOOM block is ~172 columns wide — far wider than the CPU — and the
         # grid STORE's man-memory runs hundreds of rows down the machine's east
         # side, so the flat slot just below the CPU is occupied. Hang the block
@@ -4343,6 +4351,10 @@ TAPE_SIZE = {
     # the tests pin this against. Highest address + 1, as everywhere: an
     # exactly-sized tape stalls silently rather than faulting.
     "deadman-3d": 600,
+    # deadman-3d_hires forwards pre-encoded router words straight from the input
+    # room to the tiled wall, so its whole state is the round's word counter in
+    # slot 1 (slot 0 is the assembler's scratch).
+    "deadman-3d_hires": 2,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -4690,7 +4702,14 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: 4:3 rather than the 32x24 its borrowed ``plotter`` JSON states. Consulted by
 #: :func:`display_for` *before* the problem JSON; graded problems must never
 #: appear here, because for them the panel size is the judge's, not ours.
-DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
+DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {
+    "deadman-3d": (64, 48),
+    # The *logical* framebuffer. Physically it is four 64x48 panels inside the
+    # `doom4` wall (the LM-75 interior stops at 64x64), so the CPU has no display
+    # lanes and this number never reaches `_display` — it is here so the machine
+    # and its sidecar record what the demo actually renders.
+    "deadman-3d_hires": (128, 96),
+}
 
 #: Per-slug ``mem_pad`` for machines whose pad the default search should not (or
 #: cannot) pick: :func:`build` searches ``range(0, 40)`` and takes the best pad

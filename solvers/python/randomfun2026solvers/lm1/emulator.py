@@ -30,7 +30,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .asm import Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
-from .store import DictStore, DoomUnit, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
+from .store import (
+    DictStore,
+    DoomUnit,
+    DoomWall,
+    PathUnit,
+    SnakeUnit,
+    SpillRing,
+    Store,
+    StreamUnit,
+)
 
 __all__ = [
     "Round",
@@ -111,6 +120,10 @@ class RunResult(BaseModel):
     store_cells: dict[int, int] = Field(default_factory=dict)
     spill_high_water: int = 0
     display_writes: tuple[tuple[int, int], ...] = ()
+    #: ``(tile, port, value)`` for a tiled wall (``.unit doom4``): one 128x96
+    #: framebuffer is four panels, so a write has to say *which* one.  Empty on
+    #: every single-panel machine, which keeps ``display_writes`` what it was.
+    wall_writes: tuple[tuple[int, int, int], ...] = ()
 
     @property
     def over_tick_cap(self) -> bool:
@@ -152,7 +165,7 @@ class Emulator:
         self.words = list(program.words)
         self.store: Store = store if store is not None else DictStore()
         self.spill = spill if spill is not None else SpillRing()
-        self._stream: StreamUnit | SnakeUnit | PathUnit | DoomUnit | None = None
+        self._stream: StreamUnit | SnakeUnit | PathUnit | DoomUnit | DoomWall | None = None
         self.tick_model = ticks
 
         self.a = 0
@@ -166,6 +179,7 @@ class Emulator:
         self.words_skipped = 0
         self.output: list[int] = []
         self.display_writes: list[tuple[int, int]] = []
+        self.wall_writes: list[tuple[int, int, int]] = []
 
         self._rounds: tuple[Round, ...] = ()
         self._cum_out: tuple[int, ...] = ()
@@ -288,11 +302,12 @@ class Emulator:
             store_cells=cells,
             spill_high_water=self.spill.high_water,
             display_writes=tuple(self.display_writes),
+            wall_writes=tuple(self.wall_writes),
         )
 
     # ── STREAM: created on first use, since it owns the I and O rooms ────────
     @property
-    def stream(self) -> StreamUnit | SnakeUnit | PathUnit | DoomUnit:
+    def stream(self) -> StreamUnit | SnakeUnit | PathUnit | DoomUnit | DoomWall:
         """The coprocessor the program named with ``.unit``, wired to this run.
 
         Lazily built because a unit *is* part of the machine's I/O on a program that
@@ -314,6 +329,13 @@ class Emulator:
             elif self.program.unit == "doom":
                 self._stream = DoomUnit(
                     lambda port, value: self.display_writes.append((port, value))
+                )
+            elif self.program.unit == "doom4":
+                # The tiled wall owns four panels, so its writes are tagged with the
+                # tile; `display.tiled_frames_from_writes` composes them back into
+                # one 128x96 frame stream, by frame index (see `store.DoomWall`).
+                self._stream = DoomWall(
+                    lambda tile, port, value: self.wall_writes.append((tile, port, value))
                 )
             else:
                 self._stream = StreamUnit(self._next_input, self._emit)
