@@ -321,11 +321,11 @@ wire per address (four-command run differenced against the boot round;
 
 | addresses | what | reads | writes |
 |---|---|---|---|
-| 517..531 `XCOL..COLOR` | the DDA inner loop | 58.8% | 58.6% |
+| 517..531 `XCOL..COLOR` | the DDA inner loop | 56.2% | 56.2% |
 | 532..533 `PW`, `WADDR` | the texture inner loop | 25.6% | 31.2% |
 | 1..352 `MAPB`, `POSX..PLANEY` | the map, walked in address order | 8.4% | 0.0% |
-| 353..516 `MONB`/`SPRB`/`ZBUF`/`CMD` | boot-mostly + the ZBUF | 4.2% | 6.6% |
-| 534..600 `FRACX..PTR` | the rest of the scalars | 3.0% | 3.6% |
+| 353..516 `MONB`/`SPRB`/`ZBUF`/`CMD` | boot-mostly + the ZBUF | 3.5% | 2.0% |
+| 534..600 `FRACX..PTR` | the rest of the scalars | 6.3% | 10.6% |
 
 `(256, 195, 64, 85)`'s seam at 515/516 put all of that in one 85-slot ring.
 

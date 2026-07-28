@@ -5437,11 +5437,11 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: ::
 #:
 #:     addresses                       reads    writes   what
-#:     517..531  XCOL..COLOR          58.8%     58.6%    the DDA inner loop
+#:     517..531  XCOL..COLOR          56.2%     56.2%    the DDA inner loop
 #:     532..533  PW, WADDR            25.6%     31.2%    the texture inner loop
 #:     1..352    MAPB + POSX..PLANEY   8.4%      0.0%    the map, scanned
-#:     353..516  MONB/SPRB/ZBUF/CMD    4.2%      6.6%    boot-mostly + ZBUF
-#:     534..600  FRACX..PTR            3.0%      3.6%    the rest of the scalars
+#:     353..516  MONB/SPRB/ZBUF/CMD    3.5%      2.0%    boot-mostly + ZBUF
+#:     534..600  FRACX..PTR            6.3%     10.6%    the rest of the scalars
 #:
 #: The old plan's seam at 515/516 cut straight through that: **every** one of
 #: those addresses sat in one 85-slot ring. The new plan puts the fifteen
@@ -5452,10 +5452,10 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: ::
 #:
 #:     bank  addresses    M    chain pos   share of accesses
-#:     0     1..352      352      2          6.4%
-#:     1     353..516    164      3          3.2%
-#:     2     517..531     15      1         58.7%
-#:     3     532..600     69      0         31.7%
+#:     0     1..352      352      2          6.45%
+#:     1     353..516    164      3          3.10%
+#:     2     517..531     15      1         56.19%
+#:     3     532..600     69      0         34.26%
 #:
 #: Both seams are knife-edges, and both were measured, not derived — the
 #: 8-command native gate, ticks against ``(256, 195, 64, 85)``'s 75,782,738:
