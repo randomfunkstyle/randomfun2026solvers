@@ -2536,6 +2536,7 @@ def build(
     in_north: bool = False,
     store_teleport: bool = False,
     store_compact_gate: bool = False,
+    store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
@@ -2722,6 +2723,7 @@ def build(
                     in_north=in_north,
                     store_teleport=store_teleport,
                     store_compact_gate=store_compact_gate,
+                    store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
@@ -2776,6 +2778,7 @@ def build(
                     in_north=in_north,
                     store_teleport=store_teleport,
                     store_compact_gate=store_compact_gate,
+                    store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
@@ -2852,6 +2855,7 @@ def _assemble(
     in_north: bool = False,
     store_teleport: bool = False,
     store_compact_gate: bool = False,
+    store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
@@ -3116,6 +3120,7 @@ def _assemble(
                     else TAPED_SKIP_BATCH.get(program.name, 1)
                 ),
                 compact_gate=store_compact_gate,
+                order=store_bank_order,
             )
         elif store == "tape":
             tape = tape_block(
@@ -4884,14 +4889,67 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: (224x63 -> 224x58) but it sits at rows 97..154 of a machine whose floor is the
 #: display/stream panel at rows 217..266. 295x269 both ways.
 #:
-#: Follow-up this measurement suggests, not taken here: the hot bank is *last* in
-#: the chain, so 88.5% of reads pay three gate traversals to reach the cheapest
-#: ring. Ordering the banks hot-first would skip two whole gates (~22 cells each
-#: on the request path) rather than two spacers — an order of magnitude more.
-#: But the gate's range test is a prefix test by construction, so bank order IS
-#: address order: it means moving the per-frame scalars to low addresses in
-#: ``deadman3d.tape_slots()``, a program change, not a store one.
+#: The follow-up this measurement pointed at — the hot bank is *last*, so 88.5%
+#: of reads pay three gate traversals to reach the cheapest ring — is
+#: :data:`TAPED_BANK_ORDER`, and it is worth an order of magnitude more. The two
+#: do not add; see that entry.
 TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+#: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
+#: different from :data:`TAPED_BANKS`' address order. The value is a permutation
+#: of the bank indices; :func:`memory_taped.gate_chain` turns it into a per-gate
+#: literal and gate form, and rejects the orders the hardware cannot express.
+#:
+#: **The chain is a linear scan, and address order is not traffic order.** A gate
+#: forwards everything that is not its own, so a request for the bank at chain
+#: position ``j`` walks ``j`` gates' pass-through arms before it walks its own.
+#: DOOM's traffic is savagely lopsided, and it was pointing the wrong way.
+#: Measured on the emulator's abstract wire (``0 addr`` / ``1 addr value``, see
+#: ``lm1.store``), differencing a four-command run against the boot round alone
+#: so the figures are per *gameplay* frame — 11,222 reads and 3,416 writes:
+#:
+#: ::
+#:
+#:     bank (address range)           reads    writes    chain position
+#:     0  1..256   map words          8.37%     0.00%     0 -> 1
+#:     1  257..451 spawn/monsters     3.48%     0.04%     1 -> 2
+#:     2  452..515 ZBUF               0.00%     1.87%     2 -> 3 (terminal)
+#:     3  516..600 frame scalars     88.14%    98.08%     3 -> 0
+#:
+#: (The ZBUF is written once per column but read only where a sprite survives
+#: the cull, so these four frames read it not at all; the 115-frame tour puts it
+#: at 0.1%.) Average gate rooms traversed: **2.80 -> 1.15 a read**, **3.00 ->
+#: 1.04 a write**. On the request path the average read's walk through the chain
+#: goes 63.9 -> 21.3 cells, the average write's 68.9 -> 19.9.
+#:
+#: The order is simply the traffic order, ``(3, 0, 1, 2)``. Only *some*
+#: permutations exist — a gate hands on one contiguous rebased space, so each
+#: peels a bank off an **end** — but descending traffic happens to be an
+#: end-peeling here, so nothing was given up to get it.
+#:
+#: Measured on the checked-in 115-frame tour, native engine, all frames clean,
+#: against the same 1,113,752,187 baseline the compact gate was measured on:
+#:
+#: * reorder alone (12-row gate):   1,030,923,183   295x269   **-7.44%**
+#: * reorder + compact gate:        1,026,440,454   295x269   **-7.84%**
+#:
+#: **The two are strongly sub-additive**, which is the interesting part:
+#: separately 10.9M + 82.8M = 93.7M, together 87.3M. Once the hot bank is first,
+#: the spacers the hot request no longer crosses stop mattering — the
+#: compaction's remaining 4.5M is what it is worth on *one* gate instead of
+#: three. Kept anyway: it is free, and it still pays on the cold banks.
+#:
+#: **No program change and no size change.** The high-end gate form
+#: (:func:`memory_taped.bank_gate`'s ``high=``) claims the top of the space
+#: instead of the bottom, so ``deadman3d.tape_slots()`` is untouched and
+#: ``deadman-3d_taped.input.txt`` stays byte-identical to the canonical
+#: machine's. The gate room does not change shape either — ``N`` negates in one
+#: glyph where the low form's ``+`` restores, and the high form's pass-through
+#: arms are two cells *shorter* — so the block is 224x58 and the machine
+#: 295x269 both ways.
+TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
+    ("deadman-3d", "taped"): (3, 0, 1, 2),
+}
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
 #: ``deadman-3d``'s 330-slot store is far past the rotating tape's ~103-slot
@@ -5078,6 +5136,7 @@ def build_for(
         in_north=slug in INPUT_NORTH,
         store_teleport=slug in STORE_TELEPORT,
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
+        store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,

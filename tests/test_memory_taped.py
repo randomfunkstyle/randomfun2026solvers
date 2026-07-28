@@ -27,6 +27,7 @@ if str(PKG) not in sys.path:
 from randomfun2026solvers.fast_littleman import FastLittleman  # noqa: E402
 from randomfun2026solvers.memory_taped import (  # noqa: E402
     bank_gate,
+    gate_chain,
     gate_rows,
     taped_plan,
     taped_store_block,
@@ -128,7 +129,30 @@ def test_every_gate_send_still_binds_to_the_pipe_it_means() -> None:
     """
     for compact in (False, True):
         _h, in_row, local_row, down_row = gate_rows(compact)
-        # every bank size the literal's width can produce, and then some
+        # every bank size the literal's width can produce, and then some —
+        # in both gate forms, because `high` changes every arm's text and so
+        # every send's column
+        for m in (1, 5, 64, 85, 195, 256, 999, 12345):
+            for high in (None, m + 1, m + 7, 4 * m, 99999):
+                g, w = bank_gate(m, compact=compact, high=high)
+                src = {local_row: (w, local_row), down_row: (w, down_row)}
+                sends = [(x, y) for (x, y), ch in g.items() if ch == "s"]
+                assert len(sends) == 10, (m, high, compact, len(sends))
+                assert all(y != in_row for _x, y in sends)
+                for x, y in sends:
+                    want = local_row if y < in_row else down_row
+                    dist = {r: abs(px - x) + abs(py - y) for r, (px, py) in src.items()}
+                    nearest = min(src, key=lambda r: (dist[r], r))
+                    assert nearest == want, (
+                        f"m={m} high={high} compact={compact}: the `s` at {(x, y)} "
+                        f"binds to the row-{nearest} pipe, not row {want} ({dist})"
+                    )
+
+
+def test_the_low_gates_send_bindings_are_unchanged() -> None:
+    """The original, narrower assertion, kept as its own case."""
+    for compact in (False, True):
+        _h, in_row, local_row, down_row = gate_rows(compact)
         for m in (1, 5, 64, 85, 195, 256, 999, 12345):
             g, w = bank_gate(m, compact=compact)
             src = {local_row: (w, local_row), down_row: (w, down_row)}
@@ -167,6 +191,98 @@ def test_the_compact_gate_routes_every_address_the_same(skip_batch: int) -> None
             res.fatal or res.reason,
             res.output[:5],
         )
+
+
+# ── the chain order: the hot bank first, which is a different gate form ──────
+def test_the_chain_peels_banks_off_an_end_and_says_so_when_it_cannot() -> None:
+    """``gate_chain`` is where a reordering bug would hide, so the literals it
+    implies are derived here from the sizes alone and compared against it.
+
+    A low gate at chain position ``j`` owns ``1..m`` of the space it was handed
+    and forwards ``addr - m``; a high gate owns the top ``m`` of ``1..top`` and
+    forwards ``addr`` untouched. Either way the space shrinks by ``m``, so the
+    invariant that actually matters is that the ranges **tile** the address
+    space exactly once — which is what the second loop checks.
+    """
+    sizes = [256, 195, 64, 85]
+    assert gate_chain(sizes) == [(0, None), (1, None), (2, None), (3, None)]
+    assert gate_chain(sizes, (3, 0, 1, 2)) == [(3, 600), (0, None), (1, None), (2, None)]
+    assert gate_chain(sizes, (3, 2, 1, 0)) == [(3, 600), (2, 515), (1, 451), (0, None)]
+    # a bank in the MIDDLE of what is left cannot be peeled: the gate hands on
+    # one contiguous rebased space and its test is one-sided
+    with pytest.raises(ValueError, match="claim an END"):
+        gate_chain(sizes, (1, 0, 2, 3))
+    with pytest.raises(ValueError, match="permutation"):
+        gate_chain(sizes, (0, 1, 2, 2))
+
+    # ... and every reachable order lands every address in the SAME bank at the
+    # SAME local slot, which is the whole safety property. Walked here in
+    # arithmetic (the engine walks it for real two tests down).
+    def resolve(order: tuple[int, ...] | None, addr: int) -> tuple[int, int]:
+        chain = gate_chain(sizes, order)
+        for k, high in chain[:-1]:
+            m = sizes[k]
+            if high is None:  # low gate: mine is 1..m, forward addr - m
+                if addr <= m:
+                    return k, addr
+                addr -= m
+            elif addr > high - m:  # high gate: mine is high-m+1..high
+                return k, addr - (high - m)
+        return chain[-1][0], addr
+
+    want = {a: resolve(None, a) for a in range(1, sum(sizes) + 1)}
+    assert want[1] == (0, 1) and want[256] == (0, 256)
+    assert want[257] == (1, 1) and want[516] == (3, 1) and want[600] == (3, 85)
+    for order in ((3, 0, 1, 2), (3, 2, 1, 0), (0, 3, 1, 2), (3, 0, 2, 1), (0, 1, 3, 2)):
+        assert {a: resolve(order, a) for a in want} == want, order
+
+
+def test_the_hot_first_chain_is_opt_in_and_costs_no_room() -> None:
+    """The reorder is free in every dimension that scores: the high gate form is
+    the same shape as the low one, so the block does not move a column or a row,
+    and the census and pipe inventory are the plan's, not the order's."""
+    shipped = taped_store_block(330, PLAN, skip_batch=2, compact_gate=True)
+    assert taped_store_block(
+        330, PLAN, skip_batch=2, compact_gate=True, order=(0, 1, 2, 3)
+    ).cells == shipped.cells
+    hot = taped_store_block(330, PLAN, skip_batch=2, compact_gate=True, order=(3, 0, 1, 2))
+    assert (hot.width, hot.height) == (shipped.width, shipped.height)
+    assert hot.pipes == shipped.pipes
+    assert sum(1 for c in hot.cells.values() if c == "@") == sum(
+        1 for c in shipped.cells.values() if c == "@"
+    )
+    assert hot.cells != shipped.cells  # ... but it IS a different chain
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_the_hot_first_chain_resolves_every_address_to_the_same_data(compact: bool) -> None:
+    """The load-bearing test. Reordering rewrites every gate's literal, and a
+    wrong literal routes a read to the **wrong bank** rather than failing — so
+    this writes a distinct value into all 329 addresses through both chains and
+    compares them address by address, not bank by bank."""
+
+    def readback(order: tuple[int, ...] | None) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(330, PLAN, skip_batch=2, compact_gate=compact, order=order)
+        )
+        writes = [x for a in range(1, 330) for x in (1, a, a * 13 + 7)]
+        bounds = [1]
+        for m in taped_plan(330, PLAN):
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, 330)
+            reads = [x for a in range(lo, hi) for x in (0, a)]
+            want = [a * 13 + 7 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=60_000_000)
+            assert res.fatal is None, (order, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    shipped = readback(None)
+    assert len(shipped) == 329
+    assert shipped == {a: a * 13 + 7 for a in range(1, 330)}
+    assert readback((3, 0, 1, 2)) == shipped
 
 
 def test_fresh_slots_read_zero_and_extremes_survive() -> None:

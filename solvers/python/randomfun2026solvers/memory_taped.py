@@ -21,10 +21,17 @@ The parts, west to east and top to bottom::
 
 **The gate** is the load-bearing room. It speaks the tape's own wire protocol
 (``0 addr`` read / ``1 addr value`` write — what :data:`lm1.machine._ADAPTER`
-emits) on *both* sides, so the chain composes: each gate owns the next ``M``
-addresses and **rebases** what it forwards, so every bank decodes plain local
-addresses ``1..M`` and the last bank needs no gate at all — the last gate's
-downstream arm is already speaking its wire, rebased.
+emits) on *both* sides, so the chain composes: each gate owns ``M`` addresses
+off one **end** of the space it is handed and **rebases** what it forwards, so
+every bank decodes plain local addresses ``1..M`` and the last bank needs no
+gate at all — the last gate's downstream arm is already speaking its wire,
+rebased.
+
+Which end is :func:`bank_gate`'s ``high``, and it is what lets the chain visit
+the banks in an order other than address order (:func:`gate_chain`). That
+matters because a gate forwards everything that is not its own, so the chain is
+a **linear scan**: the bank at chain position ``j`` is ``j`` pass-throughs away.
+Putting the hottest bank first is worth far more than anything inside a gate.
 
 One man, four arms. ``U`` takes the op and ``b`` parks it in the backpack (the
 op is 0/1, exactly a BP flag), which frees both hands for the range test —
@@ -58,7 +65,7 @@ from __future__ import annotations
 
 from .memory_men_v3 import V3Store
 
-__all__ = ["bank_gate", "gate_rows", "taped_store_block", "taped_plan"]
+__all__ = ["bank_gate", "gate_chain", "gate_rows", "taped_store_block", "taped_plan"]
 
 #: The gate's interior height; rows 1..12 like the two-tier adapter it descends
 #: from, with the same return loop (east column down, floor west, climb to ``U``).
@@ -102,16 +109,50 @@ def gate_rows(compact: bool = False) -> tuple[int, int, int, int]:
     return GATE_H, GATE_IN_ROW, GATE_LOCAL_ROW, GATE_DOWN_ROW
 
 
-def bank_gate(m: int, *, compact: bool = False) -> tuple[dict[tuple[int, int], str], int]:
+def bank_gate(
+    m: int, *, compact: bool = False, high: int | None = None
+) -> tuple[dict[tuple[int, int], str], int]:
     """One range gate for a bank of ``m`` slots: cells (walls included), width.
 
     Local coordinates: walls at column 0 / row 0, interior from (1, 1). The
     caller attaches the request pipe to the west wall at the in row and the two
     outgoing pipes to the east wall at the local / downstream rows — all three
     from :func:`gate_rows`, which is also where ``compact`` is described.
+
+    ``high`` turns the gate around: instead of claiming the **first** ``m``
+    addresses of the space it is handed, it claims the **last** ``m`` of
+    ``1..high``. The room does not change shape by one cell, because the ISA
+    happens to be symmetric exactly where it has to be:
+
+    ==========  =====================  ============================
+    .           low gate (``high``     high gate
+                is ``None``)
+    ==========  =====================  ============================
+    spine       ``UbrM`m+1`W-X``       ``UbrM`high-m`-X``
+                ``A = addr - (m+1)``   ``A = (high-m) - addr``
+    mine        ``A < 0``, i.e.        ``A < 0``, i.e.
+                ``addr <= m``          ``addr > high-m``
+    local addr  ``A + (m+1) = addr``   ``-A = addr - (high-m)``
+    forwarded   ``A + 1 = addr - m``   ``addr``, untouched
+    ==========  =====================  ============================
+
+    Both forms therefore put **mine on the north arm** — the counter-clockwise
+    side of the ``X``, which is what the block's floor plan needs, because the
+    local pipe has to climb to a bank sitting *above* the gate strip while the
+    downstream pipe runs east under it, and those two paths cross if the local
+    one leaves below the spine. And both keep ``A == 0`` on the downstream side:
+    for the low gate zero is the first address downstream, for the high gate it
+    is the last, and either way it merges into the elbow correctly.
+
+    The arms cost the same or less. ``N`` (negate, ``SPEC.md``) does in one glyph
+    what the low gate's ``+`` does, so the north arms are the same width; the
+    high gate's south arms only have to ``W`` the untouched address back into A,
+    where the low gate's have to ``M1+`` it, so they are two cells *shorter*.
     """
     if m < 1:
         raise ValueError(f"a bank must hold at least one slot, not {m}")
+    if high is not None and high - m < 1:
+        raise ValueError(f"a high gate over 1..{high} cannot hand {high - m} addresses on")
     h, in_row, _local_row, _down_row = gate_rows(compact)
     # The four arm rows. The shipped body leaves nop spacers between the
     # stations (two above the `d`, one everywhere else); compact leaves none, so
@@ -122,8 +163,16 @@ def bank_gate(m: int, *, compact: bool = False) -> tuple[dict[tuple[int, int], s
     n_read = n_write - 1 - gap  # ... and the read arm above it (row 1 either way)
     s_write = turn + 1 + gap  # the `a` that splits south on the parked op
     s_read = s_write + 1 + gap  # ... and the read arm below it
-    lit = f"`{m + 1}`"
-    cx = 7 + len(lit)  # the range test's X
+    # the spine, and the four arms it hands A to (see the docstring's table)
+    if high is None:
+        spine = f"UbrM`{m + 1}`W-X"
+        n_read_arm, n_write_arm = "+M0sWs", "+M1sWsrs"  # restore addr
+        s_read_arm, s_write_arm = "M1+M0sWs", "M1+M1sWsrs"  # rebase to addr - m
+    else:
+        spine = f"UbrM`{high - m}`-X"
+        n_read_arm, n_write_arm = "NM0sWs", "NM1sWsrs"  # negate to addr - (high-m)
+        s_read_arm, s_write_arm = "WM0sWs", "WM1sWsrs"  # addr is already in B
+    cx = len(spine)  # the range test's X (the spine starts at column 1)
     cr = cx + 13  # the return column, east of the longest arm plus slack
     g: dict[tuple[int, int], str] = {}
 
@@ -137,26 +186,27 @@ def bank_gate(m: int, *, compact: bool = False) -> tuple[dict[tuple[int, int], s
         for i, ch in enumerate(s):
             put(x + i, y, ch)
 
-    # the spine: op -> backpack, then A = addr - (m+1), then the three-way X
-    text(1, in_row, f"UbrM{lit}W-X")
+    # the spine: op -> backpack, then the range test, then the three-way X
+    text(1, in_row, spine)
 
     # A < 0 (mine): north, splitting on the parked op at `d`
     for y in range(n_read + 1, in_row):
         put(cx, y, "d" if y == n_write else ".")  # BP > 0 (write): right = east
-    text(cx + 1, n_write, "+M1sWsrs")
+    text(cx + 1, n_write, n_write_arm)
     put(cx, n_read, ">")  # BP == 0 (read): straight through to the top row
-    text(cx + 1, n_read, "+M0sWs")
+    text(cx + 1, n_read, n_read_arm)
 
     # A == 0 goes straight and A > 0 turns south; they merge one column east
-    # (the zero IS the first downstream address, so the merge is correct).
+    # (the zero is the first downstream address on a low gate and the last one
+    # on a high gate, so either way it belongs with the southbound stream).
     put(cx + 1, in_row, "v")
     put(cx, turn, ">")
     put(cx + 1, turn, "v")
     for y in range(turn + 1, s_read):
         put(cx + 1, y, "a" if y == s_write else ".")  # BP > 0 (write): left = east
-    text(cx + 2, s_write, "M1+M1sWsrs")
+    text(cx + 2, s_write, s_write_arm)
     put(cx + 1, s_read, ">")
-    text(cx + 2, s_read, "M1+M0sWs")
+    text(cx + 2, s_read, s_read_arm)
 
     # the return leg: every arm walks east onto the same descent, then the
     # floor runs west and the climb re-enters the spine's `U` from below
@@ -207,12 +257,58 @@ def taped_plan(n: int, banks: int | tuple[int, ...]) -> list[int]:
     return sizes + [last]
 
 
+def gate_chain(
+    sizes: list[int] | tuple[int, ...], order: tuple[int, ...] | None = None
+) -> list[tuple[int, int | None]]:
+    """The chain, position by position: ``(bank index, high-gate top or None)``.
+
+    ``sizes`` is :func:`taped_plan`'s **address order**; ``order`` is the order
+    the chain visits those banks in, defaulting to address order. The last entry
+    is the terminal bank, which has no gate — its ``top`` is always ``None``.
+
+    Why an arbitrary permutation is *not* available, and which ones are: a gate
+    hands its downstream neighbour one **contiguous** address space, rebased to
+    start at 1, and the test it can do on the way is one-sided (the ``X`` splits
+    on a sign). So each gate takes a bank off one **end** of the space it was
+    handed — :func:`bank_gate`'s low form off the bottom, its ``high`` form off
+    the top — and the reachable orders are exactly the end-peelings. That is
+    enough for the thing worth doing: putting the hottest bank first.
+
+    Traversal cost is why. ``A > 0`` means "not mine, pass downstream", so a
+    request for the bank at chain position ``j`` walks ``j`` gates' south arms
+    before it walks its own north one — the chain is a linear scan, and address
+    order is not traffic order.
+    """
+    nb = len(sizes)
+    ord_ = tuple(range(nb)) if order is None else tuple(order)
+    if sorted(ord_) != list(range(nb)):
+        raise ValueError(f"chain order {ord_} is not a permutation of 0..{nb - 1}")
+    lo, hi, top = 0, nb - 1, sum(sizes)
+    out: list[tuple[int, int | None]] = []
+    for k in ord_[:-1]:
+        if k == lo:
+            out.append((k, None))
+            lo += 1
+        elif k == hi:
+            out.append((k, top))
+            hi -= 1
+        else:
+            raise ValueError(
+                f"chain order {ord_} asks for bank {k} while the space still holds "
+                f"banks {lo}..{hi}; a gate can only claim an END of what it is handed"
+            )
+        top -= sizes[k]
+    out.append((ord_[-1], None))
+    return out
+
+
 def taped_store_block(
     n: int,
     banks: int | tuple[int, ...],
     *,
     skip_batch: int = 1,
     compact_gate: bool = False,
+    order: tuple[int, ...] | None = None,
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
 
@@ -228,15 +324,23 @@ def taped_store_block(
     shorter walk through every one of them. The gate strip is the block's floor,
     so the block loses those five rows too. ``False`` keeps the shipped body, so
     every existing caller's grid is byte-identical.
+
+    ``order`` is the **chain** order over ``banks``' address-order sizes — see
+    :func:`gate_chain`, which also says which permutations exist. ``None`` is
+    address order, so every existing caller's grid is byte-identical. The banks
+    are then laid out west to east in chain order, which is what keeps the floor
+    plan (and the block's dimensions) exactly as they were.
     """
     from .lm1.machine import tape_block
 
     _gate_h, gate_in_row, gate_local_row, gate_down_row = gate_rows(compact_gate)
-    sizes = taped_plan(n, banks)
+    plan = taped_plan(n, banks)
+    chain = gate_chain(plan, order)
+    sizes = [plan[k] for k, _ in chain]
     tapes = [tape_block(size + 1, skip_batch=skip_batch) for size in sizes]
     bank_w = max(t.width for t in tapes)
     bank_h = max(t.height for t in tapes)
-    gates = [bank_gate(m, compact=compact_gate) for m in sizes[:-1]]
+    gates = [bank_gate(plan[k], compact=compact_gate, high=top) for k, top in chain[:-1]]
     gate_w = max(w for _, w in gates)
 
     # ── the floor plan ───────────────────────────────────────────────────────
