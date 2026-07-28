@@ -130,14 +130,16 @@ def test_hud_background_and_live_bars() -> None:
 def test_walk_is_its_chords_and_keys_encodes_the_mux() -> None:
     """The walk is spelled as chords; keys() encodes held-key bitmasks."""
     assert d3.WALK == [d3.keys(ch) for ch in d3.WALK_CHORDS]
-    assert len(d3.WALK) == 50
+    assert len(d3.WALK) == 53
     assert (d3.KEY_FWD, d3.KEY_BACK, d3.KEY_LEFT, d3.KEY_RIGHT, d3.KEY_FIRE) == (
         1, 2, 4, 8, 16)
     assert d3.keys("wa ") == 21 and d3.keys(".") == 0 and d3.keys("ww") == 1
-    # The FIRE beats: at the cavern's south rim, chorded with the last step
-    # toward the slime fall, and standing before it.
-    assert [i for i, c in enumerate(d3.WALK) if d3.fire_bit(c)] == [29, 48, 49]
-    assert d3.WALK[48] == d3.keys("w ") == 17  # fire while moving: the MUX
+    # The FIRE beats: at the cavern's south rim, chorded with the step OUT of
+    # the slime moat, and standing clean before the fall.
+    assert [i for i, c in enumerate(d3.WALK) if d3.fire_bit(c)] == [29, 51, 52]
+    assert d3.WALK[51] == d3.keys("w ") == 17  # fire while moving: the MUX
+    # The M5 beats: three held frames standing in the moat before stepping out.
+    assert d3.WALK[48:51] == [0, 0, 0]
 
 
 def test_chord_semantics_turn_then_move_and_cancelling() -> None:
@@ -153,7 +155,7 @@ def test_chord_semantics_turn_then_move_and_cancelling() -> None:
 
 def test_one_frame_per_command() -> None:
     frames = d3.frames_for_commands(d3.WALK)
-    assert len(frames) == len(d3.WALK) == 50
+    assert len(frames) == len(d3.WALK) == 53
 
 
 def test_walk_stays_inside_open_cells() -> None:
@@ -168,6 +170,195 @@ def test_walk_stays_inside_open_cells() -> None:
     cx, cy = d3.div(state.posX, d3.UNITS), d3.div(state.posY, d3.UNITS)
     assert (cx, cy) == (45, 46)
     assert d3.map_cell(cx, cy + 3) == 2
+
+
+# ── nukage: the damage floors (M5) ───────────────────────────────────────────
+def test_nukage_plane_round_trips_and_stays_off_walls() -> None:
+    """The 64-word bit plane rebuilds NUKAGE_STR exactly; every nukage cell is
+    open (the map words never carry it — a nonzero nibble would be a wall to
+    the DDA) and bit 63 is never set (2**63 would leave the signed word)."""
+    words = d3.nukage_words()
+    assert len(words) == 64 and all(0 <= w < 2 ** 63 for w in words)
+    printed = d3.NUKAGE_STR.splitlines()
+    count = 0
+    for x in range(d3.MAP_SIZE):
+        for y in range(d3.MAP_SIZE):
+            n = d3.nukage_cell(x, y)
+            assert n == (1 if printed[d3.MAP_SIZE - 1 - y][x] == "N" else 0)
+            if n:
+                assert d3.map_cell(x, y) == 0
+                count += 1
+    assert count == 112  # Freedoom E1M1's slime moat, wadimport-measured
+
+
+def test_walk_fords_the_moat_and_health_drains() -> None:
+    """The walk stands on nukage for exactly 14 frames (the cavern crossing
+    and the finale's soak), and the model threads health 100 -> 30 into the
+    red bar, the floor colour and the face bands."""
+    state = d3.SPAWN
+    nuk_idx = []
+    for i, cmd in enumerate(d3.WALK):
+        state = d3.step(state, cmd)
+        if d3.nukage_cell(d3.div(state.posX, d3.UNITS), d3.div(state.posY, d3.UNITS)):
+            nuk_idx.append(i)
+    assert nuk_idx == [32, 33, 34, 35, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+    frames = d3.frames_for_commands(d3.WALK)
+
+    def health_px(fr: list[str]) -> int:
+        return fr[41][4:29].count("9")
+
+    assert health_px(frames[31]) == 25          # full bar before the moat
+    assert health_px(frames[35]) == 20          # 4 frames in: health 80
+    assert health_px(frames[50]) == 7           # 14 frames in: health 30
+    assert health_px(frames[52]) == 7           # out of the moat: no more drain
+    # The floor floods green exactly on the standing-in-slime frames.
+    assert frames[46][39][5] == "2" and frames[40][39][5] == "8"
+    # And the face degrades: healthy at the spawn, bloodied in the soak.
+    assert frames[0][41][33:43] == d3.FACE_HEALTHY[0][2]
+    assert frames[50][46][33:43] == d3.FACE_BLOODY[5][2]
+
+
+def test_install_art_swaps_gun_face_and_unit_model() -> None:
+    """install_art (Mode B's art override) rebinds the golden's sprite tables,
+    the asm generator's face constants AND the emulator unit model — and a
+    restore puts the committed Freedoom art back exactly."""
+    from randomfun2026solvers.lm1.store import DoomUnit
+
+    keep_gun = (list(d3.GUN_IDLE), list(d3.GUN_FIRE))
+    keep_faces = {"healthy": list(d3.FACE_HEALTHY), "hurt": list(d3.FACE_HURT),
+                  "bloody": list(d3.FACE_BLOODY), "grim": list(d3.FACE_GRIM)}
+    idle = [(30, 30, "7")]
+    fire = [(25, 31, "9"), (29, 30, "7")]
+    faces = {k: [(41 + i, 33, "1111111111") for i in range(6)]
+             for k in ("healthy", "hurt", "bloody", "grim")}
+    try:
+        d3.install_art(idle, fire, faces)
+        assert DoomUnit.GUN_IDLE == tuple(idle)  # the emulator model follows
+        frame = d3.render(d3.SPAWN)
+        assert frame[30][30] == "7"              # the swapped gun paints
+        assert frame[41][33:43] == "1111111111"  # the swapped face paints
+        # … and the generated asm carries the swapped face's RUN constant.
+        word = 8 * (10 * 16 + 1) + DoomUnit.CODES["RUN"]
+        assert f"LDI {word}" in d3.deadman3d_source()
+    finally:
+        d3.install_art(keep_gun[0], keep_gun[1], keep_faces)
+    assert DoomUnit.GUN_IDLE == tuple(d3.GUN_IDLE)
+    assert d3.render(d3.SPAWN)[41][33:43] == d3.FACE_HEALTHY[0][2]
+
+
+def test_face_bands_and_grimace() -> None:
+    """face_for: FIRE wins, else the health bands at 67/34 — exactly the asm's
+    branch ladder — and hud_rows paints the chosen face into its box."""
+    assert d3.face_for(100, False) is d3.FACE_HEALTHY
+    assert d3.face_for(67, False) is d3.FACE_HEALTHY
+    assert d3.face_for(66, False) is d3.FACE_HURT
+    assert d3.face_for(34, False) is d3.FACE_HURT
+    assert d3.face_for(33, False) is d3.FACE_BLOODY
+    assert d3.face_for(0, False) is d3.FACE_BLOODY
+    assert d3.face_for(100, True) is d3.FACE_GRIM
+    rows = d3.hud_rows(100, 50)
+    for r, c, colors in d3.FACE_HEALTHY:
+        assert rows[r - d3.H3D][c:c + len(colors)] == colors
+    hurt = d3.hud_rows(50, 50)
+    for r, c, colors in d3.FACE_HURT:
+        assert hurt[r - d3.H3D][c:c + len(colors)] == colors
+
+
+# ── monsters: the depth-sorted billboards (M7a) ──────────────────────────────
+def test_monster_table_is_legal_and_stands_on_open_floor() -> None:
+    """Every THINGS-derived monster is a legal species on an open cell, and no
+    two share one — a monster inside a wall would be permanently occluded by
+    the very column it stands in."""
+    assert 0 < len(d3.MONSTERS) <= d3.MAX_MON
+    cells = set()
+    for cx, cy, species in d3.MONSTERS:
+        assert 0 <= cx < d3.MAP_SIZE and 0 <= cy < d3.MAP_SIZE
+        assert species in (0, 1)
+        assert d3.map_cell(cx, cy) == 0, f"monster inside wall at {(cx, cy)}"
+        assert (cx, cy) not in cells, f"two monsters share cell {(cx, cy)}"
+        cells.add((cx, cy))
+    # One HP word per monster, from the per-species table.
+    hp = d3.monster_hp_words()
+    assert len(hp) == len(d3.MONSTERS)
+    assert hp == [d3.MON_HP[s] for _cx, _cy, s in d3.MONSTERS]
+
+
+def test_the_sprite_divisor_is_positive_for_every_heading() -> None:
+    """DET = planeX*dirY - dirX*planeY divides the camera transform, and DIV
+    by 0 is 0 on this CPU — a heading where DET vanished (or went negative)
+    would fold every sprite onto column 0 instead of failing loudly."""
+    for h in range(d3.HEADINGS):
+        assert d3.det_for(h) > 0
+
+
+def test_sprite_words_pack_one_column_each_inside_the_signed_word() -> None:
+    """Each band is one packed word per sprite column, bottom pixel in nibble
+    0. Heights <= 14 keep the top nibble below 2**60, so no word can reach the
+    2**63 that would leave the signed range."""
+    widths = [w for w, _h in d3.MON_BANDS]
+    heights = [h for _w, h in d3.MON_BANDS]
+    assert all(h <= 14 for h in heights)
+    assert d3.MON_STRIDE == sum(widths)
+    assert d3.MON_BAND_OFF == (0, widths[0], widths[0] + widths[1])
+    # Three sprite frames share the stride: species 0, species 1, the corpse.
+    assert len(d3.MON_SPRITES) == 3 * d3.MON_STRIDE
+    assert all(0 <= w < 2 ** 63 for w in d3.MON_SPRITES)
+    # Every column's nibbles fit its band's height, and colour 0 is the
+    # transparency the paint chain skips (so a fully-clear column is 0).
+    for frame in range(3):
+        for band, (bw, bh) in enumerate(d3.MON_BANDS):
+            off = frame * d3.MON_STRIDE + d3.MON_BAND_OFF[band]
+            for word in d3.MON_SPRITES[off:off + bw]:
+                assert word < 16 ** bh
+
+
+def test_band_thresholds_bracket_the_cull_range() -> None:
+    """Nearest band first: the thresholds ascend and sit strictly inside the
+    near/far culls, so every surviving depth picks exactly one band."""
+    assert list(d3.BAND_T) == sorted(d3.BAND_T)
+    assert d3.MON_NEAR < d3.BAND_T[0] < d3.BAND_T[-1] < d3.MON_FAR
+    assert len(d3.BAND_T) == len(d3.MON_BANDS) - 1
+
+
+def _painted_and_hidden(state: d3.State) -> tuple[set, set]:
+    """Sprite pixels the wall depth test let through, and the ones it cut."""
+    real = d3._paint_monsters
+    cap: dict[str, list] = {}
+
+    def spy(cols, zbuf, *args):
+        base = [c[:] for c in cols]
+        drawn = [c[:] for c in cols]
+        real(drawn, zbuf, *args)
+        free = [c[:] for c in cols]
+        real(free, [10 ** 9] * len(zbuf), *args)  # walls infinitely far away
+        cap["px"] = [base, drawn, free]
+        cols[:] = drawn
+
+    d3._paint_monsters = spy
+    try:
+        d3.render(state)
+    finally:
+        d3._paint_monsters = real
+    base, drawn, free = cap["px"]
+    at = {(x, y) for x in range(len(drawn)) for y in range(len(drawn[0]))}
+    painted = {p for p in at if drawn[p[0]][p[1]] != base[p[0]][p[1]]}
+    unclipped = {p for p in at if free[p[0]][p[1]] != base[p[0]][p[1]]}
+    return painted, unclipped - painted
+
+
+def test_walls_occlude_monsters_per_column() -> None:
+    """The z-buffer is load-bearing, not decorative: at WALK[20] a monster is
+    cut down the middle — some of its columns pass the wall depth test and
+    some do not — and pretending the walls are infinitely far away paints the
+    pixels the wall is hiding."""
+    state = d3.SPAWN
+    for cmd in d3.WALK[:21]:
+        state = d3.step(state, cmd)
+    painted, hidden = _painted_and_hidden(state)
+    assert painted and hidden
+    # The same columns carry both: this is one sprite clipped, not one sprite
+    # drawn and a second one wholly behind a wall.
+    assert {x for x, _y in painted} & {x for x, _y in hidden}
 
 
 # ── pinned frames (hand-checked against the scratchpad PNGs) ─────────────────
@@ -217,19 +408,21 @@ SPAWN_FRAME = [
     "8888888888888888888888888880333333338888888888888888888888888888",
     "8888888888888888888888888880333333880888888888888888888888888888",
     "7777777777777777777777777777777777777777777777777777777777777777",
-    "88889999999999999999999999999888888888888888888888ccccccccc88888",
-    "88889999999999999999999999999888888888888888888888ccccccccc88888",
-    "88888888888888888888888888888888888888888888888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbbb888888888888888888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbbb888888888888888888888ccccccccc88888",
-    "88888888888888888888888888888888888888888888888888ccccccccc88888",
+    "88889999999999999999999999999888800088000008888888ccccccccc88888",
+    "88889999999999999999999999999888808333373808888888ccccccccc88888",
+    "88888888888888888888888888888888803377378308888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbbb88888333333f388888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbbb888888337733888888888ccccccccc88888",
+    "88888888888888888888888888888888888083380888888888ccccccccc88888",
     "8888888888888888888888888888888888888888888888888888888888888888",
 ]
 
 #: The cavern half-look (WALK[38] holds after the ``d`` turn: heading 15 at
 #: cell (41, 40)): the great cavern's north-east rim — the green MCSTAT
 #: screens and gold-brown ZIMMER cliffs banded across the horizon, the
-#: cavern floor sweeping to the dark distance.
+#: cavern floor sweeping to the dark distance.  By this frame the walk has
+#: forded the moat's west lobe (frames 32..35): health 80, the red bar 20px,
+#: the face still in its healthy band.
 CAVERN_LOOK_FRAME = [
     "0000000000000000000000000000000000000000000000000000000000000000",
     "0000000000000000000000000000000000000000000000000000000000000000",
@@ -252,11 +445,11 @@ CAVERN_LOOK_FRAME = [
     "aaaa2333333333333333333322222222222222222222222aa222222277777fff",
     "aaaa2333333333333bb333332aaa222aaaa22222aaaaa22aa222222277777fff",
     "22222333333333333bb333332aaa222aaaa22222aaaaa22aa222222277777777",
-    "aaaa2333333333333bb333332aaa222aaaa22222aaaaa2222222222277777fff",
-    "aaaa2333333333333333333322222222222222222222222aa222222277777fff",
-    "aaaa2888888888888888888888888888888888888888882aa222222277777fff",
-    "2222288888888888888888888888888888888888888888888888888887777777",
-    "8888888888888888888888888888888888888888888888888888888888888888",
+    "aaaa2333333333333bb333332aaa222aaaa2222211aaa2222222222211777fff",
+    "aaaa2333333333333333333322222222222222223322222aa222222233777fff",
+    "aaaa2888888888888888888888888888888888883388882aa222222233777fff",
+    "2222288888888888888888888888888888888888338888888888888833777777",
+    "8888888888888888888888888888888888888888338888888888888833888888",
     "8888888888888888888888888888888888888888888888888888888888888888",
     "8888888888888888888888888888888888888888888888888888888888888888",
     "8888888888888888888888888888888888888888888888888888888888888888",
@@ -272,12 +465,12 @@ CAVERN_LOOK_FRAME = [
     "8888888888888888888888888880333333338888888888888888888888888888",
     "8888888888888888888888888880333333880888888888888888888888888888",
     "7777777777777777777777777777777777777777777777777777777777777777",
-    "88889999999999999999999999999888888888888888888888ccccccccc88888",
-    "88889999999999999999999999999888888888888888888888ccccccccc88888",
-    "88888888888888888888888888888888888888888888888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbb8888888888888888888888ccccccccc88888",
-    "8888bbbbbbbbbbbbbbbbbbbbbbbb8888888888888888888888ccccccccc88888",
-    "88888888888888888888888888888888888888888888888888ccccccccc88888",
+    "88889999999999999999999988888888800088000008888888ccccccccc88888",
+    "88889999999999999999999988888888808333373808888888ccccccccc88888",
+    "88888888888888888888888888888888803377378308888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbb888888333333f388888888ccccccccc88888",
+    "8888bbbbbbbbbbbbbbbbbbbbbbbb8888888337733888888888ccccccccc88888",
+    "88888888888888888888888888888888888083380888888888ccccccccc88888",
     "8888888888888888888888888888888888888888888888888888888888888888",
 ]
 
@@ -358,12 +551,17 @@ def test_title_words_are_pre_encoded_run_commands() -> None:
 # ── boot data and the cases file ─────────────────────────────────────────────
 def test_preamble_is_the_documented_tape_order() -> None:
     pre = d3.preamble_words()
-    assert len(pre) == 295
+    assert len(pre) == 451
     assert pre[0:256] == d3.map_words()                  # MAPB, slots 1..256
     assert pre[256:272] == [16 ** k for k in range(16)]  # POWB, slots 257..272
     assert pre[272:288] == d3.heading_table()            # HDGB, slots 273..288
-    # Spawn scalars, slots 289..295: cell (5, 26), heading 0 = east.
-    assert pre[288:] == [5632, 27136, 0, 1024, 0, 0, -676]
+    assert pre[288:352] == d3.nukage_words()             # NUKB, slots 289..352
+    # Spawn scalars, slots 353..359: cell (5, 26), heading 0 = east.
+    assert pre[352:359] == [5632, 27136, 0, 1024, 0, 0, -676]
+    # M7a: the monster table, its HP block and the packed sprite columns.
+    assert pre[359:375] == d3.monster_words()            # MONB, slots 360..375
+    assert pre[375:391] == d3.monster_hp_words()         # MHPB, slots 376..391
+    assert pre[391:] == d3.MON_SPRITES                   # SPRB, slots 392..451
     # planeY = -676 (east spawn) is the preamble's ONE negative word — legal,
     # because the preamble rides input, never ROM literals.
     assert [w for w in pre if w < 0] == [-676]
@@ -417,14 +615,20 @@ def test_checked_in_asm_matches_the_generator() -> None:
 
 def test_tape_slots_are_the_documented_map() -> None:
     slots = d3.tape_slots()
-    assert (slots["MAPB"], slots["POWB"], slots["HDGB"]) == (1, 257, 273)
-    assert slots["POSX"] == len(d3.preamble_words()) - 6 == 289
-    # The scalars run consecutively after the boot data, PTR last (the V4
-    # live-HUD scalars AMMO and HEALTH sit just before it).
+    assert (slots["MAPB"], slots["POWB"], slots["HDGB"], slots["NUKB"]) == (
+        1, 257, 273, 289)
+    assert slots["POSX"] == 353
+    # M7a: the monster/sprite boot blocks end the preamble, then the 64
+    # per-frame ZBUF slots (never boot-loaded), then the scalars.
+    assert (slots["MONB"], slots["MHPB"], slots["SPRB"]) == (360, 376, 392)
+    assert slots["ZBUF"] == len(d3.preamble_words()) + 1 == 452
+    # The scalars run consecutively after ZBUF, PTR last; the sprite pass's
+    # slot file is field-major triples (slot k's field at base + k).
     scalars = sorted(v for k, v in slots.items() if v >= slots["CMD"])
-    assert scalars == list(range(296, 330))
-    assert slots["AMMO"] == 327 and slots["HEALTH"] == 328
-    assert slots["PTR"] == max(slots.values()) == 329
+    assert scalars == list(range(452 + 64, 452 + 64 + 81))
+    assert slots["AMMO"] == 547 and slots["HEALTH"] == 548 and slots["NUKE"] == 549
+    assert slots["STY1"] == slots["STY0"] + 1 and slots["SID2"] == slots["SID0"] + 2
+    assert slots["PTR"] == max(slots.values()) == 596
 
 
 def test_registry_pins() -> None:
@@ -435,16 +639,18 @@ def test_registry_pins() -> None:
     assert machine.display_for("deadman-3d") == (d3.WIDTH, d3.HEIGHT) == (64, 48)
     assert machine.display_for("plotter") == (32, 24)
     # … and the tape is highest .equ address + 1 (an exactly-sized tape stalls).
-    assert machine.TAPE_SIZE["deadman-3d"] == max(d3.tape_slots().values()) + 1 == 330
-    # 330 slots is past the rotating tape's practical cap, so the STORE rides
+    assert machine.TAPE_SIZE["deadman-3d"] == max(d3.tape_slots().values()) + 1
+    # The tape is far past the rotating tape's practical cap, so the STORE rides
     # the men-v3 man-memory (~11 ticks an access, whatever n is) …
     assert machine.STORE_TIER["deadman-3d"] == "men-v3"
-    # … as the 8x42 multi-column block: the one-column strip was 681x999 and set
-    # BOTH dimensions of the old 756x1197 bbox; 8x42 (336 >= 330 cells) is the
-    # shape that, jointly with the 44-row ROM fold (deepened for the M6 move
-    # arm), makes the machine an exact 307x307 square — the viewer holds the
-    # full bounding rectangle, so squareness is this demo's objective.
-    assert machine.STORE_SHAPE["deadman-3d"] == (8, 42)
+    # … as a multi-column block whose cells cover the tape. The exact shape is
+    # a sweep outcome (it has moved with every milestone: 1-wide, 8x42, 9x44,
+    # 10x60); what must hold is that it FITS — a short block silently drops
+    # the top slots — and that it stays a block, not the 681x999 strip that
+    # once set both dimensions of the bounding box.
+    cols, rows = machine.STORE_SHAPE["deadman-3d"]
+    assert cols * rows >= machine.TAPE_SIZE["deadman-3d"]
+    assert cols > 1
     # The router is the SINGLE looping block (v2's footprint): the CPU issues
     # reads ~1k ticks apart, so the walk home happens while the router idles —
     # measured tick-identical to the unrolled 8-block strip on the frame gate.
@@ -456,10 +662,14 @@ def test_registry_pins() -> None:
     # The frame-1 tick levers, all opt-in so other machines stay byte-identical:
     assert "deadman-3d" in machine.INPUT_NORTH
     assert "deadman-3d" in machine.STORE_TELEPORT
-    # store_dy 1: each row shortens the serial request route one cell; with
-    # the 44-row M6 fold, 1 is where height meets the 307-column width exactly
-    # (the 307x307 square).
-    assert machine.MEM_PLACE["deadman-3d"] == ((0, 0), (0, 1))
+    # store_dy: each row shortens the hot serial request route one cell and
+    # costs one row of height, so the sweep pushes it as deep as the machine's
+    # height slack allows. Pin the structure (the store moves down, never
+    # sideways — a nonzero dx would cross the request route) and let the depth
+    # itself be whatever the current sweep chose.
+    (unit_dx, unit_dy), (store_dx, store_dy) = machine.MEM_PLACE["deadman-3d"]
+    assert (unit_dx, unit_dy) == (0, 0)
+    assert store_dx == 0 and store_dy >= 0
 
 
 def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
@@ -475,7 +685,9 @@ def test_short_emulator_run_is_pixel_equal_to_golden() -> None:
 
 @slow
 def test_the_full_demo_walk_is_pixel_equal_to_golden() -> None:
-    """The title plus all 50 WALK commands."""
+    """The title plus all 53 WALK commands — the moat crossing included, so
+    this covers the green floor, the damage drain and the face bands on the
+    real machine."""
     assert _emulator_frames(d3.WALK) == [d3.title_frame()] + d3.frames_for_commands(d3.WALK)
 
 
@@ -487,6 +699,23 @@ def test_a_seeded_fuzz_walk_is_pixel_equal_to_golden() -> None:
     pool = [1, 2, 4, 8] * 2 + [16, 21, 26, 3, 12, 17, 0, 255, 100, -3]
     cmds = [rng.choice(pool) for _ in range(40)]
     assert any(d3.fire_bit(c) for c in cmds) and -3 in cmds and 255 in cmds
+    assert _emulator_frames(cmds) == [d3.title_frame()] + d3.frames_for_commands(cmds)
+
+
+@slow
+def test_a_seeded_moat_fuzz_stands_in_nukage() -> None:
+    """The scripted walk to the moat plus 20 seeded chords stirred inside it:
+    random keys while standing on damage floors — green floods, the drain,
+    the face bands, fire-in-slime — all pixel-equal on the emulator."""
+    rng = random.Random(45)
+    pool = [0, 1, 2, 4, 8, 16, 17, 21, 3, 255]
+    cmds = list(d3.WALK[:48]) + [rng.choice(pool) for _ in range(20)]
+    state, nuk_frames = d3.SPAWN, 0
+    for cmd in cmds:
+        state = d3.step(state, cmd)
+        nuk_frames += d3.nukage_cell(
+            d3.div(state.posX, d3.UNITS), d3.div(state.posY, d3.UNITS))
+    assert nuk_frames >= 12, "the fuzz must actually soak in the moat"
     assert _emulator_frames(cmds) == [d3.title_frame()] + d3.frames_for_commands(cmds)
 
 
@@ -520,11 +749,11 @@ def test_the_machine_synthesizes_with_the_men_v3_store() -> None:
     # exactly one display room, 64x48 plus its walls.
     _px, _py, pw, ph = m.regions["display"]
     assert (pw, ph) == (d3.WIDTH + 2, d3.HEIGHT + 2) == (66, 50)
-    # The whole point of the 8x42 STORE_SHAPE + 44-row fold + store_dy 1:
-    # squareness (down from 756x1197), because the viewer holds the full
-    # bounding rectangle. Assert the property, not any particular number —
-    # exact-dimension pins went stale on every layout retune without ever
-    # catching a bug. The committed artifact pins the actual bytes.
+    # The STORE_SHAPE + ROM fold + store_dy sweep exists for squareness (down
+    # from 756x1197), because the viewer holds the full bounding rectangle.
+    # Assert the property, not any particular number — exact-dimension pins
+    # went stale on every layout retune without ever catching a bug. The
+    # committed artifact pins the actual bytes.
     w, h = max(len(r) for r in m.rows), len(m.rows)
     assert max(w, h) <= 400, (w, h)
     assert max(w, h) - min(w, h) <= max(w, h) // 10, (w, h)
@@ -649,9 +878,12 @@ def test_taped_registry_pins() -> None:
     """The taped variant is opt-in: the canonical machine STAYS men-v3, and the
     taped build is the one-liner `build_for("deadman-3d", store="taped")`."""
     assert machine.STORE_TIER["deadman-3d"] == "men-v3"
-    # Traffic-shaped plan: the hot high addresses (POWB/HDG at 257..288, then
-    # POSX and the per-frame scalars up to PTR=329) get small cheap rings.
-    assert machine.TAPED_BANKS["deadman-3d"] == (128, 128, 40, 33)
+    # Traffic-shaped plan: the hot high addresses (POWB/HDG at 257..288 plus
+    # M5's once-a-frame nukage plane, then POSX and the per-frame scalars up
+    # to PTR=394) get small cheap rings.
+    # The property, not the split: every slot must land in some bank (a plan
+    # that under-covers the tape stalls silently). The exact bank tuple is a
+    # tuning outcome that moves with every re-sweep.
     assert sum(machine.TAPED_BANKS["deadman-3d"]) >= machine.TAPE_SIZE["deadman-3d"] - 1
     assert machine.TAPED_SKIP_BATCH["deadman-3d"] == 2
     # No deadman-3d_taped.input.txt: same program, same protocol, same input —

@@ -88,7 +88,7 @@ colours are ANSI too: ammo red = 9, face yellow = 11, armor blue = 12.
 
 Tape slot map (the asm's .equ table; slot 0 is scratch)
 -------------------------------------------------------
-``preamble_words()`` yields the boot data in exact tape order, slots 1..295:
+``preamble_words()`` yields the boot data in exact tape order, slots 1..451:
 
     MAPB    1..256  packed quarter-columns: word ``4x + q`` holds cells
                     (x, 16q .. 16q+15), nibble ``y mod 16`` each
@@ -96,11 +96,21 @@ Tape slot map (the asm's .equ table; slot 0 is scratch)
     HDGB  273..288  packed headings, one word per heading h:
                     (dirX+1024)*2^36 + (dirY+1024)*2^24
                     + (planeX+1024)*2^12 + (planeY+1024)   (48 bits, positive)
-    POSX  289       spawn posX = 5632   (cell 5, Q10 centre)
-    POSY  290       spawn posY = 27136  (cell 26)
-    HDG   291       spawn heading = 0   (east — Freedoom E1M1's real facing)
-    DIRX  292       spawn dirX  = 1024      DIRY  293   spawn dirY   = 0
-    PLANEX 294      spawn planeX = 0        PLANEY 295  spawn planeY = -676
+    NUKB  289..352  the nukage bit plane (M5): word x holds column x, bit y —
+                    1 = damage floor; bit 63 is structurally 0 (border wall)
+    POSX  353       spawn posX = 5632   (cell 5, Q10 centre)
+    POSY  354       spawn posY = 27136  (cell 26)
+    HDG   355       spawn heading = 0   (east — Freedoom E1M1's real facing)
+    DIRX  356       spawn dirX  = 1024      DIRY  357   spawn dirY   = 0
+    PLANEX 358      spawn planeX = 0        PLANEY 359  spawn planeY = -676
+    MONB  360..375  the monster table (M7a): ((cx*64)+cy)*2 + species each
+    MHPB  376..391  initial monster HP (1 zombieman / 2 imp; M7b mutates it)
+    SPRB  392..451  60 packed sprite columns: species 0 bands 10+6+4, species
+                    1, corpse — nibble 0 = bottom pixel, colour 0 transparent
+
+The 64 ZBUF slots (452..515) follow the boot data but ride no input: every
+frame's column loop writes all 64 wall depths before the sprite pass reads
+any, so they boot as garbage and it never matters.
 
 The cell lookup is ``floor(MAPW[4x + y/16] / 16**(y mod 16)) mod 16`` —
 ``slot = MAPB + 4*mapX + (mapY / 16)``, divisor ``POWB + (mapY mod 16)`` —
@@ -136,7 +146,7 @@ round 1.
 
 Input protocol
 --------------
-Round 0 = the data preamble (:func:`preamble_words`, 295 words) + the title
+Round 0 = the data preamble (:func:`preamble_words`, 359 words) + the title
 screen's RLE (:func:`title_words`), committing the title frame; every later
 round is exactly one command word — a **key bitmask** (a MUX of the keys held
 this frame, because space can be held while moving):
@@ -179,7 +189,7 @@ on the 64x64 grid); 50 words, spelled ``WALK_CHORDS``.
 
 ``deadman3d_source()`` emits the LM-1 assembly lowered from this model;
 ``tape_slots()`` is its ``.equ`` table (the docstring's slot map plus the
-scalars, numbered consecutively from 296).
+scalars, numbered consecutively from 360).
 
 Art credits
 -----------
@@ -196,7 +206,18 @@ https://freedoom.github.io/), fetched at commit ``d14dbbe``:
   ANSI-16 palette at 64x48 (block-Lab, x1.6 brightness lift, despeckle);
 * the pistol sprites (:data:`GUN_IDLE`, :data:`GUN_FIRE`) —
   ``sprites/pisga0.png`` (idle) and ``sprites/pisfa0.png`` (muzzle flash),
-  quantized at 11x10.
+  quantized at 11x10;
+* the status-bar face (M5: :data:`FACE_HEALTHY`/:data:`FACE_HURT`/
+  :data:`FACE_BLOODY`/:data:`FACE_GRIM`) — ``graphics/stfst00.png``,
+  ``stfst20.png``, ``stfst40.png`` and ``stfevl0.png``, face-core-cropped
+  and quantized at 10x6 by ``wadimport.face_tables``;
+* the monster billboards (M7a: :data:`MON_SPRITES`, placed at
+  :data:`MONSTERS` — the level's own THINGS lump) — ``sprites/possa1.png``
+  (the former human), ``sprites/trooa1.png`` (the imp) and ``possl0.png``
+  (the corpse frame M7b will use), hue-forward quantized at three scale
+  bands by ``wadimport.monster_sprite_words``;
+* the damage floors (:data:`NUKAGE_STR`) — the level's own SECTORS lump
+  (specials 4/5/7/16), region-resolved by ``wadimport``'s flood fill.
 
 Freedoom content is distributed under its BSD-style licence (see the
 project's COPYING.adoc), which permits use and modification with
@@ -231,6 +252,12 @@ __all__ = [
     "MOVE_NUM", "MOVE_DEN", "BIG", "MAP_SIZE", "MAP_STR", "PALETTE",
     "KEY_FWD", "KEY_BACK", "KEY_LEFT", "KEY_RIGHT", "KEY_FIRE",
     "GUN_IDLE", "GUN_FIRE", "AMMO_START", "HEALTH_START",
+    "NUKAGE_STR", "NUKE_DAMAGE", "FLOOR_NUKE", "nukage_words", "nukage_cell",
+    "FACE_HEALTHY", "FACE_HURT", "FACE_BLOODY", "FACE_GRIM", "face_for",
+    "MAX_MON", "MONSTERS", "MON_SPRITES", "MON_BANDS", "MON_BAND_OFF",
+    "MON_STRIDE", "BAND_T", "MON_NEAR", "MON_FAR", "MON_HP",
+    "monster_words", "monster_hp_words", "det_for",
+    "install_level", "install_art",
     "SPAWN", "State", "WALK", "WALK_CHORDS", "keys", "fire_bit",
     "TITLE_HEX_ROWS", "title_frame", "title_runs", "title_words",
     "div", "map_cell", "map_words", "heading_table",
@@ -276,7 +303,7 @@ _KEY_BITS = {"w": KEY_FWD, "s": KEY_BACK, "a": KEY_LEFT, "d": KEY_RIGHT, " ": KE
 #: debug sidecar (the ``io:I`` region note) so the grid itself documents how to
 #: drive it. The module docstring's "Input protocol" section is the long form.
 INPUT_PROTOCOL = (
-    "Round 0: the 295-word data preamble (deadman3d.preamble_words()) then the "
+    "Round 0: the 451-word data preamble (deadman3d.preamble_words()) then the "
     "title screen's RLE (title_words(): one pre-encoded RUN command word per "
     "run), committing the title frame; each later round is ONE command word, a "
     "bitmask of the keys held this frame: 1=W fwd, 2=S back, 4=A left, 8=D "
@@ -389,6 +416,92 @@ MAP_STR = """\
 _PRINTED_ROWS = MAP_STR.splitlines()
 assert len(_PRINTED_ROWS) == MAP_SIZE and all(len(r) == MAP_SIZE for r in _PRINTED_ROWS)
 
+#: The damage floors (M5): ``N`` marks an open cell standing on a nukage
+#: sector — same orientation as ``MAP_STR``. GENERATED by ``wadimport``'s
+#: region flood fill from Freedoom E1M1's SECTORS lump (specials 4/5/7/16,
+#: the damage-floor family): the slime moat around the great cavern's fall,
+#: 112 cells. The plane rides the tape as its own 64-word 1-bit-per-cell
+#: plane (``NUKB``) because the map words cannot carry it: an 8th nibble
+#: value at nibble 15 is ``8 * 16**15 == 2**63`` — past the signed word —
+#: and any nonzero nibble would read as a wall to the DDA's ``t > 0`` hit
+#: test anyway. Bit 63 of a plane word would be the same overflow, but row
+#: y=63 is always border wall (asserted in :func:`nukage_words`).
+NUKAGE_STR = """\
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+...............................................N................
+............................................NNNNNN..............
+...........................................NNNNNNN..............
+..................................NNNN.....NNNNN................
+.................................NNNNNNN.....NN.................
+................................NNNNNNNN.....NN.................
+................................NNNNN...N....NN.................
+.................................NNNN...NNNN.NN.................
+................................NNNNNNNNNNNNNN..................
+.................................NNNNNNNNNNN....................
+.................................NNNNNNNNNNN....................
+..................................NNNNNNNN......................
+...................................NNNNNNN......................
+.....................................N..........................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+................................................................
+"""
+
+_NUKE_ROWS = NUKAGE_STR.splitlines()
+assert len(_NUKE_ROWS) == MAP_SIZE and all(len(r) == MAP_SIZE for r in _NUKE_ROWS)
+
+#: Standing on nukage costs this much health per frame (floor 0 — no death
+#: mechanics yet, the bar is just empty at 0).
+NUKE_DAMAGE = 5
+#: A nukage cell's floor paints green (ANSI 2) instead of the gray 8.
+FLOOR_NUKE = 2
+
 
 def _grid_cell(x: int, y: int) -> int:
     """Wall type straight from ``MAP_STR`` (x east, y north; row 0 is y=31)."""
@@ -425,6 +538,159 @@ def map_cell(x: int, y: int) -> int:
     pw = POW16[sign_mod(y, 16)]
     word = _MAP_WORDS[4 * x + div(y, 16)]
     return sign_mod(div(word, pw), 16)
+
+
+def nukage_words() -> list[int]:
+    """The 64-word nukage bit plane: word ``x`` holds column x, bit ``y``.
+
+    One bit per cell keeps the whole plane 64 words (a nibble plane would be
+    256); bit 63 must never be set (``2**63`` is past the signed word), which
+    holds structurally — row 63 is always border wall.
+    """
+    words = []
+    for x in range(MAP_SIZE):
+        word = 0
+        for y in range(MAP_SIZE):
+            if _NUKE_ROWS[MAP_SIZE - 1 - y][x] == "N":
+                assert _grid_cell(x, y) == 0, f"nukage on a wall cell {(x, y)}"
+                assert y < 63, f"nukage on the border row at {(x, y)} (bit 63 overflows)"
+                word += 2 ** y
+        assert 0 <= word < 2 ** 63
+        words.append(word)
+    return words
+
+
+_NUKE_WORDS = nukage_words()
+
+#: The asm's divisor ladder for the low two bits of the bit index: bit y of a
+#: plane word is ``word / 16**(y/4) / 2**(y mod 4) mod 2``, and ``2**(y mod
+#: 4)`` is picked by a 4-way branch (there is no POW2 table on the tape).
+_POW2 = (1, 2, 4, 8)
+
+
+def nukage_cell(x: int, y: int) -> int:
+    """The nukage bit exactly as the asm reads it: the plane word ``NUKB + x``
+    shifted down by ``POWB + (y / 4)`` (a 16**k divisor), then the 2**(y mod 4)
+    ladder, then ``MODI 2``."""
+    t = div(_NUKE_WORDS[x], POW16[div(y, 4)])
+    return sign_mod(div(t, _POW2[sign_mod(y, 4)]), 2)
+
+
+# ── monsters (M7a): static occluded billboards ───────────────────────────────
+#: The monster table cap: the tape's ``MONB``/``MHPB`` blocks are sized to it.
+MAX_MON = 16
+
+#: ``(cx, cy, species)`` per monster — species 0 = former humans (Freedoom's
+#: POSS art; THINGS 3004 zombieman and 9 shotgun guy collapse at this
+#: resolution), species 1 = imps (TROO art, THINGS 3001).  GENERATED by
+#: ``wadimport``'s ``_monster_things`` from Freedoom E1M1's real THINGS lump
+#: (commit ``d14dbbe``): medium-skill, single-player, open-cell, deduped,
+#: first :data:`MAX_MON` in THINGS order (43 monster things -> 19 skill/MP
+#: drops, 4 closed-cell drops, 4 over the cap).  The imps at (25, 38) and
+#: (25, 40) stand in the brown concrete corridor the demo walk climbs; the
+#: pair at (46, 34)/(47, 36) hold the cavern's east rim.
+MONSTERS: list[tuple[int, int, int]] = [
+    (25, 38, 1),
+    (25, 40, 1),
+    (34, 44, 1),
+    (46, 34, 1),
+    (47, 36, 1),
+    (17, 43, 0),
+    (17, 46, 0),
+    (26, 51, 0),
+    (23, 49, 0),
+    (14, 52, 0),
+    (10, 53, 0),
+    (23, 27, 0),
+    (25, 12, 0),
+    (29, 11, 0),
+    (47, 19, 0),
+    (48, 19, 1),
+]
+
+#: The three baked billboard scale bands, ``(width, height)`` near/mid/far.
+#: Heights <= 14 keep one whole sprite column in ONE packed word (16 nibbles;
+#: 16**14 == 2**56 < 2**63), so the paint chain is a bottom-up MODI 16 /
+#: DIVI 16 nibble walk with no POW16 lookup at all.
+MON_BANDS = ((10, 14), (6, 9), (4, 5))
+#: Column-word offset of each band inside a sprite's 20-word stripe.
+MON_BAND_OFF = (0, 10, 16)
+#: Words per sprite stripe: species 0 at 0, species 1 at 20, corpse at 40.
+MON_STRIDE = 20
+#: Band thresholds on the Q10 camera depth TY: ``40960 // midpoint_height``
+#: against ``MON_H_NUM = 40960`` (a one-cell-tall monster under the 81920
+#: two-cell wall) — band 0 below ``BAND_T[0]``, band 1 below ``BAND_T[1]``,
+#: band 2 out to the far cull.
+BAND_T = (3562, 5851)
+#: Near cull: the player is inside the monster (TY < one cell).
+MON_NEAR = UNITS
+#: Far cull: walls go dark at NEAR_D = 16 cells; monsters vanish at 12.
+MON_FAR = 12 * UNITS
+#: Initial HP per species (boot-loads ``MHPB``; consumed by M7b's hit logic).
+MON_HP = (1, 2)
+
+#: The packed sprite columns, one word each, 60 words: species 0's three
+#: bands (10+6+4 columns), species 1's, then the shared corpse frame padded
+#: to the same band boxes (transparent top rows; an M7b consumer).  Nibble 0
+#: is the column's BOTTOM pixel; colour 0 = transparent (an opaque black-ish
+#: source block quantizes to 8 — a billboard cannot paint black).  GENERATED
+#: by ``wadimport.monster_sprite_words`` from the **Freedoom** project's
+#: ``sprites/possa1.png``, ``sprites/trooa1.png`` and ``sprites/possl0.png``
+#: (commit ``d14dbbe``, BSD-style licence — see the module credits), via the
+#: hue-forward block quantize (``wadimport.quantize_monster``): the imp reads
+#: brown 3 with red 1 spikes, the zombieman olive 2 fatigues under a brown 3
+#: torso.
+MON_SPRITES: list[int] = [
+    # species 0 (POSS): band0 10 cols, band1 6, band2 4
+    2147483648, 34628173824, 221190815744, 1305672714368, 302585331878016,
+    14725978847215752, 36331403808573576, 56075095279752, 196812581371904,
+    3298534883328,
+    65536, 3145728, 322058376, 17501923464, 318775944, 0,
+    0, 12936, 340536, 0,
+    # species 1 (TROO): band0 10 cols, band1 6, band2 4
+    53477376, 13740539904, 6817212610576384, 5404319552844595,
+    4839170576167731, 4839170576167731, 5492279677760307, 422432317059888,
+    858783744, 3145728,
+    208896, 6501184256, 5120406323, 5153960755, 3158832, 0,
+    0, 78643, 78643, 0,
+    # corpse (POSSL0, padded to the band boxes): band0 10, band1 6, band2 4
+    2176, 2184, 136, 40, 40, 296, 4488, 20872, 16, 0,
+    8, 8, 2, 24, 88, 0,
+    8, 2, 24, 1,
+]
+
+
+def monster_words() -> list[int]:
+    """The packed ``MONB`` tape block: ``((cx * 64) + cy) * 2 + species`` per
+    monster — cell and species in one positive word, unpacked by the asm's
+    MODI 2 / MODI 64 / DIVI 64 ladder."""
+    assert len(MONSTERS) <= MAX_MON, f"{len(MONSTERS)} monsters > cap {MAX_MON}"
+    assert len({(cx, cy) for cx, cy, _sp in MONSTERS}) == len(MONSTERS), \
+        "monster cells must be unique (one billboard per cell)"
+    words = []
+    for cx, cy, sp in MONSTERS:
+        assert sp in (0, 1), f"species {sp} has no sprite stripe"
+        assert 0 <= cx < MAP_SIZE and 0 <= cy < MAP_SIZE
+        assert map_cell(cx, cy) == 0, f"monster on a wall cell {(cx, cy)}"
+        words.append(((cx * 64) + cy) * 2 + sp)
+    return words
+
+
+def monster_hp_words() -> list[int]:
+    """The ``MHPB`` tape block: each monster's initial HP (:data:`MON_HP` by
+    species) — boot-loaded now, mutable by M7b's hit resolution."""
+    return [MON_HP[sp] for _cx, _cy, sp in MONSTERS]
+
+
+def _check_sprites(words: list[int]) -> list[int]:
+    assert len(words) == 3 * MON_STRIDE, f"{len(words)} sprite words != 60"
+    assert all(0 <= w < 16 ** 14 for w in words), "a sprite column overflows"
+    return list(words)
+
+
+_MON_WORDS = monster_words()
+_MHP_WORDS = monster_hp_words()
+_SPR_WORDS = _check_sprites(MON_SPRITES)
 
 
 # ── heading table ────────────────────────────────────────────────────────────
@@ -464,6 +730,15 @@ def heading_table() -> list[int]:
 
 
 _HDG_WORDS = heading_table()
+
+
+def det_for(heading: int) -> int:
+    """The sprite projection's divisor ``DET = planeX*dirY - dirX*planeY``
+    (Q20), exactly as the asm's per-frame prologue computes it.  Positive for
+    every heading because the plane is dir rotated -90° (the tests assert all
+    16) — the projection divides by it, so this is a structural invariant."""
+    dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[heading])
+    return planeX * dirY - dirX * planeY
 
 
 # ── state and the command step ───────────────────────────────────────────────
@@ -564,29 +839,182 @@ GUN_FIRE: list[tuple[int, int, str]] = [
 ] + [(r - 1, c, colors) for r, c, colors in GUN_IDLE]
 
 #: The live HUD's scalars (V4): ammo starts full and drops one per shot down
-#: to an empty clip; health is static until the demo grows damage. The bars
-#: paint 2 rows each over the baked background: red health rows 41..42 from
-#: column 4, one pixel per 4 health; yellow ammo rows 44..45, one per 2 ammo.
+#: to an empty clip; health starts full and (M5) nukage floors drain it 5 a
+#: frame, floor 0. The bars paint 2 rows each over the baked background: red
+#: health rows 41..42 from column 4, one pixel per 4 health; yellow ammo rows
+#: 44..45, one per 2 ammo.
 AMMO_START = 50
 HEALTH_START = 100
 BAR_COL = 4
 HEALTH_BAR_ROWS = (41, 42)
 AMMO_BAR_ROWS = (44, 45)
 
+#: The status-bar face (M5): 10x6 in the HUD field rows 41..46, columns
+#: 33..42 — clear of the bars (4..28) and the armor block (50..58). Derived
+#: from the **Freedoom** project's status-bar faces (commit d14dbbe:
+#: ``graphics/stfst00.png`` healthy, ``stfst20.png`` hurt, ``stfst40.png``
+#: bloodied, ``stfevl0.png`` the firing grimace; BSD-style licence, see the
+#: module credits), GENERATED by ``wadimport.face_tables`` — the face core
+#: (brow to chin) composited onto the field gray 8 and block-Lab quantized
+#: at a x1.4 brightness lift. Encoding: one ``(panel row, first column,
+#: colours)`` run per face row, painted by the CPU as one CURS plus RLE RUN
+#: command words per frame — no unit arm, so no descent-window budget.
+#: The variant is picked per frame: the grimace on FIRE frames, else by the
+#: HEALTH band (> 66 healthy, > 33 hurt, else bloodied).
+FACE_ROW, FACE_COL, FACE_W, FACE_H = 41, 33, 10, 6
+FACE_HEALTHY: list[tuple[int, int, str]] = [
+    (41, 33, "0008800000"),
+    (42, 33, "0833337380"),
+    (43, 33, "0337737830"),
+    (44, 33, "8333333f38"),
+    (45, 33, "8833773388"),
+    (46, 33, "8808338088"),
+]
+FACE_HURT: list[tuple[int, int, str]] = [
+    (41, 33, "0000000000"),
+    (42, 33, "0833337880"),
+    (43, 33, "0339733830"),
+    (44, 33, "8333333f38"),
+    (45, 33, "8833393388"),
+    (46, 33, "8808331088"),
+]
+FACE_BLOODY: list[tuple[int, int, str]] = [
+    (41, 33, "0000000000"),
+    (42, 33, "0000308000"),
+    (43, 33, "8033f33130"),
+    (44, 33, "8393337933"),
+    (45, 33, "8193313938"),
+    (46, 33, "8813991988"),
+]
+FACE_GRIM: list[tuple[int, int, str]] = [
+    (41, 33, "8880000000"),
+    (42, 33, "0000800000"),
+    (43, 33, "8083333830"),
+    (44, 33, "8377337738"),
+    (45, 33, "8833773388"),
+    (46, 33, "8883773888"),
+]
+
+
+def face_for(health: int, fire: bool) -> list[tuple[int, int, str]]:
+    """Which face this frame paints, exactly as the asm branches: FIRE wins,
+    else the HEALTH band (> 66 / > 33 / the rest)."""
+    if fire:
+        return FACE_GRIM
+    if health > 66:
+        return FACE_HEALTHY
+    if health > 33:
+        return FACE_HURT
+    return FACE_BLOODY
+
+
+# ── the sprite pass (M7a): selection, occlusion, banded billboard paint ──────
+def _paint_monsters(cols: list[list[int]], zbuf: list[int],
+                    posX: int, posY: int, dirX: int, dirY: int,
+                    planeX: int, planeY: int) -> None:
+    """Paint up to three monster billboards over the finished columns.
+
+    Written in the generated asm's exact operation order — this function IS
+    the sprite pixel contract.  Selection: unpack each ``MONB`` word, cull
+    (behind the plane, nearer than :data:`MON_NEAR`, past :data:`MON_FAR`,
+    off screen), pick the scale band and floor line, and keep the nearest
+    three in a far-first slot file (slot 0 = farthest; strict ``<``
+    everywhere, so an equal-depth later THINGS index never displaces an
+    earlier one).  Paint: slots 0 -> 2 (back to front), per column the wall
+    depth test ``TY < ZBUF[x]``, then the bottom-up MODI 16 / DIVI 16 nibble
+    walk of the column's one packed word (colour 0 transparent).
+    """
+    det = planeX * dirY - dirX * planeY  # Q20 — the asm's per-frame prologue
+    assert det > 0, f"DET {det} must be positive (plane = dir rotated -90 deg)"
+    empty = {"ty": MON_FAR, "sx0": 0, "sx1": 0, "base": 0, "bot": 0,
+             "band": 0, "idx": 0}
+    slots = [dict(empty) for _ in range(3)]
+    for i, w in enumerate(_MON_WORDS):
+        sp = sign_mod(w, 2)
+        q = div(w, 2)
+        mdy = sign_mod(q, 64) * UNITS + 512 - posY   # cell centre - player
+        mdx = div(q, 64) * UNITS + 512 - posX
+        tyn = planeX * mdy - planeY * mdx            # camera depth num (Q20)
+        if tyn <= 0:
+            continue                                 # behind the plane
+        txn = dirY * mdx - dirX * mdy                # camera x numerator
+        ty = div(tyn * UNITS, det)                   # Q10 — ZBUF's own units
+        if ty < MON_NEAR:
+            continue                                 # player inside the monster
+        if ty - MON_FAR >= 0:
+            continue                                 # beyond the far cull
+        band = 0 if ty < BAND_T[0] else (1 if ty < BAND_T[1] else 2)
+        w_band = MON_BANDS[band][0]
+        sx = div(txn * 32, tyn) + 32                 # centre screen column
+        sx0 = sx - div(w_band, 2)
+        sx1 = sx0 + w_band - 1
+        if sx1 < 0:
+            continue                                 # off the left edge
+        if sx0 > WIDTH - 1:
+            continue                                 # off the right edge
+        bot = div(div(WALL_H * H3D * UNITS, ty), 2) + MID  # the floor line
+        if bot > H3D - 1:
+            bot = H3D - 1                            # near clamp: slides up whole
+        cand = {"ty": ty, "sx0": sx0, "sx1": sx1,
+                "base": sp * MON_STRIDE + MON_BAND_OFF[band],
+                "bot": bot, "band": band, "idx": i + 1}
+        # Far-first 3-slot insertion, strict < (the asm's branch ladder).
+        if not ty < slots[0]["ty"]:
+            continue                                 # not nearer than the farthest kept
+        if ty < slots[1]["ty"]:
+            slots[0] = slots[1]
+            if ty < slots[2]["ty"]:
+                slots[1] = slots[2]
+                slots[2] = cand
+            else:
+                slots[1] = cand
+        else:
+            slots[0] = cand
+    for s in slots:                                  # slot 0 first: back to front
+        if s["idx"] == 0:
+            continue
+        h_band = MON_BANDS[s["band"]][1]
+        x = s["sx0"]
+        ptr = 0
+        while x <= s["sx1"]:
+            if x < 0:
+                x += 1
+                ptr += 1
+                continue                             # clipped off the left edge
+            if x > WIDTH - 1:
+                break                                # clipped off the right edge
+            if s["ty"] < zbuf[x]:                    # the wall depth test
+                q = _SPR_WORDS[s["base"] + ptr]
+                row = s["bot"]
+                for _j in range(h_band):             # bottom-up nibble walk
+                    c = sign_mod(q, 16)
+                    q = div(q, 16)
+                    if c != 0:
+                        cols[x][row] = c
+                    row -= 1
+            x += 1
+            ptr += 1
+
 
 # ── the renderer (lodev raycaster_flat.cpp, in Q10) ──────────────────────────
 def render(state: State, *, fire: bool = False,
-           ammo: int = AMMO_START, health: int = HEALTH_START) -> list[str]:
+           ammo: int = AMMO_START, health: int = HEALTH_START,
+           nukage: bool = False) -> list[str]:
     """One frame: 48 rows of 64 hex chars (rows 0..39 the 3D view, 40..47 HUD).
 
     The pistol (:data:`GUN_IDLE`, or :data:`GUN_FIRE` when ``fire``) paints
     over the finished columns — the golden twin of the machine's one GUN/GUNF
     command word per frame — and the HUD carries the live bars for ``ammo``
-    and ``health``.
+    and ``health`` plus the banded status face. With ``nukage`` (the player's
+    cell stands on a damage floor) every column's floor run paints
+    :data:`FLOOR_NUKE` green instead of the gray 8 — DOOM's palette-shift
+    homage, and exactly what the machine's per-column green overlay COL word
+    repaints (colour 2 is mask-invariant: ``2 & 7 == 2 & 15 == 2``).
     """
     posX, posY = state.posX, state.posY
     dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[state.heading])
     cols: list[list[int]] = []
+    zbuf: list[int] = []  # per-column wall depth (M7a) — the asm's ZBUF slots
     for x in range(WIDTH):
         # lodev: cameraX = 2*x/w - 1; exact in Q10 at w=64: 32*x - 1024.
         cameraX = 32 * x - 1024
@@ -649,6 +1077,9 @@ def render(state: State, *, fire: bool = False,
         perpWallDist = (sideDistX - deltaDistX) if side == 0 else (sideDistY - deltaDistY)
         if perpWallDist < 1:
             perpWallDist = 1
+        # The z-buffer (M7a): the clamped depth, exactly the value the asm
+        # stores into ZBUF + x right here (before the shading reads it).
+        zbuf.append(perpWallDist)
         # lodev: lineHeight = WALL_H * h / perpWallDist -> Q10: 81920 / perp
         # (two-cell walls: the 64x64 world at the 32x32 proportions).
         lineHeight = div(WALL_H * H3D * UNITS, perpWallDist)
@@ -669,12 +1100,14 @@ def render(state: State, *, fire: bool = False,
             color & 7 if sign_mod(i, 4) == 0 else color
             for i in range(drawEnd - drawStart + 1)
         ]
-        cols.append([0] * drawStart + run + [8] * (H3D - 1 - drawEnd))
+        floor_c = FLOOR_NUKE if nukage else 8
+        cols.append([0] * drawStart + run + [floor_c] * (H3D - 1 - drawEnd))
+    _paint_monsters(cols, zbuf, posX, posY, dirX, dirY, planeX, planeY)
     for r, c, colors in (GUN_FIRE if fire else GUN_IDLE):
         for i, ch in enumerate(colors):
             cols[c + i][r] = int(ch, 16)
     rows = ["".join("%x" % cols[x][y] for x in range(WIDTH)) for y in range(H3D)]
-    return rows + hud_rows(health, ammo)
+    return rows + hud_rows(health, ammo, fire)
 
 
 # ── the HUD strip (rows 40..47) ──────────────────────────────────────────────
@@ -707,11 +1140,13 @@ def hud_bg_runs() -> list[tuple[int, int]]:
     return runs
 
 
-def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START) -> list[str]:
-    """Rows 40..47: the background plus the live bars, exactly as the machine
-    paints them — red health rows 41..42 (one pixel per 4 health), yellow ammo
-    rows 44..45 (one per 2 ammo), both from column 4; an empty bar sends no
-    RUN at all, so the background shows through."""
+def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START,
+             fire: bool = False) -> list[str]:
+    """Rows 40..47: the background plus the live bars and the status face,
+    exactly as the machine paints them — red health rows 41..42 (one pixel per
+    4 health), yellow ammo rows 44..45 (one per 2 ammo), both from column 4
+    (an empty bar sends no RUN at all, so the background shows through), then
+    the :func:`face_for` variant's six rows."""
     rows = [[int(ch, 16) for ch in r] for r in hud_bg_rows()]
     hpx = div(health, 4)
     apx = div(ammo, 2)
@@ -722,6 +1157,9 @@ def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START) -> list[str]:
         for row in bar_rows:
             for c in range(BAR_COL, BAR_COL + px):
                 rows[row - H3D][c] = colour
+    for r, c, colors in face_for(health, fire):
+        for i, ch in enumerate(colors):
+            rows[r - H3D][c + i] = int(ch, 16)
     return ["".join("%x" % c for c in row) for row in rows]
 
 
@@ -735,14 +1173,19 @@ def hud_rows(health: int = HEALTH_START, ammo: int = AMMO_START) -> list[str]:
 #: rim, the shot lighting the muzzle; six ``w`` east across the cavern floor,
 #: the ZIMMER cliffs and green MCSTAT screens far ahead; ``d``, hold, ``a`` —
 #: the quiet half-look at the north rim; two ``w`` on to x=45, four ``a``
-#: round to north, two ``w`` toward the slime fall, then a *firing* step
-#: (``"w "`` — the MUX at work) and one last FIRE standing before the bright
-#: green fall.  Two-cell steps on the 64x64 grid; 50 words, spelled
-#: ``WALK_CHORDS``.
+#: round to north, two ``w`` INTO the slime moat that rings the fall (M5:
+#: the floor floods green and health drains 5 a frame, the red bar visibly
+#: shrinking); three held beats standing in the slime, the fall dead ahead,
+#: the face degrading to bloodied; then a *firing* step OUT of the moat
+#: (``"w "`` — the MUX at work) and one last FIRE standing clean before the
+#: bright green fall.  The cavern crossing at frames 32..35 already forded
+#: the moat's west lobe, so the bar drains in two episodes — 14 nukage
+#: frames in all, health 100 -> 30.  Two-cell steps on the 64x64 grid; 53
+#: words, spelled ``WALK_CHORDS``.
 WALK_CHORDS: list[str] = (
     ["."] + ["w"] * 10 + ["a"] * 4 + ["w"] * 7 + ["d"] * 4 + ["w"] * 2
     + ["d", " ", "a"] + ["w"] * 6 + ["d", ".", "a"] + ["w"] * 2 + ["a"] * 4
-    + ["w"] * 2 + ["w ", " "]
+    + ["w"] * 2 + ["."] * 3 + ["w ", " "]
 )
 
 #: The command words the demo feeds the machine: ``WALK_CHORDS`` encoded.
@@ -843,13 +1286,26 @@ def title_words() -> list[int]:
 
 # ── boot data and the cases file ─────────────────────────────────────────────
 def preamble_words() -> list[int]:
-    """Round 0's data burst, in exact tape order (slots 1..295; see docstring)."""
+    """Round 0's data burst, in exact tape order (slots 1..451; see docstring).
+
+    The M5 order (map, POW16, headings, nukage plane, the seven named spawn
+    scalars) is unchanged through slot 359; M7a appends the monster table
+    (``MONB``), the initial HP block (``MHPB``, an M7b consumer boot-loaded
+    now so the tape never moves again) and the 60 packed sprite columns
+    (``SPRB``).  The boot loop's 8x-unrolled body adapts to the length; the
+    ZBUF slots after SPRB are NOT preamble — every one is written each frame
+    before the sprite pass reads any.
+    """
     dirX, dirY, planeX, planeY = unpack_heading(_HDG_WORDS[SPAWN.heading])
     return (
         _MAP_WORDS
         + POW16
         + _HDG_WORDS
+        + _NUKE_WORDS
         + [SPAWN.posX, SPAWN.posY, SPAWN.heading, dirX, dirY, planeX, planeY]
+        + _MON_WORDS
+        + _MHP_WORDS
+        + _SPR_WORDS
     )
 
 
@@ -862,19 +1318,28 @@ def input_words(cmds: list[int]) -> list[int]:
 def frames_for_commands(cmds: list[int]) -> list[list[str]]:
     """Apply each command in turn and render after it — one frame per command.
 
-    Threads the live ammo counter exactly as the asm does: a FIRE with rounds
-    left decrements BEFORE the render (the decode ladder runs first), an empty
-    clip dry-fires at 0 and still flashes.
+    Threads the live counters exactly as the asm does: a FIRE with rounds left
+    decrements ammo BEFORE the render (the decode ladder runs first), an empty
+    clip dry-fires at 0 and still flashes; then the move lands, and standing
+    on nukage costs :data:`NUKE_DAMAGE` health (floor 0) before the frame is
+    drawn — the frame you take damage on already shows the green floor, the
+    shorter bar and the degraded face.
     """
     state = SPAWN
     ammo = AMMO_START
+    health = HEALTH_START
     frames = []
     for cmd in cmds:
         fire = fire_bit(cmd)
         if fire and ammo > 0:
             ammo -= 1
         state = step(state, cmd)
-        frames.append(render(state, fire=fire, ammo=ammo, health=HEALTH_START))
+        nuk = nukage_cell(div(state.posX, UNITS), div(state.posY, UNITS)) == 1
+        if nuk:
+            health -= NUKE_DAMAGE
+            if health < 0:
+                health = 0
+        frames.append(render(state, fire=fire, ammo=ammo, health=health, nukage=nuk))
     return frames
 
 
@@ -900,14 +1365,26 @@ def cases_json(cmds: list[int]) -> dict:
 
 
 # ── the asm generator ────────────────────────────────────────────────────────
-#: The scalar tape slots after the boot data, numbered consecutively from 296.
+#: The scalar tape slots after the boot data, numbered consecutively from 360.
 #: (No paint cursor: the DOOM unit owns the panel, so the CPU keeps no ADDRV/AEND.)
 _SCALARS = (
     "CMD", "XCOL", "CAMX", "RDX", "RDY", "SDX", "SDY",
     "DDX", "DDY", "S4X", "STPY", "PERP", "HALFH", "DSTART", "DEND",
     "COLOR", "PW", "WADDR", "FRACX", "FRACY", "PW0", "WADDR0",
     "TMP", "TMP2", "NEWX", "NEWY",
-    "BW", "BS", "BA", "BD", "FIRE", "AMMO", "HEALTH", "PTR",
+    "BW", "BS", "BA", "BD", "FIRE", "AMMO", "HEALTH", "NUKE",
+    # M7a, the sprite pass: the per-frame projection divisor, the selection
+    # loop's candidate scalars ...
+    "DET", "MI", "MSP", "MDX", "MDY", "TXN", "TYN",
+    "CTY", "CBAND", "COFF", "CHW", "CW1", "CSX0", "CSX1", "CBOT", "CBASE",
+    # ... the three kept slots, field-major triples (slot k at base + k, so
+    # the paint loop LDAs them by SLOT; slot 0 = farthest, painted first) ...
+    "STY0", "STY1", "STY2", "SSX0", "SSX1", "SSX2", "SEX0", "SEX1", "SEX2",
+    "SBA0", "SBA1", "SBA2", "SBO0", "SBO1", "SBO2",
+    "SBN0", "SBN1", "SBN2", "SID0", "SID1", "SID2",
+    # ... and the paint loop's working set.
+    "SLOT", "WTY", "WX", "WX1", "WPTR", "WBOT", "WBAND", "Q", "ADDRV",
+    "PTR",
 )
 
 #: How many copies of the DDA step the generated asm unrolls. A backward jump
@@ -924,25 +1401,384 @@ DDA_UNROLL = 16
 def tape_slots() -> dict[str, int]:
     """The asm's whole ``.equ`` table, name -> tape address (slot 0 is scratch).
 
-    Slots 1..295 are the boot data in ``preamble_words()`` order (see the
-    module docstring); the scalars follow consecutively, so the machine's
-    ``TAPE_SIZE`` is ``max(tape_slots().values()) + 1`` — an exactly-sized tape
-    stalls silently (plan risk R6), which is why tests pin this.
+    Slots 1..451 are the boot data in ``preamble_words()`` order (see the
+    module docstring: the M5 tape through slot 359, then M7a's MONB, MHPB
+    and SPRB blocks); the 64 ZBUF slots follow (written every frame, never
+    boot-loaded), then the scalars run consecutively — so the machine's
+    ``TAPE_SIZE`` is ``max(tape_slots().values()) + 1`` — an exactly-sized
+    tape stalls silently (plan risk R6), which is why tests pin this.
     """
+    n_mon = len(MONSTERS)
     slots = {
-        "MAPB": 1, "POWB": 257, "HDGB": 273,
-        "POSX": 289, "POSY": 290, "HDG": 291, "DIRX": 292, "DIRY": 293,
-        "PLANEX": 294, "PLANEY": 295,
+        "MAPB": 1, "POWB": 257, "HDGB": 273, "NUKB": 289,
+        "POSX": 353, "POSY": 354, "HDG": 355, "DIRX": 356, "DIRY": 357,
+        "PLANEX": 358, "PLANEY": 359,
+        "MONB": 360, "MHPB": 360 + n_mon, "SPRB": 360 + 2 * n_mon,
+        "ZBUF": len(preamble_words()) + 1,
     }
+    assert slots["SPRB"] + 3 * MON_STRIDE == slots["ZBUF"]
     for i, name in enumerate(_SCALARS):
-        slots[name] = len(preamble_words()) + 1 + i
+        slots[name] = slots["ZBUF"] + WIDTH + i
     return slots
+
+
+def _sprite_phase_asm(slots: dict[str, int], n_mon: int, codes: dict[str, int]) -> list[str]:
+    """The sprite phase (M7a), lowered line for line from :func:`_paint_monsters`.
+
+    Selection loop over the ``MONB`` table (cull chain, band pick, far-first
+    3-slot insertion with strict compares), then the far->near paint: per
+    slot the field-major scalars are LDA'd by SLOT, per column the ZBUF
+    occlusion test picks whether the column's one packed word enters the
+    **shared unrolled 14-block chain** — three static entry labels
+    (``chain_h14``/``chain_h9``/``chain_h5``, the last 5 blocks common to
+    all), each block one bottom-up nibble: MODI 16, transparent-skip, a CURS
+    word from ADDRV and a 1-pixel RUN word, then DIVI 16 and the row step.
+    """
+    lh_num = WALL_H * H3D * UNITS
+    run1 = 8 * 16 + codes["RUN"]  # a 1-pixel RUN word is 8*(16 + c) + C_RUN
+    lines = f"""
+; ── the sprite phase (M7a): static occluded monster billboards ───────────────
+; Selection first: every MONB word is unpacked and run down the cull chain
+; (behind the plane; nearer than {MON_NEAR}; past {MON_FAR}; off screen), the
+; scale band picked by depth (TY < {BAND_T[0]} near 10x14 / < {BAND_T[1]} mid
+; 6x9 / far 4x5), and the nearest three kept in a far-first slot file —
+; slot 0 = farthest, strict compares, so an equal-depth later THINGS index
+; never displaces an earlier one. DET = planeX*dirY - dirX*planeY > 0 for
+; every baked heading (plane is dir rotated -90 deg; the tests assert all 16).
+spsel:  LD  PLANEX
+        MUL DIRY
+        ST  DET
+        LD  DIRX
+        MUL PLANEY
+        ST  TMP
+        LD  DET
+        SUB TMP
+        ST  DET             ; the projection divisor, Q20
+        LDI {MON_FAR}
+        ST  STY0            ; empty slots sit AT the far cull: any candidate
+        ST  STY1            ; that survived it compares strictly nearer
+        ST  STY2
+        LDI 0
+        ST  SID0
+        ST  SID1
+        ST  SID2
+        ST  MI
+msel:   LD  MI
+        SUBI {n_mon}
+        BRN mbody
+        JMP mpaint          ; all {n_mon} monsters considered
+mbody:  LD  MI
+        ADDI MONB
+        LDA                 ; ((cx*64) + cy)*2 + species
+        ST  TMP
+        MODI 2
+        ST  MSP
+        LD  TMP
+        DIVI 2
+        ST  TMP             ; cx*64 + cy
+        MODI 64
+        MULI {UNITS}
+        ADDI 512
+        SUB POSY
+        ST  MDY             ; cell centre - player, Q10
+        LD  TMP
+        DIVI 64
+        MULI {UNITS}
+        ADDI 512
+        SUB POSX
+        ST  MDX
+        LD  PLANEX
+        MUL MDY
+        ST  TYN
+        LD  PLANEY
+        MUL MDX
+        ST  TMP
+        LD  TYN
+        SUB TMP
+        ST  TYN             ; camera depth numerator (Q20)
+        SUBI 1
+        BRN mnext           ; TYN <= 0: behind the camera plane
+        LD  DIRY
+        MUL MDX
+        ST  TXN
+        LD  DIRX
+        MUL MDY
+        ST  TMP
+        LD  TXN
+        SUB TMP
+        ST  TXN             ; camera x numerator (Q20)
+        LD  TYN
+        MULI {UNITS}
+        DIV DET
+        ST  CTY             ; TY, Q10 — the same units as PERP/ZBUF
+        SUBI {MON_NEAR}
+        BRN mnext           ; the player stands inside the monster
+        LD  CTY
+        SUBI {MON_FAR}
+        BRN mband
+        JMP mnext           ; beyond the far cull
+mband:  LD  CTY
+        SUBI {BAND_T[0]}
+        BRN mb0
+        LD  CTY
+        SUBI {BAND_T[1]}
+        BRN mb1
+        LDI 2               ; the far band: 4x5
+        ST  CBAND
+        LDI 16
+        ST  COFF
+        LDI 2
+        ST  CHW
+        LDI 3
+        ST  CW1
+        JMP msx
+mb0:    LDI 0               ; the near band: 10x14
+        ST  CBAND
+        ST  COFF
+        LDI 5
+        ST  CHW
+        LDI 9
+        ST  CW1
+        JMP msx
+mb1:    LDI 1               ; the mid band: 6x9
+        ST  CBAND
+        LDI 10
+        ST  COFF
+        LDI 3
+        ST  CHW
+        LDI 5
+        ST  CW1
+msx:    LD  TXN
+        MULI 32
+        DIV TYN
+        ADDI 32             ; SX = 32 + 32*TXN/TYN (the DETs cancel)
+        SUB CHW
+        ST  CSX0            ; first screen column (ST preserves ACC)
+        ADD CW1
+        ST  CSX1            ; last screen column
+        BRN mnext           ; SX1 < 0: wholly off the left edge
+        LD  CSX0
+        SUBI {WIDTH}
+        BRN mbot
+        JMP mnext           ; SX0 > {WIDTH - 1}: wholly off the right edge
+mbot:   LDI {lh_num}
+        DIV CTY
+        DIVI 2
+        ADDI {MID}
+        ST  CBOT            ; the floor line at TY == the wall drawEnd there
+        SUBI {H3D}
+        BRN mbase
+        LDI {H3D - 1}
+        ST  CBOT            ; near clamp: the sprite slides up, stays whole
+mbase:  LD  MSP
+        MULI {MON_STRIDE}
+        ADD COFF
+        ADDI SPRB
+        ST  CBASE           ; the band's column words start here
+; the 3-slot far-first insertion: nearest three kept, slot 0 = farthest;
+; strict < everywhere, so ties keep the earlier THINGS index
+        LD  CTY
+        SUB STY0
+        BRN insa
+        JMP mnext           ; not nearer than the farthest kept: dropped
+insa:   LD  CTY
+        SUB STY1
+        BRN sh01
+        JMP put0            ; nearer than slot 0 only: it replaces slot 0
+sh01:   LD  STY1            ; slot 1 retreats to slot 0 …
+        ST  STY0
+        LD  SSX1
+        ST  SSX0
+        LD  SEX1
+        ST  SEX0
+        LD  SBA1
+        ST  SBA0
+        LD  SBO1
+        ST  SBO0
+        LD  SBN1
+        ST  SBN0
+        LD  SID1
+        ST  SID0
+        LD  CTY
+        SUB STY2
+        BRN sh12
+        JMP put1
+sh12:   LD  STY2            ; … slot 2 retreats to slot 1 …
+        ST  STY1
+        LD  SSX2
+        ST  SSX1
+        LD  SEX2
+        ST  SEX1
+        LD  SBA2
+        ST  SBA1
+        LD  SBO2
+        ST  SBO1
+        LD  SBN2
+        ST  SBN1
+        LD  SID2
+        ST  SID1
+        LD  CTY             ; … and the candidate takes slot 2 (nearest)
+        ST  STY2
+        LD  CSX0
+        ST  SSX2
+        LD  CSX1
+        ST  SEX2
+        LD  CBASE
+        ST  SBA2
+        LD  CBOT
+        ST  SBO2
+        LD  CBAND
+        ST  SBN2
+        LD  MI
+        ADDI 1
+        ST  SID2            ; monster index + 1; 0 stays "empty"
+        JMP mnext
+put1:   LD  CTY
+        ST  STY1
+        LD  CSX0
+        ST  SSX1
+        LD  CSX1
+        ST  SEX1
+        LD  CBASE
+        ST  SBA1
+        LD  CBOT
+        ST  SBO1
+        LD  CBAND
+        ST  SBN1
+        LD  MI
+        ADDI 1
+        ST  SID1
+        JMP mnext
+put0:   LD  CTY
+        ST  STY0
+        LD  CSX0
+        ST  SSX0
+        LD  CSX1
+        ST  SEX0
+        LD  CBASE
+        ST  SBA0
+        LD  CBOT
+        ST  SBO0
+        LD  CBAND
+        ST  SBN0
+        LD  MI
+        ADDI 1
+        ST  SID0
+mnext:  INCM MI
+        JMP msel
+
+; ── the paint: slots 0 -> 2 (far to near), per column ZBUF-occluded ─────────
+; The slot scalars are field-major triples, LDA'd by SLOT; per visible column
+; ONE packed word carries the whole strip and the shared chain below walks it
+; bottom-up. A monster never touches rows > its BOT <= 39, so the gun and HUD
+; paint after this phase overpaint nothing they don't own.
+mpaint: LDI 0
+        ST  SLOT
+mslot:  LD  SLOT
+        ADDI SID0
+        LDA
+        BRZ mslotn          ; an empty slot paints nothing
+        LD  SLOT
+        ADDI STY0
+        LDA
+        ST  WTY
+        LD  SLOT
+        ADDI SSX0
+        LDA
+        ST  WX
+        LD  SLOT
+        ADDI SEX0
+        LDA
+        ST  WX1
+        LD  SLOT
+        ADDI SBA0
+        LDA
+        ST  WPTR            ; advances every column, skipped ones included
+        LD  SLOT
+        ADDI SBO0
+        LDA
+        ST  WBOT
+        LD  SLOT
+        ADDI SBN0
+        LDA
+        ST  WBAND
+mcol:   LD  WX
+        SUB WX1
+        SUBI 1
+        BRN mcolb
+        JMP mslotn          ; past the last column: the slot is painted
+mcolb:  LD  WX
+        BRN mcadv           ; x < 0: clipped off the left edge
+        SUBI {WIDTH}
+        BRN mcz
+        JMP mslotn          ; x > {WIDTH - 1}: clipped off the right edge
+mcz:    LD  WX
+        ADDI ZBUF
+        LDA                 ; this column's wall depth
+        ST  TMP
+        LD  WTY
+        SUB TMP
+        BRN mcvis
+        JMP mcadv           ; the wall is nearer: occluded, per column
+mcvis:  LD  WPTR
+        LDA
+        ST  Q               ; the whole sprite column in one packed word
+        LD  WBOT
+        MULI {WIDTH}
+        ADD WX
+        MULI 8
+        ADDI C_CURS
+        ST  ADDRV           ; the bottom pixel's pre-encoded CURS word
+        LD  WBAND
+        BRZ mch0
+        SUBI 1
+        BRZ mch1
+        JMP chain_h5
+mch0:   JMP chain_h14
+mch1:   JMP chain_h9
+""".splitlines()
+    # The shared unrolled chain: 14 blocks, entries 0 (h14) / 5 (h9) / 9 (h5).
+    for j in range(14):
+        entry = {0: "chain_h14:", 5: "chain_h9:", 9: "chain_h5:"}.get(j)
+        note = {0: " ; 14 blocks: the near band's strip",
+                5: "  ; enter here for the mid band's 9",
+                9: "  ; enter here for the far band's 5"}.get(j, "")
+        if entry:
+            lines.append(f"{entry}{note}")
+        lines += f"""\
+        LD  Q
+        MODI 16
+        BRZ csk{j}            ; nibble 0: a transparent pixel
+        ST  TMP
+        LD  ADDRV
+        SND                 ; CURS: the pixel's panel address
+        LD  TMP
+        MULI 8
+        ADDI {run1}             ; RUN word: 1 pixel of the nibble's colour
+        SND
+csk{j}:   LD  Q
+        DIVI 16
+        ST  Q
+        LD  ADDRV
+        SUBI 512
+        ST  ADDRV           ; up one panel row (64 cells * 8)
+""".splitlines()
+    lines += """\
+mcadv:  INCM WPTR
+        INCM WX
+        JMP mcol
+mslotn: INCM SLOT           ; ACC = the slot just finished
+        SUBI 2
+        BRZ gun             ; that was slot 2: all billboards painted
+        JMP mslot
+""".splitlines()
+    return lines
 
 
 def deadman3d_source() -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
-    Structure: boot loop (round 0's data preamble -> tape slots 1..295, the
+    Structure: boot loop (round 0's data preamble -> tape slots 1..451, the
     loop 8x-unrolled because a backward jump costs ``8*(P - loop)`` ticks) ->
     ``title:`` (round 0's title screen: the pre-encoded RUN words forwarded
     ``IN``/``SND`` 8 per counted lap, then one COMMIT) -> ``round:`` MUX decode (MODI 2 / DIVI 2 ladder -> BW BS BA BD FIRE) ->
@@ -951,8 +1787,11 @@ def deadman3d_source() -> str:
     per-frame prologue seeds PW0/WADDR0/FRACX/FRACY; then per column: setup,
     the :data:`DDA_UNROLL`-way unrolled DDA maintaining PW/WADDR incrementally,
     per-arm hit tails ``whx``/``why`` that bake the sunlit/dark shading,
-    projection, and ONE ``SND`` command word to the DOOM unit) -> the FIRE
-    pistol sprite (GUN or GUNF by the FIRE bit), the HUD (one CURS, the
+    projection, the M7a ZBUF depth store, and ONE ``SND`` command word to the
+    DOOM unit) -> the sprite phase (M7a: :func:`_sprite_phase_asm` — monster
+    selection over MONB, the far-first slot file, and the ZBUF-occluded
+    banded billboard paint through the shared unrolled nibble chain) -> the
+    FIRE pistol sprite (GUN or GUNF by the FIRE bit), the HUD (one CURS, the
     background RUN constants, then the live bars) and the commit -> back to
     ``round:``.  The lodev variable each block computes is named in its
     comments; every expression keeps :func:`render`'s exact operation order,
@@ -967,8 +1806,10 @@ def deadman3d_source() -> str:
     from randomfun2026solvers.lm1.store import DoomUnit
 
     slots = tape_slots()
-    first_free = len(preamble_words()) + 1  # 296: the boot loop's stop address
-    assert first_free == slots["CMD"], "the boot stop address is the first scalar"
+    first_free = len(preamble_words()) + 1  # 452: the boot loop's stop address
+    assert first_free == slots["ZBUF"], "the boot data ends where ZBUF begins"
+    n_mon = len(MONSTERS)
+    machine_tape = max(slots.values()) + 1  # the tape the registry must cover
     inv = UNITS * UNITS          # 1048576  — deltaDist numerator (1/rayDir, Q10*Q10)
     lh_num = WALL_H * H3D * UNITS  # 81920  — lineHeight numerator (two-cell walls)
     codes = DoomUnit.CODES       # the unit's trie codes; d3_unit pins these
@@ -978,6 +1819,7 @@ def deadman3d_source() -> str:
         "MAPB": f"..{slots['MAPB'] + 255:<3} packed map quarter-columns: word 4x+(y/16), nibble y mod 16",
         "POWB": f"..{slots['POWB'] + 15:<3} 16**k — the nibble-extraction divisors",
         "HDGB": f"..{slots['HDGB'] + 15:<3} packed headings: base-4096 digits dirX dirY planeX planeY, biased +1024",
+        "NUKB": f"..{slots['NUKB'] + 63:<3} the nukage bit plane: word x, bit y — 1 = damage floor (M5)",
         "POSX": "player x, Q10 (lodev posX)", "POSY": "player y, Q10 (lodev posY)",
         "HDG": "heading 0..15 (22.5 deg steps, CCW from east)",
         "DIRX": "lodev dirX", "DIRY": "lodev dirY",
@@ -1005,7 +1847,48 @@ def deadman3d_source() -> str:
         "BA": "key bit 2 (4): A, turn left", "BD": "key bit 3 (8): D, turn right",
         "FIRE": "key bit 4 (16): space held — fire the pistol this frame",
         "AMMO": f"live rounds left: starts {AMMO_START}, -1 per shot, floor 0",
-        "HEALTH": f"static {HEALTH_START} until the demo grows damage",
+        "HEALTH": f"live health: starts {HEALTH_START}, nukage -{NUKE_DAMAGE} a frame, floor 0",
+        "NUKE": "1 when this frame stands on nukage: green floor, health drain",
+        "MONB": f"..{slots['MONB'] + max(n_mon - 1, 0):<3} monster table (M7a): ((cx*64)+cy)*2 + species",
+        "MHPB": f"..{slots['MHPB'] + max(n_mon - 1, 0):<3} initial monster HP (M7b's hit ledger)",
+        "SPRB": f"..{slots['SPRB'] + 3 * MON_STRIDE - 1:<3} packed sprite columns: nibble 0 = bottom px, 0 = clear",
+        "ZBUF": f"..{slots['ZBUF'] + WIDTH - 1:<3} per-column wall depth, rewritten whole every frame",
+        "DET": "planeX*dirY - dirX*planeY (Q20) — the projection divisor, > 0",
+        "MI": "the selection loop's monster index",
+        "MSP": "the candidate's species (0 POSS / 1 TROO)",
+        "MDX": "monster cell centre - posX, Q10", "MDY": "… - posY",
+        "TXN": "camera x numerator dirY*MDX - dirX*MDY (Q20)",
+        "TYN": "camera depth numerator planeX*MDY - planeY*MDX (Q20)",
+        "CTY": "the candidate's depth TY = TYN*1024/DET — ZBUF's own units",
+        "CBAND": "the candidate's scale band 0/1/2",
+        "COFF": "the band's column offset in the sprite stripe (0/10/16)",
+        "CHW": "the band's half width (5/3/2)",
+        "CW1": "the band's width - 1 (9/5/3)",
+        "CSX0": "the candidate's first screen column (may be < 0)",
+        "CSX1": "the candidate's last screen column (may be > 63)",
+        "CBOT": "the candidate's bottom row: the floor line at TY, clamped 39",
+        "CBASE": "SPRB + species*20 + band offset: the column words' base slot",
+        "STY0": "slot 0 (farthest kept) depth; FAR = empty",
+        "STY1": "slot 1 depth", "STY2": "slot 2 (nearest kept) depth",
+        "SSX0": "slot 0 first column", "SSX1": "slot 1 first column",
+        "SSX2": "slot 2 first column",
+        "SEX0": "slot 0 last column", "SEX1": "slot 1 last column",
+        "SEX2": "slot 2 last column",
+        "SBA0": "slot 0 sprite base", "SBA1": "slot 1 sprite base",
+        "SBA2": "slot 2 sprite base",
+        "SBO0": "slot 0 bottom row", "SBO1": "slot 1 bottom row",
+        "SBO2": "slot 2 bottom row",
+        "SBN0": "slot 0 band", "SBN1": "slot 1 band", "SBN2": "slot 2 band",
+        "SID0": "slot 0 monster index + 1; 0 = empty (M7b's hit candidate)",
+        "SID1": "slot 1 monster index + 1", "SID2": "slot 2 monster index + 1",
+        "SLOT": "the paint loop's slot cursor 0..2 (far -> near)",
+        "WTY": "the painting slot's depth (the ZBUF compare term)",
+        "WX": "the painting column", "WX1": "the painting slot's last column",
+        "WPTR": "the painting column's sprite word slot (BASE + column)",
+        "WBOT": "the painting slot's bottom row",
+        "WBAND": "the painting slot's band — picks the chain entry",
+        "Q": "the column's packed nibbles, shifted down as the chain climbs",
+        "ADDRV": "the pre-encoded CURS word of the pixel being painted",
         "PTR": "the boot loop's tape cursor",
     }
     lines = [
@@ -1024,7 +1907,7 @@ def deadman3d_source() -> str:
         "; cancel), then move along the new heading (W/S cancel), then render.",
         "; An ungraded demo — the slug borrows plotter's problem JSON for nothing",
         "; but registration; its 64x48 panel belongs to the DOOM unit (.unit doom,",
-        "; lm1/d3_unit.py), its input is its own, and its 328-slot STORE rides the",
+        f"; lm1/d3_unit.py), its input is its own, and its {machine_tape}-slot STORE rides the",
         "; men-v3 man-memory (STORE_TIER), ~11 ticks an access.",
         ";",
         "; The CPU never touches the display: each viewport column is ONE command",
@@ -1037,7 +1920,9 @@ def deadman3d_source() -> str:
         "; black because COMMIT clears the next buffer.",
         ";",
         "; Round 0's input carries the whole data preamble (256 packed map quarter-columns,",
-        "; POW16, the 16 packed heading words, spawn state — deadman3d.preamble_words())",
+        "; POW16, the 16 packed heading words, the 64-word nukage bit plane, the spawn",
+        f"; state, the {n_mon}-monster table with its HP block and the 60 packed sprite",
+        "; columns — deadman3d.preamble_words())",
         "; followed by the title screen's RLE (deadman3d.title_words(): one pre-encoded",
         "; RUN command word per run, forwarded IN/SND and committed as round 0's one",
         "; frame): tables and art ride on INPUT because every ROM word taxes every",
@@ -1049,7 +1934,7 @@ def deadman3d_source() -> str:
         "; inlined at its three sites (no stack, no calls): the two move-collision",
         "; tests and the DDA hit test.",
         "",
-        "; ── tape slots (deadman3d.tape_slots(); slots 1..295 are the boot data) ──────",
+        f"; ── tape slots (deadman3d.tape_slots(); slots 1..{len(preamble_words())} are the boot data) ──────",
     ]
     for name, addr in slots.items():
         lines.append(f".equ {name:<6} {addr:<4}         ; {equ_notes[name]}")
@@ -1084,7 +1969,9 @@ def deadman3d_source() -> str:
         f"        BRN boot            ; keep looping while PTR < {boot_full + 1}",
     ]
     for addr in range(boot_full + 1, n_pre + 1):
-        lines += ["        IN", f"        ST  {addr_name[addr]}"]
+        # The tail slots are named when a name exists (the spawn scalars);
+        # M7a's SPRB words end the preamble unnamed, so the ST is numeric.
+        lines += ["        IN", f"        ST  {addr_name.get(addr, addr)}"]
     n_title = len(title_words())
     title_unroll = 8
     title_laps, title_rem = divmod(n_title, title_unroll)
@@ -1121,7 +2008,7 @@ def deadman3d_source() -> str:
         f"        LDI {AMMO_START}",
         "        ST  AMMO            ; a full clip (V4's live HUD)",
         f"        LDI {HEALTH_START}",
-        "        ST  HEALTH          ; static until the demo grows damage",
+        "        ST  HEALTH          ; full health — nukage drains it (M5)",
     ]
     lines += f"""
 
@@ -1304,13 +2191,60 @@ comy:   LD  NEWY
         ST  POSY
         JMP render
 
+; ── nukage (M5): the player's cell's bit of the 1-bit damage plane ───────────
+; bit y of plane word NUKB+x is  word / 16**(y/4) / 2**(y mod 4) mod 2 — the
+; high bits of the shift ride the POWB table (16**k == 2**4k), the low two
+; come off a 4-way divisor ladder (there is no POW2 table on the tape).
+; Standing on nukage: HEALTH -{NUKE_DAMAGE}, floor 0, and NUKE=1 makes every
+; column's floor repaint green (the overlay COL words below).
+render: LD  POSY
+        DIVI {UNITS}
+        ST  TMP             ; mapY = the plane word's bit index
+        DIVI 4
+        ADDI POWB
+        LDA                 ; 16**(mapY / 4)
+        ST  TMP2
+        LD  POSX
+        DIVI {UNITS}
+        ADDI NUKB
+        LDA                 ; the player's column's plane word
+        DIV TMP2
+        ST  NUKE            ; parked: the word shifted down 4*(mapY/4) bits
+        LD  TMP
+        MODI 4              ; the low two bits pick the 1/2/4/8 divisor
+        BRZ nkm0
+        SUBI 1
+        BRZ nkm1
+        SUBI 1
+        BRZ nkm2
+        LD  NUKE
+        DIVI 8
+        JMP nkbit
+nkm1:   LD  NUKE
+        DIVI 2
+        JMP nkbit
+nkm2:   LD  NUKE
+        DIVI 4
+        JMP nkbit
+nkm0:   LD  NUKE
+nkbit:  MODI 2
+        ST  NUKE            ; 1 = this frame stands on a damage floor
+        BRZ prolog          ; clean floor: no damage
+        LD  HEALTH
+        SUBI {NUKE_DAMAGE}
+        BRN hzero
+        ST  HEALTH          ; the red bar shrinks on this very frame
+        JMP prolog
+hzero:  LDI 0
+        ST  HEALTH          ; floor 0: the bar empties, no death mechanics yet
+
 ; ── render: lodev's per-column raycast, columns 0..{WIDTH - 1} ──────────────────────
 ; The per-frame prologue: everything that depends only on the player's position
 ; is computed once — the fractional position, and the cell-lookup seeds PW0 (the
 ; nibble divisor 16**(mapY mod 16)) and WADDR0 (the packed quarter-column's slot,
 ; MAPB + 4*mapX + mapY/16). The DDA then maintains PW/WADDR *incrementally*, so
 ; the per-step lookup is LDA/DIV/MODI instead of the full 16-instruction unpack.
-render: LD  POSX
+prolog: LD  POSX
         MODI {UNITS}
         ST  FRACX           ; posX - mapX*1024, hoisted out of sidex
         LD  POSY
@@ -1498,9 +2432,14 @@ why:    ST  COLOR           ; y-side: stripe = mapX & 1 = (WADDR - 1) / 4 % 2
         ST  PERP
 pclip:  SUBI 1              ; ST preserved ACC = perpWallDist
         BRN pone
-        JMP nearck
+        JMP zstore
 pone:   LDI 1
         ST  PERP
+; the z-buffer (M7a): the column's final clamped depth, persisted for the
+; sprite pass's occlusion compare — store[ZBUF + XCOL] = PERP
+zstore: LD  XCOL
+        ADDI ZBUF
+        MOVA PERP
 ; distance shading + the panel stripe (V3): COLOR steps up to the bright
 ; variant t + 8 exactly when the wall is NEAR (perp < {NEAR_D}) and this
 ; column's stripe bit is set; a far wall keeps the dark base whatever its face
@@ -1550,11 +2489,35 @@ send:   LD  DSTART
         ADDI 1              ; arg = seed*64 + (drawEnd - drawStart + 1)
         MULI 8              ; the command word: 8*arg + C_COL, and C_COL == 0
         SND
+        LD  NUKE
+        BRZ colnxt          ; clean floor: the COL word's gray floor stands
+        LD  DEND
+        SUBI {H3D - 1}
+        BRZ colnxt          ; wall to the bottom row: no floor to flood
+        ; the green flood (M5): standing on nukage, a SECOND bare COL word
+        ; repaints this column's floor run (rows drawEnd+1..{H3D - 1}) in
+        ; {FLOOR_NUKE} — the unit needs no new arm: colour {FLOOR_NUKE} is
+        ; mask-invariant ({FLOOR_NUKE} & 7 == {FLOOR_NUKE} & 15), the guard
+        ; keeps its wall run nonempty, and its own floor lap count is 0
+        LD  DEND
+        ADDI 1
+        MULI {WIDTH}
+        ADD XCOL
+        MULI 16
+        ADDI {FLOOR_NUKE}
+        SUBI {UNITS}
+        MULI {WIDTH}
+        ADDI {H3D - 1}
+        SUB DEND            ; arg = seed*64 + ({H3D - 1} - drawEnd)
+        MULI 8
+        SND
 colnxt: INCM XCOL           ; ACC = the old column number
         SUBI {WIDTH - 1}
-        BRZ gun             ; that was column {WIDTH - 1}: the viewport is sent
+        BRZ spsel           ; that was column {WIDTH - 1}: the viewport is sent
         JMP colset
-
+""".splitlines()
+    lines += _sprite_phase_asm(slots, n_mon, codes)
+    lines += f"""
 ; ── the pistol (V4): ONE command word — the unit bakes both sprites ──────────
 gun:    LD  FIRE
         BRZ gidle
@@ -1608,7 +2571,7 @@ gidle:  LDI C_GUN
 abar:   LD  AMMO
         DIVI 2
         ST  TMP             ; the ammo bar in pixels
-        BRZ cmit            ; clip empty: no bar at all
+        BRZ face            ; clip empty: no bar at all
         LDI {8 * ab1 + curs}
         SND
         LD  TMP
@@ -1623,6 +2586,48 @@ abar:   LD  AMMO
         LD  TMP2
         SND
 
+; ── the face (M5): the Freedoom status-bar face, {FACE_H}x{FACE_W} at rows {FACE_ROW}..{FACE_ROW + FACE_H - 1},
+; columns {FACE_COL}..{FACE_COL + FACE_W - 1} — four baked variants (face_for), each a constant list of
+; CURS + RLE RUN words; the branch ladder picks FIRE's grimace first, then
+; the HEALTH band (> 66 healthy, > 33 hurt, else bloodied)
+face:   LD  FIRE
+        BRZ fband           ; not firing: the health band picks the face
+        JMP fgrim
+fband:  LD  HEALTH
+        SUBI 67
+        BRN fb2
+        JMP fwell           ; health > 66: the healthy face
+fb2:    LD  HEALTH
+        SUBI 34
+        BRN fbld            ; health <= 33: the bloodied face
+        JMP fhurt
+""".splitlines()
+    face_blocks = (
+        ("fwell", FACE_HEALTHY, "healthy (stfst00)"),
+        ("fhurt", FACE_HURT, "hurt (stfst20)"),
+        ("fbld", FACE_BLOODY, "bloodied (stfst40)"),
+        ("fgrim", FACE_GRIM, "the FIRE grimace (stfevl0)"),
+    )
+    for bi, (label, table, note) in enumerate(face_blocks):
+        first = True
+        for r, c, colors in table:
+            head = f"{label}:" if first else ""
+            lines.append(f"{head:<8}LDI {8 * (r * WIDTH + c) + curs}"
+                         + (f"          ; {note}" if first else ""))
+            lines.append(f"        SND                 ; CURS: face row {r}, column {c}")
+            first = False
+            k = 0
+            while k < len(colors):
+                j = k
+                while j < len(colors) and colors[j] == colors[k]:
+                    j += 1
+                colour = int(colors[k], 16)
+                lines.append(f"        LDI {8 * ((j - k) * 16 + colour) + runc}")
+                lines.append(f"        SND                 ; RUN {j - k} x colour {colour}")
+                k = j
+        if bi + 1 < len(face_blocks):
+            lines.append("        JMP cmit")
+    lines += """
 ; ── the commit: one command word ─────────────────────────────────────────────
 cmit:   LDI C_COMMIT
         SND                 ; SWAP 0: commit THE one frame of this round
@@ -1686,27 +2691,110 @@ def _write_pngs(frames: list[list[str]], out_dir: Path, scale: int = 8) -> None:
 _WAD_INSTALLED = False
 
 
+def _twin_modules() -> list:
+    """This module object *and* the canonical package instance.
+
+    ``python -m randomfun2026solvers.deadman3d`` loads this file as
+    ``__main__`` while the unit builder (``d3_unit``) imports the sprite
+    tables from ``randomfun2026solvers.deadman3d`` — a second module
+    instance.  The install_* swaps must land on both, or the --wad build's
+    golden and its machine carry different art (measured: the M5 art
+    override passed the emulator, which reads the ``__main__`` state, and
+    failed the native gate, whose grid was baked from the package one).
+    """
+    import sys as _sys
+
+    mods = [_sys.modules[__name__]]
+    pkg = _sys.modules.get("randomfun2026solvers.deadman3d")
+    if pkg is None:
+        import randomfun2026solvers.deadman3d as pkg  # noqa: PLC0415
+    if pkg is not mods[0]:
+        mods.append(pkg)
+    return mods
+
+
 def install_level(map_rows: list[str], spawn_cell: tuple[int, int], heading: int,
-                  title_rows: list[str]) -> None:
+                  title_rows: list[str],
+                  nukage_rows: list[str] | None = None,
+                  monsters: list[tuple[int, int, int]] | None = None) -> None:
     """Swap the module onto an imported level (``wadimport`` output).
 
     Everything downstream — :func:`map_cell`, :func:`preamble_words`,
     :func:`render`, :func:`title_words`, :func:`deadman3d_source` — reads the
     module globals at call time, so the swap makes the whole model, generator
-    and player follow the imported level.
+    and player follow the imported level.  ``nukage_rows`` is the importer's
+    damage-floor plane (``N`` marks; omitted = no damage floors);
+    ``monsters`` its ``(cx, cy, species)`` THINGS extraction (M7a; omitted =
+    an empty table, the tape's MONB/MHPB blocks shrink to nothing and the
+    selection loop culls zero candidates).
     """
     global MAP_STR, _PRINTED_ROWS, _MAP_WORDS, SPAWN, TITLE_HEX_ROWS, _WAD_INSTALLED
+    global NUKAGE_STR, _NUKE_ROWS, _NUKE_WORDS, MONSTERS, _MON_WORDS, _MHP_WORDS
     assert len(map_rows) == MAP_SIZE and all(len(r) == MAP_SIZE for r in map_rows)
     assert len(title_rows) == HEIGHT and all(len(r) == WIDTH for r in title_rows)
     MAP_STR = "\n".join(map_rows) + "\n"
     _PRINTED_ROWS = list(map_rows)
     _MAP_WORDS = map_words()
+    if nukage_rows is None:
+        nukage_rows = ["." * MAP_SIZE] * MAP_SIZE
+    assert len(nukage_rows) == MAP_SIZE and all(len(r) == MAP_SIZE for r in nukage_rows)
+    NUKAGE_STR = "\n".join(nukage_rows) + "\n"
+    _NUKE_ROWS = list(nukage_rows)
+    _NUKE_WORDS = nukage_words()
+    MONSTERS = [tuple(mon) for mon in (monsters or [])]
+    _MON_WORDS = monster_words()   # re-asserts every cell open on the new map
+    _MHP_WORDS = monster_hp_words()
     x, y = spawn_cell
     assert map_cell(x, y) == 0, f"imported spawn cell {spawn_cell} is a wall"
     SPAWN = State(posX=x * UNITS + UNITS // 2, posY=y * UNITS + UNITS // 2,
                   heading=heading % HEADINGS)
     TITLE_HEX_ROWS = list(title_rows)
     _WAD_INSTALLED = True
+    here = globals()
+    for mod in _twin_modules():
+        for name in ("MAP_STR", "_PRINTED_ROWS", "_MAP_WORDS", "NUKAGE_STR",
+                     "_NUKE_ROWS", "_NUKE_WORDS", "SPAWN", "TITLE_HEX_ROWS",
+                     "MONSTERS", "_MON_WORDS", "_MHP_WORDS",
+                     "_WAD_INSTALLED"):
+            setattr(mod, name, here[name])
+
+
+def install_art(gun_idle: list[tuple[int, int, str]],
+                gun_fire: list[tuple[int, int, str]],
+                faces: dict[str, list[tuple[int, int, str]]],
+                sprites: list[int] | None = None) -> None:
+    """Swap the sprite art onto ``wadimport.iwad_art``'s WAD-derived tables
+    (Mode B only: the committed machines stay Freedoom-derived).
+
+    The pistol tables are module globals read by both the unit builder
+    (``d3_unit.unit_interior`` bakes the GUN/GUNF arms from them at build
+    time) and the emulator's unit model (``store.DoomUnit`` duplicates them
+    as class attributes — rebound here so a local machine emulates its own
+    art); the face tables are plain CPU-side RUN constants, so rebinding the
+    module globals re-generates the asm with them.  ``sprites`` (M7a) is the
+    60-word packed monster column table (``iwad_art``'s ``monster_sprites``):
+    input-borne data, so the swap touches no unit at all.
+    """
+    global GUN_IDLE, GUN_FIRE, FACE_HEALTHY, FACE_HURT, FACE_BLOODY, FACE_GRIM
+    global MON_SPRITES, _SPR_WORDS
+    from randomfun2026solvers.lm1.store import DoomUnit
+
+    GUN_IDLE = list(gun_idle)
+    GUN_FIRE = list(gun_fire)
+    FACE_HEALTHY = list(faces["healthy"])
+    FACE_HURT = list(faces["hurt"])
+    FACE_BLOODY = list(faces["bloody"])
+    FACE_GRIM = list(faces["grim"])
+    if sprites is not None:
+        MON_SPRITES = list(sprites)
+        _SPR_WORDS = _check_sprites(MON_SPRITES)
+    here = globals()
+    for mod in _twin_modules():  # __main__ AND the package instance d3_unit reads
+        for name in ("GUN_IDLE", "GUN_FIRE", "FACE_HEALTHY", "FACE_HURT",
+                     "FACE_BLOODY", "FACE_GRIM", "MON_SPRITES", "_SPR_WORDS"):
+            setattr(mod, name, here[name])
+    DoomUnit.GUN_IDLE = tuple(gun_idle)
+    DoomUnit.GUN_FIRE = tuple(gun_fire)
 
 
 def _current_program():
@@ -1805,11 +2893,23 @@ def _ansi_frame(frame: list[str]) -> str:
     return "\n".join(out)
 
 
-def _play_frame(player: "_MachinePlayer | None", state: State, code: int) -> tuple[State, str]:
-    """One keypress against whichever engine: returns (state, terminal text)."""
+def _play_frame(player: "_MachinePlayer | None", state: State, code: int,
+                counters: dict) -> tuple[State, str]:
+    """One keypress against whichever engine: returns (state, terminal text).
+
+    ``counters`` threads the golden path's live ammo/health between frames
+    (the machine keeps its own on the tape).
+    """
+    fire = fire_bit(code)
+    if fire and counters["ammo"] > 0:
+        counters["ammo"] -= 1
     state = step(state, code)
+    nuk = nukage_cell(div(state.posX, UNITS), div(state.posY, UNITS)) == 1
+    if nuk:
+        counters["health"] = max(0, counters["health"] - NUKE_DAMAGE)
     if player is None:  # --golden: the model, instant
-        frame = render(state, fire=fire_bit(code))
+        frame = render(state, fire=fire, ammo=counters["ammo"],
+                       health=counters["health"], nukage=nuk)
         n = None
     else:
         frame = player.feed(code)
@@ -1833,8 +2933,9 @@ def _play_script(script: str, golden: bool) -> None:
     player = None if golden else _MachinePlayer()
     print(_title_text(player))
     state = SPAWN
+    counters = {"ammo": AMMO_START, "health": HEALTH_START}
     for ch in script:
-        state, text = _play_frame(player, state, keys(ch))
+        state, text = _play_frame(player, state, keys(ch), counters)
         print(text)
 
 
@@ -1847,6 +2948,7 @@ def _play(golden: bool) -> None:
 
     player = None if golden else _MachinePlayer()
     state = SPAWN
+    counters = {"ammo": AMMO_START, "health": HEALTH_START}
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     print("\x1b[2J", end="")
@@ -1863,7 +2965,7 @@ def _play(golden: bool) -> None:
                     code = keys(ch)
                     break
             t0 = time.perf_counter()
-            state, text = _play_frame(player, state, code)
+            state, text = _play_frame(player, state, code, counters)
             ms = (time.perf_counter() - t0) * 1000
             print(f"\x1b[H{text}  {ms:.0f} ms", flush=True)
     finally:
@@ -1904,10 +3006,19 @@ def main(argv: list[str] | None = None) -> None:
         from randomfun2026solvers import wadimport
 
         level = wadimport.load_iwad(args.wad, args.wad_map)
-        install_level(level.map_rows, level.spawn, level.heading, level.title_rows)
+        install_level(level.map_rows, level.spawn, level.heading, level.title_rows,
+                      level.nukage_rows,
+                      [tuple(mon) for mon in level.monsters])
+        art = wadimport.iwad_art(args.wad)
+        install_art(art["gun_idle"], art["gun_fire"], art["faces"],
+                    art["monster_sprites"])
         print(f"installed {level.stats['source']}: spawn {level.spawn} "
               f"heading {level.heading}, {level.stats['wall_cells']} wall cells, "
-              f"{level.stats['title_runs']} title runs")
+              f"{level.stats.get('nukage_cells', 0)} nukage cells, "
+              f"{len(level.monsters)} monsters, "
+              f"{level.stats['title_runs']} title runs; WAD art: "
+              f"{len(art['gun_idle'])}+{len(art['gun_fire'])} pistol runs, "
+              f"{len(art['faces'])} faces, 60 monster sprite words")
         if args.build:
             local = Path(__file__).resolve().parents[3] / "littleman" / "examples" / "local"
             wadimport.emit(level, local)
