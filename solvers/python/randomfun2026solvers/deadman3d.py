@@ -1668,9 +1668,9 @@ mbase:  LD  MI
         LD  MSP
         JMP mstrip
 mdead:  LDI 0
-        ST  CID             ; a corpse: still selected, still painted, still
-        LDI 2               ; z-tested — but never a hit candidate again …
-mstrip: MULI {MON_STRIDE}   ; … and it paints from the shared corpse stripe
+        ST  CID             ; a corpse: still selected, painted and z-tested,
+        LDI 2               ; but never a hit candidate again — and it paints
+mstrip: MULI {MON_STRIDE}   ; from the shared corpse stripe (frame 2)
         ADD COFF
         ADDI SPRB
         ST  CBASE           ; the band's column words start here
@@ -1884,9 +1884,9 @@ mslotn: INCM SLOT           ; ACC = the slot just finished
 ; ── the shot lands (M7b): one HP off the monster the crosshair caught ───────
 ; AFTER the phase that drew it, so this frame still shows the live sprite under
 ; the muzzle flash and the corpse appears in the NEXT one — the selection loop
-; above read MHPB before this decrement ever ran. hp 0 is a corpse: the ladder
-; never re-selects it as a candidate, so a second shot at the same spot is
-; spent on nothing.
+; above read MHPB before this decrement ever ran. hp 0 is a corpse: it stays
+; selected and painted but records id 0, so a later round at the same crosshair
+; carries straight through it into whatever still stands behind.
 mhitap: LD  HIT
         BRZ gun             ; a dry fire, a miss, or a corpse under the sight
         ADDI MHPB

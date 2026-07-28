@@ -1059,7 +1059,8 @@ def test_v2_artifact_copies_match_the_canonical_files() -> None:
 @slow
 def test_the_first_rounds_judge_clean_on_the_native_engine() -> None:
     """Round-gated frame judging on the independent native validator: round 0
-    (boot + the title screen) and round 1 (the first walk command).
+    (boot + the title screen) through the corridor gallery — the two shots that
+    drop the imp and the corpse frame after them, judged one round at a time.
 
     This is the one place gating is enforced for real: the Python emulator
     releases every display-problem round up front. The reference wasm session
@@ -1070,10 +1071,10 @@ def test_the_first_rounds_judge_clean_on_the_native_engine() -> None:
     """
     from randomfun2026solvers.fast_littleman import FastLittleman
 
-    case = d3.cases_json(d3.WALK[:1])["publicTestData"][0]
+    case = d3.cases_json(d3.WALK[:KILL + 2])["publicTestData"][0]
     inp = " / ".join(" ".join(r["in"]) for r in case["rounds"])
     frames = [r["frames"] for r in case["rounds"]]
-    res = FastLittleman(MAN).run(inp, frames=frames, max_ticks=200_000_000)
+    res = FastLittleman(MAN).run(inp, frames=frames, max_ticks=400_000_000)
     assert res.fatal is None, res.fatal
     assert res.output == []
     assert res.passed is True

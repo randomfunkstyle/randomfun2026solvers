@@ -186,3 +186,27 @@ skip_batch 4 was wider AND slower; 5-6 banks at sb2 exceed the 307 width.
   CPU serializes), deadman suite green under BOTH tiers (40 tests), fast tier
   940 green, canonical artifacts byte-identical, taped artifacts pinned by
   test_checked_in_taped_man_matches_the_machine_builder.
+
+## M7b — the VRUN unit arm: measured, NOT taken
+
+The design's optional M7b item 3 was a one-word-per-pixel `VRUN` arm on the
+trie's spare leaf 5, replacing the paint chain's `CURS`+`RUN` pair. Costed
+before building, on the shipped M7b walk:
+
+| quantity | measured |
+|---|---|
+| CPU instructions per frame (emulator, title + 26 frames / 27) | 19,374 |
+| sprite pixels actually painted, worst frame of the walk | 76 |
+| sprite pixels actually painted, mean over the walk | 7.8 |
+| instructions VRUN saves per opaque pixel (16 -> 12) | 4 |
+
+Ceiling: 76 x 4 = 304 instructions on the *worst* frame = **1.6%**, and
+7.8 x 4 = 31 instructions on the average one = **0.16%** — against the ~5%
+bar, and against the cost of a new trie leaf (every command word's decode) plus
+keeping `d3_unit.py` and its `store.py` twin in lockstep. The design's "~30%
+off the sprite paint" was right about the *paint*; the paint is simply not a
+big enough share of a frame at 3 billboards x <= 14 rows. **No-go.**
+
+The measurement to repeat if the sprite budget ever grows (more slots, taller
+bands, per-column texture stepping): count painted pixels per frame from the
+golden model, multiply by 4, divide by the emulator's instructions/frame.
