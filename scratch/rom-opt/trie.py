@@ -60,10 +60,18 @@ def walk_cost(slots):
     lane_x0 = 4 + 2 * K
     dist = {}
 
-    def node(level, lo, hi, sofar):
+    def paths(level, lo, hi):
+        """`machine._uneven_trie`'s own recursion, accumulating each leaf's walk.
+
+        Contract copied from it: a single-child level is *contracted* (the edge
+        below carries its `]`s), a branching `x` sits at column `3 + 2*level` on
+        the gap row above its down-half's first lane, and a leaf's edge runs east
+        to `lane_x0`. So a leaf's walk is one cell per `x` it passes, plus the
+        vertical run to the child's row, plus the final horizontal edge.
+        """
         sl = [s for s in sorted(slots) if lo <= s < hi]
         mid = lo
-        up = down = []
+        down: list[int] = []
         while len(sl) > 1:
             mid = (lo + hi) // 2
             up = [s for s in sl if s < mid]
@@ -73,44 +81,17 @@ def walk_cost(slots):
             lo, hi = (lo, mid) if up else (mid, hi)
             level += 1
         if len(sl) == 1:
-            dist[sl[0]] = sofar + (lane_x0 - 1 - (3 + 2 * level))
-            return rows[sl[0]], None
-        col = 3 + 2 * level
-        xrow = rows[min(down)] - 1
-        for half in ((lo, mid), (mid, hi)):
-            crow, clevel = node(level + 1, *half, 0)
-            step = abs(crow - xrow) + ((2 + 2 * clevel) - col if clevel is not None else 0)
-            for s in [x for x in sorted(slots) if half[0] <= x < half[1]]:
-                dist[s] = dist.get(s, 0) + step
-        return xrow, level
-
-    # simpler: walk each leaf explicitly
-    dist = {}
-
-    def paths(level, lo, hi, acc):
-        sl = [s for s in sorted(slots) if lo <= s < hi]
-        while len(sl) > 1:
-            mid = (lo + hi) // 2
-            up = [s for s in sl if s < mid]
-            down = [s for s in sl if s >= mid]
-            if up and down:
-                break
-            lo, hi = (lo, mid) if up else (mid, hi)
-            level += 1
-        if len(sl) == 1:
-            dist[sl[0]] = acc + (lane_x0 - (3 + 2 * level))
+            dist[sl[0]] = lane_x0 - (3 + 2 * level)
             return rows[sl[0]]
-        col = 3 + 2 * level
         xrow = rows[min(down)] - 1
         for half in ((lo, mid), (mid, hi)):
             sub = [s for s in sorted(slots) if half[0] <= s < half[1]]
-            before = dict(dist)
-            crow = paths(level + 1, *half, 0)
+            crow = paths(level + 1, *half)
             for s in sub:
-                dist[s] = acc + 1 + abs(crow - xrow) + dist[s]
+                dist[s] += 1 + abs(crow - xrow)
         return xrow
 
-    paths(1, 0, LANES, 0)
+    paths(1, 0, LANES)
     return sum(wi * dist[s] for wi, s in zip(w, sorted(slots)))
 
 
