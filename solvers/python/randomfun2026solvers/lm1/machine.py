@@ -2827,6 +2827,7 @@ def build(
     seek: bool = False,
     seek_threshold: int = SEEK_THRESHOLD,
     seek_ops: Sequence[str] = SEEK_OPS,
+    doom_loop_row: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -3017,6 +3018,7 @@ def build(
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    doom_loop_row=doom_loop_row,
                 )
             except MachineError as exc:
                 last = exc
@@ -3073,6 +3075,7 @@ def build(
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    doom_loop_row=doom_loop_row,
                 )
             except MachineError:
                 continue
@@ -3151,6 +3154,7 @@ def _assemble(
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
     seek_layout=None,
+    doom_loop_row: int | None = None,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -3643,7 +3647,9 @@ def _assemble(
                 "the program drives the STREAM block but no ring sizes were given; "
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
-        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
+        blk, stream_touches, (SX, SY) = _stream(
+            g, cpu, CX, CY + H + 1, stream, unit=program.unit, doom_loop_row=doom_loop_row
+        )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
     # Drawn last so its northbound leg can clear everything already placed. Its
@@ -4314,6 +4320,7 @@ def _stream(
     sizes: tuple[int, int, int] | None,
     *,
     unit: str = "stream",
+    doom_loop_row: int | None = None,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -4344,7 +4351,12 @@ def _stream(
         # the CPU keeps its jumps and there is no separate `_display` call.
         from . import d3_unit
 
-        blk = d3_unit.build_doom()
+        # ``doom_loop_row`` lifts the unit's loop corridor and with it the panel,
+        # which is the machine's own floor — see ``DOOM_LOOP_ROW``. None keeps the
+        # shipped row, so the canonical artifacts do not move.
+        blk = d3_unit.build_doom(
+            loop_row=d3_unit.R_LOOP if doom_loop_row is None else doom_loop_row
+        )
     elif unit == "doom4":
         # The tiled wall: four unmodified DOOM blocks behind a 1-of-4 router, so
         # one command lane paints a 128x96 framebuffer across four 64x48 panels
@@ -5372,6 +5384,50 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: do not add; see that entry.
 TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
+#: ``(slug, tier)`` -> the DOOM unit's loop-corridor row (``d3_unit.R_LOOP``,
+#: shipped 27). Absent means "keep the shipped row", which is what holds
+#: ``deadman-3d``, ``deadman-3d_trim`` and ``deadman-3d_hires`` byte-identical.
+#:
+#: **The unit's height is the machine's floor, and seventeen rows of it were
+#: doing nothing.**
+#: The DOOM block hangs below everything (``rom`` rows 0..93, CPU/tape 94..168,
+#: the block 170..270), so the machine's last row *is* the block's, and the
+#: block's height is ``R_ADDR + PANEL_H + 6`` — the panel hangs two rows below
+#: ADDR's band row and the SWAP under-run three below the panel. The unit's own
+#: interior bottom (``R_COLLECT``) is 16 rows clear of that, so it is ADDR, and
+#: only ADDR, that sets the floor.
+#:
+#: Every row below the loop corridor is a fixed offset from it
+#: (``d3_unit.BELOW_LOOP``) because the two counted-loop bodies are rigid
+#: ladders and the band rows are where their ``r``/``s`` glyphs land. So the
+#: whole lower half translates as one piece, every ``_send_band`` decision (a
+#: comparison of row *differences*) is invariant, and all four pipe lengths —
+#: which depend on ``ADDR-DATA`` and ``ADDR-SWAP``, not on ADDR — are unchanged.
+#: Rows 19..26 of the shipped map hold no cell at all, and rows 10..18 come free
+#: once RUN's ``>`` steps into a climb column of its own — COL already does this,
+#: which is why COL's leaf column may carry machinery on the corridor row and
+#: RUN's could not. Below 10 the limit stops being a collision and becomes rule 1:
+#: COL's seed push sits at a fixed row 20, *above* the corridor, and must stay
+#: nearer the ring band (``loop+3``) than ADDR (``loop+19``); their midpoint is
+#: ``loop+11``. 9 is the reading-order tie the builder refuses, 8 and below would
+#: send the wall seed to the panel.
+#:
+#: Measured. Block 235x101 -> 235x84 at ``loop_row`` 10; pipe lengths (addr 15,
+#: data 15, swap 35) and binding margins (min 2) are identical at every value in
+#: 10..27, and the standalone probe — every arm, a negative-seed COL, both
+#: sprites, the banding masks — passes pixel-for-pixel on the native engine at
+#: all eighteen, in 44,054 steps at 10 against 45,447 at 27 (the arms' descents
+#: to the corridor are shorter, so the lift is very slightly *cheaper* too).
+#:
+#: The taped machine then goes **287x271 -> 287x254**, 839,384,674 ->
+#: 839,158,874 ticks on the 116-round tour (-0.03%, i.e. flat). The width is the
+#: taped store's floor (see :data:`SEEK_TIER_LAYOUT`) and the unit never reached
+#: it — the block's east edge is column 235 — so this is height and only height.
+#: It is banked height as well: ``rom_rows`` 81 is the shallowest fold that
+#: reaches the 287 floor, and the seventeen rows come off the total that fold has
+#: to fit under.
+DOOM_LOOP_ROW: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 10}
+
 #: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
 #: different from :data:`TAPED_BANKS`' address order. The value is a permutation
 #: of the bank indices; :func:`memory_taped.gate_chain` turns it into a per-gate
@@ -5699,6 +5755,7 @@ def build_for(
         seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
+        doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
     )
 
 
