@@ -7,7 +7,7 @@
   "regions": [
     {
       "name": "adapter",
-      "x": 71,
+      "x": 63,
       "y": 111,
       "w": 14,
       "h": 6,
@@ -57,7 +57,7 @@
       "name": "cpu:lane:BRN",
       "x": 22,
       "y": 134,
-      "w": 44,
+      "w": 36,
       "h": 1,
       "note": "opcode 9 \u2014 BRN",
       "color": "#3b82f6",
@@ -69,7 +69,7 @@
       "name": "cpu:lane:BRZ",
       "x": 22,
       "y": 136,
-      "w": 43,
+      "w": 35,
       "h": 1,
       "note": "opcode 25 \u2014 BRZ",
       "color": "#3b82f6",
@@ -129,7 +129,7 @@
       "name": "cpu:lane:JMPF",
       "x": 22,
       "y": 138,
-      "w": 42,
+      "w": 34,
       "h": 1,
       "note": "opcode 5 \u2014 JMPF",
       "color": "#3b82f6",
@@ -141,7 +141,7 @@
       "name": "cpu:lane:JMPS",
       "x": 22,
       "y": 132,
-      "w": 45,
+      "w": 37,
       "h": 1,
       "note": "opcode 17 \u2014 JMPS",
       "color": "#3b82f6",
@@ -297,7 +297,7 @@
       "name": "cpu:return:collector",
       "x": 10,
       "y": 141,
-      "w": 57,
+      "w": 49,
       "h": 1,
       "note": "every lane funnels west along here",
       "color": "#3b82f6",
@@ -319,9 +319,9 @@
     },
     {
       "name": "cpu:slab:BRN",
-      "x": 36,
+      "x": 32,
       "y": 144,
-      "w": 13,
+      "w": 11,
       "h": 8,
       "note": "BRN: discard loop / X fan-out (2-D, so not a lane)",
       "color": "#3b82f6",
@@ -331,9 +331,9 @@
     },
     {
       "name": "cpu:slab:BRZ",
-      "x": 23,
+      "x": 21,
       "y": 143,
-      "w": 13,
+      "w": 11,
       "h": 8,
       "note": "BRZ: discard loop / X fan-out (2-D, so not a lane)",
       "color": "#3b82f6",
@@ -345,7 +345,7 @@
       "name": "cpu:slab:JMPF",
       "x": 10,
       "y": 142,
-      "w": 13,
+      "w": 11,
       "h": 4,
       "note": "JMPF: discard loop / X fan-out (2-D, so not a lane)",
       "color": "#3b82f6",
@@ -355,9 +355,9 @@
     },
     {
       "name": "cpu:slab:JMPS",
-      "x": 49,
+      "x": 43,
       "y": 145,
-      "w": 13,
+      "w": 11,
       "h": 2,
       "note": "JMPS: discard loop / X fan-out (2-D, so not a lane)",
       "color": "#3b82f6",
@@ -559,38 +559,14 @@
     },
     {
       "name": "tape",
-      "x": 69,
+      "x": 61,
       "y": 97,
       "w": 224,
-      "h": 63,
+      "h": 58,
       "note": "rotating pipe tape, N=600, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [
         "tape"
-      ]
-    },
-    {
-      "name": "teleport:L",
-      "x": 79,
-      "y": 92,
-      "w": 38,
-      "h": 4,
-      "note": "",
-      "color": "#64748b",
-      "tags": [
-        "teleport"
-      ]
-    },
-    {
-      "name": "teleport:U",
-      "x": 71,
-      "y": 92,
-      "w": 6,
-      "h": 18,
-      "note": "",
-      "color": "#64748b",
-      "tags": [
-        "teleport"
       ]
     }
   ],

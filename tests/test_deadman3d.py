@@ -1167,6 +1167,95 @@ def test_taped_registry_pins() -> None:
     assert not (TAPED_MAN.parent / "deadman-3d_taped.input.txt").exists()
 
 
+def test_store_answer_west_is_opt_in_per_tier() -> None:
+    """The taped STORE hands its own answer to the CPU; no other tier opts in.
+
+    ``@>Rv`` is the forward-only ``R``/``s`` loop — a room that computes nothing
+    and exists only to move a value across itself without paying a pipe's
+    distance term. The taped response used to cross **three** of them: the
+    store's own four-bank collector, then two relay rooms this generator added
+    to carry that collector's answer to the CPU. Widening the collector itself
+    deletes both relays, so the whole machine now holds exactly one.
+    """
+    assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
+    taped = machine.build_for("deadman-3d", store="taped")
+    assert sum(r.count("@>Rv") for r in taped.rows) == 1
+    assert not [r for r in taped.debug_map().regions if r.name.startswith("teleport:")]
+
+    # men-v3 keeps its pair, and not for want of trying: its collector sits at
+    # the block's floor ~190 rows below the response row, so widening it west
+    # shortens nothing — the answer still has to climb, then cross. Deleting
+    # the pair there costs +68% on the tour, against -0.5% saved here.
+    assert machine.STORE_TIER["deadman-3d"] == "men-v3"
+    assert ("deadman-3d", "men-v3") not in machine.STORE_ANSWER_WEST
+    canonical = machine.build_for("deadman-3d")
+    assert {
+        r.name for r in canonical.debug_map().regions if r.name.startswith("teleport:")
+    } == {"teleport:L", "teleport:U"}
+
+
+def test_the_widened_collector_is_off_by_default() -> None:
+    """``answer_west`` is a block parameter, so every other caller must be able
+    to ignore it and get the byte-identical block it always got."""
+    from randomfun2026solvers.memory_taped import taped_store_block
+
+    assert taped_store_block(64, 2).cells == taped_store_block(64, 2, answer_west=None).cells
+    wide = taped_store_block(64, 2, answer_west=1)
+    assert wide.cells != taped_store_block(64, 2).cells
+    # ... and the widened block still answers from one cell, further west and
+    # below its collector rather than above it.
+    assert wide.out_cell[0] < taped_store_block(64, 2).out_cell[0]
+    assert wide.out_cell[1] > taped_store_block(64, 2).out_cell[1]
+
+
+def test_the_compact_gate_is_keyed_by_tier_and_only_the_taped_tier_takes_it() -> None:
+    """The gate chain's five nop spacers come out for the taped tier only.
+
+    Keyed by ``(slug, tier)`` because only the taped tier has gates at all — and
+    keyed at all so that the men-v3 machine, which shares the slug, cannot pick
+    the flag up. The deletion is worth ~2 ticks a gate plus the bank's own arm.
+    """
+    assert machine.TAPED_COMPACT_GATE == {("deadman-3d", "taped")}
+    # not the slug: the canonical build must not see it
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_COMPACT_GATE)
+
+
+def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -> None:
+    """The hot bank leads the chain, and the order is one the chain can express.
+
+    ``TAPED_BANKS``' sizes are in ADDRESS order and the hot 85 — the per-frame
+    scalars at 516..600, 88% of reads and 98% of writes — is last, so under the
+    default chain it pays three gate traversals while the coldest pays none.
+    The registry turns that around. The check that it is *sound* lives in
+    ``test_memory_taped.py`` (the engine reads back all 329 addresses through
+    both chains); this one pins the registry's scope and its keying.
+    """
+    from randomfun2026solvers.memory_taped import gate_chain
+
+    assert machine.TAPED_BANK_ORDER == {("deadman-3d", "taped"): (3, 0, 1, 2)}
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_BANK_ORDER)
+    sizes = list(machine.TAPED_BANKS["deadman-3d"])
+    assert sizes == [256, 195, 64, 85]
+    order = machine.TAPED_BANK_ORDER[("deadman-3d", "taped")]
+    # the hot bank leads, and only its gate is the high-end form
+    chain = gate_chain(sizes, order)
+    assert chain[0] == (3, sum(sizes))
+    assert [top for _k, top in chain[1:]] == [None, None, None]
+
+
+@slow
+def test_the_compact_gate_moves_only_the_taped_family() -> None:
+    """'Nothing else moves a byte': the men-v3 machines are built from the same
+    registry and the same slug, so this is the check that the opt-in really is
+    one — for the bank order too, which shares the same keying."""
+    for stem, kwargs in (
+        ("deadman-3d", {}),
+        ("deadman-3d_trim", {"trim_dead": True}),
+    ):
+        rows = (REPO / "littleman" / "examples" / f"{stem}.man").read_text()
+        assert machine.build_for("deadman-3d", **kwargs).rows == rows.rstrip("\n").split("\n")
+
+
 @slow
 def test_checked_in_taped_man_matches_the_machine_builder() -> None:
     rows = TAPED_MAN.read_text().rstrip("\n").split("\n")
