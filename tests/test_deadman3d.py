@@ -1221,26 +1221,39 @@ def test_the_compact_gate_is_keyed_by_tier_and_only_the_taped_tier_takes_it() ->
 
 
 def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -> None:
-    """The hot bank leads the chain, and the order is one the chain can express.
+    """The hot banks lead the chain, and the order is one the chain can express.
 
-    ``TAPED_BANKS``' sizes are in ADDRESS order and the hot 85 — the per-frame
-    scalars at 516..600, 88% of reads and 98% of writes — is last, so under the
-    default chain it pays three gate traversals while the coldest pays none.
-    The registry turns that around. The check that it is *sound* lives in
-    ``test_memory_taped.py`` (the engine reads back all 329 addresses through
-    both chains); this one pins the registry's scope and its keying.
+    ``TAPED_BANKS``' sizes are in ADDRESS order, and the traffic is not in
+    address order: the raycaster's inner loops live at 517..533, so under the
+    default chain they would pay two and three gate traversals while the map —
+    8% of reads and none of the writes — pays none. The registry turns that
+    around. The check that it is *sound* lives in ``test_memory_taped.py`` (the
+    engine reads back every address of the real 601-slot plan through both
+    chains); this one pins the registry's scope and its keying.
     """
     from randomfun2026solvers.memory_taped import gate_chain
 
-    assert machine.TAPED_BANK_ORDER == {("deadman-3d", "taped"): (3, 0, 1, 2)}
+    assert machine.TAPED_BANK_ORDER == {("deadman-3d", "taped"): (3, 2, 0, 1)}
     assert all(tier == "taped" for _slug, tier in machine.TAPED_BANK_ORDER)
     sizes = list(machine.TAPED_BANKS["deadman-3d"])
-    assert sizes == [256, 195, 64, 85]
+    assert sizes == [352, 164, 15, 69]
     order = machine.TAPED_BANK_ORDER[("deadman-3d", "taped")]
-    # the hot bank leads, and only its gate is the high-end form
+    # The two hot banks lead, and they are the two peeled off the TOP of the
+    # space, so exactly their gates take the high-end form; the cold pair below
+    # them is reached in address order and needs none.
     chain = gate_chain(sizes, order)
-    assert chain[0] == (3, sum(sizes))
-    assert [top for _k, top in chain[1:]] == [None, None, None]
+    assert chain[0] == (3, sum(sizes))                       # 532..600, no gate ahead
+    assert chain[1] == (2, sum(sizes) - sizes[3])            # 517..531, one
+    assert [top for _k, top in chain[2:]] == [None, None]
+
+    # The seams are the traffic's, not the address space's: the fifteen DDA
+    # scalars are a bank, and PW/WADDR are the tail of the one with no gate.
+    slots = d3.tape_slots()
+    bounds = [0]
+    for m in sizes:
+        bounds.append(bounds[-1] + m)
+    assert (bounds[2] + 1, bounds[3]) == (slots["XCOL"], slots["COLOR"])
+    assert bounds[3] + 1 == slots["PW"] and slots["WADDR"] == slots["PW"] + 1
 
 
 @slow

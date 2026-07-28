@@ -5278,8 +5278,25 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: glyph where the low form's ``+`` restores, and the high form's pass-through
 #: arms are two cells *shorter* — so the block is 224x58 and the machine
 #: 295x269 both ways.
+#:
+#: **Re-derived when :data:`TAPED_BANKS` was re-swept**, because an order is only
+#: correct for the split it was fitted to. Under ``(352, 164, 15, 69)`` the hot
+#: addresses are two banks, not one — the DDA scalars (bank 2) and ``PW``/
+#: ``WADDR`` (bank 3) — and both have to lead. ``(3, 2, 0, 1)`` is the descending
+#: traffic order and it is still an end-peeling: 3 and 2 come off the top, then 0
+#: off the bottom, leaving 1 terminal. Two high gates now instead of one; the
+#: block is 224x60 (bank 0's 352-slot ring is two rows deeper than the old 256)
+#: and the machine is unchanged at 289x269.
+#:
+#: The alternatives, on the 8-command native gate, ticks against
+#: ``(3, 2, 0, 1)``'s 61,799,020:
+#:
+#: * ``(3, 2, 1, 0)``  61,979,795  (+0.29%, the two cold banks swapped)
+#: * ``(3, 0, 2, 1)``  63,602,816  (+2.9%, the DDA ring behind the map)
+#: * ``(0, 3, 2, 1)``  64,478,669  (+4.3%)
+#: * address order     67,253,690  (+8.8%)
 TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
-    ("deadman-3d", "taped"): (3, 0, 1, 2),
+    ("deadman-3d", "taped"): (3, 2, 0, 1),
 }
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
@@ -5364,8 +5381,69 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: same fold — one fewer gate on every access beats the merged cold rings' laps.
 #: Merging the hot pair too (three banks, ``(256, 195, 149)``) is the wrong
 #: direction and re-proves the original lesson: 121,458,179, +29%.
+#:
+#: **Re-swept against the traffic once the chain order came free**
+#: (:data:`TAPED_BANK_ORDER`). ``(256, 195, 64, 85)`` was fitted while the chain
+#: was forced into address order, so the hot bank was pinned *last* and the only
+#: lever left was its size. With the order free the two questions separate: the
+#: order decides how many gates a bank is behind, and the sizes decide the ring
+#: tax — and the sizes turn out to have been fitted to the wrong boundary.
+#:
+#: Per-**address** traffic, on the emulator's abstract wire, differencing a
+#: four-command run against the boot round alone (``scratch/deadman3d-opt/
+#: traffic.py``; 11,222 reads and 3,416 writes a gameplay frame):
+#:
+#: ::
+#:
+#:     addresses                       reads    writes   what
+#:     517..531  XCOL..COLOR          58.8%     58.6%    the DDA inner loop
+#:     532..533  PW, WADDR            25.6%     31.2%    the texture inner loop
+#:     1..352    MAPB + POSX..PLANEY   8.4%      0.0%    the map, scanned
+#:     353..516  MONB/SPRB/ZBUF/CMD    4.2%      6.6%    boot-mostly + ZBUF
+#:     534..600  FRACX..PTR            3.0%      3.6%    the rest of the scalars
+#:
+#: The old plan's seam at 515/516 cut straight through that: **every** one of
+#: those addresses sat in one 85-slot ring. The new plan puts the fifteen
+#: DDA scalars in a ring of their own and leaves ``PW``/``WADDR`` — the two
+#: hottest single addresses in the machine — in the bank the chain reaches
+#: with no gate at all:
+#:
+#: ::
+#:
+#:     bank  addresses    M    chain pos   share of accesses
+#:     0     1..352      352      2          6.4%
+#:     1     353..516    164      3          3.2%
+#:     2     517..531     15      1         58.7%
+#:     3     532..600     69      0         31.7%
+#:
+#: Both seams are knife-edges, and both were measured, not derived — the
+#: 8-command native gate, ticks against ``(256, 195, 64, 85)``'s 75,782,738:
+#:
+#: * ``(352, 164, 15, 69)`` (this)  61,799,020  **-18.5%**
+#: * ``(352, 164, 16, 68)``         62,405,534  (``WADDR`` moved to the small
+#:   ring: one gate hop costs it more than the 54 slots it saves)
+#: * ``(352, 164, 14, 70)``         62,132,237
+#: * ``(352, 165, 14, 69)``         63,382,964  (``XCOL`` out of the small ring)
+#: * ``(352, 163, 16, 69)``         61,943,676
+#: * ``(352, 164, 17, 67)``         63,237,686
+#: * ``(256, 260, 17, 67)``         64,365,449  (the old bank-0 seam)
+#: * ``(160, 356, 17, 67)``         66,243,101
+#:
+#: Bank 0 wants to be **big**, which the ring-tax model gets exactly backwards:
+#: the map is walked in address order, so its ring is already turned to the next
+#: word and the tax is not paid. 352 is where that stops — the next seam up
+#: (354) costs +0.9% and 358 costs +6.0%, and past ~356 the block outgrows the
+#: 60 rows :func:`build` can place it in (370 and up fail to route at every
+#: fold, so bank 0 has a hard ceiling here as well as a soft one).
+#:
+#: Five banks would be the obvious next question and the answer is the width:
+#: ``48*5 + 32 = 272`` columns from the store's west wall at x=61 is an east
+#: edge of 333, past the 300-column ceiling ``tests/test_deadman3d.py`` pins.
+#: Three banks (176 columns, and it would fit) needs bank 0 to swallow
+#: everything below 517 — 516 slots, a block 66 rows deep, which does not route
+#: at any fold either. Four is what the geometry allows.
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
-    "deadman-3d": (256, 195, 64, 85)}
+    "deadman-3d": (352, 164, 15, 69)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
