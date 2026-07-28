@@ -51,14 +51,38 @@ memory is built. The canonical machine uses man-memory (hundreds of little men);
 the taped one uses a banked tape with a couple of dozen, because the editor
 snapshots every man on every animation frame and grinds to a halt otherwise.
 
-Expect the editor to be slow regardless. The bottleneck is not the engine —
-its wasm core is linear and already sparse — but the editor's own habit of
-snapshotting full entity state once per animation frame and then throttling
-itself toward one tick per frame. A frame of this program is millions of ticks.
-Wrapping `littlemanWasm.stepN` in the browser console to force a much larger
-step chunk, and slimming the snapshot to displays only, makes it play at speed;
-that is a local hack against the editor's internals, not something this repo
-ships.
+### Making it play at speed in the official editor
+
+Expect the editor to crawl otherwise, and note that the engine is not at fault:
+its wasm core is linear and already sparse. The cost is the editor's own habit of
+snapshotting **full entity state** — every man, every pipe — once per animation
+frame, and then throttling itself toward roughly one tick per frame. A frame of
+this program is millions of ticks, so the demo can appear frozen.
+
+Paste this into the browser console **before** starting the run:
+
+```js
+const api = globalThis.littlemanWasm;
+const orig = api.stepN.bind(api);
+api.stepN = (id, n, stop) => {
+  const s = orig(id, Math.max(n, 50000), stop);
+  try {
+    const o = JSON.parse(s);
+    if (o && o.entities) o.entities = { displays: o.entities.displays || [] };
+    return JSON.stringify(o);
+  } catch (e) { return s; }
+};
+```
+
+It wraps `stepN` to do two things: force a floor of 50,000 ticks per UI frame
+instead of a handful, and hand back a snapshot containing only the displays.
+The shape stays valid, so the editor is satisfied — it just no longer receives
+the hundreds of men and pipes it would otherwise re-serialise sixty times a
+second. The display is all this demo renders from, so nothing visible is lost.
+
+The snippet is deliberately comment-free. Pasting a commented version into the
+console can swallow the newlines and fail with `Uncaught SyntaxError: Unexpected
+identifier` — this one parses even if every newline is stripped.
 
 **Two input streams ship with it:**
 
