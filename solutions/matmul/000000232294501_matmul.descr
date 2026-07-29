@@ -1,0 +1,16 @@
+# matmul — submission c9920b5f-b3b8-4189-a509-9d9f2f8da9b3
+
+verdict      done: 20/20 cases, area2 6561, avgTicks 35,405, score 232,294,501
+submitted    2026-07-27T05:39:31+0300
+grid         72x81
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  e3658a1df1a402e5eaed293a063617d4b2a2c8a05ad14bfe88af168ae72a931c
+commit       63bb6c7
+local        matmul: 7/7 public cases, avg 28,286 ticks
+source       ../../../../../../../../private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers--claude-worktrees-sort-numbers-ring/8d6fb213-c37a-4fac-896b-a6b9363874f1/scratchpad/big2.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+72x81 hand grid: 4 tape rooms + 2 accumulator rooms, single critical-path man; 7/7 public, avg 29,861 ticks

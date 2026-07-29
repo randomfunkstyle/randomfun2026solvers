@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .asm import Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
-from .store import DictStore, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
+from .store import DictStore, DoomUnit, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
 
 __all__ = [
     "Round",
@@ -152,7 +152,7 @@ class Emulator:
         self.words = list(program.words)
         self.store: Store = store if store is not None else DictStore()
         self.spill = spill if spill is not None else SpillRing()
-        self._stream: StreamUnit | SnakeUnit | PathUnit | None = None
+        self._stream: StreamUnit | SnakeUnit | PathUnit | DoomUnit | None = None
         self.tick_model = ticks
 
         self.a = 0
@@ -292,7 +292,7 @@ class Emulator:
 
     # ── STREAM: created on first use, since it owns the I and O rooms ────────
     @property
-    def stream(self) -> StreamUnit | SnakeUnit | PathUnit:
+    def stream(self) -> StreamUnit | SnakeUnit | PathUnit | DoomUnit:
         """The coprocessor the program named with ``.unit``, wired to this run.
 
         Lazily built because a unit *is* part of the machine's I/O on a program that
@@ -309,6 +309,10 @@ class Emulator:
                 )
             elif self.program.unit == "path":
                 self._stream = PathUnit(
+                    lambda port, value: self.display_writes.append((port, value))
+                )
+            elif self.program.unit == "doom":
+                self._stream = DoomUnit(
                     lambda port, value: self.display_writes.append((port, value))
                 )
             else:
@@ -578,7 +582,14 @@ def _spill_pop(em: Emulator, _: int | None) -> None:
     em.b = em.a  # `M`
 
 
+# The three ``*_SEEK`` sems share these handlers: at the *source* level a seek
+# jump means exactly what its classic twin means, and only the generated
+# hardware differs (``machine.seek_split`` rewrites the opcode at build time and
+# ``seek_words`` re-encodes the operand as a drum row/offset). An assembled
+# program never contains them, so this keeps "every opcode is executable" true
+# without pretending the emulator models the drum.
 @_handler(Sem.JUMP)
+@_handler(Sem.JUMP_SEEK)
 def _jump(em: Emulator, n: int | None) -> None:
     assert n is not None
     em.bp = n  # `b`
@@ -586,6 +597,7 @@ def _jump(em: Emulator, n: int | None) -> None:
 
 
 @_handler(Sem.BR_ZERO)
+@_handler(Sem.BR_ZERO_SEEK)
 def _br_zero(em: Emulator, n: int | None) -> None:
     assert n is not None
     # `W` `X`: branch on sign(ACC); every lane's second `W` restores A = n.
@@ -594,6 +606,7 @@ def _br_zero(em: Emulator, n: int | None) -> None:
 
 
 @_handler(Sem.BR_NEG)
+@_handler(Sem.BR_NEG_SEEK)
 def _br_neg(em: Emulator, n: int | None) -> None:
     assert n is not None
     if em.b < 0:

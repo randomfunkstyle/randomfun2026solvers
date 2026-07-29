@@ -13,3 +13,6 @@ __pycache__/
 # agent worktrees and local session state
 .claude/
 .scratch/
+
+# deadman-3d --wad outputs: derived from a locally owned retail IWAD — never commit
+littleman/examples/local/

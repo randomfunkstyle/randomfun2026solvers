@@ -1,0 +1,16 @@
+# tcp — submission 3ff6175c-0156-45cf-aaca-b8274ee9f396
+
+verdict      done: 20/20 cases, area2 289, avgTicks 1,852, score 535,084
+submitted    2026-07-27T01:25:12+0300
+grid         17x17
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  462435270bc9e94688462144d13a5382c6272c949e74e628aa4c322747dc45f4
+commit       63bb6c7
+local        tcp: 6/6 public cases, avg 1,272 ticks
+source       ../../../../../../../../private/tmp/claude-502/-Users-ptaykalo-Projects-icfpc-2026-randomfun2026solvers--claude-worktrees-sort-numbers-ring/8d6fb213-c37a-4fac-896b-a6b9363874f1/scratchpad/tcp_v3.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+17x17 hand-built ring: relay room + two parallel drain men; 6/6 public, 67/67 local fuzz to n=48

@@ -2,16 +2,94 @@
 
 **Status: shipped and passing.** `tasks/solutions/little-little-little-man_ring.man`
 
-    w x h = 159 x 202     area2 = 40,804     avg_ticks = 1,373,035.30
-    score = 5.60e10       10 / 10 public cases on the engine, worst 4,869,930 ticks
+    w x h = 144 x 202     area2 = 40,804     avg_ticks = 181,238.30
+    score = 7.40e9        10 / 10 public cases on the engine, worst 404,556 ticks
+
+Previously 159x202 at 1,373,035.30 ticks and **5.60e10** — the same charged side,
+**7.6x** the speed. Everything below the first section is that change; the sections
+after "CPU or ring?" are the earlier machine's record and are kept because their
+measurements still bound what to try next.
 
 | piece | where | state |
 |---|---|---|
 | LLLM reference interpreter | `lllm_sim.py`, `tests/test_lllm_sim.py` | all 10 public cases byte-exact |
 | painter + LM-75 panel | `lllm_panel.py`, `tests/test_lllm_panel.py` | 22x26, area2 676; all 10 cases' frames replayed byte-identically on **both** validators |
-| decode tables | `lllm_tables.py` | perfect hash + two 64-bit nibble magics, verified |
-| the machine's program | `lllm_ring.py` (`WORKER`, `simulate_worker`) | 63 blocks, 614 glyph cells; reproduces every frame of all 10 public cases at token level |
-| the worker's room layout | `lllm_layout.py` | one block to a row band, 25 routing channels; emits `--man/--html/--json` |
+| decode tables | `lllm_tables.py` | perfect hash over the glyphs *and* the wall-biased `+`/`-`, plus two 64-bit nibble magics |
+| the machine's program | `lllm_ring.py` (`WORKER`, `simulate_worker`) | 68 blocks; reproduces every frame of all 10 public cases at token level |
+| the worker's room layout | `lllm_layout.py` | one block to a row band, 28 routing channels; emits `--man/--html/--json` |
+
+## The 7.6x, in the order it was found
+
+Ticks on this machine are **block transitions**, not glyphs: 421k tokens against
+13.7M ticks, so a block visit cost ~67 ticks of lane walking and a token cost 1.
+Every change below is either "take a block visit out of a loop" or "make the walk
+shorter", and the profile — `visits x (body + lane)` per CFG edge — is what chose
+between them.
+
+1. **The store lap was 92% of all block visits.** A tick rotated `16H + 1` words
+   to reach one cell. Packing eight classes to a 64-bit word makes that ring 32
+   words; holding the current word in the file and leaving a hole in the ring
+   makes the *rotation* relative, so it is 6.6 word-moves a tick, not 184.
+   The store loop is now **2%** of ticks.
+2. **Rows are the charged side, and the panel was standing in them.** The 16x16
+   panel and its painter are 26 rows; they sat in a 30-row band above the worker.
+   Moved **east** of the worker — where the room's columns run out 60 short of its
+   rows — the band is 8 rows. -22 rows for nothing.
+3. **The bands were 21 columns apart.** The store's pipes were deliberately spread
+   because a 257-word ring had to snake the whole band and its two pipes crossed.
+   A 32-word ring is a short loop, so the pairs sit together and the file band
+   starts 12 columns from the entry instead of 21 — nine ticks off *every* block
+   visit.
+4. **The setup decode was then 56% of ticks**, at eight block visits per program
+   cell. It is five now: the wall-row flag is **added to the byte** before it is
+   hashed rather than branched on (`WALL_BIAS`, and the hash is injective over
+   the union), which deleted a branch, a block and the whole `WALL_CELL` path;
+   the class lookup, the colour lookup and the `@` test merged into one block;
+   and the word-boundary test became `ACC - 2^40` instead of `ACC >> 40`, because
+   the *difference* is what both lanes want — add `2^40` back and you have the
+   accumulator, keep it and you have the finished word — so neither lane has to
+   fetch `ACC` a second time.
+
+Two things that looked right and measured wrong, kept so they are not retried:
+
+* **Handing the backtick columns out widest-literal-first.** A literal steps past
+  every column already holding a backtick, and those blanks are walked; the decode
+  block, which carries a 19-digit and a 15-digit magic, was spending ~120 of its
+  204 walked cells on skipping. Planning it first does cut that (-1.8% ticks) and
+  reshapes every other block's rows — the room came out four rows taller, +3.9% on
+  a squared footprint. 7.85e9 against 7.69e9. Not done.
+* **Widening the room past the point where wraps stop.** Free columns make the
+  skipping cheaper in principle; measured across `IW` from +90 to +170 the ticks
+  move by 0.05% and the height not at all, so the only effect is width — which
+  starts costing the moment it passes the height.
+* **Giving the hot lanes the channel columns nearest the entry.** A lane's whole
+  walk is `end + first_glyph - 2 * ch`, so every edge is cheaper the further east
+  its channel sits, and ~30% of this machine's ticks are in that `2 * (NC - ch)`.
+  It is not a free choice: a lane turns east out of its channel *on the target's
+  arrival row* and runs to the entry, so every channel occupied on that row has
+  to stand west of it. Sorting the 28 packed column groups under that constraint
+  by measured frequency, and again by the exact opposite, produces **the same 28
+  columns** — the constraint alone determines the order, and there is nothing
+  left to spend. Closed unless the entry discipline itself changes.
+
+### Where the remaining time is
+
+Per the `visits x (body + lane)` profile, on the shipped machine:
+
+| | share |
+|---|---|
+| `DEC_TAB` — hash, both magics, colour, `@` test | 23% |
+| the rest of the setup cell (`CELL`, `TAIL_R`, `KEEP_R`, `DEC_*`) | ~30% |
+| the interpreted tick (dispatch, lanes, `MOVE`, `TICK*`) | ~25% |
+| the store ring | 2% |
+
+`DEC_TAB` walks 204 cells for 88 glyphs, and 137 of those are one wrap: its
+`rq`/`sq` pair sits after the 21-cell class magic, by which point the pen has run
+past the file band, so the block turns round, walks the whole room west, and
+comes back east to reach the painter band. Widening the file band to cover
+column 109 needs the I/O pipes ~140 columns out, which puts the grid past 202
+wide — where width starts costing. That is the next thing to try and it is a
+geometry problem, not a program one.
 
 ## What has to happen
 
@@ -27,9 +105,11 @@ program halts.
   expected frame matched** (`fast_littleman_native.cpp:267`), which is exactly
   the contest rule. A machine that blocks forever after its last frame therefore
   costs nothing, and does not have to halt.
-- The leaderboard's best LLLM score is 1.3e12 against a 15M tick cap, i.e. a
-  footprint of >= 295 on a side. Any working compact machine wins by orders of
-  magnitude, so **correctness first, footprint second, ticks a distant third**.
+- That first reading of the leaderboard — "best LLLM score 1.3e12, so correctness
+  first, footprint second, ticks a distant third" — was of an empty board. The
+  finished one runs from 1.18e9, and at 5.60e10 this machine was 51x off it and
+  5.1x off tenth. **Ticks turned out to be the whole game**, which is what the
+  first section is about.
 - Public cases: `W,H` from 4x4 to 16x16, <= 26 rounds, <= 182 interpreted ticks,
   `k` up to 64. Every case halts, always on its final round. The room fills the
   whole `W x H` grid in all 10.
@@ -58,12 +138,13 @@ remainder is padded with `(POS, 9)` pairs, which is idempotent — 6 glyphs
 
 ## Program store
 
-One ring word per program cell, rows padded to sixteen so that **a cell's store
-index is its display address** — which is why the man's position is one number
-and a move is `+-1` / `+-16` with no multiply anywhere in the tick loop.
-`16H + 1` words, so 65 for a 4x4 program and 257 for a 16x16 one. Every stored
-value is non-negative, so `END = -1` is the ring's only negative value and the
-scan that returns the store finds its end with a bare `X` — no length counter.
+Rows are padded to sixteen so that **a cell's store index is its display
+address** — which is why the man's position is one number and a move is `+-1` /
+`+-16` with no multiply anywhere in the tick loop. Eight of those cells are
+packed into each ring word at five bits apiece, so the ring is a fixed 32 words
+whatever `H` is, `POS / 8` is one glyph and yields both the word index and the
+bit offset, and the padding rows past `H` are pushed as zero *words* rather than
+decoded as cells.
 
 `class` is one field, not a (colour, opcode) pair: the colour is a constant of
 the dispatch lane the class lands on. Only the *setup* pass needs a colour for
@@ -99,19 +180,19 @@ are updated by constants per move — E/W add +-1 to both, S/N add +-W to `n` an
 
 ## Ring
 
-    [ K, N, A, DIR, AI, BI, W, W0 .. W(m-1), END = -1 ]
+    STORE  31 words in the pipe, the 32nd held in the file
+    FILE   [ K, HALT, BI, AI, DIR, POS, CUR, WORD ]
 
-`K` = ticks left this round, `N`/`A` = store index / display address of the man,
-`DIR` = 0..3, `AI`/`BI` = the interpreted registers, `W` = program width, then
-`m = ceil(W*H/8)` store words, then the sentinel. Max resident 39 words, so the
-ring pipe pair must hold >= 40.
+`K` = ticks left this round, `HALT` = whether the interpreted man has stopped,
+`AI`/`BI` = the interpreted registers, `DIR` = 0..3, `POS` = the man's display
+address, `CUR` = which store word the file is holding, `WORD` = that word.
+`TICK_LIVE` transiently holds a ninth slot, so the file's pipe pair must hold
+>= 11.
 
-One interpreted tick is one lap: read the head words, `/` the address into
-(quotient, remainder), rotate `quotient` store words under a `b`-counted loop
-(B carries `8*remainder` across it, since only A is clobbered by `r`), read and
-immediately push back the target word, extract the class, then a sentinel-
-terminated `r`/`X`/`s` loop returns the rest of the store and the head words are
-rewritten behind it.
+One interpreted tick: `POS / 8` gives the word index `j` and the bit offset;
+`j - CUR` decides whether the held word is already the right one (53% of ticks,
+and then the store is not touched at all) or the ring has to turn
+`(j - CUR - 1) mod 32`; the byte comes out with one `}` and one `&`.
 
 ## Setup decode
 
@@ -123,67 +204,56 @@ counter, not once per cell. `lllm_sim.py` derives the room rectangle from the
 puts a smaller room inside a padded grid; the machine assumes the room fills the
 grid, and that assumption is recorded here as the single semantic risk.
 
-## What the store actually holds — packing was tried and dropped
+## What the store actually holds — packing, and why it took two goes
 
-The first design packed eight cells to a 64-bit word (32 words for a 16x16
-program, a ring of ~35 pipe cells). It was abandoned, and the reason is worth
-keeping: **a little man has two hands and a write-only backpack, and packing
-needs three live values.** The inner setup loop must hold an accumulator, a
-display address and a loop count while the decoder itself wants both hands;
-`acc*256 + class` cannot be formed while `class` occupies `B`, and every escape
-(`{`, `*`, `/`) needs its own constant in `B`. Every variant cost either a
-second spill FIFO or a rotating-register discipline over five slots touched once
-per cell.
+The first design packed eight cells to a 64-bit word and **was abandoned**, for a
+reason worth keeping because it was right about the obstacle and wrong about the
+way round it: *a little man has two hands and a write-only backpack, and packing
+needs three live values.* The setup loop must hold an accumulator, a display
+address and a loop count while the decoder itself wants both hands, and
+`acc*256 + class` cannot be formed while `class` occupies `B`.
 
-Unpacked — **one class per ring word** — the setup cell body holds *nothing*
-across the decode, because `s` leaves `A` alone: push the class, then look the
-colour up from it. That is the single decision that made the program small
-enough to write down. It costs a 257-cell ring instead of a 35-cell one and
-about 8x the ticks, both of which are cheap against a leaderboard at 1.3e12.
+What unblocks it is that the **register file is the third hand**, and two tricks
+that cost nothing:
 
-The same reasoning fixed the decoder: the class table is indexed by a perfect
-hash of the byte and the colour table by the *class offset the first lookup
-produced*, because `&` wants `B = 15` and destroys the shift amount. Chained,
-not parallel.
+* the accumulator rides the file **pre-shifted**, so a cell's whole contribution
+  is one `+` — no constant needs to be in `B` at the moment the class is;
+* the word boundary is found by a **carry**, not a counter. `ACC` starts at
+  `1 << 5` and shifts five bits a cell, so its sentinel reaches bit 40 on exactly
+  the eighth cell. That matters because the backpack is already holding the row's
+  cell count and there is no second counter to be had.
 
-## The layout, and what it actually cost
+Five bits a class rather than eight is what keeps the sentinel inside a positive
+64-bit literal: classes run 0..21, `8 x 5` is a 40-bit payload, and `ACC << 5`
+at its widest is `2^45`.
 
-The worker is 63 blocks / 614 glyph cells of straight runs plus 87 routed edges,
-laid out by `lllm_layout.py` into a 157x190 room. Two constraints, both measured
-before the compiler was written, and both held up:
+Unpacked, the ring was `16H + 1` words and a tick turned all of them. Packed it is
+32 words — and once it is 32 words the *relative* rotation below becomes possible,
+which is the change that actually paid.
 
-1. **Pipe binding is a column discipline, and it is nearly free here.** Six pipes
-   (input, painter, store fwd/ret, file fwd/ret) all attach to one wall, so
-   "nearest" reduces to nearest column at every row — `tcp_ring`'s rule. Of 285
-   pipe ops, **246 are register-file ops, 26 are input/painter and 13 are
-   store**, and there are only **22 intra-block zone switches**. So the bulk of
-   the code sits in one column band and only 22 places need a walk. This was the
-   risk I expected to dominate and it does not.
-2. **Rows are what cost.** The built room is 190 rows: a block gets one row per
-   glyph run (a second when a pipe band lies behind the pen and it has to wrap),
-   plus a straight-lane row, plus two more if it branches. 159x222 overall, and
-   `area2 = 49,284`.
+## The read that does not advance the ring
 
-Three things that were *not* anticipated and are worth writing down:
+A `rr` takes a word out of the ring and an `sr` puts it back at the tail, so a
+read **rotates the ring by one**. That is invisible on a full lap and fatal on a
+relative one: the commonest step of all is "the same word again" — 53% of
+interpreted ticks — and it would cost a whole 32-word lap to get back.
 
-- **A token is not a glyph.** `rq`/`sq`/`rr`/`sr`/`ri`/`sp` name a *pipe*, which
-  is a column discipline; they all compile to a bare `r` or `s`. Writing the
-  token into the cell shifted every row that contained one and showed up only as
-  "numeric literal contains a non-digit" from the loader, four blocks away.
-- **A pipe's first cell must point away from its room**, so a return pipe that
-  wants to leave a relay and immediately head east has to go north for one cell
-  first. Both return pipes silently failed to parse without it — the grid still
-  loaded, with two pipes missing.
-- The tick bill is dominated by the store ring: 16H+1 words turned once per
-  interpreted tick, each word costing a whole block entry and its routed edge.
-  That is where the 1.46M average lives, and it is the first thing to attack if
-  the score ever matters: packing eight classes to a word (see above) would cut
-  the lap eightfold.
+So the word does not go back. It stays in the file (`WORD`), `CUR` names it, and
+the ring holds 31 words with a hole where it came from. A hit touches the store
+not at all. A miss pushes the held word back — the hole is at the tail, which in
+a cyclic order is exactly where it belongs — and rotates `(j - CUR - 1) mod 32`,
+which is 0 for a step east across a word boundary and 1 for a step south.
 
-Bytes accumulate `word = word*256 + class` in raster order in the packed variant,
-so cell `i` of a word sits at bits `8*(7-i)`; a short final word is left-shifted
-by the shortfall, which is a single `{`. Kept here only because the packed store
-is the obvious footprint optimisation once the layout exists.
+Measured over the public cases, per interpreted tick:
+
+| store | word-moves a tick |
+|---|---|
+| unpacked, full lap | 184 |
+| packed 8/word, full lap | 23.0 |
+| packed, relative, word returned | 22.4 — *the read's own rotation eats it all* |
+| packed, relative, word **held** | **6.6** |
+
+The middle row is the trap: relative rotation on its own buys nothing.
 
 ## CPU or ring? — measured, and it is a wash
 

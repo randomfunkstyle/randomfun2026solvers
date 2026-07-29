@@ -1,0 +1,47 @@
+# sort-numbers — submission dda891a6-d9fc-4f0e-bf4a-b3c1b32208c8
+
+verdict      done: 25/25 cases, area2 196, avgTicks 2,375.92, score 465,680
+submitted    2026-07-27T10:30:14+0000
+grid         14x14
+problem id   85dc7d34-1c5a-4ba4-9712-b151c1970301
+fingerprint  38de8acfbfe2d7b7e041e76d47e98e482261bf5472f3c6ca58712eb20786a473
+commit       baadb7e
+local        7/7 public + 30/30 random under lm.mjs judge (engine-side round gating), avg 1,489.0
+             ticks, local score 291,844.  Measured judged ratio 2375.92/1489.0 = 1.596.
+source       tasks/solutions/sort-numbers_network.man   (generator solvers/python/randomfun2026solvers/sort_grid.py)
+
+runner output:
+Passed 25/25 test cases
+
+notes:
+17x17 -> 14x14, incumbent local 486,057 -> 291,844 (1.67x local, 1.45x judged). Almost all of it
+is geometry: area2 289 -> 196 is 1.47x on its own. At side 14 one row is worth 2/14 = 14% of
+ticks, so nothing here was bought with a row.
+
+The lever: the input pipe no longer reaches the worker, it feeds the RELAY, which merges it into
+the ring with R (ties break by reading order, so input's segment two rows above the worker's wins
+every tick it has a value). The ring's initial contents (n, then v1..vn) then already ARE the pass
+invariant "header plus n values", so MAIN and LOAD stop existing — four of the worker's ten rows.
+Two smaller ones: EMIT parks a 1 that PASS moves to B, shrinking BODY's decrement from M1-N to -;
+and the last pass (k==1) pushes no header, so the round boundary is a blocking r with no
+round-over branch at all.
+
+THIS GRID DEPENDS ON ROUND GATING and scoring.score_program does not model it — it concatenates
+rounds into one stream, and fed that, the machine sorts all rounds interleaved (right multiset,
+wrong order). Verified instead under lm.mjs judge --expected. The 25/25 verdict confirms the gate
+is real on the live judge, as the statement ("You won't receive the next list until you finish
+printing the current one") and GRADING.md:89 both said.
+
+Sorting networks were priced and lose. Batcher on a single-man ring touches 126 pops + 126 pushes
+against selection-against-a-carry's 120 total. Unrolled as rooms: a comparator needs two r, -, X,
++, W, two s plus perimeter = >=4x3 interior = 30 cells, x63 plus ~126 pipes = ~2,270 cells, side
+>=48, area2 >=2,300 — 11.7x ours against at most ~10x on ticks. Odd-even transposition (8 rooms
+reused 16x) lands ~282,000, a wash, for a full rebuild across 8 rooms of phantom-pipe surface.
+The measurement that kills all of them: OBLIVIOUSNESS IS A COST HERE. n varies 1..16 and the
+public rounds average 5.8; sum(n^2)/case is 136.6 against sum(n)/case 14.86, so a fixed 16-wire
+network pays full price on a 3-element list where the O(n^2) loop pays 3 comparisons. The packed-
+rank idea has the same defect — still 120 comparisons, plus pack/unpack per access.
+
+Previous: 674,499 (rank 39/143). This: 1.45x better.
+Archive note: 000000003273525_sort-numbers.man was a stale 25x25; the live 674,499 came from a
+17x17 on unmerged commit e65ae75, measured at 486,057 local (ratio 1.388).

@@ -1,0 +1,31 @@
+# reverse-a-list — submission ffb14789-edd1-4170-9b51-e4cdfb10b068
+
+verdict      done: 20/20 cases, 15x15, score 61,447
+submitted    2026-07-27T11:20:08+0000
+grid         15x15
+fingerprint  3cfca52b6c6179dc3f6b3734714692aa5c6914c16d6be8a97aabf31280d6a523
+commit       7230812
+source       tasks/solutions/reverse-a-list_split.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Submitted unvalidated in the closing minutes, on the reasoning that the server keeps the best
+score so a bad submission costs only a round trip. It was NOT a bad submission: 118,401 -> 61,447,
+a 1.93x gain that had been sitting on main unsubmitted, built by a parallel effort
+("Reverse lists with parallel value carriers", commit f673408).
+
+The lesson is the archive gap, not the grid. Three of our live scores today came from grids that
+were never committed, and this is the mirror case — a grid that was committed and never submitted.
+Both cost us. A grid is only banked when the score is on the board AND the generator is in the
+repo; either half alone is a loss waiting to happen.
+
+Also submitted blind in the same sweep and all worse than live, recorded so nobody re-tries them:
+  history-lesson_base128  97x90     9,409  (live 6,889)
+  history-lesson_rom      151x124  22,801
+  memory_men_addr         36x308  216,562,654  (live 19,973,628)
+  reverse-a-list_counter  175x49   66,983,000
+  plotter_block           44x56    22,774,730  — identical to live, i.e. this IS the live grid
+  tcp_queue_ast           47x45    26,339,011  (live 461,274)
+  tcp_dense_ast           19x19     1,002,966

@@ -1,0 +1,193 @@
+<div id="four-value-tape-skip">
+  <style>
+    #four-value-tape-skip {
+      color: var(--foreground);
+      display: grid;
+      gap: 16px;
+    }
+    #four-value-tape-skip .layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(220px, 0.8fr);
+      gap: 20px;
+      align-items: center;
+    }
+    #four-value-tape-skip .ring {
+      display: grid;
+      grid-template-columns: 42px repeat(5, minmax(42px, 58px)) 42px;
+      grid-template-rows: 34px repeat(5, minmax(42px, 58px)) 34px;
+      justify-content: center;
+      align-items: stretch;
+    }
+    #four-value-tape-skip .cell {
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--viz-series-1) 12%, transparent);
+      color: var(--foreground);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 500;
+    }
+    #four-value-tape-skip .test {
+      background: color-mix(in srgb, var(--viz-series-2) 20%, transparent);
+    }
+    #four-value-tape-skip .test.is-active {
+      background: var(--primary);
+      color: var(--primary-foreground);
+      outline: 3px solid var(--ring);
+      outline-offset: 2px;
+    }
+    #four-value-tape-skip .exit {
+      display: grid;
+      place-items: center;
+      color: var(--muted-foreground);
+      text-align: center;
+    }
+    #four-value-tape-skip .exit.is-active {
+      color: var(--foreground);
+      font-weight: 500;
+    }
+    #four-value-tape-skip .flow {
+      grid-column: 3 / 7;
+      grid-row: 4;
+      display: grid;
+      place-items: center;
+      color: var(--muted-foreground);
+      pointer-events: none;
+    }
+    #four-value-tape-skip .details {
+      display: grid;
+      gap: 14px;
+    }
+    #four-value-tape-skip .metric {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      padding-block: 7px;
+      border-bottom: 1px solid var(--border);
+    }
+    #four-value-tape-skip .metric:last-child {
+      border-bottom: 0;
+    }
+    #four-value-tape-skip .comparison {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    #four-value-tape-skip .bar {
+      display: grid;
+      gap: 6px;
+      align-content: end;
+    }
+    #four-value-tape-skip .track {
+      height: 10px;
+      background: var(--muted);
+      overflow: hidden;
+    }
+    #four-value-tape-skip .fill {
+      height: 100%;
+      background: var(--viz-series-1);
+    }
+    @media (max-width: 600px) {
+      #four-value-tape-skip .layout {
+        grid-template-columns: 1fr;
+      }
+      #four-value-tape-skip .ring {
+        grid-template-columns: 36px repeat(5, minmax(36px, 48px)) 36px;
+        grid-template-rows: 30px repeat(5, minmax(36px, 48px)) 30px;
+      }
+    }
+  </style>
+
+  <div class="viz-controls">
+    <label class="form-label" for="quad-skip-count">
+      Skip count: <strong id="quad-count-value">7</strong> values
+      <input class="form-range" id="quad-skip-count" type="range" min="0" max="31" value="7">
+    </label>
+  </div>
+
+  <div class="layout">
+    <div class="ring" role="img" aria-label="Five by five clockwise counted ring with four receive-send-decrement sides and four exact exits">
+      <div class="exit" data-exit="0" style="grid-column:2;grid-row:1">↑<br>N</div>
+      <div class="exit" data-exit="1" style="grid-column:7;grid-row:2">E →</div>
+      <div class="exit" data-exit="2" style="grid-column:6;grid-row:7">S<br>↓</div>
+      <div class="exit" data-exit="3" style="grid-column:1;grid-row:6">← W</div>
+
+      <div class="cell test" data-rem="0" style="grid-column:2;grid-row:2">d</div>
+      <div class="cell" style="grid-column:3;grid-row:2">r</div>
+      <div class="cell" style="grid-column:4;grid-row:2">s</div>
+      <div class="cell" style="grid-column:5;grid-row:2">m</div>
+      <div class="cell test" data-rem="1" style="grid-column:6;grid-row:2">d</div>
+
+      <div class="cell" style="grid-column:6;grid-row:3">r</div>
+      <div class="cell" style="grid-column:6;grid-row:4">s</div>
+      <div class="cell" style="grid-column:6;grid-row:5">m</div>
+      <div class="cell test" data-rem="2" style="grid-column:6;grid-row:6">d</div>
+
+      <div class="cell" style="grid-column:5;grid-row:6">r</div>
+      <div class="cell" style="grid-column:4;grid-row:6">s</div>
+      <div class="cell" style="grid-column:3;grid-row:6">m</div>
+      <div class="cell test" data-rem="3" style="grid-column:2;grid-row:6">d</div>
+
+      <div class="cell" style="grid-column:2;grid-row:5">r</div>
+      <div class="cell" style="grid-column:2;grid-row:4">s</div>
+      <div class="cell" style="grid-column:2;grid-row:3">m</div>
+
+      <div class="flow">
+        <span>clockwise · one <code>r s m</code> per side</span>
+      </div>
+    </div>
+
+    <div class="details">
+      <div class="metric"><span>Complete four-word laps</span><strong id="quad-laps">1</strong></div>
+      <div class="metric"><span>Exact tail</span><strong id="quad-tail">3 values</strong></div>
+      <div class="metric"><span>Exit after tail</span><strong id="quad-exit">west</strong></div>
+      <div class="metric"><span>Loop cost</span><strong>≈ 4 ticks/value</strong></div>
+      <div class="metric"><span>Geometry per loop</span><strong>5 × 5</strong></div>
+    </div>
+  </div>
+
+  <div class="comparison" aria-label="Loop-only tick cost comparison">
+    <div class="bar">
+      <span>batch 1 · 8</span>
+      <div class="track"><div class="fill" style="width:100%"></div></div>
+    </div>
+    <div class="bar">
+      <span>batch 2 · 5</span>
+      <div class="track"><div class="fill" style="width:62.5%"></div></div>
+    </div>
+    <div class="bar">
+      <span>batch 4 · 4</span>
+      <div class="track"><div class="fill" style="width:50%"></div></div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById("four-value-tape-skip");
+      const slider = root.querySelector("#quad-skip-count");
+      const countValue = root.querySelector("#quad-count-value");
+      const lapsValue = root.querySelector("#quad-laps");
+      const tailValue = root.querySelector("#quad-tail");
+      const exitValue = root.querySelector("#quad-exit");
+      const exitNames = ["north", "east", "south", "west"];
+
+      function update() {
+        const count = Number(slider.value);
+        const remainder = count % 4;
+        countValue.textContent = String(count);
+        lapsValue.textContent = String(Math.floor(count / 4));
+        tailValue.textContent = `${remainder} ${remainder === 1 ? "value" : "values"}`;
+        exitValue.textContent = exitNames[remainder];
+        root.querySelectorAll("[data-rem]").forEach((cell) => {
+          cell.classList.toggle("is-active", Number(cell.dataset.rem) === remainder);
+        });
+        root.querySelectorAll("[data-exit]").forEach((label) => {
+          label.classList.toggle("is-active", Number(label.dataset.exit) === remainder);
+        });
+      }
+
+      slider.addEventListener("input", update);
+      update();
+    })();
+  </script>
+</div>

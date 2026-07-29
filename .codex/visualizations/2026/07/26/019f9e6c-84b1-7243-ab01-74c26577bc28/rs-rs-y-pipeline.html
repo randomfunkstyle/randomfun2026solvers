@@ -1,0 +1,170 @@
+<div id="rs-rs-y-pipeline" style="width:100%;color:var(--foreground);">
+  <div class="viz-grid" style="margin-bottom:12px;">
+    <div class="card viz-stat">
+      <div class="text-muted">Dispatch interval</div>
+      <div class="viz-stat-value">6 ticks</div>
+      <div class="text-small text-muted">relay-matched</div>
+    </div>
+    <div class="card viz-stat">
+      <div class="text-muted">Lane reuse</div>
+      <div class="viz-stat-value">12 ticks</div>
+      <div class="text-small text-muted">two alternating workers</div>
+    </div>
+    <div class="card viz-stat">
+      <div class="text-muted">Probe result</div>
+      <div class="viz-stat-value">1 → 4</div>
+      <div class="text-small text-destructive">FIFO phase corrupted</div>
+    </div>
+  </div>
+
+  <div class="viz-controls" role="group" aria-label="Pipeline view">
+    <button class="btn btn-primary" type="button" data-view="layout" aria-pressed="true">Layout</button>
+    <button class="btn" type="button" data-view="timing" aria-pressed="false">Timing</button>
+    <button class="btn" type="button" data-view="ordering" aria-pressed="false">Creation order</button>
+  </div>
+
+  <svg viewBox="0 0 720 330" role="img" aria-labelledby="yr-title yr-desc" style="display:block;width:100%;margin-top:10px;">
+    <title id="yr-title">Rejected alternating Y tape pipeline</title>
+    <desc id="yr-desc">Two Y split points alternate receive-send workers. The dispatcher is older than every worker, allowing it to overtake pending tape transfers and corrupt FIFO phase.</desc>
+
+    <g data-panel="layout">
+      <text x="22" y="28" fill="var(--muted-foreground)">even / dispatcher lane</text>
+      <text x="22" y="146" fill="var(--muted-foreground)">odd / dispatcher lane</text>
+
+      <path d="M86 74 H570" fill="none" stroke="var(--border)" stroke-width="2"/>
+      <path d="M86 192 H570" fill="none" stroke="var(--border)" stroke-width="2"/>
+
+      <g fill="color-mix(in srgb, var(--viz-series-1) 18%, transparent)" stroke="var(--viz-series-1)" stroke-width="2">
+        <rect x="314" y="48" width="44" height="44" rx="6"/>
+        <rect x="430" y="166" width="44" height="44" rx="6"/>
+      </g>
+      <text x="336" y="76" text-anchor="middle" fill="var(--foreground)">Y₂</text>
+      <text x="452" y="194" text-anchor="middle" fill="var(--foreground)">Y₁</text>
+
+      <g fill="color-mix(in srgb, var(--viz-series-2) 18%, transparent)" stroke="var(--viz-series-2)" stroke-width="2">
+        <rect x="178" y="48" width="46" height="44" rx="6"/>
+        <rect x="548" y="166" width="46" height="44" rx="6"/>
+      </g>
+      <text x="201" y="76" text-anchor="middle" fill="var(--foreground)">r s</text>
+      <text x="571" y="194" text-anchor="middle" fill="var(--foreground)">r s</text>
+
+      <path d="M314 70 H230" fill="none" stroke="var(--viz-series-2)" stroke-width="3" marker-end="url(#yr-arrow-worker)"/>
+      <path d="M474 188 H542" fill="none" stroke="var(--viz-series-2)" stroke-width="3" marker-end="url(#yr-arrow-worker)"/>
+      <path d="M358 70 H486 V188 H474" fill="none" stroke="var(--viz-series-1)" stroke-width="3" marker-end="url(#yr-arrow-dispatch)"/>
+      <path d="M430 188 H274 V70 H308" fill="none" stroke="var(--viz-series-1)" stroke-width="3" marker-end="url(#yr-arrow-dispatch)"/>
+
+      <text x="190" y="112" fill="var(--muted-foreground)">newer worker</text>
+      <text x="516" y="230" fill="var(--muted-foreground)">newer worker</text>
+      <text x="490" y="118" fill="var(--muted-foreground)">older dispatcher</text>
+      <text x="278" y="236" fill="var(--muted-foreground)">older dispatcher</text>
+    </g>
+
+    <g data-panel="timing" style="display:none;">
+      <text x="22" y="30" fill="var(--muted-foreground)">ticks</text>
+      <g fill="var(--muted-foreground)">
+        <text x="148" y="30">0</text><text x="226" y="30">6</text><text x="304" y="30">12</text>
+        <text x="382" y="30">18</text><text x="460" y="30">24</text><text x="538" y="30">30</text>
+      </g>
+      <path d="M150 42 H552" stroke="var(--border)" stroke-width="2"/>
+      <text x="22" y="92" fill="var(--foreground)">dispatcher</text>
+      <g fill="color-mix(in srgb, var(--viz-series-1) 24%, transparent)" stroke="var(--viz-series-1)">
+        <rect x="150" y="64" width="72" height="40" rx="5"/>
+        <rect x="228" y="64" width="72" height="40" rx="5"/>
+        <rect x="306" y="64" width="72" height="40" rx="5"/>
+        <rect x="384" y="64" width="72" height="40" rx="5"/>
+        <rect x="462" y="64" width="72" height="40" rx="5"/>
+      </g>
+      <g fill="var(--foreground)" text-anchor="middle">
+        <text x="186" y="89">Y₁</text><text x="264" y="89">Y₂</text><text x="342" y="89">Y₁</text>
+        <text x="420" y="89">Y₂</text><text x="498" y="89">Y₁</text>
+      </g>
+      <text x="22" y="162" fill="var(--foreground)">worker lane 1</text>
+      <text x="22" y="230" fill="var(--foreground)">worker lane 2</text>
+      <g fill="color-mix(in srgb, var(--viz-series-2) 24%, transparent)" stroke="var(--viz-series-2)">
+        <rect x="150" y="134" width="120" height="40" rx="5"/>
+        <rect x="306" y="134" width="120" height="40" rx="5"/>
+        <rect x="462" y="134" width="120" height="40" rx="5"/>
+        <rect x="228" y="202" width="120" height="40" rx="5"/>
+        <rect x="384" y="202" width="120" height="40" rx="5"/>
+      </g>
+      <g fill="var(--foreground)" text-anchor="middle">
+        <text x="210" y="159">r → s → H / wait</text><text x="366" y="159">r → s → H / wait</text>
+        <text x="522" y="159">r → s → H / wait</text><text x="288" y="227">r → s → H / wait</text>
+        <text x="444" y="227">r → s → H / wait</text>
+      </g>
+      <path d="M552 52 V260" stroke="var(--destructive)" stroke-width="2" stroke-dasharray="6 5"/>
+      <text x="558" y="284" fill="var(--destructive)">exit has no join</text>
+    </g>
+
+    <g data-panel="ordering" style="display:none;">
+      <text x="24" y="28" fill="var(--muted-foreground)">runner action order at a contested tape pipe</text>
+      <path d="M96 92 H630" stroke="var(--border)" stroke-width="2"/>
+      <g>
+        <circle cx="146" cy="92" r="24" fill="color-mix(in srgb, var(--viz-series-1) 22%, transparent)" stroke="var(--viz-series-1)" stroke-width="2"/>
+        <text x="146" y="98" text-anchor="middle" fill="var(--foreground)">D</text>
+        <text x="146" y="132" text-anchor="middle" fill="var(--muted-foreground)">parent slot</text>
+      </g>
+      <g>
+        <circle cx="304" cy="92" r="24" fill="color-mix(in srgb, var(--viz-series-2) 22%, transparent)" stroke="var(--viz-series-2)" stroke-width="2"/>
+        <text x="304" y="98" text-anchor="middle" fill="var(--foreground)">W₁</text>
+        <text x="304" y="132" text-anchor="middle" fill="var(--muted-foreground)">newer</text>
+      </g>
+      <g>
+        <circle cx="462" cy="92" r="24" fill="color-mix(in srgb, var(--viz-series-2) 22%, transparent)" stroke="var(--viz-series-2)" stroke-width="2"/>
+        <text x="462" y="98" text-anchor="middle" fill="var(--foreground)">W₂</text>
+        <text x="462" y="132" text-anchor="middle" fill="var(--muted-foreground)">newest</text>
+      </g>
+      <path d="M146 164 V226 H568" fill="none" stroke="var(--destructive)" stroke-width="3" marker-end="url(#yr-arrow-bad)"/>
+      <text x="160" y="190" fill="var(--destructive)">dispatcher reaches target r/s first</text>
+      <path d="M304 226 V270" stroke="var(--viz-series-2)" stroke-width="2"/>
+      <path d="M462 226 V270" stroke="var(--viz-series-2)" stroke-width="2"/>
+      <text x="304" y="294" text-anchor="middle" fill="var(--muted-foreground)">pending transfer</text>
+      <text x="462" y="294" text-anchor="middle" fill="var(--muted-foreground)">pending transfer</text>
+      <text x="580" y="232" fill="var(--foreground)">overtake</text>
+    </g>
+
+    <defs>
+      <marker id="yr-arrow-worker" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="var(--viz-series-2)"/>
+      </marker>
+      <marker id="yr-arrow-dispatch" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="var(--viz-series-1)"/>
+      </marker>
+      <marker id="yr-arrow-bad" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="var(--destructive)"/>
+      </marker>
+    </defs>
+  </svg>
+
+  <div class="viz-row text-small" aria-live="polite" data-detail>
+    Compact shape: correct count and lane spacing, incorrect global FIFO ordering.
+  </div>
+</div>
+
+<script>
+(() => {
+  const root = document.getElementById('rs-rs-y-pipeline');
+  const buttons = [...root.querySelectorAll('[data-view]')];
+  const panels = [...root.querySelectorAll('[data-panel]')];
+  const detail = root.querySelector('[data-detail]');
+  const details = {
+    layout: 'Compact shape: correct count and lane spacing, incorrect global FIFO ordering.',
+    timing: 'Workers launch every 6 ticks and reuse a lane every 12, but the dispatcher exits without a join.',
+    ordering: 'Y preserves the right child in the parent slot; this layout assigns that older slot to the dispatcher.'
+  };
+  buttons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const view = button.dataset.view;
+      buttons.forEach((item) => {
+        const active = item === button;
+        item.setAttribute('aria-pressed', String(active));
+        item.classList.toggle('btn-primary', active);
+      });
+      panels.forEach((panel) => {
+        panel.style.display = panel.dataset.panel === view ? '' : 'none';
+      });
+      detail.textContent = details[view];
+    });
+  });
+})();
+</script>

@@ -139,6 +139,11 @@ class Grid:
     width: int
     height: int
     debug: DebugMap | None = field(default=None, compare=False, repr=False)
+    #: With ``io=False`` (the machine-facing block form): the first cell of the
+    #: request stub and the named top of the answer stub. ``None`` in the
+    #: standalone form, whose ends are its own I/O rooms.
+    in_cell: tuple[int, int] | None = field(default=None, compare=False)
+    out_cell: tuple[int, int] | None = field(default=None, compare=False)
 
     @property
     def n(self) -> int:
@@ -152,19 +157,50 @@ class Grid:
         return "\n".join(self.grid_rows)
 
 
-def build_grid(cols: int, rows: int) -> Grid:
+def build_grid(
+    cols: int, rows: int, *, router: Sequence[str] | None = None, io: bool = True
+) -> Grid:
     """``cols`` columns of ``rows`` cells each, addresses running column by column.
 
     Column ``j`` owns ``[j*rows, (j+1)*rows)`` and its igniter is handed ``j*rows``
     as a literal, so all ``cols`` igniters walk at once and the fixed cost of the
     whole memory is one column's walk.
+
+    ``router`` swaps the strip's program for another one driving the same bus --
+    :func:`memory_men_v3.router_rows` is the reason the hook exists. The strip only
+    ever needed the router to own one incoming pipe and no outgoing pipe but the
+    column stubs, so any program with those two properties drops in. Measured on
+    ``4x25``: the default's 16.79 ticks per operation against v3's 11.28, at the
+    cost of a taller strip (the v3 router trades area for the walk home, and this
+    grid is the one shape where area is what the score is made of).
+
+    ``io=False`` is the machine-facing **block** form: no I/O rooms. The request
+    keeps its two-cell stub into the router strip's north wall (``in_cell`` names
+    its first cell), and the answer — which the standalone form drops out of the
+    *south* — is carried back to the block's **top** by a vertical teleport room
+    down the east side (``memory_men.teleport_v``: ``R`` has no distance term, so
+    the tall room crosses its whole height in one instruction). That keeps the
+    block's outlet where ``lm1.machine``'s STORE teleport expects every man-memory
+    outlet to be, at the cost of one man and two short stubs.
     """
     if cols < 1 or rows < 1:
         raise ValueError("a grid needs at least one column of at least one cell")
+    if not io and cols == 1:
+        raise ValueError("the one-column block form is memory_men_v3.v3_store_block")
     if cols == 1:
         # One column needs none of this: the repeater would be a pass-through
         # costing a pipeline stage and two pipes, and a strip spanning one column
         # is just a router. `memory_men_addr` *is* the one-column grid.
+        #
+        # Which is also why it cannot honour `router`: there is no strip to put one
+        # in. Say so rather than returning a grid that quietly ignores the argument
+        # — a one-column build measured identical to the default is a bug, not a
+        # negative result, and `memory_men_v3.build_v3` is the shape being asked for.
+        if router is not None:
+            raise ValueError(
+                "a one-column grid is `build_addr`, which owns no router strip; "
+                "use memory_men_v3.build_v3(rows) for the unrolled one-column memory"
+            )
         one = build_addr(rows)
         return Grid(
             cols=1,
@@ -189,7 +225,8 @@ def build_grid(cols: int, rows: int) -> Grid:
     # I room, its pipe, the router strip, its pipes, the columns, their pipes,
     # the collector strip, its pipe, the O room. Two-cell pipes throughout.
     router_y = 6
-    router_h = len(ROUTER_ROWS)
+    router_prog = tuple(router) if router is not None else ROUTER_ROWS
+    router_h = len(router_prog)
     col_y = router_y + router_h + 1 + _GAP - 1  # south wall, 2 pipe cells, north wall
     # A collector only has to reach its column's *last band row*, not the column's
     # last row — the band below it is a tile's third row, which owns no pipe. So
@@ -200,7 +237,9 @@ def build_grid(cols: int, rows: int) -> Grid:
 
     x0 = 1
     total_w = x0 + cols * col_w + (cols - 1) * _COL_GAP + 1
-    grid = Circuit(total_w + 2, out_y + 4)
+    # The block form appends the riser room east of the strips: wall, two stub
+    # cells, wall, four interior columns, wall.
+    grid = Circuit(total_w + (2 if io else 10), out_y + 4)
 
     def column_x(j: int) -> dict[str, int]:
         base = x0 + j * (col_w + _COL_GAP)
@@ -218,17 +257,36 @@ def build_grid(cols: int, rows: int) -> Grid:
 
     # ── the router strip ──────────────────────────────────────────────────────
     strip_w = column_x(cols - 1)["end"] - x0
-    router_body = [r.ljust(strip_w) for r in ROUTER_ROWS]
+    router_body = [r.ljust(strip_w) for r in router_prog]
     _room(grid, x0, router_y, router_body)
-    _io_room(grid, x0 + 1, router_y - 5, "I")
+    if io:
+        _io_room(grid, x0 + 1, router_y - 5, "I")
     draw_pipe(grid, [(x0 + 1, router_y - 3), (x0 + 1, router_y - 2), (x0 + 1, router_y - 1)])
+    in_cell = None if io else (x0 + 1, router_y - 3)
 
     # ── the collector strip ───────────────────────────────────────────────────
     coll_body = [r.ljust(strip_w) for r in collector_rows(1)[0]]
     _room(grid, x0, coll_y, coll_body)
     out_x = x0 + 2
-    draw_pipe(grid, [(out_x, coll_y + 3), (out_x, coll_y + 4), (out_x, coll_y + 5)])
-    _io_room(grid, out_x, out_y, "O")
+    out_cell = None
+    if io:
+        draw_pipe(grid, [(out_x, coll_y + 3), (out_x, coll_y + 4), (out_x, coll_y + 5)])
+        _io_room(grid, out_x, out_y, "O")
+    else:
+        # The answer riser: a vertical teleport room east of everything carries
+        # the collector's output back to the block's top, where the machine's
+        # STORE teleport expects a man-memory outlet. Two short stubs; the tall
+        # room itself is crossed in one instruction (`R` has no distance term).
+        from .memory_men import teleport_v
+
+        east = x0 + strip_w  # the strips' shared east wall column
+        rx = east + 4
+        _room(grid, rx, router_y, teleport_v(coll_y + 2 - router_y)[0])
+        # collector east wall -> the riser's west wall, two cells of pipe
+        draw_pipe(grid, [(east + 1, coll_y), (east + 2, coll_y), (east + 3, coll_y)])
+        # the riser's north wall -> the block's top edge; the caller extends it
+        draw_pipe(grid, [(rx + 1, y) for y in range(router_y - 2, -1, -1)])
+        out_cell = (rx + 1, 0)
 
     # ── the columns ───────────────────────────────────────────────────────────
     dbg = DebugMap(f"grid man-memory {cols}x{rows}: {cols} igniters walking at once")
@@ -259,8 +317,9 @@ def build_grid(cols: int, rows: int) -> Grid:
         ),
         color=C_COLL,
     )
-    dbg.region("input", x0, router_y - 6, 3, 3, note="`0 addr` / `1 addr value`", color=C_IO)
-    dbg.region("output", out_x - 1, out_y - 1, 3, 3, note="one word per READ", color=C_IO)
+    if io:
+        dbg.region("input", x0, router_y - 6, 3, 3, note="`0 addr` / `1 addr value`", color=C_IO)
+        dbg.region("output", out_x - 1, out_y - 1, 3, 3, note="one word per READ", color=C_IO)
 
     for j in range(cols):
         cx = column_x(j)
@@ -346,6 +405,8 @@ def build_grid(cols: int, rows: int) -> Grid:
         width=max(len(r) for r in out),
         height=len(out),
         debug=dbg,
+        in_cell=in_cell,
+        out_cell=out_cell,
     )
 
 

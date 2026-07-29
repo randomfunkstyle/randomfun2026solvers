@@ -1,0 +1,168 @@
+{
+  "title": "reverse-a-list \u2014 parallel value carriers",
+  "offset": [
+    0,
+    0
+  ],
+  "regions": [
+    {
+      "name": "worker",
+      "x": 0,
+      "y": 0,
+      "w": 10,
+      "h": 15,
+      "note": "Controller and two collision-free value-carrier delay circuits.",
+      "color": "#38bdf8",
+      "tags": [
+        "ast",
+        "parallel"
+      ]
+    },
+    {
+      "name": "even-rank delay",
+      "x": 1,
+      "y": 1,
+      "w": 4,
+      "h": 5,
+      "note": "An 18-tick circuit; ] halves rank and m counts paired positions.",
+      "color": "#22c55e",
+      "tags": [
+        "carrier",
+        "delay"
+      ]
+    },
+    {
+      "name": "odd-rank delay",
+      "x": 5,
+      "y": 1,
+      "w": 4,
+      "h": 5,
+      "note": "Its nine-tick path skew interleaves odd ranks between even ranks.",
+      "color": "#f59e0b",
+      "tags": [
+        "carrier",
+        "delay"
+      ]
+    },
+    {
+      "name": "parity dispatcher",
+      "x": 3,
+      "y": 5,
+      "w": 6,
+      "h": 5,
+      "note": "x selects a circuit and ] halves the remaining-rank delay.",
+      "color": "#a78bfa",
+      "tags": [
+        "split",
+        "collision"
+      ]
+    },
+    {
+      "name": "controller",
+      "x": 1,
+      "y": 10,
+      "w": 7,
+      "h": 4,
+      "note": "Y retains one controller and creates one A-carrying worker per value.",
+      "color": "#fb7185",
+      "tags": [
+        "split",
+        "input"
+      ]
+    },
+    {
+      "name": "input",
+      "x": 12,
+      "y": 12,
+      "w": 3,
+      "h": 3,
+      "note": "Length-prefixed list input.",
+      "color": "#60a5fa",
+      "tags": []
+    },
+    {
+      "name": "output",
+      "x": 12,
+      "y": 5,
+      "w": 3,
+      "h": 3,
+      "note": "The delayed carriers arrive in descending rank order.",
+      "color": "#f472b6",
+      "tags": []
+    }
+  ],
+  "circles": [],
+  "scenarios": [
+    {
+      "name": "full sixteen-value reverse",
+      "input": "16 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15",
+      "from_tick": 0,
+      "to_tick": 200,
+      "watch": [
+        "controller",
+        "parity dispatcher",
+        "even-rank delay",
+        "odd-rank delay"
+      ],
+      "note": "Sixteen carriers remain collision-free and emit 15 down to 0."
+    }
+  ],
+  "lanes": [
+    {
+      "name": "input pipe",
+      "points": [
+        [
+          11,
+          13
+        ],
+        [
+          10,
+          13
+        ]
+      ],
+      "note": "",
+      "color": "#60a5fa",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          11,
+          13
+        ],
+        [
+          10,
+          13
+        ]
+      ]
+    },
+    {
+      "name": "output pipe",
+      "points": [
+        [
+          10,
+          6
+        ],
+        [
+          11,
+          6
+        ]
+      ],
+      "note": "",
+      "color": "#f472b6",
+      "kind": "pipe",
+      "expect": "",
+      "tags": [],
+      "cells": [
+        [
+          10,
+          6
+        ],
+        [
+          11,
+          6
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+# snake — submission 549b0e00-8af4-46c0-8a27-ce681cf86767
+
+verdict      done: 17/17 cases, area2 5625, avgTicks 19,270, score 108,396,066
+submitted    2026-07-27T00:31:19+0000
+grid         75x69
+fingerprint  c5e0952176652375c7776a98131644d4d8bcdedbdb6e06d02d59de6d920c4bf4
+commit       478d4a4
+local        all public cases on LM_VALIDATOR=reference, avg 12,695 ticks, score 71,410,500
+source       tasks/solutions/snake_banked.man
+
+runner output:
+Passed 17/17 test cases
+
+notes:
+Searched on area2 x *measured* avg_ticks rather than the area2 x corridor_cells proxy every prior
+sweep in this repo used. build_room costs 5-18s but optimize.verify on the fast engine costs
+0.05-0.08s — under 1% of an evaluation — so the proxy was never necessary, and searching ticks
+directly prices each lever with its row cost already counted.
+
+Block visits, not glyphs, are the bill: gradebook ran 2,496 visits against 322 glyph cells and
+15,510 grid ticks against an op model of 1,726 — 89% of ticks are corridor, ~39 a visit. Fusing
+every two-visit loop (5 each) cut visits 32.7% (gradebook) and 19.5% (snake). corridor_cells rose
+on both while ticks fell: static corridor is not what a case walks. Geometry was not spent either
+— flat_relay (a two-row turnaround; relay's three rows are a property of the perimeter walk) gave
+gradebook a row, and snake's north band folded 12 rows to 6, which bought four columns since
+snake's charged side was its width.
+
+Previous: 155,285,258. 
+
+Supersedes 109,180,919: that commit pinned a stale read of a still-running search's output file
+(the 46s improvement at 12,773 rather than the order the run finished on at 178s, 12,695). Same
+geometry, better block order. gradebook's pin was re-checked the same way and matches its result
+file exactly, so only snake was affected. Read a search's result file after the process is dead,
+and diff the pin against the file rather than against whichever log line was visible.

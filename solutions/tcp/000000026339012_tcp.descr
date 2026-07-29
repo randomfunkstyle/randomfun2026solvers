@@ -1,0 +1,16 @@
+# tcp — submission 9662d127-8b26-414e-b4a0-079adebd7864
+
+verdict      done: 20/20 cases, area2 2209, avgTicks 11,924, score 26,339,012
+submitted    2026-07-26T22:09:19+0300
+grid         47x45
+problem id   d61a3af1-c74f-44c0-98f7-4f20eeefa3fb
+fingerprint  23f9eeb0cf6c6bafd6940f0fee44a0e7faa7e6b1859a5da058feaf66ada90648
+commit       27c148a
+local        tcp: 6/6 public cases, avg 7,276 ticks
+source       tasks/solutions/tcp_queue_ast.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+47x45 compact AST fence-queue sender

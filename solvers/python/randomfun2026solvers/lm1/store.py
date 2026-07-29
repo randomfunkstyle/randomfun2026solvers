@@ -31,6 +31,7 @@ __all__ = [
     "StreamUnit",
     "SnakeUnit",
     "PathUnit",
+    "DoomUnit",
 ]
 
 READ = 0
@@ -482,3 +483,179 @@ class PathUnit:
         # two pixel writes and why the flag survives until the robot steps onto it (§4.4).
         self._write(self.SWAP, 1)
         self.frames += 1
+
+
+class DoomUnit:
+    """A model of ``d3_unit.py``'s column-painter coprocessor — the deadman-3d panel.
+
+    The same ``8 * arg + code`` wire format as the other units, because that is what
+    the real unit's decode trie reads, and the same two structural rules:
+
+    * **It answers nothing.** ``ARCH.md`` §7.1 makes an incoming pipe a rival for
+      every ``r`` in the CPU, the jump slab's ROM read included, so a replying unit
+      cannot be placed on a machine that has jumps — and deadman-3d is nothing but
+      jumps. Every command carries enough to finish its own drawing.
+    * **It owns the display.** The three LM-75 ports hang off this block, so the CPU
+      has no display lanes at all — its paint loops, FLASH block and 512-pixel HUD
+      unroll all collapse into one command word each per column / per frame.
+
+    Five commands (codes read off the trie; ``tests/test_deadman3d.py`` pins them
+    against the CPU's ``.equ C_*`` constants so the tables cannot drift)::
+
+        COL    seed*64 + n, where seed = (top*64 + col)*16 + color - 1024 and
+               n = bot - top + 1: one viewport column — rows top..bot in
+               ``color``, rows bot+1..39 in floor colour 8, each pixel an
+               ADDR/DATA pair (stride 64); the ceiling above ``top`` stays black
+               because COMMIT clears ``next``. The odd shape is the unit's own
+               arithmetic: its wall loop circulates the packed ``addr*16+color``
+               through its value ring, adding 1024 (one row) per lap, so the
+               argument is that packed word pre-biased by one lap, and one
+               floored ``/ 64`` recovers both fields (seed may be negative).
+        RUN    count*16 + colour: ``count`` bare DATA writes of ``colour`` at
+               the panel's own cursor (row-major auto-advance) — the title
+               screen is ~1k of these, one word per RLE run; the live HUD is
+               a CURS plus ~14 of them per frame.
+        CURS   addr: reposition the panel cursor (one bare ADDR write) — what
+               lets the CPU paint arbitrary RLE (the HUD strip, the bars)
+               with RUN words.
+        GUN    0   the baked idle pistol sprite (one ADDR + DATA run per
+               sprite row), bottom-centre over the finished columns.
+        GUNF   0   the recoil variant: the pistol a row higher with the
+               muzzle flash blooming above it (V1's bare diamond, retired).
+        COMMIT 0   SWAP 0 — commit the frame, clear ``next``, reset the cursor.
+
+    The models mirror ``deadman3d.GUN_IDLE``/``GUN_FIRE`` by construction —
+    the unit bakes both sprites, which is the whole point.
+    """
+
+    #: arm -> command code, read off the 3-bit trie's geometry (a west branch
+    #: is a set bit; ``d3_unit.arm_codes`` derives these and the tests pin the
+    #: two tables). COL is 0 so the CPU's per-column send is a bare
+    #: ``MULI 8; SND`` with no ``ADDI`` for the code; 5 and 2 are the two
+    #: spare leaves. RUN lives on an eastern leaf (its arm's ``r`` must beat
+    #: the cmd pipe — rule 2), the write-only sprite arms fill the west —
+    #: GUN on leaf 1 since V5 (code 3): the Freedoom-derived sprite's 12 runs
+    #: outgrew leaf 2's ten columns of headroom before CURS.
+    CODES = {"COL": 0, "CURS": 1, "RUN": 4, "GUN": 3, "GUNF": 6, "COMMIT": 7}
+
+    #: One-line contract per arm, quoted into the generated asm's ``.equ C_*`` notes.
+    ARM_NOTES = {
+        "COL": "arg=((top*64+col)*16+colour-1024)*64 + (bot-top+1): wall, then floor",
+        "RUN": "arg=count*16+colour: count pixels at the panel's own cursor",
+        "CURS": "arg=addr: reposition the panel cursor (the RLE painter's ADDR)",
+        "GUN": "arg=0: the baked idle pistol sprite (rows 30..39)",
+        "GUNF": "arg=0: the recoil pistol + muzzle flash (rows 25..38)",
+        "COMMIT": "arg=0: SWAP 0 — commit the frame, clear next, reset the cursor",
+    }
+
+    #: The pistol sprites, (row, first column, hex colours) per contiguous
+    #: run — duplicated from ``deadman3d.GUN_IDLE``/``GUN_FIRE`` (the tests
+    #: pin the tables equal) to keep this module free of the display model.
+    #: V5: derived from Freedoom's pisga0/pisfa0 (see deadman3d's credits).
+    GUN_IDLE = (
+        (30, 32, "7"), (31, 31, "770"), (32, 30, "77770"),
+        (33, 29, "7700007"), (34, 29, "710101"), (34, 35, "7"),
+        (35, 29, "7777770"), (36, 28, "77000077"), (37, 28, "33088033"),
+        (38, 27, "0333333338"), (39, 27, "033333388"), (39, 36, "0"),
+    )
+    GUN_FIRE = (
+        (25, 31, "9bb9"), (26, 30, "bffffb"), (27, 29, "3bffff"),
+        (27, 35, "b3"), (28, 31, "9ff9"),
+        (29, 32, "7"), (30, 31, "770"), (31, 30, "77770"),
+        (32, 29, "7700007"), (33, 29, "710101"), (33, 35, "7"),
+        (34, 29, "7777770"), (35, 28, "77000077"), (36, 28, "33088033"),
+        (37, 27, "0333333338"), (38, 27, "033333388"), (38, 36, "0"),
+    )
+
+    #: ``display.py``'s port numbers, repeated rather than imported to keep this
+    #: module free of the display model.
+    ADDR, DATA, SWAP = 0, 1, 2
+
+    WIDTH, H3D = 64, 40  # panel columns; viewport rows 0..39 (HUD below)
+    FLOOR = 8
+
+    def __init__(self, write_display: Callable[[int, int], None]) -> None:
+        self._write = write_display
+        self.words = 0  # command words across the CPU's pipe
+        self.pixels = 0  # pixels painted (ADDR/DATA pairs plus HUD runs)
+        self.frames = 0  # commits, i.e. SWAP writes
+
+    # ── wire protocol ────────────────────────────────────────────────────────
+    def send(self, word: int) -> None:
+        """One command word: ``8 * arg + code``."""
+        self.words += 1
+        code, arg = word & 7, word >> 3
+        if code == self.CODES["COL"]:
+            self._col(arg)
+        elif code == self.CODES["RUN"]:
+            self._run(arg)
+        elif code == self.CODES["CURS"]:
+            self._write(self.ADDR, arg)
+        elif code == self.CODES["GUN"]:
+            self._sprite(self.GUN_IDLE)
+        elif code == self.CODES["GUNF"]:
+            self._sprite(self.GUN_FIRE)
+        elif code == self.CODES["COMMIT"]:
+            self._write(self.SWAP, 0)
+            self.frames += 1
+        else:
+            raise StoreError(f"DOOM: no arm for command code {code}")
+
+    def recv(self) -> int:
+        raise StoreError("DOOM: the unit answers nothing; a program with RCV cannot bind")
+
+    # ── arms ─────────────────────────────────────────────────────────────────
+    #: The banded wall loop's mask ring (V3): every 4th painted row is ANDed
+    #: down to the dark shade — the horizontal seam of a wall panel. The real
+    #: unit circulates these four masks through its second value ring, reseeded
+    #: per command so the seam phase anchors at the wall run's top row.
+    MASKS = (7, 15, 15, 15)
+
+    def _col(self, arg: int) -> None:
+        """One viewport column, computed exactly as the unit's own loops do.
+
+        The wall loop circulates ``v = addr*16 + colour`` and adds 1024 (one row
+        of 64 cells, times 16) per lap *before* painting; each painted colour is
+        ANDed with the lap's mask from :data:`MASKS` (the banding seam); the
+        floor loop then continues from the last wall address with the baked
+        colour 8.
+        """
+        n_wall = arg % 64  # floored like the unit's `/ 64`: 0..63 even for seed < 0
+        v = arg // 64  # seed = first wall pixel's addr*16+colour, one lap early
+        if n_wall < 1:
+            raise StoreError(f"DOOM: COL with an empty wall run (arg {arg})")
+        addr = 0
+        for i in range(n_wall):
+            v += 1024
+            addr, colour = v // 16, v % 16
+            if not 0 <= addr < self.WIDTH * self.H3D:
+                raise StoreError(f"DOOM: COL wall pixel {addr} is outside the viewport")
+            self._paint(addr, colour & self.MASKS[i % 4])
+        for _ in range(self.H3D - 1 - addr // self.WIDTH):
+            addr += self.WIDTH
+            self._paint(addr, self.FLOOR)
+
+    def _run(self, arg: int) -> None:
+        """One RLE run at the panel's own cursor, exactly as the unit's loop
+        does it: BP = count laps of one bare DATA write of the colour."""
+        count, colour = arg // 16, arg % 16
+        if count < 1:
+            raise StoreError(f"DOOM: RUN with an empty run (arg {arg})")
+        for _ in range(count):
+            self._write(self.DATA, colour)
+            self.pixels += 1
+
+    def _sprite(self, runs: tuple[tuple[int, int, str], ...]) -> None:
+        """A baked pistol sprite: one ADDR reposition per contiguous row run,
+        then its colours at the cursor's own auto-advance."""
+        for row, col, colors in runs:
+            self._write(self.ADDR, row * self.WIDTH + col)
+            for ch in colors:
+                self._write(self.DATA, int(ch, 16))
+                self.pixels += 1
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _paint(self, cell: int, colour: int) -> None:
+        self._write(self.ADDR, cell)
+        self._write(self.DATA, colour)
+        self.pixels += 1

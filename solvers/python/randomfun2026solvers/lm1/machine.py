@@ -94,7 +94,7 @@ from typing import TYPE_CHECKING
 
 from . import rom as rommod
 from .asm import Program
-from .isa import TARGET_SEMS, Isa, Micro, Sem
+from .isa import SEEK_OF, TARGET_SEMS, Isa, Micro, Sem
 from .routing import RouteBox, RouteError, constrained_route
 
 if TYPE_CHECKING:  # the tape block's own canvas; imported lazily at run time
@@ -109,14 +109,19 @@ __all__ = [
     "display_for",
     "hw_micro",
     "image_program",
+    "DISPLAY_OVERRIDE",
     "DSP_BANDS",
     "DSP_LANE_BANDS",
     "DSP_SEM_BAND",
+    "MEM_PAD",
     "MEMORY_SEMS",
     "ROM_ROWS",
+    "STORE_SHAPE",
+    "STORE_TIER",
     "STREAM_SEM_BAND",
     "STREAM_SIZE",
     "TAPE_SIZE",
+    "TIER_LAYOUT",
 ]
 
 
@@ -352,8 +357,10 @@ MEMORY_SEMS = frozenset(
 )
 
 #: Tags realised as a structures-band slab rather than a flat lane.
-_JUMP_SEMS = frozenset({Sem.JUMP})
-_BRANCH_SEMS = frozenset({Sem.BR_ZERO, Sem.BR_NEG})
+_JUMP_SEMS = frozenset({Sem.JUMP, Sem.JUMP_SEEK})
+_BRANCH_SEMS = frozenset({Sem.BR_ZERO, Sem.BR_NEG, Sem.BR_ZERO_SEEK, Sem.BR_NEG_SEEK})
+#: The half of the two families above that seeks the drum instead of discarding.
+_SEEK_SEMS = frozenset({Sem.JUMP_SEEK, Sem.BR_ZERO_SEEK, Sem.BR_NEG_SEEK})
 
 
 def hw_micro(sem: Sem) -> tuple[tuple[str, str | None], ...]:
@@ -641,8 +648,157 @@ def image_program(program: Program, p: _Plan | None = None) -> Program:
     )
 
 
+def _target_index(program: Program, instrs: Sequence, index_of_word: dict, k: int) -> int:
+    """Which instruction a jump/branch at ``instrs[k]`` lands on."""
+    ins = instrs[k]
+    assert ins.operand is not None
+    after = (ins.pos + ins.words) % program.P
+    target_word = (after + ins.operand) % program.P
+    if target_word not in index_of_word:
+        raise MachineError(
+            f"{ins.mnemonic} at word {ins.pos} jumps to word {target_word}, "
+            "which is not an instruction boundary"
+        )
+    return index_of_word[target_word]
+
+
+#: A taken jump discards ~4.5 ticks a word, while a drum seek is a flat few
+#: hundred whatever the distance — so the seek only pays above a crossover.
+#: Measured on ``deadman-3d``: a seek is ~1,140 ticks and a discarded word 4.5,
+#: putting the break-even near 250 words. 256 is that, rounded to a power of two.
+#:
+#: The distribution is what makes the split worth having rather than a tuning
+#: knob: in a ``deadman-3d`` frame **186 jumps of 2,610 skip 84.5% of all the
+#: words**, so seeking only those buys nearly the whole discard bill while the
+#: 2,424 tight-loop jumps keep the counted discard they are already good at.
+#:
+#: Re-derived after M7b/M8 changed the image (P 3,957 -> 4,002 words, 2,152
+#: instructions) — the shape is unmoved. Frame 1 of the demo walk, 2,610 taken
+#: jumps discarding 387,532 ring words (``scratch/ram-program/jump_hist.py``):
+#:
+#: | skip (ring words) | jumps | words | share of the bill |
+#: |---|---|---|---|
+#: | 0-64 | 2,418 | 58,952 | 15.2% |
+#: | 64-256 | 6 | 1,151 | 0.3% |
+#: | 256-1024 | 58 | 34,796 | 9.0% |
+#: | 1024+ | 128 | 292,633 | **75.5%** |
+#:
+#: The threshold sweep is a *plateau*, which is why the exact value does not
+#: matter much and why 256 is still the right corner. In fixed-image units,
+#: ``JMPF`` alone: thr 64 -> 68.1% of the bill, 128 -> 68.1%, 192 -> 68.0%,
+#: **256 -> 67.9%**, 384 -> 66.4%, 512 -> 65.5%, 1024 -> 59.0%. Dropping below
+#: 256 buys 0.2 points of bill while paying a flat ~1,140-tick seek for jumps
+#: whose discard was under ~1,150 — i.e. nothing, at real risk. Above 384 the
+#: cliff starts.
+SEEK_THRESHOLD = 256
+
+
+#: Which classic opcodes ``seek_split`` may rewrite. Every extra family costs a
+#: lane *and* a 13-column slab, and the slab band is what pushes the memory
+#: block east, so restricting this is the footprint knob. Measured on
+#: ``deadman-3d``: ``JMPF`` alone carries 80% of the long-jump words — re-derived
+#: post-M8 as **263,260 of 327,429** in frame 1, i.e. 67.9% of the frame's whole
+#: 387,532-word discard bill, for a third of the width the full set costs. The
+#: only other family with long jumps is ``BRZ`` (25 jumps, 64,169 words); ``BRN``
+#: has none in steady state (its 107 long jumps are all boot's).
+SEEK_OPS: tuple[str, ...] = ("JMPF",)
+
+
+def seek_split(
+    program: Program,
+    *,
+    threshold: int = SEEK_THRESHOLD,
+    ops: Sequence[str] = SEEK_OPS,
+) -> Program:
+    """Rewrite long jumps/branches to their seek-drum opcodes (build-time only).
+
+    Source, listings and the emulator keep talking about ``JMPF``/``BRZ``/
+    ``BRN``; only the *hardware* image distinguishes them, so this returns a
+    copy of ``program`` whose long structured instructions carry the ``*S``
+    mnemonics and their sems. Distance is the classic forward-skip count, which
+    is exactly what the discard would have paid for.
+    """
+    instrs = sorted(program.instrs, key=lambda i: i.pos)
+    n = len(instrs)
+    index_of_word = {ins.pos: k for k, ins in enumerate(instrs)}
+    allowed = set(ops)
+    out = []
+    for k, ins in enumerate(instrs):
+        if ins.sem in TARGET_SEMS and ins.sem in SEEK_OF and ins.mnemonic in allowed:
+            skip = 2 * ((_target_index(program, instrs, index_of_word, k) - k - 1) % n)
+            if skip >= threshold:
+                seek_sem = SEEK_OF[ins.sem]
+                op = next(o for o in program.isa if o.sem is seek_sem)
+                out.append(ins.model_copy(update={"mnemonic": op.mnemonic, "code": op.code, "sem": seek_sem}))
+                continue
+        out.append(ins)
+    return program.model_copy(update={"instrs": tuple(out)})
+
+
+def seek_words(program: Program, p: _Plan, *, rows: int):
+    """The fixed-width image for a seek build, and its drum layout.
+
+    A **seek** operand is ``row * SEEK_K + offset`` of the target's opcode word
+    in the *packed* drum; a classic jump keeps its forward-skip count. The seek
+    operands depend on the packing, which depends on the token widths, which
+    depend on the operands — so they are emitted as fixed-width zero-padded
+    literals and the layout is a two-pass fixed point.
+    """
+    from .seekrom import SEEK_K, build_seek_rom, seek_target
+
+    instrs = sorted(program.instrs, key=lambda i: i.pos)
+    n = len(instrs)
+    index_of_word = {ins.pos: k for k, ins in enumerate(instrs)}
+
+    def encode(target_operand: dict[int, int]) -> list[int]:
+        out: list[int] = []
+        for k, ins in enumerate(instrs):
+            if ins.sem in _SEEK_SEMS:
+                operand = target_operand.get(k, 0)
+            elif ins.sem in TARGET_SEMS:
+                t = _target_index(program, instrs, index_of_word, k)
+                operand = 2 * ((t - k - 1) % n)
+            elif ins.operand is None:
+                operand = 0
+            else:
+                operand = ins.operand
+                if ins.sem in MEMORY_SEMS and operand < 1:
+                    raise MachineError(
+                        f"{ins.mnemonic} at word {ins.pos} addresses STORE slot "
+                        f"{operand}; hardware addresses start at 1"
+                    )
+            out += [p.number[ins.mnemonic], operand]
+        return out
+
+    targets = {
+        k: _target_index(program, instrs, index_of_word, k)
+        for k, ins in enumerate(instrs)
+        if ins.sem in _SEEK_SEMS
+    }
+    if not targets:
+        raise MachineError(
+            "seek=True but no jump is long enough to seek; build without it"
+        )
+    # Fixed-width literals for the seek operands only, so the packing does not
+    # move as their values resolve.
+    wide = frozenset(2 * k + 1 for k in targets)
+    operands = {k: 0 for k in targets}
+    probe = build_seek_rom(encode(operands), rows=rows, wide=wide, wide_digits=5)
+    digits = len(str((probe.rows_used + 2) * SEEK_K))
+    layout = build_seek_rom(encode(operands), rows=rows, wide=wide, wide_digits=digits)
+    for _ in range(4):
+        operands = {k: seek_target(layout, 2 * t) for k, t in targets.items()}
+        words = encode(operands)
+        new_layout = build_seek_rom(words, rows=rows, wide=wide, wide_digits=digits)
+        if new_layout.word_pos == layout.word_pos:
+            return words, new_layout
+        layout = new_layout
+    raise MachineError("seek operand layout did not converge")
+
+
 # ── the CPU room ─────────────────────────────────────────────────────────────
 _STRUCT_X0 = 2  # slabs hug the west wall, keeping their `r` nearest the ROM pipe
+_STRUCT_X0_SEEK = 5  # seek mode: columns 1..4 belong to the flush/remainder tail
 _SLAB_PITCH = 13  # columns per slab: each gets its own band (see _slab)
 _JUMP_SLAB_ROWS = 4
 _BRANCH_SLAB_ROWS = 8
@@ -664,6 +820,9 @@ class _Cpu:
     pipe_glyphs: list[tuple[int, int, str, str]]  # (x, y, glyph, band)
     # An unused room is not just dead weight: its pipe still competes for every
     # `r`/`s` in the CPU (§7.1 is nearest, not nearest-useful), so it is not drawn.
+    #: The IN lane's ``r`` column — where the input pipe enters the *north* wall
+    #: when the machine opts into :data:`INPUT_NORTH` (see there for why).
+    in_col: int = 0
     has_in: bool = True  # False when no lane reads the input room
     has_out: bool = True  # False on a display problem: no `O` room at all
     dsp_cols: dict[str, int] = field(default_factory=dict)  # display band -> `s` column
@@ -698,6 +857,75 @@ def _flat_lane(
     return out
 
 
+def _uneven_trie(
+    k: int, slot_rows: dict[int, int], lane_x0: int
+) -> tuple[int, dict[tuple[int, int], str]]:
+    """Lay a depth-``k`` decode trie pruned to the *used* leaf slots.
+
+    Dead-lane removal (``TRIM_DEAD_LANES``) compacts the lane band to one row pair
+    per used opcode, so the trie can no longer spread its branches by ``1 << k``:
+    each subtree's vertical extent is exactly its surviving-leaf band, a branching
+    ``x`` sits on the gap row above its down-half's first lane, and every
+    single-child chain is contracted into one edge straight to its branching
+    descendant (or lane). Semantics that must survive the re-routing:
+
+    * an ``x`` at original trie level ``L`` tests BP's low bit, which must be bit
+      ``L-1`` of the opcode — so exactly ``L-1`` ``]``-shifts must precede it.
+      Levels get **two** columns here (``x`` at ``3 + 2L``) so an edge that
+      contracts ``d`` levels has ``2d - 1 >= d`` horizontal cells for its ``]``s;
+      the uniform trie's vertical ``]`` at distance 1 cannot host more than one.
+    * a contracted path *stops* shifting once no ``x`` remains below it, so a lane
+      may be entered with junk in BP. That is safe: no lane micro-program reads BP
+      before writing it (flat lanes never touch it; jump lanes open with ``b``,
+      branch arms with ``W`` then ``b``).
+
+    Returns the root entry row — the fetch row — and the cells. Opcode numbers are
+    untouched: the ROM image is byte-identical to the uniform trie's.
+    """
+    cells: dict[tuple[int, int], str] = {}
+    used = sorted(slot_rows)
+
+    def node(level: int, lo: int, hi: int) -> tuple[int, int | None]:
+        """Entry (row, level) of the subtree over slots [lo, hi); level None = lane."""
+        sl = [s for s in used if lo <= s < hi]
+        mid = lo
+        up: list[int] = []
+        down: list[int] = []
+        while len(sl) > 1:
+            mid = (lo + hi) // 2
+            up = [s for s in sl if s < mid]
+            down = [s for s in sl if s >= mid]
+            if up and down:
+                break
+            # Single-child level: contract it — the edge below carries its `]`.
+            lo, hi = (lo, mid) if up else (mid, hi)
+            level += 1
+        if len(sl) == 1:
+            return slot_rows[sl[0]], None
+        col = 3 + 2 * level
+        xrow = slot_rows[min(down)] - 1  # the gap row above the down half
+        cells[(col, xrow)] = "x"
+        for half, sign in (((lo, mid), -1), ((mid, hi), +1)):
+            crow, clevel = node(level + 1, *half)
+            for yy in range(xrow + sign, crow, sign):
+                cells[(col, yy)] = "."
+            cells[(col, crow)] = ">"
+            shifts = 0 if clevel is None else clevel - level
+            end = (2 + 2 * clevel) if clevel is not None else (lane_x0 - 1)
+            for i, cx in enumerate(range(col + 1, end + 1)):
+                cells[(cx, crow)] = "]" if i < shifts else "."
+        return xrow, level
+
+    entry, elevel = node(1, 0, 1 << k)
+    # The approach from the fetch cell: `>rbr` ends at column 4, the first `x` (or
+    # the lone lane) starts east of it, and a contracted root still owes its shifts.
+    shifts = 0 if elevel is None else elevel - 1
+    end = (2 + 2 * elevel) if elevel is not None else (lane_x0 - 1)
+    for i, cx in enumerate(range(5, end + 1)):
+        cells[(cx, entry)] = "]" if i < shifts else "."
+    return entry, cells
+
+
 def build_cpu(
     program: Program,
     p: _Plan,
@@ -706,24 +934,51 @@ def build_cpu(
     stream_pad: int = 0,
     short_return: bool = True,
     drain_unit_bits: int = 0,
+    trim_dead: bool = False,
+    top_bus: bool = False,
+    seek: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
     ``short_return`` lets a simple lane drop at the end of its own micro-program
     rather than east of the slab band; see the drop-column comment. It narrows the
     CPU, which ``matmul``'s STREAM wiring does not currently survive.
+
+    ``trim_dead`` removes the unused leaf slots' rows (see :func:`_uneven_trie`);
+    ``top_bus`` adds a second return bus above the band and routes each simple
+    lane over whichever bus is cheaper. Both default off and leave the layout
+    byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
+    :data:`TOP_RETURN_BUS`.
     """
+    if (trim_dead or top_bus) and not short_return:
+        raise MachineError("trim_dead/top_bus require the short-return drop rule")
     k, lanes = p.k, p.lanes
-    centre = 1 << k
-    span = 2 * lanes - 1
-    lane_x0 = 5 + k
     used = list(p.number)
-    by_row = {p.row[m]: m for m in used}
-    all_rows = list(range(1, span + 1, 2))
+    bus_row = 1
+    y0 = 2 if top_bus else 1  # with a top bus, row 1 belongs to the bus
+    if trim_dead:
+        slots = sorted((p.row[m] - 1) // 2 for m in used)
+        rank = {s: i for i, s in enumerate(slots)}
+        row_of = {m: y0 + 2 * rank[(p.row[m] - 1) // 2] for m in used}
+        n_rows = len(slots)
+        lane_x0 = 4 + 2 * k  # two columns per trie level (see _uneven_trie)
+    else:
+        row_of = {m: p.row[m] + (y0 - 1) for m in used}
+        n_rows = lanes
+        lane_x0 = 5 + k
+    span = 2 * n_rows - 1
+    by_row = {row_of[m]: m for m in used}
+    all_rows = [y0 + 2 * i for i in range(n_rows)]
+    if trim_dead:
+        centre, trie_cells = _uneven_trie(
+            k, {(p.row[m] - 1) // 2: row_of[m] for m in used}, lane_x0
+        )
+    else:
+        centre, trie_cells = (1 << k) + (y0 - 1), None
 
     flat = {m: hw_micro(p.sem[m]) for m in used if p.sem[m] in _HW}
     structured = [m for m in used if p.sem[m] in _JUMP_SEMS | _BRANCH_SEMS]
-    halting = {p.row[m] for m in used if p.sem[m] is Sem.HALT}
+    halting = {row_of[m] for m in used if p.sem[m] is Sem.HALT}
 
     prefixes = [
         next((i for i, (_, b) in enumerate(mc) if b == Band.MEM), len(mc))
@@ -757,17 +1012,37 @@ def build_cpu(
     # A drain hangs *below* the entry row rather than beside it, so it sets the
     # slab's depth: a jump is its entry row plus the block, a branch is its four
     # rows of `X` fan-out and turn row plus the block.
-    if drain_unit_bits:
+    if seek and drain_unit_bits:
+        raise MachineError("seek mode replaces the discard entirely; no drain to size")
+    if seek:
+        # Hybrid: a *seek* slab is shallow (a drop to the taken row, plus the
+        # branch's X fan-out); a *classic* slab keeps its counted discard, which
+        # short jumps are already good at. Bases start at 5 because the seek
+        # tail owns columns 1..4 (flush loop, remainder read, its discard).
+        slab_rows = {}
+        for m in structured:
+            if p.sem[m] in _SEEK_SEMS:
+                slab_rows[m] = 2 if p.sem[m] in _JUMP_SEMS else 5
+            else:
+                slab_rows[m] = (
+                    _JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS
+                )
+        # The tail lives strictly below the band, so the slabs keep column 2 —
+        # which is what keeps a classic discard `r` nearest the ROM pipe.
+        struct_x0 = _STRUCT_X0
+    elif drain_unit_bits:
         from .drain import build_drain
 
         _drain_h = build_drain(0, unit_bits=drain_unit_bits, even=True).height
         slab_rows = {m: (1 if p.sem[m] in _JUMP_SEMS else 5) + _drain_h for m in structured}
+        struct_x0 = _STRUCT_X0
     else:
         slab_rows = {
             m: (_JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS)
             for m in structured
         }
-    struct_east = _STRUCT_X0 + max(1, len(structured)) * _SLAB_PITCH
+        struct_x0 = _STRUCT_X0
+    struct_east = struct_x0 + max(1, len(structured)) * _SLAB_PITCH
 
     # ── lane extents ─────────────────────────────────────────────────────────
     lane_cells: dict[tuple[int, int], tuple[str, str | None]] = {}
@@ -782,9 +1057,52 @@ def build_cpu(
             lane_end[r] = max((x for x, _ in cells), default=lane_x0 - 1)
         else:
             # A structured opcode's lane is only its preamble; the rest is a slab.
-            pre = "b" if p.sem[m] in _JUMP_SEMS else "W"
+            # Seek mode keeps the operand (row*K+rem) in A — no count to park.
+            # A seek jump keeps the operand in A (it is sent, not counted); a
+            # classic jump parks it in BP for the discard loop.
+            pre = ("." if p.sem[m] in _SEEK_SEMS else "b") if p.sem[m] in _JUMP_SEMS else "W"
             lane_cells[(lane_x0, r)] = (pre, None)
             lane_end[r] = lane_x0
+
+    # ── bus choice: which lanes return over the top instead of the bottom ────
+    # The top bus (row 1) is the collector's mirror: a lane exits east, *rises* on a
+    # column clear of every lane above it — the running prefix maximum of
+    # ``lane_end``, the same bookkeeping as the drops' suffix maximum — walks west
+    # along row 1, and descends column 1 into the fetch cell. Cheaper for lanes near
+    # the top of the band, which otherwise pay the whole band height twice (down to
+    # the collector, back up the riser). Slab lanes are excluded: their drops
+    # continue past the collector into the structures band below.
+    top_lanes: set[int] = set()
+    collector = all_rows[-1] + 1
+    if top_bus:
+        prefix_floor: dict[int, int] = {}
+        pre = lane_x0 - 1
+        for r in all_rows:
+            pre = max(pre, lane_end[r])
+            prefix_floor[r] = pre + 1
+        suffix_floor: dict[int, int] = {}
+        suf = lane_x0 - 1
+        for r in reversed(all_rows):
+            suf = max(suf, lane_end[r])
+            suffix_floor[r] = suf + 1
+        for r in all_rows:
+            m = by_row.get(r)
+            if m is None or r in halting or m in slab_rows:
+                continue
+            down_cost = (
+                (suffix_floor[r] - lane_end[r])
+                + (collector - r)
+                + (suffix_floor[r] - 1)
+                + (collector - centre)
+            )
+            up_cost = (
+                (prefix_floor[r] - lane_end[r])
+                + (r - bus_row)
+                + (prefix_floor[r] - 1)
+                + (centre - bus_row)
+            )
+            if up_cost < down_cost:
+                top_lanes.add(r)
 
     # ── drop columns: turn south the moment every lane below allows it ───────
     # A drop is only ever a `v` at its head and `.` below, and a southbound man keeps
@@ -810,9 +1128,10 @@ def build_cpu(
         floor = lane_x0
         for r in sorted(all_rows, reverse=True):
             # Halting rows carry no drop but do carry glyphs, so they still raise the
-            # floor for everything above them.
+            # floor for everything above them — as do top-bus lanes, whose return
+            # leaves by the ascent column assigned after the drops.
             floor = max(floor, lane_end[r] + 1)
-            if r in halting:
+            if r in halting or r in top_lanes:
                 continue
             m = by_row.get(r)
             if m is not None and m in slab_rows:
@@ -856,7 +1175,7 @@ def build_cpu(
 
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
-    order = sorted(structured, key=lambda m: drop_x[p.row[m]])
+    order = sorted(structured, key=lambda m: drop_x[row_of[m]])
     slab_at: dict[str, int] = {}
     slab_base: dict[str, int] = {}
     # The collector sits **immediately** below the lane band, above the slabs, and
@@ -866,7 +1185,8 @@ def build_cpu(
     # instead of 16 — paid once per instruction, for the whole program. A profile
     # (`tools/heatmap.mjs` + `lm1.profile`) put the return path at 25 % of the CPU's
     # time before this.
-    collector = span + 1
+    # (``collector`` itself is defined with the bus choice above: the row below
+    # the last lane, wherever dead-lane removal left it.)
     # Entry rows are stacked directly — slab *i* enters on ``collector + 1 + i`` —
     # rather than each slab getting a private row band. Only the entry row is an
     # exclusive resource: it is the westbound run slab *i*'s drop lands on, and it
@@ -881,8 +1201,28 @@ def build_cpu(
     # over a `.` — the same mechanism the drop columns have always used.
     for i, m in enumerate(order):
         slab_at[m] = collector + 1 + i
-        slab_base[m] = _STRUCT_X0 + i * _SLAB_PITCH
+        slab_base[m] = struct_x0 + i * _SLAB_PITCH
     bottom = max((slab_at[m] + slab_rows[m] for m in order), default=collector + 1)
+    taken_row = bottom + 1  # seek mode only: the eastbound send row below the slabs
+    if seek:
+        bottom = taken_row + 9
+
+    # ── ascent columns for the top bus, the drops' mirror ────────────────────
+    # Assigned *after* the drops so they can refuse every drop column: a rising
+    # man crossing a drop's `v` would be turned south, and a dropping man crossing
+    # an ascent's `^` would be turned north. Two ascents may share a column — a
+    # northbound man keeps his heading over another lane's `^` — just as simple
+    # drops have always shared.
+    asc_x: dict[int, int] = {}
+    if top_lanes:
+        pre = lane_x0 - 1
+        for r in all_rows:
+            pre = max(pre, lane_end[r])
+            if r in top_lanes:
+                c = pre + 1
+                while c in assigned:
+                    c += 1
+                asc_x[r] = c
 
     g = _Grid()
     pipe_glyphs: list[tuple[int, int, str, str]] = []
@@ -906,14 +1246,19 @@ def build_cpu(
             if level < k:
                 trie(level + 1, row + sign * step)
 
-    trie(1, centre)
+    if trie_cells is None:
+        trie(1, centre)
+    else:
+        # Dead-lane removal: the pruned, contracted trie (see _uneven_trie).
+        for (x, yy), ch in trie_cells.items():
+            g.put(x, yy, ch)
 
     for (x, yy), (glyph, band) in lane_cells.items():
         emit(x, yy, glyph, band)
     for r in all_rows:
         if r in halting:
             continue
-        for x in range(lane_end[r] + 1, drop_x[r]):
+        for x in range(lane_end[r] + 1, (asc_x[r] if r in top_lanes else drop_x[r])):
             g.soft(x, r, ".")
 
     # ── drops: simple lanes to the collector, structured ones to their slab ──
@@ -922,44 +1267,167 @@ def build_cpu(
     # drop cross a slab's westbound entry row at all. A `v` there would turn the
     # entry man south into the middle of the drop.
     for r in all_rows:
-        if r in halting:
+        if r in halting or r in top_lanes:
             continue
         g.put(drop_x[r], r, "v")
     for r in all_rows:
-        if r in halting:
+        if r in halting or r in top_lanes:
             continue
         m = by_row.get(r)
         stop = slab_at[m] if (m is not None and m in slab_at) else collector
         for yy in range(r + 1, stop):
             g.soft(drop_x[r], yy, ".")  # crosses the collector row for a slab lane
 
+    # ── the top bus: rises east of the band, returns along row 1, drops col 1 ──
+    # Heads first (hard), then the runs (soft), so two ascents sharing a column
+    # keep both `^`s. The bus row was reserved by ``y0``: nothing else is on row 1,
+    # and column 1 above the fetch row is blank in every layout.
+    for r, c in sorted(asc_x.items()):
+        g.put(c, r, "^")
+    for r, c in asc_x.items():
+        for yy in range(bus_row + 1, r):
+            g.soft(c, yy, ".")
+    if top_lanes:
+        g.put(1, bus_row, "v")
+        for x in range(2, max(asc_x.values()) + 1):
+            g.soft(x, bus_row, "<")
+        for yy in range(bus_row + 1, centre):
+            g.soft(1, yy, ".")
+
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
-    for m in order:
-        struct_drops |= _slab(
-            g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
-        )
+    taken_drops: list[int] = []
+    if seek:
+        # Send-and-flush slabs (engine-proven by the Stage-2 RAM work): the
+        # taken path carries `row*K+rem` in A down to the eastbound taken row,
+        # sends it out the east-wall request pipe, then drops into the flush
+        # block: r/X until the drum's sentinel (-1), read the remainder, and
+        # run the stock 2x4 counted discard. ACC stays in B throughout.
+        for m in order:
+            s0, base = slab_at[m], slab_base[m]
+            if p.sem[m] not in _SEEK_SEMS:
+                # A short jump keeps the classic counted discard, verbatim.
+                struct_drops |= _slab(
+                    g, m, p, s0, base, collector, pipe_glyphs, drain_unit_bits
+                )
+            elif p.sem[m] in _JUMP_SEMS:
+                for yy in range(s0 + 1, taken_row):
+                    g.soft(base, yy, ".")
+                taken_drops.append(base)
+            else:
+                g.soft(base, s0 + 1, ".")
+                g.put(base, s0 + 2, ">")
+                g.put(base + 1, s0 + 2, "X")
+                g.put(base + 1, s0 + 1, ">")
+                g.put(base + 1, s0 + 3, ">")
+                arm_rows = {"neg": s0 + 1, "zero": s0 + 2, "pos": s0 + 3}
+                arm_cols = {"neg": base + 9, "zero": base + 6, "pos": base + 3}
+                taken = "zero" if p.sem[m] is Sem.BR_ZERO_SEEK else "neg"
+                for arm, row in arm_rows.items():
+                    g.put(base + 2, row, "W")
+                    for cc in range(base + 3, arm_cols[arm]):
+                        g.soft(cc, row, ".")
+                    if arm == taken:
+                        g.put(arm_cols[arm], row, "v")
+                        for yy in range(row + 1, taken_row):
+                            g.soft(arm_cols[arm], yy, ".")
+                        taken_drops.append(arm_cols[arm])
+                    else:
+                        g.put(arm_cols[arm], row, "^")
+                        for yy in range(collector + 1, row):
+                            g.soft(arm_cols[arm], yy, ".")
+                        struct_drops.add(arm_cols[arm])
+        for m in order:
+            s0, dx = slab_at[m], drop_x[row_of[m]]
+            base = slab_base[m]
+            g.put(dx, s0, "<")
+            if p.sem[m] not in _SEEK_SEMS and p.sem[m] in _JUMP_SEMS:
+                # the classic discard loop owns `a<` at base..base+1
+                for x in range(base + 2, dx):
+                    g.soft(x, s0, "<")
+            else:
+                for x in range(base + 1, dx):
+                    g.soft(x, s0, "<")
+                g.put(base, s0, "v")
 
-    # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place and
-    # only fills the genuinely free cells with `<`.
-    for m in order:
-        s0, dx = slab_at[m], drop_x[p.row[m]]
-        base = slab_base[m]
-        g.put(dx, s0, "<")
-        if p.sem[m] in _JUMP_SEMS:
-            # The compact discard loop owns `a<` at base..base+1 and is entered
-            # directly from the westbound slab-entry corridor.
-            for x in range(base + 2, dx):
-                g.soft(x, s0, "<")
-        else:
-            for x in range(base + 1, dx):
-                g.soft(x, s0, "<")
-            g.put(base, s0, "v")
+        # ── the seek tail, entirely BELOW the slab band ───────────────────────
+        # Nothing here shares a row with a slab, so the classic slabs keep their
+        # west-hugging columns (and with them the ROM binding their discard `r`
+        # depends on). Rows t .. t+7, columns 1 .. e_s+1.
+        #
+        #   t    : taken drops land, run east, `s` the request, turn south
+        #   t+1  : westbound corridor back to the flush loop's column
+        #   t+1..t+3, cols 2..6 : the flush loop
+        #   t+4..t+7, cols 2..3 : the stock 2x4 counted discard for the remainder
+        #
+        # The flush `X` is entered heading **south**, which is what puts the
+        # sentinel's exit on a downward path: heading south, A>0 turns west and
+        # A==0 goes straight — both stay in the loop — while A<0 turns east and
+        # leaves. Program words are non-negative (ARCH §4.2) and the drum's
+        # sentinel is -1, so the sign is the whole test and ACC is never touched.
+        t = taken_row
+        e_s = struct_east + 2
+        for col in taken_drops:
+            g.put(col, t, ">")
+        for x in range(min(taken_drops), e_s):
+            g.soft(x, t, ".")
+        emit(e_s, t, "s", "cmd")
+        g.put(e_s + 1, t, "v")
+        g.put(e_s + 1, t + 1, "<")
+        for x in range(4, e_s + 1):
+            g.soft(x, t + 1, ".")
+        # flush loop: `r` then a sign `X`, both walked southbound
+        g.put(3, t + 1, "v")
+        emit(3, t + 2, "r", "rom")
+        g.put(3, t + 3, "X")
+        g.put(2, t + 3, "^")  # A>0: keep flushing
+        g.put(2, t + 2, "^")
+        g.put(2, t + 1, ">")
+        g.put(3, t + 4, "<")  # A==0: keep flushing
+        g.put(2, t + 4, "^")
+        # A<0 — the sentinel: read the remainder, park it in BP, drop to the
+        # counted discard. Every seek offset is even (rows pack even word
+        # counts), which is exactly the 2x4 burst loop's invariant.
+        emit(4, t + 3, "r", "rom")
+        g.put(5, t + 3, "b")
+        g.put(6, t + 3, "v")
+        g.put(6, t + 4, ".")
+        g.put(6, t + 5, "<")
+        g.soft(5, t + 5, ".")
+        g.soft(4, t + 5, ".")
+        _discard_loop(g, 2, t + 5, pipe_glyphs)
+        # the loop leaves westbound with BP == 0; rise column 1 to the collector
+        g.put(1, t + 5, "^")
+        for yy in range(collector + 1, t + 5):
+            g.soft(1, yy, ".")
+    else:
+        for m in order:
+            struct_drops |= _slab(
+                g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
+            )
+
+        # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place
+        # and only fills the genuinely free cells with `<`.
+        for m in order:
+            s0, dx = slab_at[m], drop_x[row_of[m]]
+            base = slab_base[m]
+            g.put(dx, s0, "<")
+            if p.sem[m] in _JUMP_SEMS:
+                # The compact discard loop owns `a<` at base..base+1 and is entered
+                # directly from the westbound slab-entry corridor.
+                for x in range(base + 2, dx):
+                    g.soft(x, s0, "<")
+            else:
+                for x in range(base + 1, dx):
+                    g.soft(x, s0, "<")
+                g.put(base, s0, "v")
 
     # ── collector -> west riser -> back into the fetch cell ──────────────────
     # `soft` after the drops, so a slab-entry column that has to pass *through* the
     # collector keeps its `.` and is not turned west by a `<`.
-    ret_x = max([*drop_x.values(), *struct_drops])
+    ret_x = max([*drop_x.values(), *struct_drops, lane_x0])
+    if seek:
+        ret_x = max(ret_x, struct_east + 3)  # the taken row's send site + its `v`
     for x in range(3, ret_x + 1):
         g.soft(x, collector, "<")
     g.put(1, collector, "^")
@@ -978,7 +1446,7 @@ def build_cpu(
     # *through* the collector on their way to a slab: those leave `.` on the collector
     # row, so a simple man sharing the column would sail past his turn west and be
     # swallowed by that slab.
-    through = {drop_x[p.row[m]] for m in order}
+    through = {drop_x[row_of[m]] for m in order}
     clash = {r: c for r, c in drop_x.items() if c in through and by_row.get(r) not in order}
     if clash:
         raise MachineError(
@@ -986,7 +1454,7 @@ def build_cpu(
             f"slab entry column; a simple lane would drop past the collector"
         )
 
-    width = ret_x + 1
+    width = max(ret_x, *asc_x.values()) + 1 if asc_x else ret_x + 1
     # ``bottom`` is one *past* the deepest slab's last glyph row, so on most layouts
     # this row is blank — it holds nothing but the two side walls, and `height =
     # bottom - 1` renders and binds on every registered machine.  It was worth a row
@@ -1008,21 +1476,23 @@ def build_cpu(
         if by_row.get(r) in flat and any(b == Band.MEM for _, b in flat[by_row[r]])
     )
     mem_out_row = mem_rows[len(mem_rows) // 2] if mem_rows else centre
-    in_rows = [p.row[m] for m in used if p.sem[m] is Sem.INPUT]
+    in_rows = [row_of[m] for m in used if p.sem[m] is Sem.INPUT]
     out_cols = [lane_x0 + 1]
 
     # ── name every region, so a profile is readable ───────────────────────────
     regions: dict[str, tuple[int, int, int, int]] = {
         "fetch": (1, centre, 4, 1),
-        "trie": (5, 1, k, span),
+        "trie": (5, y0, lane_x0 - 5, span),
         "return:riser": (1, centre + 1, 1, collector - centre),
         "return:collector": (2, collector, ret_x - 1, 1),
     }
+    if asc_x:
+        regions["return:topbus"] = (1, bus_row, max(asc_x.values()), 1)
     for r in all_rows:
         m = by_row.get(r)
         if m is None:
             continue
-        end = drop_x.get(r, lane_end[r])
+        end = asc_x.get(r, drop_x.get(r, lane_end[r]))
         regions[f"lane:{m}"] = (lane_x0, r, max(1, end - lane_x0 + 1), 1)
     for m in order:
         regions[f"slab:{m}"] = (slab_base[m], slab_at[m], _SLAB_PITCH, slab_rows[m])
@@ -1033,6 +1503,7 @@ def build_cpu(
         height=height,
         centre=centre,
         in_row=in_rows[0] if in_rows else 1,
+        in_col=lane_x0,
         out_col=out_cols[0],
         mem_out_row=mem_out_row,
         # The response pipe attaches *above* the request pipe: it comes back over
@@ -1304,7 +1775,7 @@ def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3", "taped")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -1417,9 +1888,13 @@ def adapter_tape_gap(program_name: str, store: str) -> int:
     """Blank columns between the adapter and the STORE block, for one build.
 
     The wider of the two constraints wins: a program's own override (``matmul``'s
-    STREAM rings) and the floor its store tier needs to bind at all.
+    STREAM rings) and the floor its store tier needs to bind at all. ``men-v3``
+    keeps the request route's jog column (``ax_out + 2``) clear of the block's
+    own column 0, where its inlet stub lives.
     """
     gap = ADAPTER_TAPE_GAP_FOR.get(program_name, ADAPTER_TAPE_GAP)
+    if store in ("men-v3", "taped"):
+        gap = max(gap, 6)
     return max(gap, ADAPTER_TAPE_GAP_BY_STORE.get(store, 0))
 
 
@@ -1969,6 +2444,23 @@ class Machine:
             "cpu:return:collector": "every lane funnels west along here",
             "cpu:return:riser": "up to the fetch row — paid once per instruction",
         }
+        if self.program.name == "deadman-3d":
+            # The demo's input protocol rides the sidecar, so the grid itself
+            # documents how to drive it (the deliverable's "input instructions").
+            from ..deadman3d import INPUT_PROTOCOL
+
+            notes["io:I"] = INPUT_PROTOCOL
+            notes["stream:panel"] = "the DOOM unit's 64x48 LM-75: top=ADDR, left=DATA, bottom=SWAP"
+            notes["stream:unit"] = (
+                "the DOOM column painter (lm1/d3_unit.py): one command word per "
+                "viewport column / RLE run / cursor move / gun sprite / COMMIT, "
+                "8*arg + code. The map, the title screen, the status bar and "
+                "the baked pistol sprites are all derived from the Freedoom "
+                "project (https://github.com/freedoom/freedoom @ d14dbbe: "
+                "levels/e1m1.wad + its textures, graphics/titlepic, "
+                "graphics/stbar, sprites/pisga0+pisfa0; "
+                "BSD-style licence) — see deadman3d.py's art credits."
+            )
         for name, (x, y, w, h) in sorted(self.regions.items()):
             kind = name.split(":", 1)[0]
             note = notes.get(name, "")
@@ -2041,6 +2533,14 @@ def build(
     hot: tuple[int, int] | None = None,
     mem_offset: tuple[int, int] = (0, 0),
     store_offset: tuple[int, int] = (0, 0),
+    in_north: bool = False,
+    store_teleport: bool = False,
+    trim_dead: bool = False,
+    top_bus: bool = False,
+    store_shape: tuple[int, int] | None = None,
+    seek: bool = False,
+    seek_threshold: int = SEEK_THRESHOLD,
+    seek_ops: Sequence[str] = SEEK_OPS,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -2119,14 +2619,56 @@ def build(
         raise MachineError(f"tape_skip_batch must be 1, 2, 4, or None, got {tape_skip_batch}")
     if tape_jump_threshold < 1:
         raise MachineError(f"tape_jump_threshold must be positive, got {tape_jump_threshold}")
-    if store != "tape" and tape_skip_batch != 1:
-        raise MachineError("tape_skip_batch applies only to store='tape'")
+    if store not in ("tape", "taped") and tape_skip_batch != 1:
+        raise MachineError("tape_skip_batch applies only to the tape tiers")
     if store != "tape" and tape_relay_size is not None:
         raise MachineError("tape_relay_size applies only to store='tape'")
     if short_return is None:
         short_return = program.name not in _LONG_RETURN
+    if seek:
+        # Build-time only: long jumps become JMPS/BRZS/BRNS, which plan() then
+        # gives lanes of their own. A registered LANE_ORDER is a permutation of
+        # the *unpinned* lanes, so each new mnemonic is spliced in beside the
+        # classic opcode it was split from rather than invalidating the order.
+        program = seek_split(program, threshold=seek_threshold, ops=seek_ops)
+        if middle_order is not None:
+            # A registered LANE_ORDER is a permutation of the unpinned lanes, so
+            # the new mnemonics have to be spliced in. **Above every classic
+            # structured lane**, deliberately: a lane's slab index follows its
+            # drop column, which grows upward through the band, so putting the
+            # seek lanes higher leaves the classic slabs hugging the west wall —
+            # and a classic slab's discard `r` must stay nearer the ROM pipe
+            # there than the STORE's response pipe on the east (§7.1). A seek
+            # slab has no `r` at all, so it is free to sit east.
+            used = {op.mnemonic for op in program.ops_used}
+            classic = ("JMPF", "BRZ", "BRN")
+            order = list(middle_order)
+            at = min(
+                (order.index(c) for c in classic if c in order),
+                default=len(order),
+            )
+            for new in ("JMPS", "BRZS", "BRNS"):
+                if new in used and new not in order:
+                    order.insert(at, new)
+                    at += 1
+            middle_order = order
     p = plan(program, middle_order=middle_order)
-    words = rom_words(program, p)
+    seek_layout = None
+    if seek:
+        # The seek drum resolves jump operands as row*K+offset in its own packed
+        # layout, so the words and the drum are built together (fixed point).
+        # Its side margins and fixed-width jump literals make each row wider
+        # than the plain packed drum's, so the fold deepens until the drum fits
+        # the same width budget the registry's row count bought.
+        plain = rom_words(program, p)
+        seek_fold = rom_rows if rom_rows is not None else max(2, _packed_fold(plain, 60))
+        budget = rommod.build_packed_rom(plain, rows=seek_fold).width + 4
+        for extra in range(0, 24):
+            words, seek_layout = seek_words(program, p, rows=seek_fold + extra)
+            if seek_layout.width <= budget:
+                break
+    else:
+        words = rom_words(program, p)
     tape_n = tape_n if tape_n is not None else _highest_address(program) + 1
     effective_skip_batch = _resolve_tape_skip_batch(
         tape_n,
@@ -2176,6 +2718,12 @@ def build(
                     hot,
                     tape_skip_batch=effective_skip_batch,
                     tape_relay_size=tape_relay_size,
+                    in_north=in_north,
+                    store_teleport=store_teleport,
+                    trim_dead=trim_dead,
+                    top_bus=top_bus,
+                    store_shape=store_shape,
+                    seek_layout=seek_layout,
                 )
             except MachineError as exc:
                 last = exc
@@ -2223,6 +2771,12 @@ def build(
                     hot,
                     tape_skip_batch=effective_skip_batch,
                     tape_relay_size=tape_relay_size,
+                    in_north=in_north,
+                    store_teleport=store_teleport,
+                    trim_dead=trim_dead,
+                    top_bus=top_bus,
+                    store_shape=store_shape,
+                    seek_layout=seek_layout,
                 )
             except MachineError:
                 continue
@@ -2292,20 +2846,35 @@ def _assemble(
     hot: tuple[int, int] | None = None,
     tape_skip_batch: int = 1,
     tape_relay_size: tuple[int, int] | None = None,
+    in_north: bool = False,
+    store_teleport: bool = False,
+    trim_dead: bool = False,
+    top_bus: bool = False,
+    store_shape: tuple[int, int] | None = None,
+    seek_layout=None,
 ) -> Machine:
+    seek = seek_layout is not None
+    if seek and not short_return:
+        raise MachineError("the seek drum requires the short-return drop rule")
     cpu = build_cpu(
         program,
         p,
         mem_pad=mem_pad,
         stream_pad=stream_pad,
         short_return=short_return,
-        drain_unit_bits=DRAIN_UNIT_BITS.get(program.name, 0),
+        drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
+        trim_dead=trim_dead,
+        top_bus=top_bus,
+        seek=seek,
     )
     W, H = cpu.width, cpu.height
 
     # ROM folded to roughly the CPU's own width, so neither dimension runs away
     # from the other (footprint is max(w, h)^2, ARCH.md §7.4).
-    if packed_rom:
+    if seek:
+        romlay = seek_layout  # built (with the operand fixpoint) by the caller
+        nrows = seek_layout.rows_used
+    elif packed_rom:
         # Packed tokens are ~half the cells, so the same column budget swallows
         # roughly twice as many words per row and the default fold is that much
         # shallower (rom.build_packed_rom).
@@ -2336,9 +2905,16 @@ def _assemble(
 
     # ── ROM room, top-left ───────────────────────────────────────────────────
     RX, RY = 0, 0
-    g.room(RX, RY, RX + romlay.width, RY + romlay.height + 1)
-    g.blit(RX, RY + 1, romlay.cells)
-    rom_bottom = RY + romlay.height + 1
+    if seek:
+        # The seek drum's cells span x 0..width-1 (col 0 is the seek riser), so
+        # its interior starts one cell east of the wall.
+        g.room(RX, RY, RX + romlay.width + 1, RY + romlay.height + 1)
+        g.blit(RX + 1, RY + 1, romlay.cells)
+        rom_bottom = RY + romlay.height + 1
+    else:
+        g.room(RX, RY, RX + romlay.width, RY + romlay.height + 1)
+        g.blit(RX, RY + 1, romlay.cells)
+        rom_bottom = RY + romlay.height + 1
 
     # ── CPU room ─────────────────────────────────────────────────────────────
     # The west margin carries two pipes that must not cross: the ROM corridor runs
@@ -2366,6 +2942,11 @@ def _assemble(
         if cpu.has_in
         else ROM_CPU_GAP_WITHOUT_INPUT
     )
+    if in_north:
+        # The I room moves into the corridor band above the CPU (INPUT_NORTH),
+        # so the band must be deep enough to hold a 3x3 room plus its two-cell
+        # pipe into the north wall.
+        cpu_gap = max(cpu_gap, 6)
     CY = rom_bottom + cpu_gap + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
     g.blit(CX, CY, cpu.cells)
@@ -2397,7 +2978,19 @@ def _assemble(
     # `r` in the room (§7.1 is nearest, not nearest-useful) — `palette` reads no
     # input at all.
     iy = CY + cpu.in_row
-    if cpu.has_in:
+    in_x = CX + cpu.in_col
+    if cpu.has_in and in_north:
+        # INPUT_NORTH: the I room sits in the corridor band and its pipe drops
+        # into the north wall directly above the IN lane's own `r`. On the west
+        # wall this pipe was the *binding* constraint that pushed the whole
+        # memory band east (a memory `r` a few rows from `in_row` was nearer it
+        # than the east-wall response), which cost every memory instruction the
+        # extra walk twice over; from the north, its distance to any lane glyph
+        # grows with the lane's depth and it rivals nothing.
+        g.room(in_x - 1, CY - 5, in_x + 1, CY - 3)
+        g.put(in_x, CY - 4, "I")
+        route_lengths["input->cpu"] = g.draw_pipe([(in_x, CY - 2), (in_x, CY - 1)])
+    elif cpu.has_in:
         g.room(3, iy - 1, 5, iy + 1)
         g.put(4, iy, "I")
         route_lengths["input->cpu"] = g.draw_pipe([(6, iy), (CX - 1, iy)])
@@ -2493,6 +3086,32 @@ def _assemble(
             tape = y_men_block(tape_n)
         elif store == "grid":
             tape = grid_block(tape_n)
+        elif store == "men-v3":
+            from ..memory_men_v3 import v3_store_block, v3_store_grid_block
+
+            v3_ops = STORE_OPS.get(program.name, 500)
+            if store_shape is not None and store_shape[0] > 1:
+                v3_cols, v3_rows = store_shape
+                if v3_cols * v3_rows < tape_n:
+                    raise MachineError(
+                        f"STORE shape {v3_cols}x{v3_rows} holds {v3_cols * v3_rows} "
+                        f"cells but the tape needs {tape_n}"
+                    )
+                tape = v3_store_grid_block(v3_cols, v3_rows, ops=v3_ops)
+            else:
+                tape = v3_store_block(tape_n, ops=v3_ops)
+        elif store == "taped":
+            from ..memory_taped import taped_store_block
+
+            tape = taped_store_block(
+                tape_n,
+                TAPED_BANKS.get(program.name, 4),
+                skip_batch=(
+                    tape_skip_batch
+                    if tape_skip_batch != 1
+                    else TAPED_SKIP_BATCH.get(program.name, 1)
+                ),
+            )
         elif store == "tape":
             tape = tape_block(
                 tape_n,
@@ -2501,7 +3120,7 @@ def _assemble(
             )
         else:
             raise MachineError(
-                f"unknown store tier {store!r}; expected 'tape', 'grid', 'men', or 'men-y'"
+                f"unknown store tier {store!r}; expected one of {STORE_TIERS!r}"
             )
         TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
         TY = CY + mem_dy + store_dy
@@ -2565,7 +3184,55 @@ def _assemble(
         # lengthening this pipe by ``2 * resp_pad`` cells and changing nothing else. It
         # exists to *measure* ARCH.md §7.4b's "every extra pipe cell costs one tick" on a
         # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
-        if compact or moved:
+        tele_regions: dict[str, tuple[int, int, int, int]] = {}
+        tele_pipes = 0
+        if store_teleport:
+            # The response comes home through two teleports instead of a long
+            # pipe. ``R`` receives from any incoming pipe with **no distance
+            # term** (SPEC.md), so a wide room is a horizontal teleport and a
+            # tall one a vertical teleport: the value crosses each room in one
+            # instruction, and the per-read latency collapses from the pipe's
+            # whole length (~59 cells here) to the three short stubs (~7).
+            # L collects the store's answer above its north wall and carries it
+            # west; U carries it down the CPU's east side and hands it to the
+            # response row with exactly the attachment cell the plain pipe used,
+            # so every memory ``r``'s binding is untouched. Cost: two men.
+            from ..memory_men import teleport, teleport_v
+
+            ux = CX + W + 4  # U hugs the CPU's east wall
+            lx0 = ux + _TELE_W + 4
+            lx1 = tout_x + 2
+            l_y1 = tout_y - 3  # L's south wall: two stub cells below it reach tout
+            l_y0 = l_y1 - _TELE_H - 1
+            # U spans from just above L's hand-off row down to the response row,
+            # wherever the store's outlet put L (men-v3's is at the block's top).
+            u_top = min(CY + 3, resp_row - 6, l_y0)
+            u_bot = resp_row + 1
+            if u_bot - u_top < 3:
+                raise MachineError("teleport U has no interior: resp_row too high")
+            u_rows, _ = teleport_v(u_bot - u_top - 1)
+            g.room(ux, u_top, ux + _TELE_W + 1, u_bot)
+            for kk, row in enumerate(u_rows):
+                g.text(ux + 1, u_top + 1 + kk, row.replace(" ", "\0"))
+            if lx1 - lx0 < 8 or l_y0 <= 1:
+                raise MachineError("teleport L has no room between the CPU and the STORE")
+            l_rows, _ = teleport(lx1 - lx0 - 1)
+            g.room(lx0, l_y0, lx1, l_y1)
+            for kk, row in enumerate(l_rows):
+                g.text(lx0 + 1, l_y0 + 1 + kk, row.replace(" ", "\0"))
+            # the store's answer climbs two cells into L's south wall ...
+            n1 = g.draw_pipe([(tout_x, tout_y - 1), (tout_x, l_y1 + 1)])
+            # ... L hands it west to U's east side ...
+            n2 = g.draw_pipe([(lx0 - 1, l_y0 + 1), (ux + _TELE_W + 2, l_y0 + 1)])
+            # ... and U drops it onto the response row's own attachment cell.
+            n3 = g.draw_pipe([(ux - 1, resp_row), (CX + W + 2, resp_row)])
+            route_lengths["store->cpu"] = n1 + n2 + n3
+            tele_pipes = 2  # the response used to be ONE pipe; now it is three
+            tele_regions = {
+                "teleport:L": (lx0, l_y0, lx1 - lx0 + 1, _TELE_H + 2),
+                "teleport:U": (ux, u_top, _TELE_W + 2, u_bot - u_top + 1),
+            }
+        elif compact or moved:
             start = (tout_x, tout_y - 1)
             end = (CX + W + 2, resp_row)
             # The corridor between the CPU and the adapter is spoken for: the request
@@ -2641,6 +3308,40 @@ def _assemble(
             )
         blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
 
+    # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
+    # Drawn last so its northbound leg can clear everything already placed. Its
+    # length is only jump-notice latency; the drum's q sees the value the tick
+    # it enters the pipe, so the man parks on the station's r rather than
+    # emitting words the CPU would flush.
+    if seek:
+        cmd_y = CY + (H - 9)  # build_cpu: bottom = taken_row + 9
+        x_e = max(x for x, _ in g.c) + 2
+        rom_east = RX + romlay.width + 1
+        ry = RY + 2
+        if blk is not None:
+            # Cross in the gap between the store block's bottom and the STREAM
+            # unit's top (both exist on the machines that hang a unit below).
+            y_b = SY - 2
+            if hot is None and y_b <= TY + tape.height - 1:
+                raise MachineError(
+                    f"seek: no clear row between the store block and the unit "
+                    f"(y_b={y_b}, store bottom cell={TY + tape.height - 1})"
+                )
+            if y_b <= cmd_y + 1:
+                raise MachineError("seek: the unit sits too high for the cmd dive")
+        else:
+            y_b = max(y for _, y in g.c) + 2
+        route_lengths["cpu->drum"] = g.draw_pipe(
+            [
+                (CX + W + 2, cmd_y),
+                (CX + W + 3, cmd_y),  # east out of the wall, then dive south
+                (CX + W + 3, y_b),
+                (x_e, y_b),
+                (x_e, ry),
+                (rom_east + 1, ry),
+            ]
+        )
+
     rows = g.rows()
 
     # ── name every block in grid coordinates ─────────────────────────────────
@@ -2651,6 +3352,7 @@ def _assemble(
     if hot is None:
         regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
         regions["tape"] = (TX, TY, tape.width, tape.height)
+        regions.update(tele_regions)
     else:
         regions.update(extra_regions)
     # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
@@ -2659,7 +3361,7 @@ def _assemble(
     if band_rows:
         regions["rom:corridor"] = (1, rom_bottom + 1, (CX + W + 1), band_rows + 1)
     if cpu.has_in:
-        regions["io:I"] = (3, iy - 1, 3, 3)
+        regions["io:I"] = (in_x - 1, CY - 5, 3, 3) if in_north else (3, iy - 1, 3, 3)
     if cpu.has_out:
         regions["io:O"] = (CX + cpu.out_col - 1, oy + 2, 3, 3)
     if blk is not None:
@@ -2688,9 +3390,11 @@ def _assemble(
         **stream_touches,
     }
     if cpu.has_in:
-        touches["in"] = (CX - 1, iy)
+        touches["in"] = (in_x, CY - 1) if in_north else (CX - 1, iy)
     if cpu.has_out:
         touches["out"] = (CX + cpu.out_col, CY + H + 2)
+    if seek:
+        touches["cmd"] = (CX + W + 2, CY + (H - 9))
     check_bindings(
         [(CX + x, CY + y, glyph, band) for x, y, glyph, band in cpu.pipe_glyphs], touches
     )
@@ -2711,8 +3415,13 @@ def _assemble(
     # cell->collector — and every one of them is a two-cell stub between facing
     # walls, which is exactly why the extra decoder hop is nearly free.
     if hot is None:
-        _STORE_PIPES = {"men-y": None, "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2}
-        store_pipes = (tape.pipes if store == "men-y" else _STORE_PIPES[store]) + 1
+        _STORE_PIPES = {
+            "men-y": None, "men-v3": None, "taped": None,
+            "men": 2 * tape_n, "grid": 3 * tape_n, "tape": 2,
+        }
+        store_pipes = (
+            tape.pipes if store in ("men-y", "men-v3", "taped") else _STORE_PIPES[store]
+        ) + 1 + tele_pipes
     _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
     return Machine(
         rows=rows,
@@ -2877,7 +3586,7 @@ def two_tier_adapter(hot_top: int) -> _Adapter2:
 #: Every memory tier ``build`` will accept, in the order they are worth trying.
 #: ``tape`` is the default and stays it — see ARCH.md §4.1 for why ``grid`` loses on
 #: footprint despite an access cost that ignores ``n``.
-STORE_TIERS = ("tape", "grid", "men", "men-y")
+STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3", "taped")
 
 #: Blank columns between the CPU's east wall and the adapter room, and between the
 #: adapter and the STORE block. Both are paid **twice**: once in the machine's width,
@@ -3292,6 +4001,13 @@ def _stream(
         from . import path_unit
 
         blk = path_unit.build_path()
+    elif unit == "doom":
+        # The DOOM unit owns deadman-3d's 64x48 panel, its column paint loops, and
+        # the baked HUD/FLASH patterns; like snake and path it answers nothing, so
+        # the CPU keeps its jumps and there is no separate `_display` call.
+        from . import d3_unit
+
+        blk = d3_unit.build_doom()
     else:
         from . import stream as streammod
 
@@ -3299,6 +4015,15 @@ def _stream(
         a_slots, b_slots, c_slots = sizes
         blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
     bx, by = 1, wall_y + 5
+    if unit == "doom":
+        # The DOOM block is ~172 columns wide — far wider than the CPU — and the
+        # grid STORE's man-memory runs hundreds of rows down the machine's east
+        # side, so the flat slot just below the CPU is occupied. Hang the block
+        # below everything already drawn instead: the command pipe simply grows,
+        # and the demo pays footprint in rows, which an ungraded slug never
+        # counts. (Doom-only, so every other unit's checked-in grid stays
+        # byte-identical.)
+        by = max(by, max(y for (_x, y) in g.c) + 3)
     g.blit(bx, by, blk.cells)
 
     cmd_col = cx + cpu.stream_cols[Band.STREAM_CMD]
@@ -3573,6 +4298,10 @@ TAPE_SIZE = {
     "tcp": 52,
     "gradebook": 32,  # one packed cell per student (16) + 15 scalars
     "plotter": 11,  # reaches address 10 — ten names aliased onto ten slots
+    # lambda-deadman is plotter plus one slot: COL (address 11) holds the segment's
+    # colour and is live across the whole round, so it can alias nothing. Highest
+    # address + 1, as everywhere — an exactly-sized tape stalls, it does not fault.
+    "lambda-deadman": 12,
     "palette": 3,  # one colour counter; the pixels need no tape at all
     "sudoku-validity": 31,  # 27 unit masks + 3 cursors, one slot of slack
     # matmul keeps both matrices in the STREAM block's rings, so its tape holds only
@@ -3604,6 +4333,16 @@ TAPE_SIZE = {
     # board still lives in the CPU's four bitset words, unlike snake-ring, where the
     # coprocessor took over the data structure itself and shrank the tape 66 -> 9.
     "pathfinder-unit": 52,
+    # deadman-3d (the E1M1 raycaster demo) boot-loads 451 data slots (256 packed
+    # map quarter-columns for the 64x64 grid, POW16, 16 packed heading words,
+    # M5's 64-word nukage bit plane, spawn state, and M7a's 16-monster table +
+    # HP block + 60 packed sprite columns), runs the 64-slot per-frame ZBUF
+    # after them and 84 scalars after that (the sprite pass's selection slots
+    # and paint cursors among them, plus M7b's LIVE/HIT/CID shot scalars), so
+    # the highest address is PTR = 599 — see `deadman3d.tape_slots()`, which
+    # the tests pin this against. Highest address + 1, as everywhere: an
+    # exactly-sized tape stalls silently rather than faulting.
+    "deadman-3d": 600,
 }
 
 #: Task-level tape choices that beat the compact default on full public-case score.
@@ -3681,6 +4420,20 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: `scratch/lane_order_search.py` under the new geometry before pinning one again;
 #: the weights are unchanged but the width constraint it filters on is not.
 LANE_ORDER: dict[str, tuple[str, ...]] = {
+    # deadman-3d, north to south, weighted by the frame-1 execution profile
+    # (LD 5,528 ... NEG 32): a row above the fetch row costs 2 ticks per row of
+    # height while every row below it costs a constant, so the coldest lanes
+    # take the top, the hot memory lanes sit as close above the fetch row as
+    # the response-pipe binding allows, and the hot immediates and the
+    # structured lanes take the constant-cost rows below it. (A full
+    # bottom-fill into the trie's 11 spare slots was tried and fails binding:
+    # it drags the response row down beside the slabs, whose discard `r` must
+    # stay nearest the ROM pipe.)
+    "deadman-3d": (
+        "NEG", "MOVA", "INCM", "ADDI", "MUL", "LDA", "DIV", "SUB", "ADD",
+        "ST", "LD", "MODI", "DIVI", "SUBI", "MULI", "LDI",
+        "BRN", "BRZ", "JMPF",
+    ),
     "brackets": (
         "HALT",
         "LDI",
@@ -3733,6 +4486,9 @@ ROM_ROWS = {
     "tcp": 2,
     # The panel adds rows, so the fold stops when height becomes binding.
     "plotter": 9,  # 103x99
+    # The vector-display demo keeps plotter's fold: the inner loop is unchanged and
+    # the slug is ungraded, so nobody swept it. Drop the entry if the default wins.
+    "lambda-deadman": 9,
     # The unrolled scans make the ROM set the width.
     # Also re-swept against :data:`MEM_PLACE`, and again after `gradebook` left
     # :data:`LANE_ORDER` — the narrower default CPU moves the width/height crossing, so
@@ -3748,6 +4504,29 @@ ROM_ROWS = {
     "pathfinder": 73,  # 177x179
     # The command arms are not complete and no checked-in grid exists yet.
     "pathfinder-unit": 72,
+    # deadman-3d: re-swept jointly with :data:`STORE_SHAPE` for min max(w, h)
+    # (the viewer holds the machine's full bounding rectangle, so squareness is
+    # the demo's objective). Historic sweeps in scratch/deadman3d-opt/
+    # METRICS.md: 307x307 at the pre-M5 330-slot tape, 335x333 at M5's 395.
+    # M7a grew the tape to 597 (monsters + sprites + ZBUF) and the ROM ~980
+    # words (the sprite phase, P 2973 -> 3957): the re-sweep (shapes 9..11
+    # wide x rom_rows 40..80 x store_dy) moves the optimum to the 10-wide
+    # store (the 9-wide block is 67 rows and floors the HEIGHT at ~397, the
+    # 11-wide chain floors the width at 391).
+    #
+    # M7b re-sweep (rom_rows 48..76 x shapes 6..14 x mem_pad 8..47 x store_dy,
+    # build-only, then native-gated at the knee). The canonical machine is a
+    # pure ROM-width / stack-height trade: width = max(rom_w(rows), 75 + store
+    # block width) and height = rows + 3*store_rows + 112, so one more fold row
+    # buys ~6 columns and costs exactly one row until the store chain's 363
+    # floor takes over at 63 rows. 60 -> 379x376 (max 379); **61 -> 373x377
+    # (max 377)**; 62 -> 369x378; 63 -> 363x379. 61 is the crossing, and it is
+    # also 0.8% FASTER on the native 9-round gate (46,529,444 vs 46,890,041) —
+    # a deeper fold shortens nothing the CPU walks, but it narrows the ROM's own
+    # rows. Everything else in the space is dominated: 10 columns is the widest
+    # store the 373-wide box holds (11 floors the width at 391) and 600 slots
+    # then force 60 rows, so store_h is not a free variable at all.
+    "deadman-3d": 61,
 }
 
 
@@ -3866,15 +4645,264 @@ _LONG_RETURN = {"matmul"}
 MEM_PLACE: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "tcp": ((-23, 40), (0, 0)),
     "gradebook": ((0, 26), (-12, -26)),
+    # deadman-3d: each row of store_dy shortens the serial adapter->store
+    # request route by one cell (~19.7k reads/frame pay it), and each row costs
+    # one row of machine height. The M7a machine (10x60 store + rom 60,
+    # 374x376) is height-bound with NO slack — every dy row pushes max(w, h)
+    # up one — so the M5-era dy 15 goes back to 0; squareness is the demo's
+    # objective and outranks the ~0.3M/frame the shorter hot route bought
+    # (historic dy sweep at the 42-row fold: dy 0/3/10 ->
+    # 11.567M/11.508M/11.371M on the frame gate).
+    "deadman-3d": ((0, 0), (0, 0)),
 }
+
+
+#: Per-``(slug, STORE tier)`` layout overrides, for a slug that ships **two**
+#: machines off one program. The registry above is written for a slug's
+#: canonical tier; a variant tier can have a completely different width/height
+#: trade, and forcing it to share the canonical numbers just makes it bigger.
+#:
+#: ``deadman-3d`` is the case: its men-v3 store is a 288x204 block, so the
+#: canonical machine's width floors at 363 and its height at ``rom_rows + 316``
+#: — a knife-edge crossing at 61 fold rows. The taped store is 224x59 (four
+#: banks), which floors the width 140 columns lower and leaves ~100 rows of
+#: height slack, so the taped machine wants a *much* deeper fold and the store
+#: pulled west. Sharing ``ROM_ROWS`` costs it 373 against 279.
+#:
+#: Recognised keys: ``rom_rows``, ``mem_offset``, ``store_offset`` (the
+#: :data:`MEM_PLACE` pair, overridable one at a time). Absent ``(slug, tier)``
+#: pairs change nothing, so every other machine stays byte-identical.
+TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
+    # deadman-3d's taped variant, swept jointly (bank plan x store dx x
+    # rom_rows) on the native 9-round gate. The store's width is
+    # ``48*banks + 32`` at skip-batch 2 and does NOT depend on the bank sizes,
+    # so the bank COUNT is the width knob and the sizes stay pure tick tuning.
+    # ``store_offset`` dx pulls the block west along the adapter's request
+    # route; -20 is the last value that still binds (-21 fails to route), and
+    # the fold then deepens until the ROM meets the store chain's floor.
+    # 395x231 -> **279x258** (max 395 -> 279, bbox 91,245 -> 71,982).
+    ("deadman-3d", "taped"): {"rom_rows": 83, "store_offset": (-20, 0)},
+}
+
+
+#: Demo slugs are not bound to any problem's panel — an ungraded demo may pick
+#: any resolution the LM-75 allows (64x64 max), and ``deadman-3d`` wants DOOM's
+#: 4:3 rather than the 32x24 its borrowed ``plotter`` JSON states. Consulted by
+#: :func:`display_for` *before* the problem JSON; graded problems must never
+#: appear here, because for them the panel size is the judge's, not ours.
+DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
+
+#: Per-slug ``mem_pad`` for machines whose pad the default search should not (or
+#: cannot) pick: :func:`build` searches ``range(0, 40)`` and takes the best pad
+#: that binds every pipe. ``deadman-3d``'s is recorded to pin the checked-in grid
+#: and skip the search. (36 when the CPU owned the panel; 18 under the 32x32
+#: program; re-searched to 17 — the smallest that binds under the real
+#: INPUT_NORTH + teleport + MEM_PLACE config — after the 64x64 map and the
+#: men-v3 store, which tie every pad on footprint. Re-searched again under the
+#: 8x42 :data:`STORE_SHAPE` + rom 42 geometry: the full pad search still lands
+#: on 17.) Consulted by :func:`build_for` like :data:`ROM_ROWS`; absent slugs
+#: keep the search.
+MEM_PAD: dict[str, int] = {"deadman-3d": 17}
+
+#: Slugs whose ``I`` room attaches to the CPU's **north** wall instead of the
+#: west. On the west wall the input pipe rivals every memory ``r`` a few rows
+#: from ``in_row`` (§7.1), which is what forced ``deadman-3d``'s memory band 39
+#: columns east — a walk every memory instruction paid twice, out and back
+#: along the collector. From the north the pipe's distance to any lane glyph
+#: grows with the lane's depth, so the memory band packs west and the pad falls
+#: to the search minimum. Opt-in per slug so every other machine's checked-in
+#: grid stays byte-identical.
+INPUT_NORTH: set[str] = {"deadman-3d"}
+
+#: Slugs whose CPU removes the decode trie's **dead leaf rows**: only used
+#: opcodes get a lane pair, the trie is re-routed over the compacted band with
+#: pruned branches and contracted chains (:func:`_uneven_trie`), and the band
+#: shrinks by two rows per unused leaf slot. The opcode numbering — and so the
+#: ROM image — is untouched. Costs ``k - 1`` extra trie columns (two per level,
+#: for the horizontal ``]`` shifts). Every instruction's decode descent, return
+#: drop and riser shorten with the band. Opt-in per slug so every other
+#: machine's checked-in grid stays byte-identical.
+TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the gate
+
+#: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
+#: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
+#: ladders, so a **long** taken jump seeks the target's row instead of
+#: recirculating every word before it. ``seek_split`` decides per instruction —
+#: short jumps keep the counted discard, which they are already good at.
+#:
+#: Empty by default, so every machine not named here is byte-identical. Measured
+#: on ``deadman-3d`` (native, round-gated, frames matched):
+#:
+#: | build | box | fp | per gameplay frame |
+#: |---|---|---|---|
+#: | drum (canonical) | 374x376 | 141,376 | 5,826,361 |
+#: | seek, JMPF only | 379x382 | 145,924 | **4,916,381 (-15.6%)** |
+#: | seek, JMPF+BRZ | 393x382 | 154,449 | 4,946,150 (-15.1%) |
+#: | seek, all three | 407x382 | 165,649 | 5,375,802 (-7.7%) |
+#:
+#: Splitting more than ``JMPF`` is a *loss*: each extra family costs a lane and
+#: a 13-column slab, the slab band is what pushes the memory block east, and the
+#: pad it forces (17 -> 22 -> 29 -> 36) charges every memory instruction the
+#: extra walk twice. Hence :data:`SEEK_OPS` defaults to ``JMPF`` alone.
+#:
+#: **Re-measured against the M7c layout re-sweep** (native, round-gated on the
+#: checked-in 115-frame tour, 116 rounds, both ``passed=True``); the table above
+#: is the pre-M7c reading and is kept only for the shape of the effect:
+#:
+#: | tier | box (classic -> seek) | tour ticks | Δ |
+#: |---|---|---|---|
+#: | canonical (men-v3) | 372x377 -> **382x382** | 640,512,397 -> **520,564,274** | **-18.7%** |
+#: | taped | 279x258 -> **295x269** | 1,250,728,623 -> **1,113,752,187** | **-11.0%** |
+#:
+#: The canonical machine comes out *exactly square*, five columns under the
+#: pre-existing 390 ceiling. The taped tier is the one that pays: its width is
+#: store-bound and the seek slabs push the block 16 columns east, which
+#: ``store_offset`` cannot claw back (dx -20 is still the last value that
+#: routes). It stays inside its 300 ceiling and the 10% skew doctrine, but that
+#: is the trade — re-check it before the next taped sweep.
+SEEK_DRUM: set[str] = {"deadman-3d"}
+
+#: ``MEM_PAD``'s replacement while the seek drum is on: the extra lane and slab
+#: move the band, so the pinned pad no longer binds. Searched once and recorded
+#: here so a seek build stays deterministic (and fast).
+SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
+
+#: :data:`TIER_LAYOUT`'s overlay while the seek drum is on. Seeking re-shapes
+#: the ROM block (a lane and a 13-column slab per split family), so the
+#: width/height crossing the classic sweep found is no longer where it was and
+#: the fold has to be re-picked per tier. Empty means "keep the classic tier
+#: layout"; a key here wins over :data:`TIER_LAYOUT`'s for the same tier.
+#:
+#: Both folds re-swept build-only against the seek slabs (``mem_pad`` 22 is the
+#: floor on both tiers — at 21 and below the classic slabs' ``r`` can no longer
+#: beat ``mem_resp`` to the ROM pipe and nothing binds):
+#:
+#: * canonical, ``rom_rows`` 59/60/61/62/63: 386x381 / **382x382** / 379x383 /
+#:   379x385 / 379x386. 60 is the crossing and it lands exactly square, so the
+#:   seek build folds one row *shallower* than the classic 61.
+#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / **295x269** /
+#:   295x272 .. 295x286. The width floors at 295 (the store binds, and
+#:   ``store_offset`` dx -20 is still the last value that routes), so the fold
+#:   stops at the first row that reaches the floor rather than the classic 83.
+SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
+    ("deadman-3d", "men-v3"): {"rom_rows": 60},
+    ("deadman-3d", "taped"): {"rom_rows": 80},
+}
+
+#: Slugs whose CPU gets a **second return bus above the band**: a simple lane
+#: returns over whichever bus is cheaper — the classic drop to the collector
+#: below, or an ascent to row 1 and a walk west into a column-1 drop onto the
+#: fetch row. Upper lanes otherwise pay the whole band height twice (down to
+#: the collector, back up the riser). Costs one row of height and moves every
+#: lane down by it, so it must re-prove every pipe binding. Opt-in per slug so
+#: every other machine's checked-in grid stays byte-identical.
+TOP_RETURN_BUS: set[str] = set()
+
+#: Slugs whose STORE **response** comes home through two teleport rooms (an L
+#: above the store's north wall and a U down the CPU's east side) instead of a
+#: long pipe. ``R`` has no distance term, so each room is crossed in one
+#: instruction and the per-read latency collapses from the pipe's length (~59
+#: cells on ``deadman-3d``) to three short stubs (~7 cells) — first-order on a
+#: machine making ~15k grid-store reads a frame. Costs two men; opt-in per slug
+#: so every other machine's checked-in grid stays byte-identical.
+STORE_TELEPORT: set[str] = {"deadman-3d"}
+
+#: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
+#: ``deadman-3d``'s 330-slot store is far past the rotating tape's ~103-slot
+#: practical cap (and a ring that size would cost ~1,100 ticks a read anyway),
+#: so it rides :func:`grid_block`, the address-carrying man-memory: ~31 ticks an
+#: access flat, paid for in rows — which an ungraded demo does not count.
+#: ``men-v3`` is the unrolled-router man-memory (``memory_men_v3``): ~11 ticks
+#: an access against the grid store's ~31, flat in the address, at the price of
+#: area — which an ungraded demo does not count. Measured on deadman-3d's
+#: ~14.3k accesses per frame it is worth ~0.3M ticks over ``grid``.
+STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
+
+#: Router-strip length for the men-v3 tier (the ``ops`` knob of
+#: ``v3_store_block`` / ``v3_store_grid_block``), per slug; unlisted slugs keep
+#: v3's own default (500). ``deadman-3d`` runs the SINGLE looping block (v2's
+#: router footprint: one unrolled operation whose end walks straight back to its
+#: start): the CPU issues its store reads ~1k ticks apart with lookup work in
+#: between, so the walk home happens while the router idles waiting for the next
+#: request — off the critical path entirely. The unrolled strip only pays for
+#: back-to-back op streams, which this machine never generates; measured on the
+#: native frame gate the ops=1 delta is recorded in scratch/deadman3d-opt/
+#: METRICS.md. Re-sweep before borrowing this for any machine whose reads
+#: arrive in bursts.
+STORE_OPS: dict[str, int] = {"deadman-3d": 1}
+
+#: STORE shape for the men-v3 tier: ``(cols, rows)`` columns of the multi-column
+#: block (``v3_store_grid_block``); absent slugs keep the one-column strip.
+#: Capacity is ``cols * rows`` and must cover :data:`TAPE_SIZE` — the shape is
+#: pure geometry, addressing is global and unchanged. ``deadman-3d``'s store was
+#: the machine's whole silhouette (the one-column block is 681x999 and set BOTH
+#: dimensions of the 756x1197 bbox); the viewer holds the full bounding
+#: rectangle, so the shape is chosen jointly with :data:`ROM_ROWS` to minimise
+#: ``max(w, h)`` (the historic sweeps are in scratch/deadman3d-opt/
+#: METRICS.md: 8x42 + rom 44 = the exact 307x307 square at 330 slots,
+#: 9x44 + rom 50 = 335x333 at M5's 395). M7a grew the tape to 597 slots
+#: (the monster table, HP block, 60 packed sprite columns and the 64-slot
+#: ZBUF) and the ROM ~980 words (the sprite phase); the M7a re-sweep
+#: (shapes 9..11 wide x rom_rows 40..80 x store_dy) puts the minimum at
+#: 10x60 (600 cells) + rom 60 + dy 0 = 374x376 (max 376): the 9-wide
+#: block's 67 rows floor the machine HEIGHT at ~397, the 11-wide chain
+#: floors the width at 391, and 10-wide crosses rom-width against height
+#: at the 60-row fold.
+STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
+
+#: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
+#: 600 slots as banked pipe tapes behind a gate chain. This tier exists for the
+#: *little-man census* — a bank is two men (worker + relay) and a gate one,
+#: against the man-memory's ~two per slot — so the visualizer renders ~20 men
+#: instead of ~700. The price is the ring tax (~5-8 ticks per slot per read),
+#: which is why the canonical deadman-3d machine stays on men-v3; build the
+#: taped variant with ``build_for("deadman-3d", store="taped")``.
+#:
+#: The plan is a tuple of bank sizes in address order (an int means uniform).
+#: deadman-3d's is traffic-shaped, swept on the native frame gate: the high
+#: addresses are the hot ones (POWB 257..272, HDG 273..288, then POSX and the
+#: per-frame scalars up to PTR — 599 since M7b), so they get SMALL rings —
+#: bank locals, and so the ring tax, stay tiny where the traffic is — and the
+#: 256 map words split across two 128s. Uniform 4x83 measured 23.7M ticks on
+#: rounds 0..1 of the 330-slot machine; the traffic-shaped plan 18.6M at the
+#: same men, width and height. M5's third bank added the once-a-frame nukage
+#: plane beside POWB/HDGB (96 words); M7a appends two more: the boot-mostly
+#: spawn + monster + sprite block (99 words, 353..451 — sprite columns are
+#: read only while a billboard paints) and the HOT 64-slot ZBUF as its own
+#: cheap ring (64 depth writes plus the occlusion reads every frame must not
+#: pay a big ring's lap), with the per-frame scalars keeping a small last
+#: ring (84 since M7b's three shot scalars — the last bank grows with them, so
+#: the plan keeps covering the whole tape; a plan that under-covers stalls).
+#:
+#: **The bank COUNT is a width knob; the bank SIZES are not.** Measured: the
+#: placed block is ``48*banks + 32`` columns wide at skip-batch 2 (``36*banks +
+#: 32`` at 1) whatever the sizes, so six banks cost 320 columns and put the
+#: taped machine's whole width floor 16 columns past the ROM's. Merging the two
+#: COLD pairs — the 128+128 map halves and the 96 nukage plane + 99 boot-mostly
+#: spawn/monster/sprite block — down to ``(256, 195, 64, 85)`` takes the block
+#: to 224 columns while leaving the two HOT rings (the 64-slot ZBUF and the
+#: per-frame scalars) exactly as small as they were. On the native 9-round gate
+#: that is FASTER, not slower: 90,157,275 against six banks' 93,649,383 at the
+#: same fold — one fewer gate on every access beats the merged cold rings' laps.
+#: Merging the hot pair too (three banks, ``(256, 195, 149)``) is the wrong
+#: direction and re-proves the original lesson: 121,458,179, +29%.
+TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
+    "deadman-3d": (256, 195, 64, 85)}
+
+#: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
+#: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
+#: and measured -13% on the frame gate; the machine still fits the 307 width.
+TAPED_SKIP_BATCH: dict[str, int] = {"deadman-3d": 2}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:
     """The problem's LM-75 resolution, or ``None`` when it has no display.
 
-    Read from the problem JSON rather than recorded here: "exactly one display at
-    the stated resolution" (``SPEC.md``) makes this the problem's number, and a
-    panel of the wrong size fails every case.
+    For a graded problem this is read from the problem JSON rather than recorded
+    here: "exactly one display at the stated resolution" (``SPEC.md``) makes this
+    the problem's number, and a panel of the wrong size fails every case. Demo
+    slugs are the exception — :data:`DISPLAY_OVERRIDE` wins for them, because a
+    demo is not bound to any problem's panel.
 
     ``tape_skip_batch`` is the tape worker implementation parameter.  ``1`` keeps
     the compact legacy loop; ``2`` uses the wider two-word counted ring.  The latter
@@ -3884,6 +4912,8 @@ def display_for(slug: str) -> tuple[int, int] | None:
     """
     from . import programs
 
+    if slug in DISPLAY_OVERRIDE:
+        return DISPLAY_OVERRIDE[slug]
     panel = (programs.problem_json(programs.problem_of(slug)).get("io") or {}).get("display")
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
@@ -3891,24 +4921,34 @@ def display_for(slug: str) -> tuple[int, int] | None:
 def build_for(
     slug: str,
     *,
-    store: str = "tape",
+    store: str | None = None,
     tape_skip_batch: int | None | str = "task",
     tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     compact: bool = False,
+    trim_dead: bool | None = None,
+    top_bus: bool | None = None,
+    seek: bool | None = None,
+    program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
 
     Everything not derivable from the ``.asm`` comes from the registry above, except
     the panel size, which comes from the problem JSON: a display-judged problem
     requires *exactly one* display at the stated resolution, so it is not a free
-    variable the generator may shrink. Pass ``compact=True`` for the opt-in
-    constraint-placement pass; default generation remains the checked-in layout.
+    variable the generator may shrink. ``store=None`` takes the slug's registered
+    tier from :data:`STORE_TIER` (default ``"tape"``); pass one explicitly to
+    override. Pass ``compact=True`` for the opt-in constraint-placement pass;
+    default generation remains the checked-in layout. ``program`` overrides the
+    checked-in ``.asm`` (deadman-3d's ``--wad`` mode builds a locally imported
+    level's machine without touching the program directory).
     """
     from . import programs
 
     if slug not in TAPE_SIZE:
         raise MachineError(f"no tape size recorded for {slug!r}; have {sorted(TAPE_SIZE)}")
+    if store is None:
+        store = STORE_TIER.get(slug, "tape")
     if tape_skip_batch == "task":
         tape_skip_batch, task_relay = TASK_TAPE_CONFIG.get(slug, (1, None))
         if tape_relay_size is None:
@@ -3917,10 +4957,24 @@ def build_for(
         raise MachineError(
             f"tape_skip_batch must be 1, 2, 4, None, or 'task', got {tape_skip_batch!r}"
         )
+    _seek = (slug in SEEK_DRUM) if seek is None else seek
+    # A slug that ships two machines off one program gets one layout per tier:
+    # the store block's shape is what sets the width/height trade, and the two
+    # tiers' blocks are nothing alike (see :data:`TIER_LAYOUT`). Empty for every
+    # other `(slug, tier)`, so their grids stay byte-identical. A seek drum
+    # re-shapes the ROM block, so it gets its own overlay keyed the same way.
+    tier = dict(TIER_LAYOUT.get((slug, store), {}))
+    if _seek:
+        tier.update(SEEK_TIER_LAYOUT.get((slug, store), {}))
+    unknown = set(tier) - {"rom_rows", "mem_offset", "store_offset"}
+    if unknown:
+        raise MachineError(f"TIER_LAYOUT[{(slug, store)!r}] has unknown keys {sorted(unknown)}")
+    mem_offset, store_offset = MEM_PLACE.get(slug, ((0, 0), (0, 0)))
     return build(
-        programs.load(slug),
+        program if program is not None else programs.load(slug),
         tape_n=TAPE_SIZE[slug],
-        rom_rows=ROM_ROWS.get(slug),
+        rom_rows=tier.get("rom_rows", ROM_ROWS.get(slug)),
+        mem_pad=(SEEK_MEM_PAD.get(slug, MEM_PAD.get(slug)) if _seek else MEM_PAD.get(slug)),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
@@ -3930,8 +4984,14 @@ def build_for(
         middle_order=LANE_ORDER.get(slug),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
-        mem_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[0],
-        store_offset=MEM_PLACE.get(slug, ((0, 0), (0, 0)))[1],
+        mem_offset=tier.get("mem_offset", mem_offset),
+        store_offset=tier.get("store_offset", store_offset),
+        in_north=slug in INPUT_NORTH,
+        store_teleport=slug in STORE_TELEPORT,
+        trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
+        seek=_seek,
+        top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
+        store_shape=STORE_SHAPE.get(slug),
     )
 
 
@@ -3947,6 +5007,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--man", "--out", dest="man", type=_Path, help="write the grid here")
     ap.add_argument("--html", type=_Path, help="write a labelled debug overlay here")
     ap.add_argument("--json", type=_Path, help="write the debug region sidecar here")
+    ap.add_argument(
+        "--store",
+        choices=STORE_TIERS,
+        help="override the slug's registered STORE tier (e.g. deadman-3d's taped variant)",
+    )
     ap.add_argument("--report", action="store_true", help="print the size report to stderr")
     ap.add_argument(
         "--compact",
@@ -3987,6 +5052,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_batch = int(args.tape_skip_batch)
     m = build_for(
         args.slug,
+        store=args.store,
         tape_skip_batch=skip_batch,
         tape_relay_size=relay_size,
         tape_jump_threshold=args.tape_jump_threshold,

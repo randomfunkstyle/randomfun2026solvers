@@ -1,191 +1,113 @@
 # randomfun2026solvers
 
-External batch solver entrypoint repo for `randomfun2026claude`.
+Team **randomfunkstyle**'s work for the **ICFP Contest 2026** — the one where you
+write programs in `littleman`, a 2D ASCII language of little men walking a grid
+of rooms and talking through pipes.
 
-The infrastructure worker clones this repo, checks out the requested ref, and
-runs one entrypoint in an isolated per-run worktree. Solver code does not talk to
-Temporal or the app database. It reads one input JSON file and writes one output
-JSON file.
+16 problems solved, every public and private case passing. The story of how, with
+a timeline and one decision tree per problem, is in **[`WRITEUP.md`](WRITEUP.md)**
+(illustrated version: [`writeup.html`](writeup.html)).
 
-## Command contract
+Two things live here:
 
-The worker invokes the configured entrypoint from the checked-out solver repo:
+1. **LM-1** — a general-purpose CPU *written in littleman*, plus a compiler that
+   turns a small assembly into a complete machine (CPU + ROM + store + display).
+   One machine, sixteen programs. See [`littleman/ARCH.md`](littleman/ARCH.md).
+2. **Hand-built dataflow grids** — bespoke machines for the problems where the
+   score mattered more than the coverage. A walked glyph costs 1 tick against the
+   CPU's 46 per instruction, and that is worth up to 3,457× (`tcp`).
 
-```sh
-./solve --solver <solver> --input <input.json> --output <output.json>
-```
+## Layout
 
-`./solve` is the default `SOLVER_ENTRYPOINT`. The `--solver` value is an opaque
-name chosen by the caller, so one entrypoint can dispatch to multiple solver
-implementations.
+| path | what |
+|---|---|
+| [`littleman/`](littleman/) | headless `.man` runner (`lm.mjs` over the bundled wasm engine), the reconstructed [`SPEC.md`](littleman/SPEC.md), every design doc, and `tools/` |
+| [`littleman/DEADMAN-3D.md`](littleman/DEADMAN-3D.md) | **DOOM on the CPU** — a first-person raycaster with real level geometry, monsters and a live HUD; how to run it, play it, and build it from your own WAD |
+| [`solvers/python/randomfun2026solvers/lm1/`](solvers/python/randomfun2026solvers/lm1/) | the LM-1 compiler: ISA, assembler, emulator, ROM, stores, router, layout |
+| [`solvers/python/randomfun2026solvers/`](solvers/python/randomfun2026solvers/) | per-problem generators (`llm_lm1.py`, `lllm_ring.py`, `brackets_*.py`, …), the fast verifier and the submit tool |
+| [`tasks/problems/`](tasks/problems/) | problem statements and public test data, as served by the contest API |
+| [`tasks/solutions/`](tasks/solutions/) | the generated/hand-built grids themselves |
+| [`solutions/`](solutions/) | every graded submission, archived under its server-verified score |
+| [`tests/`](tests/) | ~2,600 tests; the fast tier keeps generators honest, the slow tier runs real engines |
 
-## Input envelope
-
-The input file is JSON:
-
-```json
-{
-  "solver": "shell-smoke",
-  "run_id": 123,
-  "solver_commit": {
-    "ref": "main",
-    "hash": "abc123"
-  },
-  "task": {
-    "contest_key": "demo_sudoku",
-    "external_id": "sudoku-000",
-    "payload_b64": "...",
-    "content_type": "application/json"
-  }
-}
-```
-
-`task.payload_b64` is opaque task bytes encoded as base64. Decode it in the
-solver and interpret it according to `task.contest_key` and `task.content_type`.
-
-## Output envelope
-
-The solver must create the output file as JSON:
-
-```json
-{
-  "solution_b64": "...",
-  "meta": {
-    "optional": "metadata"
-  },
-  "logs": "optional short log text"
-}
-```
-
-`solution_b64` is required and must decode to the exact solution bytes the worker
-should submit. `meta` and `logs` are optional.
-
-The worker treats these as run failures:
-
-- nonzero exit code
-- timeout
-- missing output file
-- invalid output JSON
-- missing or invalid `solution_b64`
-
-## Interactive mode
-
-Some tasks need a live conversation with the contest server rather than a single
-batch answer. The worker then invokes:
+## Running a grid
 
 ```sh
-./solve --solver <solver> --mode interactive --input <input.json>
+littleman/lm.mjs run  prog.man --input "1 2 3"     # run to completion
+littleman/lm.mjs tick prog.man 40                  # step and dump the grid
+node littleman/tools/run-cases.mjs prog.man cases.json     # score against cases
+node littleman/tools/run-display-cases.mjs prog.man tasks/problems/snake.json
 ```
 
-`--mode` defaults to `batch`, so the batch contract above is unchanged. In
-interactive mode there is **no `--output` file**; the solver instead speaks a
-synchronous newline-delimited JSON protocol over stdio (stdout = protocol frames
-only, stderr = logs). The worker proxies every message to the contest server, so
-the solver never opens its own connection.
-
-Requests the solver writes (one JSON object per line), any order, repeatable:
-
-```json
-{"t": "step",  "action_b64": "<opaque action, base64>"}
-{"t": "guess", "answer_b64": "<opaque candidate answer, base64>"}
-{"t": "done",  "solution_b64": "<optional explicit solution>"}
-```
-
-Responses the worker writes back:
-
-```json
-{"t": "observation", "raw_b64": "<opaque>", "query_count": N, "penalty": M, "score": X, "done": false}
-{"t": "verdict",     "correct": true, "score": X, "raw": {}}
-{"t": "error",       "msg": "...", "fatal": false}
-```
-
-Loop: write one request, read exactly one response, repeat; finish by sending
-`done` (optionally with an explicit `solution_b64`) or by exiting. The worker
-decodes `action_b64`/`answer_b64` as opaque bytes and interprets nothing — decode
-and interpret them in the solver per `task.contest_key`. Full contract:
-`randomfun2026claude/contracts.md §3.2`.
-
-## Debugging a `.man`
-
-Generated grids carry no comments. `littleman/DEBUGGING.md` covers the overlay/trace/
-profile workflow and the `--man/--html/--json` convention every generator follows.
-
-## Submitting to the contest
-
-You need **one thing**: the team API key, in either
-`ICFP_TOKEN` or an untracked `.icfp-token` at the repo root (already gitignored —
-never commit it).
+The wasm engine runs out of memory on our largest machines, so verification goes
+through the native tick loop instead — same semantics, ~5–200× faster, and it is
+what every submission was checked with:
 
 ```sh
-export ICFP_TOKEN=icfp_...                       # or: echo 'icfp_...' > .icfp-token
-
-uv run python -m randomfun2026solvers.submit send brackets --note "what this is"
-uv run python -m randomfun2026solvers.submit send brackets --dry-run   # check only
-uv run python -m randomfun2026solvers.submit list                      # what is archived
-uv run python -m randomfun2026solvers.submit get <submission-id>       # re-read a verdict
+uv run python -m randomfun2026solvers.fast_littleman prog.man little-little-man --tick-cap 12000000
 ```
 
-`send` guards two ways before spending a submission — only 5 may be pending at
-once, so a wasted one costs real time:
+Generated grids carry no comments, so every generator emits its own overlay:
+`--man` / `--html` / `--json` in one invocation. The workflow is in
+[`littleman/DEBUGGING.md`](littleman/DEBUGGING.md).
 
-- **refuses a failing grid** (`--force` overrides), and
-- **refuses a grid already submitted**, matched by hash against the archive, and
-  prints the verdict it got last time (`--resend` overrides).
-
-It defaults to `tasks/solutions/<slug>_cpu.man`; use `--file` for anything else.
-
-Every graded submission is archived so nothing is ever lost:
-
-```
-solutions/<slug>/<server-verified-score>_<slug>.man
-solutions/<slug>/<server-verified-score>_<slug>.descr   # free-form note + provenance
-```
-
-The score is in the filename and zero-padded, so a listing sorts best-first and a
-worse run can never overwrite a better one. A submission that does not pass every
-case gets no score and is archived as `unscored_<slug>`.
-
-Two gotchas worth knowing:
-
-- **Cloudflare 403 `error code: 1010` is not an auth failure.** It is a
-  browser-signature ban on the default `Python-urllib` User-Agent; any ordinary UA
-  gets through, which is why the `curl` examples work.
-- **Local scores understate.** The server runs private cases too — `brackets` is
-  9 public but 26 graded, and its server `avgTicks` came out ~2x the local figure.
-
-## Solver Layout
-
-The root `./solve` script dispatches by solver name to language-specific
-entrypoints:
-
-- `solvers/bash/solve`: Bash solvers.
-- `solvers/python/randomfun2026solvers`: Python solvers.
-
-## Solvers
-
-- `shell-smoke`: Bash smoke solver that writes a minimal `{"smoke": true}` solution.
-- `sudoku`: Python solver for `demo_sudoku` task payloads that writes `{"grid": "<81 digits>"}`.
-- `probe`: Python interactive solver for `demo_probe`; probes each digit index then guesses the reconstructed number (run with `--mode interactive`).
-
-## Local smoke
-
-Create a tiny input file and run the default smoke solver:
+## Tests
 
 ```sh
-cat > /tmp/lq-input.json <<'JSON'
-{
-  "solver": "shell-smoke",
-  "run_id": 1,
-  "solver_commit": { "ref": "main", "hash": "local" },
-  "task": {
-    "contest_key": "demo_sudoku",
-    "external_id": "sudoku-000",
-    "payload_b64": "eyJzaXplIjo5LCJnaXZlbnMiOiIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIn0=",
-    "content_type": "application/json"
-  }
-}
-JSON
-
-./solve --solver shell-smoke --input /tmp/lq-input.json --output /tmp/lq-output.json
-cat /tmp/lq-output.json
+uv run pytest              # fast tier, kept under ~30s
+uv run pytest -m slow      # engine runs, sweeps, real grids
 ```
+
+Tests assert behaviour — outputs, pipe binding, engines agreeing with each other
+— never a recorded score, so an improvement is never a failure. The rules the
+repo was worked under are in [`AGENTS.md`](AGENTS.md).
+
+## Submitting
+
+Needs the team API key in `ICFP_TOKEN` or an untracked `.icfp-token`.
+
+```sh
+uv run python -m randomfun2026solvers.submit send brackets --file path/to.man --note "what this is"
+uv run python -m randomfun2026solvers.submit send brackets --dry-run    # local check only
+uv run python -m randomfun2026solvers.submit list                       # what is archived
+uv run python -m randomfun2026solvers.submit get <submission-id>
+```
+
+`send` verifies locally first and refuses a grid it has already sent (matched by
+hash against the archive). Every graded result is archived as
+`solutions/<slug>/<zero-padded-score>_<slug>.man` plus a `.descr` with the
+verdict, the fingerprint and a free-form note — so a listing sorts best-first and
+a worse run can never overwrite a better one.
+
+Two gotchas that cost us time: Cloudflare `403 error code: 1010` is a
+browser-signature ban on the default `Python-urllib` User-Agent, not an auth
+failure; and local scores understate — the judge runs private cases too, and its
+tick average ran a consistent **1.098×** ours.
+
+## Results
+
+| problem | score | box | | problem | score | box |
+|---|---|---|---|---|---|---|
+| `triangle` | 960 | 8×8 | | `plotter` | 22,774,730 | 44×56 |
+| `history-lesson` | 8,100 | 90×90 | | `snake` | 108,396,066 | 75×69 |
+| `reverse-a-list` | 34,535 | 14×14 | | `gradebook` | 194,662,790 | 70×70 |
+| `brackets` | 330,456 | 25×25 | | `matmul` | 232,294,501 | 72×81 |
+| `sort-numbers` | 413,066 | 14×14 | | `subset-sum` | 5,218,553,037 | 80×84 |
+| `tcp` | 535,084 | 17×17 | | `little-little-little-man` | 8,037,334,868 | 144×202 |
+| `sudoku-validity` | 2,815,180 | 20×20 | | `pathfinder` | 10,636,538,807 | 82×173 |
+| `memory` | 19,973,628 | 108×107 | | `little-little-man` | 163,823,101,714 | 180×179 |
+
+Score is `max(width, height)² × average ticks`, lower better.
+
+## Prehistory: the batch-solver harness
+
+The first commits (20–22 July, before the task was published) build a generic
+contest harness: a `./solve` entrypoint taking `--solver/--input/--output` with
+base64 JSON envelopes, plus an interactive stdio mode for problems that need a
+live conversation with a server. **None of it was used.** The 2026 contest
+submits whole programs over an HTTP API, so the harness had nothing to talk to.
+
+The entrypoint still works (`./solve --solver shell-smoke --input in.json --output
+out.json`) and dispatches by solver name into [`solvers/bash`](solvers/bash),
+[`solvers/python`](solvers/python) and [`solvers/swift`](solvers/swift) — but it
+is history, not infrastructure.

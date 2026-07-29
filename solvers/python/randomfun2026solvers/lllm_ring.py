@@ -11,27 +11,27 @@ two hands and a write-only backpack a little man carries.
 
 Two structures and one worker room:
 
-* ``STORE`` — ``[v_0, ..., v_{16H-1}, END = -1]``, one class per display cell of
-  the program's rows, padded to sixteen a row so a cell's store index **is** its
-  display address.  Classes are 0..21, so ``END`` is the ring's only negative
-  value and the scan that puts the store back finds its end with a bare ``X``.
-* ``FILE`` — six slots in cyclic order ``[K, HALT, BI, AI, DIR, POS]``.  Reading
-  slot *i* means rotating *i* words, so every block below touches the slots in
-  exactly that order and no other.  ``K`` is the round's remaining ticks.
+* ``STORE`` — a **fixed 32-word ring**.  Sixteen display rows of sixteen cells,
+  eight cells packed into each word at five bits apiece, so a cell's word index
+  is ``POS / 8`` and its bit offset ``POS % 8`` — and ``/`` yields both in one
+  glyph.  The ring is 32 words whatever ``H`` is, because a constant modulus is
+  what makes the per-tick rotation ``(j - CUR) mod 32`` a sign test and an add.
+* ``FILE`` — eight slots in cyclic order ``[K, HALT, BI, AI, DIR, POS, CUR,
+  WORD]``.  Reading slot *i* means rotating *i* words, so every block below
+  touches the slots in exactly that order and no other.
 
-A tick is one rotation of ``FILE`` and one lap of ``STORE``: rotate ``POS`` words
-under a ``b``-counted loop, read the class, push it straight back, and let a
-sentinel loop return the rest while the class rides in ``B`` — only ``A`` is
-clobbered by ``r``.
+**A tick does not lap the store.**  The word the man's cell lives in stays in the
+file (``WORD``) with ``CUR`` naming it, and the ring keeps a *hole* where it came
+from — so half the interpreted ticks touch the store not at all, and a miss
+rotates ``(j - CUR - 1) mod 32``, which is 0 or 1 whenever the man moved east or
+south.  Measured over the public cases that is **6.6 word-moves an interpreted
+tick against the 257-word lap** the unpacked store used to turn, and the store
+loop fell from 92% of all block visits to 2% of all ticks.
 
-**The store value is not the class, it is the class biased so that no third
-register is ever needed.**  Non-digits store ``j = class - 10`` in 0..11 and
-digits store ``d + 12`` in 12..21; the two ranges are disjoint and both positive,
-so one sign test on ``v - 12`` splits them.  The point is the decoder: the class
-must be pushed to ``STORE`` *before* the colour is looked up, because the colour
-table is indexed by ``j`` and the mask (`&` wants ``B = 15``) destroys the shift
-amount.  ``s`` leaves ``A`` alone, so ``sr`` then the colour lookup costs nothing
-— whereas computing both first would need a spill.
+**The store value is the class biased so that five bits hold it.**  Non-digits
+store ``j = class - 10`` in 0..11 and digits store ``d + 12`` in 12..21; the two
+ranges are disjoint and both positive, so one sign test on ``v - 12`` splits
+them, and 21 fits the five bits eight-to-a-word needs.
 
 Every non-halting lane converges on ``MOVE`` with one contract — ``A = POS``,
 ``B =`` the colour to restore, ``BP = DIR`` — which paints both pixels of the
@@ -49,6 +49,7 @@ from randomfun2026solvers.lllm_tables import (
     COLOUR_MAGIC,
     HASH_MUL,
     HASH_SHIFT,
+    WALL_BIAS,
 )
 
 __all__ = [
@@ -62,19 +63,36 @@ __all__ = [
 
 PANEL_W = PANEL_H = 16
 
-#: Longest store the machine must hold: sixteen cells a row, sixteen rows, END.
-STORE_WORDS = PANEL_W * PANEL_H + 1
-#: Register-file slots, plus one so a full rotation can never block.
-FILE_WORDS = 7
+#: Cells packed into one store word, and the bits each one gets.  Classes run
+#: 0..21, so five bits hold one; eight cells is a 40-bit payload and leaves room
+#: above it for the sentinel the setup accumulator carries.
+CELLS_PER_WORD = 8
+CELL_BITS = 5
+#: Bit the setup accumulator's sentinel reaches once a word is complete.
+WORD_BIT = CELLS_PER_WORD * CELL_BITS
+
+#: The store is a **fixed** 32-word ring — sixteen rows of sixteen cells, eight
+#: cells to a word — whatever `H` is.  A constant modulus is what makes the
+#: per-tick rotation `(j - CUR) mod 32` one sign test and one add: no ring
+#: length in a register, no sentinel word, and no full lap.
+STORE_WORDS = PANEL_W * PANEL_H // CELLS_PER_WORD
+#: Register-file slots resident, plus one so a full rotation can never block.
+#: Eight slots live here and `TICK_LIVE` transiently holds a ninth.
+FILE_WORDS = 10
 
 #: Store bias for digits — `v = d + 12` keeps digits clear of the twelve
-#: non-digit classes without going negative and breaking the END sentinel.
+#: non-digit classes and inside five bits.
 DIGIT_BIAS = 12
 
 
-def store_words(height: int) -> int:
-    """Words resident in ``STORE`` for a program of `height` rows."""
-    return PANEL_W * height + 1
+def store_words(height: int) -> int:  # noqa: ARG001 - the callers pass a height
+    """Words resident in ``STORE``: always :data:`STORE_WORDS`, whatever `H` is."""
+    return STORE_WORDS
+
+
+def _rot(n: int) -> list[str]:
+    """`n` file slots read and pushed straight back — a rotation, nothing else."""
+    return ["rq", "sq"] * n
 
 
 # ═════════════════════════════════════════════════════════════════ the program ═
@@ -86,121 +104,144 @@ def store_words(height: int) -> int:
 # (`pos`/`zero`), which is the counted-loop test.
 WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     # ══ INIT ══════════════════════════════════════════════════════════════════
-    # FILE during setup is `[ADDR, POS, ROWS, W, WPAD, WALL]` — the display
+    # FILE during setup is `[ADDR, POS, ROWS, W, WPAD, WALL, ACC]` — the display
     # address being painted, the man's address once found, rows left, the row's
-    # real width, its padding to sixteen, and whether this row is room wall.
-    # ADDR doubles as the store index, which is the whole point of padding rows
-    # to sixteen.
+    # real width, its padding to sixteen, whether this row is room wall, and the
+    # word accumulator, held *pre-shifted* so a cell only has to add.
     "INIT": ([
         "L0", "sq", "sq",                    # ADDR = 0, POS = 0
         "ri", "M", "ri", "sq",               # B = W, A = H;  ROWS = H
         "W", "sq",                           # W
         "M", "L16", "-", "sq",               # WPAD = 16 - W
-        "L1", "sq",                          # row 0 is the room's top wall
+        f"L{WALL_BIAS}", "sq",               # row 0 is the room's top wall
+        "L32", "sq",                         # ACC = 1 << CELL_BITS
         # one rotation to reach ROWS and tell the painter the frame size
         "rq", "sq", "rq", "sq",
         "rq", "M", "sq", "L4", "W", "{", "sp",  # n = 16*H pairs
-        "rq", "sq", "rq", "sq", "rq", "sq",
+        *_rot(4),                            # W WPAD WALL ACC
     ], "ROW"),
 
     # ══ ROW ═══════════════════════════════════════════════════════════════════
-    # Rows 0 and H-1 are entirely room wall, and in every other row `|` is the
-    # only wall glyph — so `+` and `-` inside are unambiguously arithmetic and
-    # the decoder needs no positional test at all.  The wall flag is set for
-    # row 0 by INIT and re-armed by ROW_END when one row is left, so the
-    # distinction costs one file slot and no per-cell work.
     "ROW": (["rq", "sq", "rq", "sq", "rq", "X"],
             {"zero": "SETUP_DONE", "pos": "ROW_GO", "neg": "SETUP_DONE"}),
     "ROW_GO": ([
         "M", "L1", "W", "-", "sq",           # ROWS - 1
         "rq", "b", "sq",                     # BP = W
-        "rq", "sq", "rq", "sq",              # WPAD, WALL
+        *_rot(3),                            # WPAD WALL ACC
     ], "REAL_LOOP"),
     "ROW_END": (["rq", "sq", "rq", "sq", "rq", "sq", "M", "L1", "W", "-", "X"],
                 {"zero": "RE_WALL", "pos": "RE_NORM", "neg": "RE_NORM"}),
-    "RE_WALL": (["rq", "sq", "rq", "sq", "rq", "L1", "sq"], "ROW"),
-    "RE_NORM": (["rq", "sq", "rq", "sq", "rq", "L0", "sq"], "ROW"),
+    "RE_WALL": ([*_rot(2), "rq", f"L{WALL_BIAS}", "sq", *_rot(1)], "ROW"),
+    "RE_NORM": ([*_rot(2), "rq", "L0", "sq", *_rot(1)], "ROW"),
 
     "REAL_LOOP": (["d"], {"pos": "CELL", "zero": "PAD_SET"}),
     "PAD_SET": ([
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",   # ADDR POS ROWS W
-        "rq", "b", "sq",                                  # BP = WPAD
-        "rq", "sq",                                       # WALL
+        *_rot(4),                            # ADDR POS ROWS W
+        "rq", "b", "sq",                     # BP = WPAD
+        *_rot(2),                            # WALL ACC
     ], "PAD_LOOP"),
     "PAD_LOOP": (["d"], {"pos": "PAD_CELL", "zero": "ROW_END"}),
 
-    # ── one program cell: address out, byte in, colour out, class stored ──────
+    # ── one program cell ─────────────────────────────────────────────────────
+    # The `WALL` slot holds 0 or :data:`WALL_BIAS` and is simply *added to the
+    # byte*, so a wall row's `+` and `-` decode to the wall class through their
+    # own two table entries.  That is what lets the cell body run straight into
+    # the digit test with no branch of its own, and what deleted `WALL_CELL`.
     "CELL": ([
-        "rq", "sp", "M", "L1", "+", "sq",    # paint at ADDR, store ADDR + 1
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",   # POS ROWS W WPAD
-        "rq", "sq", "X",                                  # WALL
-    ], {"pos": "WALL_CELL", "zero": "REAL_CELL", "neg": "REAL_CELL"}),
-    "WALL_CELL": (["ri", "L4", "sp", "L10", "sr", "m"], "REAL_LOOP"),
-    "REAL_CELL": (["ri"], "DEC"),
+        "rq", "M", "L1", "+", "sq",          # ADDR + 1 stored, ADDR rides B
+        *_rot(4),                            # POS ROWS W WPAD
+        "rq", "sq",                          # WALL, back in place, live in A
+        "W", "sp",                           # A = ADDR again, painted
+        "ri", "+",                           # A = byte + WALL
+        "M", "L48", "W", "-", "X",           # head is now ACC
+    ], {"neg": "DEC_ASC", "zero": "DEC_D0", "pos": "DEC_HI"}),
     "PAD_CELL": ([
-        "rq", "sp", "M", "L1", "+", "sq",
-        "L0", "sp",                          # padding is black
-        "L0", "sr",                          # ... and an unreachable class
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",
-        "m",
-    ], "PAD_LOOP"),
+        "rq", "M", "L1", "+", "sq",
+        *_rot(5),                            # POS ROWS W WPAD WALL
+        *_rot(1),                            # class 0 adds nothing to ACC
+        "W", "sp", "L0", "sp",               # the address, then black
+    ], "TAIL_P"),
 
     # ── the decoder ──────────────────────────────────────────────────────────
-    "DEC": (["M", "L48", "W", "-", "X"],
-            {"neg": "DEC_ASC", "zero": "DEC_D0", "pos": "DEC_HI"}),
     "DEC_ASC": (["+"], "DEC_TAB"),
-    "DEC_D0": ([f"L{DIGIT_BIAS}", "sr", "L8", "sp"], "CELL_TAIL"),
     "DEC_HI": (["M", "L9", "W", "-", "X"],
                {"neg": "DEC_DIG", "zero": "DEC_DIG", "pos": "DEC_ASC2"}),
-    "DEC_DIG": (["+", "M", f"L{DIGIT_BIAS}", "+", "sr", "L8", "sp"], "CELL_TAIL"),
     "DEC_ASC2": (["+", "M", "L48", "+"], "DEC_TAB"),
+    # A digit can never be the spawn, so it skips the `@` test outright.  The
+    # colour goes out with the accumulator still in `B`, which is what keeps the
+    # file op ahead of the painter op and the row free of a wrap.
+    "DEC_D0": ([f"L{DIGIT_BIAS}", "M", "rq", "+", "sq", "L8", "sp"], "TAIL_R"),
+    "DEC_DIG": (["+", "M", f"L{DIGIT_BIAS}", "+",
+                 "M", "rq", "+", "sq", "L8", "sp"], "TAIL_R"),
     "DEC_TAB": ([
-        "M", f"L{HASH_MUL}", "*",            # A = 29*c              B = c
-        "M", f"L{HASH_SHIFT}", "W", "}",     # A = (29*c) >> 6
+        "M", f"L{HASH_MUL}", "*",            # A = 915*c             B = c
+        "M", f"L{HASH_SHIFT}", "W", "}",     # A = (915*c) >> 8
         "M", "L15", "&",                     # A = i
         "M", "L4", "*", "W",                 # A = i                 B = 4i
         f"L{CLASS_MAGIC}", "}",              # A = CLASS_MAGIC >> 4i
         "M", "L15", "&",                     # A = j
-        "sr",                                # store it *before* the second read
+        "M", "rq", "+", "sq", "W",           # ACC += j, pushed;  A = j again
         "M", "L4", "*", "W",                 # A = j                 B = 4j
         f"L{COLOUR_MAGIC}", "}",
         "M", "L15", "&",                     # A = colour
         "sp",
-    ], "CELL_TAIL"),
-
-    # ── close the cell ───────────────────────────────────────────────────────
-    # The spawn is found by its *colour*: 9 is the man, and no glyph paints 9,
-    # so `colour == 9` is `@` and costs one sign test instead of a second decode
-    # branch.  The fix-up runs once per program and may take a whole extra
-    # rotation of the file to reach ADDR again.
-    "CELL_TAIL": (["M", "L9", "W", "-", "X"],
-                  {"zero": "AT_FIX", "pos": "CELL_ROT", "neg": "CELL_ROT"}),
-    "CELL_ROT": (["m"], "REAL_LOOP"),
+        # The spawn is found by its *colour*: 9 is the man, and no glyph paints 9.
+        "M", "L9", "W", "-", "X",
+    ], {"zero": "AT_FIX", "pos": "TAIL_R", "neg": "TAIL_R"}),
     "AT_FIX": ([
         "rq", "sq", "M", "L1", "W", "-", "M",  # B = ADDR, the cell just painted
         "rq", "W", "sq",                       # POS = ADDR
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",   # back to canonical
-        "m",
-    ], "REAL_LOOP"),
+        *_rot(5),                              # ROWS W WPAD WALL ACC
+    ], "TAIL_R"),
+
+    # ── the word boundary, found by a carry rather than a counter ────────────
+    # ACC rides the file pre-shifted, so a cell's whole contribution is one `+`.
+    # It starts at `1 << 5` and shifts five bits a cell, so its sentinel reaches
+    # bit 40 on exactly the eighth cell.  The test is `ACC - 2^40` rather than
+    # `ACC >> 40`, because the *difference* is the thing both lanes want: adding
+    # `2^40` back recovers the accumulator and the difference itself **is** the
+    # finished word.  So neither lane has to fetch `ACC` a second time.
+    "TAIL_R": ([*_rot(6), "L40", "M", "L1", "{", "M", "rq", "-", "X"],
+               {"neg": "KEEP_R", "zero": "EMIT_R", "pos": "EMIT_R"}),
+    "KEEP_R": (["+", "M", "L5", "W", "{", "sq", "m", "d"],
+               {"pos": "CELL", "zero": "PAD_SET"}),
+    "EMIT_R": (["sr", "L32", "sq", "m", "d"],
+               {"pos": "CELL", "zero": "PAD_SET"}),
+    "TAIL_P": ([*_rot(6), "L40", "M", "L1", "{", "M", "rq", "-", "X"],
+               {"neg": "KEEP_P", "zero": "EMIT_P", "pos": "EMIT_P"}),
+    "KEEP_P": (["+", "M", "L5", "W", "{", "sq", "m", "d"],
+               {"pos": "PAD_CELL", "zero": "ROW_END"}),
+    "EMIT_P": (["sr", "L32", "sq", "m", "d"],
+               {"pos": "PAD_CELL", "zero": "ROW_END"}),
 
     # ══ the round loop ════════════════════════════════════════════════════════
-    # FILE at run time is `[K, HALT, BI, AI, DIR, POS]`.
+    # FILE at run time is `[K, HALT, BI, AI, DIR, POS, CUR]`; `CUR` is the store
+    # ring's head word index, which is what turns a random read into a short
+    # relative rotation.
     "SETUP_DONE": ([
-        "L1", "N", "sr",                     # END
-        "rq", "rq", "rq", "rq", "rq", "M",   # drop W WPAD WALL ADDR, POS -> B
+        "rq", "rq", "rq", "rq",              # drop W WPAD WALL ACC
+        "rq", "M", "L256", "-",              # A = 256 - ADDR
+        "M", "L8", "W", "/",                 # A = the pad words still owed
+        "b",
+        "rq", "M",                           # POS -> B
         "L0", "sq", "sq", "sq", "sq",        # K HALT BI AI
         "L1", "sq",                          # DIR = east
         "W", "sq",                           # POS
-    ], "ROUND"),
+        "L0", "sq",                          # CUR = 0
+    ], "PADW"),
+    "PADW": (["d"], {"pos": "PADW_STEP", "zero": "PADW_END"}),
+    "PADW_STEP": (["L0", "sr", "m", "d"], {"pos": "PADW_STEP", "zero": "PADW_END"}),
+    #: The cached word leaves the ring for good: from here the store holds 31
+    #: words with its head one past ``CUR``, and the hole is where the cache is.
+    "PADW_END": (["rr", "sq"], "ROUND"),
+
     "ROUND": ([
         "ri", "M", "L2", "*", "sp",          # n = 2k pairs this frame
         "rq", "W", "sq",                     # K = k
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",
+        *_rot(7),
     ], "TICK"),
     "TICK": (["rq", "X"], {"zero": "ROUND_END", "pos": "TICK_GO", "neg": "ROUND_END"}),
-    "ROUND_END": ([
-        "sq", "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",
-    ], "ROUND"),
+    "ROUND_END": (["sq", *_rot(7)], "ROUND"),
     "TICK_GO": ([
         "M", "L1", "W", "-", "sq",           # K - 1
         "rq", "sq", "X",                     # HALT
@@ -209,21 +250,47 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     # a halted man: two idempotent writes of his own cell, so the frame is the
     # promised 2k pairs long and nothing moves.
     "TICK_PAD": ([
-        "rq", "sq", "rq", "sq", "rq", "sq",  # BI AI DIR
+        *_rot(3),                            # BI AI DIR
         "rq", "M", "sp", "L9", "sp", "W", "sp", "W", "sp", "W", "sq",
+        *_rot(2),                            # CUR WORD
     ], "TICK"),
 
+    # ══ the store read ════════════════════════════════════════════════════════
+    # `POS / 8` is one glyph and yields both halves: the quotient is the word
+    # the man's cell lives in, and `CUR` names the word the file is *holding*.
+    # A read has to take its word out of the ring, and putting it straight back
+    # would advance the head — which makes the commonest step of all, "the same
+    # word again", cost a whole lap.  So the word stays in the file and the ring
+    # keeps a hole where it came from: half the interpreted ticks then touch the
+    # store not at all, and a miss rotates `(j - CUR - 1) mod 32`, which is 0 or
+    # 1 whenever the man moved east or south.  Measured over the public cases
+    # that is 6.6 word-moves an interpreted tick against a 257-word lap.
     "TICK_LIVE": ([
-        "rq", "sq", "rq", "sq", "rq", "sq",  # BI AI DIR
+        *_rot(3),                            # BI AI DIR
         "rq", "sq",                          # POS, back in place, live in A
-        "b",                                 # BP = POS
-    ], "SEEK"),
-    "SEEK": (["d"], {"pos": "SEEK_STEP", "zero": "READ"}),
-    "SEEK_STEP": (["rr", "sr", "m"], "SEEK"),
-    "READ": (["rr", "sr", "M"], "REST"),     # class rides in B over the scan
-    "REST": (["rr", "X"], {"neg": "REST_END", "zero": "REST_PUSH", "pos": "REST_PUSH"}),
-    "REST_PUSH": (["sr"], "REST"),
-    "REST_END": (["sr", "W"], "DISPATCH"),
+        "M", "L8", "W", "/",                 # A = word index j,  B = POS % 8
+        "M", "sq",                           # CUR' = j
+        "rq", "-", "X",                      # A = CUR - j
+    ], {"zero": "HIT", "pos": "MISS", "neg": "MISS"}),
+    "HIT": ([*_rot(1)], "EXTRACT"),          # the held word is already the one
+    "MISS": (["N", "M", "L1", "W", "-", "X"],
+             {"neg": "MISS_N", "zero": "MISS_P", "pos": "MISS_P"}),
+    "MISS_P": (["b", "rq", "sr", "d"], {"pos": "ROT_STEP", "zero": "READW"}),
+    "MISS_N": (["M", "L32", "+", "b", "rq", "sr", "d"],
+               {"pos": "ROT_STEP", "zero": "READW"}),
+    "ROT_STEP": (["rr", "sr", "m", "d"], {"pos": "ROT_STEP", "zero": "READW"}),
+    "READW": (["rr", "sq"], "EXTRACT"),      # the new word leaves its hole
+    "EXTRACT": ([
+        *_rot(5),                            # K HALT BI AI DIR
+        "rq", "sq",                          # POS, live in A
+        "M", "L8", "W", "%",                 # A = r
+        "M", "L5", "*",                      # A = 5r
+        "M", "L35", "-",                     # A = 5*(7 - r), the byte's shift
+        "M",                                 # ... which rides B over the file
+        *_rot(1),                            # CUR
+        "rq", "sq", "}",                     # A = WORD >> shift
+        "M", "L31", "W", "&",                # A = the stored class
+    ], "DISPATCH"),
 
     # ══ dispatch ══════════════════════════════════════════════════════════════
     "DISPATCH": (["M", f"L{DIGIT_BIAS}", "W", "-", "X"],
@@ -240,45 +307,45 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     "J_DIR": (["M", "L4", "+", "M"], "L_DIR"),   # B = j - 6 = the heading index
 
     # ══ lanes ═════════════════════════════════════════════════════════════════
-    # Each rotates FILE once and leaves MOVE's contract: A = POS, B = colour,
-    # BP = DIR.
+    # Each rotates FILE up to POS and leaves MOVE's contract: A = POS,
+    # B = the colour to restore, BP = DIR.  `CUR` sits untouched at the tail.
     "L_DIGIT": ([
         "M",                                  # B = d
-        "rq", "sq", "rq", "sq", "rq", "sq",   # K HALT BI
+        *_rot(3),                             # K HALT BI
         "rq", "W", "sq",                      # AI = d
         "rq", "b", "sq",
         "rq", "M", "L8", "W",
     ], "MOVE"),
     "L_SPACE": ([
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",
+        *_rot(4),
         "rq", "b", "sq",
         "rq", "M", "L0", "W",
     ], "MOVE"),
     "L_M": ([
-        "rq", "sq", "rq", "sq",
+        *_rot(2),
         "rq", "rq", "sq", "sq",               # BI = AI, AI unchanged
         "rq", "b", "sq",
         "rq", "M", "L12", "W",
     ], "MOVE"),
     "L_ADD": ([
-        "rq", "sq", "rq", "sq",
+        *_rot(2),
         "rq", "M", "sq", "rq", "+", "sq",     # AI += BI
         "rq", "b", "sq",
         "rq", "M", "L10", "W",
     ], "MOVE"),
     "L_SUB": ([
-        "rq", "sq", "rq", "sq",
+        *_rot(2),
         "rq", "M", "sq", "rq", "-", "sq",     # AI -= BI
         "rq", "b", "sq",
         "rq", "M", "L10", "W",
     ], "MOVE"),
     "L_DIR": ([
-        "rq", "sq", "rq", "sq", "rq", "sq", "rq", "sq",
+        *_rot(4),
         "rq", "W", "b", "sq",                 # DIR = j - 6
         "rq", "M", "L3", "W",
     ], "MOVE"),
     "L_X": ([
-        "rq", "sq", "rq", "sq", "rq", "sq",
+        *_rot(3),
         "rq", "sq", "X",                      # sign of AI
     ], {"zero": "LX_0", "pos": "LX_P", "neg": "LX_N"}),
     "LX_0": (["rq", "b", "sq", "rq", "M", "L3", "W"], "MOVE"),
@@ -290,14 +357,13 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
         "rq", "M", "L1", "N", "+", "M", "L3", "W", "&", "b", "sq",
         "rq", "M", "L3", "W",
     ], "MOVE"),
-    # `H` and a wall are the same lane: the man never leaves either cell, so the
-    # colour underneath is never repainted and only the setup frame ever showed
-    # it.  Two idempotent writes keep the frame 2k pairs long.
+    # `H` and a wall are the same lane: the man never leaves either cell.
     "L_HALT": ([
-        "rq", "sq",                           # K
+        *_rot(1),                             # K
         "rq", "L1", "sq",                     # HALT = 1
-        "rq", "sq", "rq", "sq", "rq", "sq",   # BI AI DIR
+        *_rot(3),                             # BI AI DIR
         "rq", "M", "sp", "L9", "sp", "W", "sp", "W", "sp", "W", "sq",
+        *_rot(2),                             # CUR WORD
     ], "TICK"),
 
     # ══ MOVE ══════════════════════════════════════════════════════════════════
@@ -308,7 +374,7 @@ WORKER: dict[str, tuple[list[str], dict[str, str] | str]] = {
     "MV_W": (["M", "L1", "N", "+"], "MV_END"),
     "MV_S": (["M", "L16", "+"], "MV_END"),
     "MV_N": (["M", "L16", "N", "+"], "MV_END"),
-    "MV_END": (["M", "sp", "L9", "sp", "W", "sq"], "TICK"),
+    "MV_END": (["M", "sp", "L9", "sp", "W", "sq", *_rot(2)], "TICK"),
 }
 
 

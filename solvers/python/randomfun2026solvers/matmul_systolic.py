@@ -1,694 +1,815 @@
 #!/usr/bin/env python3
-"""GPU-like systolic matmul for littleman.
+"""Systolic matmul for littleman — a P-stage MAC chain over the contraction index.
 
-Output-stationary systolic array of MAC processing-elements (PEs). `a` flows
-west->east across rows, `b` flows north->south down columns. PE(i,j) sees
-a=A[i][t], b=B[t][j] at contraction step t, does acc += a*b, and forwards a east
-and b south. After M steps PE(i,j) holds C[i][j].
+WHY THIS SHAPE (read this before touching anything)
+===================================================
 
-Key facts this design leans on (verified on the engine, see ARCH/memory):
-  * The 3-register wall: a MAC needs 3 live values (a, b, acc) but only A/B are
-    usable (BP is write-only / branch-only). We split each PE into two rooms so
-    no room ever holds 3 live values, with ZERO per-PE spill cells:
-      - COMPUTE (stateless per cycle): r a, s a-east, M, r b, s b-south, *, s prod
-      - ACCHOLD (holds sum in B): counted_loop body `r+M`, then `W s` to drain
-  * Pipes are FIFO queues, not clocked broadcast wires, so correctness needs only
-    the right *order* of a's and b's per PE, never the right *tick* -- the classic
-    systolic skew is a non-issue. Forwarding preserves order.
+`matmul` scores ``max(w,h)^2 * avgTicks``.  The serial machine on ``main``
+(``matmul_packed.man``) is 85x92 / 29,097 avg ticks = 2.463e8, and the previous
+agent proved that splitting *that* architecture across two men costs 1.7x rather
+than saving: on a band-based build every extra man needs its own spill,
+accumulator and rings, and a ring is a band, and a band is charged on the side.
+See ``littleman/ARCH.md`` §8.2.
 
-Build status: forwarding COMPUTE cell under validation (this file's __main__
-`--probe-cell`). Array assembly to follow.
+A systolic array fixes that because every operand hop is between two *adjacent
+rooms*, not through a shared ring.  But the obvious systolic shape —
+output-stationary N x K PEs with `a` flowing east and `b` south — needs
+N*K <= 256 processing elements.  That will never fit.
+
+**The shape that does fit is a chain over the contraction index `t`.**
+
+    C[i][j] = sum_t A[i][t] * B[t][j]
+
+Put one PE per `t`.  M <= 16, so the chain is **16 stages, fixed**, independent
+of the case; stages with t >= M are fed a zero weight and contribute nothing, so
+the machine is completely *oblivious* — no data-dependent control flow anywhere
+in the array, every loop count is either a literal or a value read from a pipe.
+
+Per stage p:
+
+  * ``weight`` = A[i][p], the current row's p-th entry.  It changes once per
+    output row (N times over the whole run) and lives in the man's **B** hand.
+  * ``B[p][0..K-1]`` recirculates forever in a per-stage **ring** (a pipe loop
+    through a turnaround room).  The ring's first value is **K itself**, so the
+    stage re-reads its own trip-count every row and never needs a literal for it
+    — this is what lets the machine avoid padding K to 16 and paying 16/K on
+    small cases.
+  * the partial sum flows p -> p+1 through a chain of adder rooms.  That chain
+    is what enforces *order*: an `R`-based fan-in would let a fast stage put two
+    products into one sum.
+
+Throughput is one output value per adder-loop revolution (~12-16 ticks), so a
+16x16x16 case is ~256 beats ~= 4k ticks against the serial machine's 123,254.
+
+THE FOUR ROOMS
+==============
+
+Every stage p (F := P-1-p is how many values it must pass along) is four rooms:
+
+``LOADF_p`` — feeder.  Owns the one incoming *chain* pipe, so **every `r` in it
+is unambiguous**.  Two phases::
+
+    INIT   r          A = K            (first value of this stage's b-block)
+           s          -> ring          (K goes into the ring first)
+           M          B = K
+           b          BP = K
+           LA: K x { r ; s }           -> ring: B[p][0..K-1]
+           1 ; + ; M                   A = B = K+1        (B survived LA)
+           <F-part>                    A = F*(K+1)        (see `_times_const`)
+           b
+           LB: x { r ; s }             -> chain: forward the other stages' blocks
+
+    MAIN   r          A = A[i][p]
+           s          -> MUL_p         (this row's weight)
+           <F> ; b
+           LC: F x { r ; s }           -> chain: rest of row i
+           loop
+
+``MUL_p`` — the multiplier.  Holds the weight in B for the whole row::
+
+           r          A = weight        (from LOADF_p)
+           M          B = weight
+           r          A = K             (ring)
+           s          -> ring
+           b          BP = K
+           L4: K x { r ; s ; * ; s }    ring-read, ring-writeback, A=b*w, product
+           loop
+
+``TURN_p`` — 5x2 interior, ``>@Rsv`` / ``^...<``.  `R` takes from *either*
+incoming pipe (LOADF's initial fill, or MUL's writeback) and `s` has one
+outgoing pipe, so it cannot mis-bind.  The TURN->MUL leg must hold K+1 <= 17
+values while the array is still loading, so it is drawn long on purpose.
+
+``ADD_p`` — ``r ; M ; r ; + ; s`` (p >= 1) or ``r ; s`` (p = 0, nothing to add
+to yet).  Both incoming mouths are on the north wall (psum from the band above,
+product from MUL directly overhead) and split purely by column; psum leaves
+south.  ADD_{P-1} feeds `O`.
+
+THE INPUT STREAM THE ARRAY WANTS
+================================
+
+    [block_0][block_1]...[block_{P-1}]   block_p = K, B[p][0], ..., B[p][K-1]
+    [row_0][row_1]...[row_{N-1}]         row_i   = A[i][0..P-1], zero-padded
+
+Note the blocks come **first** and A comes second, while the *problem* delivers
+N M K, then A, then B.  So a loader has to hold A back while B loads.  That is
+the one genuinely expensive thing in the front end and it is why this file
+carries `stream_for` (the reference ordering) and why the loader is specified —
+but not yet built — at the bottom of this docstring.
+
+PIPE BINDING IS SOLVED, NOT GUESSED
+===================================
+
+`s`/`r` bind to the *nearest* pipe mouth by Manhattan distance with ties broken
+in reading order, and in a machine of small rooms that is the dominant hazard: a
+mis-bound op is invisible in the grid and invisible in the answer's shape and
+wrong only in its value.  So this module never hand-places a mouth.  Every room
+declares which target each `s`/`r` cell must reach and `solve_ports` searches
+wall positions until **every** op binds its target with a strict margin.  If no
+placement exists the build raises rather than emitting a plausible grid.
+
+`check_mouths` additionally counts arrowheads-against-a-wall the way the
+*runtime* does (`lm.mjs analyze` under-reports these) and refuses a surprise.
+
+WHAT IS BUILT, AND WHAT IT MEASURES
+==================================
+
+The **array is finished and verified**.  `probe(P, A, B)` builds a complete
+P-stage machine with a source room standing in for the front end, and the
+reference engine agrees at every scale tried:
+
+    probe(1,  [[3],[4]], [[5,6]])          -> 15 18 20 24        (ring + multiply)
+    probe(2,  [[1,2],[3,4]], [[5,6],[7,8]])-> 19 22 43 50        (adder chain)
+    probe(16, <the 16x16x16 public case>)  -> all 256 values      (every stage live)
+
+Ticks, measured:
+
+    16x16x16   first output 4,483   settles 8,563   beat 16 ticks/value
+    serial machine on the same case                123,254
+
+**14.4x on the hardest case.**  The beat is 16 ticks and the fill is 4,483, so
+the fill dominates every small case (a 2x16x2 case settles at 2,873, of which
+2,683 is fill).  Expect an average near 3,500 across the seven local cases
+against the serial machine's 29,097 — call it **8x on ticks**.
+
+WHAT IS NOT BUILT, AND WHAT IT COSTS
+====================================
+
+Two things stand between this and a scoring `.man`.
+
+**1. The front end.**  `probe` hard-codes the case in a source room.  A real
+machine has to turn ``N M K A B`` into the stream the chain wants.  Design
+below — it is now only five small rooms, because of the countdown protocol.
+
+**2. Packing.**  The stages are stacked in one column, so the grid is 72 x 1055
+and the score would be absurd.  Room area is only 538 cells per band (LOADF
+26x13, MUL 12x11, TURN 7x4, ADD 10x4) but the band as laid out is 53 x 59 =
+3,127 — 17% dense.  Tightening it (TURN into the gap beside MUL rather than
+east of LOADF; per-stage LOADF widths instead of one pitch; the trailing slack
+rows) gets a band to roughly 34 x 48, so 16 of them pack into about side 162.
+
+Which gives the honest arithmetic, and it is worth stating plainly:
+
+    area 26,000 x avg 3,500 ticks = 9.1e7 local -> 1.37e8 judged
+    against the 197,437,831 bar                    ~1.4x better
+
+So this architecture wins, but by less than the tick number suggests: sixteen
+stages of four rooms is a lot of area, and `score = area x ticks` charges both.
+The remaining headroom is in the **fill**, not the beat — 4,483 ticks of fill on
+the big case and 2,683 on a small one, against a beat that only costs 16.  The
+fill is the b-block cascade (LOADF_0 relays 15(K+1) values at ~7 ticks each) plus
+the a-phase forwarding plus the psum chain filling.  Halving it would be worth
+more than any plausible packing win.
+
+THE FRONT END, SPECIFIED
+========================
+
+The obvious design needs a ~256-cell delay line, because A arrives before B but
+B is what has to be resident.  **The countdown protocol removes it**, and lets
+the front end run in input order with no buffering at all.
+
+Prepend each padded A row with the number of rows still to come:
+
+    [N] [row_0 padded to 16] [N-1] [row_1] ... [1] [row_{N-1}] [0]
+    [block_0] ... [block_15]        block_p = K, B[p][0..K-1]
+
+LOADF's MAIN then reads the countdown, forwards it, and branches on `X`:
+nonzero means take a weight and forward F values (BP is free, so `<F>` works for
+F >= 10); zero means fall through to the b-block phase.  No delay line, no
+sentinel arithmetic, no nested counter — the outer loop is data-driven and the
+inner one is the only user of BP.  A does not have to be resident, because each
+stage's N weights simply queue in its LOADF->MUL pipe (make it >= 16 cells).
+
+Five rooms, each with at most two pipes per direction, plus three one-room ring
+turnarounds:
+
+  GATE   r->N ; s(a: N) ; M ; r->M ; s(a: M) ; * ; b ; W ; N M 9 + M 7 + ;
+         s(a: 16-M) ; s(b: M) ; r->K ; s(b: K) ; [N*M x {r ; s(a)}] ;
+         [forever {r ; s(b)}]
+         `N M 9 + M 7 +` is 16-M built from A=M with B as scratch, which is the
+         one arithmetic trick the front end needs: there is no way to load 16
+         into A without touching B, and B is live everywhere it matters.
+  APAD   ring [N, M, 16-M].  forever { r(ring)->c ; s(out: c) ;
+         M ; 1 ; N ; + ; s(ring: c-1) ; r(ring)->M ; s(ring) ; b ;
+         [M x {r(in) ; s(out)}] ; r(ring)->16-M ; s(ring) ; b ;
+         [x {0 ; s(out)}] }
+  BZERO  ring [M, K].  forwards M*K real values, then emits (16-M)*K zeros.
+  BPAD   ring [K].  forever { r(ring) ; s(ring) ; s(out: K) ; b ;
+         [K x {r(in) ; s(out)}] } — one [K, B row] block per lap.
+  MERGE  forever { r(a)->c ; s(out) ; X ; nonzero -> 16 x {r(a) ; s(out)} } ;
+         then forever { r(b) ; s(out) }.  MERGE is the only room that has to
+         know where A ends, and the countdown tells it.
+
+APAD keeps looping and blocking after it emits the 0; MERGE has already switched
+to the b path and never reads it again, so the stall is harmless.
+
+`solve_ports` will place all of these — every one has at most two incoming and
+two outgoing pipes, which is the regime it solves comfortably.
 """
 from __future__ import annotations
 
+import itertools
 import sys
+from dataclasses import dataclass, field
 
 from randomfun2026solvers.circuit import GLYPH, Circuit, Collision, E, W, N, S
 
+# ── little helpers ───────────────────────────────────────────────────────────
 
-# ── COMPUTE cell ──────────────────────────────────────────────────────────────
-# A systolic PE's stateless multiply front-end. Ports (local interior coords) are
-# returned so the assembler can attach pipes at the right walls. `fwd_a`/`fwd_b`
-# drop the east / south forward when the PE sits on the last column / row.
-#
-# Register sequence per lap (B is free scratch here; acc lives in ACCHOLD):
-#   r(a,W) -> A=a ; s(a,E) forward ; M -> B=a ; r(b,N) -> A=b ; s(b,S) forward ;
-#   * -> A=a*b ; s(prod) -> product to ACCHOLD.  Loop.
-
-CELL_IW, CELL_IH = 9, 9
+WALLS = ("N", "S", "W", "E")
 
 
-def compute_cell(fwd_a: bool = True, fwd_b: bool = True) -> tuple[Circuit, dict]:
-    c = Circuit(CELL_IW, CELL_IH)
-    # Ports = interior edge cells; the pipe attaches on the wall just outside.
-    p = {
-        "a_in": (0, 4),             # west wall, row 4
-        "b_in": (2, 0),             # north wall, col 2
-        "a_out": (CELL_IW - 1, 4),  # east wall, row 4
-        "b_out": (2, CELL_IH - 1),  # south wall, col 2
-        "prod": (6, CELL_IH - 1),   # south wall, col 6
-    }
-    S_ = c.set
-    # ── the man loop, explicit glyphs (blanks between are nops, walkable) ──
-    # Rejoin pattern `>@`: the return column comes up into `>` (turn E), `@` is a
-    # walkable nop, then the first real op -- so spawn and re-entry both hit r(a)
-    # heading E.
-    # a-row: `>` `@` r(a) M(B=a) ... s(a) east forward, `^`.
-    S_(0, 4, ">"); S_(1, 4, "@"); S_(2, 4, "r"); S_(3, 4, "M"); S_(8, 4, "^")
-    S_(7, 4, "s" if fwd_a else " ")     # forward a east only if there is an east neighbour
-    # up the east col, turn W on row1, transit W to r(b), continue W, turn S.
-    S_(8, 1, "<"); S_(2, 1, "r"); S_(1, 1, "v")
-    # down col1, turn E on the bottom row, s(b) south, *, s(prod).
-    S_(1, 7, ">"); S_(4, 7, "*"); S_(6, 7, "s")
-    S_(2, 7, "s" if fwd_b else " ")     # forward b south only if there is a south neighbour
-    # return: continue E, drop to row8, run W, up the west col, into the rejoin.
-    S_(8, 7, "v"); S_(8, 8, "<"); S_(0, 8, "^")
-    if not fwd_a:
-        del p["a_out"]
-    if not fwd_b:
-        del p["b_out"]
-    return c, p
+def digits(n: int) -> str:
+    """Glyphs that leave A = n **without touching B**.  n must be 0..9."""
+    if not 0 <= n <= 9:
+        raise ValueError(f"{n} is not a single digit; B is live here")
+    return str(n)
 
 
-def _box(c: Circuit) -> list[str]:
-    """Wrap a Circuit interior in a +--+ / |..| / +--+ room border."""
-    body = c.rows()
-    w = c.w
-    top = "+" + "-" * w + "+"
-    return [top] + ["|" + r + "|" for r in body] + [top]
+def const_free(n: int) -> str:
+    """Glyphs that leave A = n when **B is scratch** (0 <= n <= 18).
+
+    Backticks are avoided everywhere in this file: they pair per column as well
+    as per row, so a literal in one room can pair vertically with a literal in
+    another and swallow a wall glyph, which is a load error nobody sees coming.
+    """
+    if 0 <= n <= 9:
+        return str(n)
+    if n <= 18:
+        return f"9M{n - 9}+"           # A=9, B=9, A=n-9, A=(n-9)+9
+    raise ValueError(f"{n} needs a literal")
 
 
-def lit(n: int) -> str:
-    return str(n) if 0 <= n < 10 else f"`{n}`"
+def _times_const(f: int) -> str:
+    """Glyphs that turn (A = B = x) into A = f*x, leaving B alone-ish.
+
+    ``<d> *`` gives d*x for d <= 9; the remainder is added on with `+`, which
+    is legal because `*` leaves B = x.  f = 0 is the empty program and the
+    caller must skip the loop entirely.
+    """
+    if f <= 0:
+        raise ValueError("f=0 has no loop")
+    if f == 1:
+        return ""                      # A is already x
+    d = min(f, 9)
+    return digits(d) + "*" + "+" * (f - d)
 
 
-def acchold_cell(m: int) -> tuple[Circuit, dict]:
-    """Sum m incoming products (nearest-in pipe) into B, then drain result to the
-    nearest-out pipe. Ports: in=prod (local (0,0) west-ish), out=result."""
-    c = Circuit(11, 5)
-    # setup BP=m, counted loop body r+M, then W s H
-    x0, _ = c.run(0, 0, "@" + lit(m) + "b")   # x0 = column just after `@ <m> b`
-    ex, _ = c.counted_loop(x0, 0, "r+M")
-    c.run(ex, 0, "WsH")
-    p = {"prod_in": (0, 0), "res_out": (8, 0)}
-    return c, p
+# ── port placement ───────────────────────────────────────────────────────────
 
 
-def _room(rows: list[str]) -> tuple[int, int]:
-    return len(rows[0]), len(rows)
+@dataclass
+class PortSpec:
+    """One pipe mouth: which walls it may sit on, and the ops that must reach it."""
+    name: str
+    kind: str                       # "in" | "out"
+    walls: tuple[str, ...] = WALLS
 
 
-def acchold_loop(m: int) -> Circuit:
-    """Loops forever: reset acc, sum m products (nearest-in), emit (nearest-out),
-    repeat. One emit per output row. B holds the accumulator; it is reset to 0
-    each lap so consecutive rows don't bleed."""
-    c = Circuit(22, 11)
-    # rejoin `>@`, then per-lap setup: BP=m (b), acc=0 (0 M)
-    c.set(0, 3, ">"); c.set(1, 3, "@")
-    x, _ = c.run(2, 3, lit(m) + "b0M")        # A=m,BP=m ; A=0 ; B=0
-    ex, _ = c.counted_loop(x, 3, "r+M")        # sum m products into B (occupies rows 3..7)
-    x2, _ = c.run(ex, 3, "Ws")                 # A<->B, emit acc
-    # return along a clear low row (below the counted loop) back to the rejoin
-    c.route((x2, 3), E, [(x2, 9), (0, 9), (0, 3)], (0, 3), E)
-    return c
+def _mouth_xy(wall: str, off: int, w: int, h: int) -> tuple[int, int]:
+    """Interior-relative coordinates of the pipe cell just outside `wall`."""
+    return {"N": (off, -1), "S": (off, h), "W": (-1, off), "E": (w, off)}[wall]
 
 
-def source_container(cid: str, vals: list[int], wall: str) -> Container:
-    """A room that emits `vals` in order into one out-pipe on `wall`, then halts."""
-    from randomfun2026solvers.layout import Container
-
-    body = "@" + "".join(lit(v) + "s" for v in vals) + "H"
-    rows = _box(Circuit_of(body))
-    w, h = _room(rows)
-    return Container(id=cid, width=w, height=h, content=rows,
-                     outputs=[_wall_cell(w, h, wall)])
+def _cands(wall: str, w: int, h: int) -> range:
+    return range(w) if wall in "NS" else range(h)
 
 
-def drain_container(cid: str, wall: str) -> Container:
-    from randomfun2026solvers.layout import Container
+def solve_ports(
+    w: int,
+    h: int,
+    specs: list[PortSpec],
+    ops: list[tuple[tuple[int, int], str, str]],
+    *,
+    margin: int = 1,
+    sep: int = 3,
+) -> dict[str, tuple[str, int]]:
+    """Choose a wall+offset for every port so each op binds its declared target.
 
-    rows = ["+----+", "|>@rv|", "|^..<|", "+----+"]   # loops forever, discards
-    w, h = _room(rows)
-    return Container(id=cid, width=w, height=h, content=rows,
-                     inputs=[_wall_cell(w, h, wall)])
+    `ops` is [( (x,y), 'r'|'s', target_port_name )].  Returns {port: (wall,off)}.
+    Searches incoming and outgoing groups independently (they never compete).
+    """
+    out: dict[str, tuple[str, int]] = {}
+    for kind in ("in", "out"):
+        group = [s for s in specs if s.kind == kind]
+        want = [o for o in ops if (o[1] in "rRUq") == (kind == "in")]
+        if not group:
+            if want:
+                raise Collision(f"{len(want)} {kind} ops but no {kind} port")
+            continue
+        choices = [
+            [(wall, off) for wall in s.walls for off in _cands(wall, w, h)
+             if (wall, off) not in out.values()]
+            for s in group
+        ]
+        best = None
+        for combo in itertools.product(*choices):
+            placed = list(zip([s.name for s in group], combo)) + list(out.items())
+            if any(a[1][0] == b_[1][0] and abs(a[1][1] - b_[1][1]) < sep
+                   for a, b_ in itertools.combinations(placed, 2)):
+                continue                    # two mouths crowding one wall
+            mouths = {
+                s.name: _mouth_xy(wall, off, w, h)
+                for s, (wall, off) in zip(group, combo)
+            }
+            if len(set(mouths.values())) != len(mouths):
+                continue
+            worst = 1 << 30
+            ok = True
+            for (x, y), _g, target in want:
+                d = {
+                    n: abs(x - mx) + abs(y - my) for n, (mx, my) in mouths.items()
+                }
+                mine = d.pop(target)
+                slack = min(d.values()) - mine if d else 1 << 30
+                if slack < margin:
+                    ok = False
+                    break
+                worst = min(worst, slack)
+            if ok and (best is None or worst > best[0]):
+                best = (worst, combo)
+                if worst >= 4:          # comfortable; stop searching
+                    break
+        if best is None:
+            raise Collision(
+                f"no {kind} port placement in {w}x{h} satisfies "
+                + ", ".join(f"{o[0]}->{o[2]}" for o in want)
+            )
+        for s, wo in zip(group, best[1]):
+            out[s.name] = wo
+    return out
 
 
-def Circuit_of(row: str) -> Circuit:
-    c = Circuit(len(row), 1)
-    for x, ch in enumerate(row):
-        c.set(x, 0, ch)
-    return c
+# ── a room: interior circuit + solved ports ──────────────────────────────────
 
 
-def _wall_cell(w: int, h: int, wall: str) -> tuple[int, int]:
-    return {"W": (0, h // 2), "E": (w - 1, h // 2),
-            "N": (w // 2, 0), "S": (w // 2, h - 1)}[wall]
+@dataclass
+class Room:
+    name: str
+    w: int
+    h: int
+    cells: dict[tuple[int, int], str]
+    ports: dict[str, tuple[str, int]]        # name -> (wall, offset)
+    x: int = 0                               # placed box origin (set by Layout)
+    y: int = 0
+
+    def rows(self) -> list[str]:
+        body = []
+        for y in range(self.h):
+            body.append("".join(self.cells.get((x, y), " ") for x in range(self.w)))
+        top = "+" + "-" * self.w + "+"
+        return [top] + ["|" + r + "|" for r in body] + [top]
+
+    @property
+    def bw(self) -> int:
+        return self.w + 2
+
+    @property
+    def bh(self) -> int:
+        return self.h + 2
+
+    def wall_cell(self, port: str) -> tuple[int, int]:
+        """Absolute grid coordinate of the *wall* cell the pipe attaches to."""
+        wall, off = self.ports[port]
+        if wall == "N":
+            return (self.x + 1 + off, self.y)
+        if wall == "S":
+            return (self.x + 1 + off, self.y + self.bh - 1)
+        if wall == "W":
+            return (self.x, self.y + 1 + off)
+        return (self.x + self.bw - 1, self.y + 1 + off)
+
+    def mouth(self, port: str) -> tuple[int, int]:
+        """Absolute coordinate of the first pipe cell outside the wall."""
+        wall, _off = self.ports[port]
+        wx, wy = self.wall_cell(port)
+        d = {"N": (0, -1), "S": (0, 1), "W": (-1, 0), "E": (1, 0)}[wall]
+        return (wx + d[0], wy + d[1])
+
+    def outward(self, port: str) -> tuple[int, int]:
+        return {"N": (0, -1), "S": (0, 1), "W": (-1, 0), "E": (1, 0)}[self.ports[port][0]]
 
 
-def compute_container(cid: str, fwd_a=True, fwd_b=True) -> Container:
-    from randomfun2026solvers.layout import Container
+def build_room(name, w, h, lay, specs, ops, *, margin=1) -> Room:
+    """`lay(c)` draws the interior on a Circuit; `ops` declare the bindings.
 
-    cell, cp = compute_cell(fwd_a, fwd_b)
-    rows = _box(cell)
-    w, h = _room(rows)
-    # local ports -> boxed border coords (interior (lx,ly) -> (lx+1,ly+1))
-    def edge(name):
-        lx, ly = cp[name]
-        return (lx + 1, ly + 1)
-    return Container(
-        id=cid, width=w, height=h, content=rows,
-        inputs=[edge("a_in"), edge("b_in")],           # 0=a_in, 1=b_in
-        outputs=[edge("a_out"), edge("b_out"), edge("prod")],  # 0,1,2
+    Mouths are kept `sep` apart on a shared wall so the pipes leaving them do
+    not have to squeeze past each other; the requirement is relaxed only if no
+    placement exists at all.
+    """
+    c = Circuit(w, h)
+    lay(c)
+    for sep in (3, 2, 1):
+        try:
+            ports = solve_ports(w, h, specs, ops, margin=margin, sep=sep)
+        except Collision:
+            continue
+        return Room(name, w, h, dict(c.cell), ports)
+    raise Collision(f"{name}: no port placement in {w}x{h}")
+
+
+# ── the four stage rooms ─────────────────────────────────────────────────────
+
+
+def turn_room(name: str) -> Room:
+    """Ring turnaround: `R` from either source, `s` to the one outgoing pipe."""
+    def lay(c: Circuit) -> None:
+        c.run(0, 0, ">@Rsv")
+        c.set(0, 1, "^")
+        c.set(4, 1, "<")
+
+    return build_room(
+        name, 5, 2, lay,
+        [PortSpec("fill", "in", ("N",)), PortSpec("back", "in", ("W",)),
+         PortSpec("out", "out", ("S",))],
+        [],                                   # `R` and a lone `s` cannot mis-bind
     )
 
 
-def acchold_container(cid: str, m: int, in_wall="W") -> Container:
-    from randomfun2026solvers.layout import Container
+def add_room(name: str, first: bool) -> Room:
+    """psum chain stage.  `first` has nothing to add to, so it just relays."""
+    body = "rs" if first else "rMr+s"
+    w = len(body) + 3
 
-    c, _ = acchold_cell(m)
-    rows = _box(c)
-    w, h = _room(rows)
-    return Container(id=cid, width=w, height=h, content=rows,
-                     inputs=[_wall_cell(w, h, in_wall)],
-                     outputs=[_wall_cell(w, h, "E")])
+    def lay(c: Circuit) -> None:
+        c.set(0, 0, ">")
+        c.set(1, 0, "@")
+        c.run(2, 0, body)
+        c.set(w - 1, 0, "v")
+        c.set(w - 1, 1, "<")
+        c.set(0, 1, "^")
 
-
-def _blit(g: Circuit, rows: list[str], x0: int, y0: int) -> None:
-    for dy, r in enumerate(rows):
-        for dx, ch in enumerate(r):
-            if ch != " ":
-                g.set(x0 + dx, y0 + dy, ch)
-
-
-def probe_cell() -> str:
-    """Standalone harness, hand-placed with straight 2-cell pipes. Feed a=[1,2]
-    (west) & b=[5,7] (north); drain a_out (east) & b_out (south); ACCHOLD sums the
-    products (south) -> O. Expect 1*5 + 2*7 = 19."""
-    from randomfun2026solvers.memory_tape import _draw_pipe
-
-    g = Circuit(120, 80)
-    CX, CY = 24, 12
-    cell, _cp = compute_cell(True, True)
-    _blit(g, _box(cell), CX, CY)
-    # boxed port wall-cells (interior (lx,ly) -> boxed (lx+1,ly+1)):
-    a_in  = (CX + 0,  CY + 5)
-    b_in  = (CX + 3,  CY + 0)
-    a_out = (CX + 10, CY + 5)
-    b_out = (CX + 3,  CY + 10)
-    prod  = (CX + 7,  CY + 10)
-
-    # SA: emits 1,2 east into a_in. Box mid-row aligned to a_in row.
-    sa = _box(Circuit_of("@1s2sH"))                 # 3 rows x 8 cols
-    _blit(g, sa, CX - 12, CY + 5 - 1)               # east wall at col CX-5
-    _draw_pipe(g, [(CX - 4, CY + 5), (CX - 1, CY + 5)])   # >>-> into a_in wall
-
-    # SB: emits 5,7 south into b_in. Box spanning col b_in.
-    sb = _box(Circuit_of("@5s7sH"))
-    _blit(g, sb, CX + 3 - 1, CY - 6)                # south wall at row CY-4
-    _draw_pipe(g, [(CX + 3, CY - 3), (CX + 3, CY - 1)])
-
-    # DA drain: east of a_out.
-    _blit(g, ["+----+", "|>@rv|", "|^..<|", "+----+"], CX + 16, CY + 5 - 2)
-    _draw_pipe(g, [(CX + 11, CY + 5), (CX + 15, CY + 5)])
-
-    # DB drain: south of b_out.
-    _blit(g, ["+----+", "|>@rv|", "|^..<|", "+----+"], CX + 3 - 2, CY + 16)
-    _draw_pipe(g, [(CX + 3, CY + 11), (CX + 3, CY + 15)])
-
-    # AC acchold: south of prod, catches on its north wall; result east -> O.
-    ac, _ap = acchold_cell(2)
-    acbox = _box(ac)                                 # 7 rows x 13 cols
-    ACX, ACY = CX + 7 - 6, CY + 20                   # north wall col at CX+7
-    _blit(g, acbox, ACX, ACY)
-    _draw_pipe(g, [(CX + 7, CY + 11), (CX + 7, ACY - 1)])
-    # O east of AC (AC result on its east wall, mid row)
-    ac_e = ACX + len(acbox[0]) - 1
-    ac_mid = ACY + len(acbox) // 2
-    _blit(g, ["+-+", "|O|", "+-+"], ac_e + 3, ac_mid - 1)
-    _draw_pipe(g, [(ac_e + 1, ac_mid), (ac_e + 2, ac_mid)])
-
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    text = "\n".join(r.rstrip() for r in rows)
-    print(text)
-    return text
+    specs = [PortSpec("psum_out", "out", ("S",))]
+    ops: list[tuple[tuple[int, int], str, str]] = []
+    if first:
+        specs.append(PortSpec("prod_in", "in", ("N",)))
+    else:
+        # Both incoming mouths are on the north wall and split purely by column,
+        # and the *product* is read first on purpose: `+` is commutative, so
+        # reading it first puts prod_in west and psum_in east.  That is what lets
+        # the product drop straight down from MUL (which is directly overhead and
+        # west) while the psum arrives from an east channel — and it is what frees
+        # the west channel for the chain.  Read psum first and both channels end
+        # up on the same side, where the chain's riser and the psum's riser cross
+        # at every band and no row assignment exists.
+        specs += [PortSpec("prod_in", "in", ("N",)),
+                  PortSpec("psum_in", "in", ("N",))]
+        ops = [((2, 0), "r", "prod_in"), ((4, 0), "r", "psum_in")]
+    return build_room(name, w, 2, lay, specs, ops)
 
 
-def minimal_ring_countdown() -> tuple[Circuit, dict]:
-    """Isolate the novel mechanism: a countdown ring + X-branch loop.
-    Prime ring TOTAL=6, B=M=2; each lap: r(ring)->TOTAL; X(>0 continue, ==0 halt);
-    continue: - (TOTAL-=M, B preserved), s(ring), emit 7. Expect 7 7 7.
-    Ports: out(east), ring_out(south), ring_in(south)."""
-    IW, IH = 32, 20
-    c = Circuit(IW, IH)
-    # ring on SOUTH: ring_out col4, ring_in col24 (r binds it anywhere). out EAST
-    # row9. s near south-col4 -> ring_out ; s near east -> out.
-    p = {"ring_out": (4, IH - 1), "ring_in": (24, IH - 1), "out": (IW - 1, 9)}
-    S = c.set
+def mul_room(name: str) -> Room:
+    """weight in B, ring in/out, product out.  Loop count K comes off the ring."""
+    W_, H_ = 10, 9
 
-    # Fully hand-traced single path (only glyphs/turns set; blanks are walkable nops).
-    # ---- INIT: prime ring=6, B=2 ----
-    S(1, 1, "@"); S(2, 1, "6"); S(3, 1, "v")            # A=6, turn S (down col3)
-    S(3, 16, ">")                                       # row16: turn E
-    S(4, 16, "s")                                       # s -> ring_out (send 6)
-    S(5, 16, "2"); S(6, 16, "M")                        # A=2, B=2
-    S(7, 16, "^")                                       # turn N (up col7)
-    S(7, 9, ">")                                        # row9: turn E toward rejoin
-    # ---- LOOP header (rejoin at (9,9)) ----
-    S(9, 9, ">")                                        # rejoin (turn E)
-    S(10, 9, "r")                                       # r(ring) -> TOTAL
-    S(11, 9, "X")                                       # branch on sign(TOTAL)
-    S(12, 9, "H")                                       # ==0 -> straight E -> halt
-    # >0 -> CW (south): continue
-    S(11, 10, "-")                                      # A = TOTAL - M (B preserved)
-    S(11, 17, "<")                                      # row17: turn W
-    S(4, 17, "s")                                       # s -> ring_out (write TOTAL-M)
-    S(3, 17, "7")                                       # A=7
-    S(2, 17, "v"); S(2, 18, ">")                        # drop to row18, turn E
-    S(29, 18, "^")                                      # east: turn N
-    S(29, 10, ">"); S(30, 10, "^")                      # step to col30, turn N
-    S(30, 9, "s")                                       # s -> out (emit 7)  approached heading N
-    S(30, 8, "^")                                       # continue N (return)
-    S(30, 5, "<")                                       # row5: turn W
-    S(9, 5, "v")                                        # col9: turn S back into the rejoin
-    return c, p
+    def lay(c: Circuit) -> None:
+        c.run(0, 0, ">@rMrsb")
+        ex, _ = c.counted_loop(7, 0, "rs*s")          # cols 7,8; rows 0..5
+        c.route((ex, 0), E, [(ex, H_ - 1), (0, H_ - 1)], (0, 0), E)
+
+    # a_in, ring_in and ring_out all face the band above (LOADF and TURN);
+    # the product drops south into ADD.  `a_in` on the west is unsolvable here:
+    # the second `r` (ring) sits east of the first, so the ring mouth has to be
+    # the one further east, which only works if both are on the north wall.
+    specs = [
+        PortSpec("a_in", "in", ("N",)), PortSpec("ring_in", "in", ("N",)),
+        PortSpec("ring_out", "out", ("N",)), PortSpec("prod_out", "out", ("S",)),
+    ]
+    ops = [
+        ((2, 0), "r", "a_in"),
+        ((4, 0), "r", "ring_in"),
+        ((5, 0), "s", "ring_out"),
+        ((8, 1), "r", "ring_in"),
+        ((8, 2), "s", "ring_out"),
+        ((8, 4), "s", "prod_out"),
+    ]
+    return build_room(name, W_, H_, lay, specs, ops)
 
 
-def input_countdown() -> tuple[Circuit, dict]:
-    """Like minimal_ring_countdown but TOTAL=N*M read from input (N,M,K), and
-    B=M from input. Emit 7 once per row. Input `N M K` -> 7 repeated N times.
-    Adds input-in on the NORTH (r(input) near north; r(ring) near south)."""
-    IW, IH = 36, 22
-    c = Circuit(IW, IH)
-    p = {"in": (18, 0), "ring_out": (4, IH - 1), "ring_in": (26, IH - 1),
-         "out": (IW - 1, 10)}
-    S = c.set
+def counted_loop_west(c: Circuit, x: int, y: int, body: str) -> tuple[int, int]:
+    """`counted_loop` mirrored: entered heading **west** at (x,y), exits west.
 
-    # ---- INIT: read N (send to ring), M (->B), K (discard); TOTAL=N*M ----
-    S(1, 1, "@")
-    # go east to the input column (18), read N
-    S(18, 1, "r")                                      # r(N) (north input)
-    # N -> ring_out (south col4): drop to row18, west to s
-    S(19, 1, "v"); S(19, 18, "<"); S(4, 18, "s")       # s(N) -> ring_out
-    # back up to input col18, read M then K
-    S(3, 18, "^"); S(3, 3, ">"); S(18, 3, "r"); S(19, 3, "M")   # r(M); B=M
-    S(20, 3, "v"); S(20, 5, "<"); S(18, 5, "r")        # r(K) discard  (r@(18,5))
-    # read N back from ring (south col26), *, send TOTAL to ring_out (col4)
-    S(17, 5, "v"); S(17, 19, ">"); S(26, 19, "r"); S(27, 19, "*")  # r(ringN); A=N*M (B=M)
-    S(28, 19, "v"); S(28, 20, "<"); S(4, 20, "s")      # s(TOTAL) -> ring_out
-    # flow to the loop rejoin `>` at (9,10)
-    S(3, 20, "^"); S(3, 10, ">")
+    The peel glyph has to be `a`, not `d`: clockwise from west is north, which
+    walks the man into the ceiling.  Counter-clockwise from west is south, into
+    the body, which is what the eastward loop gets from `d`.
 
-    # ---- LOOP (rejoin at (9,10)) ----
-    S(9, 10, ">"); S(10, 10, "r"); S(11, 10, "X"); S(12, 10, "H")
-    S(11, 11, "-")                                     # A=TOTAL-M (B preserved)
-    S(11, 17, "<"); S(4, 17, "s")                      # s(TOTAL-M) -> ring_out
-    S(3, 17, "7"); S(2, 17, "v"); S(2, 18, ">")         # A=7, drop, turn E
-    S(31, 18, "^"); S(31, 11, ">"); S(32, 11, "^")      # east, step, turn N
-    S(32, 10, "s"); S(32, 9, "^")                       # s(7) -> out; continue N
-    S(32, 6, "<"); S(9, 6, "v")                         # row6 W, col9 S back to rejoin
-    return c, p
-
-
-def probe_input_countdown() -> str:
-    return _wire_countdown(input_countdown())
-
-
-def _wire_countdown(built) -> str:
-    loader, lp = built
-    lb = _box(loader)
-    g = Circuit(140, 80)
-    CX, CY = 20, 6
-    _blit(g, lb, CX, CY)
-    bh, bw = len(lb), len(lb[0])
-    south_y = CY + bh - 1
-    ring_out_x = CX + 1 + lp["ring_out"][0]
-    ring_in_x = CX + 1 + lp["ring_in"][0]
-    out_y = CY + 1 + lp["out"][1]
-    east_x = CX + bw - 1
-    # TURN below (relay r->s)
-    TX, TY = CX + 2, south_y + 5
-    _blit(g, ["+-----+", "|>@rsv|", "|^...<|", "+-----+"], TX, TY)
-    turn_in_x, turn_out_x = TX + 3, TX + 4
-    _pipe(g, [(ring_out_x, south_y + 1), (ring_out_x, TY - 2),
-              (turn_in_x, TY - 2), (turn_in_x, TY - 1)])
-    _pipe(g, [(turn_out_x, TY - 1), (turn_out_x, TY - 3),
-              (ring_in_x, TY - 3), (ring_in_x, south_y + 1)])
-    # I room north (over the in port)
-    if "in" in lp:
-        in_x = CX + 1 + lp["in"][0]
-        _blit(g, ["+-+", "|I|", "+-+"], in_x - 1, CY - 5)   # bottom border at CY-3
-        _pipe(g, [(in_x, CY - 2), (in_x, CY - 1)])          # 2-cell pipe into loader north
-    # O east
-    ox = east_x + 4
-    _blit(g, ["+-+", "|O|", "+-+"], ox, out_y - 1)
-    _pipe(g, [(east_x + 1, out_y), (ox - 1, out_y)])
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return "\n".join(r.rstrip() for r in rows)
-
-
-def probe_countdown(wire: bool = True) -> str:
-    """Wire minimal_ring_countdown to a south turnaround (ring) + east O.
-    No input. Expect 7 7 7."""
-    loader, lp = minimal_ring_countdown()
-    lb = _box(loader)
-    if not wire:
-        return "\n".join(lb)
-    g = Circuit(120, 70)
-    CX, CY = 20, 4
-    _blit(g, lb, CX, CY)
-    bh, bw = len(lb), len(lb[0])
-    south_y = CY + bh - 1                              # box bottom border row
-    ring_out_x = CX + 1 + lp["ring_out"][0]           # boxed col of s(ring_out)
-    ring_in_x = CX + 1 + lp["ring_in"][0]
-    out_y = CY + 1 + lp["out"][1]
-    east_x = CX + bw - 1
-
-    # TURN room below-left; relay: r(north in) -> s(north out).
-    TX, TY = CX + 2, south_y + 5
-    _blit(g, ["+-----+", "|>@rsv|", "|^...<|", "+-----+"], TX, TY)
-    # TURN north wall: in-pipe over the r at (TX+3), out-pipe over the s at (TX+4)
-    turn_in_x, turn_out_x = TX + 3, TX + 4
-    # ring_out (loader south) -> down, across, up into TURN in
-    _pipe(g, [(ring_out_x, south_y + 1), (ring_out_x, TY - 2),
-              (turn_in_x, TY - 2), (turn_in_x, TY - 1)])
-    # TURN out -> ring_in (loader south, col24)
-    _pipe(g, [(turn_out_x, TY - 1), (turn_out_x, TY - 3),
-              (ring_in_x, TY - 3), (ring_in_x, south_y + 1)])
-    # out -> O (east)
-    ox = east_x + 4
-    _blit(g, ["+-+", "|O|", "+-+"], ox, out_y - 1)
-    _pipe(g, [(east_x + 1, out_y), (ox - 1, out_y)])
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return "\n".join(r.rstrip() for r in rows)
-
-
-def row_padder(padw: int) -> Circuit:
-    """Read a count m (first input), then m real values, emitting each; then emit
-    padw-m zeros. B holds m across the inner loop so no spill is needed.
-      r M b        A=m, B=m, BP=m
-      [rs]*m       forward m real values
-      padw - b     A=padw ; A=padw-m=Z ; BP=Z   (B=m untouched by the loop)
-      [0s]*Z       emit Z zeros
+        (x,y)=`<`  (x-1,y)=`a`          a: BP>0 -> CCW/south into the body
+        (x-1,y+1..)= body                  BP==0 -> straight west, out
+        (x-1,y+k+1)=`>`  (x,y+k+1)=`^`
+        (x,y+1)=`m`
     """
-    c = Circuit(40, 12)
-    x, _ = c.run(0, 0, "@rMb")               # read m; B=m; BP=m
-    ex, _ = c.counted_loop(x, 0, "rs")        # m real values
-    x2, _ = c.run(ex, 0, lit(padw) + "-b")    # A=padw-m=Z ; BP=Z
-    ex2, _ = c.counted_loop(x2, 0, "0s")      # Z zeros
-    c.run(ex2, 0, "H")
-    return c
+    k = len(body)
+    c.set(x, y, "<")
+    c.set(x - 1, y, "a")
+    c.run(x - 1, y + 1, body, d=S)
+    c.set(x - 1, y + k + 1, ">")
+    c.set(x, y + k + 1, "^")
+    c.set(x, y + 1, "m")
+    c.blanks(x, y + 2, k - 1, d=S)
+    return x - 2, y
 
 
-def probe_padder(padw: int = 4) -> str:
-    """I -> row_padder -> O. Input `m v0 v1 .. v{m-1}` -> `v0..v{m-1}` then padw-m zeros."""
-    g = Circuit(80, 20)
-    pad = _box(row_padder(padw))
-    PX, PY = 8, 2
-    _blit(g, pad, PX, PY)
-    prow = PY + 1                              # padder interior row 0 -> boxed row 1
-    _blit(g, ["+-+", "|I|", "+-+"], 2, prow - 1)
-    _pipe(g, [(5, prow), (PX - 1, prow)])       # start just east of I's wall (col 4)
-    ox = PX + len(pad[0]) + 3
-    _blit(g, ["+-+", "|O|", "+-+"], ox, prow - 1)
-    _pipe(g, [(PX + len(pad[0]), prow), (ox - 1, prow)])
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return "\n".join(r.rstrip() for r in rows)
+def loadf_room(name: str, f: int) -> Room:
+    """Feeder, laid **right to left**.
+
+    Running the code westward is the whole point: it puts the ring writes (the
+    INIT head and LA) at the *east* end and the chain writes (LB, LC) at the
+    *west* end, so `solve_ports` can put ``ring_out`` on the east wall — facing
+    TURN, which the floor plan forces to sit east — and ``chain_out`` on the
+    west wall, facing the chain channel.  Laid the other way round the two
+    pipes both have to leave eastward and cannot be nested; that is what
+    blocked P >= 2.
+
+    The man spawns facing east by definition, so row 0 is two cells (`@v`) that
+    turn him south then west onto the INIT row.
+
+        row 0   .. @ v          spawn, turn down
+        row 1   [LB] <tail> [LA] b M s r <     INIT, running west
+        row 5   transit back to the east edge
+        row 6   [LC] .... b <F> s r <          MAIN, running west
+        row 10  return leg
+    """
+    tail = ("1+M" + _times_const(f) + "b") if f else ""
+    lt = len(tail)
+    cf = const_free(f) if f else ""
+    W_ = max(10, lt + 12)
+    H_, MAIN_Y = 11, 6
+    la_x = W_ - 6                      # LA entry; its body column is la_x-1
+    init_end = W_ - 8                  # first free cell west of LA
+    lb_x = init_end - lt               # LB entry; body column lb_x-1
+    loop_col = lb_x - 1
+
+    def lay(c: Circuit) -> None:
+        c.set(W_ - 2, 0, "@")
+        c.set(W_ - 1, 0, "v")
+        c.set(W_ - 1, 1, "<")
+        c.run(W_ - 2, 1, "rsMb", d=W)
+        ex, _ = counted_loop_west(c, la_x, 1, "rs")
+        if f:
+            ex, _ = c.run(ex, 1, tail, d=W)
+            ex, _ = counted_loop_west(c, lb_x, 1, "rs")
+        c.route((ex, 1), W, [(0, 1), (0, 5), (W_ - 1, 5)], (W_ - 1, MAIN_Y), W)
+        ex, _ = c.run(W_ - 2, MAIN_Y, "rs" + (cf + "b" if f else ""), d=W)
+        if f:
+            ex, _ = counted_loop_west(c, lb_x, MAIN_Y, "rs")
+        c.route((ex, MAIN_Y), W, [(0, MAIN_Y), (0, H_ - 1), (W_ - 1, H_ - 1)],
+                (W_ - 1, MAIN_Y), W)
+
+    specs = [
+        PortSpec("chain_in", "in", ("N",)),
+        PortSpec("chain_out", "out", ("W",)), PortSpec("ring_out", "out", ("E",)),
+        PortSpec("mul_out", "out", ("S",)),
+    ]
+    ops = [
+        ((W_ - 3, 1), "s", "ring_out"),
+        ((la_x - 1, 3), "s", "ring_out"),
+        ((W_ - 3, MAIN_Y), "s", "mul_out"),
+    ]
+    if f:
+        ops += [((loop_col, 3), "s", "chain_out"),
+                ((loop_col, MAIN_Y + 2), "s", "chain_out")]
+    else:
+        specs = [s for s in specs if s.name != "chain_out"]
+    return build_room(name, W_, H_, lay, specs, ops)
 
 
-def probe_ring() -> str:
-    """B-ring: TURN (R-any: loader OR ring) -> FEED (r, then S to {consumer, ring}).
-    Load [5,7]; a consumer reads 4 -> expect 5 7 5 7 (recirculation)."""
-    g = Circuit(80, 30)
-    TX, TY = 12, 10
-    FX = TX + 12
-    # TURN: R-any -> s to FEED
-    _blit(g, ["+----+", "|>@Rv|", "|^.s<|", "+----+"], TX, TY)
-    # FEED: r (ring-in) -> S to all outs {ring-out, pej-out}
-    _blit(g, ["+----+", "|>@rv|", "|^.S<|", "+----+"], FX, TY)
-    # ring pipes: TURN.to-FEED (east,row1) -> FEED.ring-in (west,row1)
-    _pipe(g, [(TX + 6, TY + 1), (FX - 1, TY + 1)])
-    #           FEED.ring-out (west,row2) -> TURN.ring-in (east,row2)
-    _pipe(g, [(FX - 1, TY + 2), (TX + 6, TY + 2)])
-    # loader source [5,7] -> TURN loader-in (west,row1)
-    src = _box(Circuit_of("@5s7sH"))
-    _blit(g, src, TX - len(src[0]) - 4, TY)
-    _pipe(g, [(TX - 4, TY + 1), (TX - 1, TY + 1)])
-    # consumer reads 4 -> O ; FEED.pej-out (east,row1) -> consumer
-    con = _box(Circuit_of("@rsrsrsrsH"))
-    CXc = FX + 8
-    _blit(g, con, CXc, TY)
-    _pipe(g, [(FX + 6, TY + 1), (CXc - 1, TY + 1)])
-    ox = CXc + len(con[0]) + 3
-    _blit(g, ["+-+", "|O|", "+-+"], ox, TY)
-    _pipe(g, [(CXc + len(con[0]), TY + 1), (ox - 1, TY + 1)])
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return "\n".join(r.rstrip() for r in rows)
+def lit_free(n: int) -> str:
+    """Glyphs leaving A = n for any |n| <= 99, using B as scratch and **no
+    backticks** (a backtick pairs by column as well as by row, so one in a
+    generated room can pair with one in another room and swallow a wall)."""
+    if n < 0:
+        return lit_free(-n) + "N"
+    if n <= 9:
+        return str(n)
+    if n <= 18:
+        return f"9M{n - 9}+"          # A=9, B=9, A=n-9, A=(n-9)+9
+    for a in range(9, 1, -1):
+        for b in range(18, 1, -1):
+            c = n - a * b
+            if 0 <= c <= 9:
+                # A=b, B=b, A=a, A=a*b, B=a*b, A=c, A=c+a*b
+                return lit_free(b) + f"M{a}*" + (f"M{c}+" if c else "")
+    raise ValueError(n)
 
 
-def collector_loop(res_cols: list[int], reader_x0: int) -> tuple[list[str], int]:
-    """Reader that loops forever: read acc0..accK-1 (nearest-in, one r directly
-    under each drop column in `res_cols`, left-to-right) and emit each to the one
-    O out-pipe. Returns (boxed rows, O-column). `res_cols` are GLOBAL columns; the
-    room is placed at global x=reader_x0."""
-    # interior col that renders (after _box adds a border) at GLOBAL column rx is
-    # rx - reader_x0 - 1.
-    local = [rx - reader_x0 - 1 for rx in res_cols]
-    width = max(local) + 3
-    c = Circuit(width, 6)
-    c.set(0, 1, ">"); c.set(1, 1, "@")              # rejoin (interior cols 0,1)
-    for lc in local:
-        c.set(lc, 1, "r")
-        c.set(lc + 1, 1, "s")                        # emit to O (single out-pipe)
-    # return: from east end down to row3, west to col0, up into the rejoin
-    endx = max(local) + 2
-    c.route((endx, 1), E, [(endx, 3), (0, 3), (0, 1)], (0, 1), E)
-    o_col = res_cols[0]                              # O sits under the first r
-    return _box(c), o_col
+def src_room(name: str, vals: list[int], width: int = 44) -> Room:
+    """Test-only stand-in for the front end: emit `vals` in order, then halt.
+
+    Snaked across rows, because a 16-stage probe stream is several hundred
+    values and a single row would be wider than the machine.
+    """
+    body = "".join(lit_free(v) + "s" for v in vals) + "H"
+    span = width - 2
+    chunks = [body[i:i + span] for i in range(0, len(body), span)] or [""]
+    h = len(chunks)
+
+    def lay(c: Circuit) -> None:
+        for y, chunk in enumerate(chunks):
+            east = y % 2 == 0
+            if y == 0:
+                c.set(0, 0, "@")
+                c.run(1, 0, chunk)
+            elif east:
+                c.set(0, y, ">")
+                c.run(1, y, chunk)
+            else:
+                c.set(width - 1, y, "<")
+                c.run(width - 2, y, chunk, d=W)
+            if y + 1 < h:
+                c.set(width - 1 if east else 0, y, "v")
+
+    return build_room(name, width, h, lay, [PortSpec("out", "out", ("S",))], [])
 
 
-def assemble_1xk(m: int, kk: int, a_stream, b_streams) -> str:
-    """1xK row-streaming matmul. Physical: one row of kk compute cells (a forwarded
-    east, b from north), an acchold_loop under each, and a looping collector -> O.
-    Feed row-major A to cell 0's west; B[*][j] repeated N times to cell j's north.
-    Each acchold emits one C value per output row; the collector reads acc0..accK-1
-    each lap, so O receives C in row-major order."""
-    g = Circuit(500, 140)
-    PX, X0, Y0 = 30, 34, 16
-    boxes = [(X0 + j * PX, Y0) for j in range(kk)]
-    for j in range(kk):
-        cell, _p = compute_cell(fwd_a=(j < kk - 1), fwd_b=False)
-        _blit(g, _box(cell), *boxes[j])
-    # a forwarded east between cells (straight, row Y0+5)
-    for j in range(kk - 1):
-        P, Q = _cell_ports(*boxes[j]), _cell_ports(*boxes[j + 1])
-        _pipe(g, [(P["a_out"][0] + 1, Y0 + 5), (Q["a_in"][0] - 1, Y0 + 5)])
-    # a-source -> cell 0 west
-    bx0, by0 = boxes[0]
-    sa = _box(Circuit_of("@" + "".join(lit(v) + "s" for v in a_stream) + "H"))
-    _blit(g, sa, bx0 - len(sa[0]) - 4, Y0 + 5 - 1)
-    _pipe(g, [(bx0 - 4, Y0 + 5), (bx0 - 1, Y0 + 5)])
-    # b-source j -> cell j north (straight, col bx+3)
-    for j in range(kk):
-        bx, by = boxes[j]
-        sb = _box(Circuit_of("@" + "".join(lit(v) + "s" for v in b_streams[j]) + "H"))
-        _blit(g, sb, bx + 3 - len(sb[0]) // 2, by - 6)
-        _pipe(g, [(bx + 3, by - 3), (bx + 3, by - 1)])
-    # acchold_loop under each cell; prod drops in (north), result exits south
-    ay = Y0 + 13
-    ach = len(_box(acchold_loop(m)))
-    coly = ay + ach + 4
-    res_cols = []
-    for j in range(kk):
-        bx, by = boxes[j]
-        acbox = _box(acchold_loop(m))
-        acw = len(acbox[0])
-        ax = bx + 7 - acw // 2
-        _blit(g, acbox, ax, ay)
-        _pipe(g, [(bx + 7, by + 11), (bx + 7, ay - 1)])       # prod -> acc north
-        res_cols.append(bx + 7)
-        _pipe(g, [(bx + 7, ay + ach), (bx + 7, coly - 1)])    # result -> collector north
-    # collector loop -> O  (reader_x0 leaves room for the `>@` rejoin before the
-    # first r: first interior r col = res_cols[0]-reader_x0-1 must be >= 2)
-    reader_x0 = res_cols[0] - 3
-    reader, o_col = collector_loop(res_cols, reader_x0)
-    _blit(g, reader, reader_x0, coly)
-    rbot = coly + len(reader) - 1                             # reader south border
-    _blit(g, ["+-+", "|O|", "+-+"], o_col - 1, rbot + 3)      # O two cells below
-    _pipe(g, [(o_col, rbot + 1), (o_col, rbot + 2)])
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return "\n".join(r.rstrip() for r in rows)
+def io_room(name: str, glyph: str, kind: str) -> Room:
+    def lay(c: Circuit) -> None:
+        c.set(0, 0, glyph)
+
+    return build_room(name, 1, 1, lay, [PortSpec("p", kind)], [])
 
 
-def _pipe(g, pts):
-    from randomfun2026solvers.memory_tape import _draw_pipe
-    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-        if x0 != x1 and y0 != y1:
-            raise ValueError(f"non-rectilinear pipe leg {(x0, y0)}->{(x1, y1)} "
-                             "(would make _draw_pipe loop forever)")
-    _draw_pipe(g, pts)
+# ── the reference stream ─────────────────────────────────────────────────────
 
 
-# Cell boxed port wall-cells, relative to the box top-left (bx,by):
-#   a_in W (0,5) · b_in N (3,0) · a_out E (10,5) · b_out S (3,10) · prod S (7,10)
-def _cell_ports(bx, by):
-    return {
-        "a_in": (bx + 0, by + 5), "b_in": (bx + 3, by + 0),
-        "a_out": (bx + 10, by + 5), "b_out": (bx + 3, by + 10),
-        "prod": (bx + 7, by + 10),
-    }
-
-
-def assemble_test(n: int, m: int, k: int, a_rows, b_cols) -> str:
-    """Prove the ARRAY with direct per-row/col source rooms (no input LOADER yet).
-    a_rows[i] feeds row i's west edge; b_cols[j] feeds col j's north edge.
-    Output = C row-major."""
-    g = Circuit(300, 300)
-    PX, PY = 30, 26
-    X0, Y0 = 30, 14
-
-    boxes = {}
+def stream_for(a: list[list[int]], b: list[list[int]], p: int) -> list[int]:
+    """The exact sequence the chain's head must receive, for a P-stage chain."""
+    n, m = len(a), len(a[0])
+    k = len(b[0])
+    out: list[int] = []
+    for t in range(p):
+        row = b[t] if t < m else [0] * k
+        out += [k] + list(row)
     for i in range(n):
-        for j in range(k):
-            cell, _p = compute_cell(fwd_a=(j < k - 1), fwd_b=(i < n - 1))
-            bx, by = X0 + j * PX, Y0 + i * PY
-            _blit(g, _box(cell), bx, by)
-            boxes[(i, j)] = (bx, by)
-
-    # inter-cell forward pipes
-    for i in range(n):
-        for j in range(k):
-            P = _cell_ports(*boxes[(i, j)])
-            if j < k - 1:
-                Q = _cell_ports(*boxes[(i, j + 1)])
-                y = P["a_out"][1]
-                _pipe(g, [(P["a_out"][0] + 1, y), (Q["a_in"][0] - 1, y)])
-            if i < n - 1:
-                Q = _cell_ports(*boxes[(i + 1, j)])
-                x = P["b_out"][0]
-                _pipe(g, [(x, P["b_out"][1] + 1), (x, Q["b_in"][1] - 1)])
-
-    # sources: row west edges, col north edges
-    for i in range(n):
-        bx, by = boxes[(i, 0)]
-        sa = _box(Circuit_of("@" + "".join(lit(v) + "s" for v in a_rows[i]) + "H"))
-        sw = len(sa[0])
-        _blit(g, sa, bx - sw - 4, by + 5 - 1)
-        _pipe(g, [(bx - 4, by + 5), (bx - 1, by + 5)])
-    for j in range(k):
-        bx, by = boxes[(0, j)]
-        sb = _box(Circuit_of("@" + "".join(lit(v) + "s" for v in b_cols[j]) + "H"))
-        _blit(g, sb, bx + 3 - 3, by - 6)
-        _pipe(g, [(bx + 3, by - 3), (bx + 3, by - 1)])
-
-    # accholds below each cell (prod straight down); result exits SOUTH.
-    accs = {}
-    for i in range(n):
-        for j in range(k):
-            bx, by = boxes[(i, j)]
-            ac, _ap = acchold_cell(m)
-            acbox = _box(ac)
-            aw, ah = len(acbox[0]), len(acbox)
-            ax, ay = bx + 5, by + 13
-            _blit(g, acbox, ax, ay)
-            accs[(i, j)] = (ax, ay, aw, ah)
-            P = _cell_ports(bx, by)
-            _pipe(g, [(P["prod"][0], P["prod"][1] + 1), (P["prod"][0], ay - 1)])
-
-    # collector: one wide reader with an `r` directly under each acc, visited in
-    # row-major order -> O. Result-pipes drop straight down (no channels, no
-    # crossings) provided the acc x-coordinates are strictly increasing in
-    # row-major order -- true for a single row; multi-row needs x-staggered accs.
-    coly = Y0 + n * PY + 8
-    order = [(i, j) for i in range(n) for j in range(k)]
-    res_cols = []
-    for (i, j) in order:
-        ax, ay, aw, ah = accs[(i, j)]
-        rx = ax + aw // 2                 # acc south-exit column
-        res_cols.append(rx)
-        _pipe(g, [(rx, ay + ah), (rx, coly - 1)])   # straight drop into reader north
-    # build reader interior spanning the result columns: `r` under each, `s` after.
-    lo, hi = min(res_cols), max(res_cols)
-    width = hi - lo + 3
-    inter = [" "] * width
-    inter[0] = "@"
-    for rx in res_cols:
-        c = rx - lo + 1                    # +1 for reader box border added by _box
-        inter[c] = "r"
-        if c + 1 < width:
-            inter[c + 1] = "s"
-    reader = _box(Circuit_of("".join(inter)))
-    rdx = lo - 1                           # box left border sits one col left of first r col
-    _blit(g, reader, rdx, coly)
-    # O to the south of the reader (single out-pipe, so every `s` binds it)
-    ox = res_cols[0]
-    ry_bottom = coly + len(reader) - 1        # reader's south border row
-    _blit(g, ["+-+", "|O|", "+-+"], ox - 1, ry_bottom + 3)
-    _pipe(g, [(ox, ry_bottom + 1), (ox, ry_bottom + 2)])
-
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return "\n".join(r.rstrip() for r in rows)
+        out += [a[i][t] if t < m else 0 for t in range(p)]
+    return out
 
 
-def probe_acc() -> str:
-    """Feed products 5,14,15,28 into acchold_loop(2); expect emits 19, 43."""
-    g = Circuit(120, 30)
-    src = _box(Circuit_of("@" + "".join(lit(v) + "s" for v in [5, 14, 15, 28]) + "H"))
-    _blit(g, src, 2, 6)
-    ac = acchold_loop(2)
-    acbox = _box(ac)
-    AX, AY = 2 + len(src[0]) + 5, 3          # acc west port row = AY+4 = 7 = src mid row
-    _blit(g, acbox, AX, AY)
-    # src east -> acc west (acc reads nearest-in), straight on row 7.
-    _pipe(g, [(2 + len(src[0]), 7), (AX - 1, 7)])
-    # acc emit (nearest-out) -> O on the east, straight on row 7.
-    ox = AX + len(acbox[0]) + 3
-    _blit(g, ["+-+", "|O|", "+-+"], ox, 6)
-    _pipe(g, [(AX + len(acbox[0]), 7), (ox - 1, 7)])
-    rows = g.rows()
-    while rows and not rows[-1].strip():
-        rows.pop()
-    return "\n".join(r.rstrip() for r in rows)
+def expected(a, b) -> list[int]:
+    n, m, k = len(a), len(a[0]), len(b[0])
+    return [sum(a[i][t] * b[t][j] for t in range(m)) for i in range(n) for j in range(k)]
+
+
+# ── grid assembly ────────────────────────────────────────────────────────────
+
+
+class Grid:
+    def __init__(self, w: int, h: int) -> None:
+        self.c = Circuit(w, h)
+        self.rooms: list[Room] = []
+
+    def place(self, room: Room, x: int, y: int) -> Room:
+        room.x, room.y = x, y
+        for dy, r in enumerate(room.rows()):
+            for dx, ch in enumerate(r):
+                if ch != " ":
+                    self.c.set(x + dx, y + dy, ch)
+        self.rooms.append(room)
+        return room
+
+    def pipe(self, pts: list[tuple[int, int]]) -> None:
+        from randomfun2026solvers.memory_tape import _draw_pipe
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if x0 != x1 and y0 != y1:
+                raise ValueError(f"non-rectilinear pipe leg {(x0,y0)}->{(x1,y1)}")
+        _draw_pipe(self.c, pts)
+
+    def link(self, src: Room, sp: str, dst: Room, dp: str,
+             waypoints: list[tuple[int, int]] | None = None) -> None:
+        pts = [src.mouth(sp)] + (waypoints or []) + [dst.mouth(dp)]
+        self.pipe(pts)
+
+    def boxes(self):
+        return [(r.x, r.y, r.bw, r.bh) for r in self.rooms]
+
+    def text(self) -> str:
+        rows = self.c.rows()
+        while rows and not rows[-1].strip():
+            rows.pop()
+        return "\n".join(r.rstrip() for r in rows)
+
+
+def check_mouths(grid: Grid, expect: int) -> None:
+    from randomfun2026solvers.brackets_men import pipe_mouths, wall_cells
+    rows = grid.text().split("\n")
+    found = pipe_mouths(rows, wall_cells(grid.boxes()))
+    if len(found) != expect:
+        listed = ", ".join(f"{ch!r}@{c}" for c, ch in sorted(found))
+        raise Collision(f"{len(found)} pipe mouths, wanted {expect}: {listed}")
+
+
+# ── the probe: a P-stage chain fed by a hard-coded source room ───────────────
+
+
+GAP = 13                 # rows between LOADF and MUL: the ring serpentine lives here
+
+
+def build_chain(p: int, stream: list[int] | None) -> tuple[Grid, int]:
+    """P stages stacked vertically.  Returns (grid, expected pipe count).
+
+    THE FLOOR PLAN, AND WHY IT IS THE ONLY ONE
+
+    MUL's north wall carries three pipes in a *forced* column order —
+    ``a_in`` < ``ring_out`` < ``ring_in`` — because MUL's first `r` (the weight)
+    sits west of its second (the ring).  Everything else follows:
+
+      * TURN sits **east**, so its two pipes nest outside the weight pipe, which
+        drops straight down from LOADF.
+      * the three gap pipes turn on strictly ordered rows, ``r_a`` above
+        ``r_ring`` above ``r_ser``, so each crosses the others' columns only
+        above where they are live.
+      * LOADF is laid right-to-left, so ``ring_out`` is on the east wall facing
+        TURN and ``chain_out`` on the west wall facing the **west channel**.
+      * ADD reads the product before the psum, which puts ``prod_in`` west (fed
+        straight down from MUL) and ``psum_in`` east — so the psum runs down an
+        **east channel** and never meets the chain.
+
+    Two north-south channels on the same side cannot both work: each one's
+    horizontals cross the other's riser at every band, and the row overlap is
+    unavoidable because one spans the top of a band and the other the bottom.
+    Putting them on opposite sides is the whole trick.
+    """
+    loadf = [loadf_room(f"LOADF{i}", p - 1 - i) for i in range(p)]
+    muls = [mul_room(f"MUL{i}") for i in range(p)]
+    turns = [turn_room(f"TURN{i}") for i in range(p)]
+    adds = [add_room(f"ADD{i}", i == 0) for i in range(p)]
+
+    lw = max(r.bw for r in loadf)
+    X0, SY = 22, 10 + (0 if stream is None else src_room('probe', stream).bh + 8)
+    BANDH = 13 + GAP + 11 + 6 + 4 + 12
+    chw = X0 - 4                      # west channel: the a/b chain
+    pse = X0 + lw + 23                # east channel: the psum
+    g = Grid(max(pse, X0 + 50) + 8, SY + BANDH * p + 24)
+
+    for i in range(p):
+        by = SY + BANDH * i
+        g.place(loadf[i], X0, by)
+        g.place(turns[i], X0 + lw + 10, by + 4)
+        g.place(muls[i], X0, by + 13 + GAP)
+        g.place(adds[i], X0, by + 13 + GAP + 11 + 6)
+
+    npipe = 0
+    for i in range(p):
+        by = SY + BANDH * i
+        muly = by + 13 + GAP
+        addy = muly + 11 + 6
+        L, T, M_, A = loadf[i], turns[i], muls[i], adds[i]
+        r_a, r_ring, r_ser = muly - 12, muly - 10, muly - 8
+        east2 = X0 + lw + 6
+        mx0, my0 = L.mouth("mul_out")
+        ax, ay = M_.mouth("a_in")
+        g.pipe([(mx0, my0), (mx0, r_a), (ax, r_a), (ax, ay)])
+        rx, ry = M_.mouth("ring_out")
+        bx, byy = T.mouth("back")
+        g.pipe([(rx, ry), (rx, r_ring), (east2, r_ring), (east2, byy), (bx, byy)])
+        fx, fy = L.mouth("ring_out")
+        tx, ty = T.mouth("fill")
+        g.pipe([(fx, fy), (tx, fy), (tx, ty)])
+        ox, oy = T.mouth("out")
+        ix, iy = M_.mouth("ring_in")
+        # The TURN->MUL leg has to hold K+1 <= 17 values while the array is
+        # still loading (MUL is not reading yet), and no more: every cell beyond
+        # that is a tick of revolution latency at each row boundary.  Going
+        # straight west from TURN is already ~30 cells, so it needs no serpentine.
+        g.pipe([(ox, oy), (ox, r_ser), (ix, r_ser), (ix, iy)])
+        px, py = M_.mouth("prod_out")
+        qx, qy = A.mouth("prod_in")
+        g.pipe([(px, py), (px, py + 2), (qx, py + 2), (qx, qy)])
+        npipe += 5
+        if i + 1 < p:
+            cx, cy = L.mouth("chain_out")
+            nx, ny = loadf[i + 1].mouth("chain_in")
+            g.pipe([(cx, cy), (chw, cy), (chw, ny - 4), (nx, ny - 4), (nx, ny)])
+            sx0, sy0 = A.mouth("psum_out")
+            dx0, dy0 = adds[i + 1].mouth("psum_in")
+            g.pipe([(sx0, sy0), (sx0, sy0 + 2), (pse, sy0 + 2),
+                    (pse, dy0 - 2), (dx0, dy0 - 2), (dx0, dy0)])
+            npipe += 2
+
+    hx, hy = loadf[0].mouth("chain_in")
+    if stream is None:
+        raise NotImplementedError("front end not built; see the module docstring")
+    src = src_room("SRC", stream)
+    g.place(src, X0, SY - src.bh - 6)
+    sx, sy = src.mouth("out")
+    g.pipe([(sx, sy), (sx, hy - 3), (hx, hy - 3), (hx, hy)])
+    npipe += 1
+    ox, oy = adds[-1].mouth("psum_out")
+    o = io_room("O", "O", "in")
+    g.place(o, ox - 1, oy + 3)
+    g.pipe([(ox, oy), (ox, oy + 2)])
+    npipe += 1
+    return g, npipe
+
+
+def probe(p: int, a, b) -> tuple[str, list[int]]:
+    g, npipe = build_chain(p, stream_for(a, b, p))
+    check_mouths(g, npipe)
+    return g.text(), expected(a, b)
 
 
 if __name__ == "__main__":
-    if "--probe-cell" in sys.argv:
-        probe_cell()
-    elif "--probe-acc" in sys.argv:
-        print(probe_acc())
-    elif "--probe-ring" in sys.argv:
-        print(probe_ring())
-    elif "--probe-padder" in sys.argv:
-        print(probe_padder(4))
-    elif "--probe-countdown" in sys.argv:
-        print(probe_countdown())
-    elif "--probe-input-countdown" in sys.argv:
-        print(probe_input_countdown())
-    elif "--test-1xk" in sys.argv:
-        # N=2,M=2,K=2  A=[[1,2],[3,4]] B=[[5,6],[7,8]] -> C row-major 19 22 43 50
-        # a_stream = row-major A ; b_streams[j] = B[*][j] repeated N times
-        print(assemble_1xk(2, 2,
-                           a_stream=[1, 2, 3, 4],
-                           b_streams=[[5, 7, 5, 7], [6, 8, 6, 8]]))
-    elif "--test-1x2" in sys.argv:
-        # A=[[1,2]] B=[[5,6],[7,8]] -> C=[[19,22]]
-        print(assemble_test(1, 2, 2, a_rows=[[1, 2]], b_cols=[[5, 7], [6, 8]]))
-    elif "--test-2x2" in sys.argv:
-        # A=[[1,2],[3,4]] B=[[5,6],[7,8]] -> C=[[19,22],[43,50]]
-        # row i west stream = A[i][*]; col j north stream = B[*][j]
-        print(assemble_test(2, 2, 2,
-                            a_rows=[[1, 2], [3, 4]],
-                            b_cols=[[5, 7], [6, 8]]))
+    A = [[1, 2], [3, 4]]
+    B = [[5, 6], [7, 8]]
+    text, exp = probe(2, A, B)
+    print(text)
+    print("# expect:", exp, file=sys.stderr)

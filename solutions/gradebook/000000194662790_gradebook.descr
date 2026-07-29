@@ -1,0 +1,28 @@
+# gradebook — submission c64cbc58-6a40-4cfb-9a67-34063795f373
+
+verdict      done: 20/20 cases, area2 4900, avgTicks 39,727, score 194,662,790
+submitted    2026-07-27T00:31:19+0000
+grid         70x70
+fingerprint  757e314e9fe586e6dd253149311a9ec54443a690f6152e0e90ae5a6b7bb0dba0
+commit       478d4a4
+local        all public cases on LM_VALIDATOR=reference, avg 13,970 ticks, score 68,454,400
+source       tasks/solutions/gradebook_ring.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Searched on area2 x *measured* avg_ticks rather than the area2 x corridor_cells proxy every prior
+sweep in this repo used. build_room costs 5-18s but optimize.verify on the fast engine costs
+0.05-0.08s — under 1% of an evaluation — so the proxy was never necessary, and searching ticks
+directly prices each lever with its row cost already counted.
+
+Block visits, not glyphs, are the bill: gradebook ran 2,496 visits against 322 glyph cells and
+15,510 grid ticks against an op model of 1,726 — 89% of ticks are corridor, ~39 a visit. Fusing
+every two-visit loop (5 each) cut visits 32.7% (gradebook) and 19.5% (snake). corridor_cells rose
+on both while ticks fell: static corridor is not what a case walks. Geometry was not spent either
+— flat_relay (a two-row turnaround; relay's three rows are a property of the perimeter walk) gave
+gradebook a row, and snake's north band folded 12 rows to 6, which bought four columns since
+snake's charged side was its width.
+
+Previous: 247,544,223. 

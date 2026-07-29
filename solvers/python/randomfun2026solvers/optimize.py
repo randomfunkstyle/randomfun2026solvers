@@ -138,7 +138,7 @@ def verify(
     problem: str | os.PathLike[str] | dict[str, Any],
     *,
     lm: Littleman | None = None,
-    tick_cap: int = scoring.DEFAULT_TICK_CAP,
+    tick_cap: int | None = None,
 ) -> VerifyResult:
     """Run every public case through the engine; require exact output match.
 
@@ -149,6 +149,7 @@ def verify(
     settle tick over all cases.
     """
     prob = load_problem(problem)
+    tick_cap = scoring.resolve_tick_cap(prob, tick_cap)
     cases = prob.get("publicTestData") or []
     source = _grid_source(grid)
     # An explicitly supplied Littleman is commonly a test double and always
@@ -740,7 +741,7 @@ def optimize(
     passes: Sequence[Any] = PASSES,
     semantic: bool = False,
     max_sweeps: int = 3,
-    tick_cap: int = scoring.DEFAULT_TICK_CAP,
+    tick_cap: int | None = None,
 ) -> OptimizeResult:
     """Search for a lower-scoring grid that still passes every public case.
 
@@ -765,6 +766,7 @@ def optimize(
     verify_lm = lm
     lm = lm or Littleman()
     prob = load_problem(problem)
+    tick_cap = scoring.resolve_tick_cap(prob, tick_cap)
 
     passes = list(passes)
     if semantic:
@@ -895,7 +897,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="also run the content-rewrite rule catalog (opt-in; geometric-only by default)",
     )
-    parser.add_argument("--tick-cap", type=int, default=scoring.DEFAULT_TICK_CAP, dest="tick_cap")
+    parser.add_argument("--tick-cap", type=int, default=None, dest="tick_cap")
     parser.add_argument("--out", help="write the optimized grid here")
     parser.add_argument("--verbose", action="store_true", help="print the search log")
     args = parser.parse_args(argv)

@@ -1,0 +1,16 @@
+# matmul — submission 5818b2cc-9b27-4a03-84b5-d36b50cc9d30
+
+verdict      done: 20/20 cases, area2 9216, avgTicks 38,438, score 354,244,608
+submitted    2026-07-26T21:53:44+0200
+grid         85x96
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  ec2ccd6e84495b73f1b37b00233d86d15ba23d99bb8da3580538670171b03b3e
+commit       1ccb41a
+local        matmul: 7/7 public cases, avg 31,090 ticks
+source       .claude/worktrees/agent-a9c84305bb5294054/tasks/solutions/matmul_packed.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+band widths re-searched against a trimmed west margin: 88x98 -> 85x96, 31553 -> 31090 ticks

@@ -51,7 +51,9 @@ __all__ = [
 #: emulator picks a model and the generator picks a block from this one word.
 #: ``stream`` is ``lm1/stream.py``'s three rings and a MAC (``matmul``); ``snake`` is
 #: ``lm1/snake_unit.py``'s body FIFO, which also owns the display and answers nothing.
-UNITS = frozenset({"stream", "snake", "path"})
+#: ``doom`` is ``lm1/d3_unit.py``'s column painter: the deadman-3d panel plus the
+#: baked HUD/FLASH patterns, write-only like ``snake`` and ``path``.
+UNITS = frozenset({"stream", "snake", "path", "doom"})
 
 #: ``ARCH.md`` §2.1: ring capacity must be ``P + slack``; too small deadlocks,
 #: too large starves the CPU.

@@ -1,0 +1,27 @@
+# matmul — submission da3770a7-ee07-4eae-8363-df781a4957b4
+
+verdict      done: 20/20 cases, area2 8100, avgTicks 156,535.3, score 1,267,935,930
+submitted    2026-07-26
+grid         86x90
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+local        matmul: 7/7 public cases, avg 104,833 ticks, local score 849,143,829
+source       tasks/solutions/matmul_cpu.man (origin/main at b2409ec)
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+Server ticks ran 1.49x the local figure (156,535 vs 104,833).
+
+Entry packing was investigated and is DOMINATED here — recorded so nobody
+retries it. Entries are -99..99, so 8 bits each and 8 per 64-bit word, but
+matmul's tape holds only 14 scalars and a tape is 32x32 whatever N is; the
+matrices live in the STREAM block's pipe rings. Sweeping STREAM_SIZE
+257/129/65/33/17/9/5/3 gives 8100 -> 7744 and then nothing: below 129 slots
+the WIDTH binds, and the width is the tape's, not the rings'. So 8-per-word
+buys exactly what 2-per-word buys, and a pipe re-route collects it for free.
+
+An independent 88x87 (area2 7744) fold exists on worktree-agent-a0b68d072175e6372
+at 118,638 local ticks. It is complementary to this grid's tick work: combining
+them should give 86x87, area2 7569, ~104,833 ticks, ~7.9e8 local. Merging
+conflicts in machine.py and test_lm1_matmul.py.

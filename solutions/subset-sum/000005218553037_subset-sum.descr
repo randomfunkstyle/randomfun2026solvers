@@ -1,0 +1,51 @@
+# subset-sum — submission d61d515d-cb90-4661-8302-faf41a604d2b
+
+verdict      done: 20/20 cases, area2 7056, avgTicks 739,591, score 5,218,553,038
+submitted    2026-07-27T10:52:01+0000
+grid         80x84
+problem id   b5e48adc-317d-480d-88a4-e2edc659453a
+fingerprint  d836446c230987bc915b9e252c8725c337d4437bd562f4c13aa6b51728e355f2
+commit       a11f11a
+local        7/7 public on LM_VALIDATOR=reference, avg 262,399 ticks, score 1,851,489,360
+             plus 12 random constraint-shaped cases; adversarial n=20 worst 5,981,344 vs 15M cap
+source       tasks/solutions/subset-sum_split.man   (generator solvers/python/randomfun2026solvers/subset_sum_split.py)
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+The two-room split. 92x128 -> 80x84, area2 16,384 -> 7,056 (x0.43), ticks 267,010 -> 262,399.
+Room A = init + phase 2; room B = phase 3 + emit + no-solution. The seam is real: phase 3 and
+emit need only ring V and the O pipe, never ring B, so room B's interior is 33 against room A's
+41. Ring B lives in the void BELOW room A (room A is 60 rows against room B's 74, so it is free)
+rather than in a widened band above. The relay room disappears entirely: a pipe may not loop back
+into its own room, which was the only reason ring V needed a turnaround — A -> B -> A is legal.
+
+THE UNMEASURED NUMBER CAME BACK FREE. The design budgeted +5% for the idle-relay forwarding cost.
+Measured by swapping ring V's relay on the real grid: relay(3,3)=8.00 ticks/word, (4,3)=5.00,
+(6,4)=3.20, (8,6)=2.67 — all four gave an IDENTICAL 267,010-tick average. Ring V's far side is
+never on the critical path: 28 words against a ~1,500-tick lap in a 97-cell pipe, so the buffer
+absorbs the bursts. Ticks then improved 4,600 because _nosol stops being a 97-row walk to the
+bottom of the grid.
+
+Two silent failures the guards caught, both of which loaded and ran:
+  - Room A's forwarding loop used the one-room v band (14..24), but room A's baton anchor is at
+    column 9 and ring V's send anchor at 21, so the midpoint is 15: every ring-V word room A
+    forwarded after handover went down the BATON pipe. Right shape, wrong values. _op now does an
+    exact nearest-anchor check requiring a strict win (ties go to reading order, which nothing may
+    depend on) and it is a build error, pinned by a test.
+  - _rot's third exit: its X goes straight on a word of exactly zero, which never happens in the
+    one-room build because the ring is always aligned — but room B starts wherever the idle loop
+    left it, and both RR before phase 2 and C when the last mask wins are zero. Straight walked
+    into the wall.
+  - _mouths counted eight when ring B's serpentine put a bend under the relay's corner.
+
+The baton is a third pipe polled with q, not a sentinel in ring V: a marker costs ~10 ticks/word
+against 6 because every word then needs M 2 + X W to be compared without being destroyed, which
+doubles ring V's cost on every lap of the search.
+
+Remaining: room B alone sets the charged side (74 rows against room A's 60; 84 tall against 80
+wide). Four rows off room B is area2 7,056 -> 6,400, ~x0.91, and all four must come out of the
+phase-3-and-emit stack, already greedily compacted once.
+
+Previous: 12,178,364,826. This: 2.33x better.
