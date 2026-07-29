@@ -439,15 +439,13 @@ def test_every_depth_four_pipe_glyph_sits_on_its_own_pipes_row():
         assert rows[band] == y, f"{glyph}@{(x, y)} claims {band}, whose row is {rows[band]}"
 
     # rule 2, stated: the west rows are distinct and rise in UPDB's read order.
-    assert unit.west["a_ret"] < unit.west["p1"] < unit.west["b_ret"]
+    assert unit.west["p1"] < unit.west["a_ret"] < unit.west["b_ret"]
     assert len(set(unit.west.values())) == len(unit.west)
     assert len(set(unit.east.values())) == len(unit.east)
-    # Ring A's fill is the topmost outgoing row, not `resp`. That is the *point* of
-    # reading ring A's return first (`UPDB_BANDS`): it puts ring A's two ports at
-    # opposite ends of the perimeter interval, which is what takes ring A's pair out
-    # of the ADDER's way — see `stream.block_crossings` and the two tests below.
-    assert unit.east["a_fwd"] == min(unit.east.values())
-    assert unit.west["a_ret"] == min(unit.west.values())
+    # `resp` must be the topmost outgoing row. It is the one pipe that leaves the
+    # block northward, so its pipe cuts the routing region, and any port above it is
+    # cut off from every other one — see `stream.block_crossings`.
+    assert unit.east["resp"] == min(unit.east.values())
 
 
 def test_the_drawn_updb_arm_touches_the_pipes_the_probe_proved():
@@ -637,7 +635,7 @@ def test_the_depth_three_block_is_planar_and_the_depth_four_one_is_not():
     had better report it planar. It does.
     """
     assert stream.block_crossings(3) == []
-    assert stream.block_crossings(4) == [("b_fwd", "b_ret")]
+    assert stream.block_crossings(4) == [("a_fwd", "a_ret"), ("b_fwd", "b_ret")]
 
 
 def test_the_remaining_depth_four_crossing_is_forced_by_two_arms():
@@ -670,9 +668,132 @@ def test_routing_prod_through_ring_bs_relay_makes_the_block_planar():
     §2.1's caution is about sharing a relay with a ring that can *drain*: ring B holds
     the weights and is permanently full, the product stream is not.
     """
-    grown = ("p2", "p1", "b_fwd", "b_ret")
+    # One dual relay is not enough: `prod` has to reach the ADDER through *both*
+    # rings' relays, because ring A's pair encloses ring B's and the ADDER has to end
+    # up outside both. So `prod` -> ring B's relay -> ring A's relay -> ADDER, and
+    # each of those relays turns its own ring around as well.
+    assert stream.block_crossings(4, tree=("p2", "p1", "b_fwd", "b_ret")) == [
+        ("a_fwd", "a_ret")
+    ]
+    grown = ("p2", "p1", "b_fwd", "b_ret", "a_fwd", "a_ret")
     assert stream.block_crossings(4, tree=grown) == []
     # And the dual relay this needs is already drawn and already has two loops.
     cells = stream.dual_relay_cells()
     assert list(cells.values()).count("Y") == 1
     assert list(cells.values()).count("r") == list(cells.values()).count("s") == 2
+
+
+def test_resp_leaving_northward_is_what_pins_the_unit_s_row_order():
+    """The cut `block_crossings` first missed, and the reason for UPDB's body order.
+
+    ``resp`` is the only pipe that leaves the block northward, so within the block it
+    is a curve from the unit's boundary to the outer boundary: it *splits* the
+    perimeter, and a ring whose two ports end up on opposite sides of it is
+    unroutable by any layout at all. This module drew ``updb_body``'s other valid
+    order once — which puts ring A's fill above ``resp`` — and reverted it for exactly
+    this reason, so the assertion belongs here rather than in a comment.
+    """
+    spec = stream._spec(4)
+    assert spec.rows["resp"] == min(spec.rows[b] for b in spec.east)
+    order = stream.perimeter_order(4)
+    assert order[0] == "resp", "nothing may sit above resp on the east wall"
+    # and with resp first, its cut takes nothing with it
+    assert stream.block_crossings(4, tree=("p2", "p1", "b_fwd", "b_ret", "a_fwd", "a_ret")) == []
+
+
+# ── the four-pipe dual relay: one room, two men, two jobs ────────────────────
+def test_the_dual_relay_s_two_loops_each_read_before_they_send():
+    """A relay that sends first would push the 0 its man was born holding.
+
+    ``_RELAY``'s own man reaches his ``r`` before his ``s``; the upper loop's child is
+    born heading north *below* its ``s``, so it has to detour round the west column to
+    enter at the top. Before this was fixed the detour returned to the west column
+    instead of the ``s``, so the upper loop read for ever and never sent — a defect
+    that survived because the existing test pinned tick-5 positions and nothing else.
+    """
+    cells = stream.dual_relay_cells()
+    steps = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}
+
+    def walk(pos, direction, n=30):
+        seen = []
+        for _ in range(n):
+            glyph = cells.get(pos, " ")
+            seen.append(glyph)
+            direction = steps.get(glyph, direction)
+            pos = (pos[0] + direction[0], pos[1] + direction[1])
+        return seen
+
+    for start, direction in (((2, 4), (0, -1)), ((2, 6), (0, 1))):
+        ops = [g for g in walk(start, direction) if g in "rs"]
+        assert ops[:4] == ["r", "s", "r", "s"], f"loop from {start} is {ops[:4]}"
+
+
+def test_the_dual_relay_s_two_men_cannot_meet():
+    """By layout, not by timing — which is what makes it safe to place around.
+
+    ``SPEC.md``: a child born on another live man kills both, and so do same-cell
+    arrivals and head-on swaps, *without a fatal error*. So "the two men never meet"
+    has to be a property of the drawing. It is: their steady-state cycles are disjoint
+    cell sets, three columns apart in the same room but six rows apart.
+    """
+    cells = stream.dual_relay_cells()
+    steps = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}
+
+    def cycle(pos, direction, skip, n=40):
+        seen = []
+        for i in range(n):
+            glyph = cells.get(pos, " ")
+            if i >= skip:
+                seen.append(pos)
+            direction = steps.get(glyph, direction)
+            pos = (pos[0] + direction[0], pos[1] + direction[1])
+        return set(seen)
+
+    upper, lower = cycle((2, 4), (0, -1), 8), cycle((2, 6), (0, 1), 4)
+    assert upper and lower
+    assert not (upper & lower), f"the two men share {upper & lower}"
+
+
+@pytest.mark.parametrize("upper_driven", [True, False])
+def test_the_dual_relay_passes_a_pipe_through_without_starving_its_ring(upper_driven: bool):
+    """Four pipes, two men, and an empty pipe parks one loop without stalling the other.
+
+    ``ARCH.md`` §2.1 allows one room to turn around many rings *only while they are
+    permanently full*, because a shared relay blocks on the first empty one. Two men
+    is the way round that, and this is the check: the idle loop's ``r`` is wired to a
+    manless stub room so nothing ever arrives, and the driven loop still passes every
+    value. Argued, that would be a liveness claim; run, it is a fact.
+    """
+    rows = stream.dual_relay_probe(upper_driven)
+    engine = FastLittleman("\n".join(rows))
+    assert len(engine.pipes) == 4, "two loops, one in and one out each"
+    assert sorted(room.kind for room in engine.rooms) == [
+        "compute", "compute", "compute", "input", "output",
+    ]
+
+    result = engine.run([11, 22, 33], max_ticks=20_000)
+    assert result.fatal is None, result.fatal
+    assert result.output == [11, 22, 33]
+
+
+def test_every_dual_relay_pipe_binds_by_position():
+    """All four, against the engine's own binding — ARCH.md §4.4's silent-misbind family."""
+    rows = stream.dual_relay_probe(True)
+    engine = FastLittleman("\n".join(rows))
+    rx, ry = 10, 8
+    south = ry + stream.DUAL_RELAY_IH + 1
+    wall = {}
+    for band, (side, off) in stream.DUAL_RELAY_PORTS.items():
+        wall[band] = {"north": (rx + off, ry), "south": (rx + off, south), "west": (rx, ry + off)}[
+            side
+        ]
+    glyphs = {
+        ("turn_in", "r"): (rx + 3, ry + 2),
+        ("turn_out", "s"): (rx + 2, ry + 2),
+        ("pass_in", "r"): (rx + 3, ry + 8),
+        ("pass_out", "s"): (rx + 2, ry + 8),
+    }
+    for (band, glyph), cell in glyphs.items():
+        pipe = engine.pipes[engine._bindings[cell]]
+        attach = pipe.src_attach if glyph == "s" else pipe.dst_attach
+        assert attach == wall[band], f"{glyph}@{cell} should bind {band} at {wall[band]}"
