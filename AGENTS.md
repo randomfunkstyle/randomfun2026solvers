@@ -60,6 +60,28 @@ which on this machine is CPU ops per second, which is **ticks per frame**.
   machine's 300-column ceiling is pinned in `tests/test_deadman3d.py`, and every
   pipe must keep binding. Stay inside those; never minimise for its own sake.
 
+### The one metric: ticks to the last frame
+
+For `deadman-3d_hires`, report **ticks until the last frame of the tour is on the
+wall** — `res.frame_ticks[-1]`, which is the whole run including boot and title,
+and equals `res.step`. On the 21-round tour that is currently **369,544,763**,
+mean **17,036,041 a frame**.
+
+Quote the mean beside it when the question is frame rate; quote the total when
+the question is "is this change an improvement".
+
+**Why the total and not the frame-1→frame-N walk**, which is what every number
+recorded before `0d99dd1` is: the walk can be gamed and the total cannot. Move
+work into boot — precompute a table, unroll the loader differently — and
+per-frame time falls while total work rises, with nothing in the gates to notice.
+Boot is 7.80% of the run, so the total dilutes a gameplay win by that much; that
+is a cheap price for a number nobody can quietly cheat.
+
+The two differ by ~8.5%, so **say which one you mean.** `revalidate.py` writes
+both to `measurements.jsonl` for exactly that reason. Per-frame times spread
+1.55x across the tour (14.3M to 22.2M — monster-heavy frames cost more), so two
+runs are comparable only at the same round count.
+
 ### Test scope: DOOM only
 
 The contest is over and this family is all that is being worked on, so **do not

@@ -14,6 +14,12 @@ allowed to stay declined — it is a tripwire for the ones that stopped being tr
 
     python scratch/deadman3d-opt/revalidate.py [rounds] [lever ...]
 
+The metric is **ticks until the last frame is on the wall** — the whole run,
+boot and title included.  That is the ungameable one: the older "walk" figure
+(frame 1 to frame N) can be improved by moving work into boot, where nothing in
+the gates would see it.  Both are written to ``measurements.jsonl``, because every
+number recorded before this change is a walk and they differ by boot's ~7.8%.
+
 Three rounds (~30s a variant) is enough to see a sign change; confirm anything
 interesting at 21.  Exit status is 0 whatever the numbers say — read the table.
 """
@@ -122,10 +128,24 @@ def main(argv: list[str]) -> int:
                 print(f"  {label:>22}: RUN FAILED — fatal={res.fatal} "
                       f"passed={res.passed}", flush=True)
                 return None
-            walk = res.frame_ticks[-1] - res.frame_ticks[0]
-            cfg.record(log, label, feats, rounds=n, outcome="ok", ticks=walk,
+            ft = list(res.frame_ticks)
+            # THE metric: ticks until frame N is on the wall — the whole run,
+            # boot and title included.  The walk (`ft[-1] - ft[0]`) is what every
+            # older number in this repo is, so it is kept beside it rather than
+            # replaced: the two differ by boot's ~7.8% and silently switching
+            # units would make every recorded figure incomparable.
+            #
+            # Total is the honest one because it cannot be gamed.  The walk can:
+            # move work into boot — precompute a table, unroll differently — and
+            # per-frame time falls while total work rises, with nothing in the
+            # gates to notice.
+            total, walk = ft[-1], ft[-1] - ft[0]
+            per = [ft[i + 1] - ft[i] for i in range(len(ft) - 1)]
+            cfg.record(log, label, feats, rounds=n, outcome="ok",
+                       ticks_to_last_frame=total, walk=walk, boot=ft[0],
+                       mean_frame=sum(per) // len(per) if per else None,
                        width=m.width, height=m.height)
-            return walk, m, time.time() - t0, feats
+            return total, m, time.time() - t0, feats
         finally:
             for reg, old in saved:
                 if isinstance(reg, set):
@@ -140,7 +160,7 @@ def main(argv: list[str]) -> int:
         print("  shipped machine does not build or gate — fix that first")
         return 1
     base, m, dt, base_f = got
-    print(f"  {'shipped':>22}: {m.width}x{m.height} walk={base:,}  ({dt:.0f}s)",
+    print(f"  {'shipped':>22}: {m.width}x{m.height} ticks={base:,}  ({dt:.0f}s)",
           flush=True)
 
     flipped = []
@@ -153,7 +173,7 @@ def main(argv: list[str]) -> int:
         flag = ""
         if d < -0.5:
             flag, _ = "  <<< NOW A WIN", flipped.append((name, d, feats))
-        print(f"  {name:>22}: {m.width}x{m.height} walk={walk:,}  "
+        print(f"  {name:>22}: {m.width}x{m.height} ticks={walk:,}  "
               f"{walk - base:+,} = {d:+.3f}%{flag}  ({dt:.0f}s)", flush=True)
 
     if flipped:
