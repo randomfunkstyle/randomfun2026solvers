@@ -417,7 +417,7 @@
       "name": "seek:H",
       "x": 62,
       "y": 158,
-      "w": 225,
+      "w": 231,
       "h": 11,
       "note": "",
       "color": "#64748b",
@@ -429,8 +429,8 @@
       "name": "seek:V",
       "x": 257,
       "y": 1,
-      "w": 30,
-      "h": 113,
+      "w": 36,
+      "h": 102,
       "note": "",
       "color": "#64748b",
       "tags": [
@@ -585,24 +585,12 @@
       "name": "tape",
       "x": 61,
       "y": 98,
-      "w": 224,
+      "w": 230,
       "h": 60,
       "note": "rotating pipe tape, N=600, skip_batch=1, relay=None",
       "color": "#0ea5e9",
       "tags": [
         "tape"
-      ]
-    },
-    {
-      "name": "teleport:REQ",
-      "x": 61,
-      "y": 120,
-      "w": 6,
-      "h": 29,
-      "note": "",
-      "color": "#64748b",
-      "tags": [
-        "teleport"
       ]
     }
   ],

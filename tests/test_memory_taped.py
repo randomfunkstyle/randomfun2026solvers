@@ -334,6 +334,97 @@ def test_the_shipped_deadman3d_plan_routes_every_one_of_its_600_addresses() -> N
     assert hot_first == address_order
 
 
+def test_grown_gate_rooms_are_opt_in_and_still_route_every_real_address() -> None:
+    """Gate rooms grown to their **callers** — off by default, and still exact.
+
+    ``chain_reach`` pulls every gate but the first west until its wall stands
+    beside the previous gate's; ``request_roof`` pulls the first gate's roof up
+    to whatever hands it the request. Both work for one reason and it is not
+    obvious: ``U`` turns away from the **wall** the pipe attaches to, not from
+    the direction the pipe comes from, so the entry may sit thirty rows above
+    the man who reads it. If that were the other way round the man would turn
+    south and the gate would route reads to the wrong bank *without erroring* —
+    which is why this reads every address of the live plan back individually
+    through all four builds rather than checking a shape.
+
+    What it deliberately cannot do is reach the gate's **callee**. The two
+    outgoing pipes share the east wall and ``s`` takes the nearest; the tightest
+    of the eight ``s`` glyphs has three cells of margin, so a local attachment
+    more than four rows off the body binds to the downstream pipe instead.
+    """
+    from randomfun2026solvers.lm1 import machine
+
+    n = machine.TAPE_SIZE["deadman-3d"]
+    plan = machine.TAPED_BANKS["deadman-3d"]
+    order = machine.TAPED_BANK_ORDER[("deadman-3d", "taped")]
+    skip = machine.TAPED_SKIP_BATCH["deadman-3d"]
+    common = dict(skip_batch=skip, compact_gate=True, order=order)
+
+    shipped = taped_store_block(n, plan, **common)
+    men = sum(1 for c in shipped.cells.values() if c == "@")
+    # Off by default, to the cell — the knobs are additive for every other caller.
+    assert taped_store_block(n, plan, **common, chain_reach=False).cells == shipped.cells
+    assert taped_store_block(n, plan, **common, request_roof=None).cells == shipped.cells
+    assert taped_store_block(n, plan, **common, feed_teleport=False).cells == shipped.cells
+
+    builds = {
+        "chain": dict(chain_reach=True),
+        "roof": dict(request_roof=20),
+        "both": dict(chain_reach=True, request_roof=20),
+        "feed": dict(feed_teleport=True),
+        "all": dict(chain_reach=True, request_roof=20, feed_teleport=True),
+    }
+    want = {a: a * 13 + 7 for a in range(1, n)}
+    for name, kw in builds.items():
+        block = taped_store_block(n, plan, **common, **kw)
+        if kw.get("feed_teleport"):
+            # A forwarder a bank: one man and one extra pipe each, and two
+            # columns of pitch, because the corridor it hangs in was four
+            # columns wide and `teleport_v` is six. The height does not move.
+            assert block.height == shipped.height, name
+            assert block.width == shipped.width + 2 * (len(plan) - 1), name
+            assert block.pipes == shipped.pipes + len(plan), name
+            assert sum(1 for c in block.cells.values() if c == "@") == men + len(plan), name
+        else:
+            # Growing a room west/north costs nothing that scores: the banks, the
+            # pitch and therefore the block's own box are computed from the
+            # ungrown gates, and no room is added.
+            assert (block.width, block.height) == (shipped.width, shipped.height), name
+            assert block.pipes == shipped.pipes, name
+            assert sum(1 for c in block.cells.values() if c == "@") == men, name
+        assert block.cells != shipped.cells, name
+
+        engine = _standalone(block)
+        writes = [x for a in range(1, n) for x in (1, a, a * 13 + 7)]
+        bounds = [1]
+        for m in taped_plan(n, plan):
+            bounds.append(bounds[-1] + m)
+        got: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, n)
+            if lo >= hi:
+                continue
+            reads = [x for a in range(lo, hi) for x in (0, a)]
+            res = engine.run(
+                writes + reads,
+                expected=[a * 13 + 7 for a in range(lo, hi)],
+                max_ticks=400_000_000,
+            )
+            assert res.fatal is None, (name, lo, res.fatal)
+            got.update(zip(range(lo, hi), res.output, strict=False))
+        assert got == want, name
+
+    # ``chain_pad`` only ever lengthens: it is the measuring instrument, so it
+    # must move the links and nothing else, and it must refuse to run backwards.
+    padded = taped_store_block(n, plan, **common, chain_reach=True, chain_pad=10)
+    assert (padded.width, padded.height) == (shipped.width, shipped.height)
+    assert padded.cells != taped_store_block(n, plan, **common, chain_reach=True).cells
+    with pytest.raises(ValueError):
+        taped_store_block(n, plan, **common, chain_reach=True, chain_pad=-1)
+    with pytest.raises(ValueError):
+        bank_gate(8, compact=True, west_grow=-1)
+
+
 def test_fresh_slots_read_zero_and_extremes_survive() -> None:
     engine = _standalone(taped_store_block(330, PLAN, skip_batch=2))
     addrs = [1, 128, 129, 256, 257, 296, 297, 329]  # both sides of every seam
