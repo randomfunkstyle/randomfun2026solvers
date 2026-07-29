@@ -107,8 +107,15 @@ which assumes a single panel to compare frames against. That is our own code.
 (`v >> 4`, giving 0..15). 2000 train images and 1000 validation images, taken as
 the first N of the official train and test splits so the selection needs no seed.
 
-64 nibbles is **exactly four 64-bit words**. A fifth word carries the label. So an
-image is 5 words, the train set is 10,000 words and the validation set is 5,000.
+**A word holds fifteen nibbles, not sixteen.** Sixteen would be 64 bits exactly, and
+every littleman value is a *signed* 64-bit integer while a ROM literal must in
+addition be non-negative (`rom.digit_width` raises on a negative word) — an all-white
+8x8 image packs to `2^64 - 1`, which is neither. Fifteen nibbles is 60 bits, at most
+`1,152,921,504,606,846,975`: 19 digits, comfortably inside the signed range.
+
+64 pixels plus a label is 65 nibbles, so an image is **5 words** with ten slots
+spare — the count the rest of this document assumes, unchanged. The train set is
+10,000 words and the validation set 5,000.
 
 ### 3.2 Blocked rings, not a tape
 
@@ -145,9 +152,9 @@ SHA-256 of the source files. Builds and tests are then **offline and
 byte-reproducible**, which `AGENTS.md`'s "never touch production from a test" rule
 wants. The fetch is a separate CLI subcommand, never a build step.
 
-ROM cost: 192,000 nibbles at ~3 bits per grid cell (a 19-digit literal in 21 cells)
-is ~256,000 cells of serpentine. With the program's own ROM and code ring (§5) the
-whole grid lands near 650x650 — irrelevant
+ROM cost: 15,000 words as 19-digit literals in ~21 cells each is ~315,000 cells of
+serpentine. With the program's own ROM and code ring (§5) the whole grid lands near
+700x700 — irrelevant
 against the 10MB program limit, and there is no footprint term to pay.
 
 ## 4. The model
