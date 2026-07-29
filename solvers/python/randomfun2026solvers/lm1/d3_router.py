@@ -155,12 +155,44 @@ R_TRIE = 2  # rows 2..4 (TRIE_BITS levels), fanning sideways
 R_SEND = 6  # every leaf's `s` sits on this row: south-wall binding is by column
 R_COLLECT = 8  # every leaf rejoins here and walks back west to MAIN
 
-#: Trie geometry, :mod:`d3_unit`'s verbatim: eight leaves at
-#: ``LEAF0 + LEAF_PITCH * i``, the entry column midway.  The pitch only has to
-#: exceed twice the leaf row's distance to the south wall for the outlets to
-#: bind unambiguously; 12 leaves a margin of 12 against a required 1.
-LEAF0 = 3
-LEAF_PITCH = 12
+#: Trie geometry: eight leaves at ``LEAF0 + LEAF_PITCH * i``, the entry column
+#: midway.  :mod:`d3_unit`'s shape, but **not** its pitch, and the difference is
+#: the whole width of this room.
+#:
+#: The pitch is a **tick** cost, not a footprint one.  A man walks one cell a
+#: tick, and every command word walks the fan twice: east from the unpack to
+#: ``TRIE_COL`` (``LEAF_PITCH * 7 // 2`` cells), down the trie (``2P + P +
+#: P/2``), and west along the collector back to column 1 (up to another
+#: ``LEAF0 + 4P``).  At 12 that is ~116 ticks a word, measured
+#: (``scratch/deadman3d-opt/router_load.py``); at 2 it is ~30.
+#:
+#: What the pitch has to buy is that each leaf's ``s`` is **strictly** nearest
+#: its own outlet on the south wall, and since the outlets sit directly below
+#: the leaves that margin *is* the pitch (:func:`_check_router`) — one would do.
+#: 12 was not slack either: it was forced by an arrangement this wall no longer
+#: has.  With all four blocks west of the cluster the two north legs shared one
+#: lane row, which needs T1's outlet east of T0's *command port* at column 33,
+#: i.e. ``LEAF0 + 3 * LEAF_PITCH > 33``.  The blocks are back either side of the
+#: cluster (see :data:`GUTTER_Y`), every leg has its own lane again, and the only
+#: outlet constraint left is ``LEAF0 + 2 * LEAF_PITCH < 33`` — T0's outlet west
+#: of its own command port.  So the pitch goes the other way, to the floor.
+#:
+#: ``LEAF0`` is 4 rather than 3 because ``TRIE_COL`` has to clear the unpack:
+#: ``>@rM8W/WbW`` fills columns 1..10 of :data:`R_MAIN` and the trie's entry
+#: ``v`` sits on that row.  At pitch 2 the entry is ``LEAF0 + 7``, so 4 is the
+#: first value that lands east of the ``W``.  A smaller one is not a silent
+#: error — :class:`~..circuit.Collision` refuses the overwrite.
+#:
+#: The pitch must stay **even**: the trie's step at level *l* is
+#: ``LEAF_PITCH * 2 ** (TRIE_BITS - l) // 2``, and the deepest level's step is
+#: ``LEAF_PITCH // 2``.  At 2 that step is 1, so the deepest level places its
+#: ``v`` in the cell the shallower levels give a ``]`` — which is right, and not
+#: an accident: ``]`` shifts BP for the *next* test and there is no next test
+#: after the last level.  :func:`leaf_codes` reads the selectors off the trie
+#: either way, so :data:`SEL` is pitch-independent and the emitted asm does not
+#: move.
+LEAF0 = 4
+LEAF_PITCH = 2
 TRIE_BITS = 3
 TRIE_COL = LEAF0 + LEAF_PITCH * ((1 << TRIE_BITS) - 1) // 2
 
@@ -346,22 +378,23 @@ GAP_Y = 8
 
 #: The blocks' west margin — how far east of the wall's own edge column 0 the
 #: 2x2 starts.  It used to be ``IW + 4`` (94), which put the whole router room
-#: *beside* block 0 and charged its 92 columns to the wall's width for nothing:
-#: the router is 10 rows tall and the blocks start at row 18, so it fits
-#: perfectly well **above** block 0's left-hand columns.
+#: *beside* block 0 and charged its columns to the wall's width for nothing: the
+#: router is 10 rows tall and the blocks start at row 18, so it fits perfectly
+#: well **above** block 0's left-hand columns.
 #:
 #: What the margin actually has to cover is the two **lower** tiles' legs.  A
 #: leg leaves the router's south wall, drops to its lane row and runs east, and
-#: the bottom row's lanes are ~114 rows below the router — so those two descents
+#: the bottom row's lanes are ~200 rows below the router — so those two descents
 #: have to pass the whole height of the top row of blocks, which means their
 #: outlet columns must stay west of ``bx0``.  :data:`DEST_LEAF` already puts the
-#: bottom tiles on the two westernmost leaves (``T2`` at 3, ``T3`` at 15), so
-#: clearing column 15 is the whole requirement and 17 is the first value that
-#: does it.  The top tiles' legs turn two rows above the blocks and never
-#: descend past them, so their outlets (27, 39) may sit over block 0 freely.
+#: bottom tiles on the two westernmost leaves (``T2`` at 4, ``T3`` at 6), and the
+#: room itself is only 23 columns wide now, so 17 clears both with room to spare.
+#: The top tiles' legs turn two rows above the blocks and never descend past
+#: them, so their outlets (8, 10) may sit over block 0 freely.
 #:
-#: 572 -> 495 columns, which is a quarter of the wall and — with the ROM folded
-#: (``machine.ROM_ROWS``) — a quarter off the machine's binding side.
+#: 572 -> 495 columns on the scattered wall, which is a quarter of it and — with
+#: the ROM folded (``machine.ROM_ROWS``) — a quarter off the machine's binding
+#: side.
 BLOCK_X0 = 17
 
 #: The last panel row COL's floor run fills, per tile row.  At 128x96 the 3D
