@@ -657,3 +657,63 @@ Both are consistent with one model and both were measured.
 tour and it is now entirely the drum's **cascade walk**, not the request pipe. The
 252-cell westward run along the bottom collector row is the biggest single piece of
 it. Shortening the pipe further is worth nothing; the pipe is below the floor.
+
+# M11b — the U-turn under the CPU: what it was for, and that it was for nothing
+
+Taped tier only, opt-in via `machine.SEEK_TAKEN_DROP_EAST`. Baseline: the M11
+grid, **838,353,122**.
+
+Read off the shipped 287x253 grid, a taken `JMPS` went:
+
+```
+(58,133)  the JMPS lane's drop column          drop 13 rows
+(58,146)  '<'  the slab's entry row            walk 15 WEST
+(43,146)  'v'  slab_base                       drop  8 rows
+(43,154)  '>'  the taken row                   walk 13 EAST
+(56,154)  's'  the request goes out            -> (57,154) 'v', (57,155) '<'
+```
+
+— 15 west and then 13 east, to arrive 2 columns from where it started falling.
+
+**What it was for.** The drop column is `slab_base[m]`, and for a *branch* slab
+that is genuinely load-bearing: `base` is where `>`/`X` and the three arm rows of
+the fan-out are built. A seek **jump** slab has no body at all — under the seek
+drum its whole "slab" is one `v` and a column of `.` — so it inherited a column it
+has no use for. Nothing else holds it either: the seek tail's only `r`/`s` glyphs
+are the `s` at `e_s` and the flush/discard `r`s in columns 3..4, and none of them
+move when the drop does.
+
+**The fix.** Turn south at `struct_east + 1` (= `e_s - 1`), the last column that
+still lands west of the `s`, clamped to the lane's own drop column so the entry
+row's `<` keeps its cell. Being east of `struct_east` it is east of every slab
+body by construction, so the drop crosses nobody; the generator asserts the column
+is clear anyway. The walk becomes 3 west, 8 down, 1 east.
+
+| | before | after |
+|---|---|---|
+| JMPS entry-row leg | 15 west + 13 east | **3 west + 1 east** |
+| taped box | 287x253 | 287x253 (unmoved) |
+| 116-round tour | 838,353,122 | **837,925,922** (**-0.051%**) |
+
+24 ticks a taken `JMPS`, and the tour says ~17,800 of them over 116 rounds (~153 a
+frame) — which is also the first direct count of taken jumps on this machine, and
+it is *twice* the ~8,063 the seek-pipe derivative suggested. That is not a
+contradiction: only the seeks whose transit outruns the drum's cascade walk pay
+per pipe cell, so the pipe derivative counts pipe-bound seeks, not all of them.
+
+## The *other* west leg, which is load-bearing and stays
+
+After `s` the man turns south and walks row `t+1` west from column 57 to column 11
+— 46 ticks, the longest single leg left on the seek path. It looks identical in
+kind to the one just deleted. It is not:
+
+* the flush loop's `r` and the remainder `r` must be nearest the **ROM** pipe,
+  which attaches at the CPU's *west* wall (`_STRUCT_X0_SEEK`'s comment: "columns
+  1..4 belong to the flush/remainder tail"), and
+* even granting slack there — the ROM beats `mem_resp` for any `r` west of column
+  ~39, so the tail could move ~28 columns east — the man still has to reach the
+  CPU's **return riser**, which is at the west wall. Moving the tail east only
+  moves the same 46-tick walk onto the collector row.
+
+Measured negative by construction: the walk is conserved, so it is recorded rather
+than built.

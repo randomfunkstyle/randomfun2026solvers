@@ -1081,6 +1081,7 @@ def build_cpu(
     trim_dead: bool = False,
     top_bus: bool = False,
     seek: bool = False,
+    seek_taken_drop_east: bool = False,
     tight_drops: bool = False,
     slab_pitch: int = _SLAB_PITCH,
 ) -> _Cpu:
@@ -1493,12 +1494,25 @@ def build_cpu(
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
     taken_drops: list[int] = []
+    #: Where each seek slab turns south off its entry row; ``slab_base`` unless
+    #: :data:`SEEK_TAKEN_DROP_EAST` straightened it (see below).
+    turn_x: dict[str, int] = {}
     if seek:
         # Send-and-flush slabs (engine-proven by the Stage-2 RAM work): the
         # taken path carries `row*K+rem` in A down to the eastbound taken row,
         # sends it out the east-wall request pipe, then drops into the flush
         # block: r/X until the drum's sentinel (-1), read the remainder, and
         # run the stock 2x4 counted discard. ACC stays in B throughout.
+        # A seek *jump* has no slab body at all — it is one turn south and a drop —
+        # so the column it turns at is a free choice, unlike a branch's, whose `X`
+        # fan-out really does start at ``base``. Taking ``base`` anyway makes the man
+        # walk west across the whole slab band on the entry row and then straight
+        # back east along the taken row to reach the ``s``: a U-turn of
+        # ``2 * (e_s - 1 - base)`` ticks on every taken jump, and it holds nothing.
+        # ``jump_x`` instead turns him at the last column that still lands west of
+        # the ``s``. That column is east of ``struct_east``, hence east of every slab
+        # body, so the drop passes through nobody's slab on the way down.
+        jump_x = struct_east + 1 if seek_taken_drop_east else None
         for m in order:
             s0, base = slab_at[m], slab_base[m]
             if p.sem[m] not in _SEEK_SEMS:
@@ -1507,9 +1521,15 @@ def build_cpu(
                     g, m, p, s0, base, collector, pipe_glyphs, drain_unit_bits
                 )
             elif p.sem[m] in _JUMP_SEMS:
+                # never west of ``base`` (that is the shipped column and the floor),
+                # never east of the lane's own drop (its `<` owns that cell).
+                jx = base if jump_x is None else max(base, min(jump_x, drop_x[row_of[m]] - 1))
                 for yy in range(s0 + 1, taken_row):
-                    g.soft(base, yy, ".")
-                taken_drops.append(base)
+                    if jx != base and (jx, yy) in g.c:
+                        raise MachineError(f"seek jump drop column {jx} is occupied at y={yy}")
+                    g.soft(jx, yy, ".")
+                taken_drops.append(jx)
+                turn_x[m] = jx
             else:
                 g.soft(base, s0 + 1, ".")
                 g.put(base, s0 + 2, ">")
@@ -1542,9 +1562,10 @@ def build_cpu(
                 for x in range(base + 2, dx):
                     g.soft(x, s0, "<")
             else:
-                for x in range(base + 1, dx):
+                turn = turn_x.get(m, base)
+                for x in range(turn + 1, dx):
                     g.soft(x, s0, "<")
-                g.put(base, s0, "v")
+                g.put(turn, s0, "v")
 
         # ── the seek tail, entirely BELOW the slab band ───────────────────────
         # Nothing here shares a row with a slab, so the classic slabs keep their
@@ -2838,6 +2859,7 @@ def build(
     seek_threshold: int = SEEK_THRESHOLD,
     seek_ops: Sequence[str] = SEEK_OPS,
     seek_teleport: bool = False,
+    seek_taken_drop_east: bool = False,
     doom_loop_row: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
@@ -3030,6 +3052,7 @@ def build(
                     store_shape=store_shape,
                     seek_layout=seek_layout,
                     seek_teleport=seek_teleport,
+                    seek_taken_drop_east=seek_taken_drop_east,
                     doom_loop_row=doom_loop_row,
                 )
             except MachineError as exc:
@@ -3088,6 +3111,7 @@ def build(
                     store_shape=store_shape,
                     seek_layout=seek_layout,
                     seek_teleport=seek_teleport,
+                    seek_taken_drop_east=seek_taken_drop_east,
                     doom_loop_row=doom_loop_row,
                 )
             except MachineError:
@@ -3168,6 +3192,7 @@ def _assemble(
     store_shape: tuple[int, int] | None = None,
     seek_layout=None,
     seek_teleport: bool = False,
+    seek_taken_drop_east: bool = False,
     doom_loop_row: int | None = None,
 ) -> Machine:
     seek = seek_layout is not None
@@ -3187,6 +3212,7 @@ def _assemble(
         trim_dead=trim_dead,
         top_bus=top_bus,
         seek=seek,
+        seek_taken_drop_east=seek_taken_drop_east,
     )
     W, H = cpu.width, cpu.height
 
@@ -5550,6 +5576,32 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: derivative before building.
 SEEK_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
+#: Slugs whose **seek jump** turns south at the east end of its entry row instead of
+#: at its slab's ``base``, deleting the U-turn under the CPU.
+#:
+#: A taken ``JMPS`` used to arrive at its entry row on the lane's own drop column,
+#: walk *west* across the whole slab band to ``slab_base``, drop to the taken row,
+#: and then walk straight back *east* to the ``s`` — 15 west and 13 east on
+#: ``deadman-3d``. The west leg looks like it must be holding something, and for a
+#: *branch* slab it would be: ``base`` is where the ``X`` fan-out and its three arm
+#: rows start. A seek jump has no slab body at all — the whole "slab" is one ``v``
+#: and a column of dots — so ``base`` is inherited convention and nothing else.
+#: Nothing binds to it either: the only ``r``/``s`` glyphs in the seek tail are the
+#: ``s`` at ``e_s`` and the flush ``r``\ s in columns 3..4, and none of them move.
+#:
+#: The new column is ``struct_east + 1`` = ``e_s - 1``, the last one that still
+#: lands west of the ``s``, clamped to the lane's own drop column. Being east of
+#: ``struct_east`` it is east of every slab body by construction, so the drop
+#: crosses nobody on the way down; the generator asserts the column is clear
+#: anyway.
+#:
+#: Worth ``2 * (e_s - 1 - base)`` = **24 ticks a taken JMPS**. Measured on the
+#: 116-round tour, native, taped tier: see the commit message. Keyed by
+#: ``(slug, tier)`` — the CPU band is identical on both deadman-3d tiers, so the
+#: canonical machine would take the same win, but its grid is pinned at
+#: ``f62d63fd`` and only the taped family is allowed to move.
+SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
 #: 12-row one. Keyed by tier because only the taped tier has gates at all;
@@ -6034,6 +6086,7 @@ def build_for(
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
         seek_teleport=_seek and (slug, store) in SEEK_TELEPORT,
+        seek_taken_drop_east=_seek and (slug, store) in SEEK_TAKEN_DROP_EAST,
         seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
