@@ -885,16 +885,22 @@ def test_the_taped_tier_builds_from_the_taped_program() -> None:
     taped = d3.taped_program()
     # The registry keys off the program *name*, so the override must keep it.
     assert taped.name == canonical.name == "deadman-3d"
-    # The taped program is the canonical one with both read-count levers on, and
-    # ROM words are how the two show up here: -32 for the sixteen deleted
-    # `LD WADDR` (16 instructions x 2 words), +6 for `dda_diff`'s three added
-    # instructions outside the loop (one per per-ray seed arm, one in `whx`) —
-    # the DDA step itself is word-neutral, which is the point.
+    # The taped program is the canonical one with every tier lever on, and ROM
+    # words are how they show up here: -32 for the sixteen deleted `LD WADDR`
+    # (16 instructions x 2 words); +6 for `dda_diff`'s three added instructions
+    # outside the loop (one per per-ray seed arm, one in `whx`) — the DDA step
+    # itself is word-neutral, which is the point; +10 for `lap_via_jump`'s five
+    # (a stub and an exit for each of `boot`/`title`, one shared stub for the
+    # DDA, whose two arms both branch to it).
     reload_only = asm.assemble(
         d3.deadman3d_source(dda_acc_reload=False), name="deadman-3d"
     )
+    diff_only = asm.assemble(
+        d3.deadman3d_source(dda_acc_reload=False, dda_diff=True), name="deadman-3d"
+    )
     assert reload_only.P == canonical.P - 32
-    assert taped.P == reload_only.P + 6
+    assert diff_only.P == reload_only.P + 6
+    assert taped.P == diff_only.P + 10
     assert machine._tier_program("deadman-3d", "men-v3").words == canonical.words
     assert machine._tier_program("deadman-3d", "taped").words == taped.words
 
@@ -941,6 +947,41 @@ def test_dda_diff_keeps_the_difference_instead_of_the_two_side_distances() -> No
     assert "        ADD SDY             ; sideDistX = SDD + sideDistY" in lines
     # And the gate is one-way: the frozen canonical program never sees it.
     assert d3.deadman3d_source() == d3.deadman3d_source(dda_diff=False)
+
+
+def test_every_loop_lap_is_a_jump_so_the_seek_split_can_take_it() -> None:
+    """``lap_via_jump=True`` leaves no *backward* ``BRN``/``BRZ`` in the program.
+
+    ``machine.SEEK_OPS`` is ``("JMPF",)``: the seek split rewrites a jump and
+    nothing else, so a branch keeps its classic discard loop however far it
+    goes — and a backward target's forward-skip count is nearly the whole ring.
+    Each of this program's three laps was therefore recirculating 2,200-3,900
+    words at 8 ticks a word, every lap. Routing them through a two-word ``JMP``
+    stub costs one seek instead.
+
+    This asserts the property rather than the saving: after the rewrite every
+    branch in the program jumps *forward* in ring order, which is exactly the
+    condition under which no branch can pay a whole-ring discard.
+    """
+    for kwargs, want_backward in (
+        ({}, True),
+        ({"lap_via_jump": True}, False),
+    ):
+        prog = asm.assemble(
+            d3.deadman3d_source(dda_acc_reload=False, dda_diff=True, **kwargs),
+            name="deadman-3d",
+        )
+        split = machine.seek_split(prog)
+        instrs = sorted(split.instrs, key=lambda i: i.pos)
+        index = {ins.pos: k for k, ins in enumerate(instrs)}
+        backward = []
+        for k, ins in enumerate(instrs):
+            if ins.mnemonic not in ("BRN", "BRZ"):
+                continue  # a JMPF long enough to wrap is a JMPS by now
+            target = machine._target_index(split, instrs, index, k)
+            if target <= k:
+                backward.append(ins.mnemonic)
+        assert bool(backward) is want_backward, backward
 
 
 def test_tape_slots_are_the_documented_map() -> None:

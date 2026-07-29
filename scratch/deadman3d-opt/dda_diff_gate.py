@@ -14,8 +14,10 @@ from randomfun2026solvers.lm1.display import frames_from_writes
 from randomfun2026solvers.lm1.emulator import Emulator, Round
 
 kw = {"dda_acc_reload": False}
-if sys.argv[1:2] == ["diff"]:
+if "diff" in sys.argv[1:]:
     kw["dda_diff"] = True
+if "lap" in sys.argv[1:]:
+    kw["lap_via_jump"] = True
 prog = assemble(d3.deadman3d_source(**kw), name="deadman-3d")
 cmds = list(d3.WALK)
 res = Emulator(prog).run(

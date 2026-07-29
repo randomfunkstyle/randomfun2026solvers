@@ -1420,3 +1420,77 @@ retired (2.93%)**. `tests/test_deadman3d.py -m slow` **12/12**. DOOM fast set
 arguments still regenerates the checked-in `.asm` byte for byte — the lever
 ships as `deadman3d_source(dda_diff=True)` through the existing
 `machine.TIER_PROGRAM`, exactly as M13 did.
+
+## M15 — the three loop laps were `BRN`/`BRZ`, and `seek_split` only takes `JMPF`
+
+Found while costing M14's follow-ups, and it is the largest single item this
+file has recorded since M12. **`machine.SEEK_OPS` is `("JMPF",)`** — the seek
+split rewrites a *jump* and nothing else, so a `BRN`/`BRZ` keeps its classic
+discard loop however far it goes. A **backward** branch's forward-skip count is
+nearly the whole ring, so every lap of every loop recirculated ~P words at 8
+ticks a word:
+
+| lap | branch | laps/frame | words/lap | ticks/frame |
+|---|---|---:|---:|---:|
+| `xarm15` | `BRZ dda0` | 15.2 | 2,214 | **269,564** |
+| `hity15` | `BRZ dda0` | 3.3 | 1,553 | 41,424 |
+| `boot` | `BRN boot` | round 0 only | 3,828 | 1.71M one-off |
+| `title` | `BRN title` | round 0 only | 3,877 | 1.64M one-off |
+
+The DDA's lap alone was **5.3% of a frame**. Cross-checked against the grid
+profile before building anything: `BRZ`'s whole measured slab bill is 2,384,475
+ticks over nine frames and the two DDA laps predict 2,383,000 of it, so
+essentially *all* of `BRZ`'s discard was the lap. (A ray averages 12.4 steps
+against `DDA_UNROLL = 16`, which is why 861 steps a frame lap only 18.5 times.)
+
+### The fix is three stubs
+
+```asm
+        BRZ lap15           ; forward, over `JMP whx`
+        JMP whx
+lap15:  JMP dda0            ; a JMP, so `seek_split` can make it a seek
+```
+
+`boot`/`title` need one more instruction each because their lap is a
+fall-through loop: `BRN bootl` / `JMP bootd` / `bootl: JMP boot` / `bootd:`.
+Five instructions, ten ROM words, and both DDA arms share one stub.
+
+### Measured
+
+| | tour (116 rounds) | gate (`WALK[:8]`) | ticks/frame | reads/frame |
+|---|---:|---:|---:|---:|
+| M14 | 668,862,998 | 46,114,271 | 5,123,808 | 7,976 |
+| **M15** | **638,946,726** | **42,517,078** | **4,724,120** | 7,976 |
+| | **-29,916,272 = -4.472%** | **-7.80%** | -7.80% | **unchanged** |
+
+Reads are *unchanged*, which is the point of reporting them: this is a
+control-flow lever, not a memory one, and the two are now separable in the log.
+Predicted -5.5% on the tour from `(269,564 + 41,424) x 116 + 3.35M` against
+668.9M; realised -4.47%, the shortfall being the seeks the stubs now pay
+(18.5 a frame at ~1,008) plus ten more ROM words on every fetch.
+
+The box goes back to **293x253** — M14's extra row was the ROM fold, and ten
+words did not re-cross it.
+
+### What is left of the discard bill
+
+`scratch/deadman3d-opt/skip_sites.py` re-runs the census. After M15 every
+remaining non-seekable discard is a `BRN dda{k} -> xarm{k}`: the x-step
+stepping over the y-arm it did not take, ~64 words a step, **~330,000 ticks a
+frame (7%) in total.** It cannot be turned into a seek — a seek costs 1,008 and
+the skip costs 512 — so the only lever on it is *making the y-arm shorter*, and
+the two candidates are costed in the commit message. Neither is taken here.
+
+### Gates
+
+Emulator over the whole `WALK`, pixel-identical to the golden frames. DOOM fast
+set 130 passed, `tests/test_deadman3d.py -m slow` 12/12, default suite 2755
+passed / 68 skipped. `deadman-3d.man` / `_trim` / `_v2` still `f62d63fd…`,
+`deadman-3d.input.txt` still `654d35d6…`, `deadman3d_source()` with default
+arguments still byte-identical to the checked-in `.asm`. Ships as
+`deadman3d_source(lap_via_jump=True)` through `machine.TIER_PROGRAM`.
+
+`test_every_loop_lap_is_a_jump_so_the_seek_split_can_take_it` pins the property
+rather than the saving: after the rewrite **no `BRN`/`BRZ` in the program has a
+backward target**, which is the condition under which none can pay a whole-ring
+discard. It asserts both directions, so deleting the lever fails it.

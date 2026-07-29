@@ -3012,6 +3012,7 @@ def deadman3d_source(
     *,
     dda_acc_reload: bool = True,
     dda_diff: bool = False,
+    lap_via_jump: bool = False,
 ) -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
@@ -3046,6 +3047,25 @@ def deadman3d_source(
     ``f62d63fd`` and the checked-in ``deadman-3d.asm`` is what pins it; only the
     taped family is allowed to move (the same rule :data:`machine.TIER_LAYOUT`,
     :data:`machine.MEM_PAD_FOR` and friends already follow, one level down).
+
+    ``lap_via_jump`` is a third, and it is about *control flow* rather than
+    memory. :data:`machine.SEEK_OPS` is ``("JMPF",)`` — only a **jump** is
+    rewritten to the seek drum, and a ``BRN``/``BRZ`` keeps its classic discard
+    loop whatever its distance. A *backward* branch's forward-skip count is
+    nearly the whole ring, so every one of this program's three loop laps
+    recirculates ~2,200–3,900 words at 8 ticks each:
+
+    ======================  =====================  ==========  =============
+    lap                     branch                 laps/frame  ticks/frame
+    ======================  =====================  ==========  =============
+    ``xarm{last}``          ``BRZ dda0``           15.2        269,564
+    ``hity{last}``          ``BRZ dda0``           3.3         41,424
+    ``boot`` / ``title``    ``BRN boot/title``     round 0     3.3M one-off
+    ======================  =====================  ==========  =============
+
+    Passing ``True`` routes each lap through a two-word ``JMP`` stub, which
+    ``seek_split`` *can* take, trading ~17,700 ticks a lap for one ~1,008-tick
+    seek. Nothing else about the loops changes; it costs three instructions.
 
     ``dda_diff`` is the second such tier-only program change, and it attacks the
     same quantity from the other end: **how many store reads the DDA issues.**
@@ -3108,6 +3128,27 @@ def deadman3d_source(
     # ... and it needs sideDistY seeded before sideDistX, so the two per-ray
     # seed arms swap places and `ddy:` falls into the other one.
     _first_side = "sidey" if dda_diff else "sidex"
+
+    def _backward_lap(op: str, target: str, stub: str, done: str, note: str) -> list[str]:
+        """A loop's backward branch, optionally routed through a ``JMP``.
+
+        ``machine.SEEK_OPS`` is ``("JMPF",)``: only a *jump* is rewritten to the
+        seek drum. A ``BRN``/``BRZ`` keeps its classic discard loop, and a
+        backward target's skip count is nearly the whole ring — so a backward
+        branch recirculates ~P words at 8 ticks each, every lap, forever. Sending
+        the lap through a two-word ``JMP`` stub trades that for one seek.
+        """
+        branch = f"        {op} {target if not lap_via_jump else stub}"
+        if not lap_via_jump:
+            return [f"{branch:<28}; {note}"]
+        return [
+            f"{branch:<28}; {note}",
+            f"        {'JMP ' + done:<20}; ... and out, past the lap stub",
+            f"{stub + ':':<8}{'JMP ' + target:<20}; the lap as a JMP, so `seek_split` can",
+            "                            ; make it a seek: a taken BRN/BRZ would",
+            "                            ; recirculate every word back to the top",
+            f"{done}:",
+        ]
     machine_tape = max(slots.values()) + 1  # the tape the registry must cover
     inv = UNITS * UNITS          # 1048576  — deltaDist numerator (1/rayDir, Q10*Q10)
     lh_num = geom.lh_num         # 81920 at 64x48 — lineHeight's numerator
@@ -3321,7 +3362,8 @@ def deadman3d_source(
     lines += [
         "        LD  PTR",
         f"        SUBI {boot_full + 1}",
-        f"        BRN boot            ; keep looping while PTR < {boot_full + 1}",
+        *_backward_lap("BRN", "boot", "bootl", "bootd",
+                       f"keep looping while PTR < {boot_full + 1}"),
     ]
     for addr in range(boot_full + 1, n_pre + 1):
         # The tail slots are named when a name exists (the spawn scalars);
@@ -3353,7 +3395,8 @@ def deadman3d_source(
             "        INCM PTR",
             "        LD  PTR",
             f"        SUBI {title_laps}",
-            f"        BRN title           ; keep looping while PTR < {title_laps}",
+            *_backward_lap("BRN", "title", "titll", "titld",
+                           f"keep looping while PTR < {title_laps}"),
         ]
     for _ in range(title_rem):
         lines += ["        IN", "        SND"]
@@ -3738,8 +3781,15 @@ syneg:  LDI 0
     # accumulator already held. `LDA` takes its address from ACC and clobbers A
     # first, so nothing downstream can see the difference.
     _xarm_reload = "        LD  WADDR\n" if dda_acc_reload else ""
+    # The DDA's own backward lap is the machine's single most expensive branch:
+    # `xarm{last}` / `hity{last}` end `BRZ dda0`, a *backward* BRZ, and `BRZ` is
+    # not in `machine.SEEK_OPS` — so each lap recirculates ~2,200 ring words at
+    # 8 ticks. Under `lap_via_jump` both arms branch to one local stub whose
+    # `JMP dda0` the seek split can take.
+    _last = DDA_UNROLL - 1
+    _lap = f"lap{_last}"
     for k in range(DDA_UNROLL):
-        nxt = f"dda{k + 1}" if k < DDA_UNROLL - 1 else "dda0"
+        nxt = f"dda{k + 1}" if k < DDA_UNROLL - 1 else ("dda0" if not lap_via_jump else _lap)
         nxt_note = "the next unrolled step" if k < DDA_UNROLL - 1 else "the backward lap"
         # The step's compare. Canonically two reads (`SDX`, `SDY`) rebuild the
         # difference every step; under `dda_diff` the difference IS the state, so
@@ -3803,6 +3853,12 @@ hity{k}:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
         MODI 16
         BRZ {nxt}            ; empty -> {nxt_note}
         JMP whx             ; an x-side wall: t is sunlit""".splitlines()
+        if lap_via_jump and k == _last:
+            lines += [
+                f"{_lap + ':':<8}{'JMP dda0':<20}; the lap as a JMP, so `seek_split` can",
+                "                            ; make it a seek: a taken BRZ would",
+                "                            ; recirculate every word back to dda0",
+            ]
     # perpWallDist on the x side is the sideDistX the step just consumed. Under
     # `dda_diff` that absolute is not stored any more, so the tail rebuilds it —
     # once per wall hit (64 a frame) against the 615 x-steps that paid for it.
@@ -4199,7 +4255,8 @@ def taped_program():
     from randomfun2026solvers.lm1.asm import assemble
 
     return assemble(
-        deadman3d_source(dda_acc_reload=False, dda_diff=True), name="deadman-3d"
+        deadman3d_source(dda_acc_reload=False, dda_diff=True, lap_via_jump=True),
+        name="deadman-3d",
     )
 
 
