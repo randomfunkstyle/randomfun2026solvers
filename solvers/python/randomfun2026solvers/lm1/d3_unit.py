@@ -69,8 +69,8 @@ Geometry: the same three rules as path_unit, all asserted
    only ever carries COMMIT, which trails the last paint by a whole collector
    walk, but the tie is refused on principle, as in path_unit).
 
-The one degree of freedom: ``loop_row``
----------------------------------------
+The two degrees of freedom: ``loop_row`` (rows) and ``leaf_cols`` (columns)
+--------------------------------------------------------------------------
 
 Every band row is a fixed offset from the loop corridor (:data:`BELOW_LOOP`),
 and that is forced rather than chosen: the two counted-loop bodies are rigid
@@ -93,6 +93,20 @@ and the corridor runs down to :data:`MIN_LOOP_ROW`, seventeen rows in all.
 ``machine.DOOM_LOOP_ROW`` is where a tier opts in; ``d3_router.build_wall``
 hands the same row to all four of its blocks, and its 2x2 stacks two block
 heights, so on ``deadman-3d_hires`` the seventeen come off twice.
+
+The columns are the same story turned ninety degrees, and what they buy is
+**walk** rather than height. Dispatch is one man: east from MAIN to the trie
+root, across three trie rows to his leaf, down the arm, and the whole way back
+west along the collector row to column 1 — roughly ``2 x leaf_column``, on every
+command. The leaves used to sit at a fixed :data:`LEAF_PITCH` that the *widest*
+arm set, so three of the six had nineteen columns of nothing after them and the
+trie walked through the gaps. :data:`COMPACT_LEAF_COLS` gives each arm its own
+width (interior 156 -> 92), and it moves nothing else: :func:`arm_codes` reads
+the codes off the leaves' *rank*, :class:`Cols` carries the whole east side in
+with the wall so every pipe length is unchanged, and no row moves at all.
+``machine.DOOM_LEAF_COLS`` is where a tier opts in. What is *not* free is the
+leaves' order — see :data:`COMPACT_LEAF_COLS` for which two arms are nailed down
+and why the traffic mix cannot be sorted against.
 
 The sprite arms and the backtick discipline
 -------------------------------------------
@@ -1012,7 +1026,7 @@ def build_logic(
     #: the uniform layout, and its own allowance under any other. (The two
     #: sprite arms overrun it, exactly as they always have: their chains ride
     #: east over a spare leaf.)
-    edge = {x: nxt for x, nxt in zip(leaf_cols, leaf_cols[1:])}
+    edge = dict(zip(leaf_cols, leaf_cols[1:], strict=False))
     regions = {
         "unit": (UX, UY, unit.width + 2, r.collect + 2),
         "unit:main": (UX + 1, UY + R_MAIN, levels[0][0], 1),
