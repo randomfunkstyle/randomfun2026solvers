@@ -14,13 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "solvers" / "python"))
 
 from randomfun2026solvers import deadman3d as d3  # noqa: E402
-from randomfun2026solvers.lm1.asm import assemble  # noqa: E402
 from randomfun2026solvers.lm1.emulator import Emulator, Round  # noqa: E402
 
 prefixes = tuple(sys.argv[1:]) or ("ywr", "yneg", "dda", "xarm", "hity", "whx", "why")
-prog = assemble(
-    d3.deadman3d_source(dda_acc_reload=False, dda_diff=True), name="deadman-3d"
-)
+prog = d3.taped_program()  # the shipped taped tier, whatever levers it carries
 at = collections.defaultdict(list)
 for label, word in prog.labels.items():
     at[word].append(label)
