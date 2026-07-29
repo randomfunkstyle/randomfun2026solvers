@@ -66,6 +66,7 @@ __all__ = [
     "Forward",
     "EpochStat",
     "exp_lut",
+    "exp_q12",
     "init_params",
     "forward",
     "cross_entropy",
@@ -223,6 +224,28 @@ def exp_lut() -> list[int]:
 
 
 _EXP = exp_lut()
+
+
+def exp_q12(d: int) -> int:
+    """``exp(-d / SCALE)`` in Q12, for ``d >= 0``. The softmax's whole approximation.
+
+    Split out of :func:`forward` so it can be pinned entry by entry: this is the
+    one function two later tiers must reproduce bit-for-bit, and it is four
+    instructions where an off-by-one in the index, a dropped mask, or a swapped
+    ``lo``/``hi`` would all still produce a plausible-looking softmax.
+
+    ``d`` is ``max(logits) - logit``, so it is never negative and the shift is
+    never applied to a negative value. Above entry 31 the value is clamped with no
+    interpolation — that is ``exp(z) < 0.0005``, under one Q12 tick, where there is
+    nothing left to resolve.
+    """
+    k = d >> _EXP_INDEX_SHIFT
+    if k >= _EXP_ENTRIES - 1:
+        return _EXP[_EXP_ENTRIES - 1]
+    lo, hi = _EXP[k], _EXP[k + 1]
+    return lo + (((hi - lo) * (d & _EXP_INDEX_MASK)) >> _EXP_INDEX_SHIFT)
+
+
 _LN2 = round(SCALE * math.log(2))
 _LN_MANT = [round(SCALE * math.log(1 + i / _LN_MANT_ENTRIES)) for i in range(_LN_MANT_ENTRIES + 1)]
 
@@ -326,15 +349,7 @@ def forward(p: Params, pixels: list[int]) -> Forward:
         logits.append(p.dense_b[j] + (acc >> SHIFT))
 
     top = max(logits)
-    exps = []
-    for z in logits:
-        d = top - z  # >= 0, so the shift below is never on a negative value
-        k = d >> _EXP_INDEX_SHIFT
-        if k >= _EXP_ENTRIES - 1:
-            exps.append(_EXP[_EXP_ENTRIES - 1])  # clamped tail: under a Q12 tick
-        else:
-            lo, hi = _EXP[k], _EXP[k + 1]
-            exps.append(lo + (((hi - lo) * (d & _EXP_INDEX_MASK)) >> _EXP_INDEX_SHIFT))
+    exps = [exp_q12(top - z) for z in logits]  # top - z >= 0 always
     total = sum(exps)
     probs = [e * SCALE // total for e in exps]
 

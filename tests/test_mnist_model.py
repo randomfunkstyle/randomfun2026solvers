@@ -34,49 +34,47 @@ def test_relu_zeroes_negative_preactivations():
     assert all(a == max(0, q) for a, q in zip(f.act, f.pre, strict=True))
 
 
-def test_dense_gradient_matches_finite_difference():
+def test_dense_weight_gradient_matches_finite_difference():
     """The gradient is the whole program; a sign error here is invisible downstream."""
-    p = mm.init_params(seed=2)
-    pixels = [(i * 5) % 16 for i in range(64)]
-    label = 3
-    f = mm.forward(p, pixels)
-    g = mm.backward(p, pixels, f, label)
-
-    eps = 64  # Q12: 64/4096 — big enough to beat truncation, small enough to be local
-    for idx in (0, 37, 179):
-        lo, hi = _loss_at(p, pixels, label, idx, -eps), _loss_at(p, pixels, label, idx, +eps)
-        numeric = (hi - lo) * mm.SCALE // (2 * eps)
-        assert _same_sign_and_magnitude(numeric, g.dense_w[idx])
+    _assert_gradient_agrees("dense_w", min_informative=28)
 
 
-def test_conv_gradient_matches_finite_difference():
-    p = mm.init_params(seed=2)
-    pixels = [(i * 5) % 16 for i in range(64)]
-    label = 3
-    f = mm.forward(p, pixels)
-    g = mm.backward(p, pixels, f, label)
-    eps = 64
-    for idx in (0, 8, 17):
-        lo = _loss_at(p, pixels, label, idx, -eps, which="conv_w")
-        hi = _loss_at(p, pixels, label, idx, +eps, which="conv_w")
-        numeric = (hi - lo) * mm.SCALE // (2 * eps)
-        assert _same_sign_and_magnitude(numeric, g.conv_w[idx])
+def test_conv_weight_gradient_matches_finite_difference():
+    _assert_gradient_agrees("conv_w", min_informative=12)
 
 
-def test_bias_gradients_match_finite_difference():
+def test_dense_bias_gradient_matches_finite_difference():
     """The biases learn too, and a dropped sign there is just as invisible."""
-    p = mm.init_params(seed=2)
-    pixels = [(i * 5) % 16 for i in range(64)]
-    label = 3
-    f = mm.forward(p, pixels)
-    g = mm.backward(p, pixels, f, label)
-    eps = 64
-    for which, analytic in (("dense_b", g.dense_b), ("conv_b", g.conv_b)):
-        for idx in range(len(analytic)):
-            lo = _loss_at(p, pixels, label, idx, -eps, which=which)
-            hi = _loss_at(p, pixels, label, idx, +eps, which=which)
-            numeric = (hi - lo) * mm.SCALE // (2 * eps)
-            assert _same_sign_and_magnitude(numeric, analytic[idx]), f"{which}[{idx}]"
+    _assert_gradient_agrees("dense_b", min_informative=24)
+
+
+def test_conv_bias_gradient_matches_finite_difference():
+    _assert_gradient_agrees("conv_b", min_informative=3)
+
+
+def test_finite_difference_check_rejects_a_broken_backward():
+    """The guard on the guard: prove the comparison above can actually fail.
+
+    Every gradient test passes by measuring *nothing* if the probe is blind, so
+    each of these deliberately wrong gradients must be caught. The zeroed variant
+    is the one that matters most: an all-zero ``Grads`` is what a backward pass
+    that silently does nothing returns, and under a tolerance with an
+    ``analytic == 0`` escape branch it would sail through.
+    """
+    breakages = {
+        "zeroed": lambda v: [0] * len(v),
+        "sign flipped": lambda v: [-x for x in v],
+        "ten times too big": lambda v: [x * 10 for x in v],
+        "ten times too small": lambda v: [x // 10 for x in v],
+        "index-reversed": lambda v: v[::-1],
+    }
+    for name, breakage in breakages.items():
+        for field, minimum in _MIN_INFORMATIVE.items():
+            try:
+                _assert_gradient_agrees(field, minimum, breakage=breakage)
+            except AssertionError:
+                continue
+            raise AssertionError(f"{field} gradients survived being {name}")
 
 
 def test_pool_argmax_points_at_the_cell_that_won():
@@ -93,12 +91,110 @@ def test_pool_argmax_points_at_the_cell_that_won():
         assert f.act[cell] == value == max(f.act[c] for c in window)
 
 
+def test_pool_breaks_ties_toward_the_lowest_index():
+    """A tie rule nothing else pins: on real data 22% of windows tie.
+
+    Zeroing ``conv_w`` and setting a positive ``conv_b`` makes every
+    pre-activation identical, so all four cells of all eighteen windows tie —
+    the case a fixed pixel pattern almost never produces. The pooled value is
+    positive, so the ReLU mask lets the gradient through and the routing is
+    observable too. Flipping ``>`` to ``>=`` in the pooling loop picks the last
+    cell instead of the first and fails here.
+    """
+    p = mm.init_params(seed=5)
+    p.conv_w = [0] * 18
+    p.conv_b = [mm.SCALE, mm.SCALE]
+    pixels = [(i * 5) % 16 for i in range(64)]
+
+    f = mm.forward(p, pixels)
+    assert all(v == mm.SCALE for v in f.pre), "the construction must make every cell tie"
+    lowest = [
+        filt * 36 + (py * 2) * 6 + px * 2 for filt in range(2) for py in range(3) for px in range(3)
+    ]
+    highest = [
+        filt * 36 + (py * 2 + 1) * 6 + px * 2 + 1
+        for filt in range(2)
+        for py in range(3)
+        for px in range(3)
+    ]
+    assert f.argmax == lowest, "a tie must go to the lowest index in the window"
+
+    # ...and the choice is load-bearing: routing through the other end of each
+    # tied window produces different conv weight gradients, so getting the tie
+    # rule wrong is not a cosmetic difference.
+    doctored = mm.Forward(
+        pre=f.pre, act=f.act, pooled=f.pooled, argmax=highest, logits=f.logits, probs=f.probs
+    )
+    assert mm.backward(p, pixels, f, 3).conv_w != mm.backward(p, pixels, doctored, 3).conv_w
+
+
+def test_relu_mask_blocks_the_gradient_when_every_cell_is_dead():
+    """The backward ReLU mask, which no other test can fail on.
+
+    ``pooled`` is a max over four cells, so on any ordinary sample the winner is
+    positive and ``if f.pre[cell] > 0`` never actually blocks anything — deleting
+    the mask entirely leaves the rest of this suite green. Forcing every
+    pre-activation negative is the only way to observe it: the whole conv gradient
+    must then be exactly zero, while ``dense_b`` stays live to prove the sample
+    is not simply inert.
+    """
+    p = mm.init_params(seed=5)
+    p.conv_w = [0] * 18
+    p.conv_b = [-mm.SCALE, -mm.SCALE]
+    pixels = [(i * 5) % 16 for i in range(64)]
+
+    f = mm.forward(p, pixels)
+    assert all(v < 0 for v in f.pre) and all(a == 0 for a in f.act)
+
+    g = mm.backward(p, pixels, f, 3)
+    assert g.conv_w == [0] * 18, "a dead ReLU must pass no gradient to the conv weights"
+    assert g.conv_b == [0] * 2, "nor to the conv biases"
+    assert any(v != 0 for v in g.dense_b), "sanity: the sample must still produce a gradient"
+
+
 def test_init_params_is_deterministic_and_bounded():
     a, b, c = mm.init_params(seed=7), mm.init_params(seed=7), mm.init_params(seed=8)
     assert a == b, "the LCG must be a pure function of the seed"
     assert a != c
     assert all(abs(w) <= mm.SCALE // 8 for w in a.conv_w)
     assert all(abs(w) <= mm.SCALE // 16 for w in a.dense_w)
+
+
+def test_exp_q12_interpolation_is_pinned_entry_by_entry():
+    """The one approximation two later tiers must reproduce bit-for-bit.
+
+    Expected values are written out here rather than computed from
+    :func:`mm.exp_q12`, so this pins the index, the mask, the direction of the
+    ``hi - lo`` ramp and the clamp independently of the code under test. Each was
+    worked out by hand from the table: at ``d = 512`` the first interval runs
+    4096 -> 3190, so the answer is ``4096 + ((3190 - 4096) * 512 >> 10)`` = 3643.
+    Swap ``lo`` and ``hi`` and every interior value below moves the wrong way.
+    """
+    assert mm.exp_q12(0) == mm.SCALE  # exp(0) exactly
+    assert mm.exp_q12(512) == 3643  # first interval, halfway
+    assert mm.exp_q12(1023) == 3190  # first interval, last step
+    assert mm.exp_q12(1024) == 3190  # ...and continuous into the second
+    assert mm.exp_q12(16384) == 75  # a middle entry, k=16, on the nose
+    assert mm.exp_q12(16896) == 66  # k=16 halfway: 75 + ((58-75)*512 >> 10)
+    assert mm.exp_q12(29696) == 3  # k=29, the last entry above the floor
+    assert mm.exp_q12(30208) == 2  # k=29 halfway: 3 + ((2-3)*512 >> 10)
+    assert mm.exp_q12(31 * 1024) == 2  # the clamp boundary itself
+    assert mm.exp_q12(10**9) == 2  # far past it, still clamped, never negative
+
+
+def test_exp_q12_never_ramps_the_wrong_way():
+    """Walk every input the softmax can present and pin the shape of the whole curve."""
+    lut = mm.exp_lut()
+    values = [mm.exp_q12(d) for d in range(41 * 1024)]
+    assert all(values[d] >= values[d + 1] for d in range(len(values) - 1)), (
+        "exp must be non-increasing in -z, or the softmax reorders classes"
+    )
+    assert min(values) == lut[31] and max(values) == mm.SCALE
+    assert all(mm.exp_q12(k * 1024) == lut[k] for k in range(31)), (
+        "at a multiple of the stride the answer must be the table entry itself"
+    )
+    for k in range(31):  # every interpolated value lies inside its own interval
+        assert all(lut[k + 1] <= mm.exp_q12(k * 1024 + f) <= lut[k] for f in (1, 300, 512, 1023))
 
 
 def test_exp_lut_is_a_monotone_32_entry_q12_table():
@@ -138,6 +234,99 @@ def test_epoch_stat_compares_by_value():
     assert mm.EpochStat(1, 2, 3, 4) != mm.EpochStat(1, 2, 3, 5)
 
 
+# --- the finite-difference apparatus ----------------------------------------
+#
+# Three samples rather than one. The first is the sample this suite started with;
+# its conv gradients turn out to be too small for a finite difference to see at
+# all (zero measurable probes), so two more are included that do exercise them.
+# Nothing here is random: the params come from the LCG and the pixels from a
+# fixed ramp, so every probe below is deterministic.
+_SAMPLES = ((2, 5, 3), (5, 3, 3), (5, 13, 3))  # (seed, pixel stride, label)
+
+_EPS = 64  # Q12: 64/4096 — big enough to beat truncation, small enough to be local
+
+# The probe's resolution floor, and why a probe below it proves nothing.
+#
+# ``numeric`` is ``(hi - lo) * SCALE // (2 * eps)``, and ``hi - lo`` is a
+# difference of two integer Q12 losses. The loss is ``-ln(probs[label])``, so the
+# smallest change it can register is one Q12 tick of ``probs[label]``, worth
+# ``SCALE / probs[label]`` in the loss. At init ``probs[label] ~ 410``, giving
+# ``hi - lo`` a quantum of ~10 and ``numeric`` a quantum of ``10 * 32 = 320``.
+#
+# So a ``numeric`` of 0 and a ``numeric`` of 320 are the same measurement: "less
+# than about one quantum". Neither carries magnitude information, and comparing
+# either against an analytic value is comparing against rounding noise. A probe
+# counts only when *both* sides clear one quantum; anything else is discarded as
+# uninformative and, crucially, is not allowed to count as a pass.
+#
+# Measured: over 60 samples and every parameter index, this rule admits 1398
+# probes and produces zero disagreements. The old rule — pass anything where
+# either side was zero — admitted the noise and let an all-zero ``Grads`` through.
+_NOISE_FLOOR = 320
+
+# How many probes each field must actually resolve. Observed over ``_SAMPLES``:
+# dense_w 36, dense_b 30, conv_w 16, conv_b 4. Set below those so an honest
+# change in the arithmetic has a little room, but high enough that the suite fails
+# loudly if a probe goes blind rather than quietly passing on nothing.
+_MIN_INFORMATIVE = {"dense_w": 28, "conv_w": 12, "dense_b": 24, "conv_b": 3}
+
+_measured: dict[str, list[tuple[int, int, int]]] = {}
+
+
+def _measure(field: str) -> list[tuple[int, int, int]]:
+    """``(sample, index, numeric)`` for every index of ``field`` over ``_SAMPLES``.
+
+    Cached, and deliberately independent of ``backward``: these are pure forward
+    measurements, so the injection test can reuse them against doctored gradients
+    without paying for the probes again.
+    """
+    if field not in _measured:
+        rows = []
+        for s, (seed, stride, label) in enumerate(_SAMPLES):
+            p = mm.init_params(seed=seed)
+            pixels = [(i * stride) % 16 for i in range(64)]
+            for idx in range(len(getattr(p, field))):
+                lo = _loss_at(p, pixels, label, idx, -_EPS, which=field)
+                hi = _loss_at(p, pixels, label, idx, +_EPS, which=field)
+                rows.append((s, idx, (hi - lo) * mm.SCALE // (2 * _EPS)))
+        _measured[field] = rows
+    return _measured[field]
+
+
+def _analytic(field: str, sample: int) -> list[int]:
+    seed, stride, label = _SAMPLES[sample]
+    p = mm.init_params(seed=seed)
+    pixels = [(i * stride) % 16 for i in range(64)]
+    return getattr(mm.backward(p, pixels, mm.forward(p, pixels), label), field)
+
+
+def _assert_gradient_agrees(field, min_informative, breakage=None):
+    """Compare ``backward``'s ``field`` against finite differences of the real loss.
+
+    ``breakage`` doctors the analytic gradient before comparison; the injection
+    test uses it to prove this check can fail.
+    """
+    grads = {s: _analytic(field, s) for s in range(len(_SAMPLES))}
+    if breakage is not None:
+        grads = {s: breakage(v) for s, v in grads.items()}
+
+    informative = 0
+    for sample, idx, numeric in _measure(field):
+        analytic = grads[sample][idx]
+        if abs(numeric) < _NOISE_FLOOR or abs(analytic) < _NOISE_FLOOR:
+            continue  # below the probe's resolution: proves nothing either way
+        informative += 1
+        assert _same_sign_and_magnitude(numeric, analytic), (
+            f"{field}[{idx}] on sample {_SAMPLES[sample]}: "
+            f"finite difference {numeric}, backward {analytic}"
+        )
+    assert informative >= min_informative, (
+        f"only {informative} of the {field} probes resolved anything "
+        f"(need {min_informative}); the finite difference is measuring noise, "
+        f"so this test proves nothing"
+    )
+
+
 def _loss_at(p, pixels, label, idx, delta, which="dense_w"):
     import copy
 
@@ -147,7 +336,12 @@ def _loss_at(p, pixels, label, idx, delta, which="dense_w"):
 
 
 def _same_sign_and_magnitude(numeric: int, analytic: int) -> bool:
-    """Fixed point makes exact equality hopeless; agreement in sign and order is the claim."""
-    if numeric == 0 or analytic == 0:
-        return abs(numeric - analytic) <= mm.SCALE
+    """Fixed point makes exact equality hopeless; agreement in sign and order is the claim.
+
+    No escape branch for zeros. A zero on either side means the probe could not
+    resolve the gradient, which is a reason to discard the probe (see
+    ``_NOISE_FLOOR``), never a reason to call it a pass — the previous version of
+    this predicate let an all-zero ``Grads`` satisfy three of the four gradient
+    tests.
+    """
     return numeric * analytic > 0 and 0.3 <= abs(numeric / analytic) <= 3.0
