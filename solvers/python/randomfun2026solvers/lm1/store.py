@@ -349,8 +349,17 @@ class StreamUnit:
             self.ring_b.append(self._pop(self.ring_b, "ring B"))
 
     def _rdp(self, _arg: int) -> int:
-        """Pop one partial sum off P1 and hand it back to the CPU directly."""
-        return self._pop(self.p1, "the accumulator")
+        """Pop one partial sum off P1 and answer it, matching :meth:`_rdin`'s shape.
+
+        The reply queue is the authoritative path — that is what a real program's
+        ``SND`` + ``RCV`` pair reads from, and the only thing ``RCV`` ever reads
+        from (:meth:`recv`, unchanged). The direct return is additionally
+        convenient for a test calling :meth:`command` straight, and harmless,
+        because it is the same value.
+        """
+        value = self._pop(self.p1, "the accumulator")
+        self._replies.append(value)
+        return value
 
     def _updb(self, n: int) -> None:
         """A rank-one weight update: ``W[j] -= (a * g[j]) >> lr_shift``, ``n`` times.

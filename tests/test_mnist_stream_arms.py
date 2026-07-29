@@ -23,6 +23,8 @@ from __future__ import annotations
 from collections import deque
 
 import pytest
+from randomfun2026solvers.lm1.asm import assemble
+from randomfun2026solvers.lm1.emulator import Emulator
 from randomfun2026solvers.lm1.store import StoreError, StreamUnit
 
 
@@ -157,3 +159,69 @@ def test_trie3_rejects_a_code_the_trie_does_not_have():
     u = _unit()
     with pytest.raises(StoreError, match="3-bit"):
         u._dispatch(StreamUnit.CODES["PUSHA"], 0)
+
+
+def test_rdp_reply_reaches_rcv_through_the_real_instruction_pair():
+    """RDP must answer through RCV, not only through ``command()``'s return value.
+
+    Every other test in this file calls ``command()`` directly, so a bug where an
+    arm answers *only* as ``command()``'s Python return value — and never enqueues
+    onto ``self._replies`` — would pass every one of them and still break the real
+    machine: a program assembles ``SND`` (send the command word) then ``RCV`` (read
+    the unit's next reply word), exactly ``RDIN``'s own idiom, and ``RCV`` reads
+    only from ``_replies`` (:meth:`StreamUnit.recv`). This test goes through that
+    actual instruction pair, via the emulator's own ``Sem.STREAM_SEND`` /
+    ``Sem.STREAM_RECV`` handlers — the same path ``matmul`` and Task 4's training
+    program both run on — rather than through ``command()``.
+
+    ``emulator.py``'s ``stream`` property is the one production ``StreamUnit()``
+    call site, and it builds a ``trie_bits=3`` unit (the emulator does not thread a
+    wider trie through yet — a later task's job). RDP lives only on a depth-4 trie,
+    so this test swaps in a unit built the same production way, just at
+    ``trie_bits=4``, before the program runs; everything downstream of that —
+    ``SND``, ``RCV``, ``em.stream.send``/``recv`` — is the real, unmodified path.
+    """
+    word = 16 * 0 + StreamUnit.CODES["RDP"]
+    em = Emulator(assemble(f"LDI {word}\nSND\nRCV\nOUT\nHALT"))
+    em._stream = StreamUnit(em._next_input, em._emit, trie_bits=4)
+    em.stream.p1 = deque([111, 222])
+
+    res = em.run(input=[])
+
+    assert res.output == (111,), "the reply must arrive through RCV, not just command()'s return"
+    assert list(em.stream.p1) == [222]
+
+
+def test_pusha_rotb_updb_have_no_reply_to_lose():
+    """The other three new arms answer nothing, so they have no reply path to break.
+
+    Confirmed rather than assumed: none of ``_pusha``, ``_rotb``, ``_updb`` return
+    a value or touch ``self._replies`` (checked by reading ``store.py``), so unlike
+    ``RDP`` there is no second path for their effects to reach and no way for a
+    ``command()``-only test to have missed one. This test pins that a program
+    driving them through the real ``SND`` path — with no matching ``RCV`` — runs to
+    completion instead of blocking, which is what "no reply" has to mean in
+    practice.
+    """
+    codes = StreamUnit.CODES
+    program = "\n".join(
+        [
+            f"LDI {16 * 5 + codes['PUSHA']}",
+            "SND",
+            f"LDI {16 * 2 + codes['ROTB']}",
+            "SND",
+            f"LDI {16 * 2 + codes['UPDB']}",
+            "SND",
+            "HALT",
+        ]
+    )
+    em = Emulator(assemble(program))
+    em._stream = StreamUnit(em._next_input, em._emit, trie_bits=4)
+    em.stream.ring_b = deque([100, 200])
+    em.stream.p1 = deque([4096, 0])
+
+    res = em.run(input=[])
+
+    assert res.halted
+    assert list(em.stream.ring_a) == [5]
+    assert em.stream._replies == deque(), "none of these three arms may queue a reply"
