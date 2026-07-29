@@ -125,6 +125,7 @@ __all__ = [
     "BANDS",
     "BELOW_LOOP",
     "DoomBlock",
+    "DoomLogic",
     "DoomUnitError",
     "FLOOR_ROW",
     "MIN_LOOP_ROW",
@@ -140,6 +141,7 @@ __all__ = [
     "arm_columns",
     "binding_margins",
     "build_doom",
+    "build_logic",
     "build_probe",
     "unit_interior",
     "word",
@@ -745,6 +747,38 @@ class DoomBlock:
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
 
+@dataclass
+class DoomLogic:
+    """A DOOM block with the **panel taken off** — the unit and its two relays.
+
+    :func:`build_doom` is this plus a panel placed 11 columns east of the unit's
+    wall and the three pipes that reach it, and that is the only arrangement the
+    single-panel families ever want.  The tiled family wants the four panels
+    packed into one 2x2 cluster instead (``d3_router.build_packed_wall``), so it
+    needs the logic on its own and the three ports as *coordinates* to route
+    from rather than as pipes already drawn.
+
+    :attr:`ports` are the cells each pipe must **start** on — column
+    :data:`EAST`, one east of the unit's east wall, on the band's own row.  They
+    are handed out north-to-south in the fixed order ``addr`` < ``data`` <
+    ``swap`` (:data:`BAND_ROWS`), which is the whole reason the twelve pipes of a
+    cluster have a forced cyclic order: a block cannot emit them in any other.
+    """
+
+    cells: dict[tuple[int, int], str]
+    width: int
+    height: int
+    #: the cell a command pipe from the CPU must end on, pointing south
+    cmd_cell: tuple[int, int]
+    pipes: int  # the four ring pipes it draws for itself
+    #: band -> the cell that band's pipe starts on, east of the unit's wall
+    ports: dict[str, tuple[int, int]] = field(default_factory=dict)
+    lengths: dict[str, int] = field(default_factory=dict)
+    glyphs: list[tuple[int, int, str, str]] = field(default_factory=list)
+    codes: dict[str, int] = field(default_factory=dict)
+    regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
+
+
 # Placement. The relays sit just east of their ring rows so both value rings
 # are short (ring 1's latency bounds a paint lap; the mask ring must beat the
 # ~72-tick lap walk); the panel hangs further east with its three descent
@@ -775,20 +809,17 @@ FEED_AT = (0, 1)
 BLOCK_AT = (8, 4)
 
 
-def build_doom(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> DoomBlock:
-    """Place the unit, its value ring and relay, the panel, and three ports.
+def build_logic(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> DoomLogic:
+    """The unit and its two value-ring relays — everything but the panel.
 
-    ``floor_row`` is passed straight to :func:`unit_interior`; the default is the
-    64x48 panel's own viewport bound and reproduces the checked-in block exactly.
+    Split out of :func:`build_doom` verbatim, and it has to stay verbatim: the
+    three committed 64x48 families are byte-compared against their checked-in
+    grids, and this is the first half of every one of them.
 
-    So is ``loop_row``, and lifting it is what makes the *block* shorter: the
-    panel hangs at ``ADDR + 2`` and the block's bottom is the SWAP under-run
-    three rows below the panel, so the block's height is ``ADDR + PANEL_H + 6``
-    and has nothing to do with the interior's own bottom — the unit's rows
-    ``ADDR..COLLECT`` hide in the panel's shadow with 16 rows to spare. Every
-    pipe length here is a difference of band rows (``ADDR - DATA``,
-    ``ADDR - SWAP``) and so is invariant under the lift; the three assertions
-    below re-check that rather than trust it.
+    What the caller gets instead of three drawn pipes is :attr:`DoomLogic.ports`
+    — the three cells those pipes would have started on.  A block emits them at
+    :data:`BAND_ROWS`' own rows and in that order, ``addr`` above ``data`` above
+    ``swap``, which is not a free variable anywhere downstream.
     """
     from .machine import _Grid
 
@@ -816,6 +847,61 @@ def build_doom(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> DoomBlock:
     g.blit(rx2, ry2, relay_cells())
     pipe("ring2", [(EAST, UY + r.ring2), (rx2 - 1, UY + r.ring2)])
     pipe("ring2_ret", [(rx2 - 1, UY + r.ret2), (EAST, UY + r.ret2)])
+
+    grid_rows = g.rows()
+    arm_h = r.collect - R_ARG + 1
+    regions = {
+        "unit": (UX, UY, UNIT_IW + 2, r.collect + 2),
+        "unit:main": (UX + 1, UY + R_MAIN, TRIE_COL, 1),
+        "unit:trie": (UX + LEAF0, UY + R_TRIE, LEAF_PITCH * 7 + 1, TRIE_BITS),
+        **{
+            f"unit:{arm}": (UX + x - 1, UY + R_ARG, LEAF_PITCH, arm_h)
+            for arm, x in arm_columns().items()
+            if arm != "COL"
+        },
+        "unit:COL": (UX + arm_columns()["COL"] - 1, UY + R_ARG, 12, arm_h),
+        "relay": (rx, ry, RELAY_IW + 2, RELAY_IH + 2),
+        "relay2": (rx2, ry2, RELAY_IW + 2, RELAY_IH + 2),
+    }
+    return DoomLogic(
+        cells=g.c,
+        width=max(len(row) for row in grid_rows),
+        height=len(grid_rows),
+        cmd_cell=(UX + unit.north["cmd"], UY - 1),
+        pipes=len(lengths),
+        ports={band: (EAST, UY + getattr(r, band)) for band in ("addr", "data", "swap")},
+        lengths=lengths,
+        glyphs=[(UX + x, UY + y, gl, band) for x, y, gl, band in unit.glyphs],
+        codes=unit.codes,
+        regions=regions,
+    )
+
+
+def build_doom(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> DoomBlock:
+    """Place the unit, its value ring and relay, the panel, and three ports.
+
+    ``floor_row`` is passed straight to :func:`unit_interior`; the default is the
+    64x48 panel's own viewport bound and reproduces the checked-in block exactly.
+
+    So is ``loop_row``, and lifting it is what makes the *block* shorter: the
+    panel hangs at ``ADDR + 2`` and the block's bottom is the SWAP under-run
+    three rows below the panel, so the block's height is ``ADDR + PANEL_H + 6``
+    and has nothing to do with the interior's own bottom — the unit's rows
+    ``ADDR..COLLECT`` hide in the panel's shadow with 16 rows to spare. Every
+    pipe length here is a difference of band rows (``ADDR - DATA``,
+    ``ADDR - SWAP``) and so is invariant under the lift; the three assertions
+    below re-check that rather than trust it.
+    """
+    from .machine import _Grid
+
+    logic = build_logic(floor_row, loop_row)
+    r = unit_interior(floor_row, loop_row).rows
+    g = _Grid()
+    g.c.update(logic.cells)
+    lengths: dict[str, int] = dict(logic.lengths)
+
+    def pipe(band: str, points: list[tuple[int, int]]) -> None:
+        lengths[band] = g.draw_pipe(points)
 
     # ── the panel and its three ports ────────────────────────────────────────
     px, py = EAST + 11, UY + r.addr + PANEL_DY
@@ -871,32 +957,18 @@ def build_doom(floor_row: int = FLOOR_ROW, loop_row: int = R_LOOP) -> DoomBlock:
         )
 
     grid_rows = g.rows()
-    arm_h = r.collect - R_ARG + 1
-    regions = {
-        "unit": (UX, UY, UNIT_IW + 2, r.collect + 2),
-        "unit:main": (UX + 1, UY + R_MAIN, TRIE_COL, 1),
-        "unit:trie": (UX + LEAF0, UY + R_TRIE, LEAF_PITCH * 7 + 1, TRIE_BITS),
-        **{
-            f"unit:{arm}": (UX + x - 1, UY + R_ARG, LEAF_PITCH, arm_h)
-            for arm, x in arm_columns().items()
-            if arm != "COL"
-        },
-        "unit:COL": (UX + arm_columns()["COL"] - 1, UY + R_ARG, 12, arm_h),
-        "relay": (rx, ry, RELAY_IW + 2, RELAY_IH + 2),
-        "relay2": (rx2, ry2, RELAY_IW + 2, RELAY_IH + 2),
-        "panel": (px, py, PANEL_W + 2, PANEL_H + 2),
-    }
+    regions = {**logic.regions, "panel": (px, py, PANEL_W + 2, PANEL_H + 2)}
     blk = DoomBlock(
         cells=g.c,
         width=max(len(row) for row in grid_rows),
         height=len(grid_rows),
-        cmd_cell=(UX + unit.north["cmd"], UY - 1),
+        cmd_cell=logic.cmd_cell,
         pipes=len(lengths),
         panel=(px, py),
         lengths=lengths,
         regions=regions,
-        glyphs=[(UX + x, UY + y, gl, band) for x, y, gl, band in unit.glyphs],
-        codes=unit.codes,
+        glyphs=logic.glyphs,
+        codes=logic.codes,
     )
     if blk.pipes != len(blk.lengths):
         raise DoomUnitError(f"the builder drew {len(blk.lengths)} pipes but reports {blk.pipes}")
