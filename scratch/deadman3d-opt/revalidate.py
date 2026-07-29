@@ -65,6 +65,11 @@ DECLINED: dict[str, dict] = {
     # question and `build` refuses the pair.  Expected to BUILD FAILED — that is
     # the correct result, and it is here so the day it stops failing is visible.
     "req_teleport": {"kind": "set", "reg": "STORE_REQUEST_TELEPORT"},
+    # SHIPPED again, at -7.326%, once ROM_TOUCH_DROP removed the constraint that
+    # made it unaffordable — reads ~0.000% while shipped.  Its full history:
+    # -4.351% shipped, +0.260% withdrawn under the seek drum, -7.326% recovered.
+    # Nothing about the lever changed at any point; the machine under it did.
+    # Original withdrawal note follows.
     # Shipped at -4.351%, then withdrawn at +0.260% when the seek drum landed:
     # pitch 1 breaks the memory-response binding and drives the pad floor 15->28,
     # and the pad costs more than the stagger saves.  The single best argument
@@ -72,7 +77,9 @@ DECLINED: dict[str, dict] = {
     # "declined" without anybody touching it.  Alone it will BUILD FAILED at the
     # shipped pad; that is the correct result and the day it stops is the day to
     # look again.
-    "lane_pitch=1": {"kind": "dict2", "reg": "LANE_PITCH", "value": 1},
+    "lane_pitch=1(shipped)": {"kind": "dict2", "reg": "LANE_PITCH", "value": 1},
+    # the knob that recovered it; reads ~0.000% while shipped
+    "rom_drop=0": {"kind": "dict2", "reg": "ROM_TOUCH_DROP", "value": 0},
 }
 
 

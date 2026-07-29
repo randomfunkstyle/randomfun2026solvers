@@ -3005,6 +3005,7 @@ def build(
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
     lane_pitch: int = 2,
+    rom_touch_drop: int = 0,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -3206,6 +3207,7 @@ def build(
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
                     lane_pitch=lane_pitch,
+                    rom_touch_drop=rom_touch_drop,
                 )
             except MachineError as exc:
                 last = exc
@@ -3273,6 +3275,7 @@ def build(
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
                     lane_pitch=lane_pitch,
+                    rom_touch_drop=rom_touch_drop,
                 )
             except MachineError:
                 continue
@@ -3362,6 +3365,7 @@ def _assemble(
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
     lane_pitch: int = 2,
+    rom_touch_drop: int = 0,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -3477,7 +3481,10 @@ def _assemble(
     # ── ROM -> CPU west wall at the fetch row ────────────────────────────────
     # Down the corridor west of the CPU, then east into the wall. The ROM has a
     # single outgoing pipe, so which of its `s` glyphs is nearest does not matter.
-    fetch_y = CY + cpu.centre
+    # ``rom_touch_drop`` moves BOTH the corridor's east leg and the touch point
+    # below, together — they are the same row by definition and splitting them
+    # would bind the checker against geometry the engine does not have.
+    fetch_y = CY + cpu.centre + rom_touch_drop
     rom_capacity = g.draw_pipe(
         rom_corridor(
             want=rom_buffer or 0,
@@ -4065,7 +4072,7 @@ def _assemble(
         )
 
     touches = {
-        "rom": (CX - 1, CY + cpu.centre),
+        "rom": (CX - 1, CY + cpu.centre + rom_touch_drop),
         "mem_req": (CX + W + 2, req_row),
         "mem_resp": (CX + W + 2, resp_row),
         **dsp_touches,
@@ -5721,6 +5728,91 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: trie descent, the drop to the collector and the riser back up are all vertical
 #: travel inside it. Opt-in per ``(slug, tier)``; absent pairs keep pitch 2 and
 #: stay byte-identical. Requires :data:`TRIM_DEAD_LANES` (see :func:`build_cpu`).
+#: How many rows **south of the fetch row** the ROM corridor turns east and
+#: attaches, per ``(slug, tier)``. Absent (0) keeps the historical behaviour: the
+#: corridor attaches *on* the fetch row, which is where ``touches["rom"]`` had
+#: been hard-coded since the corridor existed.
+#:
+#: It was hard-coded rather than chosen, and that is the whole reason this exists.
+#: Nothing holds the attachment to the fetch row — the descent is in column 1 and
+#: the columns between it and the CPU's west wall are blank for the entire height
+#: of the CPU below that row. The fetch ``r`` does not need the pipe adjacent
+#: either; §7.1 binds by distance, and it sits three cells from the touch with
+#: ~57 cells of slack against its nearest rival.
+#:
+#: **What it buys: :data:`LANE_PITCH` on ``deadman-3d_hires``.** The staggered
+#: band is worth -4.351% there and could not be taken, because the BRN slab's
+#: discard ``r`` at (43,188) came out 58 from the ROM touch against 54 from the
+#: memory response and §7.1 gave it the wrong pipe. The stagger moves the ROM
+#: touch 5 rows south by itself (161 -> 166) but moves ``mem_resp`` 10 (142 ->
+#: 152), and since both sit *above* the slab, south means nearer — a net 5-cell
+#: swing that turns a 1-cell win into a 4-cell loss:
+#:
+#: | | rom touch | mem_resp touch | the slab's `r` sees |
+#: |---|---|---|---|
+#: | pitch 2 | 161 | 142 | rom 63 < mem_resp 64 — by **one cell** |
+#: | pitch 1 | 166 | 152 | rom 58 > mem_resp 54 |
+#:
+#: So pitch 2 was never robust; it was surviving on one cell and the stagger
+#: spent five. Five more rows of drop hands them back.
+#:
+#: ``scratch/deadman3d-opt/rom_touch_probe.py`` swept the drop against the real
+#: :func:`check_bindings` over all **twelve** ``r`` glyphs that want rom (the
+#: fetch plus every slab discard):
+#:
+#: | drop | outcome |
+#: |---|---|
+#: | 0..3 | fails, rom 58..55 against mem_resp 54 |
+#: | 4 | fails — rom **ties** at 54, and :func:`check_bindings` fails ties too |
+#: | **5..14** | every one of the twelve binds |
+#:
+#: Ten rows of freedom, not a knife-edge. The direction is not a coin flip: the
+#: fetch has ~57 cells of slack and the deepest slab has one, so moving the touch
+#: south spends slack where it is abundant to buy it where it is scarce.
+#:
+#: Two things this deliberately does **not** do. It does not move the memory
+#: response (that is ``mem_pad``, and every column of it is paid twice by every
+#: memory instruction — the 28-pad fallback costs +6.274% to return the stagger's
+#: 5.99%, which is why the lever was withdrawn rather than paid for). And it does
+#: not move the memory *block*: :data:`MEM_PLACE` is structurally inert here,
+#: because both touch cells are on the CPU's own walls, so translating the block
+#: moves the pipe's far end and not its attachment — as :data:`ROM_BUFFER`'s
+#: docstring already said, ``check_bindings`` measures the attachment point and
+#: not the route.
+#: **Measured, and it pays more than the binding fix it was built for.** Sweeping
+#: the drop on the 21-round tour (ticks to frame 20, against the shipped
+#: 204,117,437 at pitch 2):
+#:
+#: | drop | pitch | pad | box | ticks | Δ |
+#: |---|---|---|---|---|---|
+#: | 0 | 2 | 15 | 649x495 | 204,117,437 | — (was shipped) |
+#: | 5 | 1 | 15 | 649x495 | 189,595,223 | -7.115% |
+#: | 14 | 1 | 15 | 649x495 | 189,363,519 | -7.228% |
+#: | 18 | 1 | 15 | 649x495 | 189,197,308 | -7.310% |
+#: | **22** | **1** | **15** | **649x495** | **189,164,256** | **-7.326%** |
+#: | 26 | 1 | 15 | 649x495 | 189,163,513 | -7.326% (flat) |
+#: | 32 | 1 | 15 | — | — | fails to bind |
+#: | 0 | 1 | 28 | 658x495 | 204,806,792 | +0.338% (the rejected fallback) |
+#:
+#: The box does not move: 649x495 at every drop that builds. The corridor's
+#: descent is in column 1 and the rows it extends through were already blank.
+#:
+#: -7.326% against the -4.351% the stagger was worth on its own, and the excess is
+#: not the binding — that is fixed at drop 5, which is only -7.115%. The extra
+#: 0.2pp from 5 to 22 is **corridor capacity**: a pipe is a FIFO whose capacity is
+#: its length (``SPEC.md``), so a longer descent holds more ROM words in flight and
+#: the CPU waits less. Note this runs *against* :data:`ROM_BUFFER`'s finding, where
+#: deliberately lengthening the corridor under a seek drum was a large loss because
+#: ``seekrom`` flushes it to the ``-1`` sentinel on every seek. Twenty-two rows is
+#: apparently below the length where that flush outweighs the buffering; the curve
+#: is flat by 26 and unbuildable by 32, so there is no room to push it and find out.
+#:
+#: 22 rather than 26 because they are identical to five figures and 22 leaves four
+#: more rows of binding margin before the wall.
+ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "taped"): 22,
+}
+
 LANE_PITCH: dict[tuple[str, str], int] = {
     ("deadman-3d", "taped"): 1,  # band 43 -> 31 rows, riser 22 -> 16
     # hires transfers, and is worth **more** than the family it came from
@@ -5743,8 +5835,10 @@ LANE_PITCH: dict[tuple[str, str], int] = {
     # *above* the band, so the collector, the structures band and every block
     # outside the CPU stay where they are.
     #
-    # **And then the seek drum landed and took it away again.** hires' entry is
-    # deliberately absent, not forgotten. Pitch 1 moves the CPU's east-wall ports
+    # **Withdrawn when the seek drum landed, then recovered by ROM_TOUCH_DROP.**
+    # The history is worth keeping because the withdrawal was correct at the time
+    # and the recovery did not come from re-measuring it — it came from removing
+    # the constraint that made it unaffordable. Pitch 1 moves the CPU's east-wall ports
     # twelve rows north, and on a seek build that breaks the memory-response
     # binding: `'r' at (43, 189) must bind 'rom' but distances are
     # [('mem_resp', 54), ('rom', 58), ...]` — §7.1 decides by distance to rivals,
@@ -5767,6 +5861,14 @@ LANE_PITCH: dict[tuple[str, str], int] = {
     # nothing about the lever changed — the machine under it did. This is listed
     # in `revalidate.py`'s DECLINED table so it is re-checked rather than
     # remembered; if the drum's pad floor ever comes down, it goes straight back.
+    #
+    # It did come down, and by a route nobody had looked at: the pad was never the
+    # only way to move a distance. :data:`ROM_TOUCH_DROP` moves the *ROM* touch
+    # south instead of pushing the memory band east, which costs no lane walk at
+    # all — and the whole conflict was five cells. With drop 22 the band staggers,
+    # the pad stays at 15, and the pair measures **-7.326%** (204,117,437 ->
+    # 189,164,256, box unchanged at 649x495).
+    ("deadman-3d_hires", "taped"): 1,
 }
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
@@ -7173,6 +7275,7 @@ def build_for(
     seek: bool | None = None,
     store_chain_pad: int = 0,
     lane_pitch: int | None = None,
+    rom_touch_drop: int | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -7264,6 +7367,11 @@ def build_for(
         store_shape=STORE_SHAPE.get(slug),
         doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
         doom_leaf_cols=DOOM_LEAF_COLS.get((slug, store)),
+        rom_touch_drop=(
+            ROM_TOUCH_DROP.get((slug, store), 0)
+            if rom_touch_drop is None
+            else rom_touch_drop
+        ),
         lane_pitch=(
             LANE_PITCH.get((slug, store), 2) if lane_pitch is None else lane_pitch
         ),
