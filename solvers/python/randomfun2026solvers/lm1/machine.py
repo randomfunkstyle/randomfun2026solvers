@@ -5458,7 +5458,7 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: ``("deadman-3d_hires", "taped")`` would be inert. It is also unnecessary: the
 #: registry exists to keep a **byte-frozen** grid off a program fix, and that
 #: family commits nothing, so ``deadman3d_hires.hires_source`` simply passes
-#: ``dda_acc_reload=False`` itself — worth -4.405% there, against -4.32% here.
+#: ``dda_acc_reload=False`` itself — worth -4.405% there, against -4.37% here.
 TIER_PROGRAM: dict[tuple[str, str], str] = {
     ("deadman-3d", "taped"): "randomfun2026solvers.deadman3d:taped_program",
 }

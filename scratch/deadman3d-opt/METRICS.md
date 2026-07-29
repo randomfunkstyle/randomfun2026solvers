@@ -1413,7 +1413,7 @@ passes `dda_acc_reload=False` itself. The generated assembly differs from the
 old one by **exactly sixteen deleted `LD  WADDR` lines and nothing else**
 (`diff` over the two builds), P 8,895 -> 8,863.
 
-**-4.405% here against -4.32% on `deadman-3d`** — the same lever at four times
+**-4.405% here against -4.37% on `deadman-3d`** (M13) — the same lever at four times
 the pixels. That is what it should be: the deleted instruction is one store read
 per DDA step, the DDA step count scales with the pixel count, and so does
 everything it is measured against.
