@@ -1158,7 +1158,7 @@ def build_cpu(
     tight_drops: bool = False,
     slab_pitch: int = _SLAB_PITCH,
     lane_pitch: int = 2,
-    squash_band: bool = False,
+    squash_band: bool | int = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -1228,8 +1228,27 @@ def build_cpu(
             # as well was tried and is a false economy: it collides with the
             # store, and chasing it with a store offset only re-breaks whichever
             # counterfactual build has a different-shaped block.
-            if not squash_band:
-                at = [r + (2 * n_rows - 1) - (at[-1] - y0 + 1) for r in at]
+            # ``squash_band`` is a **row count**, not a flag, because the choice is
+            # not all-or-nothing. ``False``/0 shifts by the whole slack (the
+            # bottom-aligned default above); ``True`` shifts by none, taking every
+            # row out of the room; an ``int`` takes exactly that many and leaves
+            # the rest blank above the band.
+            #
+            # The partial case is the one that matters: on ``deadman-3d_hires`` a
+            # full squash moves the STREAM unit north with ``CY + H`` and leaves
+            # ``_seek_teleport``'s room H two rows short of its four-row minimum,
+            # while the store — anchored to ``CY`` — does not move to follow. Two
+            # rows handed back is the difference between a build and a
+            # ``MachineError``, and there was no way to say that with a bool.
+            slack = (2 * n_rows - 1) - (at[-1] - y0 + 1)
+            if squash_band is True:
+                take = slack
+            elif not squash_band:
+                take = 0
+            else:
+                take = min(int(squash_band), slack)
+            if take < slack:
+                at = [r + (slack - take) for r in at]
         else:
             at = [y0 + 2 * i for i in range(n_rows)]
         row_of = {m: at[rank[(p.row[m] - 1) // 2]] for m in used}
@@ -3008,7 +3027,7 @@ def build(
     doom_leaf_cols: tuple[int, ...] | None = None,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
-    squash_band: bool = False,
+    squash_band: bool | int = False,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -3371,7 +3390,7 @@ def _assemble(
     doom_leaf_cols: tuple[int, ...] | None = None,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
-    squash_band: bool = False,
+    squash_band: bool | int = False,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -5883,6 +5902,83 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: Beware the tour length here: at 3 rounds the squash reads -0.854%, three and a
 #: half times its 21-round value, because a short tour is boot-heavy. Confirm this
 #: one at 21.
+#:
+#: ────────────────────────────────────────────────────────────────────────────
+#: **Re-measured, and most of the above is wrong.** Three of the four conclusions
+#: recorded here do not survive being reproduced. ``squash_band`` is now a **row
+#: count** rather than a flag (see :func:`build_cpu`), which is what made the
+#: difference: the squash was only ever all-or-nothing because the parameter was.
+#:
+#: **1. It does coexist with :data:`SEEK_TELEPORT`.** Room H needs four rows
+#: between the store's underside and the STREAM unit's top, and a *full* squash
+#: leaves it two. Taking k of the ten rows builds for **k<=8** with the teleport
+#: on. Room H never needed rehousing — it is bottom-anchored and grows into
+#: whatever band it is given, and its height comes out exactly ``12 - k``:
+#:
+#: | k | box | max drop that binds |
+#: |---|---|---|
+#: | 0 | 649x495 | 28 |
+#: | 3 | 649x492 | 26 |
+#: | 7 | 649x488 | 22 |
+#: | 8 | 649x487 | 18 |
+#: | 9 | — | none: room H is down to 3 rows |
+#:
+#: What blocks ``k>8`` is that the **store cannot follow the CPU north**, and
+#: ``store_offset`` dy is not the lever: on hires dy -1..-20 every one fails to
+#: route (``collision at (64, 128)``), and dy -2 fails identically with the squash
+#: *off* — an independent obstruction, not a squash interaction.
+#:
+#: **2. The -0.243% was 86% ROM corridor, not the squash.** The squash moves
+#: ``cpu.centre``, and ``fetch_y = CY + cpu.centre + rom_touch_drop``, so a squash
+#: of k *shortens the ROM corridor by k* — it is a negative
+#: :data:`ROM_TOUCH_DROP`. The two rows differenced above do not share a corridor:
+#: the unsquashed row is drop 22, and the squashed row only builds at **drop 5**
+#: (solved interval ``[5, 17]`` at full squash — drop 22 cannot bind, at any pad).
+#: Holding the corridor fixed instead, on the 21-round tour:
+#:
+#: | variant | eff. corridor | box | ticks | Δ |
+#: |---|---|---|---|---|
+#: | no ``SEEK_TELEPORT``, drop 22 | 22 | 649x495 | 192,066,009 | — |
+#: | no ``SEEK_TELEPORT``, drop 7 | 7 | 649x495 | 191,951,785 | -0.059% |
+#: | **squashed 10, drop 17** | **7** | 649x485 | 191,889,112 | **-0.033%** |
+#: | squashed 10, drop 10 | 0 | 649x485 | 191,636,313 | -0.224% |
+#: | squashed 10, drop 5 | -5 | 649x485 | 191,600,156 | -0.243% |
+#:
+#: Matched corridor to matched corridor the squash is worth **-0.033%**, and the
+#: remaining -0.210% is corridor. That corridor reduction is nonetheless only
+#: reachable *through* the squash, because §7.1 floors the drop at 5 and the squash
+#: is the only thing that can push the effective length below it.
+#:
+#: **3. On the shipped machine it is worth exactly nothing.** With
+#: :data:`SEEK_TELEPORT` on, the corridor's tick derivative has the **opposite
+#: sign** — longer is better — so the squash only ever spends. Compensate it with
+#: ``drop = 22 + k`` and it is free, to the digit, at 3 rounds and at 21:
+#:
+#: | variant | box | 21-round ticks | Δ |
+#: |---|---|---|---|
+#: | shipped (k 0, drop 22) | 649x495 | 189,164,256 | — |
+#: | **k 3, drop 25** | **649x492** | **189,164,256** | **+0.000%** |
+#: | k 7, drop 22 | 649x488 | 189,327,282 | +0.086% |
+#: | k 8, drop 18 | 649x487 | 189,540,535 | +0.199% |
+#:
+#: ``k=3``/``drop=25`` is the deepest §7.1 allows (k=4 needs drop 26, which ties
+#: the fetch ``r`` against ``in``). So the whole lever on the shipped machine is
+#: **three blank rows off the bounding box for zero ticks** — and since the rows
+#: were blank, it removes no runners either. Nothing here is worth -0.243%.
+#:
+#: **4. What *is* confirmed** is that the ROM corridor wants to be longer on this
+#: machine — measured directly rather than inferred, and monotonically in
+#: ``drop - k``. But it is not machine-independent: without the teleport the sign
+#: reverses, so "the corridor wants to be longer" is a fact about the shipped
+#: machine and not about corridors.
+#:
+#: The 3-round distortion is real for this pair (-0.855% against -0.243%, 3.52x
+#: reproduced) but it is **not a property of the tour**: the same two tours price
+#: removing :data:`SEEK_TELEPORT` at +1.511% and +1.534%, a ratio of 0.99. It
+#: inflates boot-weighted effects and leaves per-frame ones alone.
+#:
+#: ``scratch/deadman3d-opt/squash_{h_probe,grid,compensate,tour}.py`` and
+#: ``scratch/layout2/`` (which solves the drop interval instead of sweeping it).
 SQUASH_BAND: set[tuple[str, str]] = set()
 
 ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
@@ -7352,7 +7448,7 @@ def build_for(
     store_chain_pad: int = 0,
     lane_pitch: int | None = None,
     rom_touch_drop: int | None = None,
-    squash_band: bool | None = None,
+    squash_band: bool | int | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
