@@ -2850,6 +2850,7 @@ def build(
     in_north: bool = False,
     store_teleport: bool = False,
     store_answer_west: bool = False,
+    store_request_teleport: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -3046,6 +3047,7 @@ def build(
                     in_north=in_north,
                     store_teleport=store_teleport,
                     store_answer_west=store_answer_west,
+                    store_request_teleport=store_request_teleport,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -3106,6 +3108,7 @@ def build(
                     in_north=in_north,
                     store_teleport=store_teleport,
                     store_answer_west=store_answer_west,
+                    store_request_teleport=store_request_teleport,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -3188,6 +3191,7 @@ def _assemble(
     in_north: bool = False,
     store_teleport: bool = False,
     store_answer_west: bool = False,
+    store_request_teleport: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -3505,7 +3509,71 @@ def _assemble(
         adapter_out = (ax_out, AY + ADAPTER_OUT_ROW)
         store_in = (tin_x - 1, tin_y)
         moved = bool(mem_dx or mem_dy or store_dx)
-        if compact or moved:
+        req_tele_pipes = 0
+        req_tele_regions: dict[str, tuple[int, int, int, int]] = {}
+        if store_request_teleport:
+            # The request crosses a **room** instead of a 58-cell pipe.
+            #
+            # This is the same lever the answer path already pulled, on the leg
+            # the profile says is now the expensive one: *every* store access —
+            # 87,490 CPU-blocking reads in a nine-round run, plus every write's
+            # request — walks all of ``adapter->store``, and the CPU is stopped
+            # on the answer for the whole round trip, so those cells are paid
+            # serially and in full. ``R`` has **no distance term** (SPEC.md
+            # §Nearest — "nearest" only picks *which* pipe), so a tall room
+            # spans the canvas gap between the adapter's floor and the first
+            # gate in one instruction, and what is left is two stubs.
+            #
+            # The room hangs in the corridor between the adapter's south wall
+            # and the gate strip's north wall, which is empty for its whole
+            # height. Its exit column lands on ``store_in`` so the gate's own
+            # two-cell stub still delivers the request through the **west**
+            # wall: the gate's ``U`` turns away from the side it read from, so
+            # the entry side is load-bearing and is deliberately not moved.
+            #
+            # The request leaves the adapter's **south** wall rather than its
+            # east one, which is free: the adapter has exactly one incoming and
+            # one outgoing pipe (see :data:`_ADAPTER`), so every ``r``/``s`` in
+            # it binds unambiguously wherever the pipes attach.
+            #
+            # The room is the mechanism, not its absence — deleting the answer
+            # path's forwarders in favour of a plain pipe cost +4.14%, and a
+            # relay *chain* lost to a single forwarder plus a short pipe. So
+            # this adds exactly one room and leaves two stubs.
+            from ..memory_men import teleport_v
+
+            floor_y = AY + ADAPTER_H + 1  # the adapter's south wall
+            rx0 = store_in[0] - 1  # west wall, one clear of the exit column
+            rx1 = rx0 + _TELE_W + 1
+            ry0, ry1 = floor_y + 3, tin_y - 4
+            # The roof column has to be under the adapter's floor *and* inside
+            # the room's north wall; the west end of the room is west of the
+            # adapter, so the shared column is the east one.
+            drop = max(rx0 + 1, AX + 1)
+            if drop > min(rx1 - 1, AX + ADAPTER_W):
+                raise MachineError(
+                    "the store request teleport's roof does not reach the adapter's "
+                    f"floor: columns {rx0 + 1}..{rx1 - 1} miss {AX + 1}..{AX + ADAPTER_W}"
+                )
+            if ry1 - ry0 - 1 < _TELE_H:
+                raise MachineError(
+                    f"the store request teleport has no interior: rows {ry0}..{ry1}"
+                )
+            g.room(rx0, ry0, rx1, ry1)
+            t_rows, _ = teleport_v(ry1 - ry0 - 1)
+            for kk, row in enumerate(t_rows):
+                g.text(rx0 + 1, ry0 + 1 + kk, row.replace(" ", "\0"))
+            # adapter floor -> the room's roof ...
+            n1 = g.draw_pipe([(drop, floor_y + 1), (drop, ry0 - 1)])
+            # ... and the room's floor -> the gate's own request stub, which the
+            # last cell joins (it is already a ``>``, so the draw is idempotent).
+            n2 = g.draw_pipe([(store_in[0], ry1 + 1), store_in, (tin_x, tin_y)])
+            route_lengths["adapter->store"] = n1 + n2 - 1
+            req_tele_pipes = 1  # the request used to be ONE pipe; now it is two
+            req_tele_regions = {
+                "teleport:REQ": (rx0, ry0, rx1 - rx0 + 1, ry1 - ry0 + 1)
+            }
+        elif compact or moved:
             try:
                 # The box is the endpoints' bounding rectangle plus a two-cell margin.
                 # A STORE placed *west* of the adapter needs that margin: the pipe leaves
@@ -3748,6 +3816,7 @@ def _assemble(
         regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
         regions["tape"] = (TX, TY, tape.width, tape.height)
         regions.update(tele_regions)
+        regions.update(req_tele_regions)
     else:
         regions.update(extra_regions)
     regions.update(seek_regions)
@@ -3817,7 +3886,7 @@ def _assemble(
         }
         store_pipes = (
             tape.pipes if store in ("men-y", "men-v3", "taped") else _STORE_PIPES[store]
-        ) + 1 + tele_pipes
+        ) + 1 + tele_pipes + req_tele_pipes
     # The teleported seek request is three pipes where ``touches["cmd"]`` counts one.
     _check_pipe_count(
         rows, expected=len(touches) + store_pipes + extra + (2 if seek_regions else 0)
@@ -5657,6 +5726,48 @@ INPUT_NORTH_WEST: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 13}
 #: the room's column cannot help with. Keyed by tier so the canonical machine, whose
 #: grid is pinned at ``f62d63fd``, keeps ``SEEK_MEM_PAD``'s 22 untouched.
 MEM_PAD_FOR: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 16}
+#: ``(slug, tier)`` pairs whose **request** leg crosses a room instead of a pipe
+#: — the mirror image of :data:`STORE_ANSWER_WEST`, on the leg that was left.
+#:
+#: A stride-1 heatmap and exact pipe counters (native ``fast_littleman``, gated
+#: nine-round run, 61,555,215 ticks) put the CPU **blocked on the store answer
+#: for 47.19% of the whole run**: 87,490 reads at 332 ticks each, standing on
+#: the memory lanes' ``r``. 12,443,858 of those blocked ticks — 20.22% of the
+#: run — is *pure pipe transit*, and the single biggest term in it is this leg:
+#: ``adapter->store`` is 60 parsed cells and **every** access pays all of them,
+#: 5,249,400 ticks = 8.53%. It is the only pipe on the critical path that no
+#: access avoids.
+#:
+#: Nothing about the store is faster afterwards; the request simply stops
+#: walking. A tall teleport hangs in the corridor between the adapter's floor
+#: and the first gate's roof (empty for its whole height in the checked-in
+#: grid), the request leaves the adapter's **south** wall instead of its east
+#: one, and 58 drawn cells become **six**: two down into the room's roof and
+#: four out of its floor onto the gate's own stub. The room is crossed in one
+#: instruction because ``R`` has no distance term (``SPEC.md`` §Nearest).
+#:
+#: Two things this deliberately does **not** do, both of them measured on the
+#: answer path first: it does not delete a forwarder in favour of a plain pipe
+#: (that cost +4.14% there), and it does not build a relay chain (one forwarder
+#: plus a short pipe beat three forwarders). One room, two stubs.
+#:
+#: Measured on the checked-in 116-round tour, native engine, round-gated —
+#: **838,511,442 -> 788,880,295, -5.92%**, box unmoved at 287x253. The estimate
+#: was 8.53% and the gap is accounted for rather than shrugged at (arithmetic in
+#: ``scratch/deadman3d-opt/METRICS.md`` M12). Padding this leg gives it a
+#: derivative of **1,060,929 tour ticks a pipe cell**, so the whole 60 cells
+#: were worth 7.59%, not 8.53 — some request transit overlaps the ring's seek.
+#: Of the 52 cells removed, 46.8 came back; the ~5.2 that did not are the
+#: forwarder's own six-cell loop. A pipe is a 60-deep FIFO and pipelined the
+#: request's two words one tick apart, where one man re-serialises them at one
+#: per six ticks. Six is the shortest cycle that holds both an ``R`` and an
+#: ``s``, and a second man would reorder the words, so that is the floor here.
+#:
+#: Keyed by tier: only the taped tier has a gate chain for the request to reach,
+#: and the room's south wall is placed off the gate strip's own entry row. The
+#: hi-res family is left off for the same reason it is off ``STORE_ANSWER_WEST``
+#: — see that note; absent pairs keep every existing grid byte-identical.
+STORE_REQUEST_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
@@ -6141,6 +6252,7 @@ def build_for(
         in_north=slug in INPUT_NORTH,
         store_teleport=slug in STORE_TELEPORT and (slug, store) not in STORE_ANSWER_WEST,
         store_answer_west=(slug, store) in STORE_ANSWER_WEST,
+        store_request_teleport=(slug, store) in STORE_REQUEST_TELEPORT,
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,

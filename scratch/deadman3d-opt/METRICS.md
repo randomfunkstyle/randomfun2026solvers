@@ -828,3 +828,149 @@ length, so what a route costs is `length x frequency`, and the seek request is u
 ~150 times a frame against the store's ~15k reads. The cheap win here was not on
 any pipe at all — it was six columns of lane walk that every memory instruction
 pays twice.
+## M12 — `adapter->store`: the leg every access pays, crossed as a room
+
+The profile on `analysis-doom-profile` (`scratch/DOOM-PROFILE.md`) said the CPU
+is **blocked on the store answer for 47.19% of the run** — 87,490 reads at 332
+ticks each on a gated nine-round run — and that **20.22% of the run is pure pipe
+transit** inside that wait. The biggest single term in it was `adapter->store`:
+60 parsed cells that *every* access walks, reads and writes, all four banks.
+Estimated **8.53%**.
+
+Same lever as `STORE_ANSWER_WEST`, on the leg that was left. `R` has no distance
+term (`SPEC.md` §Nearest — "nearest" only picks *which* pipe), so a `teleport_v`
+hung in the corridor between the adapter's floor and the gate strip's roof
+crosses the whole gap in one instruction:
+
+```
+       +------------+      the adapter, (63,112)-(76,117)
+       |UX.........v|
+       +------------+
+          v                2 cells down off the SOUTH wall
+       +----+
+       |@>Rv|              teleport:REQ, (61,120)-(66,148)
+       | ^s<|              27 interior rows, crossed for free
+       |    |
+       +----+
+        v                  4 cells down, onto the gate's own 2-cell stub
+        >>>|UbrM...        the gate strip, west wall, its own entry cell
+```
+
+`adapter->store` **58 drawn cells -> 6**; parsed **60 -> 8**. The corridor
+x in [61,77], y in [118,147] was empty for its whole height, so the box does not
+move: **287x253 before and after**.
+
+Three things it deliberately does not do. It does not attach to the gate's
+**north** wall — the gate's `U` turns away from the side it read from, so the
+west wall is load-bearing. It does not delete a forwarder in favour of a plain
+pipe (+4.14% when that was tried on the answer path). It does not build a relay
+chain (one forwarder plus a short pipe beat three forwarders there). One room,
+two stubs, and `memory_taped` is untouched.
+
+### The measurement, and why it is 5.9% and not 8.5%
+
+Native `fast_littleman`, checked-in 116-round tour, round-gated, `passed=True`:
+
+| | ticks | box |
+|---|---:|---|
+| before (`merge-staging` 2a20a64, `mem_pad` 22) | 838,511,442 | 287x253 |
+| after | **788,880,295** | 287x253 |
+| | **-49,631,147 = -5.92%** | |
+
+The estimate was 8.53% and the realised figure is 5.92%. Both halves of the gap
+were measured rather than argued, by padding the room's in-stub and re-running
+the tour:
+
+**+20 cells on the in-stub costs +21,218,585 ticks — a derivative of 1,060,929
+tour ticks per pipe cell on this leg.** So:
+
+| | cells | ticks | % of 838,511,442 |
+|---|---:|---:|---:|
+| what the whole leg was worth (60 x 1,060,929) | 60 | 63,655,740 | **7.59%** |
+| what removing 52 of those cells could return | 52 | 55,168,308 | 6.58% |
+| what the room and its stubs cost back | ~5.2 | ~5,537,000 | ~0.66% |
+| **realised** | | **49,631,147** | **5.92%** |
+
+* **The profile's 8.53% was ~12% optimistic.** It priced the leg at one tick per
+  cell per read (60 x 87,490) on the gated nine-round run. The tour's own
+  derivative says 1.06M ticks a cell, not the ~1.19M that extrapolation implies
+  — some of the request's transit does overlap the ring's seek, so not every
+  cell-tick is on the critical path. The honest ceiling was 7.59%.
+* **The room costs ~5 cells' worth, and it is the forwarder's loop, not its
+  size.** A pipe is a 60-deep FIFO: the request's two words (three on a write)
+  pipelined down it one tick apart. The room is one man on a six-cell cycle
+  (`>Rv`/`^s<` — three cells from `R` to `s`, three back), so the words are
+  re-serialised at one per six ticks and the second word waits a full service
+  interval. That is the "free parallelism" the pipe was doing and the room
+  cannot. Six is the minimum cycle that can hold both an `R` and an `s` (a 2x2
+  loop is all corners), so this is the floor for one forwarder — and a second
+  forwarder would reorder the words.
+
+Net: **46.8 of the 52 removed cells came back.**
+
+### Re-verified against `mem_pad` 16
+
+The parallel JMPS-flow work (`MEM_PAD_FOR`, `INPUT_NORTH_WEST`, `SEEK_TELEPORT`)
+walks the memory band six columns west, which is where this room's stubs have to
+bind. Merged and re-measured — the room's placement is derived from the
+adapter's floor and the block's own `in_cell`, so it follows without a re-sweep,
+and `teleport:REQ` lands at the identical (61,120) 6x29:
+
+| | ticks | box |
+|---|---:|---|
+| JMPS flow, request room **off** | 822,436,488 | 287x253 |
+| JMPS flow, request room **on** | **773,267,928** | 287x253 |
+| | **-49,168,560 = -5.98%** | |
+
+49.17M against 49.63M at pad 22 — the two are additive, as disjoint legs should
+be. `adapter->store` is 6 either way.
+
+### What is left on this path
+
+* **`reqK->bankK` (45/45/44/97 cells, 6.65%) does not fall out of this change.**
+  Those arms are drawn inside `memory_taped.taped_store_block`, a different file
+  with a different room pair, and they need the gate rooms themselves to reach
+  their banks' walls. Left for a follow-up.
+* **Two cells of the out-stub.** The exit descends four rows because the gate's
+  `U` sits three rows into the gate strip and the room's south wall has to clear
+  its roof. Attaching to the gate's west wall two rows higher would save 2 cells
+  (~2.1M, ~0.25%) but needs the block's own request stub suppressed — a
+  `memory_taped` change, so it belongs with the arms above.
+
+### The follow-up is de-risked: `U` turns off the WALL, not the direction
+
+`scratch/deadman3d-opt/probe_gate_grow.py`. The room here costs one forwarder
+(~5.2 cells, ~0.66%) and its out-stub costs four more. Both would go away if the
+**gate's own room** were grown north to meet the adapter instead — a two-cell
+pipe, no forwarder, no man, no re-serialisation.
+
+What made that non-obvious is that the gate's entry glyph is `U`, not `R`: *"on
+success the man turns away from the side of the room he read from"*. Grow the
+room and the pipe still lands on the **west** wall, but 33 rows above the man.
+If "side" meant the direction from the man to the pipe he would turn *south* and
+the gate would silently mis-route — exactly the failure mode this store has.
+
+Measured, not argued. Gate 0's room pulled 30 rows north, the request fed into
+its west wall two rows below the new roof, every address of the real 601-slot
+plan written and read back individually through the live chain:
+
+```
+lift=30 plan=(352, 164, 15, 69) order=(3, 2, 0, 1)
+  600 addresses, 0 wrong
+```
+
+So `U` reads the wall, and a gate room may be grown to its caller.
+
+Two consequences, both for whoever owns `memory_taped.py` next:
+
+* **This leg can lose its forwarder.** ~6 cells plus the ~5.5M forwarder cost is
+  another ~11.9M, ~1.4% on top of M12. The sky is there: above gate 0's roof,
+  rows 118..147, columns 67..93 are empty in the built grid (only this room's
+  own east wall at 66 and a riser at 94).
+* **It is the same move the `reqK->bankK` arms want** (45/45/44/97 cells, 6.65%)
+  — a gate room grown to its *bank's* wall pays 2 cells instead of 45. That is
+  why it was probed here rather than left to be discovered there.
+
+Not taken in M12 on purpose: it is a `taped_store_block` parameter, not a
+`lm1.machine` one, and `memory_taped.py` is being edited in parallel. The two
+belong in one change on that file, not split across two branches.
