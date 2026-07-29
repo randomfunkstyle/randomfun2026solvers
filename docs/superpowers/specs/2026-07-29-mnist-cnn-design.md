@@ -167,7 +167,7 @@ a1 : ReLU
 p1 : MaxPool2                  -> 3x3x2 = 18
 f  : Flatten                   -> 18
 z  : Dense(10) + bias                                 180 MAC
-p  : softmax, exp via a 32-entry LUT
+p  : softmax, exp via a 32-entry LUT (`>> 10` index, interpolated)
 L  : cross-entropy
 ```
 
@@ -181,6 +181,39 @@ is under 2^30 and a 9-term accumulation under 2^34 — comfortably inside signed
 bits, which is what makes fixed point safe here without saturation logic.
 
 **SGD, batch 1.** The learning rate is a power of two so an update is a shift.
+`lr_shift = 6`, measured: at 8 the model reaches only 70%.
+
+### 4.1a The bit-exactness contract
+
+Two tiers have to reproduce this model *exactly*, so every approximation in it is a
+load-bearing interface, not an implementation detail. Established while building it
+(`mnist_model.py`, and §10 of the task-2 report):
+
+* **Accumulate then shift** — `sum(a*b) >> SHIFT`, never a shift per product, in conv,
+  in dense, and in the conv weight gradient. Python's `+` binds tighter than `>>`, so
+  the obvious formula is ambiguous and the grouping has to be stated.
+* **The exp LUT is indexed `(-z) >> 10`**, clamped at entry 31, linearly interpolated
+  on the low bits below the clamp. `>> 10` covers `z` in (-8, 0], the whole range
+  before a Q12 exp underflows. **`>> 7` — the first guess — cannot work**: it confines
+  all 32 entries to (-1, 0], logit gaps pass 1.0 inside one epoch, and every trailing
+  class then shares one probability with the label's `dz` pinned near -3169. Thirty
+  configurations of learning rate against init scale all stayed under 53%, against 80%
+  for a double-precision exp, so it was not a tuning problem.
+* **A second 33-endpoint log table** (`_LN_MANT`, interpolated) backs
+  `cross_entropy`, so the reported losses can compare equal across tiers.
+* **Pool ties break to the lowest index**; the ReLU mask is `pre > 0`.
+* **`predict` reads `logits`, not `probs`** — the softmax is monotone, so this is free
+  and avoids a rounding disagreement.
+* **Metrics:** train metrics online, validation as a separate sweep, file order, no
+  shuffling.
+* **`w -= g >> lr_shift`** with floor semantics, sign asymmetry included.
+
+Gradients were additionally checked against an independent double-precision
+reimplementation sharing no code: 84,000 comparisons at init and after three epochs,
+maximum deviation 269 in Q12 (0.066 real), **zero sign disagreements above 200**. That
+matters because the finite-difference probe has an irreducible noise floor — `probs`
+is a rounded Q12 integer, so the measurable step in the numeric gradient is ~320 and
+anything below ~110 is unmeasurable by that method alone.
 
 ### 4.2a The MAC goes in the STREAM unit, not the CPU
 
