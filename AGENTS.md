@@ -100,10 +100,17 @@ work before they were understood:
    with transit, so a seek costs `max(pipe, cascade)`. Padding a pipe pays the full
    per-cell rate; shortening it recovers only the overhang.
 3. **Profile before optimising, and profile the right thing.** The CPU spends
-   **47% of the run blocked** on `store:collector->cpu`. Region occupancy said so;
+   **~48% of the run blocked** on `store:collector->cpu`. Region occupancy said so;
    pipe lengths did not. `scratch/doom_heatmap.py` and `scratch/doom_pipes.py`
    re-run it. Note `littleman/tools/heatmap.mjs` **cannot** profile this machine —
    the wasm engine OOMs its 4 GB heap on it.
+4. **A `cpu:lane:*` region is not that lane.** The lanes' descent columns cut
+   through the long lanes (`JMPS` spans x=22..58), and the lanes' exits are
+   *stacked* — `ADD` drops onto `ST`'s own `v`, `MUL`/`LDA`/`DIV` onto `SUB`'s,
+   every immediate onto `SND`'s. Occupancy of a lane's rectangle therefore mixes
+   in other opcodes falling past it, so `cpu:lane:JMPS` is mostly not `JMPS`.
+   Attribute by (cell, arrival direction) — `scratch/doom_opcodes.py` does, and
+   `scratch/DOOM-OPCODES.md` is the per-opcode table it produces.
 
 ## Tests assert correctness, not quality
 
