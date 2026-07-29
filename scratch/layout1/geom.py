@@ -89,6 +89,8 @@ class Placed:
 
 def free_offsets(block: Block, port: Port) -> tuple[int, ...]:
     """The offsets a free port may take: interior only, never a corner."""
+    if port.choices:
+        return port.choices
     if port.offset is not None:
         return (port.offset,)
     span = block.h if port.side in ("E", "W") else block.w

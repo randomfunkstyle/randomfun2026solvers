@@ -96,6 +96,11 @@ class Port:
     #: ten that decides whether the block may move — one representative glyph
     #: would model the wrong thing.  Empty means "derive one from ``depth``".
     cells: tuple[tuple[int, int], ...] = ()
+    #: Explicit candidate offsets, overriding the interior range.  Needed for a
+    #: port on a **grown** wall: a gate's local feed may attach up the extension
+    #: its roof bought, which is a negative offset in the reference frame, and it
+    #: is exactly the move ``check_bindings`` has to be given the chance to refuse.
+    choices: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if self.side not in SIDES:

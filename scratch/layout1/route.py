@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from .model import FORWARDER_CELLS, Leg, Route
+from .model import FORWARDER_CELLS, MIN_PIPE, Leg, Route
 
 DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
@@ -62,6 +62,22 @@ class Field:
         self.border = _border(rects)
         self.taken: set[tuple[int, int]] = set(taken or ())
 
+    def plus(self, rect: tuple[int, int, int, int], taken=()) -> Field:
+        """A field with one more rectangle, **sharing** this one's cell sets.
+
+        Materialising the solid set again for every trial forwarder position is
+        O(area) per attempt and dominates the whole search on a 250-row corridor.
+        """
+        sub = Field.__new__(Field)
+        x0, y0, w, h = rect
+        sub.bounds = self.bounds
+        sub.rects = [*self.rects, rect]
+        cells = {(x, y) for x in range(x0, x0 + w) for y in range(y0, y0 + h)}
+        sub.solid = self.solid | cells
+        sub.border = self.border | _border([rect])
+        sub.taken = self.taken | set(taken)
+        return sub
+
     def free(self, c: tuple[int, int]) -> bool:
         x, y = c
         bw, bh = self.bounds
@@ -92,17 +108,20 @@ def route(
     goal_dir: tuple[int, int],
     *,
     min_length: int = 2,
+    max_length: int | None = None,
     node_cap: int = 400_000,
 ) -> tuple[tuple[int, int], ...]:
     """Shortest legal pipe from ``start`` to ``goal``, at least ``min_length`` cells.
 
     ``start_dir`` is the heading the pipe leaves the source wall on; ``goal_dir``
     is the heading it must be travelling when it arrives, so that its terminal
-    arrowhead points into the destination wall.
+    arrowhead points into the destination wall.  ``max_length`` abandons the search
+    once every frontier is longer than that — a forwarder's stub is short by
+    definition, so bounding it is what keeps the room search affordable.
     """
     if not field.free(start) or not field.free(goal):
         raise NoRoute(f"{start} or {goal} is not free")
-    short = _bfs(field, start, start_dir, goal, goal_dir, node_cap)
+    short = _bfs(field, start, start_dir, goal, goal_dir, node_cap, max_length)
     if short is None:
         raise NoRoute(f"no path {start} -> {goal}")
     if len(short) >= min_length:
@@ -123,23 +142,31 @@ def _bfs(
     goal: tuple[int, int],
     goal_dir: tuple[int, int],
     node_cap: int,
+    max_length: int | None = None,
 ) -> tuple[tuple[int, int], ...] | None:
     # State is (cell, heading): the bend rule depends on which way we arrived.
-    first = _add(start, start_dir)
+    # Parent pointers, not carried paths — a 100x250 corridor makes the difference
+    # between milliseconds and minutes.  A BFS shortest path on a unit-weight grid
+    # is always simple, so no explicit self-avoidance is needed here.
     if start == goal:
         return None
+    first = _add(start, start_dir)
     if not field.free(first) and first != goal:
         return None
-    seen = {(start, start_dir)}
-    q: deque[tuple[tuple[int, int], tuple[int, int], tuple[tuple[int, int], ...]]] = deque(
-        [(start, start_dir, (start,))]
-    )
+    root = (start, start_dir)
+    parent: dict[
+        tuple[tuple[int, int], tuple[int, int]],
+        tuple[tuple[int, int], tuple[int, int]] | None,
+    ] = {root: None}
+    q: deque[tuple[tuple[int, int], tuple[int, int], int]] = deque([(*root, 1)])
     n = 0
     while q:
-        cell, d, path = q.popleft()
+        cell, d, depth = q.popleft()
         n += 1
         if n > node_cap:
             return None
+        if max_length is not None and depth >= max_length:
+            continue
         for nd in DIRS:
             if nd == (-d[0], -d[1]):
                 continue  # a pipe never doubles back on itself
@@ -149,13 +176,16 @@ def _bfs(
             if nxt == goal:
                 if nd != goal_dir:
                     continue
-                return (*path, goal)
-            if not field.free(nxt) or nxt in path:
+                out = [goal]
+                node: tuple[tuple[int, int], tuple[int, int]] | None = (cell, d)
+                while node is not None:
+                    out.append(node[0])
+                    node = parent[node]
+                return tuple(reversed(out))
+            if (nxt, nd) in parent or not field.free(nxt):
                 continue
-            if (nxt, nd) in seen:
-                continue
-            seen.add((nxt, nd))
-            q.append((nxt, nd, (*path, nxt)))
+            parent[(nxt, nd)] = (cell, d)
+            q.append((nxt, nd, depth + 1))
     return None
 
 
@@ -215,6 +245,7 @@ def room_route(
     out_side: str,
     *,
     node_cap: int = 400_000,
+    budget: int | None = None,
 ) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
     """Two stubs into and out of a forwarder placed at ``room``.
 
@@ -231,14 +262,19 @@ def room_route(
         "E": (x0 + w, y0 + h // 2),
         "W": (x0 - 1, y0 + h // 2),
     }
-    sub = Field(field.bounds, [*field.rects, room], field.taken)
-    a = route(sub, start, start_dir, mid[in_side], inward[in_side], node_cap=node_cap)
+    cap = None if budget is None else max(MIN_PIPE, budget - MIN_PIPE)
+    sub = field.plus(room)
+    a = route(
+        sub, start, start_dir, mid[in_side], inward[in_side],
+        max_length=cap, node_cap=node_cap,
+    )
     b = route(
-        Field(field.bounds, [*field.rects, room], field.taken | set(a)),
+        field.plus(room, a),
         mid[out_side],
         outward[out_side],
         goal,
         goal_dir,
+        max_length=None if budget is None else max(MIN_PIPE, budget - len(a)),
         node_cap=node_cap,
     )
     return a, b

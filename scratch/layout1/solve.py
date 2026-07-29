@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from .bind import MachineError, Unexpressible, audit_segments, check_layout
 from .geom import Layout, Placed, free_offsets
-from .model import MIN_PIPE, Block, Leg, Problem, Route, Solution
+from .model import FORWARDER_CELLS, MIN_PIPE, SIDES, Block, Leg, Problem, Route, Solution
 from .route import Field, NoRoute, room_route, route
 
 _SIDE_GROW = {"N": 0, "S": 1, "E": 2, "W": 3}
@@ -96,21 +96,58 @@ def render(layout: Layout, routes: dict[str, Route]):
 
 
 # ── candidate generation ─────────────────────────────────────────────────────
-def _growths(block: Block, problem: Problem, touches: dict[tuple[str, str], tuple[int, int]]):
-    """The growth amounts worth trying for one block: none, or *reach*.
+def _headroom(block: Block, side: str, base: dict[str, tuple[int, int]]) -> int:
+    """How far this side can grow before it shares a cell with another block.
 
-    A grown side is only ever worth exactly the amount that brings its wall
-    ``MIN_PIPE`` cells from the pipe it is reaching for.  Anything less leaves
-    pipe on the table; anything more collides.  So this is two options a side, not
-    ``grow_max`` of them — the search space stays small because the physics is
-    narrow, which is the useful half of the ``REACH`` result.
+    ``TAPED_CHAIN_REACH``'s phrasing is exactly this: the gate grows west "until
+    its wall stands beside the previous gate's" — *a hop over the gap the previous
+    bank's feed riser needs, and no more*.  Rooms may abut with no gap column
+    (``ARCH.md`` §7.4b), so the wall may land flush against an obstacle.
+    """
+    px, py = base[block.name]
+    room = 10**6
+    for other, (ox, oy) in base.items():
+        if other == block.name:
+            continue
+        # NOTE: obstacles are measured against the *ungrown* rect of the other
+        # block, which is what the real registries do — nothing else moves.
+        b = _BLOCKS[other]
+        if side in ("E", "W"):
+            if oy + b.h <= py or py + block.h <= oy:
+                continue  # different rows: cannot be in the way
+            gap = px - (ox + b.w) if side == "W" else ox - (px + block.w)
+        else:
+            if ox + b.w <= px or px + block.w <= ox:
+                continue
+            gap = py - (oy + b.h) if side == "N" else oy - (py + block.h)
+        if gap >= 0:  # a block on the *other* side is not an obstacle
+            room = min(room, gap)
+    return max(0, room)
+
+
+_BLOCKS: dict[str, Block] = {}
+
+
+def _growths(
+    block: Block,
+    problem: Problem,
+    touches: dict[tuple[str, str], tuple[int, int]],
+    base: dict[str, tuple[int, int]],
+):
+    """The growth amounts worth trying for one block: none, *reach*, or *flush*.
+
+    A grown side is only ever worth one of three amounts: nothing; exactly enough
+    to stand ``MIN_PIPE`` from the pipe it is reaching for; or as far as the next
+    block lets it, when that is nearer.  Anything between leaves pipe on the table
+    and anything beyond collides — so the search space stays small because the
+    physics is narrow, which is the useful half of the ``REACH`` result.
     """
     if not block.grow:
         yield (0, 0, 0, 0)
         return
     per_side: dict[str, list[int]] = {}
     for side in sorted(block.grow):
-        want = {0}
+        want = {0, _headroom(block, side, base)}
         for pipe in problem.pipes:
             for near, far in ((pipe.dst, pipe.src), (pipe.src, pipe.dst)):
                 if near[0] != block.name or far[0] == block.name:
@@ -163,37 +200,78 @@ def room_candidates(
     lo_y, hi_y = min(start[1], goal[1]), max(start[1], goal[1])
     xs = {x for x in xs if lo_x - 4 <= x <= hi_x + 4}
     ys = {y for y in ys if lo_y - 4 <= y <= hi_y + 4}
+    sx, sy = sorted(xs), sorted(ys)
+    # A blocked-cell prefix sum over the window, so "is this rectangle empty?" is
+    # four lookups rather than an area scan.
+    x_lo, x_hi, y_lo, y_hi = sx[0], sx[-1], sy[0], sy[-1]
+    wgrid, hgrid = x_hi - x_lo + 2, y_hi - y_lo + 2
+    pre = [[0] * wgrid for _ in range(hgrid)]
+    for j in range(1, hgrid):
+        rowp, prevp = pre[j], pre[j - 1]
+        for i in range(1, wgrid):
+            hit = 0 if fld.free((x_lo + i - 1, y_lo + j - 1)) else 1
+            rowp[i] = hit + rowp[i - 1] + prevp[i] - prevp[i - 1]
+
+    def empty(x0: int, y0: int, x1: int, y1: int) -> bool:
+        a, b = x0 - x_lo, y0 - y_lo
+        c, d = x1 - x_lo + 1, y1 - y_lo + 1
+        return pre[d][c] - pre[b][c] - pre[d][a] + pre[b][a] == 0
+
     out: list[tuple[int, int, int, int]] = []
-    for x0, x1 in itertools.combinations(sorted(xs), 2):
+    for x0, x1 in itertools.combinations(sx, 2):
         if x1 - x0 + 1 < 3:
             continue
-        for y0, y1 in itertools.combinations(sorted(ys), 2):
-            if y1 - y0 + 1 < 3:
+        for y0, y1 in itertools.combinations(sy, 2):
+            if y1 - y0 + 1 < 3 or not empty(x0, y0, x1, y1):
                 continue
-            rect = (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
-            if any(
-                not fld.free((x, y))
-                for x in range(x0, x1 + 1)
-                for y in range(y0, y1 + 1)
-            ):
-                continue
-            out.append(rect)
+            out.append((x0, y0, x1 - x0 + 1, y1 - y0 + 1))
     # Biggest first: a room that spans the corridor is the one that pays.
     out.sort(key=lambda r: -(r[2] * r[3]))
     return out[:limit]
 
 
-_ROOM_SIDES = (
-    ("N", "S"), ("S", "N"), ("W", "E"), ("E", "W"),
-    ("N", "E"), ("N", "W"), ("S", "E"), ("S", "W"),
-    ("W", "N"), ("W", "S"), ("E", "N"), ("E", "S"),
-)
+def _mid(rect: tuple[int, int, int, int], side: str) -> tuple[int, int]:
+    x0, y0, w, h = rect
+    return {
+        "N": (x0 + w // 2, y0 - 1),
+        "S": (x0 + w // 2, y0 + h),
+        "E": (x0 + w, y0 + h // 2),
+        "W": (x0 - 1, y0 + h // 2),
+    }[side]
+
+
+def _room_plan(
+    rect: tuple[int, int, int, int],
+    start: tuple[int, int],
+    goal: tuple[int, int],
+) -> tuple[float, list[tuple[str, str]]]:
+    """A lower bound on this room's charged cells, and the side pairs worth trying.
+
+    The bound is Manhattan-to-the-nearest-attachment on each side plus the
+    forwarder floor, and it is admissible, so sorting by it and stopping at the
+    floor is exact rather than merely quick.
+    """
+    din = sorted(SIDES, key=lambda s: abs(_mid(rect, s)[0] - start[0])
+                 + abs(_mid(rect, s)[1] - start[1]))
+    dout = sorted(SIDES, key=lambda s: abs(_mid(rect, s)[0] - goal[0])
+                  + abs(_mid(rect, s)[1] - goal[1]))
+    a = _mid(rect, din[0])
+    b = _mid(rect, dout[0])
+    bound = (
+        max(MIN_PIPE, abs(a[0] - start[0]) + abs(a[1] - start[1]) + 1)
+        + max(MIN_PIPE, abs(b[0] - goal[0]) + abs(b[1] - goal[1]) + 1)
+        + FORWARDER_CELLS
+    )
+    pairs = [(i, o) for i in din[:2] for o in dout[:2] if i != o]
+    return bound, pairs
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────
 def solve(problem: Problem, *, verbose: bool = False, room_limit: int = 40) -> Report:
     rep = Report()
     blocks = list(problem.blocks)
+    _BLOCKS.clear()
+    _BLOCKS.update({b.name: b for b in blocks})
     port_refs = [ref for p in problem.pipes for ref in (p.src, p.dst)]
     free_choices: dict[tuple[str, str], tuple[int, ...]] = {}
     for ref in port_refs:
@@ -217,7 +295,7 @@ def solve(problem: Problem, *, verbose: bool = False, room_limit: int = 40) -> R
                 b = problem.block(ref[0])
                 pl0 = Placed(b, *base[b.name], (0, 0, 0, 0))
                 touches0[ref] = pl0.touch(b.port(ref[1]), offsets[ref])
-            grow_options = [list(_growths(b, problem, touches0)) for b in blocks]
+            grow_options = [list(_growths(b, problem, touches0, base)) for b in blocks]
             for grows in itertools.product(*grow_options):
                 rep.candidates += 1
                 placed = {
@@ -283,16 +361,37 @@ def _route_all(
             best = Route(pipe.name, (Leg(cells),))
         except NoRoute:
             pass
-        if pipe.allow_room and pipe.min_length <= MIN_PIPE:
-            for rect in room_candidates(fld, s, g, limit=room_limit):
-                for in_side, out_side in _ROOM_SIDES:
+        # A forwarder can never cost less than two 2-cell stubs plus its own
+        # re-serialisation floor, so a leg already at or under that bound cannot be
+        # improved by one and the whole room search is skipped.  That bound is what
+        # keeps an exhaustive search affordable on a 250-row corridor.
+        floor = 2 * MIN_PIPE + FORWARDER_CELLS
+        if (
+            pipe.allow_room
+            and pipe.min_length <= MIN_PIPE
+            and (best is None or best.cells > floor)
+        ):
+            plans = [
+                (*_room_plan(rect, s, g), rect)
+                for rect in room_candidates(fld, s, g, limit=room_limit)
+            ]
+            for bound, pairs, rect in sorted(plans, key=lambda p: p[0]):
+                if best is not None and bound >= best.cells:
+                    break  # the bound is admissible, so everything after is worse
+                for in_side, out_side in pairs:
                     try:
-                        a, b = room_route(fld, s, sd, g, gd, rect, in_side, out_side)
+                        a, b = room_route(
+                            fld, s, sd, g, gd, rect, in_side, out_side,
+                            node_cap=40_000,
+                            budget=None if best is None
+                            else int(best.cells - FORWARDER_CELLS),
+                        )
                     except NoRoute:
                         continue
                     cand = Route(pipe.name, (Leg(a), Leg(b)), room=rect)
                     if best is None or cand.cells < best.cells:
                         best = cand
+                if best is not None and best.cells <= floor + 1e-9:
                     break
         if best is None:
             rep.rejected_no_route += 1
