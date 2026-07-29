@@ -1,5 +1,28 @@
 # deadman-3d frame-1 optimization log
 
+> ## Scope decision (2026-07-29): DOOM is out of contest scope
+>
+> `deadman-3d` and `deadman-3d_hires` are **not scored and not judged** — there is
+> no problem named `deadman-3d`, which is why
+> `test_public_cases_pass_on_the_real_interpreter[deadman-3d-600]` has always
+> failed with `problem not found`. So the contest metric `max(w, h)**2 * ticks`
+> **does not apply to this family**.
+>
+> **Optimise ticks. Footprint is not a goal.** A change that trades ticks for
+> columns is a regression here however well it scores, and a change that costs
+> columns to save ticks is free. The two rules that follow:
+>
+> * Do not quote `max**2 * ticks` as a result for this family.
+> * Size still matters where it is a *constraint* rather than a score — the
+>   taped machine's 300-column ceiling, and anything that must keep binding —
+>   but never as something to minimise for its own sake.
+>
+> Applied immediately: the `wings` gate body (275x253, -7.13% on `max**2*ticks`)
+> is **declined**, because it costs **+1.15% ticks** — 848,164,433 against the
+> compact body's 838,511,442. Both bodies stay implemented and tested behind
+> `TAPED_GATE_BODY`; `("deadman-3d", "taped")` keeps the compact one.
+
+
 Metric: native FastLittleman, round-gated WALK[:1] (boot + first frame), passed=True required.
 Baseline: 31,080,274 ticks. Mandatory target (x5): <= 6,216,055. **Final: 5,213,912 (5.96x).**
 Model: `a*instructions + 8*words_skipped`; `a` re-fitted from each native point
