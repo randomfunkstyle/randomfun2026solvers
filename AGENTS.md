@@ -38,6 +38,46 @@ passing on the reference interpreter — keep it, mark it slow, and make sure th
 fast tier still fails if the *generator* changes shape (e.g. assert the checked-in
 grid still matches what the generator emits).
 
+## deadman-3d is out of contest scope: optimise ticks, not footprint
+
+`deadman-3d` and `deadman-3d_hires` are a **post-contest demo**. They are not
+scored, not judged, and there is no problem by either name — which is exactly why
+`test_public_cases_pass_on_the_real_interpreter[deadman-3d-600]` fails with
+`problem not found`, and why `lambda-deadman`, `pathfinder-unit` and `snake-ring`
+fail the same way. Those are expected, not latent bugs.
+
+So the contest metric `max(w, h)**2 * ticks` **does not apply to this family.**
+The only thing that matters is **how fast a frame renders** — frames per second,
+which on this machine is CPU ops per second, which is **ticks per frame**.
+
+- **Optimise ticks.** Report ticks. Do not quote `max**2 * ticks` for this family.
+- **A change that trades ticks for columns is a regression here**, however well it
+  scores. The `wings` tape-gate body was declined on exactly this basis: 275x253
+  and -7.13% on the score metric, but **+1.15% ticks**.
+- **A change that spends columns to save ticks is free.** If a teleport room wants
+  more space than a corridor has, take the space.
+- Size still matters where it is a **constraint** rather than a score: the taped
+  machine's 300-column ceiling is pinned in `tests/test_deadman3d.py`, and every
+  pipe must keep binding. Stay inside those; never minimise for its own sake.
+
+Three measurement traps this family has already sprung, all of which cost real
+work before they were understood:
+
+1. **Pipe length is not tick cost.** A pipe shifts in O(1) per tick whatever its
+   length, so cost is length x *frequency* x who blocks on it. `cpu->drum` is the
+   longest pipe in the machine at 437 cells and worth **0.019%**; the 60-cell
+   `adapter->store` is worth an estimated **8.5%**, because every one of ~87,000
+   store reads pays all 60 of its cells.
+2. **`q` counts values anywhere in a pipe, not just at its destination.** The seek
+   drum notices a request the tick it is sent and walks its cascade *concurrently*
+   with transit, so a seek costs `max(pipe, cascade)`. Padding a pipe pays the full
+   per-cell rate; shortening it recovers only the overhang.
+3. **Profile before optimising, and profile the right thing.** The CPU spends
+   **47% of the run blocked** on `store:collector->cpu`. Region occupancy said so;
+   pipe lengths did not. `scratch/doom_heatmap.py` and `scratch/doom_pipes.py`
+   re-run it. Note `littleman/tools/heatmap.mjs` **cannot** profile this machine —
+   the wasm engine OOMs its 4 GB heap on it.
+
 ## Tests assert correctness, not quality
 
 **Do not assert a footprint, score, or measured tick count as a recorded value.**
