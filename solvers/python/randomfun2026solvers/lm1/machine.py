@@ -5859,6 +5859,27 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: elsewhere**. If it can, -0.243% is free. That is a placement search under a
 #: hard full-width constraint — layout-manager work, not a sweep.
 #:
+#: **Reclaiming the rows from the CPU's *top* instead of its bottom does not help
+#: either, and cannot.** The obvious repair for the room-H collision is to leave
+#: everything below the band where it is and take the twelve rows off the room's
+#: top wall — hand them back to ``cpu_gap`` so ``CY + H`` never moves. Probed, and
+#: it fails two ways at once:
+#:
+#: 1. **It still breaks room H.** The store is anchored to ``CY``, not to
+#:    ``CY + H``, so raising ``cpu_gap`` pushes ``CY`` — and the adapter and store
+#:    with it — twelve rows *down*, squeezing H's band from the other side. Both
+#:    variants collide with the same room for mirror-image reasons.
+#: 2. **There is nothing to win even if it built.** With ``CY + H`` fixed and
+#:    ``rom_bottom`` fixed, *no pipe changes length* — the twelve blank rows simply
+#:    move from inside the room to the gap above it, and the machine's height is
+#:    unchanged. A win would need the ROM block to descend into the freed space,
+#:    which shortens the ROM corridor — and :data:`ROM_TOUCH_DROP` measured that
+#:    corridor as wanting to be **longer**, worth 0.2pp from drop 5 to 22.
+#:
+#: So the twelve rows are only worth anything if they come off the *bottom*, which
+#: is the variant above, which needs room H rehoused. The probe was reverted rather
+#: than left as a dead path.
+#:
 #: Beware the tour length here: at 3 rounds the squash reads -0.854%, three and a
 #: half times its 21-round value, because a short tour is boot-heavy. Confirm this
 #: one at 21.
