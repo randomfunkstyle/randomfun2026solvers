@@ -252,6 +252,31 @@ and `B` — so it gets designed as a standalone probe grid verified against a Py
 model *before* it is placed, which is how `dsprelay` and the store selector were
 built.
 
+#### The trie width is a parameter, not a widening
+
+The first plan said "add the new arms at codes 8-15, leaving the existing eight at 0-7
+so `matmul` cannot shift." **That is arithmetically impossible.** The wire format is
+`arg * 2^bits + code`, so:
+
+* at the current 3 bits, `word % 8` is always 0-7 and codes 8-15 are **unreachable** —
+  `PUSHA` with `arg=42` would encode to 344, which decodes as `EMIT(43)`;
+* at 4 bits, every existing word with an odd `arg` **aliases**. `FILLA` with `arg=35`
+  is word 283, which decodes correctly as `(35, 3)` at mod-8 and as `(17, 11)` at
+  mod-16. `matmul`'s shipped public cases exercise odd `arg` already.
+
+So the decode width cannot be widened in place. It becomes a **parameter of the built
+unit**: `trie_bits=3` keeps `matmul` on the depth-3 unit with its eight arms and its
+`8 * arg + code` format, byte-identical and untouched; `trie_bits=4` builds the
+depth-4 unit for this machine, with sixteen leaves, twelve arms used and a
+`16 * arg + code` format. Each program uses the unit its own program was written
+against.
+
+This is strictly safer than widening a shared trie: `matmul`'s grid, its `.equ`
+constants and its command words are not modified at all, so the arm-renumber hazard
+the plan worried about cannot arise. The cost is that `stream.py` and `StreamUnit`
+both carry the width, and a test must pin that a depth-3 unit still decodes
+`8 * arg + code` exactly as it did.
+
 ### 4.2 The store: rings win on wall clock, and unrolling is what makes them easy
 
 Four tiers were priced against the model above. The tape is dead on arrival at this
