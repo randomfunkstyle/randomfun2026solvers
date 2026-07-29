@@ -4378,7 +4378,12 @@ def _stream(
         # ``DOOM_LOOP_ROW``.
         from . import d3_router
 
-        blk = d3_router.build_wall(loop_row=doom_loop_row)
+        # The **packed** wall: the four panels in one 2x2 cluster with a
+        # two-column, three-row gutter, so the thing the machine paints is a
+        # contiguous 128x96 screen rather than four monitors 177 columns apart.
+        # ``build_wall``'s scattered arrangement stays for the probe and the
+        # tests that pin the router's own geometry.
+        blk = d3_router.build_packed_wall(loop_row=doom_loop_row)
     else:
         from . import stream as streammod
 

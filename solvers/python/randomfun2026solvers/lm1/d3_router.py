@@ -881,15 +881,19 @@ def _check_lengths(lengths: dict[tuple[int, str], int]) -> None:
             )
 
 
-def build_probe(commands: Sequence[int]) -> tuple[list[str], Wall]:
+def build_probe(commands: Sequence[int], *, packed: bool = False
+                ) -> tuple[list[str], Wall]:
     """The wall plus a room that recites ``commands`` into the router and halts.
 
     The whole protocol is write-only, so the grid is standalone: run it with no
-    input at all and it paints all four panels.
+    input at all and it paints all four panels.  ``packed`` swaps
+    :func:`build_wall` for :func:`build_packed_wall`, which is how the packed
+    cluster's twelve pipes are checked against the real engine without an IWAD
+    or a CPU anywhere near them.
     """
     from .machine import _Grid
 
-    wall = build_wall()
+    wall = build_packed_wall() if packed else build_wall()
     ox, oy = 8, 6
     g = _Grid()
     for (x, y), ch in wall.cells.items():
@@ -916,10 +920,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--ruler", action="store_true")
     ap.add_argument("--wall", action="store_true", help="print the placed 2x2 wall")
+    ap.add_argument("--packed", action="store_true",
+                    help="the packed cluster instead of four scattered panels")
     ap.add_argument("--commands", default="", help="probe command words")
     args = ap.parse_args(argv)
     if args.wall or args.commands:
-        rows, wall = build_probe([int(v) for v in args.commands.split()])
+        rows, wall = build_probe([int(v) for v in args.commands.split()],
+                                 packed=args.packed)
         print("\n".join(rows))
         print(
             f"# wall {wall.width}x{wall.height}, pipes={wall.pipes}, sel={wall.sel}, "
