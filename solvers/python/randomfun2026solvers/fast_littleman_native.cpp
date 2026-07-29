@@ -101,6 +101,10 @@ struct Case {
   bool has_frames{};
   std::vector<std::vector<std::vector<unsigned char>>> frame_rounds;
   std::uint64_t max_ticks{};
+  // Opt-in profiling.  Absent from every request that does not ask for it, so
+  // the tick loop and the reply are byte-identical to the uninstrumented one.
+  bool profile{};
+  std::uint64_t stride{1};
 };
 
 template <typename T>
@@ -218,6 +222,13 @@ bool parse_request(const char* raw, Program& p, Case& c, std::string& error) {
     }
   }
   if (!readv(in, c.max_ticks)) { error = "missing tick cap"; return false; }
+  // Trailing and optional: a request that stops at the tick cap profiles
+  // nothing, which is what every existing caller sends.
+  int profile_flag = 0;
+  if (readv(in, profile_flag) && profile_flag != 0) {
+    c.profile = true;
+    if (!readv(in, c.stride) || c.stride == 0) c.stride = 1;
+  }
   return true;
 }
 
@@ -227,6 +238,9 @@ struct Result {
   bool halted{}, passed_known{}, passed{};
   std::string reason, fatal;
   Pos fatal_pos{-1, -1};
+  // Empty unless the request asked to profile; appended after the output list
+  // so a caller that did not ask cannot see a longer reply.
+  std::string profile;
 };
 
 struct Display {
@@ -334,9 +348,20 @@ class Machine {
       }
     }
     release_satisfied();
+    if (c.profile) {
+      heat.assign(cells, 0);
+      heat_wait.assign(cells, 0);
+      pipe_send.assign(npipes, 0);
+      pipe_recv.assign(npipes, 0);
+      pipe_send_blocked.assign(npipes, 0);
+      pipe_recv_blocked.assign(npipes, 0);
+      pipe_query.assign(npipes, 0);
+      pipe_wait.assign(npipes, 0);
+    }
   }
 
   Result run() {
+    if (c.profile) sample();
     while (step < c.max_ticks) {
       if (!fatal.empty()) return finish(fatal, true, false);
       if (c.has_frames && matched_frames >= expected_frames.size())
@@ -349,6 +374,7 @@ class Machine {
         return finish("done", known, pass);
       }
       tick();
+      if (c.profile && step % c.stride == 0) sample();
     }
     return finish("tick-cap", c.has_expected, false);
   }
@@ -383,10 +409,54 @@ class Machine {
   std::string fatal;
   Pos fatal_pos{-1, -1};
 
+  // ── profiling (all empty unless c.profile) ─────────────────────────────────
+  // heat is a per-cell count of runner-samples: a man standing still because he
+  // is blocked on `r` is sampled in that cell every time, which is the point —
+  // blocked time is time.  heat_wait is the sleeping-on-a-pipe subset.
+  std::vector<std::uint64_t> heat, heat_wait;
+  std::vector<std::uint64_t> pipe_send, pipe_recv, pipe_send_blocked, pipe_recv_blocked;
+  std::vector<std::uint64_t> pipe_query, pipe_wait;
+  std::uint64_t samples{};
+
+  void sample() {
+    ++samples;
+    for (const Runner& r : runners) {
+      if (r.halted) continue;
+      std::size_t f = p.flat(r.pos);
+      ++heat[f];
+      if (!r.asleep) continue;
+      ++heat_wait[f];
+      // Charge the wait to whatever pipe(s) the op at his feet is bound to:
+      // "which pipe is this man waiting on" is the actionable form of stalled.
+      std::int32_t bidx = p.binding_at[f];
+      if (bidx < 0) continue;
+      for (int pid : p.binding_lists[bidx])
+        if (pid >= 0) ++pipe_wait[static_cast<std::size_t>(pid)];
+    }
+  }
+
+  std::string encode_profile() const {
+    std::ostringstream out;
+    out << " P " << samples << ' ' << c.stride << ' ' << pipe_send.size();
+    for (std::size_t i = 0; i < pipe_send.size(); ++i)
+      out << ' ' << pipe_send[i] << ' ' << pipe_recv[i] << ' ' << pipe_send_blocked[i]
+          << ' ' << pipe_recv_blocked[i] << ' ' << pipe_query[i] << ' ' << pipe_wait[i];
+    std::size_t occupied = 0;
+    for (std::uint64_t n : heat) occupied += n != 0;
+    out << ' ' << occupied;
+    for (std::size_t f = 0; f < heat.size(); ++f) {
+      if (!heat[f]) continue;
+      out << ' ' << static_cast<int>(f % p.width) << ' ' << static_cast<int>(f / p.width)
+          << ' ' << heat[f] << ' ' << heat_wait[f];
+    }
+    return out.str();
+  }
+
   Result finish(std::string reason, bool known, bool pass) {
     bool halted = true;
     for (const auto& r : runners) halted &= r.halted;
-    return {output, step, halted, known, pass, std::move(reason), fatal, fatal_pos};
+    return {output,       step,  halted, known, pass, std::move(reason), fatal, fatal_pos,
+            c.profile ? encode_profile() : std::string()};
   }
   bool output_in_flight() const {
     for (int pid : out_pipes) if (!vals[pid].empty()) return true;
@@ -480,6 +550,7 @@ class Machine {
   }
   void io() {
     if (out_pipe >= 0 && back_occupied(out_pipe)) {
+      if (c.profile) ++pipe_recv[static_cast<std::size_t>(out_pipe)];
       i64 v = take_back(out_pipe);
       output.push_back(v);
       if (c.has_expected) {
@@ -489,6 +560,7 @@ class Machine {
       }
     }
     if (in_pipe >= 0 && !input.empty() && !front_occupied(in_pipe)) {
+      if (c.profile) ++pipe_send[static_cast<std::size_t>(in_pipe)];
       put_front(in_pipe, input.front());
       input.pop_front();
     }
@@ -516,6 +588,7 @@ class Machine {
   }
   bool take_display(int pid, i64& value) {
     if (pid < 0 || !back_occupied(pid)) return false;
+    if (c.profile) ++pipe_recv[static_cast<std::size_t>(pid)];
     value = take_back(pid);
     return true;
   }
@@ -575,24 +648,42 @@ class Machine {
     const std::vector<int>* ids = bidx < 0 ? nullptr : &p.binding_lists[bidx];
     if (!ids || ids->empty() || (*ids)[0] < 0) { die("no-pipe", r.pos); return; }
     if (op == 'q') {
+      if (c.profile) ++pipe_query[static_cast<std::size_t>((*ids)[0])];
       r.bp = static_cast<i64>(vals[(*ids)[0]].size());
       return;
     }
     if (op == 's') {
       int pid = (*ids)[0];
-      if (front_occupied(pid)) sleep_on_fronts(r, idx, *ids);
-      else put_front(pid, r.a);
+      if (front_occupied(pid)) {
+        if (c.profile) ++pipe_send_blocked[static_cast<std::size_t>(pid)];
+        sleep_on_fronts(r, idx, *ids);
+      } else {
+        if (c.profile) ++pipe_send[static_cast<std::size_t>(pid)];
+        put_front(pid, r.a);
+      }
       return;
     }
     if (op == 'S') {
-      for (int pid : *ids) if (front_occupied(pid)) { sleep_on_fronts(r, idx, *ids); return; }
-      for (int pid : *ids) put_front(pid, r.a);
+      for (int pid : *ids) if (front_occupied(pid)) {
+        if (c.profile) for (int q : *ids) ++pipe_send_blocked[static_cast<std::size_t>(q)];
+        sleep_on_fronts(r, idx, *ids);
+        return;
+      }
+      for (int pid : *ids) {
+        if (c.profile) ++pipe_send[static_cast<std::size_t>(pid)];
+        put_front(pid, r.a);
+      }
       return;
     }
     int pid = -1;
     if (op == 'r') pid = (*ids)[0];
     else for (int candidate : *ids) if (back_occupied(candidate)) { pid = candidate; break; }
-    if (pid < 0 || !back_occupied(pid)) { sleep_on_backs(r, idx, *ids); return; }
+    if (pid < 0 || !back_occupied(pid)) {
+      if (c.profile) for (int q : *ids) if (q >= 0) ++pipe_recv_blocked[static_cast<std::size_t>(q)];
+      sleep_on_backs(r, idx, *ids);
+      return;
+    }
+    if (c.profile) ++pipe_recv[static_cast<std::size_t>(pid)];
     r.a = take_back(pid);
     if (op == 'U') r.dir = p.pipes[pid].dst_side;
   }
@@ -779,6 +870,7 @@ std::string encode(const Result& r) {
       << r.passed << ' ' << r.reason << ' ' << (r.fatal.empty() ? "-" : r.fatal)
       << ' ' << r.fatal_pos.x << ' ' << r.fatal_pos.y << ' ' << r.output.size();
   for (i64 value : r.output) out << ' ' << value;
+  out << r.profile;  // empty unless the request opted in
   return out.str();
 }
 
