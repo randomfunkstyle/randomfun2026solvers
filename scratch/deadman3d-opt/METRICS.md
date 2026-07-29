@@ -1312,3 +1312,197 @@ What is left on this path is the last arm, `req3->bank3`: 58 of its 64 cells are
 one horizontal run under bank 2, because the last gate feeds two banks and only
 one of them can be adjacent. It is 3.10% of accesses, so the run is worth ~2.0M
 ticks (~0.28%) — the smallest lever this file has left.
+
+---
+
+# H1 — `deadman-3d_hires`: a tick baseline, and the levers it was missing
+
+At `50277ab`. Everything here is the **hi-res** family; the three committed
+64x48 families are untouched and hash-verified below.
+
+## The obstacle, and how it was removed
+
+This machine has never had a tick number. `FastLittleman`'s display judge
+required *exactly one* display and the wall is four 64x48 panels, so gating was
+refused outright; the reference wasm engine OOMs its 4 GB heap around ~10M
+ticks and one hi-res frame costs ~50M. That left ungated runs, and an ungated
+run has **no stopping condition** — the machine blocks on input and the engine
+ticks to the cap. (The unrun `hires_gate2.py` an earlier agent left behind had
+exactly this bug: `max_ticks=40e9` against a machine that stops doing work at
+~1e9.)
+
+`FastLittleman.run(frames=..., frame_tiles=(cols, rows))` now judges a tiled
+wall. Each expected frame is cut into `cols*rows` tiles in reading order — which
+is the order both engines discover display rooms in, verified against
+`lm.mjs analyze` below — and panel *d* is compared against tile *d* on that
+panel's *n*-th COMMIT. Round *n+1* is released once the **slowest** panel has
+committed frame *n*: composition by index, the invariant
+`display.tiled_frames_from_writes` already enforced on the emulator side. One
+display is the `(1, 1)` case and behaves exactly as before (`test_fast_littleman`
+green, `deadman-3d`'s own frame gate unchanged).
+
+`FastResult.frame_ticks` carries the tick each *logical* frame landed on, so a
+per-frame cost is a difference of two measured stamps rather than a total
+divided by a count.
+
+## The baseline
+
+**Engine:** `fast_littleman` native backend (the independent C++ validator),
+round-gated, `passed=True` — every pixel of every panel of all 21 frames matched
+the model. **Method:** `scratch/deadman3d-opt/hires_gate2.py 21`, differencing
+`FastResult.frame_ticks`. **Machine:** 500x348, `P=8863`, tape 902, at `50277ab`.
+
+| frame | commit tick | cost | | frame | commit tick | cost |
+|---:|---:|---:|---|---:|---:|---:|
+| 0 | 35,991,674 | *35,991,674* | | 11 | 599,121,846 | 68,338,079 |
+| 1 | 86,244,888 | 50,253,214 | | 12 | 665,442,057 | 66,320,211 |
+| 2 | 135,927,732 | 49,682,844 | | 13 | 727,636,714 | 62,194,657 |
+| 3 | 180,671,297 | 44,743,565 | | 14 | 783,671,891 | 56,035,177 |
+| 4 | 225,446,629 | 44,775,332 | | 15 | 833,037,857 | 49,365,966 |
+| 5 | 269,996,552 | 44,549,923 | | 16 | 875,588,144 | 42,550,287 |
+| 6 | 311,276,032 | 41,279,480 | | 17 | 924,852,786 | 49,264,642 |
+| 7 | 357,055,148 | 45,779,116 | | 18 | 977,716,206 | 52,863,420 |
+| 8 | 406,749,432 | 49,694,284 | | 19 | 1,029,318,683 | 51,602,477 |
+| 9 | 459,013,745 | 52,264,313 | | 20 | 1,072,188,070 | 42,869,387 |
+| 10 | 530,783,767 | 71,770,022 | | | | |
+
+**Frames 1..20: 1,036,196,396 ticks, mean 51,809,819 a frame.**
+Frame 0 is boot plus the title RLE and is *not* comparable — it renders no 3D at
+all. Total for the 21-round tour: 1,072,188,070.
+
+The spread is real geometry, not noise: frames 10..13 (66-72M) are where the
+corridor opens and the ray count that reaches a far wall peaks; frame 6 (41.3M)
+is the tightest view. Against the 64x48 machine's ~4.7M a frame this is ~11x for
+4x the pixels — the extra is the router, the four panels' COMMIT traffic and the
+per-column work that does not halve.
+
+## What hires took, what it declined, and what each was worth
+
+All on the same 21-round tour, comparing **frames 1..20** (`walk`) so the boot
+frame cannot flatter anything. `scratch/deadman3d-opt/hires_opt.py`.
+
+| lever | walk ticks | vs base | |
+|---|---:|---:|---|
+| base (`b78eafc`: compact gate + bank order) | 1,090,194,166 | — | |
+| `dda_acc_reload=False` (the M13 program lever) | 1,042,173,023 | **-4.405%** | **taken** |
+| `STORE_REQUEST_REACH` + `store_offset (-14, 0)` | 1,085,082,598 | **-0.469%** | **taken** |
+| `TAPED_FEED_TELEPORT` | 1,087,081,434 | **-0.286%** | **taken** |
+| `STORE_REQUEST_TELEPORT` (same offset) | 1,086,250,847 | -0.362% | declined |
+| `TAPED_CHAIN_REACH` | 1,089,980,434 | -0.020% | declined |
+| `store_offset (-14, 0)` alone (the control) | 1,091,072,532 | **+0.081%** | — |
+| **all three shipped** | **1,036,196,396** | **-4.953%** | |
+| shipped + `TAPED_CHAIN_REACH` | 1,036,018,295 | -4.969% | declined |
+
+Additivity: -48,021,143 (acc) + -8,183,259 (roof+feed together) = -56,204,402
+predicted against -53,997,770 realised, 4% short. That is the expected direction
+— the ACC lever deletes store reads, and the roof and the forwarders shorten
+what a store read costs, so they overlap by construction.
+
+### `TIER_PROGRAM` cannot reach this family at all
+
+`machine.TIER_PROGRAM` is read by `_tier_program`, which `build_for` calls
+**only when no `program=` was passed**. `deadman3d_hires.build_local` always
+passes one, because the level comes out of an IWAD at call time and there is no
+checked-in `.asm` to load. An entry keyed `("deadman-3d_hires", "taped")` would
+be inert config.
+
+It is also unnecessary. The registry exists to keep a **byte-frozen** grid off a
+program fix — `deadman-3d.asm` pins `f62d63fd…` and may not move. This family
+commits nothing (`test_the_family_commits_nothing`), so `hires_source()` simply
+passes `dda_acc_reload=False` itself. The generated assembly differs from the
+old one by **exactly sixteen deleted `LD  WADDR` lines and nothing else**
+(`diff` over the two builds), P 8,895 -> 8,863.
+
+**-4.405% here against -4.32% on `deadman-3d`** — the same lever at four times
+the pixels. That is what it should be: the deleted instruction is one store read
+per DDA step, the DDA step count scales with the pixel count, and so does
+everything it is measured against.
+
+### `STORE_REQUEST_REACH` did not cost more here — it did not *build*
+
+```
+MachineError: the store's request column 101 is not under the adapter's
+floor (81..92); the drop has nowhere to start
+```
+
+`deadman-3d` buys that overlap with a `TIER_LAYOUT` `store_offset` of
+`(-20, 0)`; hires had no `TIER_LAYOUT` entry at all. Column `101 + dx` lands in
+`81..92` for `dx` in `-20..-9`, and `scratch/deadman3d-opt/hires_roof.py` shows
+**every value in that window binds** — including `-19` and `-20`, which the
+`STORE_ANSWER_WEST` note records as failing. (No contradiction: those failed
+that registry's own widened collector, not placement.)
+
+Which value is chosen **does not matter at all**. The 21-round tour comes out at
+1,085,082,598 ticks **to the tick** at `-9`, `-14` and `-20`. With the roof
+reaching, the only thing crossing the gap is the two-cell drop and everything
+else is translation; without it the request pipe costs a measurable 1,246 boot
+ticks per column of westward move. `-14` is the middle of the window, so the
+drop has five columns of margin either side.
+
+The offset is not free on its own — **+0.081%** — so the roof's gross -0.550%
+nets to -0.469%.
+
+### The two declines have one root: hires' own bank order
+
+`TAPED_BANK_ORDER["deadman-3d_hires"] = (3, 0, 1, 2)` puts the bank holding
+**90.79% of reads and 99.85% of writes** at chain position **0**. A request for
+position 0 walks *zero* chain links (0.13 gates a read, against `deadman-3d`'s
+1.15), and that single fact explains both results:
+
+* **`TAPED_CHAIN_REACH` is declined.** It shortens links 0 and 1 from 25 cells
+  to 7. On `deadman-3d` those carry 68% and 12% of reads and it is worth -1.950%;
+  here they carry ~4% and ~0.2% and it is worth **-0.020%** — and only -0.017%
+  on top of the shipped set. It is free in box terms (500x348 either way) and is
+  still not taken: two hundred-thousandths of a run does not buy pinning three
+  gate rooms into a grown form that the next store change has to work around.
+* **`TAPED_FEED_TELEPORT` is taken for the mirror-image reason.** ~91% of
+  accesses walk `req0->bank0` and *nothing else* — the arm the chain lever
+  cannot touch and this one shortens most. -0.286% against -4.194% on
+  `deadman-3d`; the arm is the same ~45 cells, but a 128x96 frame is four times
+  the work between two store accesses, so any one leg is a quarter of the share.
+  Its two extra columns of pitch cost nothing: **this machine's width is the
+  496-column wall's, not the store's.** 500x348 before and after.
+
+`STORE_REQUEST_TELEPORT` is declined as **measured**, not as assumed superseded:
+at the same offset, where both forms bind, the room gets -0.362% and the roof
+-0.469%. The 0.107pp gap is the forwarder's own six-tick re-serialisation, which
+is exactly the thing `STORE_REQUEST_REACH` was built to stop paying (M13).
+
+`TAPED_BANK_ORDER` stays `(3, 0, 1, 2)` — derived from hires' own traffic over
+its uniform quarters `(226, 226, 226, 223)`, never `deadman-3d`'s `(3, 2, 0, 1)`
+over `(352, 164, 15, 69)`.
+
+## Verification
+
+* **Every composed frame byte-identical** to the pre-change build: all 27 PNGs
+  `cmp`-clean, and `deadman-3d_hires.cases.json` (which *is* the expected-frame
+  set) and `.input.txt` byte-identical too. Only the `.asm` moved, by the
+  sixteen lines above.
+* **The frames are also verified live**, which matters more than the `cmp`:
+  the gated run above is `passed=True` on all 21 frames — every pixel of every
+  panel against the model, across both seams. A wrong ACC assumption would show
+  as corrupted geometry and it does not.
+* `node littleman/lm.mjs analyze` — **4 displays at 64x48**, listed order ==
+  reading order == tile order: `(366,241) (434,241) (366,297) (434,297)`.
+  35 rooms, 62 pipes.
+* `lm.mjs tick … 1000000` on the reference JS engine: 1,000,000 ticks,
+  `halted:false`, **no fatal** (empty stderr; `lm.mjs` writes `fatal: …` there).
+* `scratch/deadman3d-opt/packed_probe.py`: scattered and packed walls both
+  `fatal None`, `frames [2, 2, 2, 2]`, composed images identical, all four
+  corners painted. This is the routing check a rendered PNG cannot do.
+* Committed families unmoved: `deadman-3d.man` / `_trim.man` / `_v2.man`
+  `f62d63fd…`, `_taped.man` / `_m6_taped.man` `6a739e1c…`,
+  `deadman-3d.input.txt` `654d35d6…`.
+* Default suite 2,756 passed / 68 skipped; `tests/test_deadman3d.py -m slow`
+  **12/12**.
+
+## What is next, with the arithmetic already done
+
+The store levers have run out on this machine, and the table says why: the three
+that remain are worth 0.020%, and the two that were taken are worth 0.755%
+between them. **95% of the shipped win is the one program lever.** At 128x96 the
+store is simply not where the ticks are — the frame is four times the pixels
+against the same 902-slot tape, so every store leg is a quarter of the share it
+has on `deadman-3d`. The next lever for this family is in the DOOM unit or the
+router, not the store block, and `frame_ticks` is now the instrument to find it
+with.
