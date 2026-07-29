@@ -14,11 +14,19 @@ constrains it is wall clock, and that turns out to constrain it *hard*.
 
 | quantity | value | source |
 |---|---|---|
-| native engine throughput | **2.5M ticks/s** | 60M ticks of `deadman-3d.man` in 24.0s |
+| native engine, ~26 live men | **12.3M ticks/s** | 20M ticks of `deadman-3d_taped.man` in 1.62s |
+| native engine, ~200 live men | **2.5M ticks/s** | 20M ticks of `deadman-3d.man` in 7.91s |
+| fitted cost per tick | **~30 ns fixed + ~1.9 ns per live man** | the two rows above |
 | emulator throughput | **930k instructions/s**, ~60M emulated ticks/s | `lm1.emulator` over 2,001 instructions |
 | one CPU instruction | ~162 ticks | `ARCH.md` §4.1, profiled on `snake` |
 | one tape read / write | 523 / 19 ticks | same |
+| one man-memory read | ~31 ticks, independent of `n` | `ARCH.md` §4.1, `memory_men_addr` |
 | one recirculated ROM word | 4.8 ticks | `ROM-RECIRCULATION.md` |
+
+**Wall clock is the only clock in this project.** There is no judge, so nothing
+charges ticks; what costs is our own simulator, and it charges per live man per
+tick. Every sizing decision below is made against wall clock, and several of them
+come out the opposite way to how they would on a graded problem.
 
 The emulator is **24x faster than the grid** and runs the same assembly, which is
 what makes this project tractable at all: the development loop and the accuracy
@@ -39,12 +47,17 @@ The chosen point on the curve, at 10-30 epochs:
 | MACs per forward pass | 828 |
 | MACs per training step | 1,836 |
 | MACs per epoch | 4.5M |
-| ticks per epoch | ~2.9x10^9 |
-| **wall clock per epoch** | **~19 min native, ~19 s emulator** |
-| 10 / 20 / 30 epochs, native | 3.2 h / 6.5 h / 9.7 h |
-| 10 / 20 / 30 epochs, emulator | 3 min / 6 min / 10 min |
+| ticks per epoch | ~6.0x10^9 |
+| live men | ~20 |
+| **wall clock per epoch** | **~7 min native, ~40 s emulator** |
+| 10 / 20 / 30 epochs, native | 1.1 h / 2.3 h / 3.4 h |
+| 10 / 20 / 30 epochs, emulator | 7 min / 13 min / 20 min |
 
 Expected validation accuracy: **83-86%**.
+
+The tick count is ~2x what the MAC count alone implies, because the store is rings
+rather than random-access memory (§4.2) — and the wall clock is nevertheless ~3.5x
+better, because the ring costs no men.
 
 ## 2. Engine facts established by probe
 
@@ -108,9 +121,15 @@ consumer takes a word. So the dataset ring is a sequential tape with:
   measured facts", fact 3);
 * **one lap per epoch, exactly** — 10,000 reads returns the ring to its start
   position, so epoch boundaries need no counter and no addressing;
-* **zero live men.** Values move through pipes without a runner. This is §4.1's
-  `runners x ticks` rule, the one that got a `little-little-man` submission
-  rejected with `time-cap` despite being 2.36x faster in ticks.
+* **zero live men, and zero per-tick cost.** Values move through pipes without a
+  runner, and `fast_littleman_native.cpp`'s performance notes make the stronger
+  claim: a pipe is a deque plus a run-length list of occupied cells, "a busy pipe
+  costs O(runs), an empty pipe costs nothing", and every run advances unless jammed
+  against the destination. A **permanently-full ring is exactly one jammed run**, so
+  a 10,000-word ring costs O(1) a tick no matter how long it is. This is the
+  mechanism behind §4.1's `runners x ticks` rule — the one that got a
+  `little-little-man` submission rejected with `time-cap` despite being 2.36x faster
+  in ticks.
 
 The alternative was a tape, and it is not close: at `105 + 8.3n` ticks per access a
 15,000-word tape costs ~125,000 ticks **per read**.
@@ -125,7 +144,8 @@ byte-reproducible**, which `AGENTS.md`'s "never touch production from a test" ru
 wants. The fetch is a separate CLI subcommand, never a build step.
 
 ROM cost: 192,000 nibbles at ~3 bits per grid cell (a 19-digit literal in 21 cells)
-is ~256,000 cells of serpentine. The whole grid lands near 550x600 — irrelevant
+is ~256,000 cells of serpentine. With the program's own ROM and code ring (§5) the
+whole grid lands near 650x650 — irrelevant
 against the 10MB program limit, and there is no footprint term to pay.
 
 ## 4. The model
@@ -153,13 +173,44 @@ bits, which is what makes fixed point safe here without saturation logic.
 
 **SGD, batch 1.** The learning rate is a power of two so an update is a shift.
 
-**Parameters live in two rings** — conv (20 words) and dense (190) — read-modify-
-written in lap order. Three laps per training step (forward read, backward read for
-input gradients, update) at 210 instructions a lap is ~100k ticks against 1.2M of
-arithmetic: 8%, and it buys a store that costs no men and no tape latency.
+### 4.2 The store: rings win on wall clock, and unrolling is what makes them easy
 
-**Activations for the backward pass** — 72 conv pre-activations, 18 pooled values,
-and the pool argmax indices — go in a third ring, written forward and read backward.
+Four tiers were priced against the model above. The tape is dead on arrival at this
+size; a man-memory RAM is the fastest in ticks and loses anyway.
+
+| tier | ticks/access | live men | ticks/epoch | throughput | **wall clock/epoch** |
+|---|---|---|---|---|---|
+| tape, `n` ~ 300 | `105 + 8.3n` = **2,595** | 0 | ~2.4x10^10 | 20M/s | ~20 min, and 4x the arithmetic |
+| man-memory, all 300 words | **31** | ~300 | 2.5x10^9 | 1.7M/s | ~25 min |
+| hybrid, ~170-word RAM | 31 | ~170 | 3.2x10^9 | 2.8M/s | ~18 min |
+| **rings + <=16-word scratch RAM** | ~2 instructions | **~20** | 6.0x10^9 | 14.7M/s | **~7 min** |
+
+So: **rings for everything with a fixed access order, a small man-memory only for
+values that are genuinely random-access.** RAM is faster per access and costs ~3.5x
+more wall clock, which is the `little-little-man` trade again — 52 slots in a man
+tier cut ticks 2.36x and raised simulator work 9.7x.
+
+**Full unrolling is what makes ring order free.** A ring forces a fixed access
+order, which is normally the thing that makes it hard to program. In straight-line
+code it is not bookkeeping at all: the generator knows at emit time exactly which
+value sits at the ring head at every instruction, so ring position is a compile-time
+constant it can simply get right, and the fast tier can assert it.
+
+Concretely:
+
+* **Parameters** — conv (20 words) and dense (190) in their own rings. The dense
+  backward pass and the weight update share **one lap**: iterating `(j, i)` in
+  storage order, `df[i] += dz[j]*W[j][i]` and `W[j][i] -= lr*dz[j]*f[i]` both read
+  `W[j][i]` exactly once.
+* **Conv as nine offset-sequential passes.** For a fixed tap `t`, `acc[p] +=
+  x[p+t]*W[f][t]` walks both `x` and `acc` in order at a constant offset, so both
+  can be rings. This is ~2x the instructions of a random-access conv, and it is what
+  keeps the man count near 20.
+* **Activations** — the 72 conv pre-activations, 18 pooled values and pool argmax
+  indices go in a ring, written forward and read backward.
+* **The scratch RAM holds <=16 words**: the accumulator spills the unrolled code
+  cannot keep in `A`/`B`, plus the 10 `dz` values. At 16 men that is ~30 ns/tick
+  extra, i.e. free, and it removes the only genuinely awkward ordering constraint.
 
 ### 4.1 Two of the requested layers are deliberately absent
 
@@ -177,23 +228,31 @@ different machine and is out of scope here.
 
 A taken backward jump discards `(target - pc - 1) mod P` ring words at 4.8 ticks
 each, and `ROM-RECIRCULATION.md` measures that as **36-52% of six shipped
-machines**. An 1,836-iteration inner MAC loop over a 12,000-word ring would cost
-~100M ticks *per sample* — 30x the arithmetic.
+machines**. Rolled up, this program is ~400 words with a ~10-word MAC body, so every
+one of the 1,836 iterations would discard ~390 words: **~1,900 ticks of discarding
+per MAC against ~650 of arithmetic**, i.e. the loop would spend three quarters of its
+life throwing instructions away.
 
-So forward and backward are **fully unrolled** into ~7,500 instructions (~12,000 ROM
-words). Two consequences:
+So forward and backward are **fully unrolled**: `train_body` ~14,700 instructions
+(~21,000 ROM words) and `val_body` ~6,600 (~9,400 words), `P` ~ 30,400. With two
+bodies in one ring the discards are small and asymmetric, because a loop discards
+`P - body`:
 
-* the only backward jump is the sample loop wrapping the whole ring, and a wrap
-  discards ~0 words because `mod P` makes it free;
-* skipping the backward section on a validation sample is a *forward* skip of ~5,000
-  words, ~24k ticks, ~2% of a sample. Acceptable; the alternative is two separate
-  unrolled bodies, decided at implementation time on measurement.
+| loop | discard per sample | against compute | share |
+|---|---|---|---|
+| train | ~9,400 words = 45k ticks | 2.4M ticks | **2%** |
+| validation | ~21,000 words = 101k ticks | 1.07M ticks | **9%** |
 
-Unrolling is not free on the *code* ring: at `P` ~ 12,000 words the ring pipes must
+Both acceptable. The alternative — one body with the backward section skipped
+forward on validation samples — trades the 9% for a ~72k-tick forward skip, so it is
+close to a wash and is settled by measurement once both exist.
+
+Unrolling is not free on the *code* ring: at `P` ~ 30,400 words the ring pipes must
 hold `P + slack` cells (§2.1 — capacity below `P` deadlocks, capacity far above it
-starves), so ~12,000 cells of folded pipe plus a ~41,000-cell ROM serpentine at 3.4
-cells a word. That is additive to the ~256,000 cells of dataset ROM and is what puts
-the grid near 550x600. It costs nothing but area, and there is no area term here.
+starves), so ~30,400 cells of folded pipe plus a ~103,000-cell ROM serpentine at 3.4
+cells a word. That is additive to the ~256,000 cells of dataset ROM and puts the grid
+near 650x650. It costs nothing but area, and there is no area term here — but it does
+cost **one** live man for the ROM, which halts after boot.
 
 Control flow that remains:
 
@@ -281,7 +340,11 @@ generator report, this document and the commit message.
   generous ceiling is the plan; revisit if the reference run shows otherwise.
 * **Whether `val_body` is a forward skip or a second unrolled body** is a 2%
   decision, settled by measurement once both exist.
-* **Whether the activation ring or a man-memory wins** for the 90 backward-pass
-  values. The ring costs no men but forces backward order; a man-memory is ~31
-  ticks random-access but 90 live men for a 6-hour run, which is the exact trade
-  §4.1 warns about. Ring first.
+* **The live-man cost model is fitted from two points**, both on `deadman-3d`, whose
+  man counts are themselves estimates from the docs rather than counted. `~30 ns +
+  1.9 ns per man` is good enough to choose rings over RAM by 3.5x, and not good
+  enough to size the scratch RAM precisely. First implementation task after the
+  data path: build the same trivial program at several `store="grid"` sizes and
+  measure the slope directly.
+* **RAM versus rings is settled** (§4.2) and does not need revisiting: rings for
+  everything with a fixed access order, <=16 words of man-memory for the rest.
