@@ -105,10 +105,14 @@ def test_a_stream4_program_cannot_be_built_on_a_depth_three_unit():
 
     At mod-8 a ``PUSHA`` word decodes as ``EMIT``, a ``ROTB`` as ``FILLB``, so a
     machine built from ``stream.py``'s depth-3 trie would run this program to
-    completion and train nothing. Drawing the depth-4 trie is Task 6; refusing to
-    build the wrong one is a correctness property today.
+    completion and train nothing. Refusing to build the wrong one is a correctness
+    property; what the refusal *says* changed with Task 6, which drew the depth-4
+    unit (twelve arms, eleven pipes, every glyph checked against the engine's own
+    ``route``) but did not place the block around it — so the refusal is now about
+    the placement rather than about the trie. Either way it is a raise, and this
+    test pins the raise, not the wording of the part that is still to do.
     """
-    with pytest.raises(StreamError, match="Task 6"):
+    with pytest.raises(StreamError, match="not placed yet"):
         stream.build_stream(
             a_slots=16, b_slots=64, c_slots=16, trie_bits=asm.UNIT_TRIE_BITS["stream4"]
         )

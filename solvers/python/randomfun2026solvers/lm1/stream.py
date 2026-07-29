@@ -78,6 +78,32 @@ own ``route``:
 Arms are laid out west to east as trie leaves and their bodies run *down* their
 own column, so "which row a glyph is on" is a free variable the layout uses to
 satisfy rule 1 — padding a body with blanks moves a pipe glyph onto its row.
+
+Two decode widths, and rule 2 changes shape between them
+--------------------------------------------------------
+
+The eight arms above are ``matmul``'s, on a depth-3 trie. The MNIST trainer needs
+four more — ``PUSHA``, ``ROTB``, ``RDP`` and ``UPDB`` (:class:`~.store.StreamUnit`
+models them) — and gets them on a depth-4 trie: sixteen leaves, twelve arms, four
+spare, ``16 * arg + code``. The widths are never mixed in one decode, because at
+mod-8 a ``PUSHA`` word reads as ``EMIT`` and at mod-16 an existing odd-argument
+``FILLA`` word reads as a different arm entirely, so a program has to name the
+width it was written against (``asm.UNITS``' ``stream`` / ``stream4``).
+
+Four new arms cost **no new pipes** — they reuse the rings that are already there,
+which matters because a new pipe would be a new rival for every ``r`` and ``s`` in
+the unit. What they do cost is rule 2's shape: at depth 4 **all four incoming
+pipes are on the west wall**, one row each. :data:`UPDB_BANDS` gives the reason in
+full; the short version is that ``UPDB`` reads the accumulator, then ring A's
+return, then ring B's, in that order, and §7.1's distances never let a south or
+north pipe win *between* two west-wall reads — a south pipe's distance falls with
+the row exactly as a west pipe's does above its own row, so one of them always
+wins, and north is the mirror image. With every incoming pipe on one wall, rule 2
+collapses into rule 1 and no per-arm argument is needed at all.
+
+The depth-4 *unit* is drawn and checked (:func:`unit_interior_grid` renders it
+with all eleven pipes for ``analyze``/``route`` to answer about). The *block*
+around it is not placed yet — see the note above :func:`build_stream`.
 """
 
 from __future__ import annotations
