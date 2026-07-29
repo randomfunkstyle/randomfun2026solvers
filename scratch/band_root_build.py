@@ -48,6 +48,22 @@ CANDIDATES: dict[str, dict[str, int]] = {
         "DIVI": 16, "SUBI": 18, "MULI": 20, "LDI": 24, "JMPS": 25, "BRN": 26,
         "BRZ": 28, "JMPF": 30, "SND": 31,
     },
+    # Dispatch minimised subject to <= 6,900 opcode cells: 6,617, sixty above the
+    # drum DP's own optimum, and the root does not move. The conservative pick.
+    "cheap121": {
+        "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5, "LDA": 6,
+        "DIV": 7, "SUB": 8, "ADD": 9, "ST": 12, "LD": 16, "MODI": 17,
+        "DIVI": 18, "SUBI": 20, "MULI": 21, "LDI": 24, "JMPS": 25, "BRN": 27,
+        "BRZ": 28, "JMPF": 30, "SND": 31,
+    },
+    # The other Pareto point: 7,082 cells (549 cheaper than `joint125`) for
+    # 201,584 more dispatch. A narrower drum may reach a shallower fold.
+    "joint127": {
+        "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5, "LDA": 6,
+        "DIV": 7, "SUB": 8, "ADD": 9, "ST": 10, "LD": 12, "MODI": 14,
+        "DIVI": 15, "SUBI": 16, "MULI": 17, "LDI": 18, "JMPS": 19, "BRN": 20,
+        "BRZ": 24, "JMPF": 27, "SND": 28,
+    },
     # `band_root_probe.search()` — four seeds, same optimum.
     "root125": {
         "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5, "LDA": 6,

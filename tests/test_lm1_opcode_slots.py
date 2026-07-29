@@ -1,4 +1,5 @@
-"""``OPCODE_SLOTS``: relabel the trie's leaves, move no lane, shrink the drum.
+"""``OPCODE_SLOTS``: relabel the trie's leaves, move no lane, shrink the drum —
+and, because the slot *values* choose the tree's branches, reshape the decode.
 
 The knob's whole claim is that it is *row-neutral* — a lane's row is its leaf
 slot's rank under ``trim_dead``, so relabelling the slots leaves every row, drop
@@ -7,6 +8,12 @@ column and lane tick exactly where it was and changes only
 would be a silently retuned ``LANE_ORDER`` rather than a failure, so it is
 checked here from both ends: the rows really are identical, and a map that would
 reorder the lanes is refused.
+
+Row-neutral is not shape-neutral, though, and the second half of this file is
+about the difference. ``_uneven_trie`` splits the **slot space** at each dyadic
+midpoint rather than the used slots, so the values decide every branch — which
+is what the registry's dispatch tuning is for, and what makes a bad map decode
+an opcode into the wrong lane with every pipe still bound.
 """
 
 from __future__ import annotations
@@ -75,8 +82,11 @@ def test_the_registered_map_moves_no_lane_and_only_moves_the_numbers(key) -> Non
 
 @pytest.mark.parametrize("key", LOADABLE)
 def test_the_registered_map_is_a_strict_win_in_drum_cells(key) -> None:
-    """The knob exists for one number: cells in the drum's lap. A map that does
-    not lower it is a retune of the trie for nothing."""
+    """Drum cells were the knob's original and for a while its only objective, and
+    a map must still beat the default on them — a registered map that is worse in
+    the drum *and* not paying for it elsewhere is dead weight. It is no longer the
+    only objective (dispatch ticks are the other; see the registry), so this is a
+    floor against the default rather than a claim that the map minimises it."""
     slug, _tier = key
     program, base = _seek_plan(slug, None)
     _, relabelled = _seek_plan(slug, machine.OPCODE_SLOTS[key])
@@ -130,3 +140,94 @@ def test_the_knob_is_refused_where_it_would_not_be_row_neutral() -> None:
             trim_dead=False,
             opcode_slots={"LDI": 0},
         )
+
+
+# ── the map also shapes the decode trie, so the trie has to be walked ────────
+#
+# New tests rather than assertions bolted onto the ones above: these are a
+# different claim about the same registry — that the tree *routes*, and that its
+# rows are packed — and each wants to be able to fail on its own.
+
+_DIRS = {"E": (1, 0), "W": (-1, 0), "N": (0, -1), "S": (0, 1)}
+_CW = {"E": "S", "S": "W", "W": "N", "N": "E"}
+_CCW = {"E": "N", "N": "W", "W": "S", "S": "E"}
+
+
+def _trie_of(slug: str, slots: dict[str, int]):
+    """The trie the generator emits for ``slots``, in interior coordinates."""
+    _, p = _seek_plan(slug, slots)
+    used = sorted((p.row[m] - 1) // 2 for m in p.number)
+    rank = {s: i for i, s in enumerate(used)}
+    slot_rows = {s: 1 + 2 * rank[s] for s in used}
+    lane_x0 = 4 + 2 * p.k
+    entry, cells = machine._uneven_trie(p.k, slot_rows, lane_x0)
+    return p, slot_rows, lane_x0, entry, cells
+
+
+def _walk_trie(cells, bp: int, entry_row: int, lane_x0: int) -> int:
+    """Replay a decode from the fetch cell; returns the row it enters a lane on."""
+    x, y, d = 5, entry_row, "E"
+    for _ in range(400):
+        g = cells.get((x, y), " ")
+        if g == "x":
+            d = _CW[d] if (bp & 1) else _CCW[d]
+        elif g == "]":
+            bp >>= 1
+        elif g == ">":
+            d = "E"
+        elif g == "<":
+            d = "W"
+        elif g == "^":
+            d = "N"
+        elif g in "vV":
+            d = "S"
+        elif g not in ". ":
+            raise AssertionError(f"decode ran onto {g!r} at {(x, y)}")
+        dx, dy = _DIRS[d]
+        x, y = x + dx, y + dy
+        if x >= lane_x0:
+            return y
+    raise AssertionError("decode never reached a lane")
+
+
+@pytest.mark.parametrize("key", LOADABLE)
+def test_every_opcode_number_decodes_to_its_own_lane(key) -> None:
+    """The registry picks the slot *values*, and :func:`machine._uneven_trie`
+    splits the slot **space** at each dyadic midpoint — so the values choose every
+    branch of the tree, not just the labels on its leaves.
+
+    That makes a bad map fail the worst way available here: the grid builds, every
+    pipe binds, and one opcode walks into the *wrong lane* and executes it. So walk
+    the tree the generator actually emits and check every landing. Pure — no
+    machine build and no simulation, so it belongs in the fast tier.
+    """
+    slug, _tier = key
+    p, slot_rows, lane_x0, entry, cells = _trie_of(slug, machine.OPCODE_SLOTS[key])
+    for m, number in p.number.items():
+        landed = _walk_trie(cells, number, entry, lane_x0)
+        want = slot_rows[(p.row[m] - 1) // 2]
+        assert landed == want, f"{m} (number {number}) decodes to row {landed}, not {want}"
+
+
+@pytest.mark.parametrize("key", LOADABLE)
+def test_the_trie_gives_every_node_its_own_row(key) -> None:
+    """Why the lane band's pitch of 2 is a floor rather than slack.
+
+    An ``x`` fans out perpendicular on **both** sides, so every internal node has
+    one child's subtree strictly above it and the other's strictly below. That is
+    the in-order condition, and it forces all ``2n - 1`` nodes onto distinct rows:
+    any two of them lie in opposite halves of their common ancestor. The band is
+    therefore exactly ``n`` lane rows interleaved with ``n - 1`` ``x`` rows with
+    nothing left over — the "gap" rows *are* the decoder. Pinned because that
+    height has been read as spare before.
+    """
+    slug, _tier = key
+    p, slot_rows, _lane_x0, _entry, cells = _trie_of(slug, machine.OPCODE_SLOTS[key])
+
+    n = len(slot_rows)
+    lane_rows = set(slot_rows.values())
+    x_rows = [y for (_x, y), g in cells.items() if g == "x"]
+    assert len(x_rows) == n - 1, "a binary trie over n lanes branches n-1 times"
+    assert len(set(x_rows)) == n - 1, "two `x` nodes may never share a row"
+    assert not (set(x_rows) & lane_rows), "an `x` may not sit on a lane row"
+    assert max(lane_rows) - min(lane_rows) + 1 == 2 * n - 1

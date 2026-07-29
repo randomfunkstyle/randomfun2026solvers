@@ -5630,16 +5630,41 @@ SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 #: packing, not of anything here, and it is why 84 — 0.2% faster than 81 and
 #: equally narrow — is not the pin: it sits in a hole between folds that do not
 #: run at all.
+#: **The hole moved when the slot map did.** Which folds "do not RUN" is a
+#: property of the *packed words*, and :data:`OPCODE_SLOTS` changes the words — so
+#: the whole curve above was re-swept against the dispatch-tuned map below. A map
+#: with fewer one-digit opcodes is a **wider drum**, and the seek teleport's V room
+#: wants a clear column band east of it (:func:`_seek_teleport`), so the shallow
+#: folds stop binding: 78..82 fail V outright, and **83 binds the shipped build but
+#: not the counterfactual ones** — `tests/test_deadman3d.py` proves several
+#: registries load-bearing by rebuilding with one flipped off, and
+#: ``TAPED_FEED_TELEPORT=False`` is a wider block than the shipped one.
+#: ``scratch/band_root_variants.py`` sweeps every such variant per fold; 84 is the
+#: shallowest that binds all of them.
+#:
+#: The tour ticks across the folds that bind, all round-gated:
+#:
+#: ::
+#:
+#:     83   293x255   595,520,499   (shipped build only — a variant fails V)
+#:     84   293x257   597,185,956   <- the pin
+#:     85   293x257   597,185,956
+#:     86   293x259   599,627,097
+#:
+#: So 83 is 0.28% faster and unbuildable for the suite; the pin costs that and
+#: keeps every counterfactual. Re-sweep both numbers together whenever either
+#: moves — neither is safe to carry across the other.
 SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
-    ("deadman-3d", "taped"): {"rom_rows": 81},
+    ("deadman-3d", "taped"): {"rom_rows": 84},
 }
 
 #: Per-``(slug, tier)`` **leaf relabelling** for the decode trie: which slot each
 #: opcode's lane occupies, north to south. Absent keys keep the contiguous default
 #: and every other machine stays byte-identical.
 #:
-#: This is a *ROM-encoding* knob and nothing else. A lane's row is its slot's
+#: **It is not only a ROM-encoding knob, though it was designed as one — see "The
+#: second objective" below.** A lane's row is its slot's
 #: **rank** under :data:`TRIM_DEAD_LANES`, so a rank-preserving relabelling leaves
 #: every row, drop column and lane tick untouched (:func:`plan` enforces that) and
 #: only moves ``number = _bitrev(slot, k)``. The drum charges an opcode below ten
@@ -5696,12 +5721,58 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: constant. The crossing moves 102 -> **88** and the machine 496x401 ->
 #: 496x387 on this knob alone (see :data:`ROM_ROWS`, where the two knobs are
 #: swept together).
+#: ## The second objective: the map also shapes the **decode trie**
+#:
+#: The rank-preservation above is what makes this knob safe, and it is also what
+#: hid the rest of it: rows do not move, so nothing *looks* like geometry. But
+#: :func:`_uneven_trie` splits the **slot space** at each dyadic midpoint, not the
+#: used slots, so the slot *values* decide every branch — and therefore
+#:
+#: * the **zigzag**: the vertical the walk actually travels above the ``|fetch row
+#:   - lane row|`` it owes (2,587,216 ticks under the old map, 4.29% of the
+#:   profiled run);
+#: * the **riser**: the root is the trie's in-order median, so its row is
+#:   ``band_y0 + 2u - 1`` for ``u`` slots in ``[0, 16)``, and the riser is
+#:   ``collector - root``. ``u = 11`` centred the fetch row; every slot moved west
+#:   across 16 walks the root one lane south and takes two ticks off the riser.
+#:
+#: Writing the loop out shows why both matter and the drop does not: with the
+#: collector at ``C`` and the root at ``F``, a lane at ``r`` costs
+#: ``2C - 2*min(r, F) - 1 + zigzag(r)`` — below the root the descent and the drop
+#: telescope. (That is the same fact :data:`LANE_ORDER`'s comment records as "a
+#: row above the fetch row costs 2 ticks per row of height while every row below
+#: it costs a constant".)
+#:
+#: So the map is a two-objective problem and the old one solved half of it. The
+#: two are in real tension — the dispatch optimum alone costs 9,098 opcode cells
+#: against the drum DP's 6,557 — and pricing both in tour ticks
+#: (``scratch/band_root_probe.py``, ``search_joint``) lands between them. Measured
+#: on the 116-round tour, every one round-gated:
+#:
+#: | map | opcode cells | dispatch | fold | box | tour ticks | |
+#: |---|---:|---:|---:|---|---:|---:|
+#: | drum DP (was shipped) | **6,557** | 12,426,204 | 81 | 293x254 | 609,871,597 | |
+#: | dispatch-only optimum | 9,098 | **11,167,796** | 90 | 293x262 | 598,773,720 | -1.820% |
+#: | cheapest drum that helps | 6,617 | 11,747,422 | 81 | 293x254 | 602,765,896 | -1.165% |
+#: | **joint (shipped)** | 7,631 | **11,167,796** | 84 | 293x257 | **597,185,956** | **-2.080%** |
+#:
+#: The joint map reaches the *same* dispatch optimum as the dispatch-only one for
+#: 1,467 fewer cells, which is what lets it keep a shallow fold — and the fold is
+#: worth having: the same drum DP map at fold 88 runs 611,508,114, so seven rows
+#: of fold is +0.268% on its own. **Width does not move** (293, the store's floor);
+#: height goes 254 -> 257, which under `AGENTS.md` § "optimise ticks, not
+#: footprint" is free.
+#:
+#: What this is *not*: a lane reorder. Rank order is byte-identical to the old
+#: map's, so :data:`LANE_ORDER` is untouched and every lane's micro-program, drop
+#: column and row are where they were. Only the numbers moved — and, through them,
+#: the shape of the tree that reads them.
 OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
     ("deadman-3d", "taped"): {
         "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5,
-        "LDA": 8, "DIV": 9, "SUB": 10, "ADD": 11, "ST": 12, "LD": 16,
-        "MODI": 18, "DIVI": 20, "SUBI": 21, "MULI": 22, "LDI": 24,
-        "JMPS": 25, "BRN": 26, "BRZ": 28, "JMPF": 29, "SND": 30,
+        "LDA": 6, "DIV": 7, "SUB": 8, "ADD": 11, "ST": 12, "LD": 14,
+        "MODI": 15, "DIVI": 16, "SUBI": 18, "MULI": 20, "LDI": 24,
+        "JMPS": 25, "BRN": 26, "BRZ": 28, "JMPF": 30, "SND": 31,
     },
     ("deadman-3d_hires", "taped"): {
         "IN": 0, "INCM": 1, "MOVA": 2, "DIV": 3, "ST": 4, "SUB": 5,
