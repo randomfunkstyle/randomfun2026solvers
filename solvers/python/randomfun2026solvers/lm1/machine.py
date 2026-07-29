@@ -942,6 +942,59 @@ def _flat_lane(
     return out
 
 
+def _uneven_gaps(k: int, slots: Sequence[int]) -> set[int]:
+    """Which adjacent lane pairs still need a blank row between them.
+
+    The band has historically been laid at a uniform pitch of two: one row per
+    lane and one for the ``x`` that splits it from the next. That is one row per
+    *node*, and most of them do not need one. A node at level ``L`` sits in column
+    ``3 + 2L`` and every lane in its subtree is entered at column ``>= 5 + 2L``,
+    so the node — and both its legs — are strictly **west** of every lane beneath
+    it. The lane's man starts east of the node and never walks onto it, and no leg
+    ever lands inside a lane's shift run. **A node can share a lane's row.**
+
+    Exactly one case cannot, and it is forced by ``x`` itself: ``x`` *always*
+    turns, clockwise to the south and counter-clockwise to the north, with no
+    outcome that leaves the man on his own row. So a node's row must lie strictly
+    **between** its two children's rows. :func:`_uneven_trie` puts a node on the
+    row above its down-half's first lane, which is the up-half's *last* lane — and
+    if the up half is a single lane, that lane **is** the node's own up child. Its
+    entry ``>`` then lands on the node's cell and overwrites the ``x``, and every
+    opcode routed through it walks east into the wrong lane, silently.
+
+    So: a gap row is needed after rank ``i`` exactly when the node splitting lane
+    ``i`` from lane ``i + 1`` has a **single-lane up half**. Everywhere else the
+    two lanes may sit one row apart.
+
+    Returns the set of ranks after which a gap is required. Mirrors
+    :func:`_uneven_trie`'s recursion, including its single-child contraction, so
+    the tree it measures is the one that gets built.
+    """
+    used = sorted(slots)
+    rank = {s: i for i, s in enumerate(used)}
+    gaps: set[int] = set()
+
+    def node(lo: int, hi: int) -> None:
+        sl = [s for s in used if lo <= s < hi]
+        mid, up, down = lo, [], []
+        while len(sl) > 1:
+            mid = (lo + hi) // 2
+            up = [s for s in sl if s < mid]
+            down = [s for s in sl if s >= mid]
+            if up and down:
+                break
+            lo, hi = (lo, mid) if up else (mid, hi)
+        if len(sl) <= 1:
+            return
+        if len(up) == 1:
+            gaps.add(rank[max(up)])
+        node(lo, mid)
+        node(mid, hi)
+
+    node(0, 1 << k)
+    return gaps
+
+
 def _uneven_trie(
     k: int, slot_rows: dict[int, int], lane_x0: int
 ) -> tuple[int, dict[tuple[int, int], str]]:
@@ -968,6 +1021,7 @@ def _uneven_trie(
     untouched: the ROM image is byte-identical to the uniform trie's.
     """
     cells: dict[tuple[int, int], str] = {}
+    nodes: dict[tuple[int, int], int] = {}  # branch cells, checked below
     used = sorted(slot_rows)
 
     def node(level: int, lo: int, hi: int) -> tuple[int, int | None]:
@@ -990,6 +1044,7 @@ def _uneven_trie(
         col = 3 + 2 * level
         xrow = slot_rows[min(down)] - 1  # the gap row above the down half
         cells[(col, xrow)] = "x"
+        nodes[(col, xrow)] = level
         for half, sign in (((lo, mid), -1), ((mid, hi), +1)):
             crow, clevel = node(level + 1, *half)
             for yy in range(xrow + sign, crow, sign):
@@ -1008,6 +1063,24 @@ def _uneven_trie(
     end = (2 + 2 * elevel) if elevel is not None else (lane_x0 - 1)
     for i, cx in enumerate(range(5, end + 1)):
         cells[(cx, entry)] = "]" if i < shifts else "."
+
+    # Every branch cell must still be an `x`. This is not paranoia about the code:
+    # it is the one failure this trie has that the grid cannot show you. `x`
+    # **always turns**, so a node's row has to lie strictly *between* its two
+    # children's rows — and a node whose children are both lanes therefore needs a
+    # row between two **adjacent** lanes. Squeeze the band and that node's own
+    # up-lane lands on its row and overwrites the `x` with its entry `>`; every
+    # opcode routed through it then walks east into the wrong lane, silently, with
+    # no binding error and no collision. Nine of this program's twenty nodes are
+    # such pairs, so a naive one-row band loses nine of them at once.
+    lost = sorted(pos for pos in nodes if cells[pos] != "x")
+    if lost:
+        raise MachineError(
+            f"{len(lost)} decode branch(es) overwritten at {lost[:4]}"
+            f"{'...' if len(lost) > 4 else ''}: an `x` needs a row strictly between "
+            "its two children, so a node with two lane children needs a row between "
+            "two adjacent lanes. The band cannot be compacted past that."
+        )
     return entry, cells
 
 
@@ -1084,6 +1157,7 @@ def build_cpu(
     seek_taken_drop_east: bool = False,
     tight_drops: bool = False,
     slab_pitch: int = _SLAB_PITCH,
+    lane_pitch: int = 2,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -1101,6 +1175,15 @@ def build_cpu(
     """
     if (trim_dead or top_bus) and not short_return:
         raise MachineError("trim_dead/top_bus require the short-return drop rule")
+    if lane_pitch != 2:
+        if not trim_dead:
+            # The untrimmed band puts a lane at ``2 * slot + 1`` straight from the
+            # plan, and the uniform trie's step is ``1 << (k - level)`` rows — both
+            # hard-wired to the pair. Only the pruned trie derives its geometry
+            # from ``slot_rows``, which is what makes a pitch a free variable.
+            raise MachineError("lane_pitch requires trim_dead (the pruned trie)")
+        if not 1 <= lane_pitch <= 2:
+            raise MachineError(f"lane_pitch must be 1 or 2, got {lane_pitch}")
     if tight_drops and not short_return:
         raise MachineError("tight_drops requires the short-return drop rule")
     if slab_pitch < _SLAB_PITCH_FLOOR:
@@ -1117,19 +1200,46 @@ def build_cpu(
     used = list(p.number)
     bus_row = 1
     y0 = 2 if top_bus else 1  # with a top bus, row 1 belongs to the bus
+    pitch = lane_pitch if trim_dead else 2
     if trim_dead:
         slots = sorted((p.row[m] - 1) // 2 for m in used)
         rank = {s: i for i, s in enumerate(slots)}
-        row_of = {m: y0 + 2 * rank[(p.row[m] - 1) // 2] for m in used}
         n_rows = len(slots)
+        if pitch == 1:
+            # Staggered: lanes sit one row apart, and a second row goes in only
+            # where the ``x`` splitting the pair has nowhere else to stand. See
+            # :func:`_uneven_gaps` — most nodes can share the lane row above them,
+            # because a node is always strictly west of the lanes in its subtree.
+            gaps = _uneven_gaps(k, slots)
+            at = [y0]
+            for i in range(n_rows - 1):
+                at.append(at[-1] + (2 if i in gaps else 1))
+            # **Bottom-align it.** The rows the stagger saves are left blank above
+            # the band instead of being taken out of the room, so the collector,
+            # the whole structures band below it and the room's own height all
+            # stay exactly where they were — and so does every block placed
+            # against them. Nothing outside the CPU has to move for this.
+            #
+            # It costs nothing that matters: the win is the *vertical travel*
+            # inside the band, and all three terms measure from the collector —
+            # the drop is `collector - 1 - row`, the riser is `collector - centre`
+            # and the trie descent is the band's own height. Shrinking the room
+            # as well was tried and is a false economy: it collides with the
+            # store, and chasing it with a store offset only re-breaks whichever
+            # counterfactual build has a different-shaped block.
+            at = [r + (2 * n_rows - 1) - (at[-1] - y0 + 1) for r in at]
+        else:
+            at = [y0 + 2 * i for i in range(n_rows)]
+        row_of = {m: at[rank[(p.row[m] - 1) // 2]] for m in used}
         lane_x0 = 4 + 2 * k  # two columns per trie level (see _uneven_trie)
     else:
         row_of = {m: p.row[m] + (y0 - 1) for m in used}
         n_rows = lanes
         lane_x0 = 5 + k
-    span = 2 * n_rows - 1
+        at = [y0 + 2 * i for i in range(n_rows)]
+    span = at[-1] - y0 + 1
     by_row = {row_of[m]: m for m in used}
-    all_rows = [y0 + 2 * i for i in range(n_rows)]
+    all_rows = list(at)
     if trim_dead:
         centre, trie_cells = _uneven_trie(
             k, {(p.row[m] - 1) // 2: row_of[m] for m in used}, lane_x0
@@ -2868,6 +2978,7 @@ def build(
     in_west: int = 0,
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
+    lane_pitch: int = 2,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -3068,6 +3179,7 @@ def build(
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
+                    lane_pitch=lane_pitch,
                 )
             except MachineError as exc:
                 last = exc
@@ -3134,6 +3246,7 @@ def build(
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
+                    lane_pitch=lane_pitch,
                 )
             except MachineError:
                 continue
@@ -3222,6 +3335,7 @@ def _assemble(
     in_west: int = 0,
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
+    lane_pitch: int = 2,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -3241,6 +3355,7 @@ def _assemble(
         top_bus=top_bus,
         seek=seek,
         seek_taken_drop_east=seek_taken_drop_east,
+        lane_pitch=lane_pitch,
     )
     W, H = cpu.width, cpu.height
 
@@ -5519,6 +5634,56 @@ INPUT_NORTH: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: machine's checked-in grid stays byte-identical.
 TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 rows, -13.6% on the gate
 
+#: ``(slug, tier)`` pairs whose CPU lane band is laid at **pitch 1** — one row per
+#: lane, no gap row between them — instead of the historic pair.
+#:
+#: The gap row was never the lanes' to spend. Every trie cell lives in columns
+#: ``5 .. lane_x0 - 1`` and every micro-program starts at ``lane_x0``, so the two
+#: never contend for a cell; what needed the row was the ``x`` **node**, which
+#: always turns and so has to sit somewhere its own subtree's men do not walk.
+#: :func:`_uneven_trie` puts a node one row above its down-half's first lane, and
+#: at pitch 1 that row is the up-half's **last lane row** — which is safe for a
+#: reason that holds structurally rather than by luck:
+#:
+#:     a node at level ``L`` sits in column ``3 + 2L``, and *every* lane in its
+#:     subtree is entered from a node at level ``> L``, hence at column
+#:     ``>= 5 + 2L``. A node's column, and its two legs' column, are therefore
+#:     strictly **west of every lane entry below it** — so no lane man ever walks
+#:     onto them and no leg ever lands inside a lane's shift run.
+#:
+#: The node rows are distinct for free, too: a node's row is fixed by its split
+#: slot, there are 21 split points between 22 lanes, and single-child chains are
+#: contracted away — so 21 nodes land on 21 different lane rows with nothing left
+#: over.
+#:
+#: What it buys is the whole of the band's height, three times over, because the
+#: trie descent, the drop to the collector and the riser back up are all vertical
+#: travel inside it. Opt-in per ``(slug, tier)``; absent pairs keep pitch 2 and
+#: stay byte-identical. Requires :data:`TRIM_DEAD_LANES` (see :func:`build_cpu`).
+LANE_PITCH: dict[tuple[str, str], int] = {
+    ("deadman-3d", "taped"): 1,  # band 43 -> 31 rows, riser 22 -> 16
+    # hires transfers, and is worth **more** than the family it came from
+    # (-4.351% against -4.04%) — but only on a machine whose store has already
+    # been fixed, which is the whole lesson of measuring it twice:
+    #
+    #   | machine                          | pitch 2     | pitch 1     | Δ       |
+    #   |----------------------------------|-------------|-------------|---------|
+    #   | before the 11-bank cut (c51a748) | 990,895,368 | —           | -0.401% |
+    #   | after it                         | 365,333,921 | 349,439,532 | -4.351% |
+    #
+    # Same builder change, same program, an order of magnitude apart. On the old
+    # store the CPU was *blocked* on a 223-slot ring for ~68% of the run
+    # (METRICS M14 measured exactly that), so shortening its walk bought idle
+    # time and nothing else. The absolute saving is not even conserved — it grew
+    # 396,380 -> 15,894,389 — because the dispatch walk only became the critical
+    # path once the store stopped being it.
+    #
+    # Box unchanged at 514x451: the eleven rows the stagger frees are left blank
+    # *above* the band, so the collector, the structures band and every block
+    # outside the CPU stay where they are.
+    ("deadman-3d_hires", "taped"): 1,
+}
+
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
 #: ladders, so a **long** taken jump seeks the target's row instead of
@@ -5658,6 +5823,7 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
     ("deadman-3d", "taped"): {"rom_rows": 84},
 }
+
 
 #: Per-``(slug, tier)`` **leaf relabelling** for the decode trie: which slot each
 #: opcode's lane occupies, north to south. Absent keys keep the contiguous default
@@ -6097,7 +6263,28 @@ STORE_REQUEST_REACH: set[tuple[str, str]] = {
 #: two-hundred-thousandth of a run does not buy pinning three gate rooms into a
 #: grown form that the next store change would have to work around. On top of
 #: the shipped hi-res set it is smaller still, -178,101 ticks = -0.017%.
-TAPED_CHAIN_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
+#: **hires was measured here once, declined, and the decline is now void.** At
+#: -0.020% it was the weakest lever on the pre-``c51a748`` machine, and the
+#: reason given was correct for that machine: hires' bank order put the bank
+#: taking 90.79% of reads at chain position 0, so the links carried ~4% of
+#: accesses instead of ``deadman-3d``'s 80%, and shortening them bought nothing.
+#:
+#: The 11-bank cut removed exactly that condition. Traffic is spread across
+#: eleven banks now, most of them behind several links, so the links are back on
+#: the critical path of most accesses — and the same registry re-measures at
+#: **-2.678%**, a 134-fold swing on an unchanged builder.
+#:
+#: Two levers were re-litigated against the new store at the same time and the
+#: other two stay declined, which is what makes this one a finding rather than a
+#: reflex: ``lap_via_jump`` is still a wash (+0.036%, against -4.47% on the 64x48
+#: machine — it has never paid here), and :data:`STORE_REQUEST_TELEPORT` still
+#: cannot be taken at all, for a structural reason rather than a measured one —
+#: it and :data:`STORE_REQUEST_REACH` are two answers to one question and
+#: ``build`` refuses the pair outright.
+TAPED_CHAIN_REACH: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
 
 #: ``(slug, tier)`` pairs whose taped STORE puts a **vertical forwarder** on every
 #: ``reqK->bankK`` arm — the legs a grown gate room provably cannot take, because
@@ -6644,6 +6831,7 @@ def build_for(
     top_bus: bool | None = None,
     seek: bool | None = None,
     store_chain_pad: int = 0,
+    lane_pitch: int | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -6735,6 +6923,9 @@ def build_for(
         store_shape=STORE_SHAPE.get(slug),
         doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
         doom_leaf_cols=DOOM_LEAF_COLS.get((slug, store)),
+        lane_pitch=(
+            LANE_PITCH.get((slug, store), 2) if lane_pitch is None else lane_pitch
+        ),
     )
 
 

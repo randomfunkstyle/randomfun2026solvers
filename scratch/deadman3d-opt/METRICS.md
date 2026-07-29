@@ -2601,3 +2601,217 @@ whose destinations are NW/NE/SW/SE in tile order and `S` binds all four
 (`FastLittleman._bindings`, the same nearest-pipe rule the engine uses).
 `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`, `_taped.man` `a11edcc6…`,
 `deadman-3d.input.txt` `654d35d6…`.
+
+---
+
+# M19 — the lane band's gap rows: what they are, and the floor under them
+
+The lane band is **43 rows** carrying **21 lanes**. The user's reading of it was
+that the gaps are slack the `x` trie leaves behind, and that a leg feeding a
+later `>]x` could be shortened to close them. **Half of that is exactly right,
+and the half that is wrong is the half that sets the floor.** The band came out
+at 43 rows and it stays at 43; what the investigation produced instead is a
+*measured* floor of 30, a priced ceiling of ~5%, and a permanent guard against
+the silent failure that finding it exposed.
+
+`machine.py` gained the mechanism (`lane_pitch`, `LANE_PITCH`) and an invariant
+check; every grid is byte-identical. `deadman-3d.man` / `_trim` / `_v2`
+`f62d63fd…`, `deadman-3d.input.txt` `654d35d6…`, `deadman-3d_taped.man`
+`684e26e7…`. DOOM fast tier **135 passed**, the pixel gate **12/12**, and the
+whole fast suite **2,788 passed / 68 skipped** — every other slug's hash pin
+holds, which is the check that matters when `build_cpu` is the file being
+touched.
+
+## 1. What the band's depth is made of — and what it is not
+
+Measured on the built grid (`scratch/gap_probe.py`, `scratch/cpu_pitch.py`):
+
+| | |
+|---|---|
+| lane rows | 100, 102, … 142 — even, pitch 2, one hole at 134 where an opcode was retired |
+| gap rows | 101, 103, … 141 — **odd, and every one carries exactly one `x` node** |
+| what else is on a gap row | nothing. No micro-program cell, no pipe glyph, no slab cell. Only trie cells in columns 13–21, plus drop columns passing through — and those cross lane rows too |
+| `_SLAB_PITCH` | **irrelevant.** It is 13 *columns* for the structures band **below** the collector. It does not touch a lane row |
+
+So the depth is **trie fan-out geometry and nothing else**: 21 lanes + 20 `x`
+nodes, one per row, 41 occupied rows in a 43-row band. It is already a perfect
+1:1 packing. The gaps are not slack that squaring-off left behind — they are
+the nodes.
+
+## 2. The rule: right about internal legs, wrong about leaf legs
+
+**Right, and it is a real structural fact.** A node at trie level `L` sits in
+column `3 + 2L`, and *every* lane in its subtree is entered from a node at level
+`> L`, so at column `>= 5 + 2L`. A node's column — and both its legs' column —
+is therefore **strictly west of every lane entry beneath it**. A lane's man
+starts east of it and never walks onto it, and a leg never lands inside a lane's
+shift run. **A node can share a lane's row**, and a leg feeding a later `>]x` can
+be shortened exactly as claimed.
+
+**Wrong for a leg that feeds a lane, and that is the binding case.** `x` **always
+turns** — clockwise is south, counter-clockwise is north, and there is no third
+outcome that leaves the man on his own row. So a node's row must lie **strictly
+between its two children's rows**. A node whose two children are both lanes — a
+**cherry** — therefore needs a row between two *adjacent* lanes. No lane row can
+serve it. That row is irreducible.
+
+**This program's trie has 9 cherries** (`scratch/trie_embed.py`; 20 nodes, by
+level 1/2/4/6/7).
+
+### The proof, and why it had to be on the grid
+
+`lane_pitch=1` was built and walked. The trie emitted **12 of its 20 `x` nodes** —
+**exactly 9 lost**, each overwritten by its own up-lane's entry `>` at the same
+cell. Every opcode routed through a lost node then walks east into the **wrong
+lane**: no binding error, no collision, no crash. A pixel diff hundreds of frames
+later is the only symptom.
+
+That is now impossible to ship by accident. `_uneven_trie` records every branch
+cell and re-checks it after laying the tree; a squeezed band raises instead of
+emitting a decoder:
+
+```
+9 decode branch(es) overwritten at [(11, 12), (13, 1), (13, 3), (13, 5)]...:
+an `x` needs a row strictly between its two children, so a node with two lane
+children needs a row between two adjacent lanes.
+```
+
+## 3. The floor, and what it is worth
+
+Leaves keep their rows; every non-cherry node can share one; every cherry cannot.
+
+**Floor = 21 lanes + 9 cherries = 30 rows, against 43 today — 13 removable.**
+Not 21. The band was never going to halve.
+
+Priced on the current grid (`scratch/pitch_probe.py`; the trie walk reproduces
+the profile's stage to the tick):
+
+| stage | today | % run | at the 30-row floor | saved | % run |
+|---|---:|---:|---:|---:|---:|
+| trie descent | 5,234,638 | 8.68% | — of which 1,576,377 is horizontal and fixed | 1,105k | 1.83% |
+| drop to the collector | 3,292,144 | 5.46% | scales with the band | 995k | 1.65% |
+| riser (22 flat) | 3,826,702 | 6.34% | ~15 flat | 1,173k | 1.94% |
+| **total** | **12,353,484** | **20.48%** | | **~3,273k** | **~5.42%** |
+
+**~5% is the ceiling**, and it assumes *perfect* sharing — every one of the 11
+non-cherry nodes finding a lane row that also satisfies betweenness and column
+order. Feasibility only takes bites out of it.
+
+## 4. Why it was not taken
+
+Two costs, and the second is the one that decided it.
+
+* **A new embedder.** `_uneven_trie` derives a node's row from its own subtree
+  (`slot_rows[min(down)] - 1`). Sharing is a global assignment — which node takes
+  which lane row — under betweenness *and* the column-order precondition. That is
+  a different algorithm, not a parameter.
+* **The room does not shrink where it stands.** With the CPU 20 rows shorter,
+  `store_offset` dy was swept over **−30..+30** and **every value failed**
+  (`scratch/pitch_sweep.py`). The failures are structural rather than marginal,
+  and they name four different neighbours: block collisions at
+  (63,106)/(65,106)/(105,86), `taped block collision at (4,5)`, `request roof is
+  not above the gate strip`, and `no clear band below the store for the seek
+  teleport`. The store block, the adapter, the gate strip and the seek teleport
+  are all placed against the tall room, so this is not one offset being stale —
+  it is a simultaneous re-tune of several placement registries.
+
+  This is a **one-dimensional** sweep and therefore a lower bound on the work,
+  not a proof of impossibility; a wider `(rom_rows, store_dy, mem_dy)` sweep was
+  left running and had found nothing when this was written. A 13-row shrink is
+  the same problem with a smaller number. That is the price against ~5%, on a
+  decoder whose failure mode is silent.
+
+The mechanism is left in place and inert — `LANE_PITCH` is empty, `lane_pitch`
+defaults to 2, and every grid is byte-identical — so whoever picks this up starts
+from the guard rather than from the bug.
+
+---
+
+# M20 — the band staggers: 43 rows to 31, **-4.04%**
+
+M19 read the band's floor as 30 rows and did not take it, on two grounds that
+both turned out to be soft. This takes it. **Tour 609,871,597 -> 585,257,450,
+-4.04%, box 293x254 unchanged.** `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`,
+input `654d35d6…`, taped moves to `51d356d6…`. DOOM tier **139 passed**, pixel
+gate **12/12**.
+
+## What the rule turned out to be
+
+A gap row is owed to a node **only when its up half is a single lane**. Nine of
+this trie's twenty nodes. The other eleven share the lane row above them, and
+they can because of a column invariant that holds structurally:
+
+> a node at trie level `L` sits in column `3 + 2L`, and every lane in its subtree
+> is entered from a node at level `> L`, hence at column `>= 5 + 2L`. A node's
+> column — and both its legs' column — is therefore strictly **west** of every
+> lane entry beneath it.
+
+So the lane's man begins east of the node and never walks onto it, and no leg
+ever lands inside a lane's shift run. That is the user's rule, and it is right.
+
+The nine that cannot share are forced by `x` itself: it **always turns**, so a
+node's row must lie strictly *between* its two children's rows, and a node whose
+up child is a lane needs a row between two **adjacent** lanes. `_uneven_gaps`
+computes that set. **`_uneven_trie` needed no change at all** — its
+`slot_rows[min(down)] - 1` already places a node correctly once the leaves are
+spaced right, which is the tell that the gap was in the *spacing* and never in
+the trie.
+
+## Bottom-aligning it is what made it shippable
+
+M19's blocker was that the shorter room does not place. It does not have to be
+shorter. The eleven saved rows are left **blank above the band**, so the
+collector, the whole structures band below it and the room's own height stay
+exactly where they were — and so does every block placed against them.
+
+This costs nothing that matters, because all three winnings measure from the
+collector: the drop is `collector - 1 - row`, the riser is `collector - centre`,
+and the trie descent is the band's own height. The fetch row simply moves from
+121 to 127 and the band ends where it always did.
+
+**Shrinking the room as well was built and measured, and rejected.** With the
+CPU 12 rows shorter the machine is 293x242 and the tour is **579,543,849,
+-4.97%** — 0.93% better. It needs the STORE to follow it north (`store_offset`
+dy -5; the window is -10..-5, closed at -4 by the seek teleport's "no clear band
+below the store"). That extra 0.93% is real and still on the table, but the
+offset that fits the shipped grid does not fit a counterfactual build with a
+differently shaped store block, and chasing it with a fallback search cost three
+minutes a test run and still left two pins failing. Bottom-aligning gets 81% of
+the win for none of that.
+
+## Measured
+
+Nine-frame profile case, stages walked on the emitted cells
+(`scratch/pitch_probe.py`) — the win is near-perfect thirds, which is what you
+expect when the thing removed is the band's height and all three terms are
+vertical travel inside it:
+
+| stage | pitch 2 | staggered | saved | % run |
+|---|---:|---:|---:|---:|
+| trie descent | 5,234,638 | 4,183,452 | 1,051,186 | **1.74%** |
+| drop to the collector | 3,292,144 | 2,261,706 | 1,030,438 | **1.71%** |
+| riser (22 flat -> 16 flat) | 3,826,702 | 2,783,056 | 1,043,646 | **1.73%** |
+| **total** | **12,353,484** | **9,228,214** | **3,125,270** | **5.18%** |
+
+| | tour | vs baseline |
+|---|---:|---:|
+| M19 baseline | 609,871,597 | — |
+| **M20, staggered band** | **585,257,450** | **-4.04%** |
+| (shrunk room, not taken) | 579,543,849 | -4.97% |
+
+## Correctness
+
+A mis-decode is silent — the wrong lane runs and the grid still loads — so this
+is checked three ways rather than trusted. The branch-overwrite guard added in
+M19 does **not** fire on the staggered band (it fires on a uniform one-row band,
+losing all nine at once, which is pinned as a test). The decoder is walked on the
+emitted cells and every opcode reaches a *distinct* lane row. And the pixel gate
+is 12/12.
+
+## What is left here
+
+* **0.93%** in shrinking the room, if the store's placement is made to follow the
+  CPU's height rather than be pinned against it.
+* The floor is **30** rows and this reaches **31** — one row, because the band is
+  laid from a single pass rather than by matching each node to the best of the
+  two lane rows it may share. Worth ~0.16%, and not worth a solver.
