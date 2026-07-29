@@ -2250,7 +2250,10 @@ the silent failure that finding it exposed.
 `machine.py` gained the mechanism (`lane_pitch`, `LANE_PITCH`) and an invariant
 check; every grid is byte-identical. `deadman-3d.man` / `_trim` / `_v2`
 `f62d63fd…`, `deadman-3d.input.txt` `654d35d6…`, `deadman-3d_taped.man`
-`684e26e7…`. DOOM fast tier **135 passed**.
+`684e26e7…`. DOOM fast tier **135 passed**, the pixel gate **12/12**, and the
+whole fast suite **2,788 passed / 68 skipped** — every other slug's hash pin
+holds, which is the check that matters when `build_cpu` is the file being
+touched.
 
 ## 1. What the band's depth is made of — and what it is not
 
