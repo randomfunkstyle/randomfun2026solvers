@@ -1,0 +1,16 @@
+# matmul — submission 36aacc40-8f60-4ae3-829f-384ded8d68b4
+
+verdict      done: 20/20 cases, area2 7921, avgTicks 38,187, score 302,478,435
+submitted    2026-07-27T02:29:29+0300
+grid         77x89
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  055dede3cc8347efb8df8958b4495649a8f79152f4cc676d56711af40bd46830
+commit       6ef9386
+local        matmul: 7/7 public cases, avg 30,893 ticks
+source       tasks/solutions/matmul-compacted.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+compacted 85x96 -> 77x89 (footprint 9216 -> 7921) by deleting grid lines and re-placing the corridor bends they carried; every instruction preserved, local avg ticks 31090 -> 30893

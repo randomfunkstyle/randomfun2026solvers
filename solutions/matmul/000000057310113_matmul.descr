@@ -1,0 +1,16 @@
+# matmul — submission a4708053-4d94-450f-a10f-421db2d71c97
+
+verdict      done: 20/20 cases, area2 3364, avgTicks 17,036, score 57,310,113
+submitted    2026-07-27T13:40:41+0300
+grid         58x58
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  f677bc506dced06eecf1f32507e6c27e55f288bd29d1b5daa62261cfc0b9cb11
+commit       41a682f
+local        matmul: 7/7 public cases, avg 13,853 ticks
+source       tasks/solutions/matmul-v1.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+58x58, 7/7 reference, avg 13,853 ticks

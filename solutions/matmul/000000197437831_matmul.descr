@@ -1,0 +1,16 @@
+# matmul — submission fa12547a-dd8d-4426-bdfd-75791f500f84
+
+verdict      done: 20/20 cases, area2 5776, avgTicks 34,182, score 197,437,831
+submitted    2026-07-27T09:32:19+0300
+grid         70x76
+problem id   58f54636-3ec4-497d-8102-b486f13a1ed1
+fingerprint  35a709e3d7be73ea715a8898610cf97ce10760988332a9c9a0fde6fea239c4f0
+commit       0f2a0e7
+local        matmul: 7/7 public cases, avg 27,437 ticks
+source       tasks/solutions/matmul-compacted.man
+
+runner output:
+Passed 20/20 test cases
+
+notes:
+compacted matmul-c9920b5f 72x81 -> 70x76 (factor 6561 -> 5776) by alternating row/column corridor relocation; reference-engine avg ticks 29859 -> 29009
