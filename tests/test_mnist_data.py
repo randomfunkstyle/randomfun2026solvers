@@ -46,6 +46,42 @@ def test_packing_uses_fifteen_nibbles_per_word():
     assert words[1] == 7
 
 
+def test_word_layout_matches_hand_computed_bit_positions():
+    """Pins the exact bit layout of words 0, 1 and 4, independent of unpack_image.
+
+    Every other layout check in this file goes through a pack -> unpack round
+    trip, so a bug that shifts a field the same wrong way in both pack_image
+    and unpack_image would pass every one of them while silently breaking the
+    on-grid format every later LM-1 task depends on -- "the heart of this
+    task." This test computes its expected integers from bare shift
+    arithmetic and never calls unpack_image, so a compensating bug in the pair
+    cannot hide from it.
+    """
+    pixels = [0] * 64
+    # The word 0 / word 1 boundary: pixel 14 is nibble 14 (the *top*, highest-
+    # order nibble) of word 0 -- an off-by-one in the shift is invisible to a
+    # round trip but not to a literal comparison. Pixel 15 is nibble 0 of word 1.
+    pixels[14] = 3
+    pixels[15] = 9
+    # Word 4: pixels 60-63 occupy nibbles 0-3, and the label shares the same
+    # word at nibble 4. Every field gets a distinct nonzero value so a swapped
+    # or shifted field cannot coincidentally match.
+    pixels[60] = 1
+    pixels[61] = 2
+    pixels[62] = 4
+    pixels[63] = 8
+    label = 7
+
+    words = md.pack_image(pixels, label=label)
+
+    assert words[0] == 3 << (4 * 14), "pixel 14 must sit in the top nibble (14) of word 0"
+    assert words[1] == 9 << (4 * 0), "pixel 15 must sit in nibble 0 of word 1"
+    expected_word4 = (
+        (1 << (4 * 0)) | (2 << (4 * 1)) | (4 << (4 * 2)) | (8 << (4 * 3)) | (label << (4 * 4))
+    )
+    assert words[4] == expected_word4, "pixels 60-63 in nibbles 0-3 and the label in nibble 4"
+
+
 def test_downsample_averages_three_by_three_blocks():
     """A uniform image stays uniform; 3x3 average pooling of a constant is that constant."""
     raw = bytes([255] * 784)
