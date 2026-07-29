@@ -37,22 +37,47 @@ from randomfun2026solvers.lm1 import d3_router as R  # noqa: E402
 
 def word(arg, code, sel): return 8 * (8 * arg + code) + sel
 
-def image(packed):
-    _r, w = R.build_probe([], packed=packed)
-    C, S = w.codes, w.sel
+
+def scene(C, S):
+    """The commands both walls are driven with.
+
+    Three things it has to exercise, because each one is a different way a
+    re-route can be wrong and none of them is a load error:
+
+    * a **different pattern per tile**, so a pipe bound to the wrong panel shows
+      up as two tiles holding each other's picture rather than as a blank one;
+    * **every corner of every tile** — cursor 0, 63, 47*64 and 47*64+63 — which
+      is what pins the ADDR pipes to their own panel across both seams, since a
+      corner is the only place a one-tile error cannot hide behind a neighbour;
+    * **two commits**, so the SWAP pipes are exercised as buffer swaps and not
+      just as a single flush.  ``SWAP <- 0`` clears the next buffer, so the
+      corners go in the *second* frame: what the run ends holding is frame two,
+      and a check on frame one would be checking a buffer nothing reads.
+    """
     cmds = []
-    # a different diagonal-ish pattern per tile, several runs each, round-robined
+    # frame one: a different diagonal-ish pattern per tile, round-robined
     for lap in range(6):
         for t in range(4):
             row = lap * 7 + t
             cmds.append(word(row * 64 + lap * 3, C["CURS"], S[f"T{t}"]))
             cmds.append(word((5 + lap) * 16 + (1 + (t + lap) % 15), C["RUN"], S[f"T{t}"]))
     cmds.append(word(0, C["COMMIT"], S["ALL"]))
-    rows, _ = R.build_probe(cmds, packed=packed)
+    # frame two: the four corners of each tile, one pixel each, colour by tile
+    for t in range(4):
+        for corner in (0, 63, 47 * 64, 47 * 64 + 63):
+            cmds.append(word(corner, C["CURS"], S[f"T{t}"]))
+            cmds.append(word(16 + 1 + t, C["RUN"], S[f"T{t}"]))
+    cmds.append(word(0, C["COMMIT"], S["ALL"]))
+    return cmds
+
+
+def image(packed):
+    _r, w = R.build_probe([], packed=packed)
+    rows, _ = R.build_probe(scene(w.codes, w.sel), packed=packed)
     p = f"/tmp/img_{'packed' if packed else 'plain'}.man"
     open(p, "w").write("\n".join(rows) + "\n")
     out = subprocess.run(  # noqa: S603
-        ["node", str(REPO / "littleman" / "lm.mjs"), "tick", p, "200000", "--json"],
+        ["node", str(REPO / "littleman" / "lm.mjs"), "tick", p, "400000", "--json"],
         capture_output=True, text=True, check=False)
     d = json.loads(out.stdout)
     panels = d["entities"]["displays"]
@@ -68,6 +93,8 @@ print("scattered fatal", f0, "frames", n0)
 print("packed    fatal", f1, "frames", n1)
 print("composed 128x96 images identical:", a == b)
 print("image is non-blank:", any(ch != "0" for row in a for ch in row))
+print("all four corners painted:", all(a[r][c] != "0" for r in (0, 47, 48, 95)
+                                       for c in (0, 63, 64, 127)))
 if a != b:
     bad = [r for r in range(96) if a[r] != b[r]]
     print("rows differing:", len(bad), bad[:10])
