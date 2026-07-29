@@ -942,6 +942,59 @@ def _flat_lane(
     return out
 
 
+def _uneven_gaps(k: int, slots: Sequence[int]) -> set[int]:
+    """Which adjacent lane pairs still need a blank row between them.
+
+    The band has historically been laid at a uniform pitch of two: one row per
+    lane and one for the ``x`` that splits it from the next. That is one row per
+    *node*, and most of them do not need one. A node at level ``L`` sits in column
+    ``3 + 2L`` and every lane in its subtree is entered at column ``>= 5 + 2L``,
+    so the node — and both its legs — are strictly **west** of every lane beneath
+    it. The lane's man starts east of the node and never walks onto it, and no leg
+    ever lands inside a lane's shift run. **A node can share a lane's row.**
+
+    Exactly one case cannot, and it is forced by ``x`` itself: ``x`` *always*
+    turns, clockwise to the south and counter-clockwise to the north, with no
+    outcome that leaves the man on his own row. So a node's row must lie strictly
+    **between** its two children's rows. :func:`_uneven_trie` puts a node on the
+    row above its down-half's first lane, which is the up-half's *last* lane — and
+    if the up half is a single lane, that lane **is** the node's own up child. Its
+    entry ``>`` then lands on the node's cell and overwrites the ``x``, and every
+    opcode routed through it walks east into the wrong lane, silently.
+
+    So: a gap row is needed after rank ``i`` exactly when the node splitting lane
+    ``i`` from lane ``i + 1`` has a **single-lane up half**. Everywhere else the
+    two lanes may sit one row apart.
+
+    Returns the set of ranks after which a gap is required. Mirrors
+    :func:`_uneven_trie`'s recursion, including its single-child contraction, so
+    the tree it measures is the one that gets built.
+    """
+    used = sorted(slots)
+    rank = {s: i for i, s in enumerate(used)}
+    gaps: set[int] = set()
+
+    def node(lo: int, hi: int) -> None:
+        sl = [s for s in used if lo <= s < hi]
+        mid, up, down = lo, [], []
+        while len(sl) > 1:
+            mid = (lo + hi) // 2
+            up = [s for s in sl if s < mid]
+            down = [s for s in sl if s >= mid]
+            if up and down:
+                break
+            lo, hi = (lo, mid) if up else (mid, hi)
+        if len(sl) <= 1:
+            return
+        if len(up) == 1:
+            gaps.add(rank[max(up)])
+        node(lo, mid)
+        node(mid, hi)
+
+    node(0, 1 << k)
+    return gaps
+
+
 def _uneven_trie(
     k: int, slot_rows: dict[int, int], lane_x0: int
 ) -> tuple[int, dict[tuple[int, int], str]]:
@@ -1151,16 +1204,42 @@ def build_cpu(
     if trim_dead:
         slots = sorted((p.row[m] - 1) // 2 for m in used)
         rank = {s: i for i, s in enumerate(slots)}
-        row_of = {m: y0 + pitch * rank[(p.row[m] - 1) // 2] for m in used}
         n_rows = len(slots)
+        if pitch == 1:
+            # Staggered: lanes sit one row apart, and a second row goes in only
+            # where the ``x`` splitting the pair has nowhere else to stand. See
+            # :func:`_uneven_gaps` — most nodes can share the lane row above them,
+            # because a node is always strictly west of the lanes in its subtree.
+            gaps = _uneven_gaps(k, slots)
+            at = [y0]
+            for i in range(n_rows - 1):
+                at.append(at[-1] + (2 if i in gaps else 1))
+            # **Bottom-align it.** The rows the stagger saves are left blank above
+            # the band instead of being taken out of the room, so the collector,
+            # the whole structures band below it and the room's own height all
+            # stay exactly where they were — and so does every block placed
+            # against them. Nothing outside the CPU has to move for this.
+            #
+            # It costs nothing that matters: the win is the *vertical travel*
+            # inside the band, and all three terms measure from the collector —
+            # the drop is `collector - 1 - row`, the riser is `collector - centre`
+            # and the trie descent is the band's own height. Shrinking the room
+            # as well was tried and is a false economy: it collides with the
+            # store, and chasing it with a store offset only re-breaks whichever
+            # counterfactual build has a different-shaped block.
+            at = [r + (2 * n_rows - 1) - (at[-1] - y0 + 1) for r in at]
+        else:
+            at = [y0 + 2 * i for i in range(n_rows)]
+        row_of = {m: at[rank[(p.row[m] - 1) // 2]] for m in used}
         lane_x0 = 4 + 2 * k  # two columns per trie level (see _uneven_trie)
     else:
         row_of = {m: p.row[m] + (y0 - 1) for m in used}
         n_rows = lanes
         lane_x0 = 5 + k
-    span = pitch * n_rows - (pitch - 1)
+        at = [y0 + 2 * i for i in range(n_rows)]
+    span = at[-1] - y0 + 1
     by_row = {row_of[m]: m for m in used}
-    all_rows = [y0 + pitch * i for i in range(n_rows)]
+    all_rows = list(at)
     if trim_dead:
         centre, trie_cells = _uneven_trie(
             k, {(p.row[m] - 1) // 2: row_of[m] for m in used}, lane_x0
@@ -5581,7 +5660,9 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: trie descent, the drop to the collector and the riser back up are all vertical
 #: travel inside it. Opt-in per ``(slug, tier)``; absent pairs keep pitch 2 and
 #: stay byte-identical. Requires :data:`TRIM_DEAD_LANES` (see :func:`build_cpu`).
-LANE_PITCH: dict[tuple[str, str], int] = {}
+LANE_PITCH: dict[tuple[str, str], int] = {
+    ("deadman-3d", "taped"): 1,  # band 43 -> 31 rows, riser 22 -> 16
+}
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
@@ -5698,6 +5779,7 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
     ("deadman-3d", "taped"): {"rom_rows": 81},
 }
+
 
 #: Per-``(slug, tier)`` **leaf relabelling** for the decode trie: which slot each
 #: opcode's lane occupies, north to south. Absent keys keep the contiguous default

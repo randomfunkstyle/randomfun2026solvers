@@ -1601,9 +1601,17 @@ def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() ->
     plain = _taped_with(STORE_REQUEST_REACH=False, TAPED_CHAIN_REACH=False)
     forwarded = _taped_with(STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True)
 
-    # A pipe, then a forwarder plus two stubs, then nothing: 58 -> 6 -> 2.
-    assert plain.route_lengths["adapter->store"] > 50
+    # A pipe, then a forwarder plus two stubs, then nothing.
+    # The *contrast* is what this pins, not the length: a plain pipe is an order
+    # of magnitude longer than the forwarder that replaces it. The absolute
+    # number moves whenever the CPU's east-wall ports move, and the staggered
+    # lane band (:data:`machine.LANE_PITCH`) walked them south, taking it from
+    # 58 to 49 without changing anything this test is about.
     assert forwarded.route_lengths["adapter->store"] <= 8
+    assert (
+        plain.route_lengths["adapter->store"]
+        > 5 * forwarded.route_lengths["adapter->store"]
+    )
     assert on.route_lengths["adapter->store"] < forwarded.route_lengths["adapter->store"]
     # And no room to show for it — reaching is strictly better than forwarding
     # here, because a forwarder re-serialises a multi-word request at one word
@@ -1823,28 +1831,119 @@ def test_input_txt_is_the_flattened_cases_input() -> None:
     assert txt == [str(w) for w in d3.input_words(list(d3.WALK))]
 
 
-def test_a_squeezed_lane_band_raises_instead_of_mis_decoding() -> None:
-    """The CPU's lane band cannot be packed one row per lane, and the failure it
-    would otherwise produce is invisible.
+def test_a_uniform_one_row_band_overwrites_its_own_branches() -> None:
+    """Lanes cannot simply be packed one row apart, and the failure is invisible.
 
     ``x`` **always turns** — clockwise is south, counter-clockwise north, and
     there is no outcome that leaves the man on his own row. So a node's row must
-    lie strictly *between* its two children's rows, and a node whose children are
-    both lanes needs a row between two **adjacent** lanes. Squeeze the band and
-    that node's own up-lane lands on its row and overwrites the ``x`` with its
-    entry ``>``; every opcode routed through it then walks east into the wrong
-    lane, with no binding error and no collision to notice. This program's trie
-    has nine such nodes and a one-row band loses all nine at once.
+    lie strictly *between* its two children's rows, and a node whose up half is a
+    single lane needs a row between two **adjacent** lanes. Pack them uniformly
+    and that lane's entry ``>`` lands on the node's cell and overwrites the
+    ``x``; every opcode routed through it then walks east into the wrong lane,
+    with no binding error and no collision to notice.
 
     So :func:`machine._uneven_trie` re-checks every branch cell after laying the
-    tree. The band's floor is lanes + those nodes, not lanes.
+    tree. This is what makes the stagger safe to ship rather than hopeful.
     """
+    prog = machine._tier_program("deadman-3d", "taped")
+    p = machine.plan(
+        prog,
+        middle_order=machine.LANE_ORDER.get("deadman-3d"),
+        slots=machine.OPCODE_SLOTS.get(("deadman-3d", "taped")),
+    )
+    slots = sorted((p.row[m] - 1) // 2 for m in p.number)
+    flat = {s: 1 + i for i, s in enumerate(slots)}  # uniform, one row per lane
     with pytest.raises(machine.MachineError, match="strictly between its two children"):
-        machine.build_for("deadman-3d", store="taped", lane_pitch=1)
+        machine._uneven_trie(p.k, flat, 4 + 2 * p.k)
 
-    # and the knob is inert: no registered slug asks for anything but the pair,
-    # which is what keeps every checked-in grid byte-identical.
-    assert machine.LANE_PITCH == {}
+
+def test_the_staggered_gaps_are_exactly_the_single_lane_up_halves() -> None:
+    """A gap row is owed to a node only when its up half is one lane.
+
+    Everywhere else the node can share the lane row above it: a node at level
+    ``L`` sits in column ``3 + 2L`` while every lane in its subtree is entered at
+    column ``>= 5 + 2L``, so the node and both its legs are strictly **west** of
+    them — the lane's man starts east of the node and never walks onto it.
+    """
+    prog = machine._tier_program("deadman-3d", "taped")
+    p = machine.plan(
+        prog,
+        middle_order=machine.LANE_ORDER.get("deadman-3d"),
+        slots=machine.OPCODE_SLOTS.get(("deadman-3d", "taped")),
+    )
+    slots = sorted((p.row[m] - 1) // 2 for m in p.number)
+    gaps = machine._uneven_gaps(p.k, slots)
+    # Independent recomputation: walk the same split points and ask how many
+    # lanes are in each node's up half.
+    used, want = sorted(slots), set()
+    rank = {s: i for i, s in enumerate(used)}
+
+    def visit(lo: int, hi: int) -> None:
+        sl = [s for s in used if lo <= s < hi]
+        mid, up, down = lo, [], []
+        while len(sl) > 1:
+            mid = (lo + hi) // 2
+            up = [s for s in sl if s < mid]
+            down = [s for s in sl if s >= mid]
+            if up and down:
+                break
+            lo, hi = (lo, mid) if up else (mid, hi)
+        if len(sl) <= 1:
+            return
+        if len(up) == 1:
+            want.add(rank[max(up)])
+        visit(lo, mid)
+        visit(mid, hi)
+
+    visit(0, 1 << p.k)
+    assert gaps == want
+    # Every other adjacent pair sits one row apart, so the band is lanes + gaps
+    # rather than two rows a lane.
+    assert len(gaps) < len(used) - 1
+
+
+def test_the_staggered_trie_decodes_every_opcode_to_its_own_lane() -> None:
+    """The shipped taped grid: each opcode number walks to a *distinct* lane row.
+
+    A mis-decode is silent — the wrong lane runs and the grid still loads — so
+    the decoder is walked on the emitted cells rather than trusted.
+    """
+    m = machine.build_for("deadman-3d", store="taped")
+    cells = {(x, y): c for y, r in enumerate(m.rows) for x, c in enumerate(r)}
+    fx, fy = next((r.find(">rbr"), y) for y, r in enumerate(m.rows) if ">rbr" in r)
+    prog = machine._tier_program("deadman-3d", "taped")
+    p = machine.plan(
+        prog,
+        middle_order=machine.LANE_ORDER.get("deadman-3d"),
+        slots=machine.OPCODE_SLOTS.get(("deadman-3d", "taped")),
+    )
+    lane_x0 = fx + 3 + 2 * p.k  # interior col 4 + 2k, and interior 1 is at fx
+    cw = {"E": "S", "S": "W", "W": "N", "N": "E"}
+    ccw = {"E": "N", "N": "W", "W": "S", "S": "E"}
+    step = {"E": (1, 0), "W": (-1, 0), "N": (0, -1), "S": (0, 1)}
+
+    landed = {}
+    for mn, num in p.number.items():
+        x, y, d, bp = fx + 4, fy, "E", num
+        for _ in range(400):
+            g = cells.get((x, y), " ")
+            if g == "x":
+                d = cw[d] if bp & 1 else ccw[d]
+            elif g == "]":
+                bp >>= 1
+            elif g == ">":
+                d = "E"
+            elif g not in ". ":
+                break
+            dx, dy = step[d]
+            x, y = x + dx, y + dy
+            if x >= lane_x0:
+                break
+        else:
+            raise AssertionError(f"{mn}: decode did not terminate")
+        assert x >= lane_x0, f"{mn}: decode stopped at {(x, y)} before the lanes"
+        landed[mn] = y
+    assert len(set(landed.values())) == len(landed), "two opcodes share a lane row"
 
 
 def test_lane_pitch_needs_the_pruned_trie() -> None:

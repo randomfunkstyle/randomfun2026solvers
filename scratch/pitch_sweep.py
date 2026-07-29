@@ -54,17 +54,14 @@ def attempt(pitch, store_dy, mem_dy=0, store_dx=-20, rom_rows=81):
 if __name__ == "__main__":
     pitch = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     hits, kinds = [], {}
-    for rr in (77, 79, 81, 83, 85):
-        for sdy in range(-8, 9):
-            for mdy in range(-8, 9):
-                try:
-                    m = attempt(pitch, sdy, mdy, rom_rows=rr)
-                except Exception as exc:  # noqa: BLE001 - the failure mode is the point
-                    key = str(exc).split(":")[0][:60]
-                    kinds[key] = kinds.get(key, 0) + 1
-                    continue
-                hits.append((m.width * m.height, rr, sdy, mdy, m.width, m.height))
-                print(f"rom={rr} store_dy={sdy:+3d} mem_dy={mdy:+3d}  OK  {m.width}x{m.height}",
-                      flush=True)
-    print("failure modes:", sorted(kinds.items(), key=lambda kv: -kv[1])[:6])
+    for sdy in range(-14, 15):
+        try:
+            m = attempt(pitch, sdy)
+        except Exception as exc:  # noqa: BLE001 - the failure mode is the point
+            key = str(exc).split("last:")[-1].strip()[:70]
+            kinds[key] = kinds.get(key, 0) + 1
+            print(f"store_dy={sdy:+3d}  {key}", flush=True)
+            continue
+        hits.append((m.width * m.height, sdy, m.width, m.height))
+        print(f"store_dy={sdy:+3d}  OK  {m.width}x{m.height}", flush=True)
     print("best:", sorted(hits)[:3] if hits else "NONE PLACED")

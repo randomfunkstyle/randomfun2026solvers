@@ -8,7 +8,7 @@
     {
       "name": "adapter",
       "x": 63,
-      "y": 113,
+      "y": 122,
       "w": 14,
       "h": 6,
       "note": "expands one sign-biased request word into the tape's `op addr [value]`",
@@ -20,7 +20,7 @@
     {
       "name": "cpu:fetch",
       "x": 9,
-      "y": 121,
+      "y": 127,
       "w": 4,
       "h": 1,
       "note": ">rbr \u2014 opcode into BP, then the operand into A (fixed-width 2 words)",
@@ -32,7 +32,7 @@
     {
       "name": "cpu:lane:ADD",
       "x": 22,
-      "y": 118,
+      "y": 126,
       "w": 22,
       "h": 1,
       "note": "opcode 26 \u2014 ADD",
@@ -44,7 +44,7 @@
     {
       "name": "cpu:lane:ADDI",
       "x": 22,
-      "y": 108,
+      "y": 118,
       "w": 23,
       "h": 1,
       "note": "opcode 4 \u2014 ADDI",
@@ -56,7 +56,7 @@
     {
       "name": "cpu:lane:BRN",
       "x": 22,
-      "y": 136,
+      "y": 138,
       "w": 36,
       "h": 1,
       "note": "opcode 11 \u2014 BRN",
@@ -68,7 +68,7 @@
     {
       "name": "cpu:lane:BRZ",
       "x": 22,
-      "y": 138,
+      "y": 139,
       "w": 35,
       "h": 1,
       "note": "opcode 7 \u2014 BRZ",
@@ -80,7 +80,7 @@
     {
       "name": "cpu:lane:DIV",
       "x": 22,
-      "y": 114,
+      "y": 123,
       "w": 23,
       "h": 1,
       "note": "opcode 18 \u2014 DIV",
@@ -92,7 +92,7 @@
     {
       "name": "cpu:lane:DIVI",
       "x": 22,
-      "y": 126,
+      "y": 131,
       "w": 4,
       "h": 1,
       "note": "opcode 5 \u2014 DIVI",
@@ -104,7 +104,7 @@
     {
       "name": "cpu:lane:IN",
       "x": 22,
-      "y": 100,
+      "y": 112,
       "w": 26,
       "h": 1,
       "note": "opcode 0 \u2014 IN",
@@ -116,7 +116,7 @@
     {
       "name": "cpu:lane:INCM",
       "x": 22,
-      "y": 106,
+      "y": 117,
       "w": 26,
       "h": 1,
       "note": "opcode 24 \u2014 INCM",
@@ -128,7 +128,7 @@
     {
       "name": "cpu:lane:JMPF",
       "x": 22,
-      "y": 140,
+      "y": 141,
       "w": 34,
       "h": 1,
       "note": "opcode 23 \u2014 JMPF",
@@ -140,7 +140,7 @@
     {
       "name": "cpu:lane:JMPS",
       "x": 22,
-      "y": 134,
+      "y": 137,
       "w": 37,
       "h": 1,
       "note": "opcode 19 \u2014 JMPS",
@@ -152,7 +152,7 @@
     {
       "name": "cpu:lane:LD",
       "x": 22,
-      "y": 122,
+      "y": 128,
       "w": 21,
       "h": 1,
       "note": "opcode 1 \u2014 LD",
@@ -164,7 +164,7 @@
     {
       "name": "cpu:lane:LDA",
       "x": 22,
-      "y": 112,
+      "y": 121,
       "w": 23,
       "h": 1,
       "note": "opcode 2 \u2014 LDA",
@@ -176,7 +176,7 @@
     {
       "name": "cpu:lane:LDI",
       "x": 22,
-      "y": 132,
+      "y": 135,
       "w": 4,
       "h": 1,
       "note": "opcode 3 \u2014 LDI",
@@ -188,7 +188,7 @@
     {
       "name": "cpu:lane:MODI",
       "x": 22,
-      "y": 124,
+      "y": 130,
       "w": 4,
       "h": 1,
       "note": "opcode 9 \u2014 MODI",
@@ -200,7 +200,7 @@
     {
       "name": "cpu:lane:MOVA",
       "x": 22,
-      "y": 104,
+      "y": 115,
       "w": 26,
       "h": 1,
       "note": "opcode 8 \u2014 MOVA",
@@ -212,7 +212,7 @@
     {
       "name": "cpu:lane:MUL",
       "x": 22,
-      "y": 110,
+      "y": 120,
       "w": 23,
       "h": 1,
       "note": "opcode 20 \u2014 MUL",
@@ -224,7 +224,7 @@
     {
       "name": "cpu:lane:MULI",
       "x": 22,
-      "y": 130,
+      "y": 134,
       "w": 4,
       "h": 1,
       "note": "opcode 13 \u2014 MULI",
@@ -236,7 +236,7 @@
     {
       "name": "cpu:lane:NEG",
       "x": 22,
-      "y": 102,
+      "y": 114,
       "w": 26,
       "h": 1,
       "note": "opcode 16 \u2014 NEG",
@@ -260,7 +260,7 @@
     {
       "name": "cpu:lane:ST",
       "x": 22,
-      "y": 120,
+      "y": 127,
       "w": 22,
       "h": 1,
       "note": "opcode 6 \u2014 ST",
@@ -272,7 +272,7 @@
     {
       "name": "cpu:lane:SUB",
       "x": 22,
-      "y": 116,
+      "y": 124,
       "w": 23,
       "h": 1,
       "note": "opcode 10 \u2014 SUB",
@@ -284,7 +284,7 @@
     {
       "name": "cpu:lane:SUBI",
       "x": 22,
-      "y": 128,
+      "y": 133,
       "w": 4,
       "h": 1,
       "note": "opcode 21 \u2014 SUBI",
@@ -308,9 +308,9 @@
     {
       "name": "cpu:return:riser",
       "x": 9,
-      "y": 122,
+      "y": 128,
       "w": 1,
-      "h": 22,
+      "h": 16,
       "note": "up to the fetch row \u2014 paid once per instruction",
       "color": "#3b82f6",
       "tags": [
