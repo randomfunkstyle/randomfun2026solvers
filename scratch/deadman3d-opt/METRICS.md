@@ -2074,11 +2074,15 @@ pipe lengths — had it needed a re-order it would have been the wrong trade at
 these prices.
 # M17 — declined: rebuilding the decode trie out of `a`/`d` instead of `x`
 
-**Nothing was built.** `machine.py` is untouched and every hash is where M16 left
+# M18 — declined: rebuilding the decode trie out of `a`/`d` instead of `x`
+
+**Nothing was built.** `machine.py` is untouched and every hash is where M17 left
 it: `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`, `deadman-3d.input.txt`
-`654d35d6…`, `deadman-3d_taped.man` `a11edcc6…`. Two read-only probes were added
+`654d35d6…`, `deadman-3d_taped.man` `684e26e7…`. Two read-only probes were added
 (`scratch/trie_probe.py`, `scratch/gap_probe.py`); they build the grid and walk
-it, they do not change it.
+it, they do not change it. The tick figures below were taken on the `a11edcc6…`
+taped grid, whose CPU room M17 did not touch — the trie and the lane band are
+cell-for-cell the same, so the analysis carries.
 
 The idea was that `x` "always turns" and so forces the CPU's lanes apart, while
 `a`/`d` go **straight** on one side and would close the gaps — potentially
