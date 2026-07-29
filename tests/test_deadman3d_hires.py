@@ -192,6 +192,52 @@ def test_every_tile_leaf_binds_its_own_outlet() -> None:
         assert sorted(dists)[1] > sorted(dists)[0]  # no reading-order tie
 
 
+def test_the_packed_wall_is_one_screen_and_not_four_monitors() -> None:
+    """The deliverable: four panels close enough to read as one 128x96 frame.
+
+    ``build_wall`` places whole DOOM blocks, so its four panels end up 177
+    columns and 59 rows apart — the machine paints a 128x96 picture across four
+    monitors scattered over the grid.  ``build_packed_wall`` takes the panels
+    off the blocks and puts them in one cluster, and the gutter is the thing
+    worth pinning: two free columns (``panel_pack.py``'s sweep says one is
+    undrawable, because the east panel's DATA arrowhead has nowhere to sit) and
+    three free rows (two would work for the *panels*, but the middle one is the
+    only east-west way through the cluster and the T3 command leg needs it).
+    """
+    from randomfun2026solvers.lm1 import d3_router, d3_unit
+
+    wall = d3_router.build_packed_wall()
+    pw, ph = d3_unit.PANEL_W + 2, d3_unit.PANEL_H + 2
+    (nw, ne, sw, se) = wall.panels
+    assert nw[1] == ne[1] and sw[1] == se[1]  # two rows of two
+    assert nw[0] == sw[0] and ne[0] == se[0]
+    assert ne[0] - (nw[0] + pw) == d3_router.GUTTER_X == 2
+    assert sw[1] - (nw[1] + ph) == d3_router.GUTTER_Y == 3
+    # ...and the cluster really is the whole screen, walls included
+    assert wall.regions["cluster"][2:] == (2 * pw + 2, 2 * ph + 3) == (134, 103)
+    # the panels are in tile order, which is also the engine's reading order,
+    # which is what `display.tiled_frames_from_writes` composes by
+    assert wall.panels == sorted(wall.panels, key=lambda p: (p[1], p[0]))
+
+
+def test_the_packed_wall_keeps_the_blocks_pipe_invariants() -> None:
+    """``len(addr) == len(data)`` and ``len(swap) > len(data)``, per tile.
+
+    They are ``d3_unit.build_doom``'s and they do not become optional because
+    the pipes got twenty times longer: a DATA that overtakes its ADDR paints at
+    the wrong cursor, and a COMMIT still in flight when the next frame's first
+    paint lands commits that pixel into the wrong buffer.  ``build_packed_wall``
+    raises rather than draw a wall that breaks either, so this is really a check
+    that the solver is still finding a solution — and that the wall is still the
+    32 pipes the engine has to find.
+    """
+    from randomfun2026solvers.lm1 import d3_router
+
+    wall = d3_router.build_packed_wall()
+    assert wall.pipes == 32 == d3_router.build_wall().pipes
+    assert len(wall.legs) == 4
+
+
 def test_the_commit_is_the_broadcast_and_a_tile_word_is_not() -> None:
     from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers.lm1 import d3_router
