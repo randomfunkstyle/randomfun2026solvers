@@ -5533,6 +5533,18 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: (that cost +4.14% there), and it does not build a relay chain (one forwarder
 #: plus a short pipe beat three forwarders). One room, two stubs.
 #:
+#: Measured on the checked-in 116-round tour, native engine, round-gated —
+#: **838,511,442 -> 788,880,295, -5.92%**, box unmoved at 287x253. The estimate
+#: was 8.53% and the gap is accounted for rather than shrugged at (arithmetic in
+#: ``scratch/deadman3d-opt/METRICS.md`` M12). Padding this leg gives it a
+#: derivative of **1,060,929 tour ticks a pipe cell**, so the whole 60 cells
+#: were worth 7.59%, not 8.53 — some request transit overlaps the ring's seek.
+#: Of the 52 cells removed, 46.8 came back; the ~5.2 that did not are the
+#: forwarder's own six-cell loop. A pipe is a 60-deep FIFO and pipelined the
+#: request's two words one tick apart, where one man re-serialises them at one
+#: per six ticks. Six is the shortest cycle that holds both an ``R`` and an
+#: ``s``, and a second man would reorder the words, so that is the floor here.
+#:
 #: Keyed by tier: only the taped tier has a gate chain for the request to reach,
 #: and the room's south wall is placed off the gate strip's own entry row. The
 #: hi-res family is left off for the same reason it is off ``STORE_ANSWER_WEST``
