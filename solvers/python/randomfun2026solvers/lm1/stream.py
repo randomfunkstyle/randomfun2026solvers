@@ -104,7 +104,8 @@ collapses into rule 1 and no per-arm argument is needed at all.
 
 The depth-4 *unit* is drawn and checked (:func:`unit_interior_grid` renders it
 with all eleven pipes for ``analyze``/``route`` to answer about). The *block*
-around it is not placed yet — see the note above :func:`build_stream`.
+around it is **not planar** and so not placed: :func:`block_crossings` proves it,
+and the note above :func:`build_stream` says what removes the obstruction.
 """
 
 from __future__ import annotations
@@ -115,6 +116,8 @@ from ..circuit import Circuit, E
 
 __all__ = [
     "ARMS",
+    "block_crossings",
+    "perimeter_order",
     "DUAL_RELAY_IH",
     "DUAL_RELAY_IW",
     "StreamBlock",
@@ -176,7 +179,7 @@ def _shift_glyphs(shift: int) -> str:
 #: The pipes ``UPDB``'s body touches, in body order — which is row order, which is
 #: execution order, because the body is walked down one column one glyph per row.
 #: This tuple is the reason the depth-4 unit's incoming pipes are *all* on the west
-#: wall: ring A's return is read between the accumulator's and ring B's, and
+#: wall: the accumulator's return is read between ring A's and ring B's, and
 #: ``ARCH.md`` §7.1's distances only let a reader swap between two walls whose
 #: row-slopes differ. A south pipe's distance falls with the row exactly as a west
 #: pipe's does above its own row, so a south pipe can only ever win *below* every
@@ -184,7 +187,7 @@ def _shift_glyphs(shift: int) -> str:
 #: image. So the middle read has to be on the same wall as the outer two, and once
 #: the accumulator's return is on the west wall there is no reason for anything else
 #: to be anywhere else. :func:`_spec4` asserts the drawn arm matches this.
-UPDB_BANDS: tuple[str, ...] = ("p1", "p2", "a_ret", "a_fwd", "b_ret", "b_fwd")
+UPDB_BANDS: tuple[str, ...] = ("a_ret", "a_fwd", "p1", "p2", "b_ret", "b_fwd")
 
 
 def updb_body(shift: int = UPDB_SHIFT) -> str:
@@ -216,10 +219,12 @@ def updb_body(shift: int = UPDB_SHIFT) -> str:
     its ``aq`` model asserts at emit time, so the two tiers cannot drift apart
     silently. It is the one place the drawn arm is narrower than the model.
 
-    Which pipe each glyph talks to is :data:`UPDB_BANDS`, and it is forced by the
-    row map rather than chosen: the accumulator is read first because ``resp`` has
-    to be the topmost *outgoing* row and it sits below ``in``, which sits below the
-    accumulator's own row.
+    Which pipe each glyph talks to is :data:`UPDB_BANDS`. Ring A's return is read
+    *first*, and that is not arbitrary: it puts ring A's two ports at opposite ends
+    of the block's perimeter interval, which is what keeps ring A's chord out of the
+    ADDER's way (:func:`block_crossings`). The other valid order — accumulator first
+    — computes exactly the same thing for the same glyphs and makes the block *less*
+    routable, which is the only reason to prefer this one.
     """
     return "rsMrs*" + _shift_glyphs(shift) + "Mr-s"
 
@@ -583,27 +588,25 @@ def _spec4(shift: int) -> _Spec:
 
     arg = "M4W}b"  # `}` by 4: the depth-4 trie's own `16 * arg + code`, floored
     arg_row = R_TRIE + 4  # the trie is one row deeper than depth 3's
-    p1 = arg_row + len(arg) + 1  # 12: the first row an arm's loop body can reach
+    top = arg_row + len(arg) + 1  # 12: the first row an arm's loop body can reach
 
-    # ``UPDB``'s body, padded so its three reads and three writes land on their
-    # rows. Two blanks after the accumulator's read: ``resp`` has to be the topmost
-    # *outgoing* row (it is the one pipe that climbs north, so anything above it
-    # would cross its climb), and ``resp`` sits below ``in``, which sits below the
-    # accumulator — so ``p2`` cannot be the row immediately under ``p1``.
-    updb = body[:1] + "  " + body[1:]
+    # ``UPDB``'s body with one blank after ring A's return, which is what makes room
+    # for ``in`` above ring A's *fill*: ``FILLA`` reads the input then sends to ring
+    # A, so ``in`` has to sit between them, and a body's rows are its execution order.
+    updb = body[:1] + " " + body[1:]
     rows = {
-        "p1": p1,  # 12  west: partial sums back from the ADDER
-        "in": p1 + 1,  # 13  west: the input room
-        "resp": p1 + 2,  # 14  east: one word back to the CPU
-        "p2": p1 + 3,  # 15  east: partial sums to the ADDER
-        "out": p1 + 4,  # 16  east: the output room
-        "a_ret": p1 + 5,  # 17  west: ring A's return
-        "a_fwd": p1 + 6,  # 18  east: ring A's fill
-        "b_ret": p1 + len(updb) - 3,  # 26  west: ring B's return
-        "b_fwd": p1 + len(updb) - 1,  # 28  east: ring B's rotate-back
-        "prod": p1 + len(updb) + 1,  # 30  east: products to the ADDER
+        "a_ret": top,  # 12  west: ring A's return  (UPDB's scalar, MAC's too)
+        "in": top + 1,  # 13  west: the input room
+        "a_fwd": top + 2,  # 14  east: ring A's fill
+        "p1": top + 4,  # 16  west: partial sums back from the ADDER
+        "p2": top + 5,  # 17  east: partial sums to the ADDER
+        "resp": top + 6,  # 18  east: one word back to the CPU
+        "out": top + 7,  # 19  east: the output room
+        "b_ret": top + len(updb) - 3,  # 25  west: ring B's return
+        "b_fwd": top + len(updb) - 1,  # 27  east: ring B's rotate-back
+        "prod": top + len(updb) + 1,  # 29  east: products to the ADDER
     }
-    if [p1 + i for i in [pipe_ops[0], *(o + 2 for o in pipe_ops[1:])]] != [
+    if [top + i for i in [pipe_ops[0], *(o + 1 for o in pipe_ops[1:])]] != [
         rows[band] for band in UPDB_BANDS
     ]:
         raise StreamError(f"UPDB's body {updb!r} does not land on the row map {rows}")
@@ -630,7 +633,7 @@ def _spec4(shift: int) -> _Spec:
         "ZEROC": _Arm(loop=(rows["p2"] - 2, "0s")),
         "FWD": _Arm(loop=(rows["p1"] - 1, gap("p1", "p2"))),
         "EMIT": _Arm(loop=(rows["p1"] - 1, gap("p1", "out"))),
-        "UPDB": _Arm(loop=(rows["p1"] - 1, updb)),
+        "UPDB": _Arm(loop=(rows["a_ret"] - 1, updb)),
     }
 
     arms = tuple(arm for arm in _LEAVES4 if arm)
@@ -828,6 +831,66 @@ EXPECTED_PIPES = 11
 def unit_pipe_count(trie_bits: int = TRIE_BITS) -> int:
     spec = _spec(trie_bits)
     return len(spec.west) + len(spec.east) + len(spec.south) + 1  # + cmd
+
+
+def perimeter_order(trie_bits: int = TRIE_BITS, *, lr_shift: int = UPDB_SHIFT) -> list[str]:
+    """The unit's ports clockwise from the top of the east wall, down it and up the west.
+
+    ``cmd`` and ``resp`` both run north to the CPU, so no pipe of the block can cross
+    the top: the region the block's pipes may use is the unit's perimeter *as an
+    interval*, and this is that interval. ``cmd`` is not in it — it comes from outside
+    the block — and ``resp`` is, because its climb occupies the east side.
+    """
+    spec = _spec(trie_bits, lr_shift)
+    east = sorted((spec.rows[band], band) for band in spec.east)
+    west = sorted((spec.rows[band], band) for band in spec.west)
+    # Clockwise: down the east wall, west along the south wall, up the west wall.
+    south = sorted((-col, band) for band, col in spec.south_col.items())
+    return (
+        [band for _row, band in east]
+        + [band for _col, band in south]
+        + [band for _row, band in reversed(west)]
+    )
+
+
+def block_crossings(
+    trie_bits: int = TRIE_BITS,
+    *,
+    lr_shift: int = UPDB_SHIFT,
+    tree: tuple[str, ...] = ("p2", "prod", "p1"),
+    pairs: tuple[tuple[str, str], ...] = (("a_fwd", "a_ret"), ("b_fwd", "b_ret")),
+) -> list[tuple[str, str]]:
+    """Which ring pairs *cannot* be routed outside the unit. Empty means planar.
+
+    The ADDER's legs form a tree touching the perimeter at ``tree``, cutting the disk
+    into that many sectors; a pair is routable exactly when both of its ports fall in
+    one sector. Splitting a pipe with a relay does not change this — a relay changes
+    neither endpoint — which is why no leg span, band depth or column allocation can
+    make a crossing go away, and why the fix has to change the *perimeter order* or
+    the *tree*. See the note above :func:`build_stream`.
+
+    ``tree`` is a parameter because the fix is to grow it: routing ``prod`` through
+    ring B's relay adds ``b_fwd`` and ``b_ret`` as leaves of the same tree, which is
+    what makes them adjacent to it instead of separated by it.
+    """
+    order = perimeter_order(trie_bits, lr_shift=lr_shift)
+    pos = {band: i for i, band in enumerate(order)}
+    cuts = sorted(pos[band] for band in tree)
+
+    def sector(p: int) -> tuple[int, int]:
+        for i, lo in enumerate(cuts):
+            hi = cuts[(i + 1) % len(cuts)]
+            if (lo < p < hi) if lo < hi else (p > lo or p < hi):
+                return (lo, hi)
+        raise StreamError(f"{order[p]} is itself one of the tree's leaves {tree}")
+
+    # A port that is itself a leaf of the tree is connected *by* the tree, so it
+    # needs no sector of its own — which is exactly what growing the tree buys.
+    return [
+        pair
+        for pair in pairs
+        if not set(pair) & set(tree) and sector(pos[pair[0]]) != sector(pos[pair[1]])
+    ]
 
 
 def unit_interior_grid(trie_bits: int = TRIE_BITS, *, lr_shift: int = UPDB_SHIFT) -> list[str]:
@@ -1043,66 +1106,61 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
     return pts
 
 
-# ── placement, depth 4: the unit is drawn, the block is not placed ───────────
+# ── placement, depth 4: the unit is drawn, the block is NOT PLANAR ───────────
 # The depth-4 *unit* is drawn and all twenty-eight of its pipe glyphs are checked
 # against the engine's own ``route`` (:func:`unit_interior_grid`). The block around
-# it — the ADDER, the ring relays, the I/O rooms and the pipes between them — is not
-# placed. The constraint that stops it is recorded here rather than in a report,
-# because two rounds of work have narrowed it from "P1 cannot cross the block" to
-# something much smaller, and the next attempt should start from the narrow version.
+# it cannot be placed, and this is now a *proof* rather than a failed search:
+# :func:`block_crossings` computes it and the tests pin it.
 #
-# **Three rules the depth-4 block does close**, and they are the reusable part:
+# **The argument.** ``cmd`` enters and ``resp`` leaves through the north wall, and
+# both run to the CPU above, so no pipe can cross the top: the region the block's
+# pipes may use is a disk with the unit removed and the north side cut, i.e. an
+# *interval* of the unit's perimeter. Label the ports clockwise from the top of the
+# east wall, down it, and back up the west wall (:func:`perimeter_order`).
 #
-# 1. Southbound pipes leaving the east wall must turn at columns that *fall* as
-#    their row rises, or a lower pipe's eastward run crosses a higher one's descent.
-#    With ``resp`` climbing north from the topmost row, that fixes the order
-#    ``prod`` < ``b_fwd`` < ``a_fwd`` < ``out`` < ``p2``.
-# 2. Each then runs west along a corridor row of its own, and if the corridor rows
-#    *and* the columns they drop down at rise in the same order as the turn columns,
-#    the five nest exactly: pipe *j*'s corridor is below pipe *i*'s, so it passes
-#    *i*'s descent above where *i* turns west, and *i*'s drop column is west of *j*'s
-#    corridor, so *j* never crosses it. **The destination depths are then free** —
-#    the non-obvious consequence, and what lets the ADDER's room span the three
-#    intermediate drop columns: those all terminate above it.
-# 3. Each of the four west-wall rows is a corridor too — a pipe arriving on one runs
-#    east along it — so every source turns north in a column of its own, ordered by
-#    the wall row it feeds (the pipe climbing highest goes furthest west). A source
-#    whose room sits directly beside its climb has a *one-cell* leg, and a one-cell
-#    leg cannot cross anything: that is how the ring returns get past every drop.
+# The block must connect:
 #
-# **P1's crossing is solved, by ARCH.md §2.1's own pattern.** ``SPEC.md`` forbids a
-# pipe looping back to its own room, so a ring always needs two rooms and a
-# turnaround room is something this block already knows how to place. The
-# accumulator's return is *structurally* the topmost pipe on the west wall (``UPDB``
-# reads it before both ring returns and a body's rows rise with its execution order)
-# while the ADDER that feeds it hangs off the bottom of the east wall, so P1 has to
-# cross the block diagonally — which a single pipe cannot, because it would have to
-# be both the diagonal and the final east-running corridor. Splitting it at a relay
-# **dedicated to P1** makes ``p1b`` a short straight run into the topmost west row
-# and frees ``p1a`` to take any route, since it no longer has to land on a corridor
-# row. Dedicated, not shared: §2.1 allows one room to turn around many rings but only
-# while they are permanently full, and the accumulator ring drains by design
-# (``ZEROC`` seeds P2, ``MAC`` drains it, ``EMIT`` and ``RDP`` drain P1), so a shared
-# relay would block on the first empty ring. With one ``r`` and one ``s`` it never
-# chooses, and is exactly as transparent as more pipe would have been.
+#   * ``p2`` -> ADDER, ``prod`` -> ADDER, ADDER -> ``p1`` — one room, three legs;
+#   * ``a_fwd`` -> ring A's relay -> ``a_ret``;
+#   * ``b_fwd`` -> ring B's relay -> ``b_ret``;
+#   * ``out`` -> the O room and the I room -> ``in``, which are terminals and free.
 #
-# **What is still open is smaller, and is not P1.** It is the two rings' *bands*.
-# Each band is entered from a drop column west of it (rule 2) and left toward its
-# relay, and the two bands are at different depths by construction. With both sharing
-# one leg span — which is what makes each ring's capacity maximal per row — the
-# shallower ring's exit column is live at the deeper ring's entry row, or the deeper
-# ring's entry jog crosses the shallower one's exit, depending on which way round the
-# bands and relays are ordered. Six orderings of (band depth, relay depth, jog
-# column) were tried; each closes one direction and breaks the other.
+# The ADDER's three legs form a tree touching the perimeter at ``p2``, ``prod`` and
+# ``p1``, which cuts the disk into three sectors. A ring's pair is routable **iff
+# both of its ports lie in one sector** — and splitting a pipe with a relay does not
+# help, because a relay changes neither endpoint: ``a_fwd`` -> relay -> ``a_ret`` is
+# still one curve from ``a_fwd`` to ``a_ret``. Nor does any choice of leg span, band
+# depth or column allocation, for the same reason.
 #
-# The fix is local and is a *capacity trade*, which is why it is a decision and not a
-# derivation: give the two bands **disjoint leg spans** (halving each ring's cells per
-# row, so ring B needs roughly twice the rows for ``mnist``'s 856 values), or give
-# each ring its own serpentine *column* band so the two never share a row at all.
-# Both change the block's footprint, so it belongs with Task 7's placement pass.
+# As drawn, both ring pairs straddle a sector boundary, so **two** crossings are
+# forced. Two facts make that unavoidable rather than a numbering accident:
 #
-# Until then :func:`build_stream` refuses depth 4, for the same reason it refuses
-# depth 5: a block it cannot draw correctly must not be approximated.
+#   * ``prod`` is the bottom-most east port, because ``MAC`` must push ``b`` back
+#     (``s`` on ring B's fill) *before* it can multiply and send the product, so
+#     ``R_B_FWD < R_PROD`` always; and
+#   * ``b_ret`` is the bottom-most west port, because ``UPDB`` reads ring B last.
+#
+# So ``prod`` always sits between ``b_fwd`` and ``b_ret`` in the cyclic order.
+#
+# **Two things do fix it, and both are cheap.**
+#
+# 1. :func:`updb_body`'s *other* valid order — reading ring A's return before the
+#    accumulator's (``rsMrs*…`` with no padding, the order this module first drew) —
+#    puts ``a_fwd`` at the top of the east wall and ``a_ret`` at the bottom of the
+#    west, so ring A's pair lands in the sector that wraps the interval's ends and
+#    **one of the two crossings disappears**. Both orders compute the same thing and
+#    cost the same glyphs, so this is free.
+# 2. The remaining crossing goes away if ``prod``'s pipe is *split through ring B's
+#    relay* — ``ARCH.md`` §2.1's "one room can turn around many rings", which is what
+#    :func:`dual_relay_cells` was exposed for: two men from one ``Y``, so ring B's
+#    loop never blocks behind the product stream (§2.1's caution — the product stream
+#    is not permanently full, ring B is). The ADDER's tree then touches the perimeter
+#    at four points instead of three, ``b_fwd`` and ``b_ret`` become adjacent leaves
+#    of it rather than being separated by it, and **the block is planar**.
+#
+# Both change the block's internals only: no port moves wall, and no port order
+# changes except within the unit's own east and west walls, which is the row map the
+# unit already owns. That is the next round's work; it is not a placement search.
 
 
 def build_stream(

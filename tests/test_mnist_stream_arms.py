@@ -439,12 +439,15 @@ def test_every_depth_four_pipe_glyph_sits_on_its_own_pipes_row():
         assert rows[band] == y, f"{glyph}@{(x, y)} claims {band}, whose row is {rows[band]}"
 
     # rule 2, stated: the west rows are distinct and rise in UPDB's read order.
-    assert unit.west["p1"] < unit.west["a_ret"] < unit.west["b_ret"]
+    assert unit.west["a_ret"] < unit.west["p1"] < unit.west["b_ret"]
     assert len(set(unit.west.values())) == len(unit.west)
     assert len(set(unit.east.values())) == len(unit.east)
-    # resp is the topmost outgoing row: it is the only pipe that climbs north, so
-    # anything above it would cross that climb wherever the block puts it.
-    assert unit.east["resp"] == min(unit.east.values())
+    # Ring A's fill is the topmost outgoing row, not `resp`. That is the *point* of
+    # reading ring A's return first (`UPDB_BANDS`): it puts ring A's two ports at
+    # opposite ends of the perimeter interval, which is what takes ring A's pair out
+    # of the ADDER's way — see `stream.block_crossings` and the two tests below.
+    assert unit.east["a_fwd"] == min(unit.east.values())
+    assert unit.west["a_ret"] == min(unit.west.values())
 
 
 def test_the_drawn_updb_arm_touches_the_pipes_the_probe_proved():
@@ -616,3 +619,60 @@ def test_the_real_program_satisfies_that_precondition():
 
     source = mnist_cnn.emit_source(lr_shift=6, single_step=True)
     assert "UPDB" in source
+
+
+# ── the block's planarity, which is why it is not placed ─────────────────────
+def test_the_depth_three_block_is_planar_and_the_depth_four_one_is_not():
+    """The proof that stops the depth-4 placement, executable so it cannot rot.
+
+    ``cmd`` and ``resp`` both run north to the CPU, so no pipe of the block may cross
+    the top: the region its pipes can use is the unit's perimeter *as an interval*.
+    The ADDER's three legs form a tree touching that interval at ``p2``, ``prod`` and
+    ``p1``, cutting it into sectors, and a ring's ``fwd``/``ret`` pair is routable
+    exactly when both ports fall in one sector. Splitting a pipe with a relay changes
+    neither endpoint, so no relay, leg span, band depth or column allocation can move
+    a pair across a sector boundary — only the perimeter order or the tree can.
+
+    The depth-3 block is the control: it *is* placed, judged and shipped, so the model
+    had better report it planar. It does.
+    """
+    assert stream.block_crossings(3) == []
+    assert stream.block_crossings(4) == [("b_fwd", "b_ret")]
+
+
+def test_the_remaining_depth_four_crossing_is_forced_by_two_arms():
+    """``prod`` always sits between ring B's two ports, for two independent reasons.
+
+    ``MAC`` must push ``b`` back before it can multiply and send the product, so
+    ring B's fill is always above ``prod`` on the east wall; and ``UPDB`` reads ring B
+    last, so ring B's return is always the bottom-most west port. So ``prod`` is the
+    east port immediately below ring B's fill and ring B's return is the west port
+    immediately after ``prod`` — cyclically, ``prod`` is between them, whatever the
+    row numbers are.
+    """
+    spec = stream._spec(4)
+    entry, body = spec.plan["MAC"].loop
+    assert body == "r s*s", "read b, push it back, multiply, send the product"
+    assert spec.rows["b_fwd"] < spec.rows["prod"], "the push-back precedes the product"
+    assert spec.rows["b_ret"] == max(spec.rows[b] for b in spec.west)
+    assert spec.rows["prod"] == max(spec.rows[b] for b in spec.east)
+    order = stream.perimeter_order(4)
+    i, j, k = (order.index(b) for b in ("b_fwd", "prod", "b_ret"))
+    assert i < j < k, "prod is cyclically between ring B's two ports"
+
+
+def test_routing_prod_through_ring_bs_relay_makes_the_block_planar():
+    """The fix, checked: grow the ADDER's tree so ring B's ports become its leaves.
+
+    ``ARCH.md`` §2.1's "one room can turn around many rings" — which is what
+    :func:`stream.dual_relay_cells` was exposed for. Two men from one ``Y`` keep
+    ring B's loop from blocking behind the product stream, which matters because
+    §2.1's caution is about sharing a relay with a ring that can *drain*: ring B holds
+    the weights and is permanently full, the product stream is not.
+    """
+    grown = ("p2", "p1", "b_fwd", "b_ret")
+    assert stream.block_crossings(4, tree=grown) == []
+    # And the dual relay this needs is already drawn and already has two loops.
+    cells = stream.dual_relay_cells()
+    assert list(cells.values()).count("Y") == 1
+    assert list(cells.values()).count("r") == list(cells.values()).count("s") == 2
