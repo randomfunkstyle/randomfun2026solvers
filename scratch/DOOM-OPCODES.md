@@ -394,11 +394,12 @@ level has compared to the layout level's 3.46%.
 
 ## 6. Ranked opportunities
 
-**Nothing here was implemented.** This is the map, and this session has already
-had three cases where the obvious target was wrong — so every row states what it
-is measured against and what would falsify it.
+**Nothing here was implemented when this was written; #1 has since been taken**
+(−4.37%, `METRICS.md` § M13). This is the map, and this session has already had
+three cases where the obvious target was wrong — so every row states what it is
+measured against and what would falsify it.
 
-### 1. Delete the DDA's redundant `LD WADDR` — est. **−4.0 to −4.3%**
+### 1. Delete the DDA's redundant `LD WADDR` — est. **−4.0 to −4.3%** — **TAKEN, realised −4.37%**
 
 5,536 executions × 470.9 ticks = 2,606,902 = 4.32%. One instruction, sixteen
 unrolled copies, and the ISA's own documentation says the value is already in
@@ -408,6 +409,20 @@ program change, so it needs no re-layout and no re-binding.
 **What would falsify it:** if the assembler or the CPU's `ST` micro-program
 clobbers ACC in practice despite the ISA text. Check by asserting the emulator
 agrees before and after (`lm1.emulator`), then the pixel gate.
+
+> **Done — see `scratch/deadman3d-opt/METRICS.md` § M13.** `ST` is
+> ACC-preserving in the implementation and not merely the docstring
+> (`emulator._store` writes `em.b` and never assigns it; `LDA`'s `_load_acc`
+> takes its address from `em.b` after clobbering `em.a`). The 116-round tour goes
+> **773,267,928 → 739,507,401, −4.366%**, *ahead* of the 4.32% prediction because
+> 16 fewer instructions is also 32 fewer ROM words and every instruction's fetch
+> wait shrinks with the loop. Shipped as
+> `deadman3d_source(dda_acc_reload=False)` behind the new `machine.TIER_PROGRAM`,
+> keyed `(slug, tier)` so the canonical grid stays `f62d63fd`. The other 19 sites
+> of the same shape are censused in M13: four in the movement path worth ~0.04%
+> together (left in), and the y-arm's, which crosses a block boundary into the
+> four-predecessor `hity{k}` join and is worth ~0.05% (left in). The `SDX` half
+> of the cursor pair is *not* this pattern — `SUB SDY` really does destroy it.
 
 ### 2. Teleport `adapter -> store:req->bank0` (60 cells) — est. **−8.5 to −8.7%**
 

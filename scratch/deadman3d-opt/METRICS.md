@@ -974,3 +974,108 @@ Two consequences, both for whoever owns `memory_taped.py` next:
 Not taken in M12 on purpose: it is a `taped_store_block` parameter, not a
 `lm1.machine` one, and `memory_taped.py` is being edited in parallel. The two
 belong in one change on that file, not split across two branches.
+
+---
+
+## M13 — the DDA x-arm's redundant `LD WADDR` (the first *program* lever)
+
+Every lever above this one moves cells. This one deletes an instruction, and it
+beat all of them: **−4.37% for sixteen deleted lines.**
+
+`scratch/DOOM-OPCODES.md` §5 named it from a stride-1, fully-attributed
+per-opcode profile. The unrolled x-arm did
+
+```asm
+        LD  WADDR
+        ADD S4X
+        ST  WADDR      ; ISA op 8: "store[addr] = ACC (ACC preserved)"
+        LD  WADDR      ; ...re-reads the word ACC already holds
+        LDA            ; the x-side hit test
+```
+
+### The claim was checked in the implementation, not the docstring
+
+* `isa.py` op 8 `ST`: micro `LIT1 SEND_MEM RING_READ SEND_MEM SWAP SEND_MEM SWAP`
+  — the two `SWAP`s are a sandwich, so ACC comes back to where it started.
+* `emulator._store` writes `em.b` (the accumulator) and assigns only `em.a`.
+  It never touches `em.b`.
+* `emulator._load_acc` (`LDA`, the consumer two lines down) takes its address
+  from `em.b` and clobbers `em.a` first — so the `a = WADDR` that `ST` leaves
+  behind, and which the deleted `LD` would have overwritten, is unobservable.
+* The program already relies on this elsewhere and says so: `pclip: SUBI 1
+  ; ST preserved ACC = perpWallDist`.
+
+### Measured
+
+116-round tour, native `fast_littleman`, taped tier:
+
+| | ticks | box |
+|---|---:|---|
+| M12 | 773,267,928 | 287x253 |
+| M13, the 16 reloads deleted | **739,507,401** | 287x253 |
+| | **−33,760,527 = −4.366%** | |
+
+**Predicted −4.32%; realised −4.37%.** The 0.05pt overshoot is a term the
+prediction did not model: 5,536 × 470.9 counts only the deleted instructions'
+own ticks, but 16 fewer instructions is also 32 fewer ROM words (P 4002 → 3970),
+and a shorter ROM loop shaves the fetch wait of *every* instruction. Unlike the
+two estimates that came in optimistic this session (`adapter->store` by 12%, the
+"longest pipe" heuristic by two orders of magnitude), an exact per-opcode
+attribution with a counted execution total lands on the nose.
+
+### Why it is keyed to the tier
+
+The `.asm` is shared between the two tiers and the canonical grid is byte-frozen
+at `f62d63fd`, so the fix ships as `deadman3d_source(dda_acc_reload=False)`
+behind a new `machine.TIER_PROGRAM`, keyed `(slug, tier)` exactly like
+`TIER_LAYOUT` / `MEM_PAD_FOR` / `INPUT_NORTH_WEST`. Default is the reload, so
+`deadman-3d.asm` regenerates byte for byte and `deadman-3d.man` / `_trim` /
+`_v2` / `deadman-3d.input.txt` are untouched — verified, and the canonical build
+still hashes `f62d63fd`. **The canonical machine would take the same −4.37%; it
+is simply not allowed to move.**
+
+### The same pattern elsewhere — the full census, taken and not
+
+An `ST X` immediately followed by an unlabelled `LD X` is always a pure reload.
+There are **20** in the canonical source; 16 are the x-arm's and are now gone.
+
+| site | executions | worth | taken |
+|---|---:|---|---|
+| x-arm `ST WADDR` / `LD WADDR` ×16 | 5,536 / 9 frames | **4.32%** | **yes** |
+| `ST HDG` / `LD HDG` (the turn block) | ≤1 a frame | ~0.01% | no |
+| `ST NEWX` / `LD NEWX` (move, x commit) | ≤1 a frame | ~0.01% | no |
+| `ST NEWY` / `LD NEWY` ×2 (move, y half-step and commit) | ≤2 a frame | ~0.02% | no |
+
+The four movement-path sites are correct to delete and worth about **0.04% of
+the run between them** — four executions a frame against the x-arm's 615. Left
+in deliberately: each is a separate control-flow block to re-verify, and the
+whole set is inside the measurement noise of a single tour run.
+
+The y-arm has the pattern too, but **across a block boundary**, where it cannot
+be deleted in place: `ywrd{k}` ends `ST WADDR` / `JMP hity{k}` and `hity{k}`
+opens `LD WADDR`. `hity{k}` has four predecessors and the other three
+(`ST PW`-then-fall-through, the `INCM WADDR` wrap, and the straight `ST PW`
+path) genuinely need the load — `INCM` in particular leaves ACC holding the
+*old* value (`emulator._inc_mem`: `em.a = old+1, em.b = old`). Taking it would
+mean peeling a copy of the `hity` tail for the `ywrd` edge, and `ywrd` is the
+*downward* quarter-column wrap: **60 executions in nine frames**, ~0.05%. Not
+worth 16 more copies of a five-instruction tail. `ST POSY` / `JMP render` /
+`render: LD POSY` is the same shape once a frame.
+
+The `SDX` half of the cursor pair (521, 12,657 reads) is **not** this pattern
+and is not free. `dda{k}` does `LD SDX` / `SUB SDY` / `BRN xarm{k}`, so ACC
+holds `SDX − SDY` at the arm, not `SDX`; the arm's `LD SDX` is a real read.
+Reconstructing it as `ADD SDY` trades an `LD` (470.9) for an `ADD` (421.8) —
+5,536 × 49 = ~0.45% — but it is an arithmetic identity over a wrapping word
+rather than a deletion, so it needs its own equivalence proof. Recorded, not
+attempted.
+
+### Gates
+
+Emulator, both programs over the whole `WALK`, pixel-identical to the golden
+frames — and **30,729 fewer instructions retired (2.39%)**, which is the deleted
+`LD` count over the tour's length. `tests/test_deadman3d.py -m slow` **12/12**.
+DOOM fast set **125 passed**. Rest of the default suite 2672 passed, 68 skipped;
+the only `-m slow` failures are the three pre-existing ones AGENTS.md names
+(`test_lm1_pipe_cost`, `test_lm1_grid_store`, `test_lm1_lane_order[deadman-3d]`),
+all of which call `machine.build` directly and cannot see `TIER_PROGRAM`.
