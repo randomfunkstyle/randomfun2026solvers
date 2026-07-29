@@ -5883,10 +5883,26 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: Beware the tour length here: at 3 rounds the squash reads -0.854%, three and a
 #: half times its 21-round value, because a short tour is boot-heavy. Confirm this
 #: one at 21.
-SQUASH_BAND: set[tuple[str, str]] = set()
+#: **Shipped for hires by explicit direction, as a deliberate ticks-for-rows
+#: trade.** ``AGENTS.md`` calls that a regression for this family and the number
+#: below is the measured cost: the twelve rows come out of the room, the CPU is
+#: 649x485 instead of 649x495, and the machine is **+1.288% slower** because
+#: :data:`SEEK_TELEPORT` has to be switched off with it — the seek request goes
+#: back to the long way round the outside of the machine, 437 cells against 53.
+#:
+#: To put it back: drop this entry, restore ``("deadman-3d_hires", "taped")`` to
+#: :data:`SEEK_TELEPORT`, and set :data:`ROM_TOUCH_DROP` for it back to 22.
+#: That is the 189,164,256 configuration.
+SQUASH_BAND: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 
 ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
-    ("deadman-3d_hires", "taped"): 22,
+    # 5, not the 22 the table above picks, because :data:`SQUASH_BAND` moves the
+    # whole band twelve rows north and re-prices every distance. On the squashed
+    # CPU the feasible window is drop 5..17 and 18 stops binding; inside it the
+    # curve is almost flat (5: 21,659,942 … 13: 21,666,878 … 17: 21,868,736 on the
+    # 3-round tour), so 5 is the fastest and 13 — the drop that puts the corridor
+    # exactly on the collector row — costs 0.03%.
+    ("deadman-3d_hires", "taped"): 5,
 }
 
 LANE_PITCH: dict[tuple[str, str], int] = {
@@ -6440,13 +6456,20 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: event is worth less, not more — which is the whole reason to measure the
 #: derivative before building.
 #:
-#: ``deadman-3d_hires`` takes it too, and it is the smallest of the five registries
-#: its seek build needed: 233,851,301 -> **233,658,800** on the 21-round tour,
-#: **-0.08%**. Same ceiling argument, one machine larger — hires' plain route is
-#: longer still, but its seek rate is the same handful a frame.
+#: ``deadman-3d_hires`` **had** it and has lost it to :data:`SQUASH_BAND`, which
+#: cannot coexist with room H (see that registry). Not a decline — a forced trade,
+#: and an expensive one, because this registry turned out to be worth far more than
+#: it was first measured at.
+#:
+#: It went in at 233,851,301 -> 233,658,800, **-0.08%** on the 21-round tour. Every
+#: later landing — the 11-bank cut, the seek drum, ``lap_via_jump``, the staggered
+#: band — made everything *else* faster, and removing it now costs **+1.534%**:
+#: 189,164,256 -> 192,066,009. Nothing about the room pair changed. A fully
+#: serialised ~70-seeks-a-frame path simply became a much larger share of a much
+#: faster run, which is the same lesson as ``AGENTS.md`` §"the measurement is not
+#: separable" and the sharpest example of it in the tree.
 SEEK_TELEPORT: set[tuple[str, str]] = {
     ("deadman-3d", "taped"),
-    ("deadman-3d_hires", "taped"),
 }
 
 #: Slugs whose **seek jump** turns south at the east end of its entry row instead of

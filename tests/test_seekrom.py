@@ -132,8 +132,14 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert machine.SEEK_SLAB_PITCH["deadman-3d_hires"] == 11
     assert machine.MEM_PAD_FOR[key] == 15
     assert machine.INPUT_NORTH_WEST[key] == 13
-    assert key in machine.SEEK_TELEPORT
     assert key in machine.SEEK_TAKEN_DROP_EAST
+    # `SEEK_TELEPORT` is the one of the five this build no longer has: it cannot
+    # coexist with `SQUASH_BAND`'s shorter room, whose room H needs a full-width
+    # clear strip the squash removes. A forced trade, not a decline, and priced
+    # at +1.534% — see both registries' docstrings.
+    assert key not in machine.SEEK_TELEPORT
+    assert key in machine.SQUASH_BAND
+    assert ("deadman-3d", "taped") in machine.SEEK_TELEPORT  # unaffected
 
     # Nothing was written on the bare slug where a `(slug, tier)` key was meant,
     # which is the mistake that would silently move the canonical hires build.
