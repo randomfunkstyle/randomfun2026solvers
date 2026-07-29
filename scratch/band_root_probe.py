@@ -146,6 +146,134 @@ def relabel(u: int) -> dict[str, int] | None:
     return dict(zip(lanes, low + high))
 
 
+def static_hist() -> dict[str, int]:
+    """Static opcode counts — what the drum's cells are charged against.
+
+    Same construction as ``scratch/rom-opt/slots.py``, which is the DP that chose
+    the shipped map; reusing it keeps the two objectives commensurable.
+    """
+    import collections
+
+    from randomfun2026solvers.lm1 import programs
+
+    prog = machine.seek_split(
+        programs.load(SLUG), threshold=machine.SEEK_THRESHOLD, ops=machine.SEEK_OPS
+    )
+    return dict(collections.Counter(i.mnemonic for i in prog.instrs))
+
+
+HIST = None
+
+
+def opcode_cells(slots: dict[str, int]) -> int:
+    """Drum cells the opcode field costs: ``Ns`` = 2 under ten, ```NN`s`` = 5 over."""
+    global HIST
+    if HIST is None:
+        HIST = static_hist()
+    return sum(HIST.get(m, 0) * (2 if bitrev(s) < 10 else 5) for m, s in slots.items())
+
+
+#: Tour ticks per unit of each objective, calibrated on measured runs (see the
+#: commit message): the dispatch derivative is counted over a ~60.3M-tick profile
+#: window against a 609.9M-tick tour, and :data:`machine.OPCODE_SLOTS`' own
+#: docstring prices 2,373 opcode cells at 0.077% of the tour.
+TICKS_PER_DISPATCH = 609_871_597 / 60_330_000
+TICKS_PER_CELL = 0.00077 * 609_871_597 / 2_373
+
+
+def joint(slots: dict[str, int]) -> float:
+    """Estimated tour ticks relative to an arbitrary origin."""
+    return (
+        price(slots)["total"] * TICKS_PER_DISPATCH + opcode_cells(slots) * TICKS_PER_CELL
+    )
+
+
+def search_joint(seed: int = 0, iters: int = 40_000):
+    """Hill-climb the slot subset against dispatch **and** drum cells together.
+
+    The shipped map is the drum DP's exact optimum and scores 6,557 cells; the
+    dispatch-only optimum throws most of that away. Pricing both in tour ticks is
+    what makes the two comparable, and the answer is not either extreme.
+    """
+    import random
+
+    rng = random.Random(seed)
+    lanes = [m for m, _ in sorted(shipped().items(), key=lambda kv: kv[1])]
+    cur = sorted(shipped().values())
+
+    def score(sl):
+        try:
+            return joint(dict(zip(lanes, sl)))
+        except AssertionError:
+            return float("inf")
+
+    cur_s = score(cur)
+    best, best_s = list(cur), cur_s
+    for _ in range(iters):
+        cand = list(cur)
+        free = [s for s in range(32) if s not in cand]
+        cand[rng.randrange(len(cand))] = rng.choice(free)
+        cand.sort()
+        s = score(cand)
+        if s <= cur_s:
+            cur, cur_s = cand, s
+            if s < best_s:
+                best, best_s = cand, s
+        elif rng.random() < 0.02:
+            cur, cur_s = cand, s
+    return dict(zip(lanes, best))
+
+
+def search_u(u: int, seed: int = 0, iters: int = 30_000):
+    """Best dispatch total among maps with exactly ``u`` slots in ``[0, 16)``.
+
+    ``u`` fixes the root row (``F = y0 + 2u - 1``) and so fixes the riser; the
+    climb then only re-shapes the two subtrees. Sweeping ``u`` traces the trade
+    the shipped map never priced: riser against the drum's one-digit opcodes,
+    which are what force ``u = 11`` (``LD`` at slot 16 is the boundary).
+    """
+    import random
+
+    rng = random.Random(seed)
+    lanes = [m for m, _ in sorted(shipped().items(), key=lambda kv: kv[1])]
+    n = len(lanes)
+    if not (1 <= u <= 16 and 1 <= n - u <= 16):
+        return None, None
+
+    def score(sl):
+        try:
+            r = price(dict(zip(lanes, sl)))
+        except AssertionError:
+            return float("inf"), None
+        return r["total"], r
+
+    cur = sorted(rng.sample(range(16), u)) + sorted(rng.sample(range(16, 32), n - u))
+    cur_s, _ = score(cur)
+    best, best_s, best_r = list(cur), cur_s, score(cur)[1]
+    for _ in range(iters):
+        cand = list(cur)
+        half = rng.random() < u / n
+        lo, hi = (0, 16) if half else (16, 32)
+        j = rng.randrange(0, u) if half else rng.randrange(u, n)
+        free = [s for s in range(lo, hi) if s not in cand]
+        if not free:
+            continue
+        cand[j] = rng.choice(free)
+        cand[:u], cand[u:] = sorted(cand[:u]), sorted(cand[u:])
+        s, r = score(cand)
+        if s <= cur_s:
+            cur, cur_s = cand, s
+            if s < best_s:
+                best, best_s, best_r = cand, s, r
+        elif rng.random() < 0.02:
+            cur, cur_s = cand, s
+    return dict(zip(lanes, best)), best_r
+
+
+def one_digit_kept(slots: dict[str, int]) -> int:
+    return sum(1 for s in slots.values() if s in ONE_DIGIT)
+
+
 def search(seed: int = 0, iters: int = 60_000) -> tuple[dict[str, int], dict[str, object]]:
     """Hill-climb the 22-of-32 slot subset against trie + riser.
 
@@ -184,6 +312,48 @@ def search(seed: int = 0, iters: int = 60_000) -> tuple[dict[str, int], dict[str
     return dict(zip(lanes, best)), best_r
 
 
+#: The ten slots whose bit-reverse is below ten — the ones the drum charges
+#: ``Ns`` = 2 cells for instead of ```NN`s`` = 5 (see :data:`machine.OPCODE_SLOTS`).
+ONE_DIGIT = (0, 2, 4, 8, 12, 16, 18, 20, 24, 28)
+
+
+def drum_neutral() -> list[dict[str, int]]:
+    """Every rank-preserving map that leaves all ten one-digit opcodes in place.
+
+    The shipped assignment already holds all ten of :data:`ONE_DIGIT`, so pinning
+    those and letting the other twelve lanes slide inside the gaps between them
+    keeps **every opcode in its digit class** — same cell count, same drum lap,
+    same width. Rank order forces each free lane into the open interval between
+    its pinned neighbours, so the space is small and can be enumerated whole.
+    """
+    ship = shipped()
+    lanes = [m for m, _ in sorted(ship.items(), key=lambda kv: kv[1])]
+    pinned = {m: s for m, s in ship.items() if s in ONE_DIGIT}
+    assert len(pinned) == len(ONE_DIGIT), sorted(pinned.values())
+
+    # Free lanes group into runs between consecutive pinned slots.
+    runs: list[tuple[list[str], range]] = []
+    prev = -1
+    run: list[str] = []
+    for m in lanes:
+        if m in pinned:
+            if run:
+                runs.append((run, range(prev + 1, pinned[m])))
+            run, prev = [], pinned[m]
+        else:
+            run.append(m)
+    if run:
+        runs.append((run, range(prev + 1, 32)))
+
+    out = []
+    for combo in itertools.product(*(itertools.combinations(r, len(ms)) for ms, r in runs)):
+        cand = dict(pinned)
+        for (ms, _), picks in zip(runs, combo):
+            cand.update(zip(ms, picks))
+        out.append(cand)
+    return out
+
+
 if __name__ == "__main__":
     base = price(shipped())
     print(f"shipped: root row {base['root_row'] + 99} (interior {base['root_row']}), "
@@ -208,6 +378,34 @@ if __name__ == "__main__":
         print(f"{u:3d} {r['root_row'] + 99:5d} {r['trie']:11,} {r['zigzag']:10,} "
               f"{r['drop']:11,} {r['riser']:11,} {r['total']:12,} {d:+12,} "
               f"{100 * d / 60_398_000:+7.2f}")
+
+    cands = drum_neutral()
+    scored = sorted(((price(c)["total"], i) for i, c in enumerate(cands)))
+    print(f"\ndrum-neutral maps (all ten one-digit opcodes kept): {len(cands)} of them")
+    for tot, i in scored[:3]:
+        r = price(cands[i])
+        d = tot - base["total"]
+        print(f"  root {r['root_row'] + 99} trie {r['trie']:,} riser {r['riser']:,} "
+              f"total {tot:,} {d:+,}")
+        print(f"    slots = {dict(sorted(cands[i].items(), key=lambda kv: kv[1]))}")
+    print(f"  worst {scored[-1][0]:,}; shipped ranks "
+          f"{[i for i, (_, j) in enumerate(scored) if cands[j] == shipped()]} of {len(cands)}")
+
+    print("\nbest map per root row (u = slots in [0,16); riser = 44 - 2u):")
+    print(f"{'u':>3} {'root':>5} {'trie':>11} {'riser':>11} {'total':>12} "
+          f"{'vs shipped':>12} {'1-digit':>8}")
+    for u in range(9, 17):
+        slots, r = min(
+            (x for x in (search_u(u, s) for s in range(3)) if x[1]),
+            key=lambda x: x[1]["total"],
+            default=(None, None),
+        )
+        if r is None:
+            continue
+        d = r["total"] - base["total"]
+        print(f"{u:3d} {r['root_row'] + 99:5d} {r['trie']:11,} {r['riser']:11,} "
+              f"{r['total']:12,} {d:+12,} {one_digit_kept(slots):5d}/10")
+        print(f"    {dict(sorted(slots.items(), key=lambda kv: kv[1]))}")
 
     print("\nhill-climb over the 22-of-32 slot subset (rank order frozen):")
     for seed in range(4):
