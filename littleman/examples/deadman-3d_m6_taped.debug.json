@@ -405,9 +405,9 @@
       "name": "rom",
       "x": 0,
       "y": 0,
-      "w": 252,
+      "w": 254,
       "h": 93,
-      "note": "looping ROM: 4002 words, 85 rows, re-emitted forever",
+      "note": "looping ROM: 3970 words, 85 rows, re-emitted forever",
       "color": "#a855f7",
       "tags": [
         "rom"
@@ -427,9 +427,9 @@
     },
     {
       "name": "seek:V",
-      "x": 255,
+      "x": 257,
       "y": 1,
-      "w": 32,
+      "w": 30,
       "h": 113,
       "note": "",
       "color": "#64748b",

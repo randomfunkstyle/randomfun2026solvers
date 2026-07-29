@@ -273,7 +273,7 @@ __all__ = [
     "HUD_BG_ROWS", "BAR_COLOR", "BAR_ROWS", "AMMO_BAR_COLS", "HEALTH_BAR_COLS",
     "AMMO_PER_PX", "HEALTH_PER_PX",
     "preamble_words", "input_words", "frames_for_commands", "cases_json",
-    "tape_slots", "deadman3d_source", "main",
+    "tape_slots", "deadman3d_source", "taped_program", "main",
 ]
 
 # ── the fixed geometry ────────────────────────────────────────────────────────
@@ -3007,7 +3007,7 @@ sbnuk:  LD  NUKE
         SND""".splitlines()
 
 
-def deadman3d_source(geom: Geom = GEOM64) -> str:
+def deadman3d_source(geom: Geom = GEOM64, *, dda_acc_reload: bool = True) -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
     Structure: boot loop (round 0's data preamble -> tape slots 1..451, the
@@ -3029,6 +3029,18 @@ def deadman3d_source(geom: Geom = GEOM64) -> str:
     ``round:``.  The lodev variable each block computes is named in its
     comments; every expression keeps :func:`render`'s exact operation order,
     which is the pixel contract.
+
+    ``dda_acc_reload`` is the one *program* difference between the two tiers, and
+    it exists only because the tiers share this source. The unrolled x-arm used to
+    do ``ST WADDR`` and then ``LD WADDR``; ``ST`` is ACC-preserving, so the reload
+    re-fetched a word the accumulator already held — 5,536 executions in nine
+    frames at ~471 ticks each, **4.32% of the run** (``scratch/DOOM-OPCODES.md``
+    §5). Passing ``False`` deletes it from all :data:`DDA_UNROLL` copies, which is
+    what :func:`taped_program` does. It defaults to ``True`` because the canonical
+    men-v3 grid (``deadman-3d.man`` / ``_trim`` / ``_v2``) is byte-frozen at
+    ``f62d63fd`` and the checked-in ``deadman-3d.asm`` is what pins it; only the
+    taped family is allowed to move (the same rule :data:`machine.TIER_LAYOUT`,
+    :data:`machine.MEM_PAD_FOR` and friends already follow, one level down).
 
     Regenerate with::
 
@@ -3656,6 +3668,13 @@ syneg:  LDI 0
         ; this machine, so only every {DDA_UNROLL}th empty step pays a full lap; a
         ; sideDist tie goes to the Y arm (lodev's else — risk R5)
 """.splitlines()
+    # The x-arm's reload of WADDR, kept only for the byte-frozen canonical tier.
+    # `ST` is ACC-preserving (isa.py: "store[addr] = ACC (ACC preserved)", and
+    # emulator._store writes `em.b` without ever assigning it), so the `LD WADDR`
+    # that used to sit between `ST WADDR` and `LDA` re-read the word the
+    # accumulator already held. `LDA` takes its address from ACC and clobbers A
+    # first, so nothing downstream can see the difference.
+    _xarm_reload = "        LD  WADDR\n" if dda_acc_reload else ""
     for k in range(DDA_UNROLL):
         nxt = f"dda{k + 1}" if k < DDA_UNROLL - 1 else "dda0"
         nxt_note = "the next unrolled step" if k < DDA_UNROLL - 1 else "the backward lap"
@@ -3700,8 +3719,7 @@ xarm{k}:  LD  SDX
         LD  WADDR
         ADD S4X
         ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
-        LD  WADDR
-        LDA                 ; the x-side hit test
+{_xarm_reload}        LDA                 ; the x-side hit test
         DIV PW
         MODI 16
         BRZ {nxt}            ; empty -> {nxt_note}
@@ -4077,6 +4095,22 @@ def install_art(gun_idle: list[tuple[int, int, str]],
             setattr(mod, name, here[name])
     DoomUnit.GUN_IDLE = tuple(gun_idle)
     DoomUnit.GUN_FIRE = tuple(gun_fire)
+
+
+def taped_program():
+    """The taped tier's program: :func:`deadman3d_source` without the DDA x-arm's
+    redundant ``LD WADDR``.
+
+    Registered as ``machine.TIER_PROGRAM[("deadman-3d", "taped")]``, so
+    ``build_for("deadman-3d", store="taped")`` stays the one-liner that makes the
+    shipped taped machine while the canonical men-v3 build keeps loading the
+    byte-frozen ``deadman-3d.asm``. Assembled in memory rather than checked in as a
+    second ``.asm``: the two sources differ by sixteen deleted lines and nothing
+    else, and ``deadman-3d_taped.man`` already pins the result byte for byte.
+    """
+    from randomfun2026solvers.lm1.asm import assemble
+
+    return assemble(deadman3d_source(dda_acc_reload=False), name="deadman-3d")
 
 
 def _current_program():

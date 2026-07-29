@@ -5330,6 +5330,36 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 }
 
 
+#: Per-``(slug, STORE tier)`` **program** override, as ``"module:callable"``. The
+#: callable takes no arguments and returns a :class:`~.asm.Program`; it is imported
+#: lazily so this module keeps importing without the solver packages.
+#:
+#: :data:`TIER_LAYOUT` is this idea one level down — a slug that ships two machines
+#: off one source may want different *layout* per tier. This is the same escape
+#: hatch for the *source itself*, and it exists for exactly one reason: a slug whose
+#: canonical grid is byte-frozen cannot take a program fix that its unfrozen tier
+#: can. An explicit ``program=`` argument to :func:`build_for` still wins, so
+#: deadman-3d's ``--wad`` mode keeps building the level it just installed.
+#:
+#: ``deadman-3d``'s entry deletes the DDA x-arm's redundant ``LD WADDR``. ``ST`` is
+#: ACC-preserving (``isa.py`` op 8; ``emulator._store`` writes ``em.b`` and never
+#: assigns it), so the reload between ``ST WADDR`` and ``LDA`` re-fetched the word
+#: the accumulator already held — and a store read is the most expensive thing this
+#: machine does. Per-opcode attribution at stride 1 (``scratch/DOOM-OPCODES.md``):
+#: 5,536 executions in nine frames at 470.9 ticks each = **4.32% of the run**, the
+#: largest single lever the profiler found and the only one that is a program change
+#: rather than a layout one. It also drops 32 words of ROM.
+#:
+#: The canonical men-v3 grid is pinned at ``f62d63fd`` and ``deadman-3d.asm`` is what
+#: pins it, so the fix is keyed here rather than applied to the shared source — the
+#: same rule :data:`MEM_PAD_FOR`, :data:`INPUT_NORTH_WEST` and
+#: :data:`SEEK_TAKEN_DROP_EAST` already follow. The canonical machine would take the
+#: same win; it is simply not allowed to move.
+TIER_PROGRAM: dict[tuple[str, str], str] = {
+    ("deadman-3d", "taped"): "randomfun2026solvers.deadman3d:taped_program",
+}
+
+
 #: Demo slugs are not bound to any problem's panel — an ungraded demo may pick
 #: any resolution the LM-75 allows (64x64 max), and ``deadman-3d`` wants DOOM's
 #: 4:3 rather than the 32x24 its borrowed ``plotter`` JSON states. Consulted by
@@ -6176,6 +6206,26 @@ def display_for(slug: str) -> tuple[int, int] | None:
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
 
+def _tier_program(slug: str, store: str):
+    """The program a ``(slug, tier)`` builds from — :data:`TIER_PROGRAM`, else the
+    checked-in ``<slug>.asm``."""
+    from importlib import import_module
+
+    from . import programs
+
+    ref = TIER_PROGRAM.get((slug, store))
+    if ref is None:
+        return programs.load(slug)
+    module, _, attr = ref.partition(":")
+    prog = getattr(import_module(module), attr)()
+    if prog.name != slug:
+        raise MachineError(
+            f"TIER_PROGRAM[{(slug, store)!r}] returned a program named {prog.name!r}; "
+            f"the registry keys off the program name, so it must be {slug!r}"
+        )
+    return prog
+
+
 def build_for(
     slug: str,
     *,
@@ -6228,8 +6278,10 @@ def build_for(
     if unknown:
         raise MachineError(f"TIER_LAYOUT[{(slug, store)!r}] has unknown keys {sorted(unknown)}")
     mem_offset, store_offset = MEM_PLACE.get(slug, ((0, 0), (0, 0)))
+    if program is None:
+        program = _tier_program(slug, store)
     return build(
-        program if program is not None else programs.load(slug),
+        program,
         tape_n=TAPE_SIZE[slug],
         rom_rows=tier.get("rom_rows", ROM_ROWS.get(slug)),
         mem_pad=(

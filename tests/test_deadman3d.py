@@ -849,6 +849,48 @@ def test_checked_in_asm_matches_the_generator() -> None:
     )
 
 
+def test_the_taped_program_is_the_canonical_one_minus_the_dda_reloads() -> None:
+    """``dda_acc_reload=False`` deletes the x-arm's redundant ``LD WADDR`` from
+    each of the sixteen unrolled copies, and changes nothing else.
+
+    ``ST`` is ACC-preserving, so the reload between ``ST WADDR`` and ``LDA``
+    re-fetched the word the accumulator already held — 4.32% of the run at the
+    profiler's 470.9 ticks a ``LD`` (``scratch/DOOM-OPCODES.md`` §5). This is the
+    audit of the gate: the two tiers' sources differ by sixteen deleted lines, all
+    of them the same line, with nothing added.
+    """
+    import difflib
+
+    canon = d3.deadman3d_source().splitlines()
+    taped = d3.deadman3d_source(dda_acc_reload=False).splitlines()
+    delta = [
+        line
+        for line in difflib.unified_diff(canon, taped, lineterm="", n=0)
+        if line[:1] in "+-" and not line.startswith(("---", "+++"))
+    ]
+    assert delta == ["-        LD  WADDR"] * d3.DDA_UNROLL == ["-        LD  WADDR"] * 16
+    # And the gate is one-way: the default is the frozen canonical program.
+    assert d3.deadman3d_source() == d3.deadman3d_source(dda_acc_reload=True)
+
+
+def test_the_taped_tier_builds_from_the_taped_program() -> None:
+    """The program override is opt-in per ``(slug, tier)``, exactly like
+    :data:`machine.TIER_LAYOUT` — so the canonical men-v3 grid, pinned at
+    ``f62d63fd``, keeps loading the checked-in ``deadman-3d.asm`` untouched."""
+    assert set(machine.TIER_PROGRAM) == {("deadman-3d", "taped")}
+    assert machine.TIER_PROGRAM[("deadman-3d", "taped")] == (
+        "randomfun2026solvers.deadman3d:taped_program"
+    )
+    canonical = programs.load("deadman-3d")
+    taped = d3.taped_program()
+    # The registry keys off the program *name*, so the override must keep it.
+    assert taped.name == canonical.name == "deadman-3d"
+    # 16 instructions x 2 words of ROM go with them.
+    assert taped.P == canonical.P - 32
+    assert machine._tier_program("deadman-3d", "men-v3").words == canonical.words
+    assert machine._tier_program("deadman-3d", "taped").words == taped.words
+
+
 def test_tape_slots_are_the_documented_map() -> None:
     slots = d3.tape_slots()
     assert (slots["MAPB"], slots["POWB"], slots["HDGB"], slots["NUKB"]) == (
