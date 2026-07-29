@@ -6824,6 +6824,25 @@ TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
 #: one notch coarser than the model's (nine banks, not eleven), which is the
 #: predicted direction for an unmodelled per-access fixed cost, and is worth
 #: 0.09pp — it does not change the decision.
+#:
+#: **Re-validated after ``a15b200``, and the margin is now thin enough to be worth
+#: re-checking rather than treating as settled.** That commit landed
+#: :data:`LANE_PITCH` and :data:`TAPED_CHAIN_REACH` for hires, both of which take
+#: time out of the *store-adjacent* path this lever competes with, so the decline
+#: was re-measured rather than inherited (3-round tour):
+#:
+#: | variant | box | ticks | Δ |
+#: |---|---|---|---|
+#: | shipped, batch 1 | 514x451 | 31,189,000 | — |
+#: | batch 2 | 641x447 | 31,246,826 | **+0.185%** |
+#: | batch 4 | 806x451 | 32,458,584 | +4.071% |
+#:
+#: Batch 2's penalty fell from **+3.54% to +0.185%** on an unchanged builder —
+#: an order of magnitude, from the CPU-side work alone. It is still a regression
+#: and stays declined, but it is now close enough that the next landing which
+#: shortens the store path could flip it. Re-run this before assuming otherwise;
+#: the same mistake in the other direction is what made
+#: :data:`TAPED_CHAIN_REACH`'s -0.020% decline void.
 TAPED_SKIP_BATCH: dict[str, int] = {"deadman-3d": 2}
 
 
