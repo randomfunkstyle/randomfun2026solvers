@@ -6773,6 +6773,57 @@ TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
 #: and measured -13% on the frame gate; the machine still fits the 307 width.
+#:
+#: **Declined for ``deadman-3d_hires``, and :data:`TAPED_BANKS` is the reason.**
+#: The absent entry is deliberate, not an oversight: hires falls through to
+#: ``.get(name, 1)`` on purpose. The lever pays per *slot walked*, so its value is
+#: a function of ring length — and the eleven-bank cut above already spent that
+#: length. Measured on the 21-round tour over frames 1..20
+#: (``scratch/deadman3d-opt/hires_batchrun.py``), against the shipped cut's
+#: **365,333,921 ticks at 514x451**:
+#:
+#: | variant | banks | batch | box | ticks | Δ |
+#: |---|---|---|---|---|---|
+#: | **shipped** | 11 | **1** | **514x451** | **365,333,921** | **—** |
+#: | naive port | 11 | 2 | 641x447 | 374,110,911 | **+2.402%** |
+#: | re-cut for batch 2 | 9 | 2 | 541x451 | 373,783,008 | **+2.313%** |
+#: | | 11 | 4 | 806x451 | 397,592,042 | **+8.830%** |
+#:
+#: Batching is a *regression* here, and re-deriving the cut for it does not
+#: rescue it — the best batch-2 configuration over the whole DP family is still
+#: +2.31%. Nothing is shipped.
+#:
+#: **The lever did not vanish, it was already collected.** Priced on the same
+#: 3-round tour across cuts, batch 2's worth is monotone in ring length and
+#: changes sign before it reaches the shipped one:
+#:
+#: | cut | longest ring | batch 1 | batch 2 | Δ |
+#: |---|---|---|---|---|
+#: | uniform quarters (pre-cut) | 226 | 98,744,653 | 71,793,271 | **-27.29%** |
+#: | DP 4 | 673 | 43,032,952 | 39,046,675 | **-9.26%** |
+#: | DP 8 | 438 | 35,341,671 | 35,440,614 | +0.28% |
+#: | DP 9 | 438 | 33,817,184 | 34,565,029 | +2.21% |
+#: | **DP 11 (shipped)** | 306 | **33,625,138** | 34,813,816 | **+3.54%** |
+#:
+#: On the 223-slot ring hires ran before ``c51a748`` this was worth -27%, and
+#: batch 4 there was worth -44.5% (54,754,680). Both are moot: the cut alone
+#: takes the same 3-round tour to 33,625,138, which no batch-and-quarters
+#: combination comes near. The two levers are substitutes, the cut is the
+#: stronger one, and stacking them is worse than the cut alone because the
+#: batched worker's per-access fixed cost is now paid on rings too short to
+#: amortise it.
+#:
+#: **The cut cannot be re-derived to suit the batch either**, and this is
+#: structural rather than empirical. ``hires_bankcut.dp`` minimises the ring term
+#: alone, and that term is *linear* in its ``RING`` constant — so for a fixed bank
+#: count the split it returns is invariant to the batch, and only the count can
+#: move against the fixed ``HOP``. ``scratch/deadman3d-opt/hires_batchdp.py``
+#: sweeps it: eleven banks stay optimal at ``RING=8`` (batch 1), ``5`` (batch 2)
+#: and ``3.5``, and the count does not move off eleven until ``RING~2.0`` — far
+#: below anything a real worker charges. The measured batch-2 optimum does drift
+#: one notch coarser than the model's (nine banks, not eleven), which is the
+#: predicted direction for an unmodelled per-access fixed cost, and is worth
+#: 0.09pp — it does not change the decision.
 TAPED_SKIP_BATCH: dict[str, int] = {"deadman-3d": 2}
 
 
