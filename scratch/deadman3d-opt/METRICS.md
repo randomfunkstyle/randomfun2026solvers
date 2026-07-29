@@ -2231,3 +2231,256 @@ caterpillar is worth 4.3% and the band height is worth 8.7%, and only the second
 is reachable without re-deriving the ROM.
 
 If dispatch is picked up again, **§3 is the lever, not §4.**
+## M14 — "draw in runs" (the `plotter` idea): **declined, and here is the arithmetic**
+
+**Nothing was built. `d3_unit.py` is untouched, no arm was added, and every hash
+pin is where it was:** `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`,
+`_taped.man` `6a739e1c…`, `deadman-3d.input.txt` `654d35d6…`. DOOM set **128
+passed**, pixel gate **12/12**. Tour baseline for every percentage below:
+**293x253, 683,820,497 ticks, `passed=True`** (`tour6.py - - -`).
+
+### The proposal
+
+> "We have the `plotter` implementation in the task set. In DOOM we have a lot of
+> same-coloured pixels, especially vertically — so instead of drawing
+> pixel-per-pixel, draw with runs. It could speed up drawing ~10% or more."
+
+### The finding, first
+
+**The painter is not on the critical path — at either resolution — and the
+drawing is already in runs, in fact already in whole columns.** The premise the
+idea rests on ("we draw pixel per pixel") is false for the 83% of the frame that
+is the 3D viewport, and where per-pixel drawing does survive it is worth 1.7% at
+its absolute ceiling. The three concrete forms of the idea cost, respectively,
+**more than they save**, **0.28%**, and **≤1.7%**.
+
+The CPU parks on the painter for **0.72%** of the run at 64x48 and — the case
+that could have reopened this — for **0.0003%** at 128x96, where it is instead
+parked on the store for **68%**. Hi-res does not invert the balance; it buries
+it, because each of the four units still paints one 64x48 panel while the CPU
+takes twice as long to feed it.
+
+### 1. Where the frame's pixels go, and what they cost in command words
+
+`scratch/doom_words.py` (new) censuses the unit's command stream on the
+emulator — exact for the program, since it records the value of every `SND` —
+and attributes each word to the label that emitted it. Over the checked-in
+116-round tour (115 raycast frames plus the title):
+
+| what it covers | pixels/frame | command words/frame | px per word |
+|---|---:|---:|---:|
+| **3D viewport**, rows 0–39 — walls, floor, ceiling | **2,560 (83%)** | **71.8 `COL`** | **35.7** |
+| HUD strip, rows 40–47 — bar art, bars, mugshot, floor tints | 512 (17%) | 69.6 `RUN` + 15.9 `CURS` | 6.0 |
+| **monster sprites**, overpainting the viewport | **14.5** | **14.5 `RUN` + 14.5 `CURS`** | **0.5** |
+| gun sprite, frame boundary | (baked in the unit) | 0.9 `GUN`/`GUNF` + 1.0 `COMMIT` | — |
+| **total** | **3,072** | **188.4** | 16.3 |
+
+Read the first row again: **one command word paints a whole viewport column.**
+`COL`'s argument is the unit's own loop seed, and the unit paints the wall run
+*and then* the floor run from it (`deadman3d.py`, the `send:` block); the ceiling
+costs nothing at all because `COMMIT` cleared the next buffer to black. 64
+columns → 64 words → 2,560 pixels. The 7.8 extra `COL`s a frame are M5's nukage
+flood repainting a floor run in green.
+
+The third row is the whole proposal, isolated. It is the only per-pixel painting
+left in the machine — a `CURS` + `RUN(1 px)` pair per opaque nibble, half a pixel
+per word — and it covers **14.5 pixels a frame, 0.5% of the frame**.
+
+### 2. What the CPU pays to *produce* those words
+
+The unit is a write-only coprocessor that paints concurrently with the next
+raycast, so the only painter cost on the critical path is (a) the CPU's own
+arithmetic to build a word and (b) the CPU standing on `cpu->stream:unit`.
+Instruction census over the tour, priced at `DOOM-OPCODES.md` §2's measured
+per-opcode means (the pricing totals 794.3M against the native 683.8M, so it runs
+~16% high and every percentage in this section is *of the estimate*, which makes
+it conservative in the idea's favour):
+
+| | instrs/frame | est ticks | % est run |
+|---|---:|---:|---:|
+| `send:` + `colnxt:` — building the 71.8 `COL` words | 1,257 | 40,228,779 | **5.1%** |
+| sprite chain, all of it (`mbody` … `csk*`) | 1,592 | 52,823,355 | 6.7% |
+| — of which the **per-pixel nibble walk** (`chain_h*` + `csk*`) | 415 | **13,673,402** | **1.7%** |
+| HUD word emission | 76 | 127,080 | 0.02% |
+
+The HUD line is the surprise and it matters: the HUD is **61% of all unit
+traffic** and costs the CPU **nothing**, because its words are `LDI <const>` /
+`SND` pairs constant-folded at assembly time. Word count is not cost here.
+
+And the blocking, **re-measured on today's machine** rather than quoted from
+`DOOM-PROFILE.md` (`scratch/doom_painter.py`, new; gated `WALK[:8]`,
+`passed=True`, 48,455,100 ticks, wait sampled every 64):
+
+| the CPU is parked on | ticks | % run |
+|---|---:|---:|
+| `store:collector->cpu` | 18,638,784 | **38.47%** |
+| `rom->cpu` | 1,208,128 | 2.49% |
+| **`cpu->stream:unit`** — the painter | **349,952** | **0.72%** |
+| `input->cpu` | 34,688 | 0.07% |
+| blocked, all pipes | 20,231,552 | 41.75% |
+| walking his own dispatch | 28,223,548 | 58.25% |
+
+The painter figure has moved, and the direction is worth understanding: the
+profile's 0.55% was 340,824 ticks of 61.5M. Today it is 349,952 ticks of
+48.5M — **the absolute painter block is unchanged (+2.7%) and the run around it
+got 21% shorter**, so the fraction rose. The painter is a fixed cost that M12/M13
+have made relatively larger by removing store latency around it. It is still
+**under three quarters of one percent**, and `SND` in total — all 190.5 words a
+frame of it — is 0.79% of the run, of which that block is nearly all.
+**A painter that finished instantly would buy 0.72%.**
+
+**The census is cross-checked against the native profiler.** `DOOM-OPCODES.md`
+counted **175,153** instructions in its nine gated frames on the *pre-M13*
+program; this census counts **169,671** on the same nine frames of the post-M13
+taped program, and M13 deleted **5,536** executions of one instruction —
+175,153 − 5,536 = 169,617, which is 54 instructions (0.03%) from what the
+emulator counts. Two independent engines agree on the instruction stream, which
+is what licenses pricing it. What they do *not* agree on is the price: the
+per-opcode means are from that pre-M13 machine and are therefore ~4.4% stale on
+top of the 16% the totals already differ by. Everything here is an upper bound.
+
+### 3. The three concrete forms of the idea, each costed
+
+#### 3a. A horizontal run merging identical adjacent columns — **net negative**
+
+This is the strongest version: DOOM columns repeat, so paint *k* neighbouring
+columns from one word. Decoding all 8,256 `COL` words of the tour back into
+`(x, drawStart, count, colour)`:
+
+* **4,855 of 8,256 (58.8%)** are pixel-identical to their left neighbour;
+* mean run length **2.43 columns**.
+
+That is a real 58.8%, and it is still not worth having:
+
+```
+saved   4,855 merged words x 3,779 est ticks to build a COL word  =  18.35M
+```
+```
+cost    the merge must be decided BEFORE the word is built, so the
+        comparison is paid on all 7,360 columns, not just the merged ones.
+        The ISA has no compare: the cheapest sound test is two scalars
+        (drawStart and colour — drawEnd is not a function of drawStart once
+        the clip bites), i.e. 2 x (LD 470.9 + SUB 412.9 + BRZ 348.7)
+        + 2 x ST 132 = 2,729 ticks
+        7,360 x 2,729                                              =  20.08M
+```
+
+**Net −1.7M ticks — a loss — before a single cell of the new unit arm exists.**
+Even the *unsound* floor (one scalar, no bookkeeping, wrong pixels at every
+shade boundary) is 9.07M spent against 18.35M saved: 9.3M, **1.2% of the
+estimate**, and it would also need the CPU to buffer a column and defer its send
+until the run breaks, which adds a branch and a spill the model above does not
+charge for. This is the version the proposal literally describes, and it does not
+survive its own bookkeeping.
+
+The reason is structural and worth stating plainly: **the CPU cannot skip the
+raycast for a merged column.** It has to cast the column to discover the column
+is a duplicate. Merging removes the *send*, which is 5.1%, and never touches the
+DDA, which is most of the rest.
+
+#### 3b. A run primitive carrying its own start position (deleting `CURS`) — **0.28% ceiling**
+
+`CURS` is 30.5 words a frame, 16.2% of unit traffic, and pure cursor positioning.
+If a run word carried its own address, all 3,504 of them over the tour would go.
+Priced at what they actually cost the CPU:
+
+| where | count | the CPU's cost each | total |
+|---|---:|---:|---:|
+| sprite chain (`LD ADDRV` / `SND`) | 1,664 | 743.5 | 1.24M |
+| HUD, bars, floor tints (`LDI <const>` / `SND`) | 1,840 | 358.7 | 0.66M |
+| | | | **1.90M = 0.28%** |
+
+And 0.28% is the *ceiling*, reached only if the address becomes free. It does
+not: the merged word still has to carry it, so the sprite side keeps its
+`LD ADDRV` and gains a `MULI`/`ADD` to pack it — leaving roughly **0.1%** for a
+new arm and a wider word encoding.
+
+#### 3c. RLE sprites instead of nibble-per-pixel — **1.7% ceiling, the honest one**
+
+The sprite chain is the only genuinely per-pixel painter left, and it is the one
+place the proposal's diagnosis is correct. Its nibble walk (`chain_h5` 0.92M,
+`chain_h9` 0.51M, `chain_h14` 0.32M, `csk0`…`csk13` 11.93M) is **13.67M est
+ticks = 1.7%**, unpacking one nibble and advancing one row at a time whether the
+pixel is opaque or transparent. An RLE encoding would skip transparent spans —
+but it still has to advance the cursor, and the walk's other half (`mbody` alone
+is 21.4M) is per-monster projection that no drawing primitive touches. **≤1.7%,
+realistically well under half of it**, for a re-encoding of the sprite tables and
+a new arm.
+
+### 4. Hi-res, which was the one case that could have inverted the balance
+
+128x96 is 4x the pixels across four concurrent units, so the balance was worth
+re-deriving rather than assuming. Command-word census on the hires program
+(`scratch/doom_words_hires.py`, IWAD-only, 20 rounds):
+
+| | words/frame | px/frame | CPU instrs/frame |
+|---|---:|---:|---:|
+| 64x48 | 188.4 | 3,072 | 20,854 |
+| **128x96** | **1,277.2** | 12,288 | **43,009** |
+| ratio | **6.8x** | 4x | **2.06x** |
+
+The word rate is where a hires argument for the idea would have to live, and it
+does look promising for about one paragraph: through the **serial** stream the
+rate rises **3.3x** (6.8x the words over 2.06x the frame time). If the per-word
+block held at 64x48's ~195 ticks, hires' backpressure would land near 1.8% — the
+only number in this investigation that would clear a percent.
+
+Where the extra words go says why it does not: `COL` only goes 71.8 → 281.5 a
+frame (the viewport is 80 rows against a 48-row tile, so *every* column crosses
+the seam and costs one word per panel — 128 x 2 = 256, plus 25.5 of nukage
+flood), while **`RUN` goes 84.1 → 729.4 and `CURS` 30.5 → 265.4**. That is the
+HUD and the floor tints scaling with area at ~2.8 px a word — and it is exactly
+the traffic that costs the CPU nothing to produce, because it is constant-folded.
+
+#### Measured, and it is not close
+
+`scratch/doom_painter.py hires 20 300000000`, on a 500x348 machine built from
+the IWAD. Hires cannot be frame-gated (the display judge wants exactly one
+display and there are four), so the run is ungated and **cut off inside the demo
+at a tick budget** — which is also the strictest case, because an ungated CPU
+never parks at `IN` and therefore hands the units work as fast as it ever will:
+
+| the CPU is parked on | 64x48 (gated, 48.5M ticks) | **128x96 (ungated, 300M ticks)** |
+|---|---:|---:|
+| `store:collector->cpu` | 38.47% | **68.05%** |
+| `rom->cpu` | 2.49% | 1.56% |
+| **`cpu->stream:router`** — the painter | **0.72%** (349,952 t) | **0.0003%** (1,024 t) |
+| blocked, all pipes | 41.75% | 69.62% |
+| walking his own dispatch | 58.25% | 30.38% |
+
+**Hi-res does not invert the balance — it buries it.** The painter is waited on
+for **one thousand ticks in three hundred million**. And the reason is the first
+bullet, not the second: the four units are each still a 64x48 LM-75 painting its
+own ~3,072 pixels exactly as before, while the CPU now takes twice as long to
+produce a frame and spends **68%** of it parked on the store — which is when the
+router drains. Per unit, per unit of CPU time, hires asks the painter for
+**0.83x** the work 64x48 does.
+
+**Checked as a derivative, so it is not a title-screen artefact.** The title
+frame is 4,004 command words, an order of magnitude more than any other, so a
+single cut-off run could have been dominated by it. Cutting at 100M instead of
+300M gives 192 ticks of painter block; the difference over the [100M, 300M)
+window is **832 ticks in 200,000,000 = 0.0004%**, i.e. the steady state is the
+same as the average. (The 100M point also shows the store at 57.00% climbing to
+68.05% — the machine is genuinely rendering across the whole window.)
+
+### 5. Verdict
+
+**The painter is not on the critical path at either resolution, and the drawing
+is already done in runs.** The best of the three concrete forms is 0.28% at its
+ceiling on a family whose store is 38–68% of the run. Invest in memory and CPU.
+
+Three things this cost, recorded so the next attempt does not re-pay them:
+
+* `prof.wait` counts **samples, not ticks**. `doom_pipes.py` divides by the tick
+  total directly, which is right only at stride 1, where the two coincide. At
+  stride 64 the first cut of every figure above was 64x low.
+* An **ungated run that reaches the end of its input does not stop** — the CPU
+  parks on `IN` and the engine keeps ticking to the cap. A large `max_ticks`
+  then measures the idle tail: the first 64x48 attempt reported "98.44% walking
+  his own dispatch" and a painter block of 0.000%, both of which were the tail.
+* The first bucketing of the instruction census caught the DDA's `hity{k}` arm
+  joins on a `"hit"` prefix and reported **13.4% of the run as "monster
+  painting"**. The real sprite chain is 6.7% and its per-pixel part is 1.7%.
+  A label-prefix bucket is a guess until the labels are read.
+
