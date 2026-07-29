@@ -30,6 +30,7 @@ from typing import Literal
 __all__ = [
     "FastLittleman",
     "FastLittlemanError",
+    "FastProfile",
     "FastResult",
 ]
 
@@ -136,6 +137,37 @@ class _DisplayState:
 
 
 @dataclass(slots=True)
+class FastProfile:
+    """Where a run spent itself, when :meth:`FastLittleman.run` was asked.
+
+    ``heat`` is a per-cell count of runner *samples*: every ``stride`` ticks each
+    live runner's cell is recorded, so a man parked on an ``r`` waiting for a
+    pipe is counted every sample.  Blocked time is time, and this is the metric
+    that shows it — an instruction counter would hide exactly the men who cost
+    the most.  ``wait`` is the sleeping-on-a-pipe subset of the same samples.
+
+    The pipe counters are exact (not sampled): every value that entered or left
+    each pipe, plus the retries that found the pipe full/empty.  A block is
+    counted once per park, not once per tick, because the engine sleeps a
+    blocked runner rather than re-testing him — use ``pipe_wait`` (sampled) for
+    blocked *duration* and ``recv_blocked``/``send_blocked`` for how often.
+    """
+
+    width: int
+    height: int
+    samples: int
+    stride: int
+    heat: dict[Cell, int] = field(default_factory=dict)
+    wait: dict[Cell, int] = field(default_factory=dict)
+    send: list[int] = field(default_factory=list)
+    recv: list[int] = field(default_factory=list)
+    send_blocked: list[int] = field(default_factory=list)
+    recv_blocked: list[int] = field(default_factory=list)
+    query: list[int] = field(default_factory=list)
+    pipe_wait: list[int] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class FastResult:
     """Validation-oriented result returned by :class:`FastLittleman`."""
 
@@ -147,6 +179,7 @@ class FastResult:
     fatal_pos: Cell | None = None
     passed: bool | None = None
     frames: list[list[str]] = field(default_factory=list)
+    profile: FastProfile | None = None
 
     @property
     def ok(self) -> bool:
@@ -494,23 +527,41 @@ class FastLittleman:
         frames: Sequence[Sequence[Sequence[str]]] | None = None,
         max_ticks: int = 5_000_000,
         native: bool = True,
+        profile: bool = False,
+        profile_stride: int = 1,
     ) -> FastResult:
         """Execute from a fresh state.
 
         Slash-separated strings implement judge round gating.  Plain sequences
         are a single round.  When ``expected`` is supplied, later input rounds
         are released only after the preceding expected round has been emitted.
+
+        ``profile=True`` additionally fills :attr:`FastResult.profile` with a
+        per-cell occupancy heatmap (sampled every ``profile_stride`` ticks) and
+        exact per-pipe traffic counters.  It is off by default and adds nothing
+        to the request when off, so an ordinary run is unchanged; it requires
+        the native backend.
         """
         input_rounds = self._parse_round_values(input)
         expected_rounds = self._parse_round_values(expected) if expected is not None else None
         frame_rounds = self._parse_frame_rounds(frames)
+        if profile and not native:
+            raise FastLittlemanError("profiling requires the native backend")
         if native:
             try:
-                return self._run_native(input_rounds, expected_rounds, frame_rounds, max_ticks)
+                return self._run_native(
+                    input_rounds,
+                    expected_rounds,
+                    frame_rounds,
+                    max_ticks,
+                    profile=profile,
+                    profile_stride=profile_stride,
+                )
             except (OSError, subprocess.SubprocessError):
                 # A compiler is optional for portability.  The independent
                 # Python engine remains a correct (but slower) fallback.
-                pass
+                if profile:
+                    raise
         if frame_rounds is not None:
             raise FastLittlemanError("display judging requires the native backend")
         machine = _Machine(self, input_rounds, expected_rounds)
@@ -522,9 +573,19 @@ class FastLittleman:
         expected_rounds: list[list[int]] | None,
         frame_rounds: list[list[list[int]]] | None,
         max_ticks: int,
+        *,
+        profile: bool = False,
+        profile_stride: int = 1,
     ) -> FastResult:
         lib = _native_library()
-        request = self._native_request(input_rounds, expected_rounds, frame_rounds, max_ticks)
+        request = self._native_request(
+            input_rounds,
+            expected_rounds,
+            frame_rounds,
+            max_ticks,
+            profile=profile,
+            profile_stride=profile_stride,
+        )
         ptr = lib.flm_run(request.encode("ascii"))
         if not ptr:
             raise OSError("native Little Man runner could not allocate its result")
@@ -545,9 +606,10 @@ class FastLittleman:
         fatal = None if fields[6] == "-" else fields[6]
         fatal_pos_raw = (int(fields[7]), int(fields[8]))
         count = int(fields[9])
-        output = [int(value) for value in fields[10:]]
+        output = [int(value) for value in fields[10 : 10 + count]]
         if len(output) != count:
             raise FastLittlemanError("native runner returned a truncated output list")
+        tail = fields[10 + count :]
         return FastResult(
             output=output,
             step=step,
@@ -556,7 +618,29 @@ class FastLittleman:
             fatal=fatal,
             fatal_pos=None if fatal_pos_raw == (-1, -1) else fatal_pos_raw,
             passed=passed,
+            profile=self._parse_profile(tail) if profile else None,
         )
+
+    def _parse_profile(self, tail: list[str]) -> FastProfile:
+        if not tail or tail[0] != "P":
+            raise FastLittlemanError("native runner returned no profile section")
+        it = iter(tail[1:])
+        take = lambda: int(next(it))  # noqa: E731
+        samples, stride, npipes = take(), take(), take()
+        prof = FastProfile(width=self.width, height=self.height, samples=samples, stride=stride)
+        for _ in range(npipes):
+            prof.send.append(take())
+            prof.recv.append(take())
+            prof.send_blocked.append(take())
+            prof.recv_blocked.append(take())
+            prof.query.append(take())
+            prof.pipe_wait.append(take())
+        for _ in range(take()):
+            x, y, hot, waiting = take(), take(), take(), take()
+            prof.heat[(x, y)] = hot
+            if waiting:
+                prof.wait[(x, y)] = waiting
+        return prof
 
     def _native_request(
         self,
@@ -564,6 +648,9 @@ class FastLittleman:
         expected_rounds: list[list[int]] | None,
         frame_rounds: list[list[list[int]]] | None,
         max_ticks: int,
+        *,
+        profile: bool = False,
+        profile_stride: int = 1,
     ) -> str:
         values: list[int | str] = ["FLM1", self.width, self.height]
         values.extend(ord(ch) for row in self.grid for ch in row)
@@ -618,6 +705,10 @@ class FastLittleman:
                 for frame in round_frames:
                     values.extend((len(frame), *frame))
         values.append(max_ticks)
+        # Trailing and omitted when off, so a non-profiling request is exactly
+        # the string every existing caller already sends.
+        if profile:
+            values.extend((1, max(1, profile_stride)))
         return " ".join(str(value) for value in values)
 
     @staticmethod
