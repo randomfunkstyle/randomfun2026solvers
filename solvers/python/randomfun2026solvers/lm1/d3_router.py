@@ -613,53 +613,70 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
     panels end up 177 columns and 59 rows apart — four monitors scattered across
     the grid rather than one screen.  This places the same four blocks with their
     panels taken off (:func:`d3_unit.build_logic`) and the panels packed into a
-    single 134x102 cluster with a two-cell gutter, which is what
-    ``deadman-3d_hires`` is a picture *of*: a 128x96 frame.
+    single 134x103 cluster, two columns and three rows between their facing
+    walls, which is what ``deadman-3d_hires`` is a picture *of*: one 128x96 frame.
 
-    Why the four blocks sit where they do
-    -------------------------------------
+    The blocks keep :func:`build_wall`'s own arrangement — NW and NE on one
+    command row, SW and SE on another — and the cluster goes between them::
 
-    Not aesthetics — the ports' cyclic order, which is forced twice over.
+        router
+        [ NW logic ]  ..  [ NE logic ]
+              the twelve port pipes' fan
+                   [ cluster ]
+        [ SW logic ]  ..  [ SE logic ]
+
+    Why the ports have a forced order
+    ---------------------------------
 
     A block emits ADDR, DATA and SWAP on its east wall at
     :data:`d3_unit.BAND_ROWS`' own rows, in that order, north to south; nothing
     downstream can reorder them.  And the cluster's twelve terminals sit at fixed
-    places on its boundary: ADDR on a top wall, DATA on a left wall, SWAP on a
-    bottom wall, with the band's two rows and the corridor's two columns as the
-    only ways in to the four interior ones.  So the twelve have a **cyclic order
-    around the cluster**, and a planar routing exists only if that order breaks
-    into four contiguous ``(addr, data, swap)`` runs — one per block, in the same
-    rotational sense as the blocks themselves.
+    places on its boundary: ADDR immediately above a top wall, DATA immediately
+    west of a left wall, SWAP immediately below a bottom wall, with the band's
+    rows and the corridor's columns the only ways in to the interior ones.  So
+    the twelve have a **cyclic order around the cluster**, and a planar routing
+    exists only if that order breaks into four contiguous ``(addr, data, swap)``
+    runs, one per block, in the same rotational sense as the blocks.
 
     Read counter-clockwise from the cluster's west face, with NE's SWAP taken
-    down the corridor's free tunnel to the band's first row, the order is::
+    down the corridor's free tunnel to the band's first row, it does::
 
         NW(a, d, s)  SW(a, d, s)  SE(a, d, s)  NE(a, d, s)
 
-    — four contiguous triples, all in the emitted order.  So the blocks must
-    appear counter-clockwise as NW, SW, SE, NE, and that is exactly
-    ``[NW][cluster][NE]`` over ``[SW][cluster][SE]``: down the west side, along
-    the south, up the east side.  Send NE's SWAP into the band's *east* end
-    instead and the north face reads ``NW.ADDR, NE.DATA, NE.ADDR`` — NE's triple
-    is ``(d, a, s)``, which no block emits, and the routing deadlocks against
-    itself whatever the column assignment.
+    Send NE's SWAP into the band's *east* end instead and the north face reads
+    ``NW.ADDR, NE.DATA, NE.ADDR`` — NE's triple is ``(d, a, s)``, which no block
+    emits, and the fan crosses itself whatever the column assignment.  That
+    tunnel is the whole reason :data:`GUTTER_X` is 2: one column is undrawable
+    (the east panels' DATA arrowheads have to *be* the corridor), and the second
+    is a free north-south passage NE's SWAP comes down and SE's ADDR goes up.
 
     Why the two fans have to be kept apart
     --------------------------------------
 
     The router's four legs run **east**, from outlets on its south wall to a
-    command port on each block's north wall.  The east blocks' twelve-pipe fan
-    runs **west**, from their east walls to a cluster that is west of them.  In
-    the strip immediately north of an east block the two interleave — the leg
-    ends *inside* the block's column span while every panel pipe crosses it — so
-    they cross unconditionally, and no choice of lane rows helps.
+    command port on each block's north wall.  The east blocks' six port pipes run
+    **west**, from their east walls to a cluster that is west of them.  In the
+    strip immediately north of an east block the two interleave — the leg ends
+    *inside* the block's column span while every port pipe crosses it — so they
+    cross unconditionally, and no choice of lane rows helps.
 
     The fix is that the east blocks' pipes never enter that strip: they leave the
-    east wall, run out to the east margin, and turn **away** from the command
-    lane — NE's down and back west underneath itself into the east channel, SE's
-    up and back west over itself — reaching the cluster from the channel between
-    it and the blocks.  The router's legs then have the whole northern strip to
-    themselves and are the unmodified fan :func:`build_wall` already draws.
+    east wall, run out to the east margin and turn **south**, back west
+    underneath their own block, and reach the cluster from below.  The router's
+    legs then have the northern strip to themselves.
+
+    Why the gutter is three rows and not two
+    ----------------------------------------
+
+    The T3 leg.  Its command port is the east block of the *lower* row, so its
+    lane has to cross the whole wall — and every row it could use is taken.
+    Above the cluster the west channel is full of T0's three descending pipes,
+    below it of T2's three climbing ones, and the cluster itself is 134 columns
+    of display.  The one row that is free the whole way across is the **middle**
+    of a three-row band: T0 and T1's SWAP arrowheads sit in the band's first row
+    and T2 and T3's ADDR arrowheads in its last, the tunnel is NE's above the
+    middle row and SE's below it, and nothing at all wants the row between.
+    :attr:`Cluster.lane` is that row and :data:`GUTTER_Y` is 3 to have it.
 
     Lengths, which are the other half of the geometry
     -------------------------------------------------
@@ -667,14 +684,15 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
     ``len(addr) == len(data)`` and ``len(swap) > len(data)`` are
     :func:`d3_unit.build_doom`'s invariants and they do not become optional
     because the pipes got twenty times longer: a DATA that overtakes its ADDR
-    paints the wrong pixel, and a COMMIT that arrives after the next frame's
-    first paint commits it into the wrong buffer.  Every route below therefore
-    has one free coordinate — the column an ADDR turns down into its top wall,
-    the row a DATA arrives at on its left wall, the column a SWAP rises in — and
-    they are solved for rather than chosen.  Monotone legs cannot be padded (a
-    staircase's length is its Manhattan distance), which is why the free
-    coordinate is a *terminal* one.
-    """
+    paints at the wrong cursor, and a COMMIT still in flight when the next
+    frame's first paint lands commits that pixel into the wrong buffer.  Three
+    tiles meet them with a free terminal — the column an ADDR turns down into
+    its top wall, the row a DATA arrives at on its left wall, the column a SWAP
+    rises in — solved for rather than chosen.  T3 cannot: its ADDR crosses the
+    whole cluster to the band's last row while its SWAP stops at the nearest
+    edge, and a monotone route's length is its Manhattan distance, so DATA and
+    SWAP are padded up to it with :func:`_excursion` instead.
+        """
     from . import d3_unit
     from .machine import _Grid
 
