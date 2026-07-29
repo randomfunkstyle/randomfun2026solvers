@@ -94,12 +94,19 @@ struct Program {
   }
 };
 
+// One entry per display room, in reading order (the same order the rooms were
+// declared in the request).  A display the caller is not judging carries
+// ``has_frames == false`` and an empty ``frame_rounds``.
+struct DisplayFrames {
+  bool has_frames{};
+  std::vector<std::vector<std::vector<unsigned char>>> frame_rounds;  // [round][frame][pixel]
+};
+
 struct Case {
   std::vector<std::vector<i64>> inputs;
   bool has_expected{};
   std::vector<std::vector<i64>> expected;
-  bool has_frames{};
-  std::vector<std::vector<std::vector<unsigned char>>> frame_rounds;
+  std::vector<DisplayFrames> per_display;
   std::uint64_t max_ticks{};
 };
 
@@ -193,26 +200,34 @@ bool parse_request(const char* raw, Program& p, Case& c, std::string& error) {
       for (i64& v : round) if (!readv(in, v)) { error = "truncated expected"; return false; }
     }
   }
-  int frame_flag;
-  if (!readv(in, frame_flag)) { error = "missing frame flag"; return false; }
-  c.has_frames = frame_flag != 0;
-  if (c.has_frames) {
-    if (!readv(in, rounds) || rounds < 0) { error = "bad frame rounds"; return false; }
-    c.frame_rounds.resize(rounds);
-    for (auto& round : c.frame_rounds) {
-      int frame_count;
-      if (!readv(in, frame_count) || frame_count < 0) { error = "bad frame count"; return false; }
-      round.resize(frame_count);
-      for (auto& frame : round) {
-        int pixels;
-        if (!readv(in, pixels) || pixels < 0) { error = "bad pixel count"; return false; }
-        frame.resize(pixels);
-        for (auto& pixel : frame) {
-          int value;
-          if (!readv(in, value) || value < 0 || value > 15) {
-            error = "bad frame pixel"; return false;
+  // One frame block per display room, in the same reading order the rooms
+  // were declared above -- the count is derived from the room list itself
+  // rather than sent separately, so it cannot desync from it.
+  int n_displays = 0;
+  for (const auto& r : p.rooms) if (r.kind == 3) ++n_displays;
+  c.per_display.resize(n_displays);
+  for (auto& pd : c.per_display) {
+    int frame_flag;
+    if (!readv(in, frame_flag)) { error = "missing frame flag"; return false; }
+    pd.has_frames = frame_flag != 0;
+    if (pd.has_frames) {
+      if (!readv(in, rounds) || rounds < 0) { error = "bad frame rounds"; return false; }
+      pd.frame_rounds.resize(rounds);
+      for (auto& round : pd.frame_rounds) {
+        int frame_count;
+        if (!readv(in, frame_count) || frame_count < 0) { error = "bad frame count"; return false; }
+        round.resize(frame_count);
+        for (auto& frame : round) {
+          int pixels;
+          if (!readv(in, pixels) || pixels < 0) { error = "bad pixel count"; return false; }
+          frame.resize(pixels);
+          for (auto& pixel : frame) {
+            int value;
+            if (!readv(in, value) || value < 0 || value > 15) {
+              error = "bad frame pixel"; return false;
+            }
+            pixel = static_cast<unsigned char>(value);
           }
-          pixel = static_cast<unsigned char>(value);
         }
       }
     }
@@ -227,12 +242,21 @@ struct Result {
   bool halted{}, passed_known{}, passed{};
   std::string reason, fatal;
   Pos fatal_pos{-1, -1};
+  // Every frame each display committed (SWAP, value 0 or 1), regardless of
+  // whether that display was being judged.  One list per display room, in
+  // reading order.
+  std::vector<std::vector<std::vector<unsigned char>>> committed_by_display;
 };
 
 struct Display {
   int room{}, width{}, height{}, cursor{};
   std::vector<unsigned char> current, next;
   int pid[3]{-1, -1, -1};  // 0 top/ADDR, 1 left/DATA, 2 bottom/SWAP.
+  bool has_frames{};
+  std::vector<std::vector<unsigned char>> expected_frames;
+  std::vector<std::size_t> cumulative;  // expected-frame count after each round
+  std::size_t matched_frames{};
+  std::vector<std::vector<unsigned char>> committed;  // every commit, unconditionally
 };
 
 // Performance notes.  The tick loop is exactly the reference semantics
@@ -275,6 +299,7 @@ class Machine {
           out_pipes.push_back(static_cast<int>(i));
         }
     std::vector<std::size_t> spawn_rooms;
+    std::size_t display_index = 0;
     for (std::size_t rid = 0; rid < p.rooms.size(); ++rid) {
       const auto& room = p.rooms[rid];
       if (room.kind == 0 && room.sx >= 0) spawn_rooms.push_back(rid);
@@ -287,8 +312,26 @@ class Machine {
              {display_pipe(static_cast<int>(rid), 0),
               display_pipe(static_cast<int>(rid), 1),
               display_pipe(static_cast<int>(rid), 2)}});
+        // Displays are visited here in the same reading order the request's
+        // per-display frame blocks were sent in, so index i lines up with
+        // c.per_display[i] without needing to send the index explicitly.
+        if (display_index < c.per_display.size()) {
+          Display& d = displays.back();
+          const auto& pd = c.per_display[display_index];
+          d.has_frames = pd.has_frames;
+          if (pd.has_frames) {
+            for (const auto& round : pd.frame_rounds) {
+              for (const auto& frame : round) d.expected_frames.push_back(frame);
+              d.cumulative.push_back(d.expected_frames.size());
+            }
+          }
+        }
+        ++display_index;
       }
     }
+    for (const auto& d : displays) if (d.has_frames) ++judged_displays;
+    any_display_has_frames = judged_displays > 0;
+    single_judged = judged_displays == 1;
     // Initial creation order follows the @ cells in row-major order, not room
     // discovery order. A later Y split retains the parent's position here.
     std::sort(spawn_rooms.begin(), spawn_rooms.end(), [&](std::size_t a, std::size_t b) {
@@ -317,17 +360,17 @@ class Machine {
       for (std::size_t i = 0; i < runners.size(); ++i)
         runner_at[p.flat(runners[i].pos)] = static_cast<std::int32_t>(i);
     }
-    if (!c.has_expected && !c.has_frames) {
+    // Round-gated input release keyed to frame commits is only defined here
+    // for a single judged display (every existing caller judges at most
+    // one).  With more than one display judged at once there is no single
+    // commit stream to gate rounds against, so every input round releases
+    // upfront instead -- same as the no-judging case.
+    if (!c.has_expected && !single_judged) {
       for (const auto& round : c.inputs) for (i64 v : round) input.push_back(v);
     } else if (!c.inputs.empty()) {
       for (i64 v : c.inputs[0]) input.push_back(v);
     }
-    if (c.has_frames) {
-      for (const auto& round : c.frame_rounds) {
-        for (const auto& frame : round) expected_frames.push_back(frame);
-        cumulative.push_back(expected_frames.size());
-      }
-    } else {
+    if (!single_judged) {
       for (const auto& round : c.expected) {
         expected.insert(expected.end(), round.begin(), round.end());
         cumulative.push_back(expected.size());
@@ -339,9 +382,9 @@ class Machine {
   Result run() {
     while (step < c.max_ticks) {
       if (!fatal.empty()) return finish(fatal, true, false);
-      if (c.has_frames && matched_frames >= expected_frames.size())
+      if (any_display_has_frames && all_judged_matched())
         return finish("output-settled", true, output.empty());
-      if (!c.has_frames && c.has_expected && output.size() >= expected.size())
+      if (!any_display_has_frames && c.has_expected && output.size() >= expected.size())
         return finish("output-settled", true, true);
       if (live == 0 && !output_in_flight()) {
         bool known = c.has_expected;
@@ -375,18 +418,28 @@ class Machine {
   std::vector<int> out_pipes;
   std::deque<i64> input;
   std::vector<i64> output, expected;
-  std::vector<std::vector<unsigned char>> expected_frames;
-  std::size_t matched_frames{};
-  std::vector<std::size_t> cumulative;
+  std::vector<std::size_t> cumulative;  // output-judged rounds only; frame rounds live on Display
   std::size_t released{};
+  std::size_t judged_displays{};
+  bool any_display_has_frames{};
+  bool single_judged{};
   std::uint64_t step{};
   std::string fatal;
   Pos fatal_pos{-1, -1};
 
+  bool all_judged_matched() const {
+    for (const auto& d : displays)
+      if (d.has_frames && d.matched_frames < d.expected_frames.size()) return false;
+    return true;
+  }
+
   Result finish(std::string reason, bool known, bool pass) {
     bool halted = true;
     for (const auto& r : runners) halted &= r.halted;
-    return {output, step, halted, known, pass, std::move(reason), fatal, fatal_pos};
+    Result r{output, step, halted, known, pass, std::move(reason), fatal, fatal_pos};
+    r.committed_by_display.reserve(displays.size());
+    for (const auto& d : displays) r.committed_by_display.push_back(d.committed);
+    return r;
   }
   bool output_in_flight() const {
     for (int pid : out_pipes) if (!vals[pid].empty()) return true;
@@ -494,8 +547,22 @@ class Machine {
     }
   }
   void release_satisfied() {
-    std::size_t progress = c.has_frames ? matched_frames : output.size();
-    while (released < cumulative.size() && progress >= cumulative[released]) {
+    // Round-gated release against frame commits only has a well-defined
+    // single stream to follow when exactly one display is judged (see the
+    // constructor comment); the multi-display case releases everything
+    // upfront instead, so this is a no-op for it (cumulative stays empty).
+    std::size_t progress;
+    const std::vector<std::size_t>* cum;
+    if (single_judged) {
+      const Display* judged = nullptr;
+      for (const auto& d : displays) if (d.has_frames) { judged = &d; break; }
+      progress = judged->matched_frames;
+      cum = &judged->cumulative;
+    } else {
+      progress = output.size();
+      cum = &cumulative;
+    }
+    while (released < cum->size() && progress >= (*cum)[released]) {
       ++released;
       if (released < c.inputs.size())
         for (i64 item : c.inputs[released]) input.push_back(item);
@@ -540,12 +607,15 @@ class Machine {
           std::fill(display.next.begin(), display.next.end(), 0);
           display.cursor = 0;
         }
-        if (c.has_frames) {
-          if (matched_frames >= expected_frames.size() ||
-              display.current != expected_frames[matched_frames]) {
+        // Every commit is recorded, whether or not this display is judged --
+        // that is what frames_per_display() on the Python side reports.
+        display.committed.push_back(display.current);
+        if (display.has_frames) {
+          if (display.matched_frames >= display.expected_frames.size() ||
+              display.current != display.expected_frames[display.matched_frames]) {
             die("wrong-frame", {-1, -1}); return;
           }
-          ++matched_frames;
+          ++display.matched_frames;
           release_satisfied();
         }
       }
@@ -779,6 +849,18 @@ std::string encode(const Result& r) {
       << r.passed << ' ' << r.reason << ' ' << (r.fatal.empty() ? "-" : r.fatal)
       << ' ' << r.fatal_pos.x << ' ' << r.fatal_pos.y << ' ' << r.output.size();
   for (i64 value : r.output) out << ' ' << value;
+  // Trailing section: one committed-frame list per display, in reading
+  // order.  Existing callers' response parsing stops at the output values
+  // above (it reads exactly ``count`` of them), so this is additive and does
+  // not change what they see.
+  out << ' ' << r.committed_by_display.size();
+  for (const auto& frames : r.committed_by_display) {
+    out << ' ' << frames.size();
+    for (const auto& frame : frames) {
+      out << ' ' << frame.size();
+      for (unsigned char pixel : frame) out << ' ' << static_cast<int>(pixel);
+    }
+  }
   return out.str();
 }
 

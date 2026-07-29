@@ -40,6 +40,8 @@ MAX_RUNNERS = 65_536
 
 Cell = tuple[int, int]
 Dir = tuple[int, int]
+# A single display's own judged content: rounds of frames of hex-digit rows.
+FrameSpec = Sequence[Sequence[Sequence[str]]]
 EAST: Dir = (1, 0)
 SOUTH: Dir = (0, 1)
 WEST: Dir = (-1, 0)
@@ -147,10 +149,21 @@ class FastResult:
     fatal_pos: Cell | None = None
     passed: bool | None = None
     frames: list[list[str]] = field(default_factory=list)
+    _frames_by_display: list[list[list[str]]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return self.fatal is None and self.passed is not False
+
+    def frames_per_display(self) -> list[list[list[str]]]:
+        """Every frame each display committed, one list per display room, reading order.
+
+        Populated regardless of whether ``frames=`` was passed to :meth:`FastLittleman.run`
+        for judging: this reports what was actually drawn, not what was expected.
+        ``frames`` above is the single-display convenience — the same data, unwrapped —
+        for the (only previously supported) case of exactly one display room.
+        """
+        return self._frames_by_display
 
 
 class FastLittleman:
@@ -491,7 +504,7 @@ class FastLittleman:
         input: str | Sequence[int] | None = None,
         *,
         expected: str | Sequence[int] | None = None,
-        frames: Sequence[Sequence[Sequence[str]]] | None = None,
+        frames: FrameSpec | Sequence[FrameSpec | None] | None = None,
         max_ticks: int = 5_000_000,
         native: bool = True,
     ) -> FastResult:
@@ -500,18 +513,29 @@ class FastLittleman:
         Slash-separated strings implement judge round gating.  Plain sequences
         are a single round.  When ``expected`` is supplied, later input rounds
         are released only after the preceding expected round has been emitted.
+
+        ``frames`` judges committed display frames against expected content.
+        A program with exactly one display room takes that display's own
+        sequence of rounds directly (the original, single-display calling
+        convention).  A program with more display rooms takes one such
+        sequence per room, in reading order; ``None`` in a slot leaves that
+        display unjudged.  Regardless of ``frames``, every display's actually
+        committed frames are available afterwards via
+        :meth:`FastResult.frames_per_display`.
         """
         input_rounds = self._parse_round_values(input)
         expected_rounds = self._parse_round_values(expected) if expected is not None else None
-        frame_rounds = self._parse_frame_rounds(frames)
+        frame_rounds_by_display = self._parse_frame_rounds(frames)
         if native:
             try:
-                return self._run_native(input_rounds, expected_rounds, frame_rounds, max_ticks)
+                return self._run_native(
+                    input_rounds, expected_rounds, frame_rounds_by_display, max_ticks
+                )
             except (OSError, subprocess.SubprocessError):
                 # A compiler is optional for portability.  The independent
                 # Python engine remains a correct (but slower) fallback.
                 pass
-        if frame_rounds is not None:
+        if frame_rounds_by_display is not None:
             raise FastLittlemanError("display judging requires the native backend")
         machine = _Machine(self, input_rounds, expected_rounds)
         return machine.run(max_ticks)
@@ -520,11 +544,13 @@ class FastLittleman:
         self,
         input_rounds: list[list[int]],
         expected_rounds: list[list[int]] | None,
-        frame_rounds: list[list[list[int]]] | None,
+        frame_rounds_by_display: list[list[list[list[int]]] | None] | None,
         max_ticks: int,
     ) -> FastResult:
         lib = _native_library()
-        request = self._native_request(input_rounds, expected_rounds, frame_rounds, max_ticks)
+        request = self._native_request(
+            input_rounds, expected_rounds, frame_rounds_by_display, max_ticks
+        )
         ptr = lib.flm_run(request.encode("ascii"))
         if not ptr:
             raise OSError("native Little Man runner could not allocate its result")
@@ -545,9 +571,11 @@ class FastLittleman:
         fatal = None if fields[6] == "-" else fields[6]
         fatal_pos_raw = (int(fields[7]), int(fields[8]))
         count = int(fields[9])
-        output = [int(value) for value in fields[10:]]
+        output_end = 10 + count
+        output = [int(value) for value in fields[10:output_end]]
         if len(output) != count:
             raise FastLittlemanError("native runner returned a truncated output list")
+        frames_by_display = self._decode_committed_frames(fields, output_end)
         return FastResult(
             output=output,
             step=step,
@@ -556,13 +584,43 @@ class FastLittleman:
             fatal=fatal,
             fatal_pos=None if fatal_pos_raw == (-1, -1) else fatal_pos_raw,
             passed=passed,
+            # The single-display convenience: unambiguous only when there is
+            # exactly one display room, which is every existing caller.
+            frames=frames_by_display[0] if len(frames_by_display) == 1 else [],
+            _frames_by_display=frames_by_display,
         )
+
+    def _decode_committed_frames(self, fields: list[str], start: int) -> list[list[list[str]]]:
+        """Parse the response's trailing per-display committed-frame section."""
+        idx = start
+        n_displays = int(fields[idx])
+        idx += 1
+        result: list[list[list[str]]] = []
+        for room_id in self.display_rooms[:n_displays]:
+            room = self.rooms[room_id]
+            width = room.max[0] - room.min[0] - 1
+            height = room.max[1] - room.min[1] - 1
+            n_frames = int(fields[idx])
+            idx += 1
+            frames: list[list[str]] = []
+            for _ in range(n_frames):
+                n_pixels = int(fields[idx])
+                idx += 1
+                pixels = fields[idx : idx + n_pixels]
+                idx += n_pixels
+                rows = [
+                    "".join(format(int(p), "x") for p in pixels[row * width : (row + 1) * width])
+                    for row in range(height)
+                ]
+                frames.append(rows)
+            result.append(frames)
+        return result
 
     def _native_request(
         self,
         input_rounds: list[list[int]],
         expected_rounds: list[list[int]] | None,
-        frame_rounds: list[list[list[int]]] | None,
+        frame_rounds_by_display: list[list[list[list[int]]] | None] | None,
         max_ticks: int,
     ) -> str:
         values: list[int | str] = ["FLM1", self.width, self.height]
@@ -610,13 +668,20 @@ class FastLittleman:
             values.append(len(expected_rounds))
             for round_values in expected_rounds:
                 values.extend((len(round_values), *round_values))
-        values.append(1 if frame_rounds is not None else 0)
-        if frame_rounds is not None:
-            values.append(len(frame_rounds))
-            for round_frames in frame_rounds:
-                values.append(len(round_frames))
-                for frame in round_frames:
-                    values.extend((len(frame), *frame))
+        # One block per display room, in reading order; the count itself is
+        # not sent because the native side derives it from the room list
+        # above, so it cannot desync from it.
+        display_specs = frame_rounds_by_display
+        if display_specs is None:
+            display_specs = [None] * len(self.display_rooms)
+        for spec in display_specs:
+            values.append(1 if spec is not None else 0)
+            if spec is not None:
+                values.append(len(spec))
+                for round_frames in spec:
+                    values.append(len(round_frames))
+                    for frame in round_frames:
+                        values.extend((len(frame), *frame))
         values.append(max_ticks)
         return " ".join(str(value) for value in values)
 
@@ -633,32 +698,55 @@ class FastLittleman:
 
     def _parse_frame_rounds(
         self,
-        frames: Sequence[Sequence[Sequence[str]]] | None,
-    ) -> list[list[list[int]]] | None:
+        frames: FrameSpec | Sequence[FrameSpec | None] | None,
+    ) -> list[list[list[list[int]]] | None] | None:
+        """Parse ``frames`` into one optional round list per display, in reading order.
+
+        A program with exactly one display keeps the original calling
+        convention: ``frames`` is that display's own sequence of rounds
+        directly, not wrapped in an extra list. A program with more display
+        rooms takes one such sequence per room instead (``None`` for an
+        unjudged display).
+        """
         if frames is None:
             return None
         display_ids = self.display_rooms
-        if len(display_ids) != 1:
-            raise FastLittlemanError(
-                f"display judging needs exactly one display, found {len(display_ids)}"
-            )
-        room = self.rooms[display_ids[0]]
-        width = room.max[0] - room.min[0] - 1
-        height = room.max[1] - room.min[1] - 1
-        parsed: list[list[list[int]]] = []
-        for round_frames in frames:
-            parsed_round: list[list[int]] = []
-            for frame in round_frames:
-                if len(frame) != height or any(len(str(row)) != width for row in frame):
-                    raise FastLittlemanError(
-                        f"expected frame is not {width}x{height}"
-                    )
-                try:
-                    pixels = [int(ch, 16) for row in frame for ch in str(row)]
-                except ValueError as exc:
-                    raise FastLittlemanError("expected frame contains a non-hex color") from exc
-                parsed_round.append(pixels)
-            parsed.append(parsed_round)
+        if not display_ids:
+            raise FastLittlemanError("display judging requires a display room")
+        if len(display_ids) == 1:
+            per_display: list[FrameSpec | None] = [frames]  # type: ignore[list-item]
+        else:
+            per_display = list(frames)  # type: ignore[arg-type]
+            if len(per_display) != len(display_ids):
+                raise FastLittlemanError(
+                    f"expected one frame spec per display ({len(display_ids)}), "
+                    f"got {len(per_display)}"
+                )
+        parsed: list[list[list[list[int]]] | None] = []
+        for room_id, spec in zip(display_ids, per_display, strict=True):
+            if spec is None:
+                parsed.append(None)
+                continue
+            room = self.rooms[room_id]
+            width = room.max[0] - room.min[0] - 1
+            height = room.max[1] - room.min[1] - 1
+            parsed_rounds: list[list[list[int]]] = []
+            for round_frames in spec:
+                parsed_round: list[list[int]] = []
+                for frame in round_frames:
+                    if len(frame) != height or any(len(str(row)) != width for row in frame):
+                        raise FastLittlemanError(
+                            f"expected frame is not {width}x{height}"
+                        )
+                    try:
+                        pixels = [int(ch, 16) for row in frame for ch in str(row)]
+                    except ValueError as exc:
+                        raise FastLittlemanError(
+                            "expected frame contains a non-hex color"
+                        ) from exc
+                    parsed_round.append(pixels)
+                parsed_rounds.append(parsed_round)
+            parsed.append(parsed_rounds)
         return parsed
 
 
