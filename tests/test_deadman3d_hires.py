@@ -199,11 +199,16 @@ def test_the_packed_wall_is_one_screen_and_not_four_monitors() -> None:
     columns and 59 rows apart — the machine paints a 128x96 picture across four
     monitors scattered over the grid.  ``build_packed_wall`` takes the panels
     off the blocks and puts them in one cluster, and the gutter is the thing
-    worth pinning: two free columns (``panel_pack.py``'s sweep says one is
-    undrawable, because the east panel's DATA arrowhead has nowhere to sit) and
-    six free rows — the first carries the north panels' SWAP arrowheads, the last
-    the south panels' ADDR arrowheads, and the four between are the approach
-    lanes for the four pipes that turn south at four different columns.
+    worth pinning, because it *is* the seam a viewer sees: two free columns
+    (``panel_pack.py``'s sweep says one is undrawable, because the east panel's
+    DATA arrowhead has nowhere to sit) and **three** free rows — the first
+    carries the north panels' SWAP arrowheads, the last the south panels' ADDR
+    arrowheads, and the one between is the lane SE's ADDR turns on.
+
+    Three is a requirement, not a search result.  It was briefly six, because a
+    subsystem sweep scored on the wall's bounding box and a wider band bought
+    shorter legs; the bounding box is not scored for this family and the seam is
+    what the demo is a picture *of*, so the band is pinned here.
     """
     from randomfun2026solvers.lm1 import d3_router, d3_unit
 
@@ -213,9 +218,9 @@ def test_the_packed_wall_is_one_screen_and_not_four_monitors() -> None:
     assert nw[1] == ne[1] and sw[1] == se[1]  # two rows of two
     assert nw[0] == sw[0] and ne[0] == se[0]
     assert ne[0] - (nw[0] + pw) == d3_router.GUTTER_X == 2
-    assert sw[1] - (nw[1] + ph) == d3_router.GUTTER_Y == 6
+    assert sw[1] - (nw[1] + ph) == d3_router.GUTTER_Y == 3
     # ...and the cluster really is the whole screen, walls included
-    assert wall.regions["cluster"][2:] == (2 * pw + 2, 2 * ph + 6) == (134, 106)
+    assert wall.regions["cluster"][2:] == (2 * pw + 2, 2 * ph + 3) == (134, 103)
     # the panels are in tile order, which is also the engine's reading order,
     # which is what `display.tiled_frames_from_writes` composes by
     assert wall.panels == sorted(wall.panels, key=lambda p: (p[1], p[0]))
