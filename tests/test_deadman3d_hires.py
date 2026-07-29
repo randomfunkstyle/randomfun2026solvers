@@ -201,8 +201,9 @@ def test_the_packed_wall_is_one_screen_and_not_four_monitors() -> None:
     off the blocks and puts them in one cluster, and the gutter is the thing
     worth pinning: two free columns (``panel_pack.py``'s sweep says one is
     undrawable, because the east panel's DATA arrowhead has nowhere to sit) and
-    three free rows (two would work for the *panels*, but the middle one is the
-    only east-west way through the cluster and the T3 command leg needs it).
+    six free rows — the first carries the north panels' SWAP arrowheads, the last
+    the south panels' ADDR arrowheads, and the four between are the approach
+    lanes for the four pipes that turn south at four different columns.
     """
     from randomfun2026solvers.lm1 import d3_router, d3_unit
 
@@ -212,9 +213,9 @@ def test_the_packed_wall_is_one_screen_and_not_four_monitors() -> None:
     assert nw[1] == ne[1] and sw[1] == se[1]  # two rows of two
     assert nw[0] == sw[0] and ne[0] == se[0]
     assert ne[0] - (nw[0] + pw) == d3_router.GUTTER_X == 2
-    assert sw[1] - (nw[1] + ph) == d3_router.GUTTER_Y == 3
+    assert sw[1] - (nw[1] + ph) == d3_router.GUTTER_Y == 6
     # ...and the cluster really is the whole screen, walls included
-    assert wall.regions["cluster"][2:] == (2 * pw + 2, 2 * ph + 3) == (134, 103)
+    assert wall.regions["cluster"][2:] == (2 * pw + 2, 2 * ph + 6) == (134, 106)
     # the panels are in tile order, which is also the engine's reading order,
     # which is what `display.tiled_frames_from_writes` composes by
     assert wall.panels == sorted(wall.panels, key=lambda p: (p[1], p[0]))
