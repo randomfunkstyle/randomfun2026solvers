@@ -772,9 +772,12 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
     rows_n = range(py0 + 1, py0 + d3_unit.PANEL_H + 1)  # the north panels' interior
     rows_s = range(py3 + 1, py3 + d3_unit.PANEL_H + 1)  # the south panels' interior
 
-    # ── T0, the north-west panel.  Its block is due west of the cluster, so
-    #    ADDR runs straight along the row above the top wall, DATA straight
-    #    into the left wall, and SWAP drops one column into the band ─────────
+    # ── T0, the north-west panel.  Its block is due west of the cluster and a
+    #    whole block row above it, so all three simply descend the channel —
+    #    ADDR to the row above the top wall, DATA into the left wall, SWAP to
+    #    the band's first row.  Their descent columns are ordered by target,
+    #    ``c1`` for the deepest: a pipe's own east-wall run would otherwise
+    #    cross the descent of a pipe that leaves above it ────────────────────
     a0, d0, s0 = (port(0, b) for b in ("addr", "data", "swap"))
     pipe(0, "addr", [a0, (c3, a0[1]), (c3, cl.north), (px0 + 3, cl.north)], end="v")
     la = lengths[0, "addr"]
@@ -824,6 +827,9 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
     #    SWAP from the north ─────────────────────────────────────────────────
     a3, d3, s3 = (port(3, b) for b in ("addr", "data", "swap"))
     p1, p2, p3 = (PACK_ROW_S + lg.height + i for i in range(3))  # under the block
+    # Where the two padded pipes double back: four rows inside the bottom block
+    # row's own band, which is empty everywhere between the two logic columns.
+    e1, e2, e3, e4 = (PACK_ROW_S + 3 + 10 * i for i in range(4))
     # ADDR is the longest of the three by construction — it alone crosses the
     # whole cluster to the band's last row, and its margin column and its
     # westward row are both forced outermost by the other two — so on this tile
@@ -835,15 +841,18 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
     pipe(3, "addr", [a3, (m3, a3[1]), (m3, p3), (cl.tunnel, p3),
                      (cl.tunnel, cl.band[1]), (px3 + 1, cl.band[1])], end="v")
     la = lengths[3, "addr"]
-    sx = px3 + 25  # SWAP's climb, east of DATA's excursion and west of its own
+    # SWAP climbs far enough east to leave DATA's excursion room west of it,
+    # and takes three excursions to DATA's one because it is the shorter route
+    # and has the further to be padded.
+    sx = px3 + 25
     pipe(3, "data", solve(
         lambda w: [d3, (m2, d3[1]), (m2, p2), (cl.corridor, p2),
-                   *_excursion(cl.corridor, 250, w), (cl.corridor, rows_s.start)],
+                   *_excursion(cl.corridor, e4, w), (cl.corridor, rows_s.start)],
         range(1, sx - cl.corridor - 1), lambda n: n == la, "DATA excursion"), end=">")
     pipe(3, "swap", solve(
         lambda w: [s3, (m1, s3[1]), (m1, p1), (sx, p1),
-                   *_excursion(sx, 240, w), *_excursion(sx, 230, w),
-                   *_excursion(sx, 220, w), (sx, cl.south)],
+                   *_excursion(sx, e3, w), *_excursion(sx, e2, w),
+                   *_excursion(sx, e1, w), (sx, cl.south)],
         range(1, cols_e.stop - sx), lambda n: n >= la + SWAP_LEAD, "SWAP excursion"))
 
     _check_lengths(lengths)
