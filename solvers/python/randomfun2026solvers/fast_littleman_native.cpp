@@ -232,6 +232,20 @@ bool parse_request(const char* raw, Program& p, Case& c, std::string& error) {
       }
     }
   }
+  // Round-gated input release (see the Machine constructor) only has a single
+  // commit stream to follow when at most one display is judged at a time.
+  // Rather than silently falling back to an upfront release that the caller
+  // never asked for, refuse the combination outright when it would matter --
+  // i.e. when there is more than one round of input to gate in the first
+  // place. A judged program with 0 or 1 input rounds has nothing for
+  // round-gating to do, so it is not refused.
+  int judged_displays = 0;
+  for (const auto& pd : c.per_display) if (pd.has_frames) ++judged_displays;
+  if (judged_displays > 1 && c.inputs.size() > 1) {
+    error = "round-gated input release is not supported when more than one "
+            "display is judged at once";
+    return false;
+  }
   if (!readv(in, c.max_ticks)) { error = "missing tick cap"; return false; }
   return true;
 }

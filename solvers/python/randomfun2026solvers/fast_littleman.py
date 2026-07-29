@@ -150,6 +150,7 @@ class FastResult:
     passed: bool | None = None
     frames: list[list[str]] = field(default_factory=list)
     _frames_by_display: list[list[list[str]]] = field(default_factory=list)
+    _native: bool = True
 
     @property
     def ok(self) -> bool:
@@ -162,7 +163,30 @@ class FastResult:
         for judging: this reports what was actually drawn, not what was expected.
         ``frames`` above is the single-display convenience — the same data, unwrapped —
         for the (only previously supported) case of exactly one display room.
+
+        Two things this does **not** promise:
+
+        * It requires the native backend. A result from the pure-Python fallback
+          (``run(..., native=False)``, or a native build that failed and fell back
+          silently) has no captured content at all, and raises here rather than
+          returning an empty list that would be indistinguishable from "nothing was
+          drawn."
+        * It can under-report by a commit. The engine treats a run as finished once
+          every runner has halted with no *output* in flight (``live == 0 and not
+          output_in_flight()``) — display pipes are not drained for that check. A
+          SWAP value still travelling its pipe at that instant never reaches
+          ``execute_displays()`` and is not recorded, even though the reference wasm
+          engine (which keeps stepping until nothing changes) does commit it. This is
+          pre-existing engine behaviour, not something this accessor changes; see
+          ``littleman/examples/panel-latency-swap-equal.man`` and the test pinning it
+          in ``tests/test_mnist_display.py``.
         """
+        if not self._native:
+            raise FastLittlemanError(
+                "frames_per_display() requires the native backend; this result came "
+                "from the pure-Python fallback (native=False), which does not "
+                "capture display frames"
+            )
         return self._frames_by_display
 
 
@@ -707,6 +731,18 @@ class FastLittleman:
         directly, not wrapped in an extra list. A program with more display
         rooms takes one such sequence per room instead (``None`` for an
         unjudged display).
+
+        Which shape applies is decided by ``len(self.display_rooms)`` — a static
+        property of the parsed program — never by the shape or length of ``frames``
+        itself. That still leaves one real hazard: for more than one display, a
+        caller who passes the *old* single-display shape by mistake (a flat
+        sequence of rounds meant for one display) is silently one level too
+        shallow, and if that sequence happens to have exactly as many rounds as
+        there are displays, the length check alone would not catch it — each round
+        would be accepted as if it were a whole display's spec. Every level below
+        is explicitly typed (frame rows are always ``str``; rounds and frames are
+        never ``str``), so a mis-nested shape is caught here instead of quietly
+        judging the wrong data.
         """
         if frames is None:
             return None
@@ -716,6 +752,11 @@ class FastLittleman:
         if len(display_ids) == 1:
             per_display: list[FrameSpec | None] = [frames]  # type: ignore[list-item]
         else:
+            if isinstance(frames, str):
+                raise FastLittlemanError(
+                    "frames= must be one spec per display for a multi-display "
+                    "program, not a single sequence"
+                )
             per_display = list(frames)  # type: ignore[arg-type]
             if len(per_display) != len(display_ids):
                 raise FastLittlemanError(
@@ -727,19 +768,41 @@ class FastLittleman:
             if spec is None:
                 parsed.append(None)
                 continue
+            if isinstance(spec, str):
+                raise FastLittlemanError(
+                    f"frame spec for display {room_id} is a string, not a sequence of rounds"
+                )
             room = self.rooms[room_id]
             width = room.max[0] - room.min[0] - 1
             height = room.max[1] - room.min[1] - 1
             parsed_rounds: list[list[list[int]]] = []
             for round_frames in spec:
+                if isinstance(round_frames, str):
+                    raise FastLittlemanError(
+                        f"frame spec for display {room_id} is nested one level too "
+                        "shallow: expected a sequence of rounds, each a sequence of "
+                        "frames, but found a bare row string where a round belongs "
+                        "(the classic sign of passing a single-display spec to a "
+                        "multi-display program whose round count happens to match "
+                        "the display count)"
+                    )
                 parsed_round: list[list[int]] = []
                 for frame in round_frames:
-                    if len(frame) != height or any(len(str(row)) != width for row in frame):
+                    if isinstance(frame, str):
+                        raise FastLittlemanError(
+                            f"frame spec for display {room_id} is nested one level "
+                            "too shallow: expected each round to be a sequence of "
+                            "frames, each frame a sequence of row strings, but found "
+                            "a bare row string where a frame belongs"
+                        )
+                    if len(frame) != height or any(
+                        not isinstance(row, str) or len(row) != width for row in frame
+                    ):
                         raise FastLittlemanError(
                             f"expected frame is not {width}x{height}"
                         )
                     try:
-                        pixels = [int(ch, 16) for row in frame for ch in str(row)]
+                        pixels = [int(ch, 16) for row in frame for ch in row]
                     except ValueError as exc:
                         raise FastLittlemanError(
                             "expected frame contains a non-hex color"
@@ -875,6 +938,7 @@ class _Machine:
             fatal=self.fatal,
             fatal_pos=self.fatal_pos,
             passed=passed,
+            _native=False,
         )
 
     def _output_in_flight(self) -> bool:
