@@ -163,9 +163,26 @@ class SpillRing:
 class StreamUnit:
     """A model of ``stream.py``'s STREAM block — three rings and an adder.
 
-    One command word per request, ``8 * arg + code``: exactly what the real unit's
-    decode trie reads, down to using *floored* division for the argument so a
-    negative one survives (``SPEC.md``'s ``/``) and a raw low-bit test for the code.
+    One command word per request, ``arg * 2**trie_bits + code``: exactly what the
+    real unit's decode trie reads, down to using *floored* division for the
+    argument so a negative one survives (``SPEC.md``'s ``/``) and a raw low-bit
+    test for the code.
+
+    ``trie_bits`` is a property of *this instance* — of how the unit was built —
+    not of the word it is handed, because that is what the real hardware's decode
+    trie is: fixed depth, wired in once. ``matmul`` was built against a depth-3
+    trie (``8 * arg + code``, the original eight arms, codes 0..7) and must see
+    that forever; this machine's training loop needs four more arms and is built
+    against a depth-4 trie (``16 * arg + code``, codes 0..11, four spare leaves).
+    There is deliberately no single decode that serves both widths at once: at 3
+    bits, ``word % 8`` is always < 8, so codes 8..15 are structurally unreachable
+    (``PUSHA`` with ``arg=42`` encodes to word 344, which a 3-bit trie reads back
+    as ``EMIT(43)``); at 4 bits, every *existing* word built from an odd ``arg``
+    aliases into a different arm (``FILLA`` with ``arg=35`` is word 283 — ``(35,
+    3)`` at mod 8, ``(17, 11)`` at mod 16 — and ``matmul``'s shipped cases exercise
+    odd ``arg`` for exactly this reason). No residue-sniffing hybrid rescues
+    either direction, so the width is chosen once, at construction, like the real
+    trie is.
 
     The rings are plain deques, because a rotate-only FIFO is nothing more than
     that. What the model does *not* have is the hardware's finite capacity, so it
@@ -180,7 +197,10 @@ class StreamUnit:
 
     #: arm -> command code, mirroring :func:`stream.arm_codes`, which derives them
     #: from the trie's geometry. The tests assert the two tables are equal: move a
-    #: leaf and this has to move with it.
+    #: leaf and this has to move with it. Codes 0..7 are the original eight — the
+    #: only ones a depth-3 (``trie_bits=3``) unit, i.e. ``matmul``'s, ever sees.
+    #: Codes 8..11 are new, reachable only from a depth-4 (``trie_bits=4``) unit;
+    #: 12..15 are spare leaves on that trie, deliberately left unassigned.
     CODES = {
         "EMIT": 0,
         "FILLB": 1,
@@ -190,11 +210,21 @@ class StreamUnit:
         "DRAINB": 5,
         "MAC": 6,
         "RDIN": 7,
+        "PUSHA": 8,
+        "ROTB": 9,
+        "RDP": 10,
+        "UPDB": 11,
     }
 
-    def __init__(self, read_input: Callable[[], int], emit: Callable[[int], None]) -> None:
+    def __init__(
+        self,
+        read_input: Callable[[], int],
+        emit: Callable[[int], None],
+        trie_bits: int = 3,
+    ) -> None:
         self._read_input = read_input
         self._out = emit
+        self.trie_bits = trie_bits
         self.ring_a: deque[int] = deque()  # A, row-major, drained
         self.ring_b: deque[int] = deque()  # B, row-major, rotated
         self.p1: deque[int] = deque()  # accumulator: ADDER -> unit
@@ -204,8 +234,13 @@ class StreamUnit:
         self.high_a = 0
         self.high_b = 0
         self.high_c = 0
+        self.lr_shift = 12  # UPDB's weight-update shift; a test attribute, not a command field
+        self._scalar_a = 0  # the scalar most recently pushed by PUSHA, for UPDB
         self._replies: deque[int] = deque()
-        self._arms: dict[int, Callable[[int], None]] = {
+        #: The full twelve-leaf table. A ``trie_bits=3`` unit only keeps the codes
+        #: that fit in 3 bits (0..7) — the same eight arms it has always had — so a
+        #: word decoded on it can never resolve to a code outside that set.
+        all_arms: dict[int, Callable[[int], int | None]] = {
             self.CODES["RDIN"]: self._rdin,
             self.CODES["FILLA"]: self._filla,
             self.CODES["FILLB"]: self._fillb,
@@ -214,16 +249,51 @@ class StreamUnit:
             self.CODES["MAC"]: self._mac,
             self.CODES["FWD"]: self._fwd,
             self.CODES["EMIT"]: self._emit_row,
+            self.CODES["PUSHA"]: self._pusha,
+            self.CODES["ROTB"]: self._rotb,
+            self.CODES["RDP"]: self._rdp,
+            self.CODES["UPDB"]: self._updb,
         }
+        width = 1 << trie_bits
+        self._arms = {code: fn for code, fn in all_arms.items() if code < width}
 
     # ── wire protocol ────────────────────────────────────────────────────────
-    def send(self, word: int) -> None:
-        """One command word: ``8 * arg + code``."""
+    def command(self, word: int) -> int | None:
+        """Decode and run one command word against *this unit's* trie width.
+
+        The decode is ``arg, code = divmod(word, 2**trie_bits)`` — floored, so a
+        negative argument survives, exactly as the hardware's ``/`` does. This is
+        the single decode path; :meth:`send` (``matmul``'s entry point) delegates
+        here rather than duplicating it.
+        """
         self.words += 1
-        self._arms[word & 7](word >> 3)
+        arg, code = divmod(word, 1 << self.trie_bits)
+        result = self._dispatch(code, arg)
         self.high_a = max(self.high_a, len(self.ring_a))
         self.high_b = max(self.high_b, len(self.ring_b))
         self.high_c = max(self.high_c, len(self.p1), len(self.p2))
+        return result
+
+    def _dispatch(self, code: int, arg: int) -> int | None:
+        """Run one already-decoded ``(code, arg)`` pair, or refuse a code this trie lacks.
+
+        A well-formed word can never *decode* to a code this wide's ``divmod``
+        cannot produce, so this branch is unreachable from :meth:`command` alone —
+        that is exactly the point proven in this task's design notes (a 3-bit
+        trie's ``word % 8`` is always < 8; there is no word that means "code 8" to
+        it). This guard exists for the seam itself: any caller — direct dispatch,
+        a future Task 4 helper — that hands a decoded code the unit's trie was
+        never built to carry gets a clear refusal instead of a silent wrong arm.
+        """
+        if code not in self._arms:
+            raise StoreError(
+                f"STREAM: code {code} has no arm on a {self.trie_bits}-bit trie"
+            )
+        return self._arms[code](arg)
+
+    def send(self, word: int) -> None:
+        """``matmul``'s entry point: unchanged behaviour, delegating to :meth:`command`."""
+        self.command(word)
 
     def recv(self) -> int:
         if not self._replies:
@@ -231,7 +301,7 @@ class StreamUnit:
         self.words += 1
         return self._replies.popleft()
 
-    # ── arms ─────────────────────────────────────────────────────────────────
+    # ── arms (the original eight) ───────────────────────────────────────────
     def _rdin(self, _arg: int) -> None:
         self._replies.append(self._read_input())
 
@@ -266,6 +336,35 @@ class StreamUnit:
     def _emit_row(self, n: int) -> None:
         for _ in range(n):
             self._out(self._pop(self.p1, "the accumulator"))
+
+    # ── arms (the four new ones: push, rotate-tap, read-partial, update-in-place) ──
+    def _pusha(self, v: int) -> None:
+        """Put one CPU-computed scalar on ring A and remember it for a following UPDB."""
+        self.ring_a.append(v)
+        self._scalar_a = v
+
+    def _rotb(self, n: int) -> None:
+        """Rotate ring B by ``n`` without touching the accumulator — a tap-offset move."""
+        for _ in range(n):
+            self.ring_b.append(self._pop(self.ring_b, "ring B"))
+
+    def _rdp(self, _arg: int) -> int:
+        """Pop one partial sum off P1 and hand it back to the CPU directly."""
+        return self._pop(self.p1, "the accumulator")
+
+    def _updb(self, n: int) -> None:
+        """A rank-one weight update: ``W[j] -= (a * g[j]) >> lr_shift``, ``n`` times.
+
+        ``g`` circulates onto P2 rather than being consumed, because the same
+        gradient ring feeds every weight row in the training loop, not just this
+        one pass over ring B.
+        """
+        a = self._scalar_a
+        for _ in range(n):
+            b = self._pop(self.ring_b, "ring B")
+            g = self._pop(self.p1, "the accumulator")
+            self.p2.append(g)
+            self.ring_b.append(b - ((a * g) >> self.lr_shift))
 
     @staticmethod
     def _pop(ring: deque[int], what: str) -> int:

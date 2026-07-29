@@ -53,9 +53,18 @@ def test_arm_codes_come_from_the_tries_geometry() -> None:
     to the west, so each west branch sets that level's bit. If a leaf moves, these
     numbers move with it, and the emulator's model would silently dispatch to the
     wrong arm — hence the equality against :attr:`StreamUnit.CODES`.
+
+    ``stream.arm_codes()`` reads a depth-3 trie — the eight leaves this grid
+    actually has; the four PUSHA/ROTB/RDP/UPDB codes are a depth-4 unit's, modelled
+    in :class:`StreamUnit` ahead of the grid that will build them (a later task).
+    So the equality is against the depth-3 *subset* of the model's table, not the
+    whole of it: comparing against the full table would fail the moment the model
+    grew arms this grid doesn't have yet, which is exactly the state pinning the
+    semantics first is supposed to produce.
     """
     codes = stream.arm_codes()
-    assert codes == StreamUnit.CODES
+    depth_3_codes = {arm: code for arm, code in StreamUnit.CODES.items() if code < 8}
+    assert codes == depth_3_codes
     assert sorted(codes.values()) == list(range(8))
     assert set(codes) == set(stream.ARMS)
 
