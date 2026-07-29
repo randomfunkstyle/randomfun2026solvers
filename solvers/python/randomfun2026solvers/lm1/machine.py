@@ -5205,6 +5205,34 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: worth a great deal less than the 4.2% of area it costs. Re-run
 #: `scratch/lane_order_search.py` under the new geometry before pinning one again;
 #: the weights are unchanged but the width constraint it filters on is not.
+#: **``deadman-3d_hires`` is absent by measurement, and the reason is a coupling
+#: rather than a number.** Its :data:`OPCODE_SLOTS` map is a *rank-preserving*
+#: relabelling of ``plan``'s default order, and ``build`` enforces that — every
+#: candidate order below is rejected outright with "opcode slot map must preserve
+#: the lanes' north-to-south rank order". The two registries are one decision
+#: here, exactly as :data:`TAPED_BANKS` and :data:`TAPED_BANK_ORDER` are.
+#:
+#: Dropping the slot map to price the order alone, against hires' own execution
+#: profile (per gameplay frame: ``LD`` 7,632 = 20.65%, ``ST`` 6,866 = 18.58%,
+#: ``MULI`` 3,838, ``LDI`` 3,820 … and ``NEG``/``INCM``/``IN`` never executing at
+#: all), on the 3-round tour against the shipped 22,902,559:
+#:
+#: | order | result |
+#: |---|---|
+#: | default (none) | 22,902,559 |
+#: | cold-first (ascending frequency) | **fails to bind** — `'r' at (39, 168)` |
+#: | cold-first + ``JMPS`` | **fails to bind** — `'r' at (39, 169)` |
+#: | hot memory pulled south of the structured lanes | **fails to bind** — `'s' at (38, 174)` |
+#: | ``deadman-3d``'s own order | 22,922,622, **+0.088%** |
+#:
+#: Three of four do not survive §7.1: moving a lane moves the CPU's east-wall
+#: ports, and the memory-response pipe stops being the nearest rival. The one
+#: that does build is a small loss. So the space is binding-constrained rather
+#: than tick-constrained, and there is no free order to take.
+#:
+#: This is **not** a proof that no better order exists — a real evaluation has to
+#: re-run the ``OPCODE_SLOTS`` DP per candidate order, which is the same joint
+#: search M21 left open. It is a proof that the order cannot be moved on its own.
 LANE_ORDER: dict[str, tuple[str, ...]] = {
     # deadman-3d, north to south, weighted by the frame-1 execution profile
     # (LD 5,528 ... NEG 32): a row above the fetch row costs 2 ticks per row of
