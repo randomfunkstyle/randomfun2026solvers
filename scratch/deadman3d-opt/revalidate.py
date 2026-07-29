@@ -48,17 +48,31 @@ DECLINED: dict[str, dict] = {
     # -0.020% pre-cut, -2.678% post-cut -> SHIPPED in a15b200.  Kept here as the
     # worked example of why this script exists; it should now read ~0.000%.
     "chain_reach(shipped)": {"kind": "set", "reg": "TAPED_CHAIN_REACH"},
-    # +3.54% pre-a15b200, +0.185% after.  The margin fell an order of magnitude
-    # from CPU-side work alone; this is the row most likely to flip next.
-    "skip_batch=2": {"kind": "dict", "reg": "TAPED_SKIP_BATCH", "value": 2},
+    # SHIPPED at -1.567% once the seek drum landed.  Declined three times before
+    # that (-27.29% but beaten outright by the cut, then +3.54%, then +0.185%).
+    # Batching pays in proportion to the store's share of the run, and that share
+    # has now gone down and back up twice.  Reads ~0.000% while shipped.
+    "skip_batch=2(shipped)": {"kind": "dict", "reg": "TAPED_SKIP_BATCH", "value": 2},
     "skip_batch=4": {"kind": "dict", "reg": "TAPED_SKIP_BATCH", "value": 4},
-    # +0.006% at first measurement, +0.036% after the bank cut.  Worth -4.47% on
-    # the 64x48 machine and never anything here.
-    "lap_via_jump": {"kind": "prog", "key": "lap_via_jump"},
+    # SHIPPED at -18.503% once the seek drum landed.  Declined twice before that
+    # (+0.006%, then +0.036%) and both readings were correct: it converts a
+    # backward-branch lap into a forward JMPF, and SEEK_OPS seeks JMPF and
+    # nothing else, so without a drum the rewrite does nothing at all.  Kept here
+    # reading ~0.000% as the second worked example — this one went from declined
+    # twice to the largest single program lever this family has.
+    "lap_via_jump(shipped)": {"kind": "prog", "key": "lap_via_jump"},
     # Structural, not numeric: it and STORE_REQUEST_REACH are two answers to one
     # question and `build` refuses the pair.  Expected to BUILD FAILED — that is
     # the correct result, and it is here so the day it stops failing is visible.
     "req_teleport": {"kind": "set", "reg": "STORE_REQUEST_TELEPORT"},
+    # Shipped at -4.351%, then withdrawn at +0.260% when the seek drum landed:
+    # pitch 1 breaks the memory-response binding and drives the pad floor 15->28,
+    # and the pad costs more than the stagger saves.  The single best argument
+    # for this whole script — a lever can go from "shipped, worth 4%" to
+    # "declined" without anybody touching it.  Alone it will BUILD FAILED at the
+    # shipped pad; that is the correct result and the day it stops is the day to
+    # look again.
+    "lane_pitch=1": {"kind": "dict2", "reg": "LANE_PITCH", "value": 1},
 }
 
 
@@ -84,7 +98,7 @@ def main(argv: list[str]) -> int:
 
     #: The knobs `hires_source()` passes; not registries, so they are stated.
     KNOBS = dict(dda_acc_reload=False, dda_diff=True, dda_stepy_split=True,
-                 lap_via_jump=False)
+                 lap_via_jump=True)
     log = Path(__file__).resolve().parent / "measurements.jsonl"
     shipped_f = cfg.feature_set(SLUG, "taped", **KNOBS)
     print(f"re-validating {len(names)} declines against config "
@@ -98,12 +112,16 @@ def main(argv: list[str]) -> int:
         if spec:
             if spec["kind"] == "set":
                 reg = getattr(M, spec["reg"])
-                saved.append((reg, KEY in reg))
+                saved.append((reg, None, KEY in reg))
                 reg.add(KEY)
             elif spec["kind"] == "dict":
                 reg = getattr(M, spec["reg"])
-                saved.append((reg, reg.get(SLUG, KeyError)))
+                saved.append((reg, SLUG, reg.get(SLUG, KeyError)))
                 reg[SLUG] = spec["value"]
+            elif spec["kind"] == "dict2":  # keyed by (slug, tier)
+                reg = getattr(M, spec["reg"])
+                saved.append((reg, KEY, reg.get(KEY, KeyError)))
+                reg[KEY] = spec["value"]
             else:
                 prog_kw[spec["key"]] = True
         try:
@@ -147,13 +165,13 @@ def main(argv: list[str]) -> int:
                        width=m.width, height=m.height)
             return total, m, time.time() - t0, feats
         finally:
-            for reg, old in saved:
+            for reg, key, old in saved:
                 if isinstance(reg, set):
                     reg.add(KEY) if old else reg.discard(KEY)
                 elif old is KeyError:
-                    reg.pop(SLUG, None)
+                    reg.pop(key, None)
                 else:
-                    reg[SLUG] = old
+                    reg[key] = old
 
     got = run("shipped", None)
     if not got:

@@ -246,15 +246,30 @@ def hires_source() -> str:
     ``lap_via_jump``                            1,036,259,288   +0.006%
     ==========================================  =============  =========
 
-    ``lap_via_jump`` is **declined** — see the note in ``METRICS.md``; it is
-    worth -4.47% on the 64x48 machine and nothing at all here, and it is the
-    only one of the three that did not transfer.  ``dda_stepy_split`` cannot be
-    taken *alone* at this geometry (the second emission collides on ``dda0`` at
-    hires' unroll factor); with ``dda_diff`` the labels are distinct and it
-    builds, which is the combination ``deadman-3d`` ships anyway.
+    ``lap_via_jump`` was **declined twice on those readings and is now taken**,
+    worth **-18.503%** — and the reason it reversed is the whole point rather
+    than a correction.  It replaces a backward-branch lap with a forward
+    ``JMPF``, and :data:`machine.SEEK_OPS` seeks ``JMPF`` **and nothing else**.
+    Without a seek drum the rewrite is free of charge and free of benefit, which
+    is exactly what +0.006% and +0.036% were measuring.  With one, every lap it
+    converts stops discarding the ROM man's ring and starts seeking the row.
+
+    That is also why it was worth -4.47% on the 64x48 machine all along: that
+    machine has had a ``SEEK_DRUM`` since ``886ea07``.  The lever never failed to
+    transfer — the *drum* had not transferred yet, and nobody had tried.
+
+    ==========================================  =============  =========
+    shipped, seek drum on (21-round tour)         254,446,307       —
+    ``+ lap_via_jump``                            207,366,882  **-18.503%**
+    ==========================================  =============  =========
+
+    ``dda_stepy_split`` cannot be taken *alone* at this geometry (the second
+    emission collides on ``dda0`` at hires' unroll factor); with ``dda_diff`` the
+    labels are distinct and it builds, which is the combination ``deadman-3d``
+    ships anyway.
     """
     return d3.deadman3d_source(GEOM, dda_acc_reload=False, dda_diff=True,
-                               dda_stepy_split=True)
+                               dda_stepy_split=True, lap_via_jump=True)
 
 
 def install_wad(wad: Path, *, brightness: float | None = None) -> dict:

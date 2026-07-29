@@ -353,9 +353,11 @@ def test_the_hires_opcode_map_is_its_own_and_a_win(wad_installed) -> None:
     key = ("deadman-3d_hires", "taped")
     slots = machine.OPCODE_SLOTS[key]
     program = assemble(wad_installed.hires_source(), name="deadman-3d_hires")
-    # exactly what `build_for` plans with: no LANE_ORDER entry, no seek split
+    # exactly what `build_for` plans with: no LANE_ORDER entry, and the seek
+    # split's JMPS filtered out by `_relabel_slots` (see the map's own test in
+    # `test_seekrom.py` — the DP's twenty-one assignments are what is checked here)
     assert machine.LANE_ORDER.get("deadman-3d_hires") is None
-    assert "deadman-3d_hires" not in machine.SEEK_DRUM
+    slots = {m: s for m, s in slots.items() if m != "JMPS"}
     base = machine.plan(program, middle_order=None)
     relabelled = machine.plan(program, middle_order=None, slots=slots)
 
@@ -368,10 +370,12 @@ def test_the_hires_opcode_map_is_its_own_and_a_win(wad_installed) -> None:
 
     assert cells(relabelled) < cells(base)
 
-    # not deadman-3d's: no JMPS lane at all, and a different assignment besides
+    # not deadman-3d's: both name JMPS now, but the assignment is its own — the
+    # DP was re-run on hires' histogram and agrees on six of twenty-one lanes.
     other = machine.OPCODE_SLOTS[("deadman-3d", "taped")]
-    assert "JMPS" in other and "JMPS" not in slots
-    assert slots != other
+    assert "JMPS" in other and "JMPS" in machine.OPCODE_SLOTS[key]
+    assert machine.OPCODE_SLOTS[key] != other
+    assert sum(1 for m, s in slots.items() if other.get(m) == s) < len(slots)
 
 
 @needs_iwad
@@ -642,26 +646,33 @@ def test_the_wall_judges_frame_by_frame_and_reports_what_each_one_cost(
     assert res.frame_ticks[0] < res.frame_ticks[1] == res.step
 
 
-def test_the_hires_ring_worker_stays_at_batch_one_because_the_cut_took_it() -> None:
-    """``TAPED_SKIP_BATCH`` has no hires entry, and that is a measured decision.
+def test_the_hires_ring_worker_batches_again_now_that_the_drum_landed() -> None:
+    """``TAPED_SKIP_BATCH``'s hires entry, and the four readings behind it.
 
-    ``deadman-3d`` runs the two-word counted worker for -13% on its frame gate,
-    so the absence of a hires entry reads like an oversight.  It is not: the
-    lever pays per slot walked, :data:`machine.TAPED_BANKS`' eleven-bank cut
-    already spent the ring length it would have paid on, and batching the cut
-    machine *costs* +2.40% on the 21-round tour (+2.31% even with the cut
-    re-derived for it, +8.83% at batch 4).  The registry docstring carries the
-    table.  This pins the fall-through so a later "port the lever across" reads
-    the decline before it re-measures it.
+    This test previously pinned the *absence* of the entry, on a decline that was
+    correct when measured: the lever pays per slot walked,
+    :data:`machine.TAPED_BANKS`' eleven-bank cut had already spent the ring length
+    it would have paid on, and batching cost +2.40%.
+
+    The seek drum then took ~40% out of everything that is not the store, which
+    raised the store's share of the run back up, and the same knob measures
+    **-1.567%** (207,366,882 -> 204,117,437, 21-round tour).  Batch 4 is still a
+    loss at +2.773%, so this is a genuine optimum and not a reversal of direction.
+
+    Four readings on an unchanged builder: -27.29% (uniform quarters, beaten
+    outright by the cut), +3.54%, +0.185%, -1.567%.  Batching's value tracks the
+    store's share of the run, and that share has now gone down and back up.
+    Pinned as the value plus the reason, so a future re-measure has the history.
     """
     from randomfun2026solvers.lm1 import machine
 
-    assert "deadman-3d_hires" not in machine.TAPED_SKIP_BATCH
-    assert machine.TAPED_SKIP_BATCH.get("deadman-3d_hires", 1) == 1
-    # the reason, pinned beside it: eleven short banks, none of them long enough
-    # for a batched worker's per-access fixed cost to amortise.
+    assert machine.TAPED_SKIP_BATCH["deadman-3d_hires"] == 2
+    # the cut it has to amortise against is unchanged — eleven short banks — so
+    # what moved is the rest of the machine, not this
     banks = machine.TAPED_BANKS["deadman-3d_hires"]
     assert len(banks) == 11
     assert max(banks) == 306
-    # and ``deadman-3d`` itself is untouched by this decision
+    # and it only pays because the drum is on; the two are not independent
+    assert "deadman-3d_hires" in machine.SEEK_DRUM
+    # `deadman-3d` untouched throughout
     assert machine.TAPED_SKIP_BATCH["deadman-3d"] == 2

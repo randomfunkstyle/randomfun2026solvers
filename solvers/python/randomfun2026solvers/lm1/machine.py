@@ -2054,6 +2054,13 @@ TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
 #: width floor is set 200 columns further east there is nothing to trade into.
 #: Left off rather than added dead; revisit if the wall ever narrows past the
 #: CPU.
+#:
+#: **The declines above are still correct and were still the wrong question**: hires
+#: takes pitch 11 under the drum, where it is worth -8.85% — see
+#: :data:`SEEK_SLAB_PITCH`. What it buys there is not a column of box but the
+#: ``mem_pad`` floor, which the classic build does not have a problem with (it binds
+#: at 15 either way) and the seek build does (35 at pitch 13). The two registries stay
+#: apart for exactly the reason the split exists.
 SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
 
 #: :data:`SLAB_PITCH`'s replacement while the seek drum is on — the same split
@@ -2075,7 +2082,26 @@ SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
 #: Note ``little-little-man`` must stay in :data:`SLAB_PITCH`: it has no drum, so a
 #: seek-only lookup would silently hand it back the default 13 and undo the -1.44% the
 #: registry exists for.
-SEEK_SLAB_PITCH: dict[str, int] = {"deadman-3d": 11}
+#:
+#: **``deadman-3d_hires`` is the largest thing in this registry and it is not a width
+#: knob at all.** :data:`SLAB_PITCH`'s note above declines the same slug twice on the
+#: grounds that hires' width is the router wall's, not its CPU's, so there is nothing
+#: to trade CPU columns *into*. That is still true and still the wrong question, which
+#: only became visible under the drum: the payoff is not the column, it is the
+#: ``mem_pad`` **floor**. A seek hires at the default pitch 13 cannot bind below 35
+#: (the classic build binds at 15), and every one of those twenty columns is walked
+#: twice by every memory instruction. Pitch 12 -> pad 28, pitch 11 -> pad 18, which
+#: with :data:`INPUT_NORTH_WEST` reaches 15. On the 21-round tour, everything else at
+#: the shipped values: 256,325,066 at pitch 13 against **233,658,800** at 11,
+#: **-8.85%** — an order of magnitude more than the -1.44% the registry was built for,
+#: and 87% of everything hires' seek build gains beyond the bare drum.
+#:
+#: Which is the *opposite* sign to the reasoning ``deadman-3d`` needed above, where a
+#: narrower CPU was a closer rival and pitch 11 could not bind at ``MEM_PAD`` 17 at
+#: all. Both readings are real; the rival that binds is not the same one on the two
+#: machines (hires is :data:`INPUT_NORTH`-fed with a 2x2 router wall east of
+#: everything), so this is a per-slug measurement and not a rule.
+SEEK_SLAB_PITCH: dict[str, int] = {"deadman-3d": 11, "deadman-3d_hires": 11}
 
 
 def _drain_block(
@@ -5341,6 +5367,13 @@ ROM_ROWS = {
     # and every row past it is now pure height with only 47 rows of slack left
     # rather than 143. Nothing deeper can pay — the 494 is the wall's floor, not
     # the ROM's, so folding further narrows a drum that is already inside it.
+    #
+    # **This number no longer describes the shipped hires machine**, which now
+    # seeks: `SEEK_TIER_LAYOUT[("deadman-3d_hires", "taped")]` overrides it with
+    # 119, and 88 does not even build under the drum (a seek row addresses its
+    # words as `row*128 + offset` and at 88 rows the first row holds 152). It is
+    # kept because it is still the classic build's crossing, which is what every
+    # counterfactual in the tests rebuilds and what this whole comment derives.
     "deadman-3d_hires": 88,
 }
 
@@ -5681,7 +5714,31 @@ LANE_PITCH: dict[tuple[str, str], int] = {
     # Box unchanged at 514x451: the eleven rows the stagger frees are left blank
     # *above* the band, so the collector, the structures band and every block
     # outside the CPU stay where they are.
-    ("deadman-3d_hires", "taped"): 1,
+    #
+    # **And then the seek drum landed and took it away again.** hires' entry is
+    # deliberately absent, not forgotten. Pitch 1 moves the CPU's east-wall ports
+    # twelve rows north, and on a seek build that breaks the memory-response
+    # binding: `'r' at (43, 189) must bind 'rom' but distances are
+    # [('mem_resp', 54), ('rom', 58), ...]` — §7.1 decides by distance to rivals,
+    # and the stagger makes the wrong rival closer. The build does not fail
+    # gracefully at one pad either; the whole floor moves, 15 -> 28 (swept
+    # 15..35, nothing below 28 binds).
+    #
+    # Every column of pad is paid twice by every memory instruction, so the two
+    # very nearly cancel — and the pad wins. 21-round tour, ticks to frame 20:
+    #
+    #   | pitch | pad | box | ticks | Δ |
+    #   |---|---|---|---|---|
+    #   | **2** | **15** | **517x496** | **254,446,307** | — |
+    #   | 1 | 28 | 526x496 | 255,106,862 | +0.260% |
+    #   | 1 | 31 | 528x496 | 258,144,151 | +1.453% |
+    #   | 2 | 28 | 526x496 | 270,409,329 | +6.274% |
+    #
+    # Read the last row against the first: the pad alone is worth 6.27%, and the
+    # stagger recovers 5.99% of it. A -4.351% lever is now a +0.260% loss, and
+    # nothing about the lever changed — the machine under it did. This is listed
+    # in `revalidate.py`'s DECLINED table so it is re-checked rather than
+    # remembered; if the drum's pad floor ever comes down, it goes straight back.
 }
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
@@ -5720,7 +5777,65 @@ LANE_PITCH: dict[tuple[str, str], int] = {
 #: ``store_offset`` cannot claw back (dx -20 is still the last value that
 #: routes). It stays inside its 300 ceiling and the 10% skew doctrine, but that
 #: is the trade — re-check it before the next taped sweep.
-SEEK_DRUM: set[str] = {"deadman-3d"}
+#:
+#: ## ``deadman-3d_hires``, and why it is worth twice what the parent got
+#:
+#: hires had never been measured here — the set had exactly two historical values,
+#: ``set()`` and ``{"deadman-3d"}`` — so this is a first reading, not a reversal.
+#: It is the largest single win the slug has taken: **-36.04%** of the tour,
+#: against the parent's -11.0% on the same tier.
+#:
+#: The reason is scale, and it is the one thing about the seek drum that *does*
+#: transfer as an argument rather than as a number. A taken long jump discards
+#: ``2 * ((t - k - 1) mod n)`` words of the ROM man's lap (:func:`rom_words`), so
+#: the classic drum's cost per long jump is linear in ``P`` while the seek
+#: ladder's is logarithmic in the fold. hires is P=9,225 against the parent's
+#: ~4,300: the thing being deleted is twice as large, and what replaces it is
+#: not.
+#:
+#: Nothing else transferred. Every coupled registry had to be re-derived, and
+#: three of them landed nowhere near ``deadman-3d``'s values:
+#:
+#: * **the fold.** :data:`ROM_ROWS`' 88 does not build under the drum at all —
+#:   a seek row addresses its words as ``row*K + offset`` with ``K = 128``, and
+#:   at 88 rows the first row holds 152. 110 is the shallowest that builds, 111
+#:   the shallowest that *runs* (110 and 121..123 pack a literal whose reverse
+#:   reading leaves signed 64 bits — the hazard :data:`SEEK_TIER_LAYOUT` records
+#:   for the parent, in a different place on this program). See
+#:   :data:`SEEK_TIER_LAYOUT` for the curve; 119 is the pin.
+#: * **the pitch.** :data:`SEEK_SLAB_PITCH` is worth **8.85%** here against the
+#:   parent's fraction of a percent, because on hires it is not a width knob at
+#:   all — it is what unblocks the ``mem_pad`` floor, 35 -> 18.
+#: * **the pad.** :data:`MEM_PAD_FOR` plus :data:`INPUT_NORTH_WEST` take it the
+#:   rest of the way, 18 -> 15, which is where the *classic* build already sat.
+#:
+#: The whole table, native ``fast_littleman``, 21-round tour (frames 1..20),
+#: ``frame_tiles=(2, 2)``, every row ``fatal is None and passed is True``.
+#: Baseline is HEAD-at-``add1e25``'s classic hires machine:
+#:
+#: | build | box | pad | tour ticks | Δ |
+#: |---|---|---:|---:|---:|
+#: | classic (baseline) | 514x451 | 15 | 365,333,921 | |
+#: | seek alone, fold 120 | 531x497 | 35 | 258,146,477 | -29.35% |
+#: | + :data:`SEEK_SLAB_PITCH` 11 | 517x496 | 18 | 236,380,143 | -35.30% |
+#: | + :data:`INPUT_NORTH_WEST` 13 / :data:`MEM_PAD_FOR` 15 | 517x496 | 15 | 234,324,256 | -35.86% |
+#: | + :data:`SEEK_TAKEN_DROP_EAST` | 517x496 | 15 | 233,851,301 | -35.99% |
+#: | + :data:`SEEK_TELEPORT` (**shipped**) | 517x496 | 15 | **233,658,800** | **-36.04%** |
+#:
+#: Each row is the shipped build with exactly one registry taken back off, so
+#: every entry is proved load-bearing rather than assumed. Note the ordering: the
+#: pad is 87% of everything the four extra registries are worth, and the two
+#: routing knobs together are 0.28%.
+#:
+#: Footprint moves 514x451 -> 517x496 and that is not a cost anyone pays:
+#: ``deadman-3d_hires`` is out of contest scope (``AGENTS.md``), so ticks are the
+#: only metric and ``max(w, h)**2 * ticks`` does not apply to it.
+#:
+#: :data:`ROM_BUFFER` stays empty. It is antagonistic to this by construction
+#: (``ROM-RECIRCULATION.md`` §170): the buffer's whole value is draining a
+#: pre-filled queue during the discard loop, and seeking is the deletion of that
+#: loop.
+SEEK_DRUM: set[str] = {"deadman-3d", "deadman-3d_hires"}
 
 #: Per-slug override for :data:`SEEK_OPS`. Absent slugs keep the ``JMPF``-only
 #: default, so this is byte-identical for everything not named here.
@@ -5819,9 +5934,45 @@ SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 #: So 83 is 0.28% faster and unbuildable for the suite; the pin costs that and
 #: keeps every counterfactual. Re-sweep both numbers together whenever either
 #: moves — neither is safe to carry across the other.
+#:
+#: **``deadman-3d_hires``' fold is not a re-pick of :data:`ROM_ROWS`' 88, it is a
+#: different feasible region.** 88 does not build under the drum at all: a seek row
+#: addresses its words as ``row * K + offset`` with ``K = 128``, so no row may hold
+#: 128 words, and at 88 rows the first holds 152. The fold has to *deepen* until every
+#: row fits — the opposite direction to the classic trade, where 88 was the shallowest
+#: fold whose drum was no wider than the 494-column router wall and every row past it
+#: was pure height.
+#:
+#: 110 is the shallowest that builds; 111 the shallowest that **runs**. 110 and
+#: 121, 122, 123 build and then fail ``FastLittleman`` with "numeric literal does
+#: not fit signed 64 bits" — the same reverse-reading hazard the parent's curve
+#: records, landing in a different place because it is a property of *this*
+#: program's packed words.
+#:
+#: The box does not move across the whole range (517 wide, the router wall's, and
+#: ``mem_pad`` 15 throughout), so this is a pure tick pick. 21-round tour, shipped
+#: registries otherwise:
+#:
+#: ::
+#:
+#:     rom_rows   box        tour ticks
+#:     111        517x488    235,095,528
+#:     115        517x491    234,590,527
+#:     118        517x495    234,768,727
+#:     **119**    517x496    **233,658,800**   <- the pin
+#:     120        517x497    234,200,405
+#:     124        517x502    235,121,255
+#:     128        517x506    234,237,503
+#:     130        517x507    234,888,187
+#:
+#: The whole span is 0.63%, and it is not monotone in either direction — the fold
+#: sets how the words pack into rows and the ladder's depth at once, and neither
+#: is smooth in the row count. 119 is the minimum of a flat, jagged curve, so
+#: treat it as a pin to re-sweep rather than a crossing to reason from.
 SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
     ("deadman-3d", "taped"): {"rom_rows": 84},
+    ("deadman-3d_hires", "taped"): {"rom_rows": 119},
 }
 
 
@@ -5866,10 +6017,9 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: ``deadman-3d_hires``'s entry is its own DP solution over its own program
 #: (``scratch/deadman3d-opt/hires_slots.py``), and it agrees with
 #: ``deadman-3d``'s on six of twenty-one lanes. It could not have been copied
-#: even in principle: hires is not in :data:`SEEK_DRUM`, so there is no
-#: ``seek_split`` and no ``JMPS`` lane at all — 21 lanes against 22 — and its
-#: rank order is ``plan``'s length-descending default rather than a tuned
-#: :data:`LANE_ORDER`, so the *ranks* the DP assigns to differ too. Its
+#: even in principle: its rank order is ``plan``'s length-descending default
+#: rather than a tuned :data:`LANE_ORDER`, so the *ranks* the DP assigns to
+#: differ too. Its
 #: histogram is a different shape besides: ``SND`` is 1,251 of 5,116 instructions
 #: (a 28-block billboard chain and a numeral painter ``deadman-3d`` has no
 #: equivalent of), where the committed program's paint traffic is a fraction of
@@ -5887,6 +6037,21 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: constant. The crossing moves 102 -> **88** and the machine 496x401 ->
 #: 496x387 on this knob alone (see :data:`ROM_ROWS`, where the two knobs are
 #: swept together).
+#:
+#: **``JMPS`` is named in the hires map and is not part of the DP.** It was added
+#: when hires joined :data:`SEEK_DRUM`: a seek build grows a 22nd lane and a map
+#: that does not name every used opcode is a hard error, so without it
+#: ``build_for(..., seek=True)`` does not build at all. It is inert for a classic
+#: build — :func:`_relabel_slots` filters names the build does not use, which is
+#: exactly what "one registered map has to serve ``seek=True`` and ``seek=False``
+#: alike" is for — so the classic hires grid is byte-identical with it. The slot
+#: is *not* re-derived: the twenty-one DP assignments are untouched and ``JMPS``
+#: takes a free slot in the only gap rank preservation leaves it, between
+#: ``JMPF``'s 24 and ``SND``'s 28. All three candidates (25, 26, 27) bit-reverse
+#: to a two-digit opcode, so the drum pays the same 345 cells whichever is
+#: picked, and the 21-round tour is **identical to the tick** at all three
+#: (233,658,800) — the trie cannot tell them apart either, because they share a
+#: descent. 25 is chosen for sitting next to the ``JMPF`` it is split from.
 #: ## The second objective: the map also shapes the **decode trie**
 #:
 #: The rank-preservation above is what makes this knob safe, and it is also what
@@ -5944,7 +6109,7 @@ OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
         "IN": 0, "INCM": 1, "MOVA": 2, "DIV": 3, "ST": 4, "SUB": 5,
         "ADD": 8, "LDA": 9, "MUL": 10, "DIVI": 11, "LD": 12, "MODI": 13,
         "NEG": 14, "SUBI": 16, "ADDI": 17, "MULI": 18, "LDI": 20, "BRN": 21,
-        "BRZ": 22, "JMPF": 24, "SND": 28,
+        "BRZ": 22, "JMPF": 24, "JMPS": 25, "SND": 28,
     },
 }
 
@@ -6068,7 +6233,15 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: one (~15k reads a frame). A seven-times-longer pipe on a two-hundred-times-rarer
 #: event is worth less, not more — which is the whole reason to measure the
 #: derivative before building.
-SEEK_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
+#:
+#: ``deadman-3d_hires`` takes it too, and it is the smallest of the five registries
+#: its seek build needed: 233,851,301 -> **233,658,800** on the 21-round tour,
+#: **-0.08%**. Same ceiling argument, one machine larger — hires' plain route is
+#: longer still, but its seek rate is the same handful a frame.
+SEEK_TELEPORT: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
 
 #: Slugs whose **seek jump** turns south at the east end of its entry row instead of
 #: at its slab's ``base``, deleting the U-turn under the CPU.
@@ -6094,7 +6267,15 @@ SEEK_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: ``(slug, tier)`` — the CPU band is identical on both deadman-3d tiers, so the
 #: canonical machine would take the same win, but its grid is pinned at
 #: ``f62d63fd`` and only the taped family is allowed to move.
-SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {("deadman-3d", "taped")}
+#:
+#: ``deadman-3d_hires`` takes it: 234,324,256 -> 233,851,301 on the 21-round tour,
+#: **-0.20%**. Worth rather more than on the parent in relative terms and for a
+#: mechanical reason — under :data:`SEEK_SLAB_PITCH` 11 the slab band is narrower, so
+#: ``e_s - 1 - base`` is a shorter U-turn, but hires takes many more of them.
+SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
 
 #: How many columns west of ``lane_x0`` an :data:`INPUT_NORTH` I room sits, per
 #: ``(slug, tier)``. Absent (0) keeps the shipped column, which is ``lane_x0``
@@ -6116,7 +6297,19 @@ SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: The westernmost legal column is ``CX + 1``: the room's own west wall then shares
 #: the CPU's west wall column (they are on different rows) and the pipe still lands
 #: on a north-wall cell rather than the corner.
-INPUT_NORTH_WEST: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 13}
+#:
+#: ``deadman-3d_hires`` takes the same 13 and for the same second-order reason: on its
+#: seek build the pad floors at 18 with the room on the IN lane's own ``r`` and at
+#: **15** with it at the CPU's north-west corner, which is where the *classic* build
+#: already binds. Worth 236,380,143 -> 234,324,256 on the 21-round tour, **-0.87%**,
+#: all of it the three columns of memory band. Note this registry is **not**
+#: seek-gated — ``build_for`` passes ``in_west`` unconditionally — so it moves a
+#: classic hires build too; that is safe here because hires commits no grid (its
+#: program is IWAD-derived, ``DEADMAN-3D.md``) and it now ships as a seek build.
+INPUT_NORTH_WEST: dict[tuple[str, str], int] = {
+    ("deadman-3d", "taped"): 13,
+    ("deadman-3d_hires", "taped"): 13,
+}
 
 #: Per-``(slug, tier)`` ``mem_pad``, overriding :data:`MEM_PAD` /
 #: :data:`SEEK_MEM_PAD`. The pad is how far east of the trie the memory band starts;
@@ -6138,7 +6331,20 @@ INPUT_NORTH_WEST: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 13}
 #: 16 is the floor with the room moved, and the rival there is the ROM pipe, which
 #: the room's column cannot help with. Keyed by tier so the canonical machine, whose
 #: grid is pinned at ``f62d63fd``, keeps ``SEEK_MEM_PAD``'s 22 untouched.
-MEM_PAD_FOR: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 16}
+#:
+#: ``deadman-3d_hires`` has no :data:`MEM_PAD` entry at all, so both its builds fall
+#: through to ``build``'s own ``range(0, 40)`` search. That search is *correct* here —
+#: hires' box is the router wall's at every pad, so every binding pad ties on
+#: footprint and the first, i.e. smallest, wins — and 15 is what it finds. This entry
+#: pins the answer rather than changing it: it makes a seek build deterministic and
+#: skips up to fifteen doomed ``_assemble`` passes, which on a P=9,225 program is most
+#: of the build. The floor is a joint property of :data:`SEEK_SLAB_PITCH` (35 at the
+#: default pitch, 18 at 11) and :data:`INPUT_NORTH_WEST` (18 -> 15); re-sweep it if
+#: either moves.
+MEM_PAD_FOR: dict[tuple[str, str], int] = {
+    ("deadman-3d", "taped"): 16,
+    ("deadman-3d_hires", "taped"): 15,
+}
 #: ``(slug, tier)`` pairs whose **request** leg crosses a room instead of a pipe
 #: — the mirror image of :data:`STORE_ANSWER_WEST`, on the leg that was left.
 #:
@@ -6860,7 +7066,27 @@ TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
 #: shortens the store path could flip it. Re-run this before assuming otherwise;
 #: the same mistake in the other direction is what made
 #: :data:`TAPED_CHAIN_REACH`'s -0.020% decline void.
-TAPED_SKIP_BATCH: dict[str, int] = {"deadman-3d": 2}
+#: **And then the seek drum landed and the decline reversed a third time.** The
+#: full history of this one entry is the clearest evidence in the repo that a
+#: lever's value is a property of the machine, not of the lever:
+#:
+#: | machine | batch 2 |
+#: |---|---|
+#: | uniform quarters, no drum | **-27.29%** (moot — the cut beats it outright) |
+#: | 11-bank cut | +3.54% |
+#: | + ``LANE_PITCH`` / ``TAPED_CHAIN_REACH`` | +0.185% |
+#: | + seek drum + ``lap_via_jump`` (**now**) | **-1.567%** |
+#:
+#: Nothing about the batched worker changed across those four rows. What changed
+#: is how much of the run is spent in the store: the bank cut took the store from
+#: ~68% of the run to a small share, which is why batching stopped paying — and
+#: the drum then took ~40% out of everything *else*, which raised the store's
+#: share back and made it pay again. Shipped at 207,366,882 -> **204,117,437**,
+#: 21-round tour, ticks to frame 20. Batch 4 remains a loss at +2.773%.
+TAPED_SKIP_BATCH: dict[str, int] = {
+    "deadman-3d": 2,
+    "deadman-3d_hires": 2,
+}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:
