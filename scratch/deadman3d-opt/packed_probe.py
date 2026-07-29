@@ -22,12 +22,18 @@ composed images are byte-identical — which is as close to an end-to-end proof
 as this family has, because the machine itself needs several million ticks to
 commit its first frame and the engine runs out of memory at two.
 """
-import json, subprocess, sys
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / 'solvers' / 'python'))
-from randomfun2026solvers.lm1 import d3_router as R
+sys.path.insert(0, str(REPO / "solvers" / "python"))
+
+from randomfun2026solvers.lm1 import d3_router as R  # noqa: E402
+
 
 def word(arg, code, sel): return 8 * (8 * arg + code) + sel
 
@@ -45,8 +51,9 @@ def image(packed):
     rows, _ = R.build_probe(cmds, packed=packed)
     p = f"/tmp/img_{'packed' if packed else 'plain'}.man"
     open(p, "w").write("\n".join(rows) + "\n")
-    out = subprocess.run(["node", str(REPO / "littleman" / "lm.mjs"), "tick", p, "200000", "--json"],
-                         capture_output=True, text=True)
+    out = subprocess.run(  # noqa: S603
+        ["node", str(REPO / "littleman" / "lm.mjs"), "tick", p, "200000", "--json"],
+        capture_output=True, text=True, check=False)
     d = json.loads(out.stdout)
     panels = d["entities"]["displays"]
     def grid(pp):
