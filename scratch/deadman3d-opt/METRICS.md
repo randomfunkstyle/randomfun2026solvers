@@ -590,3 +590,70 @@ Opt-in via `machine.DOOM_LOOP_ROW`; absent means the shipped row 27, which is
 what holds the canonical and hi-res families byte-identical. `deadman-3d_hires`
 stacks four of these blocks two deep, so opting it in is worth ~16 rows there —
 untested here, and its own layout would want a re-sweep.
+
+# M11 — the seek request pipe: 437 cells, and what they were actually costing
+
+Taped tier only, opt-in via `machine.SEEK_TELEPORT`. Baseline `merge-staging`
+`2a20a64` regenerated: taped **287x253**, 116-round tour **838,511,442** (native
+FastLittleman, round-gated, `passed=True`).
+
+`cpu->drum` was the longest route on the machine by a factor of seven — 437 cells
+against 58 for the next one — carrying `row*SEEK_K + rem` from the CPU's east wall
+around the whole store block and back into the drum's east wall.
+
+## The derivative, measured before building anything
+
+Padding the pipe's eastward leg by 100 cells (machine 337x253, everything else
+identical) moved the tour from 838,511,442 to **839,317,714**: **+8,063 ticks a
+pipe cell**. Since one cell is one tick of transit per seek, that number *is* the
+seek count over the tour — **~8,063 seeks, ~70 a frame**.
+
+So the whole 437-cell pipe is worth at most ~3.5M ticks, **0.42% of the tour**.
+That is the ceiling, and it is set by the seek *rate*: the store's teleported
+answer path was worth more (-0.52%) off a **53**-cell pipe because reads happen
+~15k times a frame. A seven-times-longer pipe on a two-hundred-times-rarer event
+is worth less, not more.
+
+## The build: two rooms, 437 -> 52 cells
+
+`machine._seek_teleport`. `R` has no distance term (SPEC.md), so:
+
+* **seek:H** — `(62,158)-(286,168)`, a 225-column room in the free band between the
+  store block's floor (row 157) and the DOOM block's roof (row 169). Swallows the
+  whole eastward crossing.
+* **seek:V** — `(255,1)-(286,113)`, a 113-row room in the empty column east of the
+  drum and north of the store. Swallows the northward climb *and* the westward
+  return into the drum.
+
+Three stubs are left: 6 cells from the CPU's own send cell down into H, 44 up
+column 285 (the only column clear of the store block's east return pipe), and 2
+from V onto the drum's own attachment cell. Both endpoints are the cells the plain
+pipe used, so no `r`/`s`/`q` binding moves. Cost: two men (18 -> 20 static).
+
+| | before | after |
+|---|---|---|
+| `cpu->drum` | 437 cells | **52** |
+| taped box | 287x253 | 287x253 (unmoved) |
+| 116-round tour | 838,511,442 | **838,353,122** (**-0.019%**) |
+
+## -0.019%, not -0.37%, and the reason is `q`
+
+The naive arithmetic says 385 cells x 8,063 = 3.1M. The measurement says 158,320.
+The missing factor is the property the shipped comment already claimed and this is
+now the number for: **`q` counts values anywhere in the pipe, not just at its
+destination cell.** The drum's row gadgets `q` the request pipe, so with the plain
+437-cell pipe the drum notices the seek *the tick the CPU sends it* and spends the
+whole transit walking its cascade — down the gadget zigzag, west along the bottom
+collector, up the seek riser to the station — and then parks on `r`. That walk is
+~250 (zigzag) + 252 (collector) + ~93 (riser) cells of the drum's own geometry, so
+the pipe and the walk ran **concurrently** and the seek cost `max(pipe, walk)`, not
+`pipe + walk`. At 437 the pipe was barely the larger of the two.
+
+Padding *up* therefore costs the full 8,063/cell (the pipe becomes the max), while
+cutting *down* recovers only the ~20 ticks a seek by which 437 exceeded the walk.
+Both are consistent with one model and both were measured.
+
+**The lever this leaves for anyone continuing:** the seek path costs ~0.4% of the
+tour and it is now entirely the drum's **cascade walk**, not the request pipe. The
+252-cell westward run along the bottom collector row is the biggest single piece of
+it. Shortening the pipe further is worth nothing; the pipe is below the floor.

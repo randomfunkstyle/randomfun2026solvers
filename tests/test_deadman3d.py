@@ -1240,8 +1240,15 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     """
     assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
     taped = machine.build_for("deadman-3d", store="taped")
-    assert sum(r.count("@>Rv") for r in taped.rows) == 1
     assert not [r for r in taped.debug_map().regions if r.name.startswith("teleport:")]
+    # Three loops on the taped grid, and exactly two of them are the *seek*
+    # request's own pair (:data:`machine.SEEK_TELEPORT`); the response path keeps
+    # the single widened collector this test is about.
+    assert sum(r.count("@>Rv") for r in taped.rows) == 3
+    assert {r.name for r in taped.debug_map().regions if r.name.startswith("seek:")} == {
+        "seek:H",
+        "seek:V",
+    }
 
     # men-v3 keeps its pair, and not for want of trying: its collector sits at
     # the block's floor ~190 rows below the response row, so widening it west

@@ -2837,6 +2837,7 @@ def build(
     seek: bool = False,
     seek_threshold: int = SEEK_THRESHOLD,
     seek_ops: Sequence[str] = SEEK_OPS,
+    seek_teleport: bool = False,
     doom_loop_row: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
@@ -3028,6 +3029,7 @@ def build(
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    seek_teleport=seek_teleport,
                     doom_loop_row=doom_loop_row,
                 )
             except MachineError as exc:
@@ -3085,6 +3087,7 @@ def build(
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    seek_teleport=seek_teleport,
                     doom_loop_row=doom_loop_row,
                 )
             except MachineError:
@@ -3164,6 +3167,7 @@ def _assemble(
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
     seek_layout=None,
+    seek_teleport: bool = False,
     doom_loop_row: int | None = None,
 ) -> Machine:
     seek = seek_layout is not None
@@ -3666,6 +3670,7 @@ def _assemble(
     # length is only jump-notice latency; the drum's q sees the value the tick
     # it enters the pipe, so the man parks on the station's r rather than
     # emitting words the CPU would flush.
+    seek_regions: dict[str, tuple[int, int, int, int]] = {}
     if seek:
         cmd_y = CY + (H - 9)  # build_cpu: bottom = taken_row + 9
         x_e = max(x for x, _ in g.c) + 2
@@ -3684,16 +3689,21 @@ def _assemble(
                 raise MachineError("seek: the unit sits too high for the cmd dive")
         else:
             y_b = max(y for _, y in g.c) + 2
-        route_lengths["cpu->drum"] = g.draw_pipe(
-            [
-                (CX + W + 2, cmd_y),
-                (CX + W + 3, cmd_y),  # east out of the wall, then dive south
-                (CX + W + 3, y_b),
-                (x_e, y_b),
-                (x_e, ry),
-                (rom_east + 1, ry),
-            ]
-        )
+        if seek_teleport:
+            route_lengths["cpu->drum"], seek_regions = _seek_teleport(
+                g, cmd_y=cmd_y, src_x=CX + W + 2, x_e=x_e, rom_east=rom_east, ry=ry, y_b=y_b
+            )
+        else:
+            route_lengths["cpu->drum"] = g.draw_pipe(
+                [
+                    (CX + W + 2, cmd_y),
+                    (CX + W + 3, cmd_y),  # east out of the wall, then dive south
+                    (CX + W + 3, y_b),
+                    (x_e, y_b),
+                    (x_e, ry),
+                    (rom_east + 1, ry),
+                ]
+            )
 
     rows = g.rows()
 
@@ -3708,6 +3718,7 @@ def _assemble(
         regions.update(tele_regions)
     else:
         regions.update(extra_regions)
+    regions.update(seek_regions)
     # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
     # the only place the ROM-PLUS snake would show up at all. Its cell count *is* its
     # capacity in words (``SPEC.md``), so the note is the number that matters.
@@ -3775,7 +3786,10 @@ def _assemble(
         store_pipes = (
             tape.pipes if store in ("men-y", "men-v3", "taped") else _STORE_PIPES[store]
         ) + 1 + tele_pipes
-    _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
+    # The teleported seek request is three pipes where ``touches["cmd"]`` counts one.
+    _check_pipe_count(
+        rows, expected=len(touches) + store_pipes + extra + (2 if seek_regions else 0)
+    )
     return Machine(
         rows=rows,
         regions=regions,
@@ -4065,6 +4079,80 @@ _ANS_BAND = 3
 #: *loop's* extent, not the room's. See :func:`memory_men.teleport`.
 _TELE_W = 4
 _TELE_H = 2
+
+
+def _seek_teleport(
+    g: _Grid, *, cmd_y: int, src_x: int, x_e: int, rom_east: int, ry: int, y_b: int
+) -> tuple[int, dict[str, tuple[int, int, int, int]]]:
+    """The CPU -> drum seek request, teleported instead of piped end to end.
+
+    The plain route is the machine's longest pipe by a factor of seven: out of the
+    CPU's east wall, south past everything that hangs below it, east across the whole
+    store block, north up the outside and back west into the drum's east wall — 437
+    cells on ``deadman-3d``'s taped machine. Every cell is a tick of latency on the
+    station's ``r``, and the CPU is flushing the corridor while it waits, so the whole
+    length is on the critical path of every taken jump.
+
+    ``R`` has no distance term (SPEC.md: "nearest" is only ``r``'s rule), so a room is
+    crossed in one instruction whatever its size. Two rooms cover the two long legs:
+
+    * **H** — a wide room in the free band between the store block's bottom and
+      whatever hangs below the CPU. It swallows the whole eastward crossing.
+    * **V** — a tall room in the empty column east of the drum and north of the
+      store, from the drum's own seek row down to the store block's top. It swallows
+      the northward climb *and* the westward return into the drum.
+
+    What is left is three stubs: the CPU's dive into H, the one column that threads
+    the store block's east side (the only through-column there is), and two cells from
+    V into the drum. The drum's attachment cell and the CPU's send cell are both
+    exactly where the plain pipe put them, so no ``r``/``s``/``q`` binding moves.
+    """
+    from ..memory_men import teleport, teleport_v
+
+    def clear(x0: int, y0: int, x1: int, y1: int) -> bool:
+        return not any((x, y) in g.c for y in range(y0, y1 + 1) for x in range(x0, x1 + 1))
+
+    # ── H, the horizontal teleport ───────────────────────────────────────────
+    hx0, hx1 = src_x + 1, x_e
+    hy1 = y_b + 1
+    hy0 = hy1 - (_TELE_H + 1)
+    if not clear(hx0, hy0, hx1, hy1):
+        raise MachineError("seek teleport: no clear band below the store for room H")
+    while hy0 - 1 > cmd_y + 2 and clear(hx0, hy0 - 1, hx1, hy0 - 1):
+        hy0 -= 1  # raise the north wall: every row raised is a cell off the dive
+    # ── V, the vertical teleport ─────────────────────────────────────────────
+    vx0, vx1, vy0 = rom_east + 3, x_e, ry - 1  # +3 leaves the drum stub its two cells
+    vy1 = vy0 + _TELE_H + 1
+    if vx1 - vx0 < _TELE_W + 1 or not clear(vx0, vy0, vx1, vy1):
+        raise MachineError("seek teleport: no clear column east of the drum for room V")
+    while vy1 + 1 < hy0 - 2 and clear(vx0, vy1 + 1, vx1, vy1 + 1):
+        vy1 += 1  # lower the south wall: every row lowered is a cell off the climb
+    # The through-column: H's north wall east of V's south wall, so the climb is
+    # one straight leg. On the taped machine it is the only column clear of the
+    # store block's east return pipe at all.
+    thru = hx1 - 1
+    if not clear(thru, vy1 + 1, thru, hy0 - 1):
+        raise MachineError(f"seek teleport: column {thru} is not clear between V and H")
+
+    g.room(hx0, hy0, hx1, hy1)
+    h_rows, _ = teleport(hx1 - hx0 - 1)
+    for k, row in enumerate(h_rows):
+        g.text(hx0 + 1, hy0 + 1 + k, row.replace(" ", "\0"))
+    g.room(vx0, vy0, vx1, vy1)
+    v_rows, _ = teleport_v(vy1 - vy0 - 1)
+    for k, row in enumerate(v_rows):
+        g.text(vx0 + 1, vy0 + 1 + k, row.replace(" ", "\0"))
+
+    # the CPU's own send cell, east two and down into H's north wall ...
+    n1 = g.draw_pipe([(src_x, cmd_y), (hx0 + 1, cmd_y), (hx0 + 1, hy0 - 1)])
+    # ... H hands it up the through-column into V's south wall ...
+    n2 = g.draw_pipe([(thru, hy0 - 1), (thru, vy1 + 1)])
+    # ... and V hands it west onto the drum's own attachment cell.
+    n3 = g.draw_pipe([(vx0 - 1, ry), (rom_east + 1, ry)])
+    return n1 + n2 + n3, {
+        "seek:H": (hx0, hy0, hx1 - hx0 + 1, hy1 - hy0 + 1),
+        "seek:V": (vx0, vy0, vx1 - vx0 + 1, vy1 - vy0 + 1),
+    }
 
 #: Use the side-ported grid man-memory for the hot tier, so its answer leaves the
 #: same wall its request enters. The bottom-ported block forces the answer to travel
@@ -5439,6 +5527,29 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: measured one.
 STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
+#: ``(slug, tier)`` pairs whose **seek request** reaches the drum through two teleport
+#: rooms instead of one pipe around the outside of the machine. See
+#: :func:`_seek_teleport` for the geometry; the registry exists so every other
+#: machine's checked-in grid stays byte-identical. Costs two men.
+#:
+#: The plain route is the longest pipe on the machine by seven times — 437 cells on
+#: ``deadman-3d`` taped against 58 for the next one — and every cell of it is latency
+#: on the drum station's ``r``. The teleported route is **53**.
+#:
+#: The arithmetic, measured on the 116-round tour with the native engine:
+#:
+#: * the derivative is **8,063 tour ticks a pipe cell** (+100 cells of pad:
+#:   838,511,442 -> 839,317,714), i.e. ~70 taken seeks a frame, one tick a cell each;
+#: * so the whole 437-cell pipe is worth ~3.5M ticks, **0.42% of the tour**, and
+#:   collapsing it to 53 is worth ~3.1M.
+#:
+#: That ceiling is set by the seek *rate*, not the pipe: this is a rare, fully
+#: serialised event (~70 a frame) where the store's teleported answer was a common
+#: one (~15k reads a frame). A seven-times-longer pipe on a two-hundred-times-rarer
+#: event is worth less, not more — which is the whole reason to measure the
+#: derivative before building.
+SEEK_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
 #: 12-row one. Keyed by tier because only the taped tier has gates at all;
@@ -5922,6 +6033,7 @@ def build_for(
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
+        seek_teleport=_seek and (slug, store) in SEEK_TELEPORT,
         seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
