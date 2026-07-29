@@ -95,6 +95,20 @@ def test_the_gates_measured_three_cell_margin_is_reproduced():
     assert ok == [0, 1, 2], f"the margin moved: legal lifts were {ok}"
 
 
+def test_the_cost_model_ranks_the_answer_paths_four_measured_builds():
+    """``STORE_ANSWER_WEST`` needs no corridor — all four builds were measured.
+
+    The model gets the *order* right, which is what a solver choosing between them
+    needs.  It does not get the forwarder floor right: backed out of the adjacent
+    pairs it is 1.48 / 0.70 / 3.71 cells against the assumed 5.2 (see
+    :data:`model.FORWARDER_CELLS`).
+    """
+    from .store import answer_path_probe
+
+    ok, lines = answer_path_probe()
+    assert ok, "\n".join(lines)
+
+
 @pytest.mark.slow
 def test_the_store_request_legs():
     from .store import run_store

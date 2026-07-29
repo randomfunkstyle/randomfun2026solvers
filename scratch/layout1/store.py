@@ -39,7 +39,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .model import TICKS_PER_WEIGHTED_CELL, Block, Pipe, Port, Problem
+from .model import (
+    FORWARDER_CELLS,
+    TICKS_PER_WEIGHTED_CELL,
+    Block,
+    Pipe,
+    Port,
+    Problem,
+)
 from .solve import Report, solve
 
 # ── the taped gate, from memory_taped.py ─────────────────────────────────────
@@ -227,6 +234,53 @@ def s3_feed(k: int, plain: int, weight: float) -> Problem:
     )
 
 
+# ── S4: the answer path, which the cost model gets *wrong* ───────────────────
+#: ``STORE_ANSWER_WEST``'s four builds, measured on the checked-in 115-frame tour:
+#: ``(label, forwarders, drawn cells, tour ticks)``.  Commit ``12ac19c``.
+ANSWER_BUILDS = (
+    ("three rooms / 10 cells", 3, 10, 1_113_752_187),
+    ("two rooms   / 10 cells", 2, 10, 1_112_107_549),
+    ("one room    /  7 cells", 1, 7, 1_107_995_954),
+    ("zero rooms  / 57 cells", 0, 57, 1_159_488_639),
+)
+
+
+def answer_path_probe() -> tuple[bool, list[str]]:
+    """Does the cost model rank ``STORE_ANSWER_WEST``'s four builds correctly?
+
+    This one needs no corridor at all: all four builds are measured, so the model
+    can be asked the only question that matters — does ``cells + 5.2 per
+    forwarder`` put them in the order the tour did?
+
+    It also backs the forwarder floor out of each adjacent pair, which is where
+    the interesting part is.
+    """
+    scored = [
+        (label, n, cells, ticks, cells + n * FORWARDER_CELLS)
+        for label, n, cells, ticks in ANSWER_BUILDS
+    ]
+    by_model = [s[0] for s in sorted(scored, key=lambda s: s[4])]
+    by_tour = [s[0] for s in sorted(scored, key=lambda s: s[3])]
+    lines = [f"    {'build':<24} {'charged':>8} {'ticks':>16}"]
+    for label, _n, _c, ticks, charged in scored:
+        lines.append(f"    {label:<24} {charged:>8.1f} {ticks:>16,}")
+    lines.append(f"    model order: {' < '.join(v.split('/')[0].strip() for v in by_model)}")
+    lines.append(f"    tour  order: {' < '.join(v.split('/')[0].strip() for v in by_tour)}")
+    # Back the forwarder's cost out of each adjacent pair: dTicks = (dCells +
+    # dRooms * F) * RATE.
+    lines.append("    forwarder floor implied by each adjacent pair"
+                 f" (model assumes {FORWARDER_CELLS}):")
+    for (la, na, ca, ta, _x), (lb, nb, cb, tb, _y) in zip(scored, scored[1:], strict=False):
+        d_rooms, d_cells, d_ticks = na - nb, ca - cb, ta - tb
+        if d_rooms:
+            f = (d_ticks / TICKS_PER_WEIGHTED_CELL - d_cells) / d_rooms
+            lines.append(
+                f"      {la.split('/')[0].strip()} -> {lb.split('/')[0].strip()}: "
+                f"{f:>6.2f} cells"
+            )
+    return by_model == by_tour, lines
+
+
 # ── running it ───────────────────────────────────────────────────────────────
 def _pick(rep: Report, leg: str) -> tuple[str, int, float]:
     r = rep.best.routes[leg]
@@ -344,6 +398,15 @@ def run_store() -> int:
               f"{rep.rejected_by_bindings}/{rep.candidates} candidates refused by "
               f"check_bindings")
         saved.append((leg, p0.best.routes[leg].cells * w, charged * w))
+
+    # ── S4: the answer path — measured builds, no corridor needed ───────────
+    print("\n  answer path (STORE_ANSWER_WEST, -0.52%): all four builds measured")
+    ok, lines = answer_path_probe()
+    for line in lines:
+        print(line)
+    print(f"        [{'OK' if ok else 'XX'}] the cost model "
+          f"{'ranks them as the tour did' if ok else 'ranks them WRONGLY'}")
+    bad += not ok
 
     tot_plain = sum(a for _n, a, _b in saved)
     tot_got = sum(b for _n, _a, b in saved)

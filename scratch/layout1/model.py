@@ -52,6 +52,18 @@ TICKS_PER_WEIGHTED_CELL = 1_112_472
 #: This is a *floor*, not a fee schedule: it is the same 5.2 whether the room is
 #: four rows tall or forty, which is the whole reason a room is a routing
 #: primitive rather than an obstacle.
+#:
+#: **But it is not one number, and Phase 1 found that out.**  Backed out of
+#: ``STORE_ANSWER_WEST``'s four measured builds, the same constant comes to
+#: **1.48, 0.70 and 3.71 cells** on three adjacent pairs (see
+#: ``store.answer_path_probe``).  That is the right sign and the right order —
+#: the model ranks all four builds exactly as the tour did — but it is 3x to 7x
+#: over on the answer path.  It should be: 5.2 was measured re-serialising a
+#: *multi-word request* at one word per six ticks, and an answer is one word,
+#: with nothing to re-serialise.  A solver that has to choose *how many*
+#: forwarders needs this per-pipe, from the words-per-message of the traffic on
+#: it; a solver only choosing *whether* survives the error, because the gap
+#: between a room and a 40-cell pipe is far wider than the error in 5.2.
 FORWARDER_CELLS = 5.2
 
 #: The shortest pipe that can attach a room to a wall: one cell out of the wall
@@ -126,6 +138,15 @@ class Block:
     rests on and which was measured, not read (``probe_gate_grow.py``).  Growing
     a side with an ``r``/``s`` on it walks that glyph away from its pipe and is
     rejected by the model, not merely priced.
+
+    **Known gap.**  That rule is too strict for one of the three measured moves.
+    ``STORE_ANSWER_WEST`` widens the answer collector *westward across its own*
+    ``s``, and it is safe because that room has exactly one outgoing pipe, so the
+    ``s`` has no rival to lose to — the glyph is redrawn beside the new wall.
+    That is a **regenerated** block, not a translated one (property 3), so it
+    needs a separate primitive — "widen a room, carrying its glyphs" — that this
+    model does not have.  Stated rather than bodged: a ``carry`` flag here would
+    be one line, and untested.
     """
 
     name: str
