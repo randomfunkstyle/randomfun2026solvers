@@ -1278,12 +1278,20 @@ def test_taped_registry_pins() -> None:
     # one — four banks is what puts the taped machine's width floor under the
     # ROM's. Property, not the split.
     assert len(machine.TAPED_BANKS["deadman-3d"]) == 4
-    # TIER_LAYOUT is opt-in per (slug, tier): only deadman-3d's taped variant
-    # deviates from the shared registry, so every other machine — and the
+    # TIER_LAYOUT is opt-in per (slug, tier): only the two DOOM taped variants
+    # deviate from the shared registry, so every other machine — and the
     # canonical men-v3 build — stays byte-identical.
-    assert set(machine.TIER_LAYOUT) == {("deadman-3d", "taped")}
+    assert set(machine.TIER_LAYOUT) == {
+        ("deadman-3d", "taped"), ("deadman-3d_hires", "taped"),
+    }
+    for tier in machine.TIER_LAYOUT.values():
+        assert set(tier) <= {"rom_rows", "mem_offset", "store_offset"}
     tier = machine.TIER_LAYOUT[("deadman-3d", "taped")]
-    assert set(tier) <= {"rom_rows", "mem_offset", "store_offset"}
+    # hires overrides the offset only; its fold is ROM_ROWS' and stays there.
+    hires = machine.TIER_LAYOUT[("deadman-3d_hires", "taped")]
+    assert set(hires) == {"store_offset"}
+    assert -20 <= hires["store_offset"][0] <= -9  # the window the roof binds in
+    assert hires["store_offset"][1] == 0
     # The taped store is a quarter of the men-v3 block's height, so its fold
     # goes far deeper than the canonical machine's height budget allows.
     assert tier["rom_rows"] > machine.ROM_ROWS["deadman-3d"]
@@ -1368,7 +1376,12 @@ def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() ->
     property, and three tests asserting overlapping halves of it is how a
     mechanical merge ends up with contradictory numbers on one expression.
     """
-    assert machine.STORE_REQUEST_REACH == {("deadman-3d", "taped")}
+    # hires takes the roof (it had to be *made* reachable — see TIER_LAYOUT)
+    # and declines the chain, because its own bank order puts the hot bank at
+    # chain position 0 and the links then carry ~4% of accesses instead of 80%.
+    assert machine.STORE_REQUEST_REACH == {
+        ("deadman-3d", "taped"), ("deadman-3d_hires", "taped"),
+    }
     assert machine.TAPED_CHAIN_REACH == {("deadman-3d", "taped")}
     assert all(tier == "taped" for _slug, tier in machine.STORE_REQUEST_REACH)
     assert all(tier == "taped" for _slug, tier in machine.TAPED_CHAIN_REACH)
@@ -1434,7 +1447,9 @@ def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() ->
     # instead (:data:`machine.TAPED_FEED_TELEPORT`). It is the only part of this
     # that costs anything — a man a bank and two columns of pitch — so what is
     # asserted is that the cost is bounded, not what it is.
-    assert machine.TAPED_FEED_TELEPORT == {("deadman-3d", "taped")}
+    assert machine.TAPED_FEED_TELEPORT == {
+        ("deadman-3d", "taped"), ("deadman-3d_hires", "taped"),
+    }
     assert all(tier == "taped" for _slug, tier in machine.TAPED_FEED_TELEPORT)
     banks = len(machine.TAPED_BANKS["deadman-3d"])
     unfed = _taped_with(TAPED_FEED_TELEPORT=False)

@@ -213,8 +213,28 @@ def cases_json(cmds: Sequence[int]) -> dict:
 
 
 def hires_source() -> str:
-    """The LM-1 assembly: :func:`deadman3d.deadman3d_source` at :data:`GEOM`."""
-    return d3.deadman3d_source(GEOM)
+    """The LM-1 assembly: :func:`deadman3d.deadman3d_source` at :data:`GEOM`,
+    without the DDA x-arm's redundant ``LD WADDR``.
+
+    ``dda_acc_reload=False`` is the M13 program lever, and it is taken here
+    rather than through ``machine.TIER_PROGRAM`` **because that registry cannot
+    reach this family**: it is consulted only by ``machine._tier_program``,
+    which ``build_for`` calls only when no ``program=`` is passed, and this
+    module always passes one — the level is installed from an IWAD at call time,
+    so there is no checked-in ``.asm`` to load.  An entry keyed
+    ``("deadman-3d_hires", "taped")`` would be dead config.  Nor is one needed:
+    the registry exists to keep a **byte-frozen** grid off a program fix, and
+    nothing this module generates is committed (see the module docstring), so
+    the source may simply take the win.
+
+    Worth **-4.405%** on the 21-round hi-res tour (1,090,194,166 ->
+    1,042,173,023 ticks over frames 1..20, ``scratch/deadman3d-opt/hires_opt.py``)
+    and 32 words of ROM, P 8,895 -> 8,863.  That is ``deadman-3d``'s own -4.37%
+    almost exactly, which is the expected answer for a lever that deletes one
+    store read per DDA step: the step count scales with the pixel count and so
+    does everything else.
+    """
+    return d3.deadman3d_source(GEOM, dda_acc_reload=False)
 
 
 def install_wad(wad: Path, *, brightness: float | None = None) -> dict:

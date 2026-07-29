@@ -5409,6 +5409,18 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     # the fold then deepens until the ROM meets the store chain's floor.
     # 395x231 -> **279x258** (max 395 -> 279, bbox 91,245 -> 71,982).
     ("deadman-3d", "taped"): {"rom_rows": 83, "store_offset": (-20, 0)},
+    # deadman-3d_hires: **not** a width/height trade — this machine's box is set
+    # by the 496-column wall and nothing the store does moves it. The offset is
+    # here for one reason: it is what lets :data:`STORE_REQUEST_REACH` reach.
+    # The store's request column is 101 and the adapter's floor spans 81..92, so
+    # the two-cell drop has nowhere to start until the block is pulled west; the
+    # window is dx -20..-9 and every value in it binds. Which one is chosen does
+    # not matter at all — the 21-round tour comes out at 1,085,082,598 ticks
+    # **to the tick** at -9, -14 and -20, because with the roof reaching, the
+    # only thing crossing the gap is the drop and the rest is translation. -14
+    # is the middle, so the drop has five columns of margin either side.
+    # ``rom_rows`` is deliberately absent and falls through to ROM_ROWS' 88.
+    ("deadman-3d_hires", "taped"): {"store_offset": (-14, 0)},
 }
 
 
@@ -5437,6 +5449,16 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: same rule :data:`MEM_PAD_FOR`, :data:`INPUT_NORTH_WEST` and
 #: :data:`SEEK_TAKEN_DROP_EAST` already follow. The canonical machine would take the
 #: same win; it is simply not allowed to move.
+#: ``deadman-3d_hires`` wants the same fix and **cannot be given it here**, which
+#: is worth stating so nobody adds the key and believes it did something. This
+#: registry is read only by :func:`_tier_program`, which :func:`build_for` calls
+#: only when no ``program=`` was passed — and ``deadman3d_hires.build_local``
+#: always passes one, because its level comes out of an IWAD at call time and
+#: there is no checked-in ``.asm`` to load. An entry keyed
+#: ``("deadman-3d_hires", "taped")`` would be inert. It is also unnecessary: the
+#: registry exists to keep a **byte-frozen** grid off a program fix, and that
+#: family commits nothing, so ``deadman3d_hires.hires_source`` simply passes
+#: ``dda_acc_reload=False`` itself — worth -4.405% there, against -4.32% here.
 TIER_PROGRAM: dict[tuple[str, str], str] = {
     ("deadman-3d", "taped"): "randomfun2026solvers.deadman3d:taped_program",
 }
@@ -5885,6 +5907,15 @@ MEM_PAD_FOR: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 16}
 #: request stub is mid-block) and because withholding it is how the tests state
 #: what a forwarder is worth. Empty by default: absent pairs keep every existing
 #: grid byte-identical.
+#: **Declined for ``deadman-3d_hires`` on the measurement, not on principle.**
+#: Once its store is pulled west far enough for either form to bind
+#: (:data:`TIER_LAYOUT`), both do — and the roof wins: -0.469% against this
+#: room's **-0.362%** on the same 21-round tour at the same offset
+#: (1,085,082,598 vs 1,086,250,847 ticks over frames 1..20, against a base of
+#: 1,090,194,166). The 0.107pp gap is the forwarder's own six-tick
+#: re-serialisation, which is exactly what :data:`STORE_REQUEST_REACH` exists to
+#: stop paying — so the supersession is measured on this machine rather than
+#: carried over from ``deadman-3d``.
 STORE_REQUEST_TELEPORT: set[tuple[str, str]] = set()
 
 #: ``(slug, tier)`` pairs whose STORE grows its **first gate's room** north until
@@ -5904,7 +5935,21 @@ STORE_REQUEST_TELEPORT: set[tuple[str, str]] = set()
 #: whole permission slip and it was measured, not read: gate 0's room pulled 30
 #: rows north with the request fed 33 rows above its man reads all 600 addresses
 #: of the real plan back correctly (``scratch/deadman3d-opt/probe_gate_grow.py``).
-STORE_REQUEST_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
+#: ``deadman-3d_hires`` takes it too, but it had to be *made* reachable: its
+#: store's request column is 101 against an adapter floor of 81..92, so out of
+#: the box the build fails outright ("the drop has nowhere to start") rather
+#: than merely costing more. A :data:`TIER_LAYOUT` ``store_offset`` of
+#: ``(-14, 0)`` pulls the block into the window — see that entry for why the
+#: exact value is arbitrary. **-0.469% net** on the 21-round hi-res tour
+#: (1,090,194,166 -> 1,085,082,598 over frames 1..20), which is the roof's own
+#: -0.550% less the +0.081% the offset costs on its own. Not the -1.478%
+#: ``deadman-3d`` got, and the reason is the same one that shrinks every store
+#: lever on this machine: at 128x96 the frame is four times the pixels but the
+#: store is the same store, so a request leg is a smaller share of the frame.
+STORE_REQUEST_REACH: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
 
 #: ``(slug, tier)`` pairs whose taped STORE grows every gate after the first
 #: **west** until its wall stands beside the previous gate's, so the chain link
@@ -5927,6 +5972,18 @@ STORE_REQUEST_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: than four rows off the body and the north arms bind to the downstream pipe —
 #: reads land in the wrong bank with no error at all. Arithmetic in
 #: ``scratch/deadman3d-opt/METRICS.md`` M13.
+#: **Declined for ``deadman-3d_hires``, and its own bank order is the reason.**
+#: This lever is worth what the chain *links* carry, and hires carries almost
+#: nothing on them: :data:`TAPED_BANK_ORDER`'s ``(3, 0, 1, 2)`` puts the bank
+#: holding 90.79% of reads and 99.85% of writes at chain position **0**, which
+#: walks zero links — 0.13 gates a read against ``deadman-3d``'s 1.15. So where
+#: link 0 carries 68% of that machine's accesses it carries ~4% of this one's,
+#: and the measurement follows: **-0.020%** on the 21-round hi-res tour
+#: (1,090,194,166 -> 1,089,980,434 over frames 1..20), against -1.950% there.
+#: It is free in box terms — 500x348 either way — and it is still not taken: a
+#: two-hundred-thousandth of a run does not buy pinning three gate rooms into a
+#: grown form that the next store change would have to work around. On top of
+#: the shipped hi-res set it is smaller still, -178,101 ticks = -0.017%.
 TAPED_CHAIN_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
 #: ``(slug, tier)`` pairs whose taped STORE puts a **vertical forwarder** on every
@@ -5944,7 +6001,21 @@ TAPED_CHAIN_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: 30) and two columns of pitch: the room is ``memory_men.teleport_v`` in the
 #: corridor between two banks, which is six columns wide and had four. Absent
 #: pairs keep every existing grid byte-identical.
-TAPED_FEED_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
+#: ``deadman-3d_hires`` takes it, at a tenth of the value and for the mirror
+#: image of the reason :data:`TAPED_CHAIN_REACH` is declined there. Its bank
+#: order puts the hot bank at chain position 0, so ~91% of accesses walk
+#: ``req0->bank0`` and *only* that arm — which is the one this lever shortens
+#: most and the chain lever does not touch at all. **-0.286%** on the 21-round
+#: hi-res tour (1,090,194,166 -> 1,087,081,434 over frames 1..20) against
+#: -4.194% on ``deadman-3d``; the arm is the same ~45 cells but a 128x96 frame
+#: is four times the work between two store accesses, so any one leg is a
+#: quarter of the share. The two columns of extra pitch cost nothing here: this
+#: machine's width is the 496-column wall's, not the store's, at 500x348 either
+#: way.
+TAPED_FEED_TELEPORT: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
