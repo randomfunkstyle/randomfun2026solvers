@@ -2338,15 +2338,21 @@ Two costs, and the second is the one that decided it.
   (`slot_rows[min(down)] - 1`). Sharing is a global assignment — which node takes
   which lane row — under betweenness *and* the column-order precondition. That is
   a different algorithm, not a parameter.
-* **The room cannot shrink where it stands.** With the CPU 20 rows shorter,
-  **no placement was found anywhere**: `store_offset` dy over −30..+30 failed at
-  every value, and the failures are structural, not marginal — block collisions
-  at (63,106)/(65,106)/(105,86), `taped block collision at (4,5)`, `request roof
-  is not above the gate strip`, and `no clear band below the store for the seek
+* **The room does not shrink where it stands.** With the CPU 20 rows shorter,
+  `store_offset` dy was swept over **−30..+30** and **every value failed**
+  (`scratch/pitch_sweep.py`). The failures are structural rather than marginal,
+  and they name four different neighbours: block collisions at
+  (63,106)/(65,106)/(105,86), `taped block collision at (4,5)`, `request roof is
+  not above the gate strip`, and `no clear band below the store for the seek
   teleport`. The store block, the adapter, the gate strip and the seek teleport
-  are all placed against the tall room. A 13-row shrink is the same problem with
-  a smaller number: it is a re-tune of every placement registry at once, to
-  collect ~5%, against a decoder whose failure mode is silent.
+  are all placed against the tall room, so this is not one offset being stale —
+  it is a simultaneous re-tune of several placement registries.
+
+  This is a **one-dimensional** sweep and therefore a lower bound on the work,
+  not a proof of impossibility; a wider `(rom_rows, store_dy, mem_dy)` sweep was
+  left running and had found nothing when this was written. A 13-row shrink is
+  the same problem with a smaller number. That is the price against ~5%, on a
+  decoder whose failure mode is silent.
 
 The mechanism is left in place and inert — `LANE_PITCH` is empty, `lane_pitch`
 defaults to 2, and every grid is byte-identical — so whoever picks this up starts
