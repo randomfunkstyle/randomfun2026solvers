@@ -67,13 +67,14 @@ own ``route``:
    uses it.** An ``s`` at its own pipe's row is at distance ``IW - x`` and every
    rival is that plus a row difference, so it wins strictly whatever column the
    arm sits in.
-2. **Incoming pipes attach where their readers are**: the ring returns and the
-   input on the west wall (their readers are the western arms), ``cmd`` on the
-   north wall beside ``MAIN``, and the accumulator's return on the *south* wall
-   under the two eastern arms that read it. Rows are then chosen so each reader
-   is strictly nearest its own — the tightest margin in the block is one cell
-   (``MAC``'s ``r`` on ``B_ret`` against ``in``), which is why this is asserted
-   rather than argued.
+2. **Incoming pipes attach where their readers are.** At depth 3 that means the
+   ring returns and the input on the west wall (their readers are the western
+   arms), ``cmd`` on the north wall beside ``MAIN``, and the accumulator's return
+   on the *south* wall under the two eastern arms that read it. Rows are then
+   chosen so each reader is strictly nearest its own — the tightest margin is one
+   cell (``MAC``'s ``r`` on ``B_ret`` against ``in``), which is why this is
+   asserted rather than argued. At depth 4 the same rule lands somewhere else;
+   see below.
 
 Arms are laid out west to east as trie leaves and their bodies run *down* their
 own column, so "which row a glyph is on" is a free variable the layout uses to
@@ -119,12 +120,18 @@ __all__ = [
     "StreamBlock",
     "UNIT_IH",
     "UNIT_IW",
+    "EXPECTED_PIPES",
+    "UPDB_BANDS",
     "UPDB_SHIFT",
     "arm_codes",
+    "build_stream",
     "build_updb_probe",
     "dual_relay_cells",
     "unit_interior",
+    "unit_interior_grid",
+    "unit_pipe_count",
     "updb_body",
+    "updb_probe_input",
     "updb_probe_model",
 ]
 
@@ -883,31 +890,9 @@ ADDER_P1_COL = ADDER_IW  # north wall: partial sums out
 ADDER_P2_ROW = 1  # east wall: partial sums in
 
 
-#: The depth-4 ADDER: the same three lines, stretched. Both inlets are on the north
-#: wall either way (the two ``r`` glyphs pick the nearer one each, and addition is
-#: commutative, so which is which does not matter) — but *how far apart* the inlets
-#: are does. At depth 3 the accumulator's row sits below the product's, so ``p2``'s
-#: turn column has to be east of ``prod``'s and the eight-wide room's four-column gap
-#: is enough. At depth 4 the rows are the other way round: ``p2`` leaves the unit
-#: *above* ``prod``, so — by the block's own no-crossing rule that a southbound
-#: pipe's turn column falls as its row rises — ``p2`` must turn **west** of ``prod``,
-#: and the three pipes between them (``out``, ring A, ring B) need columns in the
-#: gap too. Eight columns of separation is what buys those three plus slack.
-_ADDER4 = [
-    ">rM        r+v",
-    "^            s",
-    "^@<<<<<<<<<<<<",
-]
-ADDER4_IW = len(_ADDER4[0])
-ADDER4_IH = len(_ADDER4)
-ADDER4_PROD_COL = 3  # north wall: products in, nearest the first `r`
-ADDER4_P2_COL = 11  # north wall: partial sums in, nearest the second `r`
-ADDER4_P1_ROW = 2  # west wall: partial sums out, on the `s`'s own row
-
-
-def adder_cells(trie_bits: int = TRIE_BITS) -> dict[tuple[int, int], str]:
+def adder_cells() -> dict[tuple[int, int], str]:
     out: dict[tuple[int, int], str] = {}
-    for y, row in enumerate(_ADDER if trie_bits == TRIE_BITS else _ADDER4, start=1):
+    for y, row in enumerate(_ADDER, start=1):
         for x, ch in enumerate(row, start=1):
             if ch != " ":
                 out[(x, y)] = ch
