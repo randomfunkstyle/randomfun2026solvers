@@ -2488,3 +2488,116 @@ Three things this cost, recorded so the next attempt does not re-pay them:
   painting"**. The real sprite chain is 6.7% and its per-pixel part is 1.7%.
   A label-prefix bucket is a guess until the labels are read.
 
+# H2 — `stream:router`: the seam, and whether the demux is on the critical path
+
+Two questions about the same room, and they turn out to have opposite answers.
+The seam between the four panels is worth real work; the router's own width is
+worth **58 ticks a frame**, and here is the measurement that says so.
+
+## Is the router on the critical path? No — and by five orders of magnitude
+
+The router is a one-man room the CPU's single `SND` lane feeds and four DOOM
+units hang off, so its trie walk is charged to a frame **only if the CPU blocks
+sending into it**. `FastLittleman.run(profile=True)` counts that exactly:
+`FastProfile.send_blocked` is per pipe and not sampled.
+`scratch/deadman3d-opt/router_load.py`, four rounds, 180.7M ticks:
+
+| | before | after |
+|---|---:|---:|
+| command words a frame (`cpu->router` sends) | 2,544 | 2,544 |
+| **times the CPU parked sending one** | **0** | **0** |
+| router man: ticks in the room | 100% | 100% |
+| ...of which blocked on `r` | 99.5% | 99.8% |
+| router **working** (walking), share of run | 0.492% | 0.155% |
+| **ticks of walk per command word** | **116.4** | **36.8** |
+
+Zero parks in 180.7 million ticks. The room is idle waiting on `r` for 99.5% of
+the run, and its walk overlaps the CPU's next instruction entirely — the CPU
+takes ~20,000 ticks per command word and the router ~116. So the compaction's
+whole recoverable cost is **tail latency**: the last COMMIT of a frame still has
+to cross the room before the slowest panel commits, and that is what the frame
+stamp measures.
+
+Predicted saving: one walk's worth, ~80 ticks a frame. Measured: **58**. The
+ceiling — if the CPU had been perfectly serialised behind the room, which the
+zero parks say it was not — would have been `2,544 x 79.6 = 202,000` a frame,
+0.39%. It is not.
+
+## What the width was made of, and what was actually holding it
+
+`LEAF_PITCH = 12` with eight leaves is 84 columns of fan, and the walk crosses
+it twice: east to `TRIE_COL` (42 cells), down the trie (`2P + P + P/2` = 42),
+then west along the collector to column 1 (up to 50). The docstring claimed the
+pitch only had to "exceed twice the leaf row's distance to the south wall"; the
+real binding floor is **1** — the outlets sit directly under the leaves, so
+`_check_router`'s margin *is* the pitch.
+
+What actually forced 12 was the **leg fan**, in an arrangement the wall no longer
+has. With all four blocks west of the cluster the two north legs shared one lane
+row, which needs T1's outlet east of T0's command port at column 33 — i.e.
+`LEAF0 + 3 * LEAF_PITCH > 33`, so `P > 10`. With the blocks back either side of
+the cluster every leg has its own lane, and the only surviving constraint is
+`LEAF0 + 2 * LEAF_PITCH < 33`. Pitch 2, `LEAF0` 4 (the trie entry has to clear
+the `M8W/WbW` unpack, which fills columns 1..10).
+
+```
+ >@rM8W/WbWv                >@rM8W/WbW                          v
+       v  ]x]  v                             v                      ]x]
+     v]x]v   v]x]v              v          ]x]          v            ...
+    vxv vxv vxv vxv       v    ]x]    v           v    ]x]    v      ...
+    s s s s S             s           s           s           s           S
+ ^<<<<<<<<<<<            ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< ...
+   21x8  (new)                        90x8  (old)
+```
+
+Room **92x10 -> 23x10**. `SEL` is read off the trie by :func:`leaf_codes` and is
+pitch-independent, so the emitted `.asm` and the input stream hash unchanged.
+
+## The seam: `gy` 6 -> 3, and why it decides the arrangement
+
+The band between the two panel rows had drifted to six rows. It was not chosen:
+the subsystem sweep that moved the cluster east of all four blocks scored on the
+wall's **bounding box**, and a wider band shortened the leg fan enough to win on
+that objective. The bounding box is not scored for this family, and the seam is
+what the demo is a picture *of*.
+
+`gy = 3` cannot be had in the east-of-all-four arrangement. Feeding the cluster
+from one side means SE's ADDR, DATA and SWAP and SW's ADDR all enter the band as
+eastbound lanes — four pipes turning south at four different columns, four rows.
+Three of the four cannot be lifted out: SW's ADDR reaches the shared channel from
+*below* the south blocks (row 188, the first free row under the block) and has to
+leave it *into* the band (row ~168), so its channel span `[168, 188]` is **nested
+inside** the span of every SE net that runs past the cluster — and a nested pair
+has no west-of order at all (`_pack_order`; `ok(p,q)` fails in both directions).
+Escaping that needs all three SE nets to come down the panel gutter from above,
+i.e. five gutter columns, which widens the seam the other way. So the blocks go
+back either side of the cluster, each panel is fed from the block beside it, and
+the band carries only its four arrowheads.
+
+## Where H1's baseline lands
+
+Same 21-round tour, `hires_gate2.py 21`, native round-gated, `passed=True`,
+frames 1..20 differenced.
+
+| | machine | wall | ticks a frame | vs H1 |
+|---|---|---|---:|---:|
+| H1 baseline (`50277ab`) | 500x348 | 499x223 | 51,809,819 | — |
+| seam back to 3 rows | 494x447 | 493x305 | 51,810,172 | **+0.00068%** |
+| **+ router 92x10 -> 23x10** | 494x447 | 493x305 | **51,810,114** | **+0.00057%** |
+
+The seam costs +353 a frame — the leg fan goes 9/166/123/280 -> 14/308/237/531
+and the last COMMIT has further to travel. The router compaction gives 58 of it
+back. Net **+295 ticks on 51.8 million**, five and a half thousandths of a
+percent, for a seam that is half as wide.
+
+Verified on the real engine at every step: all 27 composed frames byte-identical
+to the H1 build and `.asm` `4fa5e682…` / `.input.txt` `847a0caf…` unmoved;
+`packed_probe.py` drives both walls with the same 25 commands and the composed
+128x96 images are identical, non-blank, all four seam corners painted;
+`lm.mjs analyze` finds four 64x48 displays in reading order with **3 rows and 2
+columns** between their wall boxes (`269..318`, `322..371`; `(188,253)`,
+`(256,321)`); a 1M-tick run is `fatal: None`. The four leaf `s` glyphs bind pipes
+whose destinations are NW/NE/SW/SE in tile order and `S` binds all four
+(`FastLittleman._bindings`, the same nearest-pipe rule the engine uses).
+`deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`, `_taped.man` `a11edcc6…`,
+`deadman-3d.input.txt` `654d35d6…`.
