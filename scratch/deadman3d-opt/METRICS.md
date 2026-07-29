@@ -1766,3 +1766,160 @@ instructions retired against M15's 1,217,933 (-3.9%)**.
 Reads a frame: **9,112 -> 7,813, -14.3%.** Box 293x254, six columns under the
 pinned ceiling. `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`,
 `deadman-3d.input.txt` `654d35d6…`, `deadman-3d_taped.man` `a11edcc6…`.
+
+## M17 — the DOOM unit's dead columns: the ceiling first, then the -0.19%
+
+The user, reading the block: *"in the stream units — too wide columns, and there
+are DEAD columns from what I see."* They were right about the columns, and the
+first job was to find out whether being right about the columns meant anything.
+
+### The ceiling, measured before anything was built
+
+The unit is a **write-only coprocessor**: the CPU sends a command and walks on,
+and the paint loops run concurrently with the next raycast. So unit-internal
+savings convert to tour ticks only where the CPU is actually *waiting* on it,
+and `scratch/doom_pipes.py --rounds 8` says exactly how much that is:
+
+```
+critical path — the CPU is the only man on it:
+  blocked on store:collector->cpu   16,614,151  40.44% of the run
+  blocked on rom->cpu                  778,817   1.90%
+  blocked on cpu->stream:unit          412,345   1.00%   <- the whole ceiling
+  blocked on input->cpu                 36,748   0.09%
+```
+
+**1.00%**, up from the 0.72% M14 recorded only because the CPU has got faster
+since. 1,742 commands over those eight rounds, so 237 ticks of CPU stall per
+command — and whatever the unit saves per command comes off that 237 or off
+nothing. This number is the reason the entry below is worth 0.19% and not more,
+and it was known before a line of geometry moved.
+
+### What the gaps were: a fixed pitch set by the widest arm
+
+The same shape as `SLAB_PITCH`. The trie's eight leaves sat at
+`LEAF0 + LEAF_PITCH*i` with the pitch at 20, and the pitch is set by the
+**widest** arm — GUNF's 33-column Freedoom sprite chain, which needs two leaves
+to hold it. Every other arm got 20 columns whether it wanted them or not:
+
+| arm | real span | granted | traffic |
+|---|---:|---:|---:|
+| COMMIT | 1 | 20 | 0.55% |
+| GUN | 23 | 40 | 0.48% |
+| CURS | 1 | 20 | 17.4% |
+| GUNF | 33 | 40 | 0.07% |
+| RUN | 4 | 20 | 46.6% |
+| COL | 11 | 14 | 34.9% |
+
+**73 of 156 interior columns carry a cell at all**, and the two 20-column gaps
+the user saw are leaves 2 and 5, which no arm reaches into (the sprite chains
+ride over the near end of each). The trie walked straight through both.
+
+And the pitch was **stale**: the docstring justified it by the V3 HUD arm's
+serpentine field, which lived between RUN and COL. V4 replaced that arm with
+CURS + RUN and the field went with it. Nothing had needed the pitch since.
+
+### What the walk actually costs
+
+Dispatch is one man: east from MAIN to the trie root, across three trie rows to
+his leaf, down the arm, and then **the whole way back west** along the collector
+row to column 1. That is roughly `2 x leaf_column`, on every command — 291 cells
+for a COL word at leaf 143, against a 237-tick stall. It is the same quantity
+the collector row has always been, but nobody had priced it against the pitch.
+
+`COMPACT_LEAF_COLS = (3, 7, 27, 33, 37, 41, 73, 79)` gives each arm its own
+width. `trie_nodes()` derives every internal column as the midpoint of its two
+children (two cells a side is the floor — the branch writes `x` and then `]`,
+the shift that advances the decode), so the leaves become a table rather than a
+pitch. Interior **156 -> 92 columns**, block **235x101 -> 171x101**.
+
+**No code moves.** `arm_codes()` already read the codes off the leaves' *rank* —
+a west branch is a set bit — so re-spacing hands back the same dict,
+`store.DoomUnit.CODES` and the same `.equ C_*`. That is what makes this a
+re-spacing rather than a rebuild, and it is checked rather than argued.
+
+### The east wall has to travel with the leaves
+
+The one trap, and it is rule 2's. Every deep `r` must bind its ring return
+rather than the `cmd` pipe, and it wins by `(east wall - x)` against
+`(x - CMD_COL) + depth`. Compacting the arms westward while leaving the wall at
+156 moves **both** terms the wrong way: COL's `r` would sit 86 cells from the
+wall and 70 from `cmd`, and the arm would read the command word instead of its
+own ring. Bringing the wall in restores the margin exactly (43), and `Cols.of()`
+now does for the block's east side what `Rows.of()` does for its rows — relays,
+panel and the three port pipes are all `EAST` plus a fixed offset, so all four
+pipe lengths are unchanged and `build_doom`'s three assertions re-check it.
+
+### What could NOT be done, and why it is the bigger number
+
+The traffic is **inverted against the layout**: RUN 46.6% and COL 34.9%, the two
+easternmost arms, pay the longest walk; GUN + GUNF carry 0.55% of words between
+them and sit in the west. Ordering by traffic would be worth more than the
+re-spacing. It cannot be had:
+
+* **COL is pinned to leaf 7** — its code is 0, which is what makes the CPU's
+  per-column send a bare `MULI 8`, and its loops spill ten columns east.
+* **RUN is pinned to an eastern leaf** — its literal-free `/16` parks the
+  argument in ring 1 and takes it back with an `r`, and rule 2 only lets an `r`
+  beat `cmd`'s north-wall distance from the far east. At leaf 1 that `r` binds
+  `cmd` and the arm reads the wrong word.
+
+So the gaps are free and the order is not. (Merging GUN and GUNF was measured
+and declined earlier for the same family of reason: it works and pays zero.)
+
+### Measured
+
+The probe is the unit alone — 18 commands, every arm, a negative-seed COL, the
+banding masks, both sprites — so its step count is the unit's own service time,
+dispatch walk included (`scratch/deadman3d-opt/unit_leaf_gate.py`):
+
+| | steps | |
+|---|---:|---:|
+| shipped pitch, `loop_row` 27 | 45,447 | |
+| **compact**, `loop_row` 27 | **43,507** | **-4.27%** |
+| shipped pitch, `loop_row` 10 | 44,054 | |
+| **compact**, `loop_row` 10 | **42,114** | **-4.40%** |
+
+108 ticks a command, against the 237 the CPU stalls. On the 116-round tour:
+
+| | ticks | box |
+|---|---:|---|
+| M16 | 611,021,810 | 293x254 |
+| **M17** | **609,871,597** | 293x254 |
+| | **-1,150,213 = -0.188%** | |
+
+**The box does not move**: the block is 64 columns narrower and the machine is
+not, because the taped store owns the width floor. The earlier finding that the
+unit's east edge sits ~50 columns inside the machine still holds after the store
+shrank — re-checked here rather than inherited.
+
+`deadman-3d_hires`, 9 rounds, both built from scratch and round-gated
+(`scratch/deadman3d-opt/hires_leaf.py`):
+
+| | ticks | box |
+|---|---:|---|
+| pitch | 367,069,477 | 500x348 |
+| **compact** | **367,029,420** | 490x348 |
+| | **-0.011%** | |
+
+Which is the honest answer for that family: hires is 68% blocked on its store
+and parks on `cpu->stream` for 0.0003% of its run, so four blocks' worth of
+shorter dispatch converts to nothing. Ten columns and a rounding error.
+
+### Gates
+
+`tests/test_deadman3d.py -m slow` **12/12** — every composed frame
+byte-identical. Full fast suite 2,788 passed, 68 skipped, so no other slug on
+`d3_unit` moved. Opt-in through `machine.DOOM_LEAF_COLS`, keyed exactly like
+`DOOM_LOOP_ROW` and only on the taped tier: `deadman-3d.man` / `_trim` / `_v2`
+still `f62d63fd…`, `deadman-3d.input.txt` still `654d35d6…`,
+`deadman-3d_taped.man` `a11edcc6…` -> **`684e26e7…`**.
+
+### The lesson, which is worth more than the 0.19%
+
+The user called the dead columns *"more aesthetics"* halfway through, and the
+measurement agrees with them: a write-only coprocessor's internal savings are
+capped by how long its client waits on it, and here that cap was 1.00% before
+anything started. Report the ceiling first. This one was worth taking because
+the compaction turned out to be a re-spacing that moved no codes, no rows and no
+pipe lengths — had it needed a re-order it would have been the wrong trade at
+these prices.

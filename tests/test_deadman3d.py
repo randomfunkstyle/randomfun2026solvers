@@ -1280,6 +1280,69 @@ def test_doom_loop_row_is_opt_in_per_tier() -> None:
     assert set(machine.DOOM_LOOP_ROW.values()) == {d3_unit.MIN_LOOP_ROW}
 
 
+def test_doom_leaf_cols_is_opt_in_per_tier_and_moves_no_code() -> None:
+    """The columns lever, keyed exactly like the rows one — and code-neutral.
+
+    ``machine.DOOM_LEAF_COLS`` spells the tuple out rather than importing it
+    (``d3_unit`` reaches back into ``machine`` for ``_Grid``), so this is what
+    keeps the two in step. The second half is the property that lets the lever
+    be a re-spacing rather than a rebuild: :func:`d3_unit.arm_codes` reads the
+    codes off the leaves' *rank*, so the compact layout hands back the same
+    dict, ``store.DoomUnit.CODES``, and the same ``.equ C_*``.
+    """
+    from randomfun2026solvers.lm1 import d3_unit
+    from randomfun2026solvers.lm1.store import DoomUnit
+
+    assert machine.DOOM_LEAF_COLS == {
+        ("deadman-3d", "taped"): d3_unit.COMPACT_LEAF_COLS,
+        ("deadman-3d_hires", "taped"): d3_unit.COMPACT_LEAF_COLS,
+    }
+    assert all(tier == "taped" for _slug, tier in machine.DOOM_LEAF_COLS)
+    assert d3_unit.arm_codes(d3_unit.COMPACT_LEAF_COLS) == d3_unit.arm_codes()
+    assert d3_unit.arm_codes(d3_unit.COMPACT_LEAF_COLS) == DoomUnit.CODES
+
+    # the shipped uniform pitch is the same table, spelled the old way
+    assert d3_unit.LEAF_COLS == tuple(
+        d3_unit.LEAF0 + d3_unit.LEAF_PITCH * i for i in range(8)
+    )
+    assert d3_unit.interior_width() == d3_unit.UNIT_IW == 156
+    assert d3_unit.interior_width(d3_unit.COMPACT_LEAF_COLS) == 92
+
+    # every pipe the block draws is a difference of band rows and of Cols.of()
+    # offsets, so the whole east side travels with the wall and none of them move
+    assert (
+        d3_unit.build_doom(leaf_cols=d3_unit.COMPACT_LEAF_COLS).lengths
+        == d3_unit.build_doom().lengths
+    )
+
+
+def test_a_trie_leaf_may_not_sit_one_cell_from_its_parent() -> None:
+    """``x`` then ``]`` — the branch and the shift it needs — are two cells.
+
+    :func:`d3_unit.trie_nodes` derives every internal column as the midpoint of
+    its two children, so four apart is the floor on a sibling pair. Two subtrees
+    on one row cannot collide however lopsided the leaves are (midpoints of a
+    sorted list interleave with it), which is why that is the whole contract.
+    """
+    from randomfun2026solvers.lm1 import d3_unit
+
+    with pytest.raises(d3_unit.DoomUnitError, match="two cells a side"):
+        d3_unit.trie_nodes((3, 5, 27, 33, 37, 41, 73, 79))
+    with pytest.raises(d3_unit.DoomUnitError, match="west to east"):
+        d3_unit.trie_nodes((3, 7, 33, 27, 37, 41, 73, 79))
+    with pytest.raises(d3_unit.DoomUnitError, match="leaves for a 3-bit trie"):
+        d3_unit.trie_nodes((3, 7, 27, 33))
+
+    # a lopsided but legal set still nests: every level is sorted, and each
+    # node's walk stays inside the gap between its own two children
+    levels = d3_unit.trie_nodes((3, 7, 9, 45, 47, 51, 53, 99))
+    assert levels == [[39], [16, 62], [5, 27, 49, 76], [3, 7, 9, 45, 47, 51, 53, 99]]
+    for depth, nodes in enumerate(levels[:-1]):
+        assert nodes == sorted(nodes)
+        kids = levels[depth + 1]
+        assert all(kids[2 * i] < n < kids[2 * i + 1] for i, n in enumerate(nodes))
+
+
 @slow
 def test_doom_unit_probe_paints_like_the_model() -> None:
     """The placed block plus a feeder, judged on the native engine against the

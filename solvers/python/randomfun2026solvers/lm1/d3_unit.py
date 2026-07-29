@@ -266,9 +266,11 @@ CMD_COL = 16
 BANDS: dict[str, tuple[str, int]] = ROWS.bands()
 
 #: Trie geometry: eight leaves at ``LEAF0 + LEAF_PITCH*i``, entry column midway.
-#: The pitch is what buys the HUD field its width: the serpentine lives between
-#: the RUN arm's columns and the COL arm's leaf, riding over the three spare
-#: leaves (spares have no machinery below the trie's leaf row).
+#: The pitch bought the V3 HUD arm's serpentine field its width — the field lived
+#: between the RUN arm's columns and the COL arm's leaf, riding over the spare
+#: leaves. V4 replaced that arm with CURS + RUN and the field went with it, so
+#: **nothing has needed the pitch since**; :data:`COMPACT_LEAF_COLS` is what
+#: notices. Kept because it still spells :data:`LEAF_COLS`.
 LEAF0 = 3
 LEAF_PITCH = 20
 TRIE_BITS = 3
@@ -331,10 +333,9 @@ def interior_width(leaf_cols: tuple[int, ...] = LEAF_COLS) -> int:
     return leaf_cols[-1] + COL_SPILL + EAST_SLACK
 
 #: Which leaf each arm hangs from, **west to east**. Not free: the leaves fix
-#: :func:`arm_codes` (a west branch is a set bit), COL must be leaf 7 so its
+#: :func:`arm_codes` (a west branch is a set bit), and COL must be leaf 7 so its
 #: code is 0 (the CPU's per-column send is a bare ``MULI 8``) and because its
-#: loop machinery spills ten columns east, and RUN must sit west of HUD so the
-#: serpentine field east of HUD's descent clears RUN's loop columns. Leaves
+#: loop machinery spills ten columns east. Leaves
 #: 2 and 5 are spare — headroom for later arms (GUN moved from leaf 2 to 1
 #: when the Freedoom-derived sprite's 12 runs outgrew the ten columns before
 #: CURS; each arm's run chain may ride east over a spare leaf, which has no
@@ -406,6 +407,12 @@ def trie_nodes(leaf_cols: tuple[int, ...] = LEAF_COLS) -> list[list[int]]:
     is the floor on any step, because the branch writes ``x`` on the node and
     ``]`` (``BP >>= 1``, the next level's bit) on the very next cell — at a step
     of one there is nowhere to put the shift and the decode never advances.
+
+    Nothing else can go wrong on a row: a node's walk spans exactly its two
+    children, midpoints of a sorted list are themselves sorted and interleaved
+    with it, so two subtrees on one level cannot reach into each other however
+    lopsided the leaves are. Sortedness and the two-cell step are the whole
+    contract.
     """
     if len(leaf_cols) != (1 << TRIE_BITS):
         raise DoomUnitError(f"{len(leaf_cols)} leaves for a {TRIE_BITS}-bit trie")
@@ -417,20 +424,12 @@ def trie_nodes(leaf_cols: tuple[int, ...] = LEAF_COLS) -> list[list[int]]:
         levels.insert(0, [(kids[i] + kids[i + 1]) // 2 for i in range(0, len(kids), 2)])
     for depth, nodes in enumerate(levels[:-1]):
         kids = levels[depth + 1]
-        spans: list[tuple[int, int]] = []
         for i, node in enumerate(nodes):
             west, east = kids[2 * i], kids[2 * i + 1]
             if node - west < 2 or east - node < 2:
                 raise DoomUnitError(
                     f"trie node at {node} is {node - west}/{east - node} from its "
                     f"children {west}/{east}: a branch needs two cells a side (x then ])"
-                )
-            spans.append((west, east))
-        for (_, prev_east), (nxt_west, _) in zip(spans, spans[1:]):
-            if nxt_west <= prev_east:
-                raise DoomUnitError(
-                    f"trie level {depth + 1} overlaps itself: a walk ends at {prev_east} "
-                    f"and the next begins at {nxt_west}"
                 )
     return levels
 
