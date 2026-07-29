@@ -1197,6 +1197,21 @@ def test_the_first_rounds_judge_clean_on_the_native_engine() -> None:
 TAPED_MAN = REPO / "littleman" / "examples" / "deadman-3d_taped.man"
 
 
+def _without_request_teleport():
+    """The taped machine with :data:`machine.STORE_REQUEST_TELEPORT` withheld.
+
+    Every other registry key still applies, so the two builds differ in exactly
+    the one thing under test — which is what makes "off by default" a statement
+    about this key rather than about a hand-assembled ``build()`` call.
+    """
+    key = ("deadman-3d", "taped")
+    machine.STORE_REQUEST_TELEPORT.discard(key)
+    try:
+        return machine.build_for("deadman-3d", store="taped")
+    finally:
+        machine.STORE_REQUEST_TELEPORT.add(key)
+
+
 def test_taped_registry_pins() -> None:
     """The taped variant is opt-in: the canonical machine STAYS men-v3, and the
     taped build is the one-liner `build_for("deadman-3d", store="taped")`."""
@@ -1236,12 +1251,23 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     distance term. The taped response used to cross **three** of them: the
     store's own four-bank collector, then two relay rooms this generator added
     to carry that collector's answer to the CPU. Widening the collector itself
-    deletes both relays, so the whole machine now holds exactly one.
+    deletes both relays, so the **answer** path now holds exactly one.
+
+    The second ``@>Rv`` in the taped machine is not an answer relay: it is
+    :data:`machine.STORE_REQUEST_TELEPORT`'s room on the *request* leg, and it
+    is the only ``teleport:`` region the taped machine has.
     """
     assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
     taped = machine.build_for("deadman-3d", store="taped")
-    assert sum(r.count("@>Rv") for r in taped.rows) == 1
-    assert not [r for r in taped.debug_map().regions if r.name.startswith("teleport:")]
+    assert sum(r.count("@>Rv") for r in taped.rows) == 2
+    assert [r.name for r in taped.debug_map().regions if r.name.startswith("teleport:")] == [
+        "teleport:REQ"
+    ]
+    # Turn the request room off and the answer path is on its own again — which
+    # is what pins the count above to the *answer* side of the machine.
+    plain = _without_request_teleport()
+    assert sum(r.count("@>Rv") for r in plain.rows) == 1
+    assert not [r for r in plain.debug_map().regions if r.name.startswith("teleport:")]
 
     # men-v3 keeps its pair, and not for want of trying: its collector sits at
     # the block's floor ~190 rows below the response row, so widening it west
@@ -1253,6 +1279,49 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     assert {
         r.name for r in canonical.debug_map().regions if r.name.startswith("teleport:")
     } == {"teleport:L", "teleport:U"}
+
+
+def test_the_request_teleport_is_opt_in_and_collapses_the_leg_every_access_pays() -> None:
+    """``adapter->store`` crosses a room instead of 58 cells — opt-in, per tier.
+
+    The profile behind this: the CPU is blocked on the store answer for 47.19%
+    of a gated nine-round run, 87,490 reads at 332 ticks each, and 20.22% of the
+    run is pure pipe transit inside that wait. ``adapter->store`` is its biggest
+    single term (8.53%) because it is the one leg **no** access avoids — reads,
+    writes, every bank. So the test that matters is the length, and that the
+    request still arrives the way the gate expects.
+    """
+    assert machine.STORE_REQUEST_TELEPORT == {("deadman-3d", "taped")}
+    assert all(tier == "taped" for _slug, tier in machine.STORE_REQUEST_TELEPORT)
+
+    on = machine.build_for("deadman-3d", store="taped")
+    off = _without_request_teleport()
+    assert off.route_lengths["adapter->store"] > 50
+    assert on.route_lengths["adapter->store"] <= 8
+    # Not "fewer cells because the store moved": everything else is where it was.
+    assert on.width == off.width and on.height == off.height
+    assert {k: v for k, v in on.route_lengths.items() if k != "adapter->store"} == {
+        k: v for k, v in off.route_lengths.items() if k != "adapter->store"
+    }
+
+    # The room is one forwarder, not a relay chain — a chain lost to a single
+    # forwarder plus a short pipe on the answer path, and deleting the forwarder
+    # altogether cost +4.14% there.
+    req = next(r for r in on.debug_map().regions if r.name == "teleport:REQ")
+    assert sum(r.count("@>Rv") for r in on.rows) - sum(r.count("@>Rv") for r in off.rows) == 1
+
+    # The gate's ``U`` turns away from the side it read from, so the request has
+    # to keep entering through the gate strip's WEST wall. The room therefore
+    # hands off onto the block's own two-cell stub rather than to any other wall.
+    grid = {(x, y): ch for y, row in enumerate(on.rows) for x, ch in enumerate(row)}
+    ax, ay, aw, ah = next(
+        (r.x, r.y, r.w, r.h) for r in on.debug_map().regions if r.name == "adapter"
+    )
+    # ... and it leaves the adapter's floor, which is free: the adapter has
+    # exactly one incoming and one outgoing pipe, so every r/s in it binds
+    # unambiguously wherever they attach.
+    assert any(grid.get((x, ay + ah)) == "v" for x in range(ax, ax + aw))
+    assert req.y > ay + ah and req.y + req.h < on.height
 
 
 def test_the_widened_collector_is_off_by_default() -> None:
