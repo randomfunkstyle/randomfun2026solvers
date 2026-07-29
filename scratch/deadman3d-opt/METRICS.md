@@ -1345,11 +1345,12 @@ emulator — exact for the program, since it records the value of every `SND` �
 and attributes each word to the label that emitted it. Over the checked-in
 116-round tour (115 raycast frames plus the title):
 
-| | pixels/frame | command words/frame | px per word |
+| what it covers | pixels/frame | command words/frame | px per word |
 |---|---:|---:|---:|
-| **3D viewport** (rows 0–39) | **2,560 (83%)** | **71.8 `COL` (38%)** | **35.7** |
-| HUD strip (rows 40–47) + sprites | 512 (17%) | 84.1 `RUN` + 30.5 `CURS` (61%) | 5.4 |
-| frame boundary | — | 1.0 `COMMIT` + 0.9 `GUN` | — |
+| **3D viewport**, rows 0–39 — walls, floor, ceiling | **2,560 (83%)** | **71.8 `COL`** | **35.7** |
+| HUD strip, rows 40–47 — bar art, bars, mugshot, floor tints | 512 (17%) | 69.6 `RUN` + 15.9 `CURS` | 6.0 |
+| **monster sprites**, overpainting the viewport | **14.5** | **14.5 `RUN` + 14.5 `CURS`** | **0.5** |
+| gun sprite, frame boundary | (baked in the unit) | 0.9 `GUN`/`GUNF` + 1.0 `COMMIT` | — |
 | **total** | **3,072** | **188.4** | 16.3 |
 
 Read the first row again: **one command word paints a whole viewport column.**
@@ -1359,9 +1360,9 @@ costs nothing at all because `COMMIT` cleared the next buffer to black. 64
 columns → 64 words → 2,560 pixels. The 7.8 extra `COL`s a frame are M5's nukage
 flood repainting a floor run in green.
 
-So the only per-pixel painting left in the machine is the **sprite chain**, which
-emits a `CURS`+`RUN(1 px)` pair per opaque nibble — and it paints **14.5 pixels a
-frame**.
+The third row is the whole proposal, isolated. It is the only per-pixel painting
+left in the machine — a `CURS` + `RUN(1 px)` pair per opaque nibble, half a pixel
+per word — and it covers **14.5 pixels a frame, 0.5% of the frame**.
 
 ### 2. What the CPU pays to *produce* those words
 
@@ -1389,6 +1390,16 @@ on `cpu->stream:unit` for **0.55%** of the run, against 48.51% on the store's
 answer pipe and 36.16% walking its own dispatch. `SND` in total — all 190.5 a
 frame of it — is **0.79%** of the run, and 0.57 of those 0.79 points *is* the
 0.55% block. **A painter that finished instantly would buy 0.79%.**
+
+**The census is cross-checked against the native profiler.** `DOOM-OPCODES.md`
+counted **175,153** instructions in its nine gated frames on the *pre-M13*
+program; this census counts **169,671** on the same nine frames of the post-M13
+taped program, and M13 deleted **5,536** executions of one instruction —
+175,153 − 5,536 = 169,617, which is 54 instructions (0.03%) from what the
+emulator counts. Two independent engines agree on the instruction stream, which
+is what licenses pricing it. What they do *not* agree on is the price: the
+per-opcode means are from that pre-M13 machine and are therefore ~4.4% stale on
+top of the 16% the totals already differ by. Everything here is an upper bound.
 
 ### 3. The three concrete forms of the idea, each costed
 
@@ -1483,9 +1494,9 @@ Two things fall out, and they point opposite ways:
   investigation that clears a percent.
 
 Where the extra words go is the point: `COL` only goes 71.8 → 281.5 a frame
-(128 columns, most crossing the y=48 tile seam and so costing one word per panel,
-plus the nukage flood), while **`RUN` goes 84.1 → 729.4 and `CURS` 30.5 →
-265.4**. That is the HUD and the floor tints scaling with area at ~2.8 px a word.
+(the viewport is 80 rows against a 48-row tile, so *every* column crosses the
+seam and costs one word per panel: 128 x 2 = 256, plus 25.5 of nukage flood),
+while **`RUN` goes 84.1 → 729.4 and `CURS` 30.5 → 265.4**. That is the HUD and the floor tints scaling with area at ~2.8 px a word.
 It is also the traffic that costs the CPU almost nothing to produce, because it
 is constant-folded — so a "fewer words" change would be attacking the cheapest
 words in the machine.

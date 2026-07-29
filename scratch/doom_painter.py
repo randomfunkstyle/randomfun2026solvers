@@ -50,6 +50,21 @@ def cpu_block(grid: FastLittleman, built, prof, ticks: int) -> None:
     labels = room_labels(grid, built)
     names = [f"{labels[p.src]}->{labels[p.dst]}" for p in grid.pipes]
     cpu = labels.index("cpu")
+    # `room_labels` only knows the 64x48 stream room names; on the wall the
+    # painter sits behind the router and comes back as `roomN`.  Name it from
+    # the builder's own regions rather than guessing, so "is this the painter
+    # pipe?" is never decided by a substring.
+    for rid, room in enumerate(grid.rooms):
+        if not labels[rid].startswith("room"):
+            continue
+        covering = [
+            name for name, (rx, ry, rw, rh) in built.regions.items()
+            if rx <= room.min[0] and ry <= room.min[1]
+            and room.max[0] <= rx + rw and room.max[1] <= ry + rh
+        ]
+        if covering:
+            labels[rid] = min(covering, key=len) + f"[{labels[rid]}]"
+    names = [f"{labels[p.src]}->{labels[p.dst]}" for p in grid.pipes]
     parked: dict[int, int] = {}
     for cell, n in prof.wait.items():
         if not grid.rooms[cpu].contains(cell):
@@ -58,19 +73,34 @@ def cpu_block(grid: FastLittleman, built, prof, ticks: int) -> None:
         for pid in binding if isinstance(binding, tuple) else (binding,):
             if isinstance(pid, int) and pid >= 0:
                 parked[pid] = parked.get(pid, 0) + n
+    # `prof.wait` counts *samples*, not ticks: one per sampled tick, so at
+    # stride N each entry stands for N ticks.  (doom_pipes.py divides by `ticks`
+    # directly because it runs at stride 1, where the two coincide — the
+    # distinction is invisible there and silently divides by 64 here.)
+    parked = {pid: n * STRIDE for pid, n in parked.items()}
     total = sum(parked.values())
-    print(f"\n  the CPU is blocked on — of {ticks:,} ticks:")
+    print(f"\n  the CPU is blocked on — of {ticks:,} ticks "
+          f"(sampled every {STRIDE}):")
     for pid, n in sorted(parked.items(), key=lambda kv: -kv[1]):
         print(f"    {names[pid]:<32}{n:>14,}{100 * n / ticks:>8.2f}%")
     print(f"    {'blocked, all pipes':<32}{total:>14,}{100 * total / ticks:>8.2f}%")
     print(f"    {'walking his own dispatch':<32}{ticks - total:>14,}"
           f"{100 * (ticks - total) / ticks:>8.2f}%")
-    painter = sum(n for pid, n in parked.items() if "stream" in names[pid])
+    # The painter path by elimination: every pipe *out of* the CPU that is not
+    # the store's request leg, the ROM or the input.
+    painter = sum(
+        n for pid, n in parked.items()
+        if grid.pipes[pid].src == cpu
+        and not any(k in names[pid] for k in ("adapter", "store", "rom", "input"))
+    )
     print(f"\n  >>> painter backpressure (every cpu->stream* pipe): "
-          f"{painter:,} ticks = {100 * painter / ticks:.3f}% of the run")
+          f"{painter:,} ticks = {100 * painter / ticks:.3f}% of the run "
+          f"({painter // STRIDE:,} samples, +/-{100 / max(1, painter // STRIDE) ** 0.5:.1f}% rel)")
 
 
-def run_64(rounds: int) -> None:
+def run_64(rounds: int, budget: int) -> None:
+    """Gated, exactly as `doom_case.profile` runs it — 64x48 has one display, so
+    the judge will gate it and this is directly comparable to `DOOM-PROFILE.md`."""
     from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers.lm1 import machine as M
 
@@ -79,19 +109,31 @@ def run_64(rounds: int) -> None:
     boot = d3.preamble_words() + d3.title_words()
     cmds = words[len(boot):][:rounds]
     case = d3.cases_json(cmds)["publicTestData"][0]
-    inp = " ".join(w for r in case["rounds"] for w in r["in"])
+    inp = " / ".join(" ".join(r["in"]) for r in case["rounds"])
     built = M.build_for("deadman-3d", store="taped")
     src = "\n".join(built.rows)
     assert src + "\n" == (ex / "deadman-3d_taped.man").read_text(), "taped grid drift"
     grid = FastLittleman(src)
     t0 = time.time()
-    res = grid.run(inp, max_ticks=6_000_000_000, profile=True, profile_stride=STRIDE)
-    print(f"64x48 taped {built.width}x{built.height}: {len(cmds)} cmds, "
-          f"ticks={res.step:,} fatal={res.fatal} ({time.time()-t0:.0f}s)")
+    res = grid.run(inp, frames=[r["frames"] for r in case["rounds"]],
+                   max_ticks=budget, profile=True, profile_stride=STRIDE)
+    print(f"64x48 taped {built.width}x{built.height} GATED: {len(cmds)} cmds, "
+          f"ticks={res.step:,} passed={res.passed} fatal={res.fatal} "
+          f"({time.time()-t0:.0f}s)")
     cpu_block(grid, built, res.profile, res.step)
 
 
-def run_hires(rounds: int) -> None:
+def run_hires(rounds: int, budget: int) -> None:
+    """Ungated and **tick-bounded**: the run is deliberately cut off inside the
+    demo at `budget` ticks.
+
+    Two reasons.  Gating is impossible (four displays), and an ungated run that
+    reaches the end of its input does not stop — the CPU parks on `IN` and the
+    engine keeps ticking, so letting it run to a large cap measures the idle
+    tail rather than the demo (that mistake produced a 0.000% painter figure on
+    the 64x48 tier and 98.4% "walking his own dispatch", which is the tail).
+    Cutting inside the demo samples steady-state rendering only.
+    """
     import tempfile
 
     from randomfun2026solvers import deadman3d_hires as hires
@@ -105,11 +147,11 @@ def run_hires(rounds: int) -> None:
     m = built["machine"]
     inp = " ".join(str(w) for w in hires.input_words(cmds))
     src = "\n".join(m.rows)
-    print(f"hires 128x96 {m.width}x{m.height}: {rounds} cmds, built in "
-          f"{time.time()-t0:.0f}s", flush=True)
+    print(f"hires 128x96 {m.width}x{m.height} UNGATED, cut at {budget:,} ticks: "
+          f"{rounds} cmds, built in {time.time()-t0:.0f}s", flush=True)
     grid = FastLittleman(src)
     t0 = time.time()
-    res = grid.run(inp, max_ticks=40_000_000_000, profile=True, profile_stride=STRIDE)
+    res = grid.run(inp, max_ticks=budget, profile=True, profile_stride=STRIDE)
     print(f"  ticks={res.step:,} fatal={res.fatal} ({time.time()-t0:.0f}s)")
     cpu_block(grid, m, res.profile, res.step)
 
@@ -117,4 +159,5 @@ def run_hires(rounds: int) -> None:
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "64"
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 8
-    (run_hires if which == "hires" else run_64)(n)
+    cap = int(sys.argv[3]) if len(sys.argv) > 3 else 6_000_000_000
+    (run_hires if which == "hires" else run_64)(n, cap)
