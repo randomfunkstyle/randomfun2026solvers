@@ -2072,3 +2072,162 @@ anything started. Report the ceiling first. This one was worth taking because
 the compaction turned out to be a re-spacing that moved no codes, no rows and no
 pipe lengths — had it needed a re-order it would have been the wrong trade at
 these prices.
+# M17 — declined: rebuilding the decode trie out of `a`/`d` instead of `x`
+
+**Nothing was built.** `machine.py` is untouched and every hash is where M16 left
+it: `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`, `deadman-3d.input.txt`
+`654d35d6…`, `deadman-3d_taped.man` `a11edcc6…`. Two read-only probes were added
+(`scratch/trie_probe.py`, `scratch/gap_probe.py`); they build the grid and walk
+it, they do not change it.
+
+The idea was that `x` "always turns" and so forces the CPU's lanes apart, while
+`a`/`d` go **straight** on one side and would close the gaps — potentially
+halving a trie walk that is 5,270,998 ticks, 8.74% of the run.
+
+## 1. An `a`/`d` decoder is not a trie. It is a caterpillar
+
+`x` turns on **BP's low bit**; `a`/`d` turn on **BP > 0**. The gap between those
+two predicates is not a constant factor, it is a change of shape, and the reason
+is that BP is a **one-way register**.
+
+BP has exactly four writers (`SPEC.md`): `b` (BP = A), `q` (BP = pipe count),
+`m` (BP −= 1) and `]` (BP >>= 1, arithmetic). Inside the decode only `m` and `]`
+are available — after the fetch `>rbr`, **A holds the operand, not the opcode**,
+so `b` has nothing useful to reload from. And both `m` and `]` map `BP <= 0` to
+`BP <= 0`: `m` only decreases, and an arithmetic `]` on a negative value
+converges to −1 and never crosses zero.
+
+So **once BP <= 0 it can never become > 0 again**, and every `a`/`d` below that
+point goes straight, forever. The straight branch is *terminal*. A decoder built
+from `a`/`d` therefore cannot branch twice on the same path in both directions:
+turn = continue, straight = leaf. That is a **caterpillar** — a linear chain
+with a **unary** code, not a binary trie. 22 opcodes need 21 test sites, not
+`ceil(log2 22) = 5` levels.
+
+### Why "bring the tested bit to the sign" cannot be priced down
+
+The obvious repair is to make bit *k* the sign at each level. It does not exist:
+
+* `]`×j then a test gives `opcode >= 2^j` — a **threshold**, never "bit k is
+  set". Thresholds are fine in principle (a binary search over 22 leaves is 5
+  deep), but the shift is **destructive and cumulative along the path**: after
+  `]`×j the `BP <= 0` branch holds only values in `{−1, 0}` and every remaining
+  bit of the opcode is gone. The subtree under it cannot be built.
+* The only way to get the bits back is to rewrite BP, and the only sources are
+  `b` (needs the opcode back in A) and `q` (a pipe count). Getting the opcode
+  back into A costs **a second ROM word plus an `r` plus a `b`, per level**.
+
+That is the arithmetic that ends it. The fetch is `>rbr` — **4 ticks flat** — and
+the whole trie it would replace is **26–34 ticks**. Paying one extra ROM read per
+level is 5 extra ROM words per instruction against a 30-tick budget, before
+counting the drum traffic (`rom->cpu` stall is already 2.79% of the run in
+`scratch/DOOM-OPCODES.md`). The trie is cheaper than its own re-fetch.
+
+## 2. The gaps are trie fan-out, not `_SLAB_PITCH` — and they are load-bearing
+
+Measured on the built grid (`scratch/gap_probe.py`). The CPU lane band is rows
+**100–142**; lanes sit on the **even** rows, the odd rows are the gaps. The pitch
+of 2 is hard-coded — `row_of = {m: y0 + 2 * rank[...]}` and
+`all_rows = [y0 + 2*i ...]` (`machine.py:1123`, `:1132`) — and `_uneven_trie`
+consumes the odd rows (`xrow = slot_rows[min(down)] - 1`, `machine.py:991`).
+
+Three facts from the census, all of which cut against the obvious reading:
+
+1. **`_SLAB_PITCH` has nothing to do with it.** `_SLAB_PITCH = 13` is a *column*
+   pitch for the structures band **below** the collector row. It does not touch
+   the lane rows.
+2. **The trie and the lane bodies never compete for a cell.** Every trie cell is
+   in columns **13–21**; `lane_x0 = 22` and every micro-program starts there.
+   Trie cells already appear *on lane rows* — row 104 carries trie `.` at 17,
+   `.` at 19 and its entry `>` at 21 before ADDI's body starts at 22. So the gap
+   rows are not there to keep the trie out of the lanes' way.
+3. **What the gap row is actually for is the `x` node itself.** `x` fans out
+   perpendicular on *both* sides, so a node needs its own row to sit on with a
+   clear vertical run to each child. Nothing else is on the gap rows inside the
+   CPU: no micro-program cell, no pipe glyph, no slab cell — only trie cells in
+   13–21 and the drop columns passing through (which cross lane rows too).
+
+**The two-sided fan-out is not pure waste.** It is what lets the fetch row sit in
+the *middle* of the band: 11 lanes above row 121 and 11 below, so the riser is
+**22 = half** the 43-row band. Any glyph that leaves the row in only one
+direction puts every leaf on one side of the fetch row and the riser becomes the
+**whole** band height. That is the hidden bill on the `a`/`d` idea, and it is
+paid by every instruction: +22 ticks, 3.85M, 6.4% of the run.
+
+## 3. What the gaps would be worth if they could go — the number to chase
+
+Stage totals are measured (`scratch/DOOM-OPCODES.md`, and `trie_probe.py`
+reproduces the trie line to the tick: **5,270,998**, mean 30.09). Every trie path
+walks columns 13 → 22, so 9 × 175,153 = **1,576,377** of it is horizontal and
+**3,694,621** (mean 21.1) is vertical travel inside the band.
+
+Halving the band — 22 rows at pitch 1, rank order unchanged — halves every
+vertical term at once:
+
+| term | today | pitch 1 | saved | % run |
+|---|---:|---:|---:|---:|
+| trie, vertical component | 3,694,621 | 1,847,311 | 1,847,310 | 3.06% |
+| drop (`collector − 1 − row`) | 3,301,798 | 1,650,899 | 1,650,899 | 2.74% |
+| riser (22 flat → 12 flat) | 3,853,366 | 2,101,836 | 1,751,530 | 2.90% |
+| **total** | | | **5,249,740** | **8.70%** |
+
+**~8.7% of the run sits in the band's height, and none of it needs `a`/`d`.**
+This is a derivative, not a measurement, and it is an upper bound: it assumes the
+trie still routes and every pipe still binds. The known blockers are all binding,
+not geometry — the store response pipe needs a **4-row** gap on the east wall or
+the engine reads a spurious second adapter→CPU pipe (`machine.py:1731`), the
+display/stream pitches are documented as only having to "exceed the 2-row lane
+gap" (`machine.py:1159`), and `LANE_ORDER`'s own comment records that a
+bottom-fill already failed binding once. That is where the work is.
+
+## 4. The caterpillar, priced, so nobody re-derives it
+
+For the record, the best `a`/`d` shape found. One `x` at the root picks the side
+(so the fetch row stays centred and the riser stays 22), then a `d`-staircase
+south and an `a`-staircase north, 11 leaves each. A step is `d` → `m` → `a`:
+**3 ticks, 2 rows, 1 column**, and the turn at the second glyph is deterministic
+because BP has not changed since the first. Decode cost is **4 + 3i** for rank
+`i` on its side, entering the lane at column **16 + i**; opcode numbering becomes
+`2*rank + side`, which `plan` would have to derive instead of `OPCODE_SLOTS`'
+bit-reversal.
+
+Against today's `t` (per-opcode, from `trie_probe.py`), and with `LANE_ORDER`
+frozen — which already happens to put `LD` at south rank 0 and `ST` at north
+rank 0, the two hottest opcodes:
+
+* a lane with a MEM band pads out to `mem_x` anyway, so its extra columns are
+  free: **Δ = 2i + 10 − t**, summing to **−2,049k**;
+* a lane without one carries its drop column east with it and pays the return
+  bus: **Δ = 4i − 2 − t**, summing to **−581k** (the immediates win, the deep
+  structured lanes `JMPF`/`SND` lose).
+
+**Predicted −2,630k ticks, −4.36% of the run.** Paper only — not built, not
+measured, and it does *not* collect the 8.70% above, because each staircase step
+is still 2 rows and the gaps survive.
+
+It buys exactly one thing: the trie's vertical **zigzag**, and that quantity is
+worth pricing on its own because it is the honest size of this whole direction.
+Sum `|121 − row|` over the run — the vertical a decoder would walk if it went
+straight at its leaf — and it is **1,107,405** ticks, mean 6.3. The trie actually
+walks **3,694,621**, mean 21.1. **The zigzag is 2,587,216 ticks, 4.29% of the
+run**, and it is not waste that better tuning removes: separating 22 rows in 5
+balanced levels *forces* a level-1 step of ~11 rows, so every path pays the band
+half-height whatever its leaf. That is the same fact `DOOM-OPCODES.md` records as
+"the trie is rank-independent", priced as a cost instead of as a ceiling. It also
+corroborates §4 from the other side: 4.29% against the caterpillar's 4.36%.
+
+### The one thing `a`/`d` genuinely buys, and it is not the gaps
+
+A caterpillar can be built from **`x` alone** — let one side of each node be the
+leaf and the other continue, `x` → `>` → `]` → `x`, 3 ticks a step, the same
+shape. Monotone descent is not an `a`/`d` property. What `a`/`d` uniquely gives
+is the **encoding**: stepping with `m` makes the rank the opcode's *value*
+(0–10, two digits on the drum), while stepping with `]` makes it a *bit
+position*, so an `x` caterpillar needs `opcode = 2^i − 1` — up to 2,097,151, a
+**seven-digit** opcode on every instruction the drum emits. Against
+`OPCODE_SLOTS`, whose entire job is keeping opcodes under 10, that is
+disqualifying. So if a caterpillar is ever wanted, it wants `a`/`d`; but the
+caterpillar is worth 4.3% and the band height is worth 8.7%, and only the second
+is reachable without re-deriving the ROM.
+
+If dispatch is picked up again, **§3 is the lever, not §4.**
