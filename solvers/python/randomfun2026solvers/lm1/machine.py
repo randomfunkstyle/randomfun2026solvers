@@ -2867,6 +2867,7 @@ def build(
     seek_taken_drop_east: bool = False,
     in_west: int = 0,
     doom_loop_row: int | None = None,
+    doom_leaf_cols: tuple[int, ...] | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -3066,6 +3067,7 @@ def build(
                     seek_taken_drop_east=seek_taken_drop_east,
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
+                    doom_leaf_cols=doom_leaf_cols,
                 )
             except MachineError as exc:
                 last = exc
@@ -3131,6 +3133,7 @@ def build(
                     seek_taken_drop_east=seek_taken_drop_east,
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
+                    doom_leaf_cols=doom_leaf_cols,
                 )
             except MachineError:
                 continue
@@ -3218,6 +3221,7 @@ def _assemble(
     seek_taken_drop_east: bool = False,
     in_west: int = 0,
     doom_loop_row: int | None = None,
+    doom_leaf_cols: tuple[int, ...] | None = None,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -3833,7 +3837,8 @@ def _assemble(
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
         blk, stream_touches, (SX, SY) = _stream(
-            g, cpu, CX, CY + H + 1, stream, unit=program.unit, doom_loop_row=doom_loop_row
+            g, cpu, CX, CY + H + 1, stream, unit=program.unit,
+            doom_loop_row=doom_loop_row, doom_leaf_cols=doom_leaf_cols,
         )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
@@ -4591,6 +4596,7 @@ def _stream(
     *,
     unit: str = "stream",
     doom_loop_row: int | None = None,
+    doom_leaf_cols: tuple[int, ...] | None = None,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -4624,8 +4630,11 @@ def _stream(
         # ``doom_loop_row`` lifts the unit's loop corridor and with it the panel,
         # which is the machine's own floor — see ``DOOM_LOOP_ROW``. None keeps the
         # shipped row, so the canonical artifacts do not move.
+        # ``doom_leaf_cols`` re-spaces the decode trie's leaves — the columns
+        # lever to ``doom_loop_row``'s rows one. None keeps the shipped pitch.
         blk = d3_unit.build_doom(
-            loop_row=d3_unit.R_LOOP if doom_loop_row is None else doom_loop_row
+            loop_row=d3_unit.R_LOOP if doom_loop_row is None else doom_loop_row,
+            leaf_cols=d3_unit.LEAF_COLS if doom_leaf_cols is None else doom_leaf_cols,
         )
     elif unit == "doom4":
         # The tiled wall: four unmodified DOOM blocks behind a 1-of-4 router, so
@@ -4643,7 +4652,7 @@ def _stream(
         # contiguous 128x96 screen rather than four monitors 177 columns apart.
         # ``build_wall``'s scattered arrangement stays for the probe and the
         # tests that pin the router's own geometry.
-        blk = d3_router.build_packed_wall(loop_row=doom_loop_row)
+        blk = d3_router.build_packed_wall(loop_row=doom_loop_row, leaf_cols=doom_leaf_cols)
     else:
         from . import stream as streammod
 
@@ -5766,6 +5775,39 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: bind". Neither knob touches the CPU's width or the adapter gap, so the
 #: column arithmetic never moved, which is the expected result and now a
 #: measured one.
+#:
+#: **Re-measured a third time against the shipped hi-res geometry** — the first
+#: two sweeps predate hires having a :data:`TIER_LAYOUT` ``store_offset`` at
+#: all, and :data:`STORE_REQUEST_REACH` now gives it one, which is exactly the
+#: westward move the collapse wanted. The two windows do intersect, and only
+#: just: the collector's wall is ``-18 - store_dx`` and the guard wants ``>= 1``
+#: (so ``dx <= -19``), while the roof needs the request column inside the
+#: adapter's floor (so ``dx in -20..-9``). **dx -19 and -20 satisfy both**, and
+#: the collapse still cannot be placed. The constraint is no longer the one the
+#: note above records, and it is worth naming because it is structural:
+#:
+#: 1. At the shipped ``answer_west``, all **80** attempts (40 ``mem_pad`` x roof
+#:    on/off) fail at **row 107** — the two-tier adapter's own top row. The
+#:    straight ``store->cpu`` leg assumes the collector's exit is *below*
+#:    ``resp_row``; on hires it is above, so the same two corners describe a
+#:    climb, and the climb crosses the adapter. The row never moves because it
+#:    is a CPU coordinate.
+#: 2. Routing that leg around the adapter instead (the instrument the
+#:    ``compact or moved`` branch already uses) clears row 107 and exposes the
+#:    real one: hires' ``resp_row`` sits **inside** the widened collector's own
+#:    row band, so the collector's west wall lands precisely on the cell the
+#:    response pipe must occupy to enter the CPU from the east.
+#: 3. Parking that wall further east frees the approach cell and leaves **no
+#:    free route at all** — verified with the search box opened to the whole
+#:    grid, so it is the machine and not the box. The attachment is enclosed by
+#:    the CPU to the west, the collector to the east and the adapter below, and
+#:    ``_keepout``'s halo forbids running alongside any of them.
+#:
+#: So the room that cannot be absorbed is neither of the two the collapse
+#: deletes — it is the **collector itself**, which on this machine cannot be
+#: both beside the CPU and clear of its response row. `deadman-3d_hires` keeps
+#: its `STORE_TELEPORT` pair. Probes: ``scratch/deadman3d-opt/hires_answer.py``
+#: and ``hires_answer_pads.py``; arithmetic in ``METRICS.md`` H2.
 STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
 #: ``(slug, tier)`` pairs whose **seek request** reaches the drum through two teleport
@@ -6145,6 +6187,37 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {
 DOOM_LOOP_ROW: dict[tuple[str, str], int] = {
     ("deadman-3d", "taped"): 10,
     ("deadman-3d_hires", "taped"): 10,
+}
+
+#: ``(slug, tier)`` pairs whose DOOM unit lays its six arms at their **own**
+#: widths instead of the uniform :data:`d3_unit.LEAF_PITCH`. Absent means the
+#: shipped pitch, so the canonical artifacts do not move.
+#:
+#: This is :data:`DOOM_LOOP_ROW`'s lever turned ninety degrees, and it buys the
+#: same thing: **walk**. Dispatch is one man from MAIN east to the trie root,
+#: across three trie rows to his leaf, down the arm, and the whole way back west
+#: along the collector row — roughly ``2 x leaf_column``, paid on every command.
+#: The uniform pitch was set by the widest arm (GUNF's 33-column sprite chain)
+#: and three of the six arms occupy one column, so 40 of 156 interior columns
+#: were dead and the trie walked straight through both gaps. Re-spacing the
+#: leaves takes the interior from 156 columns to 92 and the block from 235x101
+#: to 171x101, and it moves **no code**: :func:`d3_unit.arm_codes` reads them off
+#: the leaves' rank, not their columns.
+#:
+#: What it does not do is reorder them. The traffic mix is savagely lopsided the
+#: wrong way — RUN 46.6%, COL 34.9%, CURS 17.4% against COMMIT 0.55%, GUN 0.48%,
+#: GUNF 0.07%, and the three hot arms are the three easternmost — but COL is
+#: pinned to leaf 7 (code 0, so the CPU's per-column send is a bare ``MULI 8``)
+#: and RUN to an eastern leaf (rule 2: at leaf 1 its ``r`` binds the ``cmd``
+#: pipe instead of the ring and the arm reads the wrong word). The gaps are
+#: free; the order is not.
+#:
+#: Spelled out rather than imported — ``d3_unit`` reaches back into this module
+#: for ``_Grid``, so the import only ever goes one way — and pinned against
+#: :data:`d3_unit.COMPACT_LEAF_COLS` in ``tests/test_deadman3d.py``.
+DOOM_LEAF_COLS: dict[tuple[str, str], tuple[int, ...]] = {
+    ("deadman-3d", "taped"): (3, 7, 27, 33, 37, 41, 73, 79),
+    ("deadman-3d_hires", "taped"): (3, 7, 27, 33, 37, 41, 73, 79),
 }
 
 #: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
@@ -6546,6 +6619,7 @@ def build_for(
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
         doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
+        doom_leaf_cols=DOOM_LEAF_COLS.get((slug, store)),
     )
 
 

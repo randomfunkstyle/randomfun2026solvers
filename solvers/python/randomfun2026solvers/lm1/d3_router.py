@@ -385,7 +385,9 @@ class Wall:
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
 
 
-def build_wall(loop_row: int | None = None) -> Wall:
+def build_wall(
+    loop_row: int | None = None, leaf_cols: tuple[int, ...] | None = None
+) -> Wall:
     """Place the router and the four unmodified DOOM blocks, and wire the fan-out.
 
     The blocks go in a 2x2 — tile 0 top-left, tile 3 bottom-right.  *Nothing*
@@ -420,13 +422,20 @@ def build_wall(loop_row: int | None = None) -> Wall:
     DOOM_LOOP_ROW`` is where a tier opts in; the wall does not choose for
     itself, because the row is only worth anything against a *particular*
     machine's fold (see ``ROM_ROWS``).
+
+    ``leaf_cols`` is the same arrangement one axis over — the block's decode
+    trie re-spaced to its arms' own widths (``machine.DOOM_LEAF_COLS``) — and it
+    pays four times here rather than twice, because all four blocks dispatch
+    every command they are handed.  ``None`` keeps ``d3_unit.LEAF_COLS``.
     """
     from . import d3_unit
     from .machine import _Grid
 
     if loop_row is None:
         loop_row = d3_unit.R_LOOP
-    blocks = [d3_unit.build_doom(row, loop_row) for row in TILE_FLOOR_ROW]
+    if leaf_cols is None:
+        leaf_cols = d3_unit.LEAF_COLS
+    blocks = [d3_unit.build_doom(row, loop_row, leaf_cols) for row in TILE_FLOOR_ROW]
     blk = blocks[0]  # every variant has the same footprint and the same ports
     if {(b.width, b.height, b.cmd_cell, b.panel, b.pipes) for b in blocks} != {
         (blk.width, blk.height, blk.cmd_cell, blk.panel, blk.pipes)
@@ -863,7 +872,9 @@ def _pack_cluster_row(cl_at, ch, port, gap_rows, bot_rows, c1, span: range) -> i
     )
 
 
-def build_packed_wall(loop_row: int | None = None) -> Wall:
+def build_packed_wall(
+    loop_row: int | None = None, leaf_cols: tuple[int, ...] | None = None
+) -> Wall:
     """The router, four **panel-less** DOOM blocks, and one 2x2 panel cluster.
 
     :func:`build_wall` places four whole 235x101 blocks, each with its panel
@@ -953,7 +964,9 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
 
     if loop_row is None:
         loop_row = d3_unit.R_LOOP
-    logic = [d3_unit.build_logic(row, loop_row) for row in TILE_FLOOR_ROW]
+    if leaf_cols is None:
+        leaf_cols = d3_unit.LEAF_COLS
+    logic = [d3_unit.build_logic(row, loop_row, leaf_cols) for row in TILE_FLOOR_ROW]
     lg = logic[0]
     if {(b.width, b.height, b.cmd_cell, tuple(sorted(b.ports.items()))) for b in logic} != {
         (lg.width, lg.height, lg.cmd_cell, tuple(sorted(lg.ports.items())))

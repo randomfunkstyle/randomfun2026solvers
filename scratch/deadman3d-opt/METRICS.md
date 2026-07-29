@@ -1367,6 +1367,9 @@ the model. **Method:** `scratch/deadman3d-opt/hires_gate2.py 21`, differencing
 | 10 | 530,783,767 | 71,770,022 | | | | |
 
 **Frames 1..20: 1,036,196,396 ticks, mean 51,809,819 a frame.**
+**Superseded by H3** — two program levers landed on the 64x48 machine after
+this branch forked and both transfer: the table below is the machine as of
+`50277ab`, and the current one is **990,990,612 / 49,549,530 a frame**.
 Frame 0 is boot plus the title RLE and is *not* comparable — it renders no 3D at
 all. Total for the 21-round tour: 1,072,188,070.
 
@@ -1769,13 +1772,316 @@ pinned ceiling. `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`,
 
 ---
 
-# M17 — declined: rebuilding the decode trie out of `a`/`d` instead of `x`
+# H2 — the three answer rooms: re-measured against the shipped geometry, still declined
 
-**Nothing was built.** `machine.py` is untouched and every hash is where M16 left
+The user's observation is exact: hi-res carries **three** forward-only rooms on
+the answer path where the 64x48 machine carries **one**.
+
+```
+(58, 93)  teleport:L   x 65..108  y 92..95    machine-side, wide
+(66, 93)  teleport:U   x 57..62   y 92..105   machine-side, tall
+(104,103) the collector           inside the store block (x 61..242 y 97..156)
+```
+
+`STORE_ANSWER_WEST` is exactly the collapse: it widens the **collector** (which
+is already a teleport — `R` has no distance term, so widening one is free) until
+its west end reaches the CPU, flips its exit stub from a north riser to a south
+one, and `build_for` then drops `STORE_TELEPORT`'s two rooms. Three rooms to
+one, and the surviving room is the collector.
+
+**The previous two declines were measured against geometry that no longer
+exists** — both predate hires having a `TIER_LAYOUT store_offset` at all, and
+`STORE_REQUEST_REACH` gave it one this session. So it was re-asked, and the
+windows really do intersect:
+
+| | constraint | window |
+|---|---|---:|
+| the collapse | collector wall `-18 - store_dx`, guard wants `>= 1` | `dx <= -19` |
+| the roof | request column `101 + dx` inside adapter floor `81..92` | `dx in -20..-9` |
+
+**`dx` -19 and -20 satisfy both.** It still cannot be placed, and the reason is
+no longer the one on record. Three constraints, peeled one at a time:
+
+**1. Row 107, and it is the adapter.** At the shipped `answer_west`, all **80**
+attempts — 40 `mem_pad`s x roof on/off, at both offsets
+(`scratch/deadman3d-opt/hires_answer_pads.py`) — fail at **row 107**. The column
+wanders with the pad (59..82); the row never moves. Row 107 is the two-tier
+adapter's own top row. The collapse's `store->cpu` leg is a rigid three-segment
+L, `[(tout_x, tout_y+1), (tout_x, resp_row), (CX+W+2, resp_row)]`, which assumes
+the collector's south exit is *below* `resp_row`. On `deadman-3d` it is. On
+hires it is **above**, so the same two corners describe a *climb* — the pipe
+draws `^` — and the climb goes straight through the adapter. Nothing the store
+can do moves that row: it is a CPU coordinate.
+
+Going further west does not help either; past `dx -21` the failure changes into
+the store block colliding with the CPU and starts tracking `dx`
+(`(77,148)`, `(73,151)`, `(63,151)`, `(43,151)` at -21/-25/-30/-40/-60).
+
+**2. Route around the adapter, and the collector is on the response row.** The
+generator already owns the right instrument — the `compact or moved` branch
+routes this leg with `constrained_route` instead of a fixed polyline. Trying the
+straight leg first and falling back to a routed one clears row 107 (and keeps
+`deadman-3d` byte-identical by construction, since its straight leg is clear).
+What it exposes is the real constraint: hires' `resp_row` (104) sits **inside**
+the widened collector's own row band (102..105), so the collector's west wall
+lands on `CX+W+3` — precisely the cell the response pipe must occupy to enter
+the CPU at `CX+W+2` from the east.
+
+**3. Park the wall further east, and there is no route at all.** Freeing that
+approach cell (a tunable gap in place of the hard-coded `+4`) removes the
+forced-step failure and produces `no free route` at every gap from 5 to 12 —
+**with the search box opened to the entire grid**, so it is the machine and not
+the box. The attachment is enclosed: CPU to the west, collector to the east,
+adapter below, and `_keepout`'s halo forbids running alongside any of them,
+because two pipes in adjacent cells read as one and fail silently.
+
+### So which room cannot be absorbed
+
+**Neither of the two the collapse deletes — the collector itself.** `L` and `U`
+are droppable; what cannot be done is put the collector *beside the CPU* and
+*clear of its response row* at the same time, because on this machine those are
+the same rows. On `deadman-3d` the CPU is taller and the response row is below
+the block, which is the whole reason the collapse works there.
+
+The exploratory generator changes (a routed fallback for the collapsed leg, a
+`clear()` dry run on `_Grid`, and a tunable collector gap) were **reverted**:
+they were correct and they are what produced the diagnosis above, but with the
+collapse unplaceable no machine uses them, and an untested branch on the shared
+build path is exactly the dead config this log has declined six times already.
+`deadman-3d`'s grids were verified byte-identical at every step (`f62d63fd…`,
+`a11edcc6…`).
+
+---
+
+# H3 — the three program levers from the 64x48 machine: two transfer, one does not
+
+`worktree-compactor` was merged forward mid-session (`b5c6c8e`), bringing the
+levers that took `deadman-3d` taped to 611M. All three are keyword-gated on
+`deadman3d_source` and all three default to `False`, so **hires was unchanged by
+the merge** and H1's baseline still described the shipped machine. They reach
+hires through `hires_source()` — the one place this family's program knobs live,
+which is what makes `TIER_PROGRAM`'s inability to key it a non-issue.
+
+Same 21-round tour, frames 1..20, on top of the shipped store set:
+
+| | walk ticks | vs shipped | |
+|---|---:|---:|---|
+| shipped (H1) | 1,036,196,396 | — | |
+| `+ lap_via_jump` | 1,036,259,288 | **+0.006%** | declined |
+| `+ dda_diff` | 997,775,049 | -3.708% | |
+| `+ dda_diff + lap_via_jump` | 997,922,772 | -3.694% | |
+| **`+ dda_diff + dda_stepy_split`** | **990,990,612** | **-4.362%** | **taken** |
+| `+ all three` | 991,090,332 | -4.353% | |
+
+**`lap_via_jump` is the one that did not transfer**, and it is worth -4.47% on
+the 64x48 machine. It is a wash here in every combination — +0.006% alone,
++0.015pp when added to `dda_diff`, +0.010pp when added to both. Declined: it
+costs 10-16 words of ROM for nothing measurable. Worth a note for whoever tries
+it again — the lever's value is the ring recirculation a backward branch causes
+per lap, and hires' ring is a different size against a much larger `P`, so the
+per-lap saving does not scale the way the DDA levers do.
+
+`dda_stepy_split` **cannot be taken alone at this geometry** — the second
+emission collides on label `dda0` at hires' unroll factor. With `dda_diff` the
+labels are distinct and it assembles, which is the combination `deadman-3d`
+ships anyway, so this is a note rather than a limitation.
+
+Cost: 514x348, up from 500x348 (`P` 8,863 -> 9,225). Fourteen columns for
+4.36% is the trade `AGENTS.md` explicitly calls free for this family.
+
+## The revised baseline
+
+Same engine and method as H1 (native `fast_littleman`, `frame_tiles=(2, 2)`,
+round-gated, `passed=True` on all 21 frames), on the 514x348 machine:
+
+| frame | cost | | frame | cost | | frame | cost | | frame | cost |
+|---:|---:|---|---:|---:|---|---:|---:|---|---:|---:|
+| 0 | *37,108,356* | | 6 | 40,264,278 | | 11 | 63,393,702 | | 16 | 41,148,070 |
+| 1 | 49,726,883 | | 7 | 43,830,154 | | 12 | 61,635,001 | | 17 | 47,179,438 |
+| 2 | 49,027,604 | | 8 | 47,320,694 | | 13 | 58,425,729 | | 18 | 50,785,989 |
+| 3 | 44,299,060 | | 9 | 49,517,866 | | 14 | 53,416,177 | | 19 | 49,117,682 |
+| 4 | 44,152,339 | | 10 | 66,524,902 | | 15 | 46,743,991 | | 20 | 41,139,646 |
+| 5 | 43,341,407 | | | | | | | | | |
+
+**Frames 1..20: 990,990,612 ticks, mean 49,549,530 a frame** — the hi-res
+baseline. Frame 0 is boot plus the title RLE and is not comparable. Total for
+the 21-round tour 1,028,098,968.
+
+Against H1's 1,036,196,396 that is -4.362%; against where this family started
+the session (1,090,194,166 at `b78eafc`) it is **-9.100%**. The split is worth
+keeping in view: the three store registries are 0.755pp of that and the three
+program levers are 8.4pp. **Program beats placement on this machine by an order
+of magnitude**, and the reason is the one H1 already gave — at 128x96 the frame
+is four times the pixels against the same 902-slot store, so every store leg is
+a quarter of the share it has on `deadman-3d` while every per-ray instruction is
+worth four times as much. The next lever for hires is in the DOOM unit or the
+raycaster, not the store block.
+## M17 — the DOOM unit's dead columns: the ceiling first, then the -0.19%
+
+The user, reading the block: *"in the stream units — too wide columns, and there
+are DEAD columns from what I see."* They were right about the columns, and the
+first job was to find out whether being right about the columns meant anything.
+
+### The ceiling, measured before anything was built
+
+The unit is a **write-only coprocessor**: the CPU sends a command and walks on,
+and the paint loops run concurrently with the next raycast. So unit-internal
+savings convert to tour ticks only where the CPU is actually *waiting* on it,
+and `scratch/doom_pipes.py --rounds 8` says exactly how much that is:
+
+```
+critical path — the CPU is the only man on it:
+  blocked on store:collector->cpu   16,614,151  40.44% of the run
+  blocked on rom->cpu                  778,817   1.90%
+  blocked on cpu->stream:unit          412,345   1.00%   <- the whole ceiling
+  blocked on input->cpu                 36,748   0.09%
+```
+
+**1.00%**, up from the 0.72% M14 recorded only because the CPU has got faster
+since. 1,742 commands over those eight rounds, so 237 ticks of CPU stall per
+command — and whatever the unit saves per command comes off that 237 or off
+nothing. This number is the reason the entry below is worth 0.19% and not more,
+and it was known before a line of geometry moved.
+
+### What the gaps were: a fixed pitch set by the widest arm
+
+The same shape as `SLAB_PITCH`. The trie's eight leaves sat at
+`LEAF0 + LEAF_PITCH*i` with the pitch at 20, and the pitch is set by the
+**widest** arm — GUNF's 33-column Freedoom sprite chain, which needs two leaves
+to hold it. Every other arm got 20 columns whether it wanted them or not:
+
+| arm | real span | granted | traffic |
+|---|---:|---:|---:|
+| COMMIT | 1 | 20 | 0.55% |
+| GUN | 23 | 40 | 0.48% |
+| CURS | 1 | 20 | 17.4% |
+| GUNF | 33 | 40 | 0.07% |
+| RUN | 4 | 20 | 46.6% |
+| COL | 11 | 14 | 34.9% |
+
+**73 of 156 interior columns carry a cell at all**, and the two 20-column gaps
+the user saw are leaves 2 and 5, which no arm reaches into (the sprite chains
+ride over the near end of each). The trie walked straight through both.
+
+And the pitch was **stale**: the docstring justified it by the V3 HUD arm's
+serpentine field, which lived between RUN and COL. V4 replaced that arm with
+CURS + RUN and the field went with it. Nothing had needed the pitch since.
+
+### What the walk actually costs
+
+Dispatch is one man: east from MAIN to the trie root, across three trie rows to
+his leaf, down the arm, and then **the whole way back west** along the collector
+row to column 1. That is roughly `2 x leaf_column`, on every command — 291 cells
+for a COL word at leaf 143, against a 237-tick stall. It is the same quantity
+the collector row has always been, but nobody had priced it against the pitch.
+
+`COMPACT_LEAF_COLS = (3, 7, 27, 33, 37, 41, 73, 79)` gives each arm its own
+width. `trie_nodes()` derives every internal column as the midpoint of its two
+children (two cells a side is the floor — the branch writes `x` and then `]`,
+the shift that advances the decode), so the leaves become a table rather than a
+pitch. Interior **156 -> 92 columns**, block **235x101 -> 171x101**.
+
+**No code moves.** `arm_codes()` already read the codes off the leaves' *rank* —
+a west branch is a set bit — so re-spacing hands back the same dict,
+`store.DoomUnit.CODES` and the same `.equ C_*`. That is what makes this a
+re-spacing rather than a rebuild, and it is checked rather than argued.
+
+### The east wall has to travel with the leaves
+
+The one trap, and it is rule 2's. Every deep `r` must bind its ring return
+rather than the `cmd` pipe, and it wins by `(east wall - x)` against
+`(x - CMD_COL) + depth`. Compacting the arms westward while leaving the wall at
+156 moves **both** terms the wrong way: COL's `r` would sit 86 cells from the
+wall and 70 from `cmd`, and the arm would read the command word instead of its
+own ring. Bringing the wall in restores the margin exactly (43), and `Cols.of()`
+now does for the block's east side what `Rows.of()` does for its rows — relays,
+panel and the three port pipes are all `EAST` plus a fixed offset, so all four
+pipe lengths are unchanged and `build_doom`'s three assertions re-check it.
+
+### What could NOT be done, and why it is the bigger number
+
+The traffic is **inverted against the layout**: RUN 46.6% and COL 34.9%, the two
+easternmost arms, pay the longest walk; GUN + GUNF carry 0.55% of words between
+them and sit in the west. Ordering by traffic would be worth more than the
+re-spacing. It cannot be had:
+
+* **COL is pinned to leaf 7** — its code is 0, which is what makes the CPU's
+  per-column send a bare `MULI 8`, and its loops spill ten columns east.
+* **RUN is pinned to an eastern leaf** — its literal-free `/16` parks the
+  argument in ring 1 and takes it back with an `r`, and rule 2 only lets an `r`
+  beat `cmd`'s north-wall distance from the far east. At leaf 1 that `r` binds
+  `cmd` and the arm reads the wrong word.
+
+So the gaps are free and the order is not. (Merging GUN and GUNF was measured
+and declined earlier for the same family of reason: it works and pays zero.)
+
+### Measured
+
+The probe is the unit alone — 18 commands, every arm, a negative-seed COL, the
+banding masks, both sprites — so its step count is the unit's own service time,
+dispatch walk included (`scratch/deadman3d-opt/unit_leaf_gate.py`):
+
+| | steps | |
+|---|---:|---:|
+| shipped pitch, `loop_row` 27 | 45,447 | |
+| **compact**, `loop_row` 27 | **43,507** | **-4.27%** |
+| shipped pitch, `loop_row` 10 | 44,054 | |
+| **compact**, `loop_row` 10 | **42,114** | **-4.40%** |
+
+108 ticks a command, against the 237 the CPU stalls. On the 116-round tour:
+
+| | ticks | box |
+|---|---:|---|
+| M16 | 611,021,810 | 293x254 |
+| **M17** | **609,871,597** | 293x254 |
+| | **-1,150,213 = -0.188%** | |
+
+**The box does not move**: the block is 64 columns narrower and the machine is
+not, because the taped store owns the width floor. The earlier finding that the
+unit's east edge sits ~50 columns inside the machine still holds after the store
+shrank — re-checked here rather than inherited.
+
+`deadman-3d_hires`, 9 rounds, both built from scratch and round-gated
+(`scratch/deadman3d-opt/hires_leaf.py`):
+
+| | ticks | box |
+|---|---:|---|
+| pitch | 367,069,477 | 500x348 |
+| **compact** | **367,029,420** | 490x348 |
+| | **-0.011%** | |
+
+Which is the honest answer for that family: hires is 68% blocked on its store
+and parks on `cpu->stream` for 0.0003% of its run, so four blocks' worth of
+shorter dispatch converts to nothing. Ten columns and a rounding error.
+
+### Gates
+
+`tests/test_deadman3d.py -m slow` **12/12** — every composed frame
+byte-identical. Full fast suite 2,788 passed, 68 skipped, so no other slug on
+`d3_unit` moved. Opt-in through `machine.DOOM_LEAF_COLS`, keyed exactly like
+`DOOM_LOOP_ROW` and only on the taped tier: `deadman-3d.man` / `_trim` / `_v2`
+still `f62d63fd…`, `deadman-3d.input.txt` still `654d35d6…`,
+`deadman-3d_taped.man` `a11edcc6…` -> **`684e26e7…`**.
+
+### The lesson, which is worth more than the 0.19%
+
+The user called the dead columns *"more aesthetics"* halfway through, and the
+measurement agrees with them: a write-only coprocessor's internal savings are
+capped by how long its client waits on it, and here that cap was 1.00% before
+anything started. Report the ceiling first. This one was worth taking because
+the compaction turned out to be a re-spacing that moved no codes, no rows and no
+pipe lengths — had it needed a re-order it would have been the wrong trade at
+these prices.
+
+# M18 — declined: rebuilding the decode trie out of `a`/`d` instead of `x`
+
+**Nothing was built.** `machine.py` is untouched and every hash is where M17 left
 it: `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`, `deadman-3d.input.txt`
-`654d35d6…`, `deadman-3d_taped.man` `a11edcc6…`. Two read-only probes were added
+`654d35d6…`, `deadman-3d_taped.man` `684e26e7…`. Two read-only probes were added
 (`scratch/trie_probe.py`, `scratch/gap_probe.py`); they build the grid and walk
-it, they do not change it.
+it, they do not change it. The tick figures below were taken on the `a11edcc6…`
+taped grid, whose CPU room M17 did not touch — the trie and the lane band are
+cell-for-cell the same, so the analysis carries.
 
 The idea was that `x` "always turns" and so forces the CPU's lanes apart, while
 `a`/`d` go **straight** on one side and would close the gaps — potentially
