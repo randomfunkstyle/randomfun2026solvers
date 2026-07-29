@@ -1304,24 +1304,34 @@ def test_the_request_teleport_is_opt_in_and_collapses_the_leg_every_access_pays(
         k: v for k, v in off.route_lengths.items() if k != "adapter->store"
     }
 
-    # The room is one forwarder, not a relay chain — a chain lost to a single
-    # forwarder plus a short pipe on the answer path, and deleting the forwarder
-    # altogether cost +4.14% there.
-    req = next(r for r in on.debug_map().regions if r.name == "teleport:REQ")
+    # One forwarder, not a relay chain: a chain lost to a single forwarder plus
+    # a short pipe on the answer path, and deleting the forwarder altogether
+    # cost +4.14% there. So exactly one loop more than the build without it.
     assert sum(r.count("@>Rv") for r in on.rows) - sum(r.count("@>Rv") for r in off.rows) == 1
 
-    # The gate's ``U`` turns away from the side it read from, so the request has
-    # to keep entering through the gate strip's WEST wall. The room therefore
-    # hands off onto the block's own two-cell stub rather than to any other wall.
+    def west_wall_entries(m):
+        """Every cell where a pipe flows east into some room's west wall."""
+        g = {(x, y): ch for y, row in enumerate(m.rows) for x, ch in enumerate(row)}
+        return {p for p, ch in g.items() if ch == ">" and g.get((p[0] + 1, p[1])) == "|"}
+
+    # The load-bearing one. The gate's ``U`` turns away from the side of the room
+    # it read from, so the request must keep arriving through the gate strip's
+    # WEST wall — and on its own cell, or the store answers from the wrong bank
+    # without erroring. Pinned as a property of the whole machine rather than of
+    # one coordinate: every west-wall entry there was is still there.
+    assert west_wall_entries(on) == west_wall_entries(off)
+
+    # The room hangs below the adapter, and the request leaves the adapter's
+    # FLOOR rather than its east wall. That is free: the adapter has exactly one
+    # incoming and one outgoing pipe, so every r/s in it binds unambiguously
+    # wherever they attach (see machine._ADAPTER).
     grid = {(x, y): ch for y, row in enumerate(on.rows) for x, ch in enumerate(row)}
     ax, ay, aw, ah = next(
         (r.x, r.y, r.w, r.h) for r in on.debug_map().regions if r.name == "adapter"
     )
-    # ... and it leaves the adapter's floor, which is free: the adapter has
-    # exactly one incoming and one outgoing pipe, so every r/s in it binds
-    # unambiguously wherever they attach.
     assert any(grid.get((x, ay + ah)) == "v" for x in range(ax, ax + aw))
-    assert req.y > ay + ah and req.y + req.h < on.height
+    req = next(r for r in on.debug_map().regions if r.name == "teleport:REQ")
+    assert req.y > ay + ah, "the room must hang below the adapter's floor"
 
 
 def test_the_widened_collector_is_off_by_default() -> None:
