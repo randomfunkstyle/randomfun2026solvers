@@ -38,6 +38,12 @@ from randomfun2026solvers.fast_littleman import FastLittleman  # noqa: E402
 IWAD = Path(os.environ.get("DEADMAN3D_IWAD", "")) if os.environ.get("DEADMAN3D_IWAD") \
     else Path.home() / "Downloads" / "doom1_0" / "DOOM1.WAD"
 
+#: Wait-sampling stride.  The quantity wanted here is a *fraction of the run*
+#: over tens of millions of ticks, so a coarse stride is exact enough (it is an
+#: unbiased sample of where the men stand) and stride 1 on a 500x348 grid is
+#: hours.  `DOOM-PROFILE.md`'s 0.55% is the stride-1 figure to check against.
+STRIDE = int(os.environ.get("DOOM_PROFILE_STRIDE", "64"))
+
 
 def cpu_block(grid: FastLittleman, built, prof, ticks: int) -> None:
     """Print what the CPU man is parked on, by pipe."""
@@ -79,7 +85,7 @@ def run_64(rounds: int) -> None:
     assert src + "\n" == (ex / "deadman-3d_taped.man").read_text(), "taped grid drift"
     grid = FastLittleman(src)
     t0 = time.time()
-    res = grid.run(inp, max_ticks=6_000_000_000, profile=True, profile_stride=1)
+    res = grid.run(inp, max_ticks=6_000_000_000, profile=True, profile_stride=STRIDE)
     print(f"64x48 taped {built.width}x{built.height}: {len(cmds)} cmds, "
           f"ticks={res.step:,} fatal={res.fatal} ({time.time()-t0:.0f}s)")
     cpu_block(grid, built, res.profile, res.step)
@@ -103,7 +109,7 @@ def run_hires(rounds: int) -> None:
           f"{time.time()-t0:.0f}s", flush=True)
     grid = FastLittleman(src)
     t0 = time.time()
-    res = grid.run(inp, max_ticks=40_000_000_000, profile=True, profile_stride=1)
+    res = grid.run(inp, max_ticks=40_000_000_000, profile=True, profile_stride=STRIDE)
     print(f"  ticks={res.step:,} fatal={res.fatal} ({time.time()-t0:.0f}s)")
     cpu_block(grid, m, res.profile, res.step)
 
