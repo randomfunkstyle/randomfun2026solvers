@@ -295,6 +295,12 @@ struct Display {
   int room{}, width{}, height{}, cursor{};
   std::vector<unsigned char> current, next;
   int pid[3]{-1, -1, -1};  // 0 top/ADDR, 1 left/DATA, 2 bottom/SWAP.
+  // How many frames this panel has committed.  A one-display machine has one
+  // of these and it is `matched_frames`; a tiled wall has one per panel, and
+  // the *logical* frame is complete only when the slowest panel has committed
+  // it (the panels swap on four separate pipes, so they cannot be guaranteed
+  // to land on the same tick — see `lm1/display.tiled_frames_from_writes`).
+  std::uint64_t commits{};
 };
 
 // Performance notes.  The tick loop is exactly the reference semantics
@@ -469,6 +475,9 @@ class Machine {
   std::vector<i64> output, expected;
   std::vector<std::vector<unsigned char>> expected_frames;
   std::size_t matched_frames{};
+  // The tick each *logical* frame completed on, reported back whenever frames
+  // were supplied: the per-frame cost is the difference of successive entries.
+  std::vector<std::uint64_t> frame_ticks;
   std::vector<std::size_t> cumulative;
   std::size_t released{};
   std::uint64_t step{};
@@ -661,12 +670,20 @@ class Machine {
     return out.str();
   }
 
+  std::string encode_frame_ticks() const {
+    std::ostringstream out;
+    out << " F " << frame_ticks.size();
+    for (std::uint64_t t : frame_ticks) out << ' ' << t;
+    return out.str();
+  }
+
   Result finish(std::string reason, bool known, bool pass) {
     bool halted = true;
     for (const auto& r : runners) halted &= r.halted;
     std::string prof;
     if (c.profile) prof = encode_profile();
     if (c.opprof) prof += encode_opprofile();
+    if (c.has_frames) prof += encode_frame_ticks();
     return {output, step, halted, known, pass, std::move(reason), fatal, fatal_pos, std::move(prof)};
   }
   bool output_in_flight() const {
@@ -804,7 +821,8 @@ class Machine {
     return true;
   }
   void execute_displays() {
-    for (auto& display : displays) {
+    for (std::size_t di = 0; di < displays.size(); ++di) {
+      auto& display = displays[di];
       i64 value;
       if (take_display(display.pid[0], value)) {
         if (value < 0 || value >= display.width * display.height) {
@@ -825,12 +843,28 @@ class Machine {
           display.cursor = 0;
         }
         if (c.has_frames) {
-          if (matched_frames >= expected_frames.size() ||
-              display.current != expected_frames[matched_frames]) {
+          // The expected frame is the whole wall: `displays.size()` tiles laid
+          // out in display (reading) order, each `tile` pixels.  A one-display
+          // machine is the degenerate case and compares the whole thing.
+          const std::size_t tile = display.next.size();
+          const std::size_t k = display.commits;
+          if (k >= expected_frames.size()) { die("wrong-frame", {-1, -1}); return; }
+          const auto& want = expected_frames[k];
+          if (want.size() != tile * displays.size()) {
+            die("frame-shape", {-1, -1}); return;
+          }
+          if (!std::equal(display.current.begin(), display.current.end(),
+                          want.begin() + static_cast<std::ptrdiff_t>(di * tile))) {
             die("wrong-frame", {-1, -1}); return;
           }
-          ++matched_frames;
-          release_satisfied();
+          ++display.commits;
+          std::uint64_t slowest = display.commits;
+          for (const auto& other : displays) slowest = std::min(slowest, other.commits);
+          if (slowest > matched_frames) {
+            matched_frames = slowest;
+            frame_ticks.push_back(step);
+            release_satisfied();
+          }
         }
       }
     }

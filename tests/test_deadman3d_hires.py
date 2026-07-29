@@ -567,3 +567,71 @@ def test_composition_refuses_a_frame_stitched_from_mismatched_halves() -> None:
     wall.send(8 * (8 * 0 + wall.units[0].CODES["COMMIT"]) + wall.SEL["T0"])
     with pytest.raises(ValueError, match="broadcast"):
         display.tiled_frames_from_writes(writes)
+
+
+def test_the_native_judge_tiles_the_expected_frame_over_four_panels() -> None:
+    """``frame_tiles=`` cuts one expected frame into the panels' own tiles.
+
+    The engine's display judge wanted exactly one display, which is why this
+    family had no tick number at all: every measurement had to be ungated, and
+    an ungated run never stops.  The wall is now judgeable — each panel is
+    compared against its own tile of the logical frame on that panel's *n*-th
+    COMMIT — and the split is the same arithmetic ``lm1.display`` uses, so it is
+    worth pinning without building anything.
+
+    No IWAD: this is the parser, exercised on a four-panel grid drawn here.
+    """
+    from randomfun2026solvers.fast_littleman import FastLittleman, FastLittlemanError
+    from randomfun2026solvers.lm1 import display
+
+    # four one-pixel panels in a 2x2, plus the compute room the parser insists on
+    rows = [
+        "+-+  +=+ +=+",
+        "|@|  : : : :",
+        "+-+  +=+ +=+",
+        "",
+        "     +=+ +=+",
+        "     : : : :",
+        "     +=+ +=+",
+    ]
+    fl = FastLittleman("\n".join(row.ljust(12) for row in rows))
+    assert len(fl.display_rooms) == 4
+    frame = ["ab", "cd"]  # 2x2 logical wall over four 1x1 panels
+    parsed = fl._parse_frame_rounds([[frame]], (2, 2))
+    assert parsed == [[[0xA, 0xB, 0xC, 0xD]]]
+    # reading order is tile order, which is what `display.tile_of` says too
+    assert [display.tile_of(x * 64, y * 48) for y in range(2) for x in range(2)] == [0, 1, 2, 3]
+    with pytest.raises(FastLittlemanError, match="display"):
+        fl._parse_frame_rounds([[frame]], (1, 1))
+    with pytest.raises(FastLittlemanError, match="is not 2x2"):
+        fl._parse_frame_rounds([[["abc", "def"]]], (2, 2))
+
+
+@needs_iwad
+def test_the_wall_judges_frame_by_frame_and_reports_what_each_one_cost(
+    wad_installed, tmp_path,
+) -> None:
+    """The tick baseline's instrument, on two frames of the real machine.
+
+    Round gating is what makes a per-frame number mean anything: round *n+1* is
+    released only once the **slowest** of the four panels has committed frame
+    *n*, so ``frame_ticks`` is the tick a whole logical frame landed on rather
+    than whenever one tile happened to swap.
+    """
+    from randomfun2026solvers import deadman3d as d3
+    from randomfun2026solvers.fast_littleman import FastLittleman
+
+    hires = wad_installed
+    cmds = list(d3.WALK[:1])
+    built = hires.build_local(IWAD, tmp_path, cmds, pngs=False)
+    rounds = hires.cases_json(cmds)["publicTestData"][0]["rounds"]
+    res = FastLittleman("\n".join(built["machine"].rows)).run(
+        " / ".join(" ".join(r["in"]) for r in rounds),
+        frames=[r["frames"] for r in rounds], frame_tiles=(2, 2),
+        max_ticks=400_000_000,
+    )
+    assert res.fatal is None, res.fatal
+    assert res.passed is True
+    assert len(res.frame_ticks) == len(rounds) == 2
+    # strictly increasing, and the last one is where the run stopped
+    assert res.frame_ticks[0] < res.frame_ticks[1] == res.step
