@@ -88,7 +88,7 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -477,7 +477,45 @@ class _Plan:
     sem: dict[str, Sem] = field(default_factory=dict)
 
 
-def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Plan:
+def _relabel_slots(
+    placed: dict[str, int], want: Mapping[str, int], lanes: int
+) -> dict[str, int]:
+    """Apply a rank-preserving leaf relabelling to ``placed``.
+
+    Every failure mode here is one that would silently move a lane — a missing
+    mnemonic, a duplicate slot, or a map that permutes the north-to-south order —
+    so all three are errors rather than a best effort. See :func:`plan`.
+
+    A map may name opcodes this build does not use, and only those: whether
+    ``JMPS``/``BRZS``/``BRNS`` exist at all is :func:`seek_split`'s decision, made
+    from a threshold the registry cannot evaluate, so one registered map has to
+    serve ``seek=True`` and ``seek=False`` alike. Dropping names from both sides
+    of a sorted comparison cannot reorder what is left, so the rank check below
+    still holds on the subset.
+    """
+    missing = sorted(set(placed) - set(want))
+    if missing:
+        raise MachineError(f"opcode slot map does not name the used opcodes {missing}")
+    want = {m: s for m, s in want.items() if m in placed}
+    if len(set(want.values())) != len(want):
+        raise MachineError("opcode slot map assigns one slot twice")
+    bad = sorted(m for m, s in want.items() if not 0 <= s < lanes)
+    if bad:
+        raise MachineError(f"opcode slot map is outside 0..{lanes - 1} for {bad}")
+    if sorted(placed, key=lambda m: want[m]) != sorted(placed, key=lambda m: placed[m]):
+        raise MachineError(
+            "opcode slot map must preserve the lanes' north-to-south order — it "
+            "re-labels leaves, it does not re-order lanes; use middle_order for that"
+        )
+    return dict(want)
+
+
+def plan(
+    program: Program,
+    *,
+    middle_order: Sequence[str] | None = None,
+    slots: Mapping[str, int] | None = None,
+) -> _Plan:
     """Assign lane rows by pipe need, then derive opcode numbers from the trie.
 
     The trie sorts its leaves in **bit-reversed** order (``ARCH.md`` §2.4), so
@@ -494,6 +532,21 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
     ``2 * drop_x - row`` (east to the drop column, south to the collector, west
     along it), so a hot lane wants to be *low* on both terms at once. See
     ``LANE_ORDER`` for the per-program orders this bought and §7.6 for the method.
+
+    ``slots`` re-labels the *leaf slots* the lanes land on without moving a single
+    lane. Under ``trim_dead`` a lane's row is ``y0 + 2 * rank(slot)`` — the rank of
+    its slot among the used ones, not the slot itself — so any **rank-preserving**
+    relabelling leaves every row, every drop column and every measured lane tick
+    exactly where they were, and changes only ``number = _bitrev(slot, k)``. That
+    is a pure *ROM-encoding* knob: an opcode below 10 is one digit and costs the
+    drum ``Ns`` = 2 cells, one at 10 or above costs ```NN`s`` = 5, and which ten of
+    the ``1 << k`` slots bit-reverse below 10 is fixed geometry the default
+    contiguous packing has no way to aim at. See :data:`OPCODE_SLOTS`.
+
+    The rank-preserving condition is *enforced*, not documented: a map that
+    reorders the lanes is rejected, so this can never silently undo a tuned
+    ``LANE_ORDER``. It is only row-neutral under ``trim_dead`` (:func:`build`
+    checks that), because the untrimmed band puts a lane at ``2 * slot + 1``.
     """
     used = [op.mnemonic for op in program.ops_used]
     sems = {op.mnemonic: op.sem for op in program.ops_used}
@@ -536,13 +589,13 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
         return (group(m), -width(m), m)
 
     order = sorted(used, key=rank)
-    slots = list(range(lanes))
+    free = list(range(lanes))
     placed: dict[str, int] = {}
     for m in [n for n in order if group(n) == 0]:
-        placed[m] = slots.pop(0)
+        placed[m] = free.pop(0)
     for g in (3, 2):
         for m in reversed([n for n in order if group(n) == g]):
-            placed[m] = slots.pop()
+            placed[m] = free.pop()
     middle = [n for n in order if group(n) == 1]
     if middle_order is not None:
         want = list(middle_order)
@@ -553,7 +606,10 @@ def plan(program: Program, *, middle_order: Sequence[str] | None = None) -> _Pla
             )
         middle = want
     for m in middle:
-        placed[m] = slots.pop(0)
+        placed[m] = free.pop(0)
+
+    if slots is not None:
+        placed = _relabel_slots(placed, slots, lanes)
 
     return _Plan(
         k=k,
@@ -701,6 +757,26 @@ SEEK_THRESHOLD = 256
 #: 387,532-word discard bill, for a third of the width the full set costs. The
 #: only other family with long jumps is ``BRZ`` (25 jumps, 64,169 words); ``BRN``
 #: has none in steady state (its 107 long jumps are all boot's).
+#:
+#: **``BRZ`` was re-tried on the taped tier and it does not pay.** It captures
+#: exactly the bill it was predicted to — 64,169 of frame 1's 387,532 words, so
+#: the split goes from 67.9% to **84.5%** of the discard, +16.6 points — and buys
+#: essentially nothing (native/fast engine, taped, the 57-command ``WALK``):
+#:
+#: | build | box | ticks | Δ |
+#: |---|---|---|---|
+#: | ``JMPF`` (shipped) | 295x269 | 591,485,564 | — |
+#: | ``JMPF``+``BRZ`` | **309x271** | 588,983,630 | **-0.42%** |
+#:
+#: The extra slab lifts the ``mem_pad`` floor 22 -> 29 (the progression the
+#: paragraph above predicts), and that pad charges every memory instruction the
+#: extra walk twice. DOOM's taped tier is memory-bound, so the pad gives back
+#: almost the whole discard win. What is left costs **14 columns**: the width
+#: floors at 309 whatever the fold — ``rom_rows`` 80..110 all land on 309, because
+#: the *store* binds the width, not the drum — which breaks the taped machine's
+#: checked-in 300 ceiling (``test_deadman3d.py``) for four tenths of a percent.
+#: Not shipped. ``SEEK_THRESHOLD`` needs no re-tuning either: ``JMPF``+``BRZ`` is
+#: the same plateau (thr 64 -> 84.7%, 256 -> 84.5%, cliff still above 384).
 SEEK_OPS: tuple[str, ...] = ("JMPF",)
 
 
@@ -800,6 +876,15 @@ def seek_words(program: Program, p: _Plan, *, rows: int):
 _STRUCT_X0 = 2  # slabs hug the west wall, keeping their `r` nearest the ROM pipe
 _STRUCT_X0_SEEK = 5  # seek mode: columns 1..4 belong to the flush/remainder tail
 _SLAB_PITCH = 13  # columns per slab: each gets its own band (see _slab)
+#: The narrowest pitch the band is *drawn* at. A branch slab spans exactly eleven
+#: columns — its exit riser at ``base - 1`` through the ``neg`` arm at ``base + 9``
+#: — so eleven is where consecutive slabs touch without overlapping, and ten makes
+#: slab ``i``'s riser share a column with slab ``i-1``'s ``neg`` arm. That happens
+#: to *work* when the shared column is another riser (both men head north and the
+#: collector catches both), which is luck, not geometry: relabel which arm a branch
+#: takes and it becomes a drop into a riser. Ten measured 0.01% better than eleven
+#: on `little-little-man` — inside the noise, and not worth standing on.
+_SLAB_PITCH_FLOOR = 11
 _JUMP_SLAB_ROWS = 4
 _BRANCH_SLAB_ROWS = 8
 
@@ -926,6 +1011,65 @@ def _uneven_trie(
     return entry, cells
 
 
+def _tight_struct_entry(
+    p: _Plan,
+    structured: list[str],
+    row_of: dict[str, int],
+    struct_x0: int,
+    drain_unit_bits: int,
+    pitch: int = _SLAB_PITCH,
+) -> tuple[dict[str, int], frozenset[int]]:
+    """Westmost legal entry column per slab, and the columns no entry may use.
+
+    The slab band is a staircase: slab ``i`` sits at ``struct_x0 + i * pitch``
+    on entry row ``collector + 1 + i``, one pitch east and one row south of slab
+    ``i - 1``. A structured lane's drop therefore only has to clear the lane band
+    (the caller's ``floor``) and land inside **its own** column band — every
+    shallower body stops at ``base - pitch + 9``, west of the westmost entry this
+    returns, and every deeper one starts a whole pitch east.
+    The ``struct_east + 1`` floor the default rule uses is a much stronger
+    condition than the geometry needs.
+
+    Two families of column are still forbidden outright, because a slab's *risers*
+    run up to the collector and would meet the drop head-on there:
+
+    * ``base - 1`` — every slab's exit riser, the column the discarded-and-done
+      man climbs on;
+    * ``base + 3 / 6 / 9`` — a branch's three arm columns; the two not-taken arms
+      rise to the collector on theirs.
+
+    A drop sharing one of those leaves `.` on the collector row where the riser
+    needs its `<`, and the rising man sails north into the lane band instead of
+    turning west for the fetch site. They are reserved for every slab, not only
+    the shallower ones, so the answer does not depend on which slab is asking.
+
+    The westmost entry itself is per-slab:
+
+    * a branch turns its man south at ``base``, so ``base + 1`` is enough;
+    * a counted-discard jump owns ``a<`` at ``base``/``base + 1``, so ``base + 2``;
+    * a drained jump (:func:`_drain_block`) turns south on the block's spine at
+      ``base - 1 + spine``, so the drop must land at least one cell east of it.
+    """
+    order = sorted(structured, key=lambda m: -row_of[m])
+    base = {m: struct_x0 + i * pitch for i, m in enumerate(order)}
+    spine = 0
+    if drain_unit_bits:
+        from .drain import build_drain
+
+        spine = build_drain(0, unit_bits=drain_unit_bits, even=True).spine
+    first: dict[str, int] = {}
+    reserved: set[int] = set()
+    for m in order:
+        b = base[m]
+        reserved.add(b - 1)
+        if p.sem[m] in _JUMP_SEMS:
+            first[m] = b + spine if drain_unit_bits else b + 2
+        else:
+            first[m] = b + 1
+            reserved |= {b + 3, b + 6, b + 9}
+    return first, frozenset(reserved)
+
+
 def build_cpu(
     program: Program,
     p: _Plan,
@@ -937,6 +1081,9 @@ def build_cpu(
     trim_dead: bool = False,
     top_bus: bool = False,
     seek: bool = False,
+    seek_taken_drop_east: bool = False,
+    tight_drops: bool = False,
+    slab_pitch: int = _SLAB_PITCH,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -946,12 +1093,26 @@ def build_cpu(
 
     ``trim_dead`` removes the unused leaf slots' rows (see :func:`_uneven_trie`);
     ``top_bus`` adds a second return bus above the band and routes each simple
-    lane over whichever bus is cheaper. Both default off and leave the layout
-    byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
-    :data:`TOP_RETURN_BUS`.
+    lane over whichever bus is cheaper; ``tight_drops`` walks each slab's entry
+    column back to its own band (:func:`_tight_struct_entry`); ``slab_pitch``
+    narrows the staircase's step. All four default off/unchanged and leave the
+    layout byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
+    :data:`TOP_RETURN_BUS` / :data:`TIGHT_STRUCT_DROPS` / :data:`SLAB_PITCH`.
     """
     if (trim_dead or top_bus) and not short_return:
         raise MachineError("trim_dead/top_bus require the short-return drop rule")
+    if tight_drops and not short_return:
+        raise MachineError("tight_drops requires the short-return drop rule")
+    if slab_pitch < _SLAB_PITCH_FLOOR:
+        raise MachineError(
+            f"slab pitch {slab_pitch} is below the {_SLAB_PITCH_FLOOR}-column span a "
+            "branch slab occupies (`base - 1` .. `base + 9`); slabs would overlap"
+        )
+    if tight_drops and seek:
+        # Seek slabs are a different shape (a taken row *below* the band, a shared
+        # flush tail in columns 1..4) and their entry geometry has not been proved
+        # against a tightened column. Say so rather than emit an unvalidated grid.
+        raise MachineError("tight_drops is not supported with the seek drum")
     k, lanes = p.k, p.lanes
     used = list(p.number)
     bus_row = 1
@@ -1042,7 +1203,7 @@ def build_cpu(
             for m in structured
         }
         struct_x0 = _STRUCT_X0
-    struct_east = struct_x0 + max(1, len(structured)) * _SLAB_PITCH
+    struct_east = struct_x0 + max(1, len(structured)) * slab_pitch
 
     # ── lane extents ─────────────────────────────────────────────────────────
     lane_cells: dict[tuple[int, int], tuple[str, str | None]] = {}
@@ -1122,10 +1283,21 @@ def build_cpu(
     # simple man arriving on that column would sail *past* the collector and be
     # swallowed by the wrong slab. Keeping simple lanes west of ``struct_east`` and
     # structured ones east of it makes that disjointness structural.
+    #
+    # ``tight_drops`` replaces that structural disjointness with a bookkept one —
+    # see :func:`_tight_struct_entry` for the geometry and :data:`TIGHT_STRUCT_DROPS`
+    # for why it is worth doing.
     drop_x: dict[int, int] = {}
     assigned: set[int] = set()
+    struct_cols: set[int] = set()
+    tight_first, tight_reserved = (
+        _tight_struct_entry(p, structured, row_of, struct_x0, drain_unit_bits, slab_pitch)
+        if tight_drops
+        else ({}, frozenset())
+    )
     if short_return:
         floor = lane_x0
+        struct_min = lane_x0
         for r in sorted(all_rows, reverse=True):
             # Halting rows carry no drop but do carry glyphs, so they still raise the
             # floor for everything above them — as do top-bus lanes, whose return
@@ -1138,20 +1310,40 @@ def build_cpu(
                 # A slab's entry column must be unique in *both* directions: its `<`
                 # turns an arriving man west, so any other drop sharing the column
                 # would be swallowed by this slab's entry row.
-                c = max(floor, struct_east + 1)
-                while c in assigned:
+                #
+                # ``struct_min`` keeps the structured columns strictly increasing
+                # bottom-to-top, which is what makes ``order`` below reproduce the
+                # slab order ``tight_first`` was computed against. Without it a
+                # bumped column could overtake the next lane's and silently pair a
+                # slab with another slab's entry column.
+                c = (
+                    max(floor, tight_first[m], struct_min)
+                    if tight_drops
+                    else max(floor, struct_east + 1)
+                )
+                while c in assigned or c in tight_reserved:
                     c += 1
+                struct_min = c + 1
+                struct_cols.add(c)
             else:
+                # A micro-program long enough to reach the slabs has to join the
+                # structured lanes' uniqueness discipline rather than risk
+                # their columns.  Never reset it to ``struct_east + 1``:
+                # ``floor`` is the suffix maximum that proves this column clears
+                # the current lane and every lane below it. Moving west from that
+                # floor can put the drop directly on a live lane glyph.
+                #
+                # ``struct_cols`` is what that discipline is actually protecting: a
+                # slab entry leaves `.` on the collector row, and a simple man
+                # sharing the column would sail past his turn west into the slab.
+                # Under ``tight_drops`` it is tracked directly, so simple lanes go
+                # back to sharing columns freely — two `v`s in one column are fine
+                # (a southbound man keeps his heading over a `v`), and every lane
+                # east of ``struct_east`` otherwise pays for a uniqueness it never
+                # needed against its neighbours.
                 c = floor
-                if c > struct_east:
-                    # A micro-program long enough to reach the slabs has to join the
-                    # structured lanes' uniqueness discipline rather than risk
-                    # their columns.  Never reset it to ``struct_east + 1``:
-                    # ``floor`` is the suffix maximum that proves this column clears
-                    # the current lane and every lane below it. Moving west from that
-                    # floor can put the drop directly on a live lane glyph.
-                    while c in assigned:
-                        c += 1
+                while c in struct_cols or (not tight_drops and c > struct_east and c in assigned):
+                    c += 1
             drop_x[r] = c
             assigned.add(c)
     else:
@@ -1176,6 +1368,11 @@ def build_cpu(
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
     order = sorted(structured, key=lambda m: drop_x[row_of[m]])
+    if tight_drops and order != sorted(structured, key=lambda m: -row_of[m]):
+        # ``tight_first`` priced each slab against the base this order gives it, so a
+        # disagreement means the two disciplines have drifted and the entry columns
+        # would be measured against the wrong slabs. Fail rather than mis-wire.
+        raise MachineError("tight slab entries: the drop order left the slab order")
     slab_at: dict[str, int] = {}
     slab_base: dict[str, int] = {}
     # The collector sits **immediately** below the lane band, above the slabs, and
@@ -1191,7 +1388,7 @@ def build_cpu(
     # rather than each slab getting a private row band. Only the entry row is an
     # exclusive resource: it is the westbound run slab *i*'s drop lands on, and it
     # spans ``[base_i, drop_x_i]``, which crosses every *shallower* body band but
-    # stops east of every deeper one (``base_j > base_i + _SLAB_PITCH - 1`` for
+    # stops east of every deeper one (``base_j > base_i + slab_pitch - 1`` for
     # ``j > i``). So slab *i*'s body, hanging directly below its own entry row
     # inside its own column band, is crossed by no other slab's entry run, and the
     # bands overlap in rows for free: ``n`` entry rows plus the tallest body,
@@ -1201,7 +1398,7 @@ def build_cpu(
     # over a `.` — the same mechanism the drop columns have always used.
     for i, m in enumerate(order):
         slab_at[m] = collector + 1 + i
-        slab_base[m] = struct_x0 + i * _SLAB_PITCH
+        slab_base[m] = struct_x0 + i * slab_pitch
     bottom = max((slab_at[m] + slab_rows[m] for m in order), default=collector + 1)
     taken_row = bottom + 1  # seek mode only: the eastbound send row below the slabs
     if seek:
@@ -1297,12 +1494,25 @@ def build_cpu(
     # ── structures band ──────────────────────────────────────────────────────
     struct_drops: set[int] = set()
     taken_drops: list[int] = []
+    #: Where each seek slab turns south off its entry row; ``slab_base`` unless
+    #: :data:`SEEK_TAKEN_DROP_EAST` straightened it (see below).
+    turn_x: dict[str, int] = {}
     if seek:
         # Send-and-flush slabs (engine-proven by the Stage-2 RAM work): the
         # taken path carries `row*K+rem` in A down to the eastbound taken row,
         # sends it out the east-wall request pipe, then drops into the flush
         # block: r/X until the drum's sentinel (-1), read the remainder, and
         # run the stock 2x4 counted discard. ACC stays in B throughout.
+        # A seek *jump* has no slab body at all — it is one turn south and a drop —
+        # so the column it turns at is a free choice, unlike a branch's, whose `X`
+        # fan-out really does start at ``base``. Taking ``base`` anyway makes the man
+        # walk west across the whole slab band on the entry row and then straight
+        # back east along the taken row to reach the ``s``: a U-turn of
+        # ``2 * (e_s - 1 - base)`` ticks on every taken jump, and it holds nothing.
+        # ``jump_x`` instead turns him at the last column that still lands west of
+        # the ``s``. That column is east of ``struct_east``, hence east of every slab
+        # body, so the drop passes through nobody's slab on the way down.
+        jump_x = struct_east + 1 if seek_taken_drop_east else None
         for m in order:
             s0, base = slab_at[m], slab_base[m]
             if p.sem[m] not in _SEEK_SEMS:
@@ -1311,9 +1521,15 @@ def build_cpu(
                     g, m, p, s0, base, collector, pipe_glyphs, drain_unit_bits
                 )
             elif p.sem[m] in _JUMP_SEMS:
+                # never west of ``base`` (that is the shipped column and the floor),
+                # never east of the lane's own drop (its `<` owns that cell).
+                jx = base if jump_x is None else max(base, min(jump_x, drop_x[row_of[m]] - 1))
                 for yy in range(s0 + 1, taken_row):
-                    g.soft(base, yy, ".")
-                taken_drops.append(base)
+                    if jx != base and (jx, yy) in g.c:
+                        raise MachineError(f"seek jump drop column {jx} is occupied at y={yy}")
+                    g.soft(jx, yy, ".")
+                taken_drops.append(jx)
+                turn_x[m] = jx
             else:
                 g.soft(base, s0 + 1, ".")
                 g.put(base, s0 + 2, ">")
@@ -1346,9 +1562,10 @@ def build_cpu(
                 for x in range(base + 2, dx):
                     g.soft(x, s0, "<")
             else:
-                for x in range(base + 1, dx):
+                turn = turn_x.get(m, base)
+                for x in range(turn + 1, dx):
                     g.soft(x, s0, "<")
-                g.put(base, s0, "v")
+                g.put(turn, s0, "v")
 
         # ── the seek tail, entirely BELOW the slab band ───────────────────────
         # Nothing here shares a row with a slab, so the classic slabs keep their
@@ -1495,7 +1712,7 @@ def build_cpu(
         end = asc_x.get(r, drop_x.get(r, lane_end[r]))
         regions[f"lane:{m}"] = (lane_x0, r, max(1, end - lane_x0 + 1), 1)
     for m in order:
-        regions[f"slab:{m}"] = (slab_base[m], slab_at[m], _SLAB_PITCH, slab_rows[m])
+        regions[f"slab:{m}"] = (slab_base[m], slab_at[m], slab_pitch, slab_rows[m])
 
     return _Cpu(
         cells=g.c,
@@ -1557,8 +1774,9 @@ def _slab(
 
     # BP==0 (or a not-taken arm) leaves a man westbound out of the discard loop's
     # `a`. He rises at ``base - 1`` — the first column west of the loop, still
-    # clear of the shallower band, whose bodies stop at ``base - 4`` (arms reach
-    # ``base' + 9``, pitch 13). Entry rows are stacked now, so running him west
+    # clear of the shallower band, whose bodies stop at ``base' + 9`` (the `neg`
+    # arm), i.e. ``base - 4`` at the default pitch 13 and ``base - 2`` at
+    # :data:`_SLAB_PITCH_FLOOR`. Entry rows are stacked now, so running him west
     # to x=1 at this depth would walk him straight through every shallower slab's
     # loop; the riser instead crosses only shallower *entry rows*, as `.` holes
     # in their soft `<` runs. For slab 0 (``base == _STRUCT_X0``) this is the
@@ -1653,6 +1871,101 @@ DRAIN_UNIT_BITS: dict[str, int] = {
     # -12.7%, so the drain is worth ~4.5 points of that and 6 rows of slab depth.
     "little-little-man": 2,
 }
+
+#: Per-program opt-in for **tight slab entry columns** — the walk *to* a jump or
+#: branch, which is a different cost from the discard it performs there.
+#:
+#: The default rule floors every structured lane's drop at ``struct_east + 1``,
+#: east of the whole slab band. So a structured instruction walks east from
+#: ``lane_x0`` to that column, south to its entry row, then all the way back west
+#: to its own ``base`` — and the man who leaves the slab climbs at ``base - 1``
+#: and walks the collector west to the riser. Those three legs telescope: the
+#: round trip is ``2 * drop_x - lane_x0 - 2`` cells and **the slab's own column
+#: cancels out**. Only the drop column costs anything, and it costs double.
+#:
+#: :func:`_tight_struct_entry` shows the floor is far stronger than the staircase
+#: needs. Landing each slab in its own band instead makes the walk depend on the
+#: slab's index rather than on the band's total width, which is the whole point:
+#: the default cost grows with the number of structured opcodes *for every one of
+#: them*, so adding a third branch lengthens the first one's walk.
+#:
+#: Measured on ``little-little-man`` (16 opcodes, three slabs, ``lane_x0`` 9,
+#: ``struct_east`` 41), cells walked per execution of that opcode:
+#:
+#: | slab | base | drop before | drop after | walk before | walk after |
+#: |---|---|---|---|---|---|
+#: | `JMPF` | 2 | 42 | 15 | 73 | **19** |
+#: | `BRZ` | 15 | 43 | 16 | 75 | **21** |
+#: | `BRN` | 28 | 44 | 29 | 77 | **47** |
+#:
+#: The residue on `BRN` is its ``base``: the third slab starts 26 columns east, and
+#: its drop cannot precede it. That is what :data:`SLAB_PITCH` is for.
+#:
+#: The simple lanes gain twice over. Their own drops stop bumping east past three
+#: reserved slab columns, and the uniqueness rule east of ``struct_east`` — which
+#: only ever existed to keep them off those columns — goes with it, so they share
+#: their floor freely again as they always have west of the band.
+#:
+#: Empty by default, so every machine not named here is byte-identical. Requires
+#: the short-return drop rule and is not available under the seek drum, whose
+#: slabs are a different shape.
+TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
+
+#: Per-program **slab pitch**, the staircase's step. The default 13 gives a branch
+#: slab two spare columns it never uses: its glyphs run from the exit riser at
+#: ``base - 1`` to the ``neg`` arm at ``base + 9``, eleven columns
+#: (:data:`_SLAB_PITCH_FLOOR`). Narrowing the step walks every slab after the first
+#: west, which under :data:`TIGHT_STRUCT_DROPS` walks its entry column west with it
+#: — two cells off the round trip per column, per execution of that opcode.
+#:
+#: It also moves the *deepest* slab's discard ``r`` west, and that turns out to be
+#: what the CPU's east wall is really pinned to. §7.1 makes that ``r`` bind the ROM
+#: pipe on the west wall, and its rival is the memory-response pipe touching the
+#: **east** wall — so a narrower CPU is a *closer* rival, and the pad search has to
+#: escape east until the tie breaks. Measured on ``little-little-man``, sweeping
+#: ``mem_pad`` for each pitch with tight entries on (fast engine, 14 public cases,
+#: 192x193 throughout — the ROM sets the box, so none of this moves the footprint):
+#:
+#: | pitch | binds from | avgTicks |
+#: |---|---|---|
+#: | 13 (default) | 30 | 4,975,064 |
+#: | 12 | 26 | 4,962,708 |
+#: | **11** | **22** | **4,952,101** |
+#:
+#: Every column of pitch buys back a column of ``mem_pad`` and then some. Empty by
+#: default, so every machine not named here is byte-identical.
+#:
+#: **Declined for ``deadman-3d_hires``, twice, and the reason is structural.** A
+#: narrower pitch does move that grid (pitch 11 and 12 both build, both differ
+#: byte-for-byte from the default) — it just cannot move the *box*: hires is
+#: 496 wide on the router wall's 495 columns, not on its CPU, at both the old
+#: fold (496x401 either way) and the new one (496x353 either way). The knob's
+#: whole payoff is trading CPU columns for ``mem_pad``, and on a machine whose
+#: width floor is set 200 columns further east there is nothing to trade into.
+#: Left off rather than added dead; revisit if the wall ever narrows past the
+#: CPU.
+SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
+
+#: :data:`SLAB_PITCH`'s replacement while the seek drum is on — the same split
+#: :data:`MEM_PAD` / :data:`SEEK_MEM_PAD` already make, and for the same reason: the
+#: drum reshapes the band, so a pitch swept against one form does not carry to the
+#: other.
+#:
+#: Why ``deadman-3d`` is here and not above. Narrowing the pitch pulls the CPU's east
+#: wall west, and §7.1 binds the deepest slab's discard ``r`` against the
+#: memory-response pipe touching that wall — so a *narrower* CPU is a **closer** rival.
+#: A seek build clears the tie because :data:`SEEK_MEM_PAD` (22) already sits east of
+#: it; the classic build does not, and ``deadman-3d`` at pitch 11 cannot bind at
+#: ``MEM_PAD`` 17 at all. Forcing it needs 30 — thirteen columns spent to buy back two
+#: per slab — and takes the classic machine 372x377 -> 378x377, which is the baseline in
+#: :data:`SEEK_DRUM`'s own "classic -> seek" table. Keeping the two registries apart
+#: gives the shipped build its 295x269 -> 289x269 and leaves that reference number
+#: reproducible.
+#:
+#: Note ``little-little-man`` must stay in :data:`SLAB_PITCH`: it has no drum, so a
+#: seek-only lookup would silently hand it back the default 13 and undo the -1.44% the
+#: registry exists for.
+SEEK_SLAB_PITCH: dict[str, int] = {"deadman-3d": 11}
 
 
 def _drain_block(
@@ -2528,6 +2841,7 @@ def build(
     tape_relay_size: tuple[int, int] | None = None,
     tape_jump_threshold: int = 128,
     middle_order: Sequence[str] | None = None,
+    opcode_slots: Mapping[str, int] | None = None,
     rom_buffer: int | None = None,
     compact: bool = False,
     hot: tuple[int, int] | None = None,
@@ -2535,12 +2849,24 @@ def build(
     store_offset: tuple[int, int] = (0, 0),
     in_north: bool = False,
     store_teleport: bool = False,
+    store_answer_west: bool = False,
+    store_request_teleport: bool = False,
+    store_chain_reach: bool = False,
+    store_chain_pad: int = 0,
+    store_feed_teleport: bool = False,
+    store_request_reach: bool = False,
+    store_compact_gate: bool = False,
+    store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
     seek: bool = False,
     seek_threshold: int = SEEK_THRESHOLD,
     seek_ops: Sequence[str] = SEEK_OPS,
+    seek_teleport: bool = False,
+    seek_taken_drop_east: bool = False,
+    in_west: int = 0,
+    doom_loop_row: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -2652,7 +2978,11 @@ def build(
                     order.insert(at, new)
                     at += 1
             middle_order = order
-    p = plan(program, middle_order=middle_order)
+    if opcode_slots is not None and not trim_dead:
+        # Untrimmed, a lane sits at ``2 * slot + 1``, so relabelling the leaves
+        # *moves* it — the whole point of the knob is that it does not.
+        raise MachineError("opcode_slots is row-neutral only with trim_dead")
+    p = plan(program, middle_order=middle_order, slots=opcode_slots)
     seek_layout = None
     if seek:
         # The seek drum resolves jump operands as row*K+offset in its own packed
@@ -2720,10 +3050,22 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_answer_west=store_answer_west,
+                    store_request_teleport=store_request_teleport,
+                    store_chain_reach=store_chain_reach,
+                    store_chain_pad=store_chain_pad,
+                    store_feed_teleport=store_feed_teleport,
+                    store_request_reach=store_request_reach,
+                    store_compact_gate=store_compact_gate,
+                    store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    seek_teleport=seek_teleport,
+                    seek_taken_drop_east=seek_taken_drop_east,
+                    in_west=in_west,
+                    doom_loop_row=doom_loop_row,
                 )
             except MachineError as exc:
                 last = exc
@@ -2773,10 +3115,22 @@ def build(
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
+                    store_answer_west=store_answer_west,
+                    store_request_teleport=store_request_teleport,
+                    store_chain_reach=store_chain_reach,
+                    store_chain_pad=store_chain_pad,
+                    store_feed_teleport=store_feed_teleport,
+                    store_request_reach=store_request_reach,
+                    store_compact_gate=store_compact_gate,
+                    store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
                     store_shape=store_shape,
                     seek_layout=seek_layout,
+                    seek_teleport=seek_teleport,
+                    seek_taken_drop_east=seek_taken_drop_east,
+                    in_west=in_west,
+                    doom_loop_row=doom_loop_row,
                 )
             except MachineError:
                 continue
@@ -2848,10 +3202,22 @@ def _assemble(
     tape_relay_size: tuple[int, int] | None = None,
     in_north: bool = False,
     store_teleport: bool = False,
+    store_answer_west: bool = False,
+    store_request_teleport: bool = False,
+    store_chain_reach: bool = False,
+    store_chain_pad: int = 0,
+    store_feed_teleport: bool = False,
+    store_request_reach: bool = False,
+    store_compact_gate: bool = False,
+    store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
     store_shape: tuple[int, int] | None = None,
     seek_layout=None,
+    seek_teleport: bool = False,
+    seek_taken_drop_east: bool = False,
+    in_west: int = 0,
+    doom_loop_row: int | None = None,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -2863,9 +3229,14 @@ def _assemble(
         stream_pad=stream_pad,
         short_return=short_return,
         drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
+        tight_drops=not seek and program.name in TIGHT_STRUCT_DROPS,
+        slab_pitch=(SEEK_SLAB_PITCH if seek else SLAB_PITCH).get(
+            program.name, _SLAB_PITCH
+        ),
         trim_dead=trim_dead,
         top_bus=top_bus,
         seek=seek,
+        seek_taken_drop_east=seek_taken_drop_east,
     )
     W, H = cpu.width, cpu.height
 
@@ -2946,7 +3317,14 @@ def _assemble(
         # The I room moves into the corridor band above the CPU (INPUT_NORTH),
         # so the band must be deep enough to hold a 3x3 room plus its two-cell
         # pipe into the north wall.
-        cpu_gap = max(cpu_gap, 6)
+        #
+        # ROM-PLUS puts a boustrophedon in the same band, and its rows run the
+        # *whole* width — straight through the I room's columns. At gap 6 the
+        # room's top wall lands on exactly the snake's last row (the collision is
+        # `'-' vs '+'` at the room's west wall). One extra row of gap drops the
+        # room clear of it; the corridor's own descent is in column 1, far west of
+        # the room, so nothing else in the band moves.
+        cpu_gap = max(cpu_gap, 7 if band_rows else 6)
     CY = rom_bottom + cpu_gap + band_rows
     g.room(CX, CY, CX + W + 1, CY + H + 1)
     g.blit(CX, CY, cpu.cells)
@@ -2978,7 +3356,9 @@ def _assemble(
     # `r` in the room (§7.1 is nearest, not nearest-useful) — `palette` reads no
     # input at all.
     iy = CY + cpu.in_row
-    in_x = CX + cpu.in_col
+    in_x = CX + cpu.in_col - in_west
+    if in_west and not CX + 1 <= in_x <= CX + W:
+        raise MachineError(f"in_west {in_west} puts the input pipe off the CPU north wall")
     if cpu.has_in and in_north:
         # INPUT_NORTH: the I room sits in the corridor band and its pipe drops
         # into the north wall directly above the IN lane's own `r`. On the west
@@ -3103,6 +3483,10 @@ def _assemble(
         elif store == "taped":
             from ..memory_taped import taped_store_block
 
+            # The block's own placement does not depend on the block, so its
+            # origin is known before it is built — which is what lets the answer
+            # collector be widened to a column named in *machine* coordinates.
+            tx_pre = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
             tape = taped_store_block(
                 tape_n,
                 TAPED_BANKS.get(program.name, 4),
@@ -3110,6 +3494,24 @@ def _assemble(
                     tape_skip_batch
                     if tape_skip_batch != 1
                     else TAPED_SKIP_BATCH.get(program.name, 1)
+                ),
+                # Land the collector's west wall on ``CX + W + 3``: the column
+                # the deleted teleport U used to occupy, one clear of the
+                # response pipe's own attachment cell.
+                answer_west=(CX + W + 4 - tx_pre) if store_answer_west else None,
+                compact_gate=store_compact_gate,
+                order=store_bank_order,
+                chain_reach=store_chain_reach,
+                chain_pad=store_chain_pad,
+                feed_teleport=store_feed_teleport,
+                # Land the first gate's roof one row under the adapter's floor,
+                # so its west wall stands beside the adapter and the request is
+                # a drop, not a corridor. Same trick as ``answer_west``: the
+                # block's origin is known before the block is.
+                request_roof=(
+                    (AY + ADAPTER_H + 2) - (CY + mem_dy + store_dy)
+                    if store_request_reach
+                    else None
                 ),
             )
         elif store == "tape":
@@ -3135,7 +3537,114 @@ def _assemble(
         adapter_out = (ax_out, AY + ADAPTER_OUT_ROW)
         store_in = (tin_x - 1, tin_y)
         moved = bool(mem_dx or mem_dy or store_dx)
-        if compact or moved:
+        req_tele_pipes = 0
+        req_tele_regions: dict[str, tuple[int, int, int, int]] = {}
+        if store_request_reach and store_request_teleport:
+            raise MachineError(
+                "store_request_reach and store_request_teleport are two answers to "
+                "one question: the gate's own room reaching the adapter, or a "
+                "forwarder bridging the gap. Pick one."
+            )
+        if (store_request_reach or store_chain_reach) and store != "taped":
+            raise MachineError(
+                f"only the taped tier has gate rooms to grow, not {store!r}"
+            )
+        if store_request_reach:
+            # No room at all on this leg any more — the STORE's **own** first
+            # gate grew its roof up to the adapter's floor, so what used to be a
+            # 58-cell corridor, and then a forwarder plus two stubs, is now a
+            # two-cell drop off the adapter's south wall onto the gate's west
+            # wall. A forwarder costs ~5.2 cells of re-serialisation (one man on
+            # a six-cell loop against a pipe's free pipelining, M12), so not
+            # having one is worth more than having a short one — and the gate's
+            # ``U`` was reading from *any* incoming pipe with no distance term
+            # the whole time. It turns away from the **wall**, not from the
+            # direction the request came down, which is the only reason the
+            # entry may move 33 rows north of the man who reads it.
+            #
+            # The request leaves the adapter's south wall, which is free: the
+            # adapter has exactly one incoming and one outgoing pipe (see
+            # :data:`_ADAPTER`), so every ``r``/``s`` in it binds wherever they
+            # attach.
+            floor_y = AY + ADAPTER_H + 1
+            if not AX + 1 <= tin_x <= AX + ADAPTER_W:
+                raise MachineError(
+                    f"the store's request column {tin_x} is not under the adapter's "
+                    f"floor ({AX + 1}..{AX + ADAPTER_W}); the drop has nowhere to start"
+                )
+            if tin_y - 1 <= floor_y + 1:
+                raise MachineError(
+                    f"the store's request row {tin_y} leaves no drop below the "
+                    f"adapter's floor at {floor_y}"
+                )
+            # ... down to one cell short of the block's own ``>``, which is the
+            # cell that turns the drop into the gate's west wall.
+            route_lengths["adapter->store"] = g.draw_pipe(
+                [(tin_x, floor_y + 1), (tin_x, tin_y - 1)]
+            )
+        elif store_request_teleport:
+            # The request crosses a **room** instead of a 58-cell pipe.
+            #
+            # This is the same lever the answer path already pulled, on the leg
+            # the profile says is now the expensive one: *every* store access —
+            # 87,490 CPU-blocking reads in a nine-round run, plus every write's
+            # request — walks all of ``adapter->store``, and the CPU is stopped
+            # on the answer for the whole round trip, so those cells are paid
+            # serially and in full. ``R`` has **no distance term** (SPEC.md
+            # §Nearest — "nearest" only picks *which* pipe), so a tall room
+            # spans the canvas gap between the adapter's floor and the first
+            # gate in one instruction, and what is left is two stubs.
+            #
+            # The room hangs in the corridor between the adapter's south wall
+            # and the gate strip's north wall, which is empty for its whole
+            # height. Its exit column lands on ``store_in`` so the gate's own
+            # two-cell stub still delivers the request through the **west**
+            # wall: the gate's ``U`` turns away from the side it read from, so
+            # the entry side is load-bearing and is deliberately not moved.
+            #
+            # The request leaves the adapter's **south** wall rather than its
+            # east one, which is free: the adapter has exactly one incoming and
+            # one outgoing pipe (see :data:`_ADAPTER`), so every ``r``/``s`` in
+            # it binds unambiguously wherever the pipes attach.
+            #
+            # The room is the mechanism, not its absence — deleting the answer
+            # path's forwarders in favour of a plain pipe cost +4.14%, and a
+            # relay *chain* lost to a single forwarder plus a short pipe. So
+            # this adds exactly one room and leaves two stubs.
+            from ..memory_men import teleport_v
+
+            floor_y = AY + ADAPTER_H + 1  # the adapter's south wall
+            rx0 = store_in[0] - 1  # west wall, one clear of the exit column
+            rx1 = rx0 + _TELE_W + 1
+            ry0, ry1 = floor_y + 3, tin_y - 4
+            # The roof column has to be under the adapter's floor *and* inside
+            # the room's north wall; the west end of the room is west of the
+            # adapter, so the shared column is the east one.
+            drop = max(rx0 + 1, AX + 1)
+            if drop > min(rx1 - 1, AX + ADAPTER_W):
+                raise MachineError(
+                    "the store request teleport's roof does not reach the adapter's "
+                    f"floor: columns {rx0 + 1}..{rx1 - 1} miss {AX + 1}..{AX + ADAPTER_W}"
+                )
+            if ry1 - ry0 - 1 < _TELE_H:
+                raise MachineError(
+                    f"the store request teleport has no interior: rows {ry0}..{ry1}"
+                )
+            g.room(rx0, ry0, rx1, ry1)
+            t_rows, _ = teleport_v(ry1 - ry0 - 1)
+            for kk, row in enumerate(t_rows):
+                g.text(rx0 + 1, ry0 + 1 + kk, row.replace(" ", "\0"))
+            # adapter floor -> the room's roof ...
+            n1 = g.draw_pipe([(drop, floor_y + 1), (drop, ry0 - 1)])
+            # ... and the room's floor -> the gate's own request stub, which the
+            # last cell joins (it is already a ``>``, so the draw is idempotent).
+            n2 = g.draw_pipe([(store_in[0], ry1 + 1), store_in, (tin_x, tin_y)])
+            route_lengths["adapter->store"] = n1 + n2 - 1
+            req_tele_pipes = 1  # the request used to be ONE pipe; now it is two
+            req_tele_regions = {
+                "teleport:REQ": (rx0, ry0, rx1 - rx0 + 1, ry1 - ry0 + 1)
+            }
+        elif compact or moved:
             try:
                 # The box is the endpoints' bounding rectangle plus a two-cell margin.
                 # A STORE placed *west* of the adapter needs that margin: the pipe leaves
@@ -3186,7 +3695,24 @@ def _assemble(
         # real machine rather than on a 13-tick one; see tests/test_lm1_pipe_cost.py.
         tele_regions: dict[str, tuple[int, int, int, int]] = {}
         tele_pipes = 0
-        if store_teleport:
+        if store_answer_west:
+            # No forwarding rooms at all: the STORE's own answer collector was
+            # widened until its west end reached the CPU, so the response is one
+            # stub pipe again — the thing L and U were invented to replace.
+            #
+            # The collector is a teleport already (it merges four banks with
+            # ``R``, which has no distance term), and widening a teleport is
+            # free: the value still crosses it in one instruction. So the two
+            # rooms this generator used to add were not buying a teleport, they
+            # were *relaying between* teleports — three hops where the store
+            # could simply have handed the value over itself. It leaves on
+            # ``resp_row``'s own attachment cell, so every memory ``r``'s
+            # binding is untouched.
+            n1 = g.draw_pipe(
+                [(tout_x, tout_y + 1), (tout_x, resp_row), (CX + W + 2, resp_row)]
+            )
+            route_lengths["store->cpu"] = n1
+        elif store_teleport:
             # The response comes home through two teleports instead of a long
             # pipe. ``R`` receives from any incoming pipe with **no distance
             # term** (SPEC.md), so a wide room is a horizontal teleport and a
@@ -3306,13 +3832,16 @@ def _assemble(
                 "the program drives the STREAM block but no ring sizes were given; "
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
-        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
+        blk, stream_touches, (SX, SY) = _stream(
+            g, cpu, CX, CY + H + 1, stream, unit=program.unit, doom_loop_row=doom_loop_row
+        )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
     # Drawn last so its northbound leg can clear everything already placed. Its
     # length is only jump-notice latency; the drum's q sees the value the tick
     # it enters the pipe, so the man parks on the station's r rather than
     # emitting words the CPU would flush.
+    seek_regions: dict[str, tuple[int, int, int, int]] = {}
     if seek:
         cmd_y = CY + (H - 9)  # build_cpu: bottom = taken_row + 9
         x_e = max(x for x, _ in g.c) + 2
@@ -3331,16 +3860,21 @@ def _assemble(
                 raise MachineError("seek: the unit sits too high for the cmd dive")
         else:
             y_b = max(y for _, y in g.c) + 2
-        route_lengths["cpu->drum"] = g.draw_pipe(
-            [
-                (CX + W + 2, cmd_y),
-                (CX + W + 3, cmd_y),  # east out of the wall, then dive south
-                (CX + W + 3, y_b),
-                (x_e, y_b),
-                (x_e, ry),
-                (rom_east + 1, ry),
-            ]
-        )
+        if seek_teleport:
+            route_lengths["cpu->drum"], seek_regions = _seek_teleport(
+                g, cmd_y=cmd_y, src_x=CX + W + 2, x_e=x_e, rom_east=rom_east, ry=ry, y_b=y_b
+            )
+        else:
+            route_lengths["cpu->drum"] = g.draw_pipe(
+                [
+                    (CX + W + 2, cmd_y),
+                    (CX + W + 3, cmd_y),  # east out of the wall, then dive south
+                    (CX + W + 3, y_b),
+                    (x_e, y_b),
+                    (x_e, ry),
+                    (rom_east + 1, ry),
+                ]
+            )
 
     rows = g.rows()
 
@@ -3353,8 +3887,10 @@ def _assemble(
         regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
         regions["tape"] = (TX, TY, tape.width, tape.height)
         regions.update(tele_regions)
+        regions.update(req_tele_regions)
     else:
         regions.update(extra_regions)
+    regions.update(seek_regions)
     # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
     # the only place the ROM-PLUS snake would show up at all. Its cell count *is* its
     # capacity in words (``SPEC.md``), so the note is the number that matters.
@@ -3421,8 +3957,11 @@ def _assemble(
         }
         store_pipes = (
             tape.pipes if store in ("men-y", "men-v3", "taped") else _STORE_PIPES[store]
-        ) + 1 + tele_pipes
-    _check_pipe_count(rows, expected=len(touches) + store_pipes + extra)
+        ) + 1 + tele_pipes + req_tele_pipes
+    # The teleported seek request is three pipes where ``touches["cmd"]`` counts one.
+    _check_pipe_count(
+        rows, expected=len(touches) + store_pipes + extra + (2 if seek_regions else 0)
+    )
     return Machine(
         rows=rows,
         regions=regions,
@@ -3713,6 +4252,80 @@ _ANS_BAND = 3
 _TELE_W = 4
 _TELE_H = 2
 
+
+def _seek_teleport(
+    g: _Grid, *, cmd_y: int, src_x: int, x_e: int, rom_east: int, ry: int, y_b: int
+) -> tuple[int, dict[str, tuple[int, int, int, int]]]:
+    """The CPU -> drum seek request, teleported instead of piped end to end.
+
+    The plain route is the machine's longest pipe by a factor of seven: out of the
+    CPU's east wall, south past everything that hangs below it, east across the whole
+    store block, north up the outside and back west into the drum's east wall — 437
+    cells on ``deadman-3d``'s taped machine. Every cell is a tick of latency on the
+    station's ``r``, and the CPU is flushing the corridor while it waits, so the whole
+    length is on the critical path of every taken jump.
+
+    ``R`` has no distance term (SPEC.md: "nearest" is only ``r``'s rule), so a room is
+    crossed in one instruction whatever its size. Two rooms cover the two long legs:
+
+    * **H** — a wide room in the free band between the store block's bottom and
+      whatever hangs below the CPU. It swallows the whole eastward crossing.
+    * **V** — a tall room in the empty column east of the drum and north of the
+      store, from the drum's own seek row down to the store block's top. It swallows
+      the northward climb *and* the westward return into the drum.
+
+    What is left is three stubs: the CPU's dive into H, the one column that threads
+    the store block's east side (the only through-column there is), and two cells from
+    V into the drum. The drum's attachment cell and the CPU's send cell are both
+    exactly where the plain pipe put them, so no ``r``/``s``/``q`` binding moves.
+    """
+    from ..memory_men import teleport, teleport_v
+
+    def clear(x0: int, y0: int, x1: int, y1: int) -> bool:
+        return not any((x, y) in g.c for y in range(y0, y1 + 1) for x in range(x0, x1 + 1))
+
+    # ── H, the horizontal teleport ───────────────────────────────────────────
+    hx0, hx1 = src_x + 1, x_e
+    hy1 = y_b + 1
+    hy0 = hy1 - (_TELE_H + 1)
+    if not clear(hx0, hy0, hx1, hy1):
+        raise MachineError("seek teleport: no clear band below the store for room H")
+    while hy0 - 1 > cmd_y + 2 and clear(hx0, hy0 - 1, hx1, hy0 - 1):
+        hy0 -= 1  # raise the north wall: every row raised is a cell off the dive
+    # ── V, the vertical teleport ─────────────────────────────────────────────
+    vx0, vx1, vy0 = rom_east + 3, x_e, ry - 1  # +3 leaves the drum stub its two cells
+    vy1 = vy0 + _TELE_H + 1
+    if vx1 - vx0 < _TELE_W + 1 or not clear(vx0, vy0, vx1, vy1):
+        raise MachineError("seek teleport: no clear column east of the drum for room V")
+    while vy1 + 1 < hy0 - 2 and clear(vx0, vy1 + 1, vx1, vy1 + 1):
+        vy1 += 1  # lower the south wall: every row lowered is a cell off the climb
+    # The through-column: H's north wall east of V's south wall, so the climb is
+    # one straight leg. On the taped machine it is the only column clear of the
+    # store block's east return pipe at all.
+    thru = hx1 - 1
+    if not clear(thru, vy1 + 1, thru, hy0 - 1):
+        raise MachineError(f"seek teleport: column {thru} is not clear between V and H")
+
+    g.room(hx0, hy0, hx1, hy1)
+    h_rows, _ = teleport(hx1 - hx0 - 1)
+    for k, row in enumerate(h_rows):
+        g.text(hx0 + 1, hy0 + 1 + k, row.replace(" ", "\0"))
+    g.room(vx0, vy0, vx1, vy1)
+    v_rows, _ = teleport_v(vy1 - vy0 - 1)
+    for k, row in enumerate(v_rows):
+        g.text(vx0 + 1, vy0 + 1 + k, row.replace(" ", "\0"))
+
+    # the CPU's own send cell, east two and down into H's north wall ...
+    n1 = g.draw_pipe([(src_x, cmd_y), (hx0 + 1, cmd_y), (hx0 + 1, hy0 - 1)])
+    # ... H hands it up the through-column into V's south wall ...
+    n2 = g.draw_pipe([(thru, hy0 - 1), (thru, vy1 + 1)])
+    # ... and V hands it west onto the drum's own attachment cell.
+    n3 = g.draw_pipe([(vx0 - 1, ry), (rom_east + 1, ry)])
+    return n1 + n2 + n3, {
+        "seek:H": (hx0, hy0, hx1 - hx0 + 1, hy1 - hy0 + 1),
+        "seek:V": (vx0, vy0, vx1 - vx0 + 1, vy1 - vy0 + 1),
+    }
+
 #: Use the side-ported grid man-memory for the hot tier, so its answer leaves the
 #: same wall its request enters. The bottom-ported block forces the answer to travel
 #: the block's whole width and then back west across the machine; with both ports on
@@ -3977,6 +4590,7 @@ def _stream(
     sizes: tuple[int, int, int] | None,
     *,
     unit: str = "stream",
+    doom_loop_row: int | None = None,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -4007,7 +4621,29 @@ def _stream(
         # the CPU keeps its jumps and there is no separate `_display` call.
         from . import d3_unit
 
-        blk = d3_unit.build_doom()
+        # ``doom_loop_row`` lifts the unit's loop corridor and with it the panel,
+        # which is the machine's own floor — see ``DOOM_LOOP_ROW``. None keeps the
+        # shipped row, so the canonical artifacts do not move.
+        blk = d3_unit.build_doom(
+            loop_row=d3_unit.R_LOOP if doom_loop_row is None else doom_loop_row
+        )
+    elif unit == "doom4":
+        # The tiled wall: four unmodified DOOM blocks behind a 1-of-4 router, so
+        # one command lane paints a 128x96 framebuffer across four 64x48 panels
+        # (the LM-75's interior is capped at 64x64 — SPEC.md). It presents exactly
+        # the `doom` interface: one command pipe in, nothing back.
+        #
+        # ``doom_loop_row`` reaches all four blocks at once, and the 2x2 stacks
+        # two of them — so the lift comes off the wall's height twice over. See
+        # ``DOOM_LOOP_ROW``.
+        from . import d3_router
+
+        # The **packed** wall: the four panels in one 2x2 cluster with a
+        # two-column, three-row gutter, so the thing the machine paints is a
+        # contiguous 128x96 screen rather than four monitors 177 columns apart.
+        # ``build_wall``'s scattered arrangement stays for the probe and the
+        # tests that pin the router's own geometry.
+        blk = d3_router.build_packed_wall(loop_row=doom_loop_row)
     else:
         from . import stream as streammod
 
@@ -4015,7 +4651,7 @@ def _stream(
         a_slots, b_slots, c_slots = sizes
         blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
     bx, by = 1, wall_y + 5
-    if unit == "doom":
+    if unit in ("doom", "doom4"):
         # The DOOM block is ~172 columns wide — far wider than the CPU — and the
         # grid STORE's man-memory runs hundreds of rows down the machine's east
         # side, so the flat slot just below the CPU is occupied. Hang the block
@@ -4527,6 +5163,61 @@ ROM_ROWS = {
     # store the 373-wide box holds (11 floors the width at 391) and 600 slots
     # then force 60 rows, so store_h is not a free variable at all.
     "deadman-3d": 61,
+    # deadman-3d_hires had no entry at all, and `_packed_fold`'s default is the
+    # wrong shape for it by two orders of magnitude: at P=8,895 words it laid the
+    # ROM out **68 columns wide and 800 rows tall** — 69% of a 573x1155 machine's
+    # height in 12% of its width. Nobody had swept it, because the program grew
+    # from P=6,215 to 8,895 in one session (the monster billboards ~2,453 words,
+    # the numerals ~227) and the family only just moved to the taped store.
+    #
+    # The trade is `deadman-3d`'s own, run much further: the machine is
+    # width = max(rom_w(rows), wall_w + 1) by height = rows + 304, and the ROM's
+    # own width goes as ~49,700/rows (measured: 35 -> 1417x339, 50 -> 996x354,
+    # 65 -> 769x369, 80 -> 626x384, 90 -> 573x394, 110 -> 573x414, 150 ->
+    # 573x453, 190 -> 573x494, 230 -> 573x533, and the un-folded default ->
+    # 573x1155). `Machine.area2` is max(w, h)**2, so the objective is the larger
+    # side, and the crossing is wherever the ROM's own width meets the wall's.
+    # Against the 572-wide wall that was 90 rows (573x394); the wall then lost
+    # its router column band (:data:`d3_router.BLOCK_X0`, 572 -> 495) and the
+    # crossing moved with it, exactly as predicted — re-swept at 495:
+    #   95 -> 528x399   100 -> 503x404   105 -> 496x409   110 -> 496x414
+    # and then the compact tape gate (:data:`TAPED_COMPACT_GATE`) took five rows
+    # out of the store block, which moved the crossing again — re-swept a third
+    # time against 495 columns and the 224x58 block:
+    #  100 -> 503x399   **102 -> 496x401**   104 -> 496x403   105 -> 496x404
+    #  110 -> 496x409
+    # Below 102 the ROM is wider than the wall; above it every row is a row of
+    # pure height. Re-sweep whenever the wall narrows again, the store block
+    # changes shape, or the program grows — all three have moved this number
+    # already.
+    #
+    # And a fourth time, after the two knobs of the consolidation pass. They act
+    # on opposite sides of the trade and so had to be swept together:
+    # :data:`OPCODE_SLOTS` takes 36% out of the drum's opcode cells, which moves
+    # the ROM's own width curve *left*, and :data:`DOOM_LOOP_ROW` takes 34 rows
+    # out of the wall, which drops the whole height curve by a constant. Neither
+    # moves the 496 floor — that is the router wall's — so the crossing is still
+    # "the shallowest fold whose ROM is no wider than the wall", just reached
+    # sooner. Both on, height = rom_rows + 265:
+    #   80 -> 540x345   84 -> 514x349   86 -> 503x351   87 -> 497x352
+    #   **88 -> 496x353**   89 -> 496x354   90 -> 496x355   95 -> 496x360
+    #  102 -> 496x367
+    # 87 misses by one column, so 88 is the crossing and every row past it is
+    # pure height. Separately the knobs give 88 -> 496x387 (slots alone, the
+    # crossing already at 88) and 102 -> 496x367 (the lift alone, the crossing
+    # unmoved at 102); together, 496x353.
+    #
+    # And the wall then became the **packed** one
+    # (:func:`d3_router.build_packed_wall`): the four panels moved out of their
+    # blocks into a single 134x103 cluster, which is what makes the machine
+    # paint a contiguous 128x96 screen. It cost rows and gave back one column —
+    # 495x228 -> 493x305, so the machine is 496x353 -> 494x447 and `area2`
+    # 246,016 -> 244,036. 88 still holds, and for the same reason as before: it
+    # is the shallowest fold whose ROM is no wider than the wall (87 is 497),
+    # and every row past it is now pure height with only 47 rows of slack left
+    # rather than 143. Nothing deeper can pay — the 494 is the wall's floor, not
+    # the ROM's, so folding further narrows a drum that is already inside it.
+    "deadman-3d_hires": 88,
 }
 
 
@@ -4552,6 +5243,42 @@ ROM_ROWS = {
 #: This is a buffer, not a ring. A true code ring (the ``LOOP`` room of ``ARCH.md``
 #: §3's diagram) would make the CPU re-send every word it reads or the ring drains,
 #: which costs an ``s`` per discarded word and gives back much of the win.
+#:
+#: **Stays empty. Behind a seek drum it is actively harmful, and that is the whole
+#: story.** Measured flat on ``brackets``/``tcp``/``gradebook``
+#: (``ROM-RECIRCULATION.md``); measured on ``deadman-3d`` — the one slug with a
+#: :data:`SEEK_DRUM` — it is a large *loss*, structurally rather than by a tuning
+#: miss. ``seekrom``'s protocol makes the CPU **flush the corridor to the ``-1``
+#: sentinel** on every seek, so the corridor's length is paid in full by each long
+#: jump. A buffer is precisely a longer corridor, so it prices every seek at its
+#: own capacity (native/fast engine, taped, the 57-command ``WALK``):
+#:
+#: | corridor | ≈ of P=4,002 | seek drum | ticks | Δ |
+#: |---|---|---|---|---|
+#: | 44 (routing accident) | 1/91 | on | 591,485,564 | — |
+#: | 130 (shortest buildable) | 1/32 | on | 593,636,532 | **+0.36%** |
+#: | 250 | 1/16 | on | 599,111,202 | **+1.29%** |
+#: | 500 | 1/8 | on | 611,878,828 | **+3.45%** |
+#: | 1,000 | 1/4 | on | 639,137,034 | **+8.06%** |
+#: | 1,677 | 2/5 | on | 675,651,202 | **+14.23%** |
+#: | 2,000 | 1/2 | on | 690,875,164 | **+16.80%** |
+#: | 44 | — | **off** | 653,734,716 | — |
+#: | 1,677 | 2/5 | **off** | 629,578,991 | **-3.7%** |
+#:
+#: **No dip and no optimum** — cost rises from the first buildable row-pair, so a
+#: shorter buffer does not rescue it. The curve is *linear* to within 0.5% over a
+#: 45x range, slope **50,813 ticks per corridor word**; against 186 long jumps a
+#: frame over 57 frames that is **4.79 ticks per word per seek**, i.e. exactly the
+#: 4.8 ticks a recirculated word ``ROM-RECIRCULATION.md`` measures. The flush
+#: drains at the ordinary discard rate, so a buffer converts discard the drum had
+#: *removed* straight back into discard the CPU pays, one word for one word.
+#:
+#: The last two rows are the control, and they are what makes this a *conflict*
+#: rather than a dead feature: on the classic drum the buffer does what it was
+#: designed to do and is worth -3.7%; on the seek drum the same corridor costs
+#: +14.2%. Canonical at 1,677 is **+30.3%**. Combining it with a wider
+#: :data:`SEEK_OPS` is *super*-additive (+17.3%, against +13.8% predicted from the
+#: two alone), because each extra split family adds seeks and every seek flushes.
 ROM_BUFFER: dict[str, int] = {}
 
 
@@ -4682,6 +5409,58 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     # the fold then deepens until the ROM meets the store chain's floor.
     # 395x231 -> **279x258** (max 395 -> 279, bbox 91,245 -> 71,982).
     ("deadman-3d", "taped"): {"rom_rows": 83, "store_offset": (-20, 0)},
+    # deadman-3d_hires: **not** a width/height trade — this machine's box is set
+    # by the 496-column wall and nothing the store does moves it. The offset is
+    # here for one reason: it is what lets :data:`STORE_REQUEST_REACH` reach.
+    # The store's request column is 101 and the adapter's floor spans 81..92, so
+    # the two-cell drop has nowhere to start until the block is pulled west; the
+    # window is dx -20..-9 and every value in it binds. Which one is chosen does
+    # not matter at all — the 21-round tour comes out at 1,085,082,598 ticks
+    # **to the tick** at -9, -14 and -20, because with the roof reaching, the
+    # only thing crossing the gap is the drop and the rest is translation. -14
+    # is the middle, so the drop has five columns of margin either side.
+    # ``rom_rows`` is deliberately absent and falls through to ROM_ROWS' 88.
+    ("deadman-3d_hires", "taped"): {"store_offset": (-14, 0)},
+}
+
+
+#: Per-``(slug, STORE tier)`` **program** override, as ``"module:callable"``. The
+#: callable takes no arguments and returns a :class:`~.asm.Program`; it is imported
+#: lazily so this module keeps importing without the solver packages.
+#:
+#: :data:`TIER_LAYOUT` is this idea one level down — a slug that ships two machines
+#: off one source may want different *layout* per tier. This is the same escape
+#: hatch for the *source itself*, and it exists for exactly one reason: a slug whose
+#: canonical grid is byte-frozen cannot take a program fix that its unfrozen tier
+#: can. An explicit ``program=`` argument to :func:`build_for` still wins, so
+#: deadman-3d's ``--wad`` mode keeps building the level it just installed.
+#:
+#: ``deadman-3d``'s entry deletes the DDA x-arm's redundant ``LD WADDR``. ``ST`` is
+#: ACC-preserving (``isa.py`` op 8; ``emulator._store`` writes ``em.b`` and never
+#: assigns it), so the reload between ``ST WADDR`` and ``LDA`` re-fetched the word
+#: the accumulator already held — and a store read is the most expensive thing this
+#: machine does. Per-opcode attribution at stride 1 (``scratch/DOOM-OPCODES.md``):
+#: 5,536 executions in nine frames at 470.9 ticks each = **4.32% of the run**, the
+#: largest single lever the profiler found and the only one that is a program change
+#: rather than a layout one. It also drops 32 words of ROM.
+#:
+#: The canonical men-v3 grid is pinned at ``f62d63fd`` and ``deadman-3d.asm`` is what
+#: pins it, so the fix is keyed here rather than applied to the shared source — the
+#: same rule :data:`MEM_PAD_FOR`, :data:`INPUT_NORTH_WEST` and
+#: :data:`SEEK_TAKEN_DROP_EAST` already follow. The canonical machine would take the
+#: same win; it is simply not allowed to move.
+#: ``deadman-3d_hires`` wants the same fix and **cannot be given it here**, which
+#: is worth stating so nobody adds the key and believes it did something. This
+#: registry is read only by :func:`_tier_program`, which :func:`build_for` calls
+#: only when no ``program=`` was passed — and ``deadman3d_hires.build_local``
+#: always passes one, because its level comes out of an IWAD at call time and
+#: there is no checked-in ``.asm`` to load. An entry keyed
+#: ``("deadman-3d_hires", "taped")`` would be inert. It is also unnecessary: the
+#: registry exists to keep a **byte-frozen** grid off a program fix, and that
+#: family commits nothing, so ``deadman3d_hires.hires_source`` simply passes
+#: ``dda_acc_reload=False`` itself — worth -4.405% there, against -4.37% here.
+TIER_PROGRAM: dict[tuple[str, str], str] = {
+    ("deadman-3d", "taped"): "randomfun2026solvers.deadman3d:taped_program",
 }
 
 
@@ -4690,7 +5469,14 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
 #: 4:3 rather than the 32x24 its borrowed ``plotter`` JSON states. Consulted by
 #: :func:`display_for` *before* the problem JSON; graded problems must never
 #: appear here, because for them the panel size is the judge's, not ours.
-DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {"deadman-3d": (64, 48)}
+DISPLAY_OVERRIDE: dict[str, tuple[int, int]] = {
+    "deadman-3d": (64, 48),
+    # The *logical* framebuffer. Physically it is four 64x48 panels inside the
+    # `doom4` wall (the LM-75 interior stops at 64x64), so the CPU has no display
+    # lanes and this number never reaches `_display` — it is here so the machine
+    # and its sidecar record what the demo actually renders.
+    "deadman-3d_hires": (128, 96),
+}
 
 #: Per-slug ``mem_pad`` for machines whose pad the default search should not (or
 #: cannot) pick: :func:`build` searches ``range(0, 40)`` and takes the best pad
@@ -4712,7 +5498,7 @@ MEM_PAD: dict[str, int] = {"deadman-3d": 17}
 #: grows with the lane's depth, so the memory band packs west and the pad falls
 #: to the search minimum. Opt-in per slug so every other machine's checked-in
 #: grid stays byte-identical.
-INPUT_NORTH: set[str] = {"deadman-3d"}
+INPUT_NORTH: set[str] = {"deadman-3d", "deadman-3d_hires"}
 
 #: Slugs whose CPU removes the decode trie's **dead leaf rows**: only used
 #: opcodes get a lane pair, the trie is re-routed over the compacted band with
@@ -4722,7 +5508,7 @@ INPUT_NORTH: set[str] = {"deadman-3d"}
 #: for the horizontal ``]`` shifts). Every instruction's decode descent, return
 #: drop and riser shorten with the band. Opt-in per slug so every other
 #: machine's checked-in grid stays byte-identical.
-TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the gate
+TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 rows, -13.6% on the gate
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
@@ -4762,9 +5548,19 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d"}  # band 63 -> 41 rows, -13.6% on the 
 #: is the trade — re-check it before the next taped sweep.
 SEEK_DRUM: set[str] = {"deadman-3d"}
 
+#: Per-slug override for :data:`SEEK_OPS`. Absent slugs keep the ``JMPF``-only
+#: default, so this is byte-identical for everything not named here.
+SEEK_OPS_FOR: dict[str, tuple[str, ...]] = {}
+
 #: ``MEM_PAD``'s replacement while the seek drum is on: the extra lane and slab
 #: move the band, so the pinned pad no longer binds. Searched once and recorded
 #: here so a seek build stays deterministic (and fast).
+#:
+#: **The "22 is the floor" claim below is stale for the taped tier** — see
+#: :data:`MEM_PAD_FOR`, which re-swept it on the current machine and found 18
+#: without moving anything and 16 with :data:`INPUT_NORTH_WEST`. It is left at 22
+#: here because the canonical tier's grid is pinned at ``f62d63fd``; the taped tier
+#: overrides it by ``(slug, tier)``.
 SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 
 #: :data:`TIER_LAYOUT`'s overlay while the seek drum is on. Seeking re-shapes
@@ -4780,13 +5576,130 @@ SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 #: * canonical, ``rom_rows`` 59/60/61/62/63: 386x381 / **382x382** / 379x383 /
 #:   379x385 / 379x386. 60 is the crossing and it lands exactly square, so the
 #:   seek build folds one row *shallower* than the classic 61.
-#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / **295x269** /
+#: * taped, ``rom_rows`` 76/78/80/82..96: 304x265 / 299x266 / 295x269 /
 #:   295x272 .. 295x286. The width floors at 295 (the store binds, and
 #:   ``store_offset`` dx -20 is still the last value that routes), so the fold
 #:   stops at the first row that reaches the floor rather than the classic 83.
+#:
+#: **The taped fold re-swept once the width floor moved.** That sweep's floor of
+#: 295 was the answer-path's, not the store's: the STORE teleport L room sat at
+#: ``rom_bottom+1..+4`` and its collector reached to 293. :data:`STORE_ANSWER_WEST`
+#: deleted the room and :data:`SEEK_SLAB_PITCH` narrowed the slabs, and the floor
+#: fell to **287** — ``TX 61 + the block's 224 columns + the east return pipe`` —
+#: but ``rom_rows`` was left at 80, which is one row *short* of reaching it. The
+#: curve, re-measured build-only and then on the 8-command native gate under the
+#: current bank plan:
+#:
+#: ::
+#:
+#:     rom_rows   box        ticks (8-cmd gate)
+#:     76         304x265    61,698,016
+#:     78         299x266    61,613,459
+#:     79         292x268    61,714,266
+#:     80         289x269    61,799,020   (was shipped)
+#:     81         287x271    61,826,043   <- the floor, at the least height
+#:     82, 83     287x272    do not RUN (see below)
+#:     84         287x274    61,689,668
+#:     85..87     287x275/6  do not RUN
+#:     88         287x278    61,666,460
+#:     92         287x282    61,598,564
+#:     96         287x286    61,522,369
+#:     100        287x291    (width floored, height now over)
+#:
+#: 81 is the crossing: every deeper fold buys nothing in width and costs rows.
+#: Ticks are flat across the whole range — the entire 76..96 span is 0.5% — so
+#: this is a size number and only a size number; the +0.08% at 81 against 80 is
+#: inside that band. On the 115-frame tour: 838,732,969 at 80 (289x269) against
+#: 839,384,674 at 81 (287x271).
+#:
+#: **Folds 82, 83, 85, 86 and 87 build but do not run.** At those depths the
+#: ROM's packed words land so that a literal's *reverse* reading exceeds 63 bits
+#: — a ``` ` ``` pair is readable from either end, so both readings have to be
+#: values, and "every value in the language is a signed 64-bit integer"
+#: (``littleman/reference/language-reference.txt``). ``fast_littleman`` checks
+#: both directions and rejects the grid. It is a property of the fold's word
+#: packing, not of anything here, and it is why 84 — 0.2% faster than 81 and
+#: equally narrow — is not the pin: it sits in a hole between folds that do not
+#: run at all.
 SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
-    ("deadman-3d", "taped"): {"rom_rows": 80},
+    ("deadman-3d", "taped"): {"rom_rows": 81},
+}
+
+#: Per-``(slug, tier)`` **leaf relabelling** for the decode trie: which slot each
+#: opcode's lane occupies, north to south. Absent keys keep the contiguous default
+#: and every other machine stays byte-identical.
+#:
+#: This is a *ROM-encoding* knob and nothing else. A lane's row is its slot's
+#: **rank** under :data:`TRIM_DEAD_LANES`, so a rank-preserving relabelling leaves
+#: every row, drop column and lane tick untouched (:func:`plan` enforces that) and
+#: only moves ``number = _bitrev(slot, k)``. The drum charges an opcode below ten
+#: ``Ns`` = 2 cells and one from ten up ```NN`s`` = 5, and the ten slots that
+#: bit-reverse below ten are ``0, 2, 4, 8, 12, 16, 18, 20, 24, 28`` — a spread the
+#: default packing (``0..N-1`` plus the pinned tail) cannot aim at. With 22 lanes in
+#: 32 slots there are ten spare, and spending them to land the hot opcodes on those
+#: ranks is a pure win in cells.
+#:
+#: DOOM's map is the exact optimum of that assignment (``scratch/rom-opt/slots.py``
+#: — a DP over slot x rank against the **static** opcode histogram, which is what
+#: the drum's cells and its lap length are both counted in, not the execution
+#: profile ``LANE_ORDER`` is weighted by). Measured on the taped tier:
+#:
+#: | quantity | default | relabelled |
+#: |---|---|---|
+#: | one-digit opcode words | 610 of 2,152 | **1,401 of 2,152** |
+#: | opcode cells | 8,930 | **6,557** (-2,373) |
+#: | whole drum, cells/word | 4.626 | **4.075** |
+#: | drum data columns | 267 | **236** |
+#:
+#: **What those cells are worth in ticks is almost nothing, and that is the
+#: finding.** The 13% shorter lap moves the 115-frame tour 839,384,674 ->
+#: 838,737,298, **-0.077%**; a `+1 blank cell per token` control prices the whole
+#: drum at ~0.6% of tour ticks. The taped width floors at 287 on the *store*
+#: (``TX 61 + 224 + the east return pipe``), so the drum's 284 was one column
+#: under the floor and its 252 is 35 under: what this bought is a **32-column
+#: reserve** for whoever narrows the store, not the tick. Full profile, and the
+#: three levers costed and rejected beside it, in ``ROM-RECIRCULATION.md``
+#: §"The drum's *contents*".
+#:
+#: **A map is an assignment fitted to one histogram, so it does not travel.**
+#: ``deadman-3d_hires``'s entry is its own DP solution over its own program
+#: (``scratch/deadman3d-opt/hires_slots.py``), and it agrees with
+#: ``deadman-3d``'s on six of twenty-one lanes. It could not have been copied
+#: even in principle: hires is not in :data:`SEEK_DRUM`, so there is no
+#: ``seek_split`` and no ``JMPS`` lane at all — 21 lanes against 22 — and its
+#: rank order is ``plan``'s length-descending default rather than a tuned
+#: :data:`LANE_ORDER`, so the *ranks* the DP assigns to differ too. Its
+#: histogram is a different shape besides: ``SND`` is 1,251 of 5,116 instructions
+#: (a 28-block billboard chain and a numeral painter ``deadman-3d`` has no
+#: equivalent of), where the committed program's paint traffic is a fraction of
+#: that.
+#:
+#: | quantity | default | relabelled |
+#: |---|---|---|
+#: | one-digit opcode instrs | 2,046 of 5,116 | **4,392 of 5,116** |
+#: | opcode cells | 19,442 | **12,404** (-7,038, -36%) |
+#:
+#: What that is worth is **height, via the fold**. hires' width floors at 496 on
+#: the router wall (:data:`d3_router.BLOCK_X0`'s 495, plus one), never on the
+#: drum, so a narrower drum buys no column directly — it lets a *shallower*
+#: ``rom_rows`` reach the same floor, and hires' height is ``rom_rows`` plus a
+#: constant. The crossing moves 102 -> **88** and the machine 496x401 ->
+#: 496x387 on this knob alone (see :data:`ROM_ROWS`, where the two knobs are
+#: swept together).
+OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
+    ("deadman-3d", "taped"): {
+        "IN": 0, "NEG": 1, "MOVA": 2, "INCM": 3, "ADDI": 4, "MUL": 5,
+        "LDA": 8, "DIV": 9, "SUB": 10, "ADD": 11, "ST": 12, "LD": 16,
+        "MODI": 18, "DIVI": 20, "SUBI": 21, "MULI": 22, "LDI": 24,
+        "JMPS": 25, "BRN": 26, "BRZ": 28, "JMPF": 29, "SND": 30,
+    },
+    ("deadman-3d_hires", "taped"): {
+        "IN": 0, "INCM": 1, "MOVA": 2, "DIV": 3, "ST": 4, "SUB": 5,
+        "ADD": 8, "LDA": 9, "MUL": 10, "DIVI": 11, "LD": 12, "MODI": 13,
+        "NEG": 14, "SUBI": 16, "ADDI": 17, "MULI": 18, "LDI": 20, "BRN": 21,
+        "BRZ": 22, "JMPF": 24, "SND": 28,
+    },
 }
 
 #: Slugs whose CPU gets a **second return bus above the band**: a simple lane
@@ -4805,7 +5718,529 @@ TOP_RETURN_BUS: set[str] = set()
 #: cells on ``deadman-3d``) to three short stubs (~7 cells) — first-order on a
 #: machine making ~15k grid-store reads a frame. Costs two men; opt-in per slug
 #: so every other machine's checked-in grid stays byte-identical.
-STORE_TELEPORT: set[str] = {"deadman-3d"}
+STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
+
+#: ``(slug, tier)`` pairs whose STORE **widens its own answer collector** to the
+#: CPU's east wall instead of being relayed there by :data:`STORE_TELEPORT`'s two
+#: rooms. Wins the same argument the two rooms did, one hop earlier.
+#:
+#: The taped store already ends in a teleport — one 151-column room merging four
+#: banks with ``R``, which has no distance term. This generator then built two
+#: more rooms to carry that room's answer to the CPU, so a read crossed **three**
+#: forwarders and ten pipe cells to get home. But widening a teleport is free:
+#: pulling the collector's own west wall out to ``CX + W + 3`` (the block's west
+#: end is empty for these rows) puts the answer beside the CPU with no extra
+#: room at all, and a six-cell stub finishes it. One forwarder, seven cells.
+#:
+#: Measured on the checked-in 115-frame tour, taped tier:
+#:
+#: * three rooms / 10 cells (shipped): 1,113,752,187
+#: * two rooms   / 10 cells:           1,112,107,549  (-0.15%)
+#: * **one room / 7 cells (this)**:    see the commit message
+#: * zero rooms  / 57 cells:           1,159,488,639  (+4.1%)
+#:
+#: The last line is why the rooms were not simply deleted: ``R``'s missing
+#: distance term is worth ~1M ticks a pipe cell here. The win is not fewer
+#: teleports, it is not *relaying between* teleports.
+#:
+#: men-v3 must stay off, and not for want of trying: its collector is at the
+#: block's floor, ~190 rows below ``resp_row``, so widening it west does not
+#: shorten anything — the answer still has to climb. Keyed by tier for that
+#: reason; absent pairs keep the two-room build byte-identical.
+#: ``deadman-3d_hires`` is deliberately **not** here, and it is not an oversight.
+#: The collector's west wall is asked for at ``CX + W + 4 - tx_pre``; on hires
+#: that is **-18**, because its CPU is narrower (no seek drum, its own
+#: ``mem_pad``) while the store block sits at the same adapter gap — so the
+#: column the collapse wants is east of the store's own origin and there is no
+#: room to widen into. ``deadman-3d`` buys that room with a
+#: ``TIER_LAYOUT`` ``store_offset`` of ``(-20, 0)``; swept for hires, ``-18``
+#: still gives ``answer_west 0`` (the guard wants >= 1) and ``-19``/``-20``
+#: reach the guard but then fail placement outright — "no pad pair makes every
+#: pipe bind; collision at (82, 124)" — while ``-24``/``-30`` fail before that.
+#: The collapse therefore needs store-placement surgery on this machine, not a
+#: registry key, and the entry is left off rather than added dead. hires keeps
+#: its `STORE_TELEPORT` room pair, which is what `build_for` falls back to.
+#: **Re-swept after the consolidation pass** (fold 102 -> 88, the wall 34 rows
+#: shorter): identical failures at every offset — ``-18`` still ``answer_west
+#: 0``, ``-19``/``-20``/``-24``/``-30`` still "no pad pair makes every pipe
+#: bind". Neither knob touches the CPU's width or the adapter gap, so the
+#: column arithmetic never moved, which is the expected result and now a
+#: measured one.
+STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+#: ``(slug, tier)`` pairs whose **seek request** reaches the drum through two teleport
+#: rooms instead of one pipe around the outside of the machine. See
+#: :func:`_seek_teleport` for the geometry; the registry exists so every other
+#: machine's checked-in grid stays byte-identical. Costs two men.
+#:
+#: The plain route is the longest pipe on the machine by seven times — 437 cells on
+#: ``deadman-3d`` taped against 58 for the next one — and every cell of it is latency
+#: on the drum station's ``r``. The teleported route is **53**.
+#:
+#: The arithmetic, measured on the 116-round tour with the native engine:
+#:
+#: * the derivative is **8,063 tour ticks a pipe cell** (+100 cells of pad:
+#:   838,511,442 -> 839,317,714), i.e. ~70 taken seeks a frame, one tick a cell each;
+#: * so the whole 437-cell pipe is worth ~3.5M ticks, **0.42% of the tour**, and
+#:   collapsing it to 53 is worth ~3.1M.
+#:
+#: That ceiling is set by the seek *rate*, not the pipe: this is a rare, fully
+#: serialised event (~70 a frame) where the store's teleported answer was a common
+#: one (~15k reads a frame). A seven-times-longer pipe on a two-hundred-times-rarer
+#: event is worth less, not more — which is the whole reason to measure the
+#: derivative before building.
+SEEK_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+#: Slugs whose **seek jump** turns south at the east end of its entry row instead of
+#: at its slab's ``base``, deleting the U-turn under the CPU.
+#:
+#: A taken ``JMPS`` used to arrive at its entry row on the lane's own drop column,
+#: walk *west* across the whole slab band to ``slab_base``, drop to the taken row,
+#: and then walk straight back *east* to the ``s`` — 15 west and 13 east on
+#: ``deadman-3d``. The west leg looks like it must be holding something, and for a
+#: *branch* slab it would be: ``base`` is where the ``X`` fan-out and its three arm
+#: rows start. A seek jump has no slab body at all — the whole "slab" is one ``v``
+#: and a column of dots — so ``base`` is inherited convention and nothing else.
+#: Nothing binds to it either: the only ``r``/``s`` glyphs in the seek tail are the
+#: ``s`` at ``e_s`` and the flush ``r``\ s in columns 3..4, and none of them move.
+#:
+#: The new column is ``struct_east + 1`` = ``e_s - 1``, the last one that still
+#: lands west of the ``s``, clamped to the lane's own drop column. Being east of
+#: ``struct_east`` it is east of every slab body by construction, so the drop
+#: crosses nobody on the way down; the generator asserts the column is clear
+#: anyway.
+#:
+#: Worth ``2 * (e_s - 1 - base)`` = **24 ticks a taken JMPS**. Measured on the
+#: 116-round tour, native, taped tier: see the commit message. Keyed by
+#: ``(slug, tier)`` — the CPU band is identical on both deadman-3d tiers, so the
+#: canonical machine would take the same win, but its grid is pinned at
+#: ``f62d63fd`` and only the taped family is allowed to move.
+SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+#: How many columns west of ``lane_x0`` an :data:`INPUT_NORTH` I room sits, per
+#: ``(slug, tier)``. Absent (0) keeps the shipped column, which is ``lane_x0``
+#: itself — the pipe drops onto the IN lane's own ``r``.
+#:
+#: **The move is worth exactly zero on its own, and that is measured**: the pipe is
+#: two cells wherever the room goes, the box is store-bound at 287x253, and the
+#: 116-round tour is *bit-identical* at 837,925,922 with the room at x=21 and at
+#: x=8. Nothing about the room's column is geometric.
+#:
+#: What it is worth is :data:`MEM_PAD_FOR`. The input pipe is one of the three
+#: rivals every memory ``r`` in the CPU is checked against, and pulling the memory
+#: band west (a smaller ``mem_pad``) walks those ``r``\ s *toward* it. With the room
+#: at ``lane_x0`` the pad floors at 18 — ``'r' at (41,103) must bind 'mem_resp' but
+#: 'in' is 25`` — and with the room at the CPU's north-west corner the rival becomes
+#: the ROM pipe instead and the floor falls to **16**. Two columns of memory band,
+#: bought by moving a 3x3 room thirteen columns west.
+#:
+#: The westernmost legal column is ``CX + 1``: the room's own west wall then shares
+#: the CPU's west wall column (they are on different rows) and the pipe still lands
+#: on a north-wall cell rather than the corner.
+INPUT_NORTH_WEST: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 13}
+
+#: Per-``(slug, tier)`` ``mem_pad``, overriding :data:`MEM_PAD` /
+#: :data:`SEEK_MEM_PAD`. The pad is how far east of the trie the memory band starts;
+#: every column of it is paid twice by every memory instruction's lane walk.
+#:
+#: :data:`SEEK_MEM_PAD`'s 22 was recorded as the binding floor ("at 21 and below the
+#: classic slabs' ``r`` can no longer beat ``mem_resp`` to the ROM pipe"). That note
+#: is **stale** — ``SEEK_SLAB_PITCH``, :data:`STORE_ANSWER_WEST` and M10 all moved
+#: the glyphs it was measured against. Re-swept on the current taped machine:
+#:
+#: | ``mem_pad`` | I room at x=21 | I room at x=8 (:data:`INPUT_NORTH_WEST`) |
+#: |---|---|---|
+#: | 22 (was shipped) | builds — 837,925,922 | builds |
+#: | 18 | builds — **827,599,542** (-1.23%) | builds |
+#: | 17 | binds against ``in`` | builds |
+#: | 16 | binds against ``in`` | builds — **822,436,488** (-1.85%) |
+#: | 15 | binds against ``in`` | binds against ``rom`` |
+#:
+#: 16 is the floor with the room moved, and the rival there is the ROM pipe, which
+#: the room's column cannot help with. Keyed by tier so the canonical machine, whose
+#: grid is pinned at ``f62d63fd``, keeps ``SEEK_MEM_PAD``'s 22 untouched.
+MEM_PAD_FOR: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 16}
+#: ``(slug, tier)`` pairs whose **request** leg crosses a room instead of a pipe
+#: — the mirror image of :data:`STORE_ANSWER_WEST`, on the leg that was left.
+#:
+#: A stride-1 heatmap and exact pipe counters (native ``fast_littleman``, gated
+#: nine-round run, 61,555,215 ticks) put the CPU **blocked on the store answer
+#: for 47.19% of the whole run**: 87,490 reads at 332 ticks each, standing on
+#: the memory lanes' ``r``. 12,443,858 of those blocked ticks — 20.22% of the
+#: run — is *pure pipe transit*, and the single biggest term in it is this leg:
+#: ``adapter->store`` is 60 parsed cells and **every** access pays all of them,
+#: 5,249,400 ticks = 8.53%. It is the only pipe on the critical path that no
+#: access avoids.
+#:
+#: Nothing about the store is faster afterwards; the request simply stops
+#: walking. A tall teleport hangs in the corridor between the adapter's floor
+#: and the first gate's roof (empty for its whole height in the checked-in
+#: grid), the request leaves the adapter's **south** wall instead of its east
+#: one, and 58 drawn cells become **six**: two down into the room's roof and
+#: four out of its floor onto the gate's own stub. The room is crossed in one
+#: instruction because ``R`` has no distance term (``SPEC.md`` §Nearest).
+#:
+#: Two things this deliberately does **not** do, both of them measured on the
+#: answer path first: it does not delete a forwarder in favour of a plain pipe
+#: (that cost +4.14% there), and it does not build a relay chain (one forwarder
+#: plus a short pipe beat three forwarders). One room, two stubs.
+#:
+#: Measured on the checked-in 116-round tour, native engine, round-gated —
+#: **838,511,442 -> 788,880,295, -5.92%**, box unmoved at 287x253. The estimate
+#: was 8.53% and the gap is accounted for rather than shrugged at (arithmetic in
+#: ``scratch/deadman3d-opt/METRICS.md`` M12). Padding this leg gives it a
+#: derivative of **1,060,929 tour ticks a pipe cell**, so the whole 60 cells
+#: were worth 7.59%, not 8.53 — some request transit overlaps the ring's seek.
+#: Of the 52 cells removed, 46.8 came back; the ~5.2 that did not are the
+#: forwarder's own six-cell loop. A pipe is a 60-deep FIFO and pipelined the
+#: request's two words one tick apart, where one man re-serialises them at one
+#: per six ticks. Six is the shortest cycle that holds both an ``R`` and an
+#: ``s``, and a second man would reorder the words, so that is the floor here.
+#:
+#: Keyed by tier: only the taped tier has a gate chain for the request to reach,
+#: and the room's south wall is placed off the gate strip's own entry row. The
+#: hi-res family is left off for the same reason it is off ``STORE_ANSWER_WEST``
+#: — see that note; absent pairs keep every existing grid byte-identical.
+#: Superseded for ``deadman-3d`` by :data:`STORE_REQUEST_REACH`, which does the
+#: same job with no room at all; the branch stays because it is the only form
+#: available to a store whose first room cannot grow (men-v3's cannot — its
+#: request stub is mid-block) and because withholding it is how the tests state
+#: what a forwarder is worth. Empty by default: absent pairs keep every existing
+#: grid byte-identical.
+#: **Declined for ``deadman-3d_hires`` on the measurement, not on principle.**
+#: Once its store is pulled west far enough for either form to bind
+#: (:data:`TIER_LAYOUT`), both do — and the roof wins: -0.469% against this
+#: room's **-0.362%** on the same 21-round tour at the same offset
+#: (1,085,082,598 vs 1,086,250,847 ticks over frames 1..20, against a base of
+#: 1,090,194,166). The 0.107pp gap is the forwarder's own six-tick
+#: re-serialisation, which is exactly what :data:`STORE_REQUEST_REACH` exists to
+#: stop paying — so the supersession is measured on this machine rather than
+#: carried over from ``deadman-3d``.
+STORE_REQUEST_TELEPORT: set[tuple[str, str]] = set()
+
+#: ``(slug, tier)`` pairs whose STORE grows its **first gate's room** north until
+#: the west wall stands under the adapter's floor, and takes the request as a
+#: two-cell drop. Supersedes :data:`STORE_REQUEST_TELEPORT` for the same key —
+#: setting both is a build error, because the room and the reach are two answers
+#: to one question.
+#:
+#: The forwarder this replaces was already worth -5.92% (M12). What is left to
+#: take is the forwarder *itself*: a pipe is a FIFO and pipelines the request's
+#: two or three words one tick apart, where one man on a six-cell ``@>Rv``/``^s<``
+#: cycle re-serialises them at one word per six ticks — ~5.2 cells' worth, ~0.66%
+#: — plus the four cells of out-stub the room's south wall forced. A grown gate
+#: pays neither: ``U`` receives from any incoming pipe with **no distance term**
+#: (``SPEC.md`` §Nearest), and it turns away from the **wall** the pipe attaches
+#: to rather than from the direction the pipe comes from. That last clause is the
+#: whole permission slip and it was measured, not read: gate 0's room pulled 30
+#: rows north with the request fed 33 rows above its man reads all 600 addresses
+#: of the real plan back correctly (``scratch/deadman3d-opt/probe_gate_grow.py``).
+#: ``deadman-3d_hires`` takes it too, but it had to be *made* reachable: its
+#: store's request column is 101 against an adapter floor of 81..92, so out of
+#: the box the build fails outright ("the drop has nowhere to start") rather
+#: than merely costing more. A :data:`TIER_LAYOUT` ``store_offset`` of
+#: ``(-14, 0)`` pulls the block into the window — see that entry for why the
+#: exact value is arbitrary. **-0.469% net** on the 21-round hi-res tour
+#: (1,090,194,166 -> 1,085,082,598 over frames 1..20), which is the roof's own
+#: -0.550% less the +0.081% the offset costs on its own. Not the -1.478%
+#: ``deadman-3d`` got, and the reason is the same one that shrinks every store
+#: lever on this machine: at 128x96 the frame is four times the pixels but the
+#: store is the same store, so a request leg is a smaller share of the frame.
+STORE_REQUEST_REACH: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
+
+#: ``(slug, tier)`` pairs whose taped STORE grows every gate after the first
+#: **west** until its wall stands beside the previous gate's, so the chain link
+#: is a hop over the intervening feed riser instead of a run under a whole bank.
+#:
+#: Same mechanism as :data:`STORE_REQUEST_REACH` and the same permission slip; it
+#: is worth stating separately because it is worth more. The link is **25 cells
+#: down to 7**, and unlike the arms below it every one of those cells is on the
+#: critical path of *most* accesses: ``A > 0`` means "not mine, pass downstream",
+#: so a request for the bank at chain position ``k`` walks links 0..k-1 first,
+#: and with :data:`TAPED_BANK_ORDER`'s ``(3, 2, 0, 1)`` over
+#: :data:`TAPED_BANKS`' ``(352, 164, 15, 69)`` the first link alone carries 68%
+#: of the reads and the second 12%.
+#:
+#: What it deliberately does **not** touch is the ``reqK->bankK`` arms
+#: (45/45/44/97 cells). Those want the gate to reach its *callee*, and it cannot:
+#: the two outgoing pipes share the east wall, ``s`` takes the **nearest**, and
+#: the tightest of the gate's eight ``s`` glyphs has three cells of margin
+#: between the local pipe and the downstream one. Move the local attachment more
+#: than four rows off the body and the north arms bind to the downstream pipe —
+#: reads land in the wrong bank with no error at all. Arithmetic in
+#: ``scratch/deadman3d-opt/METRICS.md`` M13.
+#: **Declined for ``deadman-3d_hires``, and its own bank order is the reason.**
+#: This lever is worth what the chain *links* carry, and hires carries almost
+#: nothing on them: :data:`TAPED_BANK_ORDER`'s ``(3, 0, 1, 2)`` puts the bank
+#: holding 90.79% of reads and 99.85% of writes at chain position **0**, which
+#: walks zero links — 0.13 gates a read against ``deadman-3d``'s 1.15. So where
+#: link 0 carries 68% of that machine's accesses it carries ~4% of this one's,
+#: and the measurement follows: **-0.020%** on the 21-round hi-res tour
+#: (1,090,194,166 -> 1,089,980,434 over frames 1..20), against -1.950% there.
+#: It is free in box terms — 500x348 either way — and it is still not taken: a
+#: two-hundred-thousandth of a run does not buy pinning three gate rooms into a
+#: grown form that the next store change would have to work around. On top of
+#: the shipped hi-res set it is smaller still, -178,101 ticks = -0.017%.
+TAPED_CHAIN_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+#: ``(slug, tier)`` pairs whose taped STORE puts a **vertical forwarder** on every
+#: ``reqK->bankK`` arm — the legs a grown gate room provably cannot take, because
+#: they run to the gate's *callee* (see :data:`TAPED_CHAIN_REACH`).
+#:
+#: They are the block's largest remaining term: 45, 45, 44 and 97 cells, and
+#: every access walks exactly one of them, so weighted by
+#: :data:`TAPED_BANK_ORDER`'s traffic they are ~46.5 accesses-weighted cells
+#: against a measured 1,112,500 tour ticks each. A one-in/one-out room has none of
+#: the gate's binding problem — ``R`` takes from any incoming pipe and ``s`` has a
+#: single outgoing one — so this is the M12 lever again, on four legs at once.
+#:
+#: It costs a man a bank (census 20 -> 24 against the visualizer's own ceiling of
+#: 30) and two columns of pitch: the room is ``memory_men.teleport_v`` in the
+#: corridor between two banks, which is six columns wide and had four. Absent
+#: pairs keep every existing grid byte-identical.
+#: ``deadman-3d_hires`` takes it, at a tenth of the value and for the mirror
+#: image of the reason :data:`TAPED_CHAIN_REACH` is declined there. Its bank
+#: order puts the hot bank at chain position 0, so ~91% of accesses walk
+#: ``req0->bank0`` and *only* that arm — which is the one this lever shortens
+#: most and the chain lever does not touch at all. **-0.286%** on the 21-round
+#: hi-res tour (1,090,194,166 -> 1,087,081,434 over frames 1..20) against
+#: -4.194% on ``deadman-3d``; the arm is the same ~45 cells but a 128x96 frame
+#: is four times the work between two store accesses, so any one leg is a
+#: quarter of the share. The two columns of extra pitch cost nothing here: this
+#: machine's width is the 496-column wall's, not the store's, at 500x348 either
+#: way.
+TAPED_FEED_TELEPORT: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
+
+#: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
+#: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
+#: 12-row one. Keyed by tier because only the taped tier has gates at all;
+#: absent pairs keep the 12-row build byte-identical.
+#:
+#: The gate inherited its 12 rows from the two-tier adapter, and five of them
+#: are lone ``.`` nops the man simply walks across. Deleting them is not mainly a
+#: smaller room — it is **ticks**, because the request walks every one of those
+#: cells, and it is ticks *per gate in the chain*: ``A > 0`` means "not mine,
+#: pass downstream", so a request for bank ``k`` walks the south path of all
+#: ``k`` gates ahead of it before it walks its own arm. Cells off the walk, by
+#: arm (counted by walking the grid, not derived):
+#:
+#: ::
+#:
+#:     arm                        request U->s     full loop U->U
+#:     north read  (local read)   22 -> 19  (3)    70 -> 60  (10)
+#:     north write (local write)  22 -> 20  (2)    66 -> 58  (8)
+#:     south read  (pass down)    25 -> 23  (2)    60 -> 56  (4)
+#:     south write (pass down)    25 -> 24  (1)    60 -> 56  (4)
+#:
+#: The request column is latency the CPU waits on outright; the loop column is
+#: the gate man's recovery, which only shows when he, not the ring, is what the
+#: next access waits for.
+#:
+#: **The chain is where the money is, because DOOM's traffic is lopsided.**
+#: Profiled on the wire (``0 addr`` / ``1 addr value``) over the checked-in
+#: 115-frame tour: 10,118 reads and 3,315 writes a frame, and with
+#: :data:`TAPED_BANKS`' ``(256, 195, 64, 85)``
+#:
+#: * bank 3 (516..600, the per-frame scalars) takes **88.5%** of reads and
+#:   **97.9%** of writes — and it is the bank with *no gate of its own*, so it
+#:   is reached only by passing all three gates' south arms;
+#: * bank 0 (the 256 map words) takes 7.7%, bank 1 3.7%, bank 2 (ZBUF) 0.1%.
+#:
+#: Average gates traversed: **2.81** a read, **3.00** a write. So the average
+#: read sheds 5.73 cells and the average write 3.02 — 68.0k ticks a frame on the
+#: request path alone.
+#:
+#: Measured on the checked-in 115-frame tour, native engine, all frames clean:
+#:
+#: * 12-row gate (shipped): 1,113,752,187   295x269
+#: * **7-row gate (this)**:  1,102,849,373   295x269   **-0.98%**
+#:
+#: That is -10,902,814 ticks, **-94,807 a frame** — more than the 68.0k the
+#: request path alone predicts, so ~10% of the return-leg saving is on the
+#: critical path too: with the hot bank an 85-slot ring, the gate men really are
+#: part of what the next access waits for.
+#:
+#: **Size did not move, and was never going to.** The block loses its five rows
+#: (224x63 -> 224x58) but it sits at rows 97..154 of a machine whose floor is the
+#: display/stream panel at rows 217..266. 295x269 both ways.
+#:
+#: The follow-up this measurement pointed at — the hot bank is *last*, so 88.5%
+#: of reads pay three gate traversals to reach the cheapest ring — is
+#: :data:`TAPED_BANK_ORDER`, and it is worth an order of magnitude more. The two
+#: do not add; see that entry.
+TAPED_COMPACT_GATE: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    # Same tier, same gate chain, and the spacer rows are a property of the gate
+    # room rather than of the program: the store block goes 224x63 -> 224x58 for
+    # hires exactly as it does for `deadman-3d`, and those five rows come
+    # straight off the machine's height (see `ROM_ROWS["deadman-3d_hires"]`,
+    # whose fold is chosen against that height).
+    ("deadman-3d_hires", "taped"),
+}
+
+#: ``(slug, tier)`` -> the DOOM unit's loop-corridor row (``d3_unit.R_LOOP``,
+#: shipped 27). Absent means "keep the shipped row", which is what holds
+#: ``deadman-3d``, ``deadman-3d_trim`` and ``deadman-3d_hires`` byte-identical.
+#:
+#: **The unit's height is the machine's floor, and seventeen rows of it were
+#: doing nothing.**
+#: The DOOM block hangs below everything (``rom`` rows 0..93, CPU/tape 94..168,
+#: the block 170..270), so the machine's last row *is* the block's, and the
+#: block's height is ``R_ADDR + PANEL_H + 6`` — the panel hangs two rows below
+#: ADDR's band row and the SWAP under-run three below the panel. The unit's own
+#: interior bottom (``R_COLLECT``) is 16 rows clear of that, so it is ADDR, and
+#: only ADDR, that sets the floor.
+#:
+#: Every row below the loop corridor is a fixed offset from it
+#: (``d3_unit.BELOW_LOOP``) because the two counted-loop bodies are rigid
+#: ladders and the band rows are where their ``r``/``s`` glyphs land. So the
+#: whole lower half translates as one piece, every ``_send_band`` decision (a
+#: comparison of row *differences*) is invariant, and all four pipe lengths —
+#: which depend on ``ADDR-DATA`` and ``ADDR-SWAP``, not on ADDR — are unchanged.
+#: Rows 19..26 of the shipped map hold no cell at all, and rows 10..18 come free
+#: once RUN's ``>`` steps into a climb column of its own — COL already does this,
+#: which is why COL's leaf column may carry machinery on the corridor row and
+#: RUN's could not. Below 10 the limit stops being a collision and becomes rule 1:
+#: COL's seed push sits at a fixed row 20, *above* the corridor, and must stay
+#: nearer the ring band (``loop+3``) than ADDR (``loop+19``); their midpoint is
+#: ``loop+11``. 9 is the reading-order tie the builder refuses, 8 and below would
+#: send the wall seed to the panel.
+#:
+#: Measured. Block 235x101 -> 235x84 at ``loop_row`` 10; pipe lengths (addr 15,
+#: data 15, swap 35) and binding margins (min 2) are identical at every value in
+#: 10..27, and the standalone probe — every arm, a negative-seed COL, both
+#: sprites, the banding masks — passes pixel-for-pixel on the native engine at
+#: all eighteen, in 44,054 steps at 10 against 45,447 at 27 (the arms' descents
+#: to the corridor are shorter, so the lift is very slightly *cheaper* too).
+#:
+#: The taped machine then goes **287x271 -> 287x254**, 839,384,674 ->
+#: 839,158,874 ticks on the 116-round tour (-0.03%, i.e. flat). The width is the
+#: taped store's floor (see :data:`SEEK_TIER_LAYOUT`) and the unit never reached
+#: it — the block's east edge is column 235 — so this is height and only height.
+#: It is banked height as well: ``rom_rows`` 81 is the shallowest fold that
+#: reaches the 287 floor, and the seventeen rows come off the total that fold has
+#: to fit under.
+#:
+#: **``deadman-3d_hires`` collects it twice.** Its wall is four blocks in a 2x2
+#: (``d3_router.build_wall``), and the wall's height — which is what adds to the
+#: machine's, the wall hanging below everything — is *two* block heights plus the
+#: router and the gaps. So one lift of seventeen rows comes off it at both
+#: levels: measured, 496x401 -> **496x367** at the same fold, exactly 34 rows,
+#: and the sweep 27, 20, 15, 12, 11, 10 -> 401, 387, 377, 371, 369, 367 is 2 rows
+#: per row of corridor throughout, with no plateau and no floor of its own.
+#: :data:`d3_unit.MIN_LOOP_ROW` is still the binding constraint — 9 raises
+#: ``DoomUnitError`` on COL's seed push, unchanged by the tiling, because
+#: ``build_wall`` hands the same row to four *unmodified* blocks and each one
+#: re-checks it.
+#:
+#: The lift and :data:`OPCODE_SLOTS` are independent (one is the wall's height,
+#: the other the drum's width) and they compose exactly: together the fold
+#: crosses at 88 and the machine is **496x353**, 48 rows off 496x401.
+DOOM_LOOP_ROW: dict[tuple[str, str], int] = {
+    ("deadman-3d", "taped"): 10,
+    ("deadman-3d_hires", "taped"): 10,
+}
+
+#: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**
+#: different from :data:`TAPED_BANKS`' address order. The value is a permutation
+#: of the bank indices; :func:`memory_taped.gate_chain` turns it into a per-gate
+#: literal and gate form, and rejects the orders the hardware cannot express.
+#:
+#: **The chain is a linear scan, and address order is not traffic order.** A gate
+#: forwards everything that is not its own, so a request for the bank at chain
+#: position ``j`` walks ``j`` gates' pass-through arms before it walks its own.
+#: DOOM's traffic is savagely lopsided, and it was pointing the wrong way.
+#: Measured on the emulator's abstract wire (``0 addr`` / ``1 addr value``, see
+#: ``lm1.store``), differencing a four-command run against the boot round alone
+#: so the figures are per *gameplay* frame — 11,222 reads and 3,416 writes:
+#:
+#: ::
+#:
+#:     bank (address range)           reads    writes    chain position
+#:     0  1..256   map words          8.37%     0.00%     0 -> 1
+#:     1  257..451 spawn/monsters     3.48%     0.04%     1 -> 2
+#:     2  452..515 ZBUF               0.00%     1.87%     2 -> 3 (terminal)
+#:     3  516..600 frame scalars     88.14%    98.08%     3 -> 0
+#:
+#: (The ZBUF is written once per column but read only where a sprite survives
+#: the cull, so these four frames read it not at all; the 115-frame tour puts it
+#: at 0.1%.) Average gate rooms traversed: **2.80 -> 1.15 a read**, **3.00 ->
+#: 1.04 a write**. On the request path the average read's walk through the chain
+#: goes 63.9 -> 21.3 cells, the average write's 68.9 -> 19.9.
+#:
+#: The order is simply the traffic order, ``(3, 0, 1, 2)``. Only *some*
+#: permutations exist — a gate hands on one contiguous rebased space, so each
+#: peels a bank off an **end** — but descending traffic happens to be an
+#: end-peeling here, so nothing was given up to get it.
+#:
+#: Measured on the checked-in 115-frame tour, native engine, all frames clean,
+#: against the same 1,113,752,187 baseline the compact gate was measured on:
+#:
+#: * reorder alone (12-row gate):   1,030,923,183   295x269   **-7.44%**
+#: * reorder + compact gate:        1,026,440,454   295x269   **-7.84%**
+#:
+#: **The two are strongly sub-additive**, which is the interesting part:
+#: separately 10.9M + 82.8M = 93.7M, together 87.3M. Once the hot bank is first,
+#: the spacers the hot request no longer crosses stop mattering — the
+#: compaction's remaining 4.5M is what it is worth on *one* gate instead of
+#: three. Kept anyway: it is free, and it still pays on the cold banks.
+#:
+#: **No program change and no size change.** The high-end gate form
+#: (:func:`memory_taped.bank_gate`'s ``high=``) claims the top of the space
+#: instead of the bottom, so ``deadman3d.tape_slots()`` is untouched and
+#: ``deadman-3d_taped.input.txt`` stays byte-identical to the canonical
+#: machine's. The gate room does not change shape either — ``N`` negates in one
+#: glyph where the low form's ``+`` restores, and the high form's pass-through
+#: arms are two cells *shorter* — so the block is 224x58 and the machine
+#: 295x269 both ways.
+#:
+#: **Re-derived when :data:`TAPED_BANKS` was re-swept**, because an order is only
+#: correct for the split it was fitted to. Under ``(352, 164, 15, 69)`` the hot
+#: addresses are two banks, not one — the DDA scalars (bank 2) and ``PW``/
+#: ``WADDR`` (bank 3) — and both have to lead. ``(3, 2, 0, 1)`` is the descending
+#: traffic order and it is still an end-peeling: 3 and 2 come off the top, then 0
+#: off the bottom, leaving 1 terminal. Two high gates now instead of one; the
+#: block is 224x60 (bank 0's 352-slot ring is two rows deeper than the old 256)
+#: and the machine is unchanged at 289x269.
+#:
+#: The alternatives, on the 8-command native gate, ticks against
+#: ``(3, 2, 0, 1)``'s 61,799,020:
+#:
+#: * ``(3, 2, 1, 0)``  61,979,795  (+0.29%, the two cold banks swapped)
+#: * ``(3, 0, 2, 1)``  63,602,816  (+2.9%, the DDA ring behind the map)
+#: * ``(0, 3, 2, 1)``  64,478,669  (+4.3%)
+#: * address order     67,253,690  (+8.8%)
+TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
+    ("deadman-3d", "taped"): (3, 2, 0, 1),
+    # **Re-derived, not copied.** hires has no `TAPED_BANKS` entry, so it takes
+    # `taped_plan`'s uniform quarters `(226, 226, 226, 223)` rather than
+    # `deadman-3d`'s hand-cut `(256, 195, 64, 85)`, and its tape is 902 slots
+    # with a completely different middle (240 billboard words, 66 numerals, a
+    # 128-slot ZBUF). Measured on the same abstract wire, differencing a
+    # four-frame run against the boot round
+    # (`scratch/deadman3d-opt/hires_banks.py`) — 16,557 reads and 6,223 writes
+    # a gameplay frame:
+    #
+    #     bank  range        reads            writes
+    #      0     1.. 226      938   5.67%         0   0.00%
+    #      1   227.. 452      550   3.32%         2   0.04%
+    #      2   453.. 678       36   0.22%         7   0.11%
+    #      3   679.. 901   15,032  90.79%     6,214  99.85%
+    #
+    # Bank 3 holds the ZBUF, CMD and every per-frame scalar, and at 128x96 the
+    # scalar traffic doubles against the map traffic — so hires is *more*
+    # lopsided than `deadman-3d`, not less. The traffic order comes out the same
+    # permutation for a different reason, and `gate_chain` accepts it (each gate
+    # still peels an end). Mean gates walked: 2.76 -> **0.13** a read and
+    # 3.00 -> **0.00** a write, against `deadman-3d`'s 2.80 -> 1.15.
+    ("deadman-3d_hires", "taped"): (3, 0, 1, 2),
+}
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
 #: ``deadman-3d``'s 330-slot store is far past the rotating tape's ~103-slot
@@ -4816,7 +6251,7 @@ STORE_TELEPORT: set[str] = {"deadman-3d"}
 #: an access against the grid store's ~31, flat in the address, at the price of
 #: area — which an ungraded demo does not count. Measured on deadman-3d's
 #: ~14.3k accesses per frame it is worth ~0.3M ticks over ``grid``.
-STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
+STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3", "deadman-3d_hires": "men-v3"}
 
 #: Router-strip length for the men-v3 tier (the ``ops`` knob of
 #: ``v3_store_block`` / ``v3_store_grid_block``), per slug; unlisted slugs keep
@@ -4829,7 +6264,7 @@ STORE_TIER: dict[str, str] = {"deadman-3d": "men-v3"}
 #: native frame gate the ops=1 delta is recorded in scratch/deadman3d-opt/
 #: METRICS.md. Re-sweep before borrowing this for any machine whose reads
 #: arrive in bursts.
-STORE_OPS: dict[str, int] = {"deadman-3d": 1}
+STORE_OPS: dict[str, int] = {"deadman-3d": 1, "deadman-3d_hires": 1}
 
 #: STORE shape for the men-v3 tier: ``(cols, rows)`` columns of the multi-column
 #: block (``v3_store_grid_block``); absent slugs keep the one-column strip.
@@ -4848,7 +6283,17 @@ STORE_OPS: dict[str, int] = {"deadman-3d": 1}
 #: block's 67 rows floor the machine HEIGHT at ~397, the 11-wide chain
 #: floors the width at 391, and 10-wide crosses rom-width against height
 #: at the 60-row fold.
-STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
+STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
+                                           # The hi-res tape passed 828 slots when
+                                           # the billboards went two words a column
+                                           # (240 packed sprite words against 60) and
+                                           # the frame grew a 128-slot ZBUF; 12x60 =
+                                           # 720 no longer covers it, 14x60 = 840
+                                           # does, at the same 60-row fold. This tier
+                                           # is the fallback here — `deadman3d_hires`
+                                           # builds on the **taped** store, whose
+                                           # banks size themselves from TAPE_SIZE.
+                                           "deadman-3d_hires": (14, 60)}
 
 #: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
 #: 600 slots as banked pipe tapes behind a gate chain. This tier exists for the
@@ -4886,8 +6331,69 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60)}
 #: same fold — one fewer gate on every access beats the merged cold rings' laps.
 #: Merging the hot pair too (three banks, ``(256, 195, 149)``) is the wrong
 #: direction and re-proves the original lesson: 121,458,179, +29%.
+#:
+#: **Re-swept against the traffic once the chain order came free**
+#: (:data:`TAPED_BANK_ORDER`). ``(256, 195, 64, 85)`` was fitted while the chain
+#: was forced into address order, so the hot bank was pinned *last* and the only
+#: lever left was its size. With the order free the two questions separate: the
+#: order decides how many gates a bank is behind, and the sizes decide the ring
+#: tax — and the sizes turn out to have been fitted to the wrong boundary.
+#:
+#: Per-**address** traffic, on the emulator's abstract wire, differencing a
+#: four-command run against the boot round alone (``scratch/deadman3d-opt/
+#: traffic.py``; 11,222 reads and 3,416 writes a gameplay frame):
+#:
+#: ::
+#:
+#:     addresses                       reads    writes   what
+#:     517..531  XCOL..COLOR          56.2%     56.2%    the DDA inner loop
+#:     532..533  PW, WADDR            25.6%     31.2%    the texture inner loop
+#:     1..352    MAPB + POSX..PLANEY   8.4%      0.0%    the map, scanned
+#:     353..516  MONB/SPRB/ZBUF/CMD    3.5%      2.0%    boot-mostly + ZBUF
+#:     534..600  FRACX..PTR            6.3%     10.6%    the rest of the scalars
+#:
+#: The old plan's seam at 515/516 cut straight through that: **every** one of
+#: those addresses sat in one 85-slot ring. The new plan puts the fifteen
+#: DDA scalars in a ring of their own and leaves ``PW``/``WADDR`` — the two
+#: hottest single addresses in the machine — in the bank the chain reaches
+#: with no gate at all:
+#:
+#: ::
+#:
+#:     bank  addresses    M    chain pos   share of accesses
+#:     0     1..352      352      2          6.45%
+#:     1     353..516    164      3          3.10%
+#:     2     517..531     15      1         56.19%
+#:     3     532..600     69      0         34.26%
+#:
+#: Both seams are knife-edges, and both were measured, not derived — the
+#: 8-command native gate, ticks against ``(256, 195, 64, 85)``'s 75,782,738:
+#:
+#: * ``(352, 164, 15, 69)`` (this)  61,799,020  **-18.5%**
+#: * ``(352, 164, 16, 68)``         62,405,534  (``WADDR`` moved to the small
+#:   ring: one gate hop costs it more than the 54 slots it saves)
+#: * ``(352, 164, 14, 70)``         62,132,237
+#: * ``(352, 165, 14, 69)``         63,382,964  (``XCOL`` out of the small ring)
+#: * ``(352, 163, 16, 69)``         61,943,676
+#: * ``(352, 164, 17, 67)``         63,237,686
+#: * ``(256, 260, 17, 67)``         64,365,449  (the old bank-0 seam)
+#: * ``(160, 356, 17, 67)``         66,243,101
+#:
+#: Bank 0 wants to be **big**, which the ring-tax model gets exactly backwards:
+#: the map is walked in address order, so its ring is already turned to the next
+#: word and the tax is not paid. 352 is where that stops — the next seam up
+#: (354) costs +0.9% and 358 costs +6.0%, and past ~356 the block outgrows the
+#: 60 rows :func:`build` can place it in (370 and up fail to route at every
+#: fold, so bank 0 has a hard ceiling here as well as a soft one).
+#:
+#: Five banks would be the obvious next question and the answer is the width:
+#: ``48*5 + 32 = 272`` columns from the store's west wall at x=61 is an east
+#: edge of 333, past the 300-column ceiling ``tests/test_deadman3d.py`` pins.
+#: Three banks (176 columns, and it would fit) needs bank 0 to swallow
+#: everything below 517 — 516 slots, a block 66 rows deep, which does not route
+#: at any fold either. Four is what the geometry allows.
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
-    "deadman-3d": (256, 195, 64, 85)}
+    "deadman-3d": (352, 164, 15, 69)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
@@ -4918,6 +6424,26 @@ def display_for(slug: str) -> tuple[int, int] | None:
     return (int(panel["width"]), int(panel["height"])) if panel else None
 
 
+def _tier_program(slug: str, store: str):
+    """The program a ``(slug, tier)`` builds from — :data:`TIER_PROGRAM`, else the
+    checked-in ``<slug>.asm``."""
+    from importlib import import_module
+
+    from . import programs
+
+    ref = TIER_PROGRAM.get((slug, store))
+    if ref is None:
+        return programs.load(slug)
+    module, _, attr = ref.partition(":")
+    prog = getattr(import_module(module), attr)()
+    if prog.name != slug:
+        raise MachineError(
+            f"TIER_PROGRAM[{(slug, store)!r}] returned a program named {prog.name!r}; "
+            f"the registry keys off the program name, so it must be {slug!r}"
+        )
+    return prog
+
+
 def build_for(
     slug: str,
     *,
@@ -4929,6 +6455,7 @@ def build_for(
     trim_dead: bool | None = None,
     top_bus: bool | None = None,
     seek: bool | None = None,
+    store_chain_pad: int = 0,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -4942,6 +6469,13 @@ def build_for(
     default generation remains the checked-in layout. ``program`` overrides the
     checked-in ``.asm`` (deadman-3d's ``--wad`` mode builds a locally imported
     level's machine without touching the program directory).
+
+    ``store_chain_pad`` is the one measurement instrument here rather than a
+    registry, for the same reason ``build``'s ``resp_pad`` is: it leaves
+    :data:`TAPED_CHAIN_REACH`'s gates that many columns short of their callers,
+    lengthening each chain link by exactly that much and moving nothing else, so
+    the leg's tick derivative comes out of a division instead of an argument.
+    Default 0 — the shipped grid.
     """
     from . import programs
 
@@ -4970,11 +6504,17 @@ def build_for(
     if unknown:
         raise MachineError(f"TIER_LAYOUT[{(slug, store)!r}] has unknown keys {sorted(unknown)}")
     mem_offset, store_offset = MEM_PLACE.get(slug, ((0, 0), (0, 0)))
+    if program is None:
+        program = _tier_program(slug, store)
     return build(
-        program if program is not None else programs.load(slug),
+        program,
         tape_n=TAPE_SIZE[slug],
         rom_rows=tier.get("rom_rows", ROM_ROWS.get(slug)),
-        mem_pad=(SEEK_MEM_PAD.get(slug, MEM_PAD.get(slug)) if _seek else MEM_PAD.get(slug)),
+        mem_pad=(
+            MEM_PAD_FOR.get((slug, store), SEEK_MEM_PAD.get(slug, MEM_PAD.get(slug)))
+            if _seek
+            else MEM_PAD.get(slug)
+        ),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
@@ -4982,16 +6522,30 @@ def build_for(
         tape_relay_size=tape_relay_size,
         tape_jump_threshold=tape_jump_threshold,
         middle_order=LANE_ORDER.get(slug),
+        opcode_slots=OPCODE_SLOTS.get((slug, store)),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
         mem_offset=tier.get("mem_offset", mem_offset),
         store_offset=tier.get("store_offset", store_offset),
         in_north=slug in INPUT_NORTH,
-        store_teleport=slug in STORE_TELEPORT,
+        store_teleport=slug in STORE_TELEPORT and (slug, store) not in STORE_ANSWER_WEST,
+        store_answer_west=(slug, store) in STORE_ANSWER_WEST,
+        store_request_teleport=(slug, store) in STORE_REQUEST_TELEPORT,
+        store_chain_reach=(slug, store) in TAPED_CHAIN_REACH,
+        store_chain_pad=store_chain_pad,
+        store_feed_teleport=(slug, store) in TAPED_FEED_TELEPORT,
+        store_request_reach=(slug, store) in STORE_REQUEST_REACH,
+        store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
+        store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
+        seek_teleport=_seek and (slug, store) in SEEK_TELEPORT,
+        in_west=INPUT_NORTH_WEST.get((slug, store), 0),
+        seek_taken_drop_east=_seek and (slug, store) in SEEK_TAKEN_DROP_EAST,
+        seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
+        doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
     )
 
 

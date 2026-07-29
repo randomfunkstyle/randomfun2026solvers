@@ -25,7 +25,7 @@ if str(PKG) not in sys.path:
 
 from randomfun2026solvers import deadman3d as d3  # noqa: E402
 from randomfun2026solvers import wadimport as wi  # noqa: E402
-from randomfun2026solvers.lm1 import machine, programs  # noqa: E402
+from randomfun2026solvers.lm1 import asm, machine, programs  # noqa: E402
 from randomfun2026solvers.lm1.display import frames_from_writes  # noqa: E402
 from randomfun2026solvers.lm1.emulator import Emulator, Round  # noqa: E402
 
@@ -849,6 +849,190 @@ def test_checked_in_asm_matches_the_generator() -> None:
     )
 
 
+def test_the_taped_program_is_the_canonical_one_minus_the_dda_reloads() -> None:
+    """``dda_acc_reload=False`` deletes the x-arm's redundant ``LD WADDR`` from
+    each of the sixteen unrolled copies, and changes nothing else.
+
+    ``ST`` is ACC-preserving, so the reload between ``ST WADDR`` and ``LDA``
+    re-fetched the word the accumulator already held — 4.32% of the run at the
+    profiler's 470.9 ticks a ``LD`` (``scratch/DOOM-OPCODES.md`` §5). This is the
+    audit of the gate: the two tiers' sources differ by sixteen deleted lines, all
+    of them the same line, with nothing added.
+    """
+    import difflib
+
+    canon = d3.deadman3d_source().splitlines()
+    taped = d3.deadman3d_source(dda_acc_reload=False).splitlines()
+    delta = [
+        line
+        for line in difflib.unified_diff(canon, taped, lineterm="", n=0)
+        if line[:1] in "+-" and not line.startswith(("---", "+++"))
+    ]
+    assert delta == ["-        LD  WADDR"] * d3.DDA_UNROLL == ["-        LD  WADDR"] * 16
+    # And the gate is one-way: the default is the frozen canonical program.
+    assert d3.deadman3d_source() == d3.deadman3d_source(dda_acc_reload=True)
+
+
+def test_the_taped_tier_builds_from_the_taped_program() -> None:
+    """The program override is opt-in per ``(slug, tier)``, exactly like
+    :data:`machine.TIER_LAYOUT` — so the canonical men-v3 grid, pinned at
+    ``f62d63fd``, keeps loading the checked-in ``deadman-3d.asm`` untouched."""
+    assert set(machine.TIER_PROGRAM) == {("deadman-3d", "taped")}
+    assert machine.TIER_PROGRAM[("deadman-3d", "taped")] == (
+        "randomfun2026solvers.deadman3d:taped_program"
+    )
+    canonical = programs.load("deadman-3d")
+    taped = d3.taped_program()
+    # The registry keys off the program *name*, so the override must keep it.
+    assert taped.name == canonical.name == "deadman-3d"
+    # The taped program is the canonical one with every tier lever on, and ROM
+    # words are how the first three show up: -32 for the sixteen deleted
+    # `LD WADDR` (16 instructions x 2 words); +6 for `dda_diff`'s three added
+    # instructions outside the loop (one per per-ray seed arm, one in `whx`) —
+    # the DDA step itself is word-neutral, which is the point; +10 for
+    # `lap_via_jump`'s five (a stub and an exit for each of `boot`/`title`, one
+    # shared stub for the DDA, whose two arms both branch to it).
+    def _src(**kw: object):  # noqa: ANN202
+        return asm.assemble(
+            d3.deadman3d_source(dda_acc_reload=False, **kw), name="deadman-3d"
+        )
+
+    reload_only = _src()
+    diff_only = _src(dda_diff=True)
+    lapped = _src(dda_diff=True, lap_via_jump=True)
+    assert reload_only.P == canonical.P - 32
+    assert diff_only.P == reload_only.P + 6
+    assert lapped.P == diff_only.P + 10
+    # `dda_stepy_split` is the one that is not a small delta — it emits the DDA
+    # twice at `DDA_SPLIT_UNROLL` each. Assert the budget instead of the count:
+    # the drum stops routing above ~4,514 words (rom_headroom.py), so the split
+    # has to stay well inside it, and that is the constraint worth pinning.
+    assert taped.P > lapped.P
+    assert taped.P <= 4_500, "the split DDA must stay inside the drum's routing budget"
+    assert machine._tier_program("deadman-3d", "men-v3").words == canonical.words
+    assert machine._tier_program("deadman-3d", "taped").words == taped.words
+
+
+def test_dda_diff_keeps_the_difference_instead_of_the_two_side_distances() -> None:
+    """``dda_diff=True`` makes the DDA's compare state the *difference*
+    ``sideDistX - sideDistY``, so the step reads one word where it read two.
+
+    The saving is structural, not incidental: the canonical step re-derives the
+    difference every iteration (``LD SDX`` / ``SUB SDY``) and the x-arm then
+    re-reads ``SDX`` to increment it, four reads of the pair a step. Keeping the
+    difference costs one read at the head and one in each arm. ``sideDistY`` is
+    still carried absolutely so the y-side tail is untouched and the x-side one
+    can rebuild ``sideDistX = SDD + SDY``.
+
+    Two properties are what make it legal, and both are asserted here because a
+    wrong one shows up as corrupted geometry rather than an exception:
+
+    * ``BRN`` preserves ACC, so the x-arm inherits the difference in the
+      accumulator instead of loading it — the emulator's ``_br_neg`` reads
+      ``em.b`` and assigns nothing, and the prologue's ``DIV RDX`` / ``BRN
+      ddxneg`` / ``NEG`` already depends on it on the taken path;
+    * every operation wraps to a signed 64-bit word, so a difference maintained
+      by ``ADD DDX`` / ``SUB DDY`` is bit-identical to one recomputed from the
+      two absolutes, and the branch cannot tell them apart.
+    """
+    src = d3.deadman3d_source(dda_acc_reload=False, dda_diff=True)
+    lines = [ln.rstrip() for ln in src.splitlines()]
+    # The slot is re-purposed in place, not added: same address, new name.
+    assert f".equ SDD    {d3.tape_slots()['SDX']}" in " ".join(lines)
+    assert not any(ln.split(";")[0].rstrip().endswith(" SDX") for ln in lines), \
+        "no instruction may still name SDX once the slot holds the difference"
+    # One read at the head of every unrolled step ...
+    assert lines.count("dda0:   LD  SDD") == 1
+    assert sum(1 for ln in lines if ln.startswith("dda") and ln.endswith("LD  SDD")) \
+        == d3.DDA_UNROLL
+    # ... and the x-arm opens on the accumulator `BRN` left it, with no load.
+    xarms = [i for i, ln in enumerate(lines) if ln.startswith("xarm")]
+    assert len(xarms) == d3.DDA_UNROLL
+    for i in xarms:
+        assert lines[i].split(":")[1].split(";")[0].strip() == "ADD DDX"
+        assert lines[i + 1].strip() == "ST  SDD"
+    # sideDistY is still absolute, so `why` is untouched and `whx` rebuilds.
+    assert "        ADD SDY             ; sideDistX = SDD + sideDistY" in lines
+    # And the gate is one-way: the frozen canonical program never sees it.
+    assert d3.deadman3d_source() == d3.deadman3d_source(dda_diff=False)
+
+
+def test_the_stepy_split_emits_one_pw_arm_per_loop_and_no_stpy() -> None:
+    """``dda_stepy_split=True`` emits the DDA once per sign of stepY.
+
+    The sign of stepY is a fact about the whole *ray*, decided at the seed — but
+    the canonical loop re-decides it every y-step, with a read of ``STPY`` and a
+    branch, and carries both PW arms and both quarter-column wrap arms in every
+    unrolled copy. Splitting the loop deletes the read, the branch and the arm
+    not taken: a copy goes from 88 ring words to 62, and **the 8-ticks-a-word
+    discard the x-step's own ``BRN`` pays to step over the y-arm shrinks with
+    it** — which is where most of the saving is, not in the deleted read.
+
+    The up loop multiplies PW by 16 and wraps via ``INCM WADDR``; the down loop
+    divides and wraps the other way; and because there is only one wrap arm left
+    it falls straight through into the hit test instead of jumping to it.
+    """
+    src = d3.deadman3d_source(
+        dda_acc_reload=False, dda_diff=True, lap_via_jump=True, dda_stepy_split=True
+    )
+    body = [ln.split(";")[0].rstrip() for ln in src.splitlines()]
+    n = d3.DDA_SPLIT_UNROLL
+    # Two loops, each fully unrolled, each with its own label space.
+    for stem, count in (("dda", n), ("ddan", n), ("xarm", n), ("xarmn", n),
+                        ("hity", n), ("hityn", n), ("ywru", n), ("ywrdn", n)):
+        got = sum(1 for ln in body if ln.startswith(f"{stem}{0}")
+                  or any(ln.startswith(f"{stem}{k}:") for k in range(n)))
+        assert got == count, (stem, got, count)
+    # One PW arm per loop, and the arm the loop cannot take is simply absent.
+    # (`MULI 16` / `DIVI 16` also appear in the movement path's cell lookups, so
+    # count only the ones that shift PW itself.)
+    shifts = [b for a, b in zip(body, body[1:]) if a.endswith("LD  PW")]
+    assert shifts.count("        MULI 16") == n
+    assert shifts.count("        DIVI 16") == n
+    assert not [ln for ln in body if ln.endswith(" STPY")], \
+        "the split decides stepY at the seed, so the scalar is never touched"
+    # ... and the surviving wrap arm falls through into the hit test.
+    for k in range(n):
+        i = next(j for j, ln in enumerate(body) if ln.startswith(f"ywru{k}:"))
+        assert body[i + 3].startswith(f"hity{k}:"), body[i:i + 4]
+
+
+def test_every_loop_lap_is_a_jump_so_the_seek_split_can_take_it() -> None:
+    """``lap_via_jump=True`` leaves no *backward* ``BRN``/``BRZ`` in the program.
+
+    ``machine.SEEK_OPS`` is ``("JMPF",)``: the seek split rewrites a jump and
+    nothing else, so a branch keeps its classic discard loop however far it
+    goes — and a backward target's forward-skip count is nearly the whole ring.
+    Each of this program's three laps was therefore recirculating 2,200-3,900
+    words at 8 ticks a word, every lap. Routing them through a two-word ``JMP``
+    stub costs one seek instead.
+
+    This asserts the property rather than the saving: after the rewrite every
+    branch in the program jumps *forward* in ring order, which is exactly the
+    condition under which no branch can pay a whole-ring discard.
+    """
+    for kwargs, want_backward in (
+        ({}, True),
+        ({"lap_via_jump": True}, False),
+        ({"lap_via_jump": True, "dda_stepy_split": True}, False),
+    ):
+        prog = asm.assemble(
+            d3.deadman3d_source(dda_acc_reload=False, dda_diff=True, **kwargs),
+            name="deadman-3d",
+        )
+        split = machine.seek_split(prog)
+        instrs = sorted(split.instrs, key=lambda i: i.pos)
+        index = {ins.pos: k for k, ins in enumerate(instrs)}
+        backward = []
+        for k, ins in enumerate(instrs):
+            if ins.mnemonic not in ("BRN", "BRZ"):
+                continue  # a JMPF long enough to wrap is a JMPS by now
+            target = machine._target_index(split, instrs, index, k)
+            if target <= k:
+                backward.append(ins.mnemonic)
+        assert bool(backward) is want_backward, backward
+
+
 def test_tape_slots_are_the_documented_map() -> None:
     slots = d3.tape_slots()
     assert (slots["MAPB"], slots["POWB"], slots["HDGB"], slots["NUKB"]) == (
@@ -1039,6 +1223,63 @@ def test_doom_unit_codes_pin_the_trie() -> None:
     assert blk.lengths["swap"] > blk.lengths["data"]
 
 
+def test_doom_loop_row_lifts_the_block_and_nothing_else() -> None:
+    """``loop_row`` is a rigid translation of the unit's whole lower half.
+
+    The block's height is ``R_ADDR + PANEL_H + 6`` — the panel hangs two rows
+    below ADDR's band row and the SWAP under-run three below the panel — so a
+    row off the corridor is a row off the machine's floor. What must *not* move
+    is everything the geometry rules constrain: the pipe lengths (rule 3, which
+    depends on differences of band rows, not on their absolute values), the
+    binding margins (rules 1 and 2, likewise), the arm codes, and the width.
+    """
+    from randomfun2026solvers.lm1 import d3_unit
+
+    base = d3_unit.build_doom()
+    # The floor is a binding limit, not a collision one: COL's seed push stays at
+    # row 20 while the corridor rises, and it must stay nearer ring than ADDR.
+    assert d3_unit.SEED_PUSH_ROW == 20
+    assert d3_unit.MIN_LOOP_ROW == 10
+    assert d3_unit.SEED_PUSH_ROW < d3_unit.MIN_LOOP_ROW + 11
+    heights = {}
+    for lr in range(d3_unit.MIN_LOOP_ROW, d3_unit.R_LOOP + 1):
+        blk = d3_unit.build_doom(loop_row=lr)
+        heights[lr] = blk.height
+        assert blk.width == base.width, lr
+        assert blk.lengths == base.lengths, lr
+        assert blk.codes == base.codes, lr
+        assert min(d3_unit.binding_margins(d3_unit.unit_interior(loop_row=lr)).values()) >= 1
+
+    # One row of corridor is exactly one row of block, all the way down.
+    assert heights == {lr: base.height - (d3_unit.R_LOOP - lr) for lr in heights}
+    assert heights[d3_unit.R_LOOP] == base.height
+    assert heights[d3_unit.MIN_LOOP_ROW] == base.height - 17
+
+    # Below the floor the builder refuses rather than letting the seed push bind
+    # to ADDR, which would send the wall seed to the panel instead of the ring.
+    with pytest.raises(d3_unit.DoomUnitError, match="seed push"):
+        d3_unit.build_doom(loop_row=d3_unit.MIN_LOOP_ROW - 1)
+
+
+def test_doom_loop_row_is_opt_in_per_tier() -> None:
+    """Only the taped tier lifts the corridor; the canonical build must not.
+
+    Both taped machines take the lift, and both take it to the floor — for
+    ``deadman-3d_hires`` it is worth twice as much (its wall is a 2x2, so the
+    seventeen rows come off two stacked block heights), which
+    ``tests/test_deadman3d_hires.py`` pins. What matters here is that the
+    canonical ``deadman-3d`` and ``deadman-3d_trim`` builds are keyed out.
+    """
+    from randomfun2026solvers.lm1 import d3_unit
+
+    assert machine.DOOM_LOOP_ROW == {
+        ("deadman-3d", "taped"): 10,
+        ("deadman-3d_hires", "taped"): 10,
+    }
+    assert all(tier == "taped" for _slug, tier in machine.DOOM_LOOP_ROW)
+    assert set(machine.DOOM_LOOP_ROW.values()) == {d3_unit.MIN_LOOP_ROW}
+
+
 @slow
 def test_doom_unit_probe_paints_like_the_model() -> None:
     """The placed block plus a feeder, judged on the native engine against the
@@ -1075,10 +1316,14 @@ def test_doom_unit_probe_paints_like_the_model() -> None:
         unit.send(w)
     expected = frames_from_writes(writes, width=64, height=48)
     assert len(expected) == 3
-    rows, _dbg, _blk = d3_unit.build_probe(cmds)
-    res = FastLittleman(rows).run([], frames=[expected], max_ticks=5_000_000)
-    assert res.fatal is None, (res.fatal, res.fatal_pos)
-    assert res.passed is True
+    # Both geometries the registries ship: the canonical corridor row and the
+    # taped tier's lifted one. The lift is a pixel-level claim, so it is judged
+    # as one — the model's frames do not depend on where the corridor sits.
+    for loop_row in (d3_unit.R_LOOP, machine.DOOM_LOOP_ROW[("deadman-3d", "taped")]):
+        rows, _dbg, _blk = d3_unit.build_probe(cmds, loop_row=loop_row)
+        res = FastLittleman(rows).run([], frames=[expected], max_ticks=5_000_000)
+        assert res.fatal is None, (loop_row, res.fatal, res.fatal_pos)
+        assert res.passed is True, loop_row
 
 
 # ── the checked-in machine, judged for real ──────────────────────────────────
@@ -1136,6 +1381,28 @@ def test_the_first_rounds_judge_clean_on_the_native_engine() -> None:
 TAPED_MAN = REPO / "littleman" / "examples" / "deadman-3d_taped.man"
 
 
+def _taped_with(**registries):
+    """The taped machine with named registry keys forced on or off.
+
+    Every other registry key still applies, so two builds differ in exactly the
+    thing under test — which is what makes "off by default" a statement about a
+    key rather than about a hand-assembled ``build()`` call. Names are attributes
+    of :mod:`machine`; values are the membership wanted for ``deadman-3d``'s
+    taped pair.
+    """
+    key = ("deadman-3d", "taped")
+    saved = {name: key in getattr(machine, name) for name in registries}
+    try:
+        for name, on in registries.items():
+            reg = getattr(machine, name)
+            reg.add(key) if on else reg.discard(key)
+        return machine.build_for("deadman-3d", store="taped")
+    finally:
+        for name, on in saved.items():
+            reg = getattr(machine, name)
+            reg.add(key) if on else reg.discard(key)
+
+
 def test_taped_registry_pins() -> None:
     """The taped variant is opt-in: the canonical machine STAYS men-v3, and the
     taped build is the one-liner `build_for("deadman-3d", store="taped")`."""
@@ -1153,18 +1420,287 @@ def test_taped_registry_pins() -> None:
     # one — four banks is what puts the taped machine's width floor under the
     # ROM's. Property, not the split.
     assert len(machine.TAPED_BANKS["deadman-3d"]) == 4
-    # TIER_LAYOUT is opt-in per (slug, tier): only deadman-3d's taped variant
-    # deviates from the shared registry, so every other machine — and the
+    # TIER_LAYOUT is opt-in per (slug, tier): only the two DOOM taped variants
+    # deviate from the shared registry, so every other machine — and the
     # canonical men-v3 build — stays byte-identical.
-    assert set(machine.TIER_LAYOUT) == {("deadman-3d", "taped")}
+    assert set(machine.TIER_LAYOUT) == {
+        ("deadman-3d", "taped"), ("deadman-3d_hires", "taped"),
+    }
+    for tier in machine.TIER_LAYOUT.values():
+        assert set(tier) <= {"rom_rows", "mem_offset", "store_offset"}
     tier = machine.TIER_LAYOUT[("deadman-3d", "taped")]
-    assert set(tier) <= {"rom_rows", "mem_offset", "store_offset"}
+    # hires overrides the offset only; its fold is ROM_ROWS' and stays there.
+    hires = machine.TIER_LAYOUT[("deadman-3d_hires", "taped")]
+    assert set(hires) == {"store_offset"}
+    assert -20 <= hires["store_offset"][0] <= -9  # the window the roof binds in
+    assert hires["store_offset"][1] == 0
     # The taped store is a quarter of the men-v3 block's height, so its fold
     # goes far deeper than the canonical machine's height budget allows.
     assert tier["rom_rows"] > machine.ROM_ROWS["deadman-3d"]
     # No deadman-3d_taped.input.txt: same program, same protocol, same input —
     # the canonical deadman-3d.input.txt drives both machines.
     assert not (TAPED_MAN.parent / "deadman-3d_taped.input.txt").exists()
+
+
+def test_store_answer_west_is_opt_in_per_tier() -> None:
+    """The taped STORE hands its own answer to the CPU; no other tier opts in.
+
+    ``@>Rv`` is the forward-only ``R``/``s`` loop — a room that computes nothing
+    and exists only to move a value across itself without paying a pipe's
+    distance term. The taped response used to cross **three** of them: the
+    store's own four-bank collector, then two relay rooms this generator added
+    to carry that collector's answer to the CPU. Widening the collector itself
+    deletes both relays, so the **answer** path now holds exactly one.
+
+    The request leg used to hold the second one. It does not any more: the
+    store's own first gate grew its roof up to the adapter, so the taped machine
+    now has **no** ``teleport:`` region at all — see
+    :data:`machine.STORE_REQUEST_REACH` and the reach test below.
+    """
+    assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
+    taped = machine.build_for("deadman-3d", store="taped")
+    regions = {r.name for r in taped.debug_map().regions}
+    # Neither path holds a relay room now. The answer's collector is the store's
+    # own, so it carries no ``teleport:`` name; the request's forwarder is gone.
+    assert not {n for n in regions if n.startswith("teleport:")}
+    assert {n for n in regions if n.startswith("seek:")} == {"seek:H", "seek:V"}
+    # Exactly one of the machine's forward-only loops is an answer relay — the
+    # collector this test is about. The rest are all request-side and belong to
+    # other registries: :data:`machine.SEEK_TELEPORT`'s pair, and one per bank
+    # from :data:`machine.TAPED_FEED_TELEPORT`. So the count is pinned by
+    # *withholding* those, not by a number that every later change has to edit.
+    loops = sum(r.count("@>Rv") for r in taped.rows)
+    bare = _taped_with(TAPED_FEED_TELEPORT=False)
+    assert loops - sum(r.count("@>Rv") for r in bare.rows) == len(
+        machine.TAPED_BANKS["deadman-3d"]
+    )
+    assert sum(r.count("@>Rv") for r in bare.rows) == 3  # collector + SEEK's pair
+    # Put the request forwarder back and its loop comes with it, which is what
+    # pins the rest of the count to the *rooms* rather than to the machine.
+    forwarded = _taped_with(
+        STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True, TAPED_FEED_TELEPORT=False
+    )
+    assert sum(r.count("@>Rv") for r in forwarded.rows) == 4
+    assert {
+        r.name for r in forwarded.debug_map().regions if r.name.startswith("teleport:")
+    } == {"teleport:REQ"}
+
+    # men-v3 keeps its pair, and not for want of trying: its collector sits at
+    # the block's floor ~190 rows below the response row, so widening it west
+    # shortens nothing — the answer still has to climb, then cross. Deleting
+    # the pair there costs +68% on the tour, against -0.5% saved here.
+    assert machine.STORE_TIER["deadman-3d"] == "men-v3"
+    assert ("deadman-3d", "men-v3") not in machine.STORE_ANSWER_WEST
+    canonical = machine.build_for("deadman-3d")
+    assert {
+        r.name for r in canonical.debug_map().regions if r.name.startswith("teleport:")
+    } == {"teleport:L", "teleport:U"}
+
+
+def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() -> None:
+    """The taped store's request legs, all of them, in one test.
+
+    The profile behind this: the CPU is blocked on the store answer for 47.19%
+    of a gated nine-round run, and pure pipe transit inside that wait is 20.22%
+    of the run. Every one of those legs is a pipe walked cell by cell that a
+    **room** crosses in one instruction, because ``U`` receives from any incoming
+    pipe with no distance term (``SPEC.md`` §Nearest) and turns away from the
+    **wall** the pipe attaches to, not from the direction it comes from. So a
+    gate may be grown until it touches its caller.
+
+    Two registries, and they are separate because they are worth different
+    amounts: :data:`machine.STORE_REQUEST_REACH` on ``adapter->store`` (one leg,
+    every access) and :data:`machine.TAPED_CHAIN_REACH` on the gate-to-gate links
+    (68% and 12% of reads, by :data:`machine.TAPED_BANK_ORDER`). Both keyed by
+    tier: only the taped tier has gate rooms at all.
+
+    Kept in one test on purpose. Everything here is a statement about the same
+    property, and three tests asserting overlapping halves of it is how a
+    mechanical merge ends up with contradictory numbers on one expression.
+    """
+    # hires takes the roof (it had to be *made* reachable — see TIER_LAYOUT)
+    # and declines the chain, because its own bank order puts the hot bank at
+    # chain position 0 and the links then carry ~4% of accesses instead of 80%.
+    assert machine.STORE_REQUEST_REACH == {
+        ("deadman-3d", "taped"), ("deadman-3d_hires", "taped"),
+    }
+    assert machine.TAPED_CHAIN_REACH == {("deadman-3d", "taped")}
+    assert all(tier == "taped" for _slug, tier in machine.STORE_REQUEST_REACH)
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_CHAIN_REACH)
+    # The forwarder this replaced is off, and asking for both is a build error:
+    # a room bridging the gap and a room that spans it are two answers to one
+    # question, and the second one would land inside the first.
+    assert not machine.STORE_REQUEST_TELEPORT
+    with pytest.raises(machine.MachineError):
+        _taped_with(STORE_REQUEST_REACH=True, STORE_REQUEST_TELEPORT=True)
+
+    on = machine.build_for("deadman-3d", store="taped")
+    plain = _taped_with(STORE_REQUEST_REACH=False, TAPED_CHAIN_REACH=False)
+    forwarded = _taped_with(STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True)
+
+    # A pipe, then a forwarder plus two stubs, then nothing: 58 -> 6 -> 2.
+    assert plain.route_lengths["adapter->store"] > 50
+    assert forwarded.route_lengths["adapter->store"] <= 8
+    assert on.route_lengths["adapter->store"] < forwarded.route_lengths["adapter->store"]
+    # And no room to show for it — reaching is strictly better than forwarding
+    # here, because a forwarder re-serialises a multi-word request at one word
+    # per six ticks where a pipe pipelines it (M12: ~5.2 cells' worth).
+    assert sum(r.count("@>Rv") for r in on.rows) < sum(r.count("@>Rv") for r in forwarded.rows)
+
+    # Not "fewer cells because the store moved": the box and every other leg are
+    # exactly where they were with none of this on.
+    assert (on.width, on.height) == (plain.width, plain.height)
+    assert {k: v for k, v in on.route_lengths.items() if k != "adapter->store"} == {
+        k: v for k, v in plain.route_lengths.items() if k != "adapter->store"
+    }
+
+    def west_wall_entries(m):
+        """Every cell where a pipe flows east into some room's west wall."""
+        g = {(x, y): ch for y, row in enumerate(m.rows) for x, ch in enumerate(row)}
+        return {p for p, ch in g.items() if ch == ">" and g.get((p[0] + 1, p[1])) == "|"}
+
+    # The load-bearing one, and the reason this whole change is silent-failure
+    # territory: the request must keep arriving through a gate's WEST wall, on a
+    # cell of its own, or the store answers from the wrong bank without erroring.
+    # Growing a room moves that cell; it must not delete one or add a second.
+    assert len(west_wall_entries(on)) == len(west_wall_entries(plain))
+
+    # The request leaves the adapter's FLOOR rather than its east wall, which is
+    # free: the adapter has exactly one incoming and one outgoing pipe, so every
+    # r/s in it binds unambiguously wherever they attach (see machine._ADAPTER).
+    grid = {(x, y): ch for y, row in enumerate(on.rows) for x, ch in enumerate(row)}
+    ax, ay, aw, ah = next(
+        (r.x, r.y, r.w, r.h) for r in on.debug_map().regions if r.name == "adapter"
+    )
+    assert any(grid.get((x, ay + ah)) == "v" for x in range(ax, ax + aw))
+
+    # ``chain_pad`` is the instrument that priced the links: it leaves the gates
+    # short of their callers and lengthens every link by exactly that much,
+    # moving nothing else. Ten cells of pad against three chain links is 20 (the
+    # last gate feeds a bank, not a gate), so the sum of the routes cannot say
+    # it — the block owns those pipes. The box is what must not move.
+    padded = machine.build_for("deadman-3d", store="taped", store_chain_pad=10)
+    assert (padded.width, padded.height) == (on.width, on.height)
+    assert padded.route_lengths == on.route_lengths
+    assert padded.rows != on.rows
+
+    # The fourth leg family, and the one a grown room provably cannot take: the
+    # `reqK->bankK` arms run to the gate's CALLEE, so they get a forwarder each
+    # instead (:data:`machine.TAPED_FEED_TELEPORT`). It is the only part of this
+    # that costs anything — a man a bank and two columns of pitch — so what is
+    # asserted is that the cost is bounded, not what it is.
+    assert machine.TAPED_FEED_TELEPORT == {
+        ("deadman-3d", "taped"), ("deadman-3d_hires", "taped"),
+    }
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_FEED_TELEPORT)
+    banks = len(machine.TAPED_BANKS["deadman-3d"])
+    unfed = _taped_with(TAPED_FEED_TELEPORT=False)
+    assert on.height == unfed.height
+    assert on.width == unfed.width + 2 * (banks - 1)
+    assert sum(r.count("@") for r in on.rows) == sum(r.count("@") for r in unfed.rows) + banks
+    # Both ceilings the taped machine actually has to respect (test below pins
+    # the same two, which is the point: this change spends into both of them).
+    assert max(on.width, on.height) <= 300
+    assert sum(r.count("@") for r in on.rows) <= 30
+
+
+def test_the_widened_collector_is_off_by_default() -> None:
+    """``answer_west`` is a block parameter, so every other caller must be able
+    to ignore it and get the byte-identical block it always got."""
+    from randomfun2026solvers.memory_taped import taped_store_block
+
+    assert taped_store_block(64, 2).cells == taped_store_block(64, 2, answer_west=None).cells
+    wide = taped_store_block(64, 2, answer_west=1)
+    assert wide.cells != taped_store_block(64, 2).cells
+    # ... and the widened block still answers from one cell, further west and
+    # below its collector rather than above it.
+    assert wide.out_cell[0] < taped_store_block(64, 2).out_cell[0]
+    assert wide.out_cell[1] > taped_store_block(64, 2).out_cell[1]
+
+
+def test_the_compact_gate_is_keyed_by_tier_and_only_the_taped_tier_takes_it() -> None:
+    """The gate chain's five nop spacers come out for the taped tier only.
+
+    Keyed by ``(slug, tier)`` because only the taped tier has gates at all — and
+    keyed at all so that the men-v3 machine, which shares the slug, cannot pick
+    the flag up. The deletion is worth ~2 ticks a gate plus the bank's own arm.
+    """
+    assert machine.TAPED_COMPACT_GATE == {
+        ("deadman-3d", "taped"),
+        # hires rides the same tier and the spacers are a property of the gate
+        # ROOM, not of the program, so the deletion transfers unchanged: the
+        # store block goes 224x63 -> 224x58 there too, and those five rows come
+        # straight off the machine (496x409 -> 496x404 before the fold was
+        # re-swept onto them).
+        ("deadman-3d_hires", "taped"),
+    }
+    # not the slug: the canonical (men-v3) builds of both must not see it
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_COMPACT_GATE)
+
+
+def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -> None:
+    """The hot banks lead the chain, and the order is one the chain can express.
+
+    ``TAPED_BANKS``' sizes are in ADDRESS order, and the traffic is not in
+    address order: the raycaster's inner loops live at 517..533, so under the
+    default chain they would pay two and three gate traversals while the map —
+    8% of reads and none of the writes — pays none. The registry turns that
+    around. The check that it is *sound* lives in ``test_memory_taped.py`` (the
+    engine reads back every address of the real 601-slot plan through both
+    chains); this one pins the registry's scope and its keying.
+    """
+    from randomfun2026solvers.memory_taped import gate_chain, taped_plan
+
+    assert machine.TAPED_BANK_ORDER == {
+        ("deadman-3d", "taped"): (3, 2, 0, 1),
+        ("deadman-3d_hires", "taped"): (3, 0, 1, 2),
+    }
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_BANK_ORDER)
+    sizes = list(machine.TAPED_BANKS["deadman-3d"])
+    assert sizes == [352, 164, 15, 69]
+    order = machine.TAPED_BANK_ORDER[("deadman-3d", "taped")]
+    # The two hot banks lead, and they are the two peeled off the TOP of the
+    # space, so exactly their gates take the high-end form; the cold pair below
+    # them is reached in address order and needs none.
+    chain = gate_chain(sizes, order)
+    assert chain[0] == (3, sum(sizes))                       # 532..600, no gate ahead
+    assert chain[1] == (2, sum(sizes) - sizes[3])            # 517..531, one
+    assert [top for _k, top in chain[2:]] == [None, None]
+
+    # The seams are the traffic's, not the address space's: the fifteen DDA
+    # scalars are a bank, and PW/WADDR are the tail of the one with no gate.
+    slots = d3.tape_slots()
+    bounds = [0]
+    for m in sizes:
+        bounds.append(bounds[-1] + m)
+    assert (bounds[2] + 1, bounds[3]) == (slots["XCOL"], slots["COLOR"])
+    assert bounds[3] + 1 == slots["PW"] and slots["WADDR"] == slots["PW"] + 1
+
+    # hires' order is the same permutation for a *different* reason, and the
+    # thing that makes it non-transferable is that its banks are not these: it
+    # has no ``TAPED_BANKS`` entry, so it takes uniform quarters of a 902-slot
+    # tape. Measured (scratch/deadman3d-opt/hires_banks.py) its bank 3 —
+    # 679..901, the ZBUF, CMD and every per-frame scalar — takes 90.8% of reads
+    # and 99.9% of writes, so descending traffic is (3, 0, 1, 2) here too.
+    assert "deadman-3d_hires" not in machine.TAPED_BANKS
+    hires_sizes = taped_plan(902, 4)
+    assert hires_sizes == [226, 226, 226, 223]
+    hires_chain = gate_chain(hires_sizes,
+                             machine.TAPED_BANK_ORDER[("deadman-3d_hires", "taped")])
+    assert hires_chain[0] == (3, sum(hires_sizes))
+
+
+@slow
+def test_the_compact_gate_moves_only_the_taped_family() -> None:
+    """'Nothing else moves a byte': the men-v3 machines are built from the same
+    registry and the same slug, so this is the check that the opt-in really is
+    one — for the bank order too, which shares the same keying."""
+    for stem, kwargs in (
+        ("deadman-3d", {}),
+        ("deadman-3d_trim", {"trim_dead": True}),
+    ):
+        rows = (REPO / "littleman" / "examples" / f"{stem}.man").read_text()
+        assert machine.build_for("deadman-3d", **kwargs).rows == rows.rstrip("\n").split("\n")
 
 
 @slow

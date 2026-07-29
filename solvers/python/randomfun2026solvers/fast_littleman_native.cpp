@@ -101,7 +101,29 @@ struct Case {
   bool has_frames{};
   std::vector<std::vector<std::vector<unsigned char>>> frame_rounds;
   std::uint64_t max_ticks{};
+  // Opt-in profiling.  Absent from every request that does not ask for it, so
+  // the tick loop and the reply are byte-identical to the uninstrumented one.
+  bool profile{};
+  std::uint64_t stride{1};
+  // Opt-in *opcode* attribution, a second trailing section after the first.
+  // The caller tags (cell, arrival direction) pairs with a class (what the
+  // runner is doing there) and an opcode (which instruction that cell belongs
+  // to); the engine cuts the focus runner's timeline at `boundary` and folds
+  // each segment into one opcode.  The direction matters because one cell can
+  // serve two structures — a lane walked east is also somebody else's descent
+  // column walked south — and only the direction tells them apart.
+  bool opprof{};
+  int nclass{}, nops{}, boundary{-1}, hist_pipe{-1}, value_pipe{-1};
+  std::vector<std::int16_t> cell_class, cell_op;  // 4 * cells, direction-major
 };
+
+// East, south, west, north — the order the caller tags them in.
+inline int dir_index(Dir d) {
+  if (d.x > 0) return 0;
+  if (d.y > 0) return 1;
+  if (d.x < 0) return 2;
+  return 3;
+}
 
 template <typename T>
 bool readv(std::istringstream& in, T& v) {
@@ -218,6 +240,43 @@ bool parse_request(const char* raw, Program& p, Case& c, std::string& error) {
     }
   }
   if (!readv(in, c.max_ticks)) { error = "missing tick cap"; return false; }
+  // Trailing and optional: a request that stops at the tick cap profiles
+  // nothing, which is what every existing caller sends.
+  int profile_flag = 0;
+  if (readv(in, profile_flag) && profile_flag != 0) {
+    c.profile = true;
+    if (!readv(in, c.stride) || c.stride == 0) c.stride = 1;
+    // Trailing again: a profiling request that stops here asks for the heatmap
+    // only, which is what the region profiler sends.
+    int op_flag = 0;
+    if (readv(in, op_flag) && op_flag != 0) {
+      int tagged = 0;
+      if (!readv(in, c.nclass) || !readv(in, c.nops) || !readv(in, c.boundary) ||
+          !readv(in, c.hist_pipe) || !readv(in, c.value_pipe) || !readv(in, tagged) ||
+          c.nclass <= 0 || c.nops < 0 || tagged < 0) {
+        error = "bad opcode-profile header";
+        return false;
+      }
+      const std::size_t cells = static_cast<std::size_t>(p.width) * p.height;
+      c.cell_class.assign(cells * 4, -1);
+      c.cell_op.assign(cells * 4, -1);
+      for (int i = 0; i < tagged; ++i) {
+        long long flat = 0;
+        int dir = 0, cls = 0, opc = 0;
+        if (!readv(in, flat) || !readv(in, dir) || !readv(in, cls) || !readv(in, opc) ||
+            flat < 0 || static_cast<std::size_t>(flat) >= cells || dir < 0 || dir > 3 ||
+            cls < 0 || cls >= c.nclass || opc >= c.nops) {
+          error = "bad opcode-profile cell tag";
+          return false;
+        }
+        const std::size_t at = static_cast<std::size_t>(dir) * cells +
+                               static_cast<std::size_t>(flat);
+        c.cell_class[at] = static_cast<std::int16_t>(cls);
+        c.cell_op[at] = static_cast<std::int16_t>(opc);
+      }
+      c.opprof = true;
+    }
+  }
   return true;
 }
 
@@ -227,12 +286,21 @@ struct Result {
   bool halted{}, passed_known{}, passed{};
   std::string reason, fatal;
   Pos fatal_pos{-1, -1};
+  // Empty unless the request asked to profile; appended after the output list
+  // so a caller that did not ask cannot see a longer reply.
+  std::string profile;
 };
 
 struct Display {
   int room{}, width{}, height{}, cursor{};
   std::vector<unsigned char> current, next;
   int pid[3]{-1, -1, -1};  // 0 top/ADDR, 1 left/DATA, 2 bottom/SWAP.
+  // How many frames this panel has committed.  A one-display machine has one
+  // of these and it is `matched_frames`; a tiled wall has one per panel, and
+  // the *logical* frame is complete only when the slowest panel has committed
+  // it (the panels swap on four separate pipes, so they cannot be guaranteed
+  // to land on the same tick — see `lm1/display.tiled_frames_from_writes`).
+  std::uint64_t commits{};
 };
 
 // Performance notes.  The tick loop is exactly the reference semantics
@@ -334,9 +402,35 @@ class Machine {
       }
     }
     release_satisfied();
+    if (c.profile) {
+      heat.assign(cells, 0);
+      heat_wait.assign(cells, 0);
+      pipe_send.assign(npipes, 0);
+      pipe_recv.assign(npipes, 0);
+      pipe_send_blocked.assign(npipes, 0);
+      pipe_recv_blocked.assign(npipes, 0);
+      pipe_query.assign(npipes, 0);
+      pipe_wait.assign(npipes, 0);
+    }
+    if (c.opprof) {
+      const std::size_t ops = static_cast<std::size_t>(c.nops) + 1;  // +1 = unattributed
+      op_ticks.assign(ops * c.nclass, 0);
+      op_blocked.assign(ops * c.nclass, 0);
+      op_exec.assign(ops, 0);
+      op_pipe_ticks.assign(ops * npipes, 0);
+      op_pipe_runs.assign(ops * npipes, 0);
+      seg_ticks.assign(c.nclass, 0);
+      seg_blocked.assign(c.nclass, 0);
+      seg_pipe_ticks.assign(npipes, 0);
+      seg_pipe_runs.assign(npipes, 0);
+      op_hist.resize(ops);
+      op_values.resize(ops);
+    }
   }
 
   Result run() {
+    if (c.profile) sample();
+    if (c.opprof) sample_ops();
     while (step < c.max_ticks) {
       if (!fatal.empty()) return finish(fatal, true, false);
       if (c.has_frames && matched_frames >= expected_frames.size())
@@ -349,6 +443,10 @@ class Machine {
         return finish("done", known, pass);
       }
       tick();
+      if (c.profile && step % c.stride == 0) sample();
+      // Attribution is a state machine over consecutive ticks, so it never
+      // strides: it is exact or it is nothing.
+      if (c.opprof) sample_ops();
     }
     return finish("tick-cap", c.has_expected, false);
   }
@@ -377,16 +475,216 @@ class Machine {
   std::vector<i64> output, expected;
   std::vector<std::vector<unsigned char>> expected_frames;
   std::size_t matched_frames{};
+  // The tick each *logical* frame completed on, reported back whenever frames
+  // were supplied: the per-frame cost is the difference of successive entries.
+  std::vector<std::uint64_t> frame_ticks;
   std::vector<std::size_t> cumulative;
   std::size_t released{};
   std::uint64_t step{};
   std::string fatal;
   Pos fatal_pos{-1, -1};
 
+  // ── profiling (all empty unless c.profile) ─────────────────────────────────
+  // heat is a per-cell count of runner-samples: a man standing still because he
+  // is blocked on `r` is sampled in that cell every time, which is the point —
+  // blocked time is time.  heat_wait is the sleeping-on-a-pipe subset.
+  std::vector<std::uint64_t> heat, heat_wait;
+  std::vector<std::uint64_t> pipe_send, pipe_recv, pipe_send_blocked, pipe_recv_blocked;
+  std::vector<std::uint64_t> pipe_query, pipe_wait;
+  std::uint64_t samples{};
+
+  // ── opcode attribution (all empty unless c.opprof) ─────────────────────────
+  // The focus runner is whoever stands on a tagged cell — in practice the CPU
+  // man, who never leaves his room and is the only man in it.  His timeline is
+  // cut at the `boundary` class (the instruction fetch), each segment is folded
+  // into whichever opcode's cells it touched, and every tick of the segment is
+  // charged to that opcode under the class of the cell he stood on.  Nothing is
+  // sampled or extrapolated: this is every tick of the run.
+  std::vector<std::uint64_t> op_ticks, op_blocked;        // (nops+1) x nclass
+  std::vector<std::uint64_t> op_exec;                     // (nops+1)
+  std::vector<std::uint64_t> op_pipe_ticks, op_pipe_runs;  // (nops+1) x npipes
+  std::vector<std::unordered_map<std::uint64_t, std::uint64_t>> op_hist;    // blocked-run lengths
+  std::vector<std::unordered_map<i64, std::uint64_t>> op_values;            // sent on value_pipe
+  std::vector<std::uint64_t> seg_ticks, seg_blocked, seg_pipe_ticks, seg_pipe_runs;
+  std::vector<std::uint64_t> seg_hist;
+  std::unordered_map<i64, std::uint64_t> seg_values;
+  std::uint64_t op_samples{}, op_outside{}, op_multi{};
+  int seg_op{-1}, prev_class{-1}, run_pipe{-1};
+  std::uint64_t run_len{};
+
+  std::size_t op_slot() const {
+    return seg_op < 0 ? static_cast<std::size_t>(c.nops) : static_cast<std::size_t>(seg_op);
+  }
+
+  void end_blocked_run() {
+    if (run_pipe >= 0 && run_len) {
+      ++seg_pipe_runs[static_cast<std::size_t>(run_pipe)];
+      if (run_pipe == c.hist_pipe) seg_hist.push_back(run_len);
+    }
+    run_pipe = -1;
+    run_len = 0;
+  }
+
+  void flush_segment() {
+    std::size_t o = op_slot();
+    std::uint64_t total = 0;
+    for (int i = 0; i < c.nclass; ++i) total += seg_ticks[i];
+    if (total) {
+      ++op_exec[o];
+      for (int i = 0; i < c.nclass; ++i) {
+        op_ticks[o * c.nclass + i] += seg_ticks[i];
+        op_blocked[o * c.nclass + i] += seg_blocked[i];
+      }
+      const std::size_t np = seg_pipe_ticks.size();
+      for (std::size_t i = 0; i < np; ++i) {
+        op_pipe_ticks[o * np + i] += seg_pipe_ticks[i];
+        op_pipe_runs[o * np + i] += seg_pipe_runs[i];
+      }
+      for (std::uint64_t len : seg_hist) ++op_hist[o][len];
+      for (const auto& kv : seg_values) op_values[o][kv.first] += kv.second;
+    }
+    std::fill(seg_ticks.begin(), seg_ticks.end(), 0);
+    std::fill(seg_blocked.begin(), seg_blocked.end(), 0);
+    std::fill(seg_pipe_ticks.begin(), seg_pipe_ticks.end(), 0);
+    std::fill(seg_pipe_runs.begin(), seg_pipe_runs.end(), 0);
+    seg_hist.clear();
+    seg_values.clear();
+    seg_op = -1;
+  }
+
+  std::size_t tag_at(const Runner& r) const {
+    return static_cast<std::size_t>(dir_index(r.dir)) *
+               (static_cast<std::size_t>(p.width) * p.height) +
+           p.flat(r.pos);
+  }
+
+  void sample_ops() {
+    ++op_samples;
+    const Runner* focus = nullptr;
+    int seen = 0;
+    for (const Runner& r : runners) {
+      if (r.halted) continue;
+      if (c.cell_class[tag_at(r)] >= 0) {
+        if (!focus) focus = &r;
+        ++seen;
+      }
+    }
+    if (seen > 1) ++op_multi;  // reported, never silently merged
+    if (!focus) {
+      ++op_outside;
+      end_blocked_run();
+      prev_class = -1;
+      return;
+    }
+    const std::size_t f = p.flat(focus->pos);
+    const int cls = c.cell_class[tag_at(*focus)];
+    const int opc = c.cell_op[tag_at(*focus)];
+    if (cls == c.boundary && prev_class != c.boundary) flush_segment();
+    prev_class = cls;
+    // First opcode cell wins.  Dispatch delivers the runner to his lane before
+    // anything else in the segment, so the first tag is the instruction; a
+    // later one can only be a structure he is falling past.
+    if (opc >= 0 && seg_op < 0) seg_op = opc;
+    ++seg_ticks[static_cast<std::size_t>(cls)];
+    if (!focus->asleep) {
+      end_blocked_run();
+      return;
+    }
+    ++seg_blocked[static_cast<std::size_t>(cls)];
+    int pid = -1;
+    const std::int32_t bidx = p.binding_at[f];
+    if (bidx >= 0 && !p.binding_lists[bidx].empty()) pid = p.binding_lists[bidx][0];
+    if (pid != run_pipe) {
+      end_blocked_run();
+      run_pipe = pid;
+    }
+    ++run_len;
+    if (pid >= 0) ++seg_pipe_ticks[static_cast<std::size_t>(pid)];
+  }
+
+  std::string encode_opprofile() {
+    end_blocked_run();
+    flush_segment();  // the tail segment, so nothing is dropped at the end
+    std::ostringstream out;
+    const std::size_t ops = op_exec.size();
+    const std::size_t np = seg_pipe_ticks.size();
+    out << " Q " << ops << ' ' << c.nclass << ' ' << np << ' ' << op_samples << ' '
+        << op_outside << ' ' << op_multi;
+    for (std::uint64_t n : op_exec) out << ' ' << n;
+    for (std::uint64_t n : op_ticks) out << ' ' << n;
+    for (std::uint64_t n : op_blocked) out << ' ' << n;
+    std::ostringstream body;
+    std::size_t rows = 0;
+    for (std::size_t o = 0; o < ops; ++o)
+      for (std::size_t i = 0; i < np; ++i)
+        if (op_pipe_ticks[o * np + i] || op_pipe_runs[o * np + i]) {
+          body << ' ' << o << ' ' << i << ' ' << op_pipe_ticks[o * np + i] << ' '
+               << op_pipe_runs[o * np + i];
+          ++rows;
+        }
+    out << ' ' << rows << body.str();
+    std::ostringstream hbody;
+    rows = 0;
+    for (std::size_t o = 0; o < ops; ++o)
+      for (const auto& kv : op_hist[o]) { hbody << ' ' << o << ' ' << kv.first << ' ' << kv.second; ++rows; }
+    out << ' ' << rows << hbody.str();
+    std::ostringstream vbody;
+    rows = 0;
+    for (std::size_t o = 0; o < ops; ++o)
+      for (const auto& kv : op_values[o]) { vbody << ' ' << o << ' ' << kv.first << ' ' << kv.second; ++rows; }
+    out << ' ' << rows << vbody.str();
+    return out.str();
+  }
+
+  void sample() {
+    ++samples;
+    for (const Runner& r : runners) {
+      if (r.halted) continue;
+      std::size_t f = p.flat(r.pos);
+      ++heat[f];
+      if (!r.asleep) continue;
+      ++heat_wait[f];
+      // Charge the wait to whatever pipe(s) the op at his feet is bound to:
+      // "which pipe is this man waiting on" is the actionable form of stalled.
+      std::int32_t bidx = p.binding_at[f];
+      if (bidx < 0) continue;
+      for (int pid : p.binding_lists[bidx])
+        if (pid >= 0) ++pipe_wait[static_cast<std::size_t>(pid)];
+    }
+  }
+
+  std::string encode_profile() const {
+    std::ostringstream out;
+    out << " P " << samples << ' ' << c.stride << ' ' << pipe_send.size();
+    for (std::size_t i = 0; i < pipe_send.size(); ++i)
+      out << ' ' << pipe_send[i] << ' ' << pipe_recv[i] << ' ' << pipe_send_blocked[i]
+          << ' ' << pipe_recv_blocked[i] << ' ' << pipe_query[i] << ' ' << pipe_wait[i];
+    std::size_t occupied = 0;
+    for (std::uint64_t n : heat) occupied += n != 0;
+    out << ' ' << occupied;
+    for (std::size_t f = 0; f < heat.size(); ++f) {
+      if (!heat[f]) continue;
+      out << ' ' << static_cast<int>(f % p.width) << ' ' << static_cast<int>(f / p.width)
+          << ' ' << heat[f] << ' ' << heat_wait[f];
+    }
+    return out.str();
+  }
+
+  std::string encode_frame_ticks() const {
+    std::ostringstream out;
+    out << " F " << frame_ticks.size();
+    for (std::uint64_t t : frame_ticks) out << ' ' << t;
+    return out.str();
+  }
+
   Result finish(std::string reason, bool known, bool pass) {
     bool halted = true;
     for (const auto& r : runners) halted &= r.halted;
-    return {output, step, halted, known, pass, std::move(reason), fatal, fatal_pos};
+    std::string prof;
+    if (c.profile) prof = encode_profile();
+    if (c.opprof) prof += encode_opprofile();
+    if (c.has_frames) prof += encode_frame_ticks();
+    return {output, step, halted, known, pass, std::move(reason), fatal, fatal_pos, std::move(prof)};
   }
   bool output_in_flight() const {
     for (int pid : out_pipes) if (!vals[pid].empty()) return true;
@@ -480,6 +778,7 @@ class Machine {
   }
   void io() {
     if (out_pipe >= 0 && back_occupied(out_pipe)) {
+      if (c.profile) ++pipe_recv[static_cast<std::size_t>(out_pipe)];
       i64 v = take_back(out_pipe);
       output.push_back(v);
       if (c.has_expected) {
@@ -489,6 +788,7 @@ class Machine {
       }
     }
     if (in_pipe >= 0 && !input.empty() && !front_occupied(in_pipe)) {
+      if (c.profile) ++pipe_send[static_cast<std::size_t>(in_pipe)];
       put_front(in_pipe, input.front());
       input.pop_front();
     }
@@ -516,11 +816,13 @@ class Machine {
   }
   bool take_display(int pid, i64& value) {
     if (pid < 0 || !back_occupied(pid)) return false;
+    if (c.profile) ++pipe_recv[static_cast<std::size_t>(pid)];
     value = take_back(pid);
     return true;
   }
   void execute_displays() {
-    for (auto& display : displays) {
+    for (std::size_t di = 0; di < displays.size(); ++di) {
+      auto& display = displays[di];
       i64 value;
       if (take_display(display.pid[0], value)) {
         if (value < 0 || value >= display.width * display.height) {
@@ -541,12 +843,28 @@ class Machine {
           display.cursor = 0;
         }
         if (c.has_frames) {
-          if (matched_frames >= expected_frames.size() ||
-              display.current != expected_frames[matched_frames]) {
+          // The expected frame is the whole wall: `displays.size()` tiles laid
+          // out in display (reading) order, each `tile` pixels.  A one-display
+          // machine is the degenerate case and compares the whole thing.
+          const std::size_t tile = display.next.size();
+          const std::size_t k = display.commits;
+          if (k >= expected_frames.size()) { die("wrong-frame", {-1, -1}); return; }
+          const auto& want = expected_frames[k];
+          if (want.size() != tile * displays.size()) {
+            die("frame-shape", {-1, -1}); return;
+          }
+          if (!std::equal(display.current.begin(), display.current.end(),
+                          want.begin() + static_cast<std::ptrdiff_t>(di * tile))) {
             die("wrong-frame", {-1, -1}); return;
           }
-          ++matched_frames;
-          release_satisfied();
+          ++display.commits;
+          std::uint64_t slowest = display.commits;
+          for (const auto& other : displays) slowest = std::min(slowest, other.commits);
+          if (slowest > matched_frames) {
+            matched_frames = slowest;
+            frame_ticks.push_back(step);
+            release_satisfied();
+          }
         }
       }
     }
@@ -575,24 +893,43 @@ class Machine {
     const std::vector<int>* ids = bidx < 0 ? nullptr : &p.binding_lists[bidx];
     if (!ids || ids->empty() || (*ids)[0] < 0) { die("no-pipe", r.pos); return; }
     if (op == 'q') {
+      if (c.profile) ++pipe_query[static_cast<std::size_t>((*ids)[0])];
       r.bp = static_cast<i64>(vals[(*ids)[0]].size());
       return;
     }
     if (op == 's') {
       int pid = (*ids)[0];
-      if (front_occupied(pid)) sleep_on_fronts(r, idx, *ids);
-      else put_front(pid, r.a);
+      if (front_occupied(pid)) {
+        if (c.profile) ++pipe_send_blocked[static_cast<std::size_t>(pid)];
+        sleep_on_fronts(r, idx, *ids);
+      } else {
+        if (c.profile) ++pipe_send[static_cast<std::size_t>(pid)];
+        if (c.opprof && pid == c.value_pipe && c.cell_class[tag_at(r)] >= 0) ++seg_values[r.a];
+        put_front(pid, r.a);
+      }
       return;
     }
     if (op == 'S') {
-      for (int pid : *ids) if (front_occupied(pid)) { sleep_on_fronts(r, idx, *ids); return; }
-      for (int pid : *ids) put_front(pid, r.a);
+      for (int pid : *ids) if (front_occupied(pid)) {
+        if (c.profile) for (int q : *ids) ++pipe_send_blocked[static_cast<std::size_t>(q)];
+        sleep_on_fronts(r, idx, *ids);
+        return;
+      }
+      for (int pid : *ids) {
+        if (c.profile) ++pipe_send[static_cast<std::size_t>(pid)];
+        put_front(pid, r.a);
+      }
       return;
     }
     int pid = -1;
     if (op == 'r') pid = (*ids)[0];
     else for (int candidate : *ids) if (back_occupied(candidate)) { pid = candidate; break; }
-    if (pid < 0 || !back_occupied(pid)) { sleep_on_backs(r, idx, *ids); return; }
+    if (pid < 0 || !back_occupied(pid)) {
+      if (c.profile) for (int q : *ids) if (q >= 0) ++pipe_recv_blocked[static_cast<std::size_t>(q)];
+      sleep_on_backs(r, idx, *ids);
+      return;
+    }
+    if (c.profile) ++pipe_recv[static_cast<std::size_t>(pid)];
     r.a = take_back(pid);
     if (op == 'U') r.dir = p.pipes[pid].dst_side;
   }
@@ -779,6 +1116,7 @@ std::string encode(const Result& r) {
       << r.passed << ' ' << r.reason << ' ' << (r.fatal.empty() ? "-" : r.fatal)
       << ' ' << r.fatal_pos.x << ' ' << r.fatal_pos.y << ' ' << r.output.size();
   for (i64 value : r.output) out << ' ' << value;
+  out << r.profile;  // empty unless the request opted in
   return out.str();
 }
 

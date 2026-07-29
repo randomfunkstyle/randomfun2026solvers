@@ -14,6 +14,23 @@ the machine — that equality is the project's contract, checked on every run.
 
 ---
 
+## What this family is optimised for
+
+**This is a post-contest demo. It is not scored and not judged** — there is no
+problem named `deadman-3d`, which is why its `real_interpreter` test fails with
+`problem not found`. The contest metric `max(w, h)**2 * ticks` **does not apply.**
+
+What matters is **frames per second** — on this machine, CPU ops per second, i.e.
+**ticks per frame**. Optimise that. A change that trades ticks for a smaller box
+is a regression here; a change that spends columns to save ticks is free. Size is
+a *constraint* only where something must keep binding, or where a ceiling is
+pinned in the tests — never a goal.
+
+See `AGENTS.md` § "deadman-3d is out of contest scope" for the measurement traps
+this family has already sprung (pipe length is not tick cost; `q` counts values
+anywhere in a pipe; profile occupancy, not geometry), and
+`scratch/deadman3d-opt/METRICS.md` for the running log.
+
 ## Quick start — run the demo
 
 Two files: a machine and an input stream.

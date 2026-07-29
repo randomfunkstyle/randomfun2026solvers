@@ -39,9 +39,11 @@ def test_both_registries_default_empty() -> None:
     """Every checked-in machine stays byte-identical unless its slug opts in.
 
     deadman-3d opted into the trim once the taped tier landed (band 63 -> 41,
-    -13.6% on the gate); everything else stays flag-off.
+    -13.6% on the gate), and its 128x96 tiled variant inherits it — the two are
+    the same program at two geometries, so they use the same opcode set and the
+    same leaves are dead.  Everything else stays flag-off.
     """
-    assert machine.TRIM_DEAD_LANES == {"deadman-3d"}
+    assert machine.TRIM_DEAD_LANES == {"deadman-3d", "deadman-3d_hires"}
     assert machine.TOP_RETURN_BUS == set()
 
 
