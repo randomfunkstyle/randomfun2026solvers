@@ -101,9 +101,16 @@ def test_the_pitch_registry_is_read_only_on_a_seek_build() -> None:
     """
     seek_m = machine.build_for("deadman-3d", store="taped")
     classic = machine.build_for("deadman-3d", store="taped", seek=False)
-    # The seek build takes the narrowed pitch; the classic one is untouched by it.
-    assert seek_m.width == 287, seek_m.width
+    # The seek build takes the narrowed pitch and the pad that clears the tie;
+    # the classic one is untouched by either. Stated as the registries rather
+    # than as a recorded width: the box moves with every independent routing
+    # change, and a frozen number here just fails somebody else's improvement.
+    assert seek_m.mem_pad == machine.MEM_PAD_FOR[("deadman-3d", "taped")]
     assert classic.mem_pad == machine.MEM_PAD["deadman-3d"]
+    assert seek_m.mem_pad != classic.mem_pad
+    # Both still build, which is the half of the guard that has actually broken:
+    # at MEM_PAD 17 the classic build cannot bind the deepest slab's discard.
+    assert seek_m.rows and classic.rows
 
 
 def test_the_default_floors_every_structured_drop_east_of_the_band(program) -> None:

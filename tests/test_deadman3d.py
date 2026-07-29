@@ -849,6 +849,48 @@ def test_checked_in_asm_matches_the_generator() -> None:
     )
 
 
+def test_the_taped_program_is_the_canonical_one_minus_the_dda_reloads() -> None:
+    """``dda_acc_reload=False`` deletes the x-arm's redundant ``LD WADDR`` from
+    each of the sixteen unrolled copies, and changes nothing else.
+
+    ``ST`` is ACC-preserving, so the reload between ``ST WADDR`` and ``LDA``
+    re-fetched the word the accumulator already held — 4.32% of the run at the
+    profiler's 470.9 ticks a ``LD`` (``scratch/DOOM-OPCODES.md`` §5). This is the
+    audit of the gate: the two tiers' sources differ by sixteen deleted lines, all
+    of them the same line, with nothing added.
+    """
+    import difflib
+
+    canon = d3.deadman3d_source().splitlines()
+    taped = d3.deadman3d_source(dda_acc_reload=False).splitlines()
+    delta = [
+        line
+        for line in difflib.unified_diff(canon, taped, lineterm="", n=0)
+        if line[:1] in "+-" and not line.startswith(("---", "+++"))
+    ]
+    assert delta == ["-        LD  WADDR"] * d3.DDA_UNROLL == ["-        LD  WADDR"] * 16
+    # And the gate is one-way: the default is the frozen canonical program.
+    assert d3.deadman3d_source() == d3.deadman3d_source(dda_acc_reload=True)
+
+
+def test_the_taped_tier_builds_from_the_taped_program() -> None:
+    """The program override is opt-in per ``(slug, tier)``, exactly like
+    :data:`machine.TIER_LAYOUT` — so the canonical men-v3 grid, pinned at
+    ``f62d63fd``, keeps loading the checked-in ``deadman-3d.asm`` untouched."""
+    assert set(machine.TIER_PROGRAM) == {("deadman-3d", "taped")}
+    assert machine.TIER_PROGRAM[("deadman-3d", "taped")] == (
+        "randomfun2026solvers.deadman3d:taped_program"
+    )
+    canonical = programs.load("deadman-3d")
+    taped = d3.taped_program()
+    # The registry keys off the program *name*, so the override must keep it.
+    assert taped.name == canonical.name == "deadman-3d"
+    # 16 instructions x 2 words of ROM go with them.
+    assert taped.P == canonical.P - 32
+    assert machine._tier_program("deadman-3d", "men-v3").words == canonical.words
+    assert machine._tier_program("deadman-3d", "taped").words == taped.words
+
+
 def test_tape_slots_are_the_documented_map() -> None:
     slots = d3.tape_slots()
     assert (slots["MAPB"], slots["POWB"], slots["HDGB"], slots["NUKB"]) == (
@@ -1197,6 +1239,28 @@ def test_the_first_rounds_judge_clean_on_the_native_engine() -> None:
 TAPED_MAN = REPO / "littleman" / "examples" / "deadman-3d_taped.man"
 
 
+def _taped_with(**registries):
+    """The taped machine with named registry keys forced on or off.
+
+    Every other registry key still applies, so two builds differ in exactly the
+    thing under test — which is what makes "off by default" a statement about a
+    key rather than about a hand-assembled ``build()`` call. Names are attributes
+    of :mod:`machine`; values are the membership wanted for ``deadman-3d``'s
+    taped pair.
+    """
+    key = ("deadman-3d", "taped")
+    saved = {name: key in getattr(machine, name) for name in registries}
+    try:
+        for name, on in registries.items():
+            reg = getattr(machine, name)
+            reg.add(key) if on else reg.discard(key)
+        return machine.build_for("deadman-3d", store="taped")
+    finally:
+        for name, on in saved.items():
+            reg = getattr(machine, name)
+            reg.add(key) if on else reg.discard(key)
+
+
 def test_taped_registry_pins() -> None:
     """The taped variant is opt-in: the canonical machine STAYS men-v3, and the
     taped build is the one-liner `build_for("deadman-3d", store="taped")`."""
@@ -1236,12 +1300,40 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     distance term. The taped response used to cross **three** of them: the
     store's own four-bank collector, then two relay rooms this generator added
     to carry that collector's answer to the CPU. Widening the collector itself
-    deletes both relays, so the whole machine now holds exactly one.
+    deletes both relays, so the **answer** path now holds exactly one.
+
+    The request leg used to hold the second one. It does not any more: the
+    store's own first gate grew its roof up to the adapter, so the taped machine
+    now has **no** ``teleport:`` region at all — see
+    :data:`machine.STORE_REQUEST_REACH` and the reach test below.
     """
     assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
     taped = machine.build_for("deadman-3d", store="taped")
-    assert sum(r.count("@>Rv") for r in taped.rows) == 1
-    assert not [r for r in taped.debug_map().regions if r.name.startswith("teleport:")]
+    regions = {r.name for r in taped.debug_map().regions}
+    # Neither path holds a relay room now. The answer's collector is the store's
+    # own, so it carries no ``teleport:`` name; the request's forwarder is gone.
+    assert not {n for n in regions if n.startswith("teleport:")}
+    assert {n for n in regions if n.startswith("seek:")} == {"seek:H", "seek:V"}
+    # Exactly one of the machine's forward-only loops is an answer relay — the
+    # collector this test is about. The rest are all request-side and belong to
+    # other registries: :data:`machine.SEEK_TELEPORT`'s pair, and one per bank
+    # from :data:`machine.TAPED_FEED_TELEPORT`. So the count is pinned by
+    # *withholding* those, not by a number that every later change has to edit.
+    loops = sum(r.count("@>Rv") for r in taped.rows)
+    bare = _taped_with(TAPED_FEED_TELEPORT=False)
+    assert loops - sum(r.count("@>Rv") for r in bare.rows) == len(
+        machine.TAPED_BANKS["deadman-3d"]
+    )
+    assert sum(r.count("@>Rv") for r in bare.rows) == 3  # collector + SEEK's pair
+    # Put the request forwarder back and its loop comes with it, which is what
+    # pins the rest of the count to the *rooms* rather than to the machine.
+    forwarded = _taped_with(
+        STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True, TAPED_FEED_TELEPORT=False
+    )
+    assert sum(r.count("@>Rv") for r in forwarded.rows) == 4
+    assert {
+        r.name for r in forwarded.debug_map().regions if r.name.startswith("teleport:")
+    } == {"teleport:REQ"}
 
     # men-v3 keeps its pair, and not for want of trying: its collector sits at
     # the block's floor ~190 rows below the response row, so widening it west
@@ -1253,6 +1345,106 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     assert {
         r.name for r in canonical.debug_map().regions if r.name.startswith("teleport:")
     } == {"teleport:L", "teleport:U"}
+
+
+def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() -> None:
+    """The taped store's request legs, all of them, in one test.
+
+    The profile behind this: the CPU is blocked on the store answer for 47.19%
+    of a gated nine-round run, and pure pipe transit inside that wait is 20.22%
+    of the run. Every one of those legs is a pipe walked cell by cell that a
+    **room** crosses in one instruction, because ``U`` receives from any incoming
+    pipe with no distance term (``SPEC.md`` §Nearest) and turns away from the
+    **wall** the pipe attaches to, not from the direction it comes from. So a
+    gate may be grown until it touches its caller.
+
+    Two registries, and they are separate because they are worth different
+    amounts: :data:`machine.STORE_REQUEST_REACH` on ``adapter->store`` (one leg,
+    every access) and :data:`machine.TAPED_CHAIN_REACH` on the gate-to-gate links
+    (68% and 12% of reads, by :data:`machine.TAPED_BANK_ORDER`). Both keyed by
+    tier: only the taped tier has gate rooms at all.
+
+    Kept in one test on purpose. Everything here is a statement about the same
+    property, and three tests asserting overlapping halves of it is how a
+    mechanical merge ends up with contradictory numbers on one expression.
+    """
+    assert machine.STORE_REQUEST_REACH == {("deadman-3d", "taped")}
+    assert machine.TAPED_CHAIN_REACH == {("deadman-3d", "taped")}
+    assert all(tier == "taped" for _slug, tier in machine.STORE_REQUEST_REACH)
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_CHAIN_REACH)
+    # The forwarder this replaced is off, and asking for both is a build error:
+    # a room bridging the gap and a room that spans it are two answers to one
+    # question, and the second one would land inside the first.
+    assert not machine.STORE_REQUEST_TELEPORT
+    with pytest.raises(machine.MachineError):
+        _taped_with(STORE_REQUEST_REACH=True, STORE_REQUEST_TELEPORT=True)
+
+    on = machine.build_for("deadman-3d", store="taped")
+    plain = _taped_with(STORE_REQUEST_REACH=False, TAPED_CHAIN_REACH=False)
+    forwarded = _taped_with(STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True)
+
+    # A pipe, then a forwarder plus two stubs, then nothing: 58 -> 6 -> 2.
+    assert plain.route_lengths["adapter->store"] > 50
+    assert forwarded.route_lengths["adapter->store"] <= 8
+    assert on.route_lengths["adapter->store"] < forwarded.route_lengths["adapter->store"]
+    # And no room to show for it — reaching is strictly better than forwarding
+    # here, because a forwarder re-serialises a multi-word request at one word
+    # per six ticks where a pipe pipelines it (M12: ~5.2 cells' worth).
+    assert sum(r.count("@>Rv") for r in on.rows) < sum(r.count("@>Rv") for r in forwarded.rows)
+
+    # Not "fewer cells because the store moved": the box and every other leg are
+    # exactly where they were with none of this on.
+    assert (on.width, on.height) == (plain.width, plain.height)
+    assert {k: v for k, v in on.route_lengths.items() if k != "adapter->store"} == {
+        k: v for k, v in plain.route_lengths.items() if k != "adapter->store"
+    }
+
+    def west_wall_entries(m):
+        """Every cell where a pipe flows east into some room's west wall."""
+        g = {(x, y): ch for y, row in enumerate(m.rows) for x, ch in enumerate(row)}
+        return {p for p, ch in g.items() if ch == ">" and g.get((p[0] + 1, p[1])) == "|"}
+
+    # The load-bearing one, and the reason this whole change is silent-failure
+    # territory: the request must keep arriving through a gate's WEST wall, on a
+    # cell of its own, or the store answers from the wrong bank without erroring.
+    # Growing a room moves that cell; it must not delete one or add a second.
+    assert len(west_wall_entries(on)) == len(west_wall_entries(plain))
+
+    # The request leaves the adapter's FLOOR rather than its east wall, which is
+    # free: the adapter has exactly one incoming and one outgoing pipe, so every
+    # r/s in it binds unambiguously wherever they attach (see machine._ADAPTER).
+    grid = {(x, y): ch for y, row in enumerate(on.rows) for x, ch in enumerate(row)}
+    ax, ay, aw, ah = next(
+        (r.x, r.y, r.w, r.h) for r in on.debug_map().regions if r.name == "adapter"
+    )
+    assert any(grid.get((x, ay + ah)) == "v" for x in range(ax, ax + aw))
+
+    # ``chain_pad`` is the instrument that priced the links: it leaves the gates
+    # short of their callers and lengthens every link by exactly that much,
+    # moving nothing else. Ten cells of pad against three chain links is 20 (the
+    # last gate feeds a bank, not a gate), so the sum of the routes cannot say
+    # it — the block owns those pipes. The box is what must not move.
+    padded = machine.build_for("deadman-3d", store="taped", store_chain_pad=10)
+    assert (padded.width, padded.height) == (on.width, on.height)
+    assert padded.route_lengths == on.route_lengths
+    assert padded.rows != on.rows
+
+    # The fourth leg family, and the one a grown room provably cannot take: the
+    # `reqK->bankK` arms run to the gate's CALLEE, so they get a forwarder each
+    # instead (:data:`machine.TAPED_FEED_TELEPORT`). It is the only part of this
+    # that costs anything — a man a bank and two columns of pitch — so what is
+    # asserted is that the cost is bounded, not what it is.
+    assert machine.TAPED_FEED_TELEPORT == {("deadman-3d", "taped")}
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_FEED_TELEPORT)
+    banks = len(machine.TAPED_BANKS["deadman-3d"])
+    unfed = _taped_with(TAPED_FEED_TELEPORT=False)
+    assert on.height == unfed.height
+    assert on.width == unfed.width + 2 * (banks - 1)
+    assert sum(r.count("@") for r in on.rows) == sum(r.count("@") for r in unfed.rows) + banks
+    # Both ceilings the taped machine actually has to respect (test below pins
+    # the same two, which is the point: this change spends into both of them).
+    assert max(on.width, on.height) <= 300
+    assert sum(r.count("@") for r in on.rows) <= 30
 
 
 def test_the_widened_collector_is_off_by_default() -> None:
