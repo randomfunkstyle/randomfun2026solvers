@@ -128,12 +128,31 @@ ADDR, DATA and SWAP) runs to `done` on the bundled wasm — the official engine.
 **R1 is load-bearing for this design: the CPU is one room, so the CPU cannot drive
 two panels.** Each panel needs its own room in front of it.
 
-### 2.2 The native engine already supports N displays
+### 2.2 The native engine supported N displays for *execution* only
 
-`fast_littleman_native.cpp` holds a `std::vector<Display>` and `execute_displays()`
-iterates all of them. The refusal `display judging needs exactly one display, found
-2` comes only from the Python frame-extraction helper at `fast_littleman.py:641`,
-which assumes a single panel to compare frames against. That is our own code.
+The first version of this section said the native core already supported N displays
+and only the Python helper refused them. **That was two-thirds right**, and Task 5
+established the missing third:
+
+* **Execution** — yes. `fast_littleman_native.cpp` holds a `std::vector<Display>` and
+  `execute_displays()` iterates all of them, so N panels have always *run* correctly.
+* **Judging** — no. Frame judging compared against **one Machine-wide frame stream
+  regardless of display count**. A latent bug, unreachable in practice only because
+  the Python layer refused `N > 1` before it could be hit.
+* **Reporting** — did not exist. There was no way to get frames back per panel.
+
+So Task 5 is a C++ change as well as a Python one: `Case` gained a `DisplayFrames`
+entry per display room, in reading order, with the count derived from the room list
+itself rather than sent separately so it cannot desync. Single-display behaviour was
+held byte-identical, verified by a differential run of the old and new native engines
+over six scenarios.
+
+**One limit remains, and it lands on Task 7.** Round-gated input release is only
+well-defined when at most one display is judged at a time; judging two panels
+simultaneously with round-gated input falls back to releasing input upfront. No
+current caller exercises it, and this machine takes a single input word (`epochs`) at
+boot rather than round-gated input, so it is not a blocker — but Task 7 must not
+assume otherwise.
 
 ### 2.3 The palette
 
