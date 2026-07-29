@@ -497,7 +497,7 @@ def build_wall(loop_row: int | None = None) -> Wall:
 #: column is then a free north-south tunnel.  Running NE's SWAP down it — to the
 #: band's first row, then east — is what turns the ports' forced cyclic order
 #: into four contiguous ``(addr, data, swap)`` runs.  See :func:`build_packed_wall`.
-GUTTER_X, GUTTER_Y = 2, 2
+GUTTER_X, GUTTER_Y = 2, 3
 
 
 @dataclass
@@ -514,6 +514,9 @@ class Cluster:
     corridor: int
     #: the band's first row (north SWAPs) and last row (south ADDRs)
     band: tuple[int, int]
+    #: the band's middle row — free all the way across, and the only east-west
+    #: highway through the cluster there is
+    lane: int
     #: the column immediately west of the west panels' left walls
     west_data: int
     #: the row immediately below the cluster (south SWAP arrowheads)
@@ -535,6 +538,7 @@ def cluster_at(cx: int, cy: int, gx: int = GUTTER_X, gy: int = GUTTER_Y) -> Clus
         tunnel=cx + pw,
         corridor=x1 - 1,
         band=(cy + ph, y1 - 1),
+        lane=cy + ph + 1,
         west_data=cx - 1,
         south=y1 + ph,
         north=cy - 1,
@@ -546,18 +550,24 @@ def cluster_at(cx: int, cy: int, gx: int = GUTTER_X, gy: int = GUTTER_Y) -> Clus
 #: named rather than inlined so the assertions there can be read against them.
 #:
 #: Columns: the router's own margin (:data:`BLOCK_X0`) | the west logic column |
-#: three descent columns and DATA's arrival column | the cluster | three
-#: east-channel climb columns | the east logic column | three margin columns.
-#: Rows: router | NW/NE | (the cluster begins) | SW | (the cluster ends) | SE.
+#: three descent columns and DATA's arrival column | the cluster | the east
+#: logic column | three margin columns.
+#: Rows: router | NW and NE | their fan | the cluster | SW and SE | SE's fan.
 PACK_CH_W = 4  # free columns between the west logic column and the cluster
-PACK_CH_E = 3  # free columns between the cluster and the east logic column
-PACK_MARGIN_E = 3  # the east margin's climb/descent columns
+PACK_CH_E = 2  # free columns between the cluster and the east logic column
+PACK_MARGIN_E = 3  # the east margin's turn-round columns
 
-#: The four blocks' north-west corners are ``(x, y)`` with ``y`` the *command*
-#: row (the cell the router's leg ends on, one above the block's north wall).
-PACK_ROW_NW = 18  # NW and NE share it: both are reached over the top
-PACK_ROW_SW = 104  # 86 below, so the NW block's 84 rows clear it with a lane
-PACK_ROW_SE = 191  # below the cluster, below SE's own three westward runs
+#: The two block rows' *command* rows — the cell the router's leg ends on, one
+#: above a block's north wall.  Both blocks in a row share one, exactly as
+#: :func:`build_wall` has them, and that is not cosmetic: the leg fan is only
+#: planar when the two legs of a row can take two lanes of the same corridor.
+PACK_ROW_N = 18
+PACK_ROW_S = 217
+
+#: The cluster's north-west wall corner row.  It has to sit between the two
+#: block rows with its band straddling the one row the T3 leg crosses on
+#: (:attr:`Cluster.lane`); see :func:`build_packed_wall`.
+PACK_CLUSTER_Y = 110
 
 #: How many cells SWAP must lead DATA by.  ``build_doom`` only refuses a tie
 #: ("a commit could overtake the pixels it commits"), which is enough when the
@@ -568,6 +578,17 @@ PACK_ROW_SE = 191  # below the cluster, below SE's own three westward runs
 #: paint sooner than a trie walk plus a collector walk after a COMMIT, so 20 is
 #: kept as the floor rather than re-derived.
 SWAP_LEAD = 20
+
+
+def _excursion(x: int, y: int, w: int) -> list[tuple[int, int]]:
+    """Corners that take a northbound climb ``w`` cells east and back again.
+
+    A monotone route's length is its Manhattan distance, so a pipe that has to
+    be *longer* than the straight way between its two ends has to double back;
+    this is the smallest shape that does, and it costs two rows and ``w``
+    columns of otherwise empty grid for ``2 * w`` cells of pipe.
+    """
+    return [(x, y), (x + w, y), (x + w, y - 1), (x, y - 1)]
 
 
 def _plen(points: list[tuple[int, int]]) -> int:
@@ -672,13 +693,12 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
     wx = RX + BLOCK_X0  # the west logic column
     c1, c2, c3 = (wx + lw + i for i in range(3))  # the west channel's descents
     cx = wx + lw + PACK_CH_W  # the cluster's north-west wall corner
-    cl = cluster_at(cx, PACK_ROW_NW + 48)
+    cl = cluster_at(cx, PACK_CLUSTER_Y)
     ex = cx + cl.width + PACK_CH_E  # the east logic column
-    h1, h2, h3 = (cx + cl.width + i for i in range(3))  # the east channel's climbs
     m1, m2, m3 = (ex + lw + 1 + i for i in range(PACK_MARGIN_E))  # the east margin
 
-    anchors = {0: (wx, PACK_ROW_NW), 1: (ex, PACK_ROW_NW),
-               2: (wx, PACK_ROW_SW), 3: (ex, PACK_ROW_SE)}
+    anchors = {0: (wx, PACK_ROW_N), 1: (ex, PACK_ROW_N),
+               2: (wx, PACK_ROW_S), 3: (ex, PACK_ROW_S)}
     for tile, (bx, by) in anchors.items():
         g.blit(bx, by, logic[tile].cells)
     for cnr in cl.corners:
@@ -730,82 +750,85 @@ def build_packed_wall(loop_row: int | None = None) -> Wall:
     #    ADDR runs straight along the row above the top wall, DATA straight
     #    into the left wall, and SWAP drops one column into the band ─────────
     a0, d0, s0 = (port(0, b) for b in ("addr", "data", "swap"))
-    pipe(0, "addr", [a0, (px0 + 3, cl.north)], end="v")
+    pipe(0, "addr", [a0, (c3, a0[1]), (c3, cl.north), (px0 + 3, cl.north)], end="v")
     la = lengths[0, "addr"]
     pipe(0, "data", solve(lambda r: [d0, (c2, d0[1]), (c2, r), (cl.west_data, r)],
                           rows_n, lambda n: n == la, "DATA row"))
     pipe(0, "swap", solve(lambda c: [s0, (c1, s0[1]), (c1, cl.band[0]), (c, cl.band[0])],
                           cols_w, lambda n: n >= la + SWAP_LEAD, "SWAP column"), end="^")
 
-    # ── T2, the south-west panel.  Its block sits *beside* the cluster rather
-    #    than below it — 86 rows under T0's, which is the first row that clears
-    #    T0's 84 and leaves T2's own command lane — so ADDR climbs to the
-    #    band's last row and SWAP drops under the cluster's south wall ───────
+    # ── T2, the south-west panel.  Its block is due west too, one whole block
+    #    row below, so all three *climb* the same channel T0's three descend —
+    #    and the two never meet, because every T0 target is at or above the
+    #    band's first row and every T2 target at or below its last ───────────
     a2, d2, s2 = (port(2, b) for b in ("addr", "data", "swap"))
-    pipe(2, "addr", [a2, (c2, a2[1]), (c2, cl.band[1]), (px0 + 1, cl.band[1])], end="v")
+    pipe(2, "addr", [a2, (c1, a2[1]), (c1, cl.band[1]), (px0 + 1, cl.band[1])], end="v")
     la = lengths[2, "addr"]
-    pipe(2, "data", solve(lambda r: [d2, (c3, d2[1]), (c3, r), (cl.west_data, r)],
+    pipe(2, "data", solve(lambda r: [d2, (c2, d2[1]), (c2, r), (cl.west_data, r)],
                           rows_s, lambda n: n == la, "DATA row"))
-    pipe(2, "swap", solve(lambda c: [s2, (c1, s2[1]), (c1, cl.south + 1), (c, cl.south + 1),
+    pipe(2, "swap", solve(lambda c: [s2, (c3, s2[1]), (c3, cl.south + 1), (c, cl.south + 1),
                                      (c, cl.south)],
                           cols_w, lambda n: n >= la + SWAP_LEAD, "SWAP column"))
 
-    # ── T1, the north-east panel.  Out to the east margin, *down* under its
-    #    own block, west into the east channel and up over the cluster — the
-    #    detour that keeps the fan out of the router's command lane.  SWAP
-    #    takes the corridor's free tunnel, which is what puts the twelve ports
-    #    in an order four blocks can actually emit ───────────────────────────
+    # ── T1, the north-east panel.  Its ports face *away* from the cluster, so
+    #    all three run out to the east margin, turn **south** past their own
+    #    block and come back west underneath it, into the band between the top
+    #    block row and the cluster.  South rather than north is the whole
+    #    point: north of the block is the router's command lane, and the two
+    #    fans cross there unconditionally.  The three margin columns are forced
+    #    — ADDR leaves the highest east-wall row and descends deepest, so every
+    #    other run would cross its descent unless ADDR turns last (``m3``).
+    #    SWAP takes the corridor's free tunnel, which is what puts the twelve
+    #    ports in an order four blocks can actually emit ─────────────────────
     a1, d1, s1 = (port(1, b) for b in ("addr", "data", "swap"))
-    q1, q2, q3 = (PACK_ROW_NW + lg.height + i for i in range(3))  # under the block
-    pipe(1, "addr", [a1, (m3, a1[1]), (m3, q3), (h1, q3), (h1, cl.north), (px3 + 5, cl.north)],
-         end="v")
+    pipe(1, "addr", [a1, (m3, a1[1]), (m3, cl.north), (px3 + 5, cl.north)], end="v")
     la = lengths[1, "addr"]
     pipe(1, "data", solve(
-        lambda r: [d1, (m2, d1[1]), (m2, q2), (h2, q2), (h2, cl.north - 1),
+        lambda r: [d1, (m2, d1[1]), (m2, cl.north - 1),
                    (cl.corridor, cl.north - 1), (cl.corridor, r)],
         rows_n, lambda n: n == la, "DATA row"), end=">")
     pipe(1, "swap", solve(
-        lambda c: [s1, (m1, s1[1]), (m1, q1), (h3, q1), (h3, cl.north - 2),
-                   (cl.tunnel, cl.north - 2), (cl.tunnel, cl.band[0]), (c, cl.band[0])],
+        lambda c: [s1, (m1, s1[1]), (m1, cl.north - 2), (cl.tunnel, cl.north - 2),
+                   (cl.tunnel, cl.band[0]), (c, cl.band[0])],
         cols_e, lambda n: n >= la + SWAP_LEAD, "SWAP column"), end="^")
 
-    # ── T3, the south-east panel: the same detour mirrored — out, *up* over
-    #    its own block, and back west underneath the cluster.  ADDR takes the
-    #    band's east end rather than the tunnel, which is free here (nothing
-    #    else needs it below the band) and is what keeps ADDR short enough for
-    #    SWAP to stay the longest of the three ───────────────────────────────
+    # ── T3, the south-east panel: the same detour, past the *bottom* of its
+    #    own block this time, and back west underneath it into the empty band
+    #    below the wall.  ADDR takes the tunnel from the south, mirroring NE's
+    #    SWAP from the north ─────────────────────────────────────────────────
     a3, d3, s3 = (port(3, b) for b in ("addr", "data", "swap"))
-    p1, p2, p3 = (PACK_ROW_SE - 4 + i for i in range(3))  # over the block
-    # The three margin columns and the three rows are not free here either.
-    # ADDR leaves the *highest* east-wall row and every other climb crosses it,
-    # so ADDR must turn north first (``m1``); its own westward run is then the
-    # one the others cross, so it must be the deepest (``p3``); and its climb up
-    # the tunnel is then only clear if the tunnel is the westernmost of the three
-    # target columns — which it is, and which is why SE's ADDR takes the tunnel
-    # from the south exactly as NE's SWAP takes it from the north.
-    pipe(3, "addr", [a3, (m1, a3[1]), (m1, p3), (cl.tunnel, p3),
+    p1, p2, p3 = (PACK_ROW_S + lg.height + i for i in range(3))  # under the block
+    # ADDR is the longest of the three by construction — it alone crosses the
+    # whole cluster to the band's last row, and its margin column and its
+    # westward row are both forced outermost by the other two — so on this tile
+    # the invariants have to be met by *padding the other two up* rather than
+    # by choosing a terminal.  A staircase's length is its Manhattan distance,
+    # so padding means a reversal: an excursion sideways and back, one row
+    # apart, inside the empty band between the cluster's south wall and the
+    # block.  ``_excursion`` is the whole of it; the widths are solved.
+    pipe(3, "addr", [a3, (m3, a3[1]), (m3, p3), (cl.tunnel, p3),
                      (cl.tunnel, cl.band[1]), (px3 + 1, cl.band[1])], end="v")
     la = lengths[3, "addr"]
+    sx = px3 + 25  # SWAP's climb, east of DATA's excursion and west of its own
     pipe(3, "data", solve(
-        lambda r: [d3, (m2, d3[1]), (m2, p2), (cl.corridor, p2), (cl.corridor, r)],
-        rows_s, lambda n: n == la, "DATA row"), end=">")
-    # SWAP's target is the nearest of the three and ADDR's the furthest, so on
-    # this tile alone the invariant cannot be met by a monotone route: SWAP is
-    # ~50 rows and one whole climb shorter than ADDR however it is drawn. The
-    # slack it needs comes from overshooting west past its own column and
-    # coming back east one row below — the only reversal in the wall, and it
-    # fits entirely inside the empty band under the cluster.
+        lambda w: [d3, (m2, d3[1]), (m2, p2), (cl.corridor, p2),
+                   *_excursion(cl.corridor, 250, w), (cl.corridor, rows_s.start)],
+        range(1, sx - cl.corridor - 1), lambda n: n == la, "DATA excursion"), end=">")
     pipe(3, "swap", solve(
-        lambda c: [s3, (m3, s3[1]), (m3, p1), (px3 + 1, p1), (px3 + 1, cl.south + 1),
-                   (c, cl.south + 1), (c, cl.south)],
-        cols_e, lambda n: n >= la + SWAP_LEAD, "SWAP column"))
+        lambda w: [s3, (m1, s3[1]), (m1, p1), (sx, p1),
+                   *_excursion(sx, 240, w), *_excursion(sx, 230, w),
+                   *_excursion(sx, 220, w), (sx, cl.south)],
+        range(1, cols_e.stop - sx), lambda n: n >= la + SWAP_LEAD, "SWAP excursion"))
 
     _check_lengths(lengths)
 
     # ── the router's four legs: the unmodified fan, east out of the outlets ──
     outlets = outlet_cols()
-    lanes = {0: PACK_ROW_NW - 2, 1: PACK_ROW_NW - 3,
-             2: PACK_ROW_SW - 1, 3: PACK_ROW_SE - 1}
+    #: The lane each leg turns east on.  Three of the four are ``build_wall``'s
+    #: own: within a block row the leg that reaches further east turns two rows
+    #: above the one it crosses.  T3's is the exception and it is the reason the
+    #: gutter is three rows rather than two — see below.
+    lanes = {0: PACK_ROW_N - 2, 1: PACK_ROW_N - 3, 2: PACK_ROW_S - 2, 3: cl.lane}
     legs: list[int] = []
     for tile, (bx, by) in anchors.items():
         ox = RX + outlets[tile]
