@@ -47,17 +47,19 @@ The chosen point on the curve, at 10-30 epochs:
 | MACs per forward pass | 828 |
 | MACs per training step | 1,836 |
 | MACs per epoch | 4.5M |
-| ticks per epoch | ~6.0x10^9 |
-| live men | ~20 |
-| **wall clock per epoch** | **~7 min native, ~40 s emulator** |
-| 10 / 20 / 30 epochs, native | 1.1 h / 2.3 h / 3.4 h |
-| 10 / 20 / 30 epochs, emulator | 7 min / 13 min / 20 min |
+| ticks per epoch, MACs on the CPU | ~6.0x10^9 |
+| ticks per epoch, MACs in the STREAM unit (§4.2a) | ~4.4x10^8 |
+| live men | ~25 |
+| **wall clock per epoch** | **~30 s native, ~3 s emulator** |
+| 10 / 20 / 30 epochs, native | 5 min / 10 min / 15 min |
 
 Expected validation accuracy: **83-86%**.
 
-The tick count is ~2x what the MAC count alone implies, because the store is rings
-rather than random-access memory (§4.2) — and the wall clock is nevertheless ~3.5x
-better, because the ring costs no men.
+Two decisions produce that number, and they pull in opposite directions on ticks.
+The store is rings rather than random-access memory, which costs ~2x the ticks and
+saves ~3.5x the wall clock (§4.2). The multiply-accumulate moves into the STREAM
+unit, which saves ~14x on top (§4.2a). The model itself is unchanged from the
+CPU-only plan: the STREAM win is spent entirely on wall clock.
 
 ## 2. Engine facts established by probe
 
@@ -172,6 +174,43 @@ is under 2^30 and a 9-term accumulation under 2^34 — comfortably inside signed
 bits, which is what makes fixed point safe here without saturation logic.
 
 **SGD, batch 1.** The learning rate is a power of two so an update is a shift.
+
+### 4.2a The MAC goes in the STREAM unit, not the CPU
+
+`lm1/stream.py`'s STREAM block is a rotate-only ring tier with a **fused
+multiply-accumulate inside the unit**: the `MAC` arm is `r s * s` in a counted loop —
+read `B[j]`, push it back, multiply by the scalar still in `B`-hand, hand the product
+to the ADDER — at **~12 ticks per multiply-accumulate** against ~650 for four CPU
+instructions. `MAC n` is therefore a rank-1 update `C[j] += a * B[j]` for `n` terms,
+issued by **one** `SND`.
+
+It coexists with jumps. `path_unit` and `d3_unit` are write-only because "an
+incoming pipe is a rival for every `r` in the CPU, the jump slab's ROM read
+included" — but that is a statement about *their* geometry, not a law: `matmul` ships
+with `stream=(257, 257, 17)`, four `RCV`s and two jumps, judged at 1,137,402,365.
+That machine is the precedent this design builds on.
+
+**The win is spent on wall clock, not on model size.** The model stays as in §4:
+~30 s an epoch instead of ~7 min, so 30 epochs finishes in ~15 min and the
+development loop is effectively interactive. (Spent on capacity instead it would
+have bought a 16x16 / 8-filter / Dense(32) model at ~93-95%; that is recorded here as
+the option not taken, and it remains available later without redesign.)
+
+**What the unit does not yet have.** Eight arms exist — `RDIN`, `FILLA`, `DRAINB`,
+`FILLB`, `MAC`, `ZEROC`, `FWD`, `EMIT` — and all eight trie leaves are used, so new
+arms mean a depth-4 trie and a re-verified row map. Four are missing:
+
+| new arm | why | shape |
+|---|---|---|
+| `PUSHA v` | `FILLA` fills from the **input room**; our scalars are CPU-computed | `s(A_fwd)` with the command's own argument |
+| `ROTB n` | conv needs ring B at tap offset `t`, and the only way to rotate is to pop | `r s`, no product |
+| `RDP` | `EMIT` sends to the `O` room; we need a partial sum back at the **CPU** | `r(P1) -> s(resp)` |
+| `UPDB n` | the weight update must not go through the CPU (190 weights x 2 instructions = 61,560 ticks would swamp a 22,000-tick step) | `n x { b=r(B_ret), g=r(P1), s(P2), b - (a*g >> lr), s(B_fwd) }` |
+
+`UPDB` is the one with real register pressure — two reads and a shift with only `A`
+and `B` — so it gets designed as a standalone probe grid verified against a Python
+model *before* it is placed, which is how `dsprelay` and the store selector were
+built.
 
 ### 4.2 The store: rings win on wall clock, and unrolling is what makes them easy
 
