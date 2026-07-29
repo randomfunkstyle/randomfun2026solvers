@@ -69,11 +69,18 @@ understood:
   consumer can work concurrently with transit. A seek costs
   `max(pipe, cascade)`: padding pays the full rate, shortening recovers only
   the overhang.
-* **A forwarder's floor is a six-cell loop** costing ~5.2 cells of
-  re-serialisation, because a long pipe is a deep FIFO that pipelines a
-  multi-word request while one man emits one word per six ticks. So *removing*
-  a forwarder is worth more than shortening one, and a chain of forwarders is
-  worse than one room plus a stub.
+* **A forwarder's floor is a six-cell loop**, because a long pipe is a deep FIFO
+  that pipelines a multi-word request while one man emits one word per six
+  ticks. So *removing* a forwarder is worth more than shortening one, and a
+  chain of forwarders is worse than one room plus a stub.
+
+  Its re-serialisation cost is **not a single number**, which Phase 1 found by
+  backing it out of `STORE_ANSWER_WEST`'s four measured builds: **1.48 / 0.70 /
+  3.71** cells, against the 5.2 this document first claimed. 5.2 was measured
+  re-serialising a multi-word *request*; an answer is one word. The constant
+  still ranks all four builds exactly as the tour did — including that deleting
+  the last forwarder is a **+4.1% regression** — so it is sound for a solver
+  choosing *whether* to place a room, and unsound for one choosing *how many*.
 
 ## The interface
 
@@ -82,6 +89,41 @@ understood:
     rooms  : the solver may insert a forwarder where it beats a pipe
     cost   : sum(cells x weight) at the rate above
     verify : check_bindings on every candidate, not just the winner
+
+## Phase 1 result: viable (2026-07-29)
+
+Told only the blocks, the free space, the measured traffic weights and the tick
+rate — and nothing about which primitive to use anywhere — the prototype in
+`scratch/layout1/` **picks the same primitive the hand build picked on all seven
+store request legs**, and its predicted saving lands within **1.4%** of the
+measured one (91,039,146 against 92,374,814 ticks).
+
+Six ladder rungs, each answered on paper first, all reproduced
+(`uv run python -m scratch.layout1.run`; `pytest scratch/layout1` → 11 passed).
+Rung 3 is the one that kills a naive objective: minimising *length* ties across
+43 placements, and only the weighted objective is unique. Rung 5 is the one that
+proves the design — two candidates identical in cost, area and every geometric
+check, separated only by §7.1's arithmetic, and the wrong one refused with
+`'r' at (13,13) must bind 'rom' but distances are [('mem_resp', 8), ('rom', 9)]`.
+
+Three results beyond agreement:
+
+* **The ablation reproduces the history.** Forbid rooms and reaches → 58 cells.
+  Allow a room → a teleport in the corridor. Allow the reach → gate 0's roof
+  grown by **exactly 31 rows**, which is `memory_taped`'s own `north_grow[0]`,
+  arrived at independently.
+* **"A room can reach its caller but not its callee" is a conclusion, not an
+  input.** Offered every climb from 0 to 31 rows, 30 of 33 candidates are thrown
+  out by the production `check_bindings`.
+* **It reproduces the gate's three-cell margin and is one cell stricter,
+  correctly.** M13 found the north write arm misbinds at L=4; through
+  `check_bindings`, L=3 is already refused, because at L=3 the distances are
+  *equal* and the checker will not let reading order decide.
+
+One thing the model **cannot** express, named rather than bodged: widening the
+answer collector (`STORE_ANSWER_WEST`) carries its `s` west across the wall,
+which is a *regenerated* block rather than a translated one — property 3. The
+prototype's `Block` forbids growing a glyph-carrying side.
 
 ## Phases
 
