@@ -490,7 +490,9 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
     return pts
 
 
-def build_stream(*, a_slots: int, b_slots: int, c_slots: int) -> StreamBlock:
+def build_stream(
+    *, a_slots: int, b_slots: int, c_slots: int, trie_bits: int = TRIE_BITS
+) -> StreamBlock:
     """Place the unit, its ADDER, both ring relays and the I/O rooms.
 
     ``a_slots``/``b_slots`` are the values each long ring must hold — ``N*M`` and
@@ -498,8 +500,26 @@ def build_stream(*, a_slots: int, b_slots: int, c_slots: int) -> StreamBlock:
     more value than it stores (the same +1 ``memory_tape`` needs). The serpentine
     grows a row at a time until the pipes are long enough; capacity *is* length
     (``SPEC.md``: a pipe is a FIFO whose capacity equals its cell count).
+
+    ``trie_bits`` is checked, not honoured: this module draws exactly one decode
+    trie, the depth-3 one with the original eight arms, and a program written
+    against a wider one **must not** be handed it. The failure would otherwise be
+    silent and total — at mod-8 a ``PUSHA`` word decodes as ``EMIT``, a ``ROTB`` as
+    ``FILLB``, and the machine runs to completion computing nonsense — which is
+    the one outcome a builder is allowed to prevent by refusing to build.
     """
     from .machine import MachineError
+
+    if trie_bits != TRIE_BITS:
+        raise StreamError(
+            f"this block draws a depth-{TRIE_BITS} decode trie ({1 << TRIE_BITS} leaves, "
+            f"arms {list(ARMS)}), but the program asked for depth {trie_bits} "
+            f"({1 << trie_bits} leaves). A depth-{TRIE_BITS} trie reads a depth-4 "
+            "command word as a different arm entirely (PUSHA -> EMIT, ROTB -> FILLB, "
+            "RDP -> ZEROC, UPDB -> FILLA), so building it would produce a machine "
+            "that runs to completion and computes the wrong answer. Drawing the "
+            "depth-4 trie and its twelve arms is Task 6 of the mnist-cnn plan."
+        )
 
     # ``rows_a`` outer, because the block's height is set by ring A's band — it is
     # the lowest thing in the block, so ring B's extra rows are free until they

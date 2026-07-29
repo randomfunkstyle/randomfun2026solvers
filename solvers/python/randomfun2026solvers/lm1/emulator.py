@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .asm import UNIT_TRIE_BITS, Program
+from .asm import STREAM_LR_SHIFT_EQU, UNIT_TRIE_BITS, Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
 from .store import DictStore, DoomUnit, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
 
@@ -320,6 +320,13 @@ class Emulator:
                     self._next_input,
                     self._emit,
                     trie_bits=UNIT_TRIE_BITS.get(self.program.unit, 3),
+                    # Both the decode width and UPDB's shift are properties of the
+                    # built unit, so they come from what the *program* declared —
+                    # never from a caller reaching in afterwards, which would leave
+                    # the assembled `.asm` unable to describe its own machine.
+                    lr_shift=self.program.equs.get(
+                        STREAM_LR_SHIFT_EQU, StreamUnit.DEFAULT_LR_SHIFT
+                    ),
                 )
         return self._stream
 

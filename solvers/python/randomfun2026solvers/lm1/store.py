@@ -201,6 +201,9 @@ class StreamUnit:
     #: only ones a depth-3 (``trie_bits=3``) unit, i.e. ``matmul``'s, ever sees.
     #: Codes 8..11 are new, reachable only from a depth-4 (``trie_bits=4``) unit;
     #: 12..15 are spare leaves on that trie, deliberately left unassigned.
+    #: ``UPDB``'s shift when a program does not declare one.
+    DEFAULT_LR_SHIFT = 12
+
     CODES = {
         "EMIT": 0,
         "FILLB": 1,
@@ -221,6 +224,7 @@ class StreamUnit:
         read_input: Callable[[], int],
         emit: Callable[[int], None],
         trie_bits: int = 3,
+        lr_shift: int | None = None,
     ) -> None:
         self._read_input = read_input
         self._out = emit
@@ -234,7 +238,12 @@ class StreamUnit:
         self.high_a = 0
         self.high_b = 0
         self.high_c = 0
-        self.lr_shift = 12  # UPDB's weight-update shift; a test attribute, not a command field
+        #: ``UPDB``'s shift. It is a property of the *built* unit and not a field of
+        #: any command word, so a program that needs a particular one has to declare
+        #: it (``asm.STREAM_LR_SHIFT_EQU``) and the builder has to honour it —
+        #: running a program against a unit shifted differently is wrong arithmetic
+        #: with nothing to catch it.
+        self.lr_shift = self.DEFAULT_LR_SHIFT if lr_shift is None else lr_shift
         self._scalar_a = 0  # the scalar most recently pushed by PUSHA, for UPDB
         self._replies: deque[int] = deque()
         #: The full twelve-leaf table. A ``trie_bits=3`` unit only keeps the codes

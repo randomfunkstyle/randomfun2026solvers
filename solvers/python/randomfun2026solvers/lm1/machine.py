@@ -4010,10 +4010,20 @@ def _stream(
         blk = d3_unit.build_doom()
     else:
         from . import stream as streammod
+        from .asm import UNIT_TRIE_BITS
 
         assert sizes is not None
         a_slots, b_slots, c_slots = sizes
-        blk = streammod.build_stream(a_slots=a_slots, b_slots=b_slots, c_slots=c_slots)
+        # The declared unit carries the decode width, and `build_stream` refuses a
+        # width it cannot draw. Passing it here is what makes a `.unit stream4`
+        # program fail at build time instead of running on a depth-3 trie that
+        # reads every one of its new arms as a different old one.
+        blk = streammod.build_stream(
+            a_slots=a_slots,
+            b_slots=b_slots,
+            c_slots=c_slots,
+            trie_bits=UNIT_TRIE_BITS.get(unit, streammod.TRIE_BITS),
+        )
     bx, by = 1, wall_y + 5
     if unit == "doom":
         # The DOOM block is ~172 columns wide — far wider than the CPU — and the

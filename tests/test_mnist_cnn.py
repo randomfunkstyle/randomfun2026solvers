@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import pytest
 from randomfun2026solvers import mnist_cnn, mnist_data, mnist_model
-from randomfun2026solvers.lm1 import asm, isa
+from randomfun2026solvers.lm1 import asm, isa, stream
+from randomfun2026solvers.lm1.emulator import Emulator
+from randomfun2026solvers.lm1.store import DictStore, StoreError
+from randomfun2026solvers.lm1.stream import StreamError
 
 S = mnist_cnn.S
 
@@ -61,6 +64,69 @@ def test_the_program_asks_for_the_depth_four_stream_unit():
     program = asm.assemble(mnist_cnn.emit_source(lr_shift=6), isa=isa.LM1_EXT)
     assert program.unit == "stream4"
     assert asm.UNIT_TRIE_BITS[program.unit] == 4
+
+
+def test_the_assembled_program_needs_no_python_side_setup():
+    """Assemble the emitted text, run it on a bare Emulator, still be exact.
+
+    This is the property the whole verification ladder rests on: the ``.asm`` is
+    the artifact, and it has to describe its own machine. ``UPDB``'s shift is not a
+    command field — it is wired into the unit — so the program declares it with
+    ``.equ STREAM_LR_SHIFT`` and the emulator reads it from there. Before that, a
+    fresh ``Emulator`` silently used the unit's default 12 and produced wrong
+    pixels and wrong weights with nothing raised, which is exactly what this test
+    would now catch.
+    """
+    src = mnist_cnn.emit_source(
+        lr_shift=6, epochs_from_input=False, train_samples=1, single_step=True
+    )
+    program = asm.assemble(src, isa=isa.LM1_EXT)
+    assert program.equs[asm.STREAM_LR_SHIFT_EQU] == mnist_model.SHIFT + 6
+
+    # Nothing below configures the unit or the store beyond what the program says.
+    emulator = Emulator(program, store=DictStore(size=mnist_cnn.STORE_WORDS))
+    assert emulator.stream.lr_shift == mnist_model.SHIFT + 6
+    stream = mnist_cnn._boot_stream() + mnist_cnn._dataset_stream(
+        epochs=1, train_n=1, val_n=0
+    )
+    result = emulator.run(input=stream, max_instructions=10**9)
+    assert result.halted
+
+    got = mnist_cnn._extract_params(emulator.store, emulator.stream)
+    want = mnist_model.init_params(seed=mnist_cnn.SEED)
+    pixels, label = mnist_cnn.first_train_sample()
+    f = mnist_model.forward(want, pixels)
+    mnist_model.sgd_step(want, mnist_model.backward(want, pixels, f, label), 6)
+    assert got == want
+
+
+def test_a_stream4_program_cannot_be_built_on_a_depth_three_unit():
+    """The wrong width must fail loudly: it computes nonsense otherwise.
+
+    At mod-8 a ``PUSHA`` word decodes as ``EMIT``, a ``ROTB`` as ``FILLB``, so a
+    machine built from ``stream.py``'s depth-3 trie would run this program to
+    completion and train nothing. Drawing the depth-4 trie is Task 6; refusing to
+    build the wrong one is a correctness property today.
+    """
+    with pytest.raises(StreamError, match="Task 6"):
+        stream.build_stream(
+            a_slots=16, b_slots=64, c_slots=16, trie_bits=asm.UNIT_TRIE_BITS["stream4"]
+        )
+    # matmul's own width still builds.
+    assert stream.build_stream(a_slots=16, b_slots=64, c_slots=16, trie_bits=3)
+
+
+def test_an_out_of_range_store_access_faults(reference):
+    """The 351-word map is enforced, so a stray index cannot read a live table.
+
+    The exp LUT and the log table are adjacent in the STORE, so an off-by-one in
+    the clamp would silently interpolate log endpoints as exp entries — a wrong
+    answer no differential test can localise. A sized store turns it into a raise.
+    """
+    store = DictStore(size=mnist_cnn.STORE_WORDS)
+    store.send(0)
+    with pytest.raises(StoreError):
+        store.send(mnist_cnn.STORE_WORDS)
 
 
 def test_ring_sizes_cover_the_high_water_marks():
@@ -205,17 +271,30 @@ def test_emulator_matches_the_reference_over_eight_samples():
     metric that divides by the wrong count. Eight samples and a real epoch
     boundary can, and it still runs in the fast tier.
     """
-    got = mnist_cnn.run_emulator(epochs=1, lr_shift=6, samples=8)
+    run = mnist_cnn.run_emulator(epochs=1, lr_shift=6, samples=8, report=True)
     params = mnist_model.init_params(seed=mnist_cnn.SEED)
     want = _reference_epochs(params, epochs=1, samples=8, lr_shift=6)
-    assert got == want
+    assert run.stats == want
+    # Metrics alone would pass a drift that happens to round to the same four
+    # integers, so the parameters are compared element for element as well.
+    assert run.params.conv_w == params.conv_w
+    assert run.params.conv_b == params.conv_b
+    assert run.params.dense_w == params.dense_w
+    assert run.params.dense_b == params.dense_b
 
 
 @pytest.mark.slow
 def test_emulator_matches_the_reference_over_two_full_epochs():
-    got = mnist_cnn.run_emulator(epochs=2, lr_shift=6)
-    want = mnist_model.train(mnist_model.init_params(seed=mnist_cnn.SEED), epochs=2, lr_shift=6)
-    assert got == want
+    run = mnist_cnn.run_emulator(epochs=2, lr_shift=6, report=True)
+    params = mnist_model.init_params(seed=mnist_cnn.SEED)
+    want = mnist_model.train(params, epochs=2, lr_shift=6)
+    assert run.stats == want
+    # 6,000 samples of drift would have to be invisible in eight integers to get
+    # this far; the 210 parameters are what actually has to agree.
+    assert run.params.conv_w == params.conv_w
+    assert run.params.conv_b == params.conv_b
+    assert run.params.dense_w == params.dense_w
+    assert run.params.dense_b == params.dense_b
 
 
 def _reference_epochs(params, *, epochs: int, samples: int, lr_shift: int):

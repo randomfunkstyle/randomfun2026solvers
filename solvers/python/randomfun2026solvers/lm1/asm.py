@@ -65,6 +65,15 @@ UNITS = frozenset({"stream", "stream4", "snake", "path", "doom"})
 #: Decode-trie depth per unit name. Only ``stream``/``stream4`` differ.
 UNIT_TRIE_BITS = {"stream": 3, "stream4": 4}
 
+#: ``.equ`` name by which a program declares the shift its STREAM unit's ``UPDB``
+#: arm applies. It belongs in the program because it is not a command field — the
+#: shift is wired into the unit — so a program that assumes one and is run against
+#: a unit built with another gets wrong arithmetic and no error. Naming it here
+#: means the emitted ``.asm`` is self-describing: assembling it and running it is
+#: enough, with no out-of-band setup, which is the property the verification
+#: ladder rests on. Absent, the unit keeps its own default.
+STREAM_LR_SHIFT_EQU = "STREAM_LR_SHIFT"
+
 #: ``ARCH.md`` §2.1: ring capacity must be ``P + slack``; too small deadlocks,
 #: too large starves the CPU.
 RING_SLACK_MIN = 2
