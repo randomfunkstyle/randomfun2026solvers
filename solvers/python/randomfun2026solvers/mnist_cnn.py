@@ -399,6 +399,25 @@ class _Gen:
         self.p1 = self.p1[n:]
 
     def updb(self, n: int, note: str = "") -> None:
+        """One rank-one update. Ring A must hold *exactly* the scalar UPDB will use.
+
+        The model reads a remembered ``_scalar_a`` and leaves ``ring_a`` alone; the
+        *drawn* arm has no register to remember it in (the shift needs both hands),
+        so it re-reads the scalar off ring A every iteration and pushes it straight
+        back — a rotation, which equals "leave ring A alone" only for a one-value
+        ring. So the two tiers agree exactly while ``aq`` holds one word, and would
+        disagree *silently* otherwise: the grid would multiply by whatever was queued
+        ahead of the scalar and the emulator would not. ``updb_from_acc`` creates
+        that precondition (``PUSHA``, ``UPDB``, ``MAC 0``); this asserts it, so a
+        future caller that queues two words gets an emit-time error instead of two
+        tiers that disagree. See ``stream.updb_body``'s docstring.
+        """
+        if len(self.aq) != 1:
+            raise _RingError(
+                f"UPDB {n} with ring A holding {self.aq}: the drawn arm re-reads its "
+                "scalar off ring A every iteration, so ring A must hold exactly the "
+                "scalar and nothing else or the grid and the emulator diverge silently"
+            )
         if len(self.p1) < n:
             raise _RingError(f"UPDB {n} with only {len(self.p1)} words in P1")
         self.cmd("UPDB", n, note or f"UPDB {n}")

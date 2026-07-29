@@ -1043,37 +1043,63 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
     return pts
 
 
-# ── placement, depth 4: NOT DRAWN YET ────────────────────────────────────────
-# The depth-4 *unit* is drawn and every one of its twenty-eight pipe glyphs is
-# checked against the engine's own ``route`` (:func:`unit_interior_grid`). Placing
-# it — the block: the ADDER, the two ring relays, the I/O rooms and the ten pipes
-# between them — does not close, and the reason is worth recording because it is a
-# consequence of the unit's own row map rather than a routing detail.
+# ── placement, depth 4: the unit is drawn, the block is not placed ───────────
+# The depth-4 *unit* is drawn and all twenty-eight of its pipe glyphs are checked
+# against the engine's own ``route`` (:func:`unit_interior_grid`). The block around
+# it — the ADDER, the ring relays, the I/O rooms and the pipes between them — is not
+# placed. The constraint that stops it is recorded here rather than in a report,
+# because two rounds of work have narrowed it from "P1 cannot cross the block" to
+# something much smaller, and the next attempt should start from the narrow version.
 #
-# All four incoming pipes are on the west wall (:data:`UPDB_BANDS` explains why),
-# and the accumulator's return is *structurally* the topmost of them: ``UPDB`` reads
-# it before ring A's and ring B's returns, and a body's rows rise with its
-# execution order. So P1 has to arrive at the top of the west wall — while its
-# source, the ADDER, is fed by ``prod`` and ``p2``, which leave the *bottom* of the
-# east wall. P1 therefore has to cross the whole block from south-east to
-# north-west, and it is the crossing that will not fit:
+# **Three rules the depth-4 block does close**, and they are the reusable part:
 #
-# * Each of the four west-wall rows is a corridor — a pipe arriving on one runs east
-#   along it — so every source's pipe has to turn north in a column of its own, west
-#   of the unit. Ordering them (P1 westmost, then ring A's return, then ring B's)
-#   is what stops those four from crossing, and it works.
-# * But P1's *own* leg into that column has to reach it from wherever the ADDER is.
-#   Above the two relays, it crosses their returns' climbs; below them, it crosses
-#   whatever the ring forward pipes use to reach the relays; and east of them, it
-#   cannot get back west at a row above 13 without crossing the unit itself.
+# 1. Southbound pipes leaving the east wall must turn at columns that *fall* as
+#    their row rises, or a lower pipe's eastward run crosses a higher one's descent.
+#    With ``resp`` climbing north from the topmost row, that fixes the order
+#    ``prod`` < ``b_fwd`` < ``a_fwd`` < ``out`` < ``p2``.
+# 2. Each then runs west along a corridor row of its own, and if the corridor rows
+#    *and* the columns they drop down at rise in the same order as the turn columns,
+#    the five nest exactly: pipe *j*'s corridor is below pipe *i*'s, so it passes
+#    *i*'s descent above where *i* turns west, and *i*'s drop column is west of *j*'s
+#    corridor, so *j* never crosses it. **The destination depths are then free** —
+#    the non-obvious consequence, and what lets the ADDER's room span the three
+#    intermediate drop columns: those all terminate above it.
+# 3. Each of the four west-wall rows is a corridor too — a pipe arriving on one runs
+#    east along it — so every source turns north in a column of its own, ordered by
+#    the wall row it feeds (the pipe climbing highest goes furthest west). A source
+#    whose room sits directly beside its climb has a *one-cell* leg, and a one-cell
+#    leg cannot cross anything: that is how the ring returns get past every drop.
 #
-# Every arrangement tried closes three of the four and breaks the fourth. What it
-# needs is a design decision this task should not take alone — the candidates are
-# (a) a second relay for P1 so its long leg is split, (b) moving the ADDER north of
-# the unit and paying for ``prod``/``p2`` to climb the east side, or (c) reordering
-# the unit's east wall so ``prod`` leaves near the top, which costs ``MAC``'s body
-# a longer column. Each changes what Task 7 has to place around this block, so it
-# belongs with Task 7's own placement pass rather than here.
+# **P1's crossing is solved, by ARCH.md §2.1's own pattern.** ``SPEC.md`` forbids a
+# pipe looping back to its own room, so a ring always needs two rooms and a
+# turnaround room is something this block already knows how to place. The
+# accumulator's return is *structurally* the topmost pipe on the west wall (``UPDB``
+# reads it before both ring returns and a body's rows rise with its execution order)
+# while the ADDER that feeds it hangs off the bottom of the east wall, so P1 has to
+# cross the block diagonally — which a single pipe cannot, because it would have to
+# be both the diagonal and the final east-running corridor. Splitting it at a relay
+# **dedicated to P1** makes ``p1b`` a short straight run into the topmost west row
+# and frees ``p1a`` to take any route, since it no longer has to land on a corridor
+# row. Dedicated, not shared: §2.1 allows one room to turn around many rings but only
+# while they are permanently full, and the accumulator ring drains by design
+# (``ZEROC`` seeds P2, ``MAC`` drains it, ``EMIT`` and ``RDP`` drain P1), so a shared
+# relay would block on the first empty ring. With one ``r`` and one ``s`` it never
+# chooses, and is exactly as transparent as more pipe would have been.
+#
+# **What is still open is smaller, and is not P1.** It is the two rings' *bands*.
+# Each band is entered from a drop column west of it (rule 2) and left toward its
+# relay, and the two bands are at different depths by construction. With both sharing
+# one leg span — which is what makes each ring's capacity maximal per row — the
+# shallower ring's exit column is live at the deeper ring's entry row, or the deeper
+# ring's entry jog crosses the shallower one's exit, depending on which way round the
+# bands and relays are ordered. Six orderings of (band depth, relay depth, jog
+# column) were tried; each closes one direction and breaks the other.
+#
+# The fix is local and is a *capacity trade*, which is why it is a decision and not a
+# derivation: give the two bands **disjoint leg spans** (halving each ring's cells per
+# row, so ring B needs roughly twice the rows for ``mnist``'s 856 values), or give
+# each ring its own serpentine *column* band so the two never share a row at all.
+# Both change the block's footprint, so it belongs with Task 7's placement pass.
 #
 # Until then :func:`build_stream` refuses depth 4, for the same reason it refuses
 # depth 5: a block it cannot draw correctly must not be approximated.
@@ -1115,12 +1141,13 @@ def build_stream(
         raise StreamError(
             f"the depth-{spec.trie_bits} unit is drawn ({len(spec.arms)} arms, "
             f"{unit_pipe_count(spec.trie_bits)} pipes, every glyph checked against the "
-            "engine's own route) but the block around it is not placed yet: the "
-            "accumulator's return is structurally the topmost pipe on the west wall "
-            "while the ADDER that feeds it hangs off the bottom of the east wall, and "
-            "no arrangement tried routes that crossing without cutting one of the "
-            "four west-wall corridors. See the note above build_stream and the "
-            "task-6 report; the decision belongs with Task 7's placement pass."
+            "engine's own route) but the block around it is not placed yet. P1's own "
+            "crossing is solved — a turnaround relay dedicated to it splits the leg — "
+            "and what is still open is that the two rings' bands cannot both be "
+            "entered from the west and left toward their relays while sharing one leg "
+            "span. See the note above build_stream: the fix is disjoint leg spans or a "
+            "column band per ring, which is a capacity trade and so a placement "
+            "decision for Task 7 rather than a derivation."
         )
 
     # ``rows_a`` outer, because the block's height is set by ring A's band — it is
