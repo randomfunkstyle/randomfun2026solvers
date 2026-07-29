@@ -276,17 +276,6 @@ UPDB_CASES = [
 ]
 
 
-def _probe_input(scalar: int, weights: list[int], grads: list[int]) -> list[int]:
-    """One command word, then one ``(a, g, b)`` lap per weight.
-
-    Feeding the scalar once per lap is not a shortcut around the arm: it is exactly
-    what ring A hands it, because the drawn body pops the scalar and pushes it
-    straight back every iteration (:func:`stream.updb_body`).
-    """
-    words = [_updb_words(len(weights))]
-    for weight, grad in zip(weights, grads, strict=True):
-        words += [scalar, grad, weight]
-    return words
 
 
 def test_the_drawn_updb_body_is_the_shift_the_program_declares():
@@ -346,14 +335,23 @@ def test_updb_probe_grid_matches_the_model(
     assert [room.kind for room in engine.rooms] == ["compute", "input", "output"]
     assert len(engine.pipes) == 2, "one pipe in, one pipe out — that is the whole point"
 
-    result = engine.run(_probe_input(scalar, weights, grads), max_ticks=200_000)
+    words = stream.updb_probe_input(scalar, weights, grads)
+    assert words[0] == _updb_words(len(weights)), "the probe decodes a real command word"
+    result = engine.run(words, max_ticks=200_000)
     assert result.fatal is None, result.fatal
     assert result.halted
 
+    # The oracle is the model, not the builder's own idea of the answer: read the
+    # updated weights and the circulated gradients back off StreamUnit and lay them
+    # out in the arm's own send order.
     ring_b, p2 = _model_updb(scalar, weights, grads, shift=shift)
-    want: list[int] = []
-    for weight, grad in zip(ring_b, p2, strict=True):
-        want += [scalar, grad, weight]
+    sends = {"p2": p2, "a_fwd": [scalar] * len(ring_b), "b_fwd": ring_b}
+    want = [
+        sends[band][i]
+        for i in range(len(ring_b))
+        for band in stream.UPDB_BANDS
+        if band in sends
+    ]
     assert result.output == want
     assert want == stream.updb_probe_model(scalar, weights, grads, shift=shift)
 
@@ -373,6 +371,214 @@ def test_the_updb_probe_runs_the_same_on_the_reference_interpreter(tmp_path):
     assert len(analysis.pipes) == 2
 
     for scalar, weights, grads in UPDB_CASES:
-        words = " ".join(str(v) for v in _probe_input(scalar, weights, grads))
+        words = " ".join(str(v) for v in stream.updb_probe_input(scalar, weights, grads))
         out = list(lm.tick(path, 4000, input=words).output)
         assert out == stream.updb_probe_model(scalar, weights, grads), (scalar, out)
+
+
+# ── the depth-4 unit, drawn ──────────────────────────────────────────────────
+def test_depth_three_unit_is_unchanged():
+    """matmul's arm codes must not move at all: its grid is shipped and judged."""
+    codes = stream.arm_codes(trie_bits=3)
+    for arm in ("EMIT", "FILLB", "ZEROC", "FILLA", "FWD", "DRAINB", "MAC", "RDIN"):
+        assert codes[arm] == StreamUnit.CODES[arm]
+    assert sorted(codes.values()) == list(range(8))
+
+
+def test_the_depth_four_codes_are_read_off_the_trie_not_assigned():
+    """Twelve arms on sixteen leaves, and *which* four are spare is not free either.
+
+    The codes are the leaves' own trie paths, so the arms have to sit on the leaves
+    whose paths spell the numbers :attr:`StreamUnit.CODES` already publishes — eight
+    of them because ``matmul`` ships them, four because Task 3's model has been
+    tested against them since. That is the property that stops the table drifting
+    from the drawing: move a leaf and this fails.
+    """
+    codes = stream.arm_codes(trie_bits=4)
+    assert codes == StreamUnit.CODES
+    assert sorted(codes.values()) == list(range(12))
+
+    cols = {arm: col for arm, col in stream._spec(4).cols.items()}
+    assert set(cols) == set(StreamUnit.CODES)
+    spare = [i for i, arm in enumerate(stream._spec(4).leaves) if not arm]
+    assert len(spare) == 4, "sixteen leaves, twelve arms"
+
+
+def test_the_depth_four_unit_reuses_the_rings_and_adds_no_pipes():
+    """Four new arms, no new hardware: that is what makes them cheap.
+
+    Eleven pipes either way — the module docstring's number — because ``PUSHA``
+    sends to ring A's fill, ``ROTB`` rotates ring B, ``RDP`` drains the accumulator
+    and ``UPDB`` uses all three. A new pipe would be a new rival for every ``r`` and
+    ``s`` in the unit (``ARCH.md`` §7.1), so *not* adding one is load-bearing.
+    """
+    assert stream.unit_pipe_count(3) == stream.EXPECTED_PIPES == 11
+    assert stream.unit_pipe_count(4) == stream.EXPECTED_PIPES
+
+    three, four = stream._spec(3), stream._spec(4)
+    assert set(three.east) == set(four.east), "the same six outgoing bands"
+    assert set(three.west) | set(three.south) == set(four.west), "p1 moves west, no more"
+    assert four.south == ()
+
+
+def test_every_depth_four_pipe_glyph_sits_on_its_own_pipes_row():
+    """Rule 1 and the depth-4 shape of rule 2, as pure geometry.
+
+    Every incoming pipe is on the west wall now, one row each, so an ``r`` on its
+    row is nearest its own by ``x + 0`` against ``x + |dy|`` — the same argument
+    rule 1 makes for the east wall, which is why the depth-4 unit needs no
+    per-arm reasoning at all. ``cmd`` is the one exception and it loses to every
+    west pipe from any column east of MAIN's own.
+    """
+    unit = stream.unit_interior(4)
+    rows = {**unit.west, **unit.east}
+    assert unit.south == {}
+    for x, y, glyph, band in unit.glyphs:
+        if band == "cmd":
+            continue
+        assert rows[band] == y, f"{glyph}@{(x, y)} claims {band}, whose row is {rows[band]}"
+
+    # rule 2, stated: the west rows are distinct and rise in UPDB's read order.
+    assert unit.west["p1"] < unit.west["a_ret"] < unit.west["b_ret"]
+    assert len(set(unit.west.values())) == len(unit.west)
+    assert len(set(unit.east.values())) == len(unit.east)
+    # resp is the topmost outgoing row: it is the only pipe that climbs north, so
+    # anything above it would cross that climb wherever the block puts it.
+    assert unit.east["resp"] == min(unit.east.values())
+
+
+def test_the_drawn_updb_arm_touches_the_pipes_the_probe_proved():
+    """The placed arm's six glyphs, in order, against :data:`stream.UPDB_BANDS`."""
+    unit = stream.unit_interior(4)
+    col = stream._spec(4).cols["UPDB"] + 1  # a counted loop's body is one column east
+    body = [(y, glyph, band) for x, y, glyph, band in unit.glyphs if x == col]
+    assert [band for _y, _g, band in sorted(body)] == list(stream.UPDB_BANDS)
+    assert [g for _y, g, _b in sorted(body)] == ["r", "s", "r", "s", "r", "s"]
+
+
+def test_the_new_arms_do_what_their_glyphs_say():
+    """One assertion per new arm, tying its drawn glyphs to the model's behaviour."""
+    unit = stream.unit_interior(4)
+    spec = stream._spec(4)
+    by_arm: dict[str, list[str]] = {}
+    for i, arm in enumerate(spec.leaves):
+        if not arm:
+            continue
+        cols = {spec.col(i), spec.col(i) + 1}
+        by_arm[arm] = [
+            band for x, _y, _g, band in sorted(unit.glyphs, key=lambda t: t[1]) if x in cols
+        ]
+    # PUSHA v -> ring_a.append(v): one send, to ring A's fill, and no read at all.
+    assert by_arm["PUSHA"] == ["a_fwd"]
+    # ROTB n -> pop from ring B and push straight back: a rotation, no product.
+    assert by_arm["ROTB"] == ["b_ret", "b_fwd"]
+    # RDP -> pop one partial sum and answer it, exactly RDIN's shape on P1.
+    assert by_arm["RDP"] == ["p1", "resp"]
+    assert by_arm["RDIN"] == ["in", "resp"]
+    # UPDB: all three rings, in the order updb_body imposes.
+    assert by_arm["UPDB"] == list(stream.UPDB_BANDS)
+    # and the accumulator convention the model was verified against, unchanged:
+    # ZEROC seeds P2, MAC consumes P2 and produces P1, FWD recirculates, EMIT drains.
+    assert by_arm["ZEROC"] == ["p2"]
+    assert by_arm["MAC"] == ["a_ret", "b_ret", "b_fwd", "prod"]
+    assert by_arm["FWD"] == ["p1", "p2"]
+    assert by_arm["EMIT"] == ["p1", "out"]
+
+
+def test_the_builder_refuses_a_width_it_cannot_place():
+    """A block it cannot draw correctly must not be approximated (ARCH.md §4.4)."""
+    from randomfun2026solvers.lm1.stream import StreamError
+
+    with pytest.raises(StreamError, match="not placed yet"):
+        stream.build_stream(a_slots=16, b_slots=856, c_slots=80, trie_bits=4)
+    with pytest.raises(StreamError, match="depth 5"):
+        stream.build_stream(a_slots=8, b_slots=8, c_slots=6, trie_bits=5)
+
+
+def test_an_undrawable_shift_is_refused_rather_than_rounded():
+    from randomfun2026solvers.lm1.stream import StreamError
+
+    assert stream.updb_body(9) == "rsMrs*M9W}Mr-s"
+    with pytest.raises(StreamError, match="at least 1"):
+        stream.updb_body(0)
+
+
+# ── the depth-4 unit, on the engine ──────────────────────────────────────────
+def _unit_grid_engine(trie_bits: int) -> tuple[FastLittleman, dict[str, tuple[int, int]]]:
+    """The unit alone in a room with all eleven pipes, plus where each attaches.
+
+    ``ARCH.md`` §4.4: a mis-bound pipe produces a machine that runs to completion
+    doing the wrong thing, and a stray ``|`` one cell behind an arrowhead deletes a
+    whole pipe with ``analyze`` reporting one fewer. So the count is asserted, not
+    argued, and every glyph is then checked against the engine's own binding.
+    """
+    spec = stream._spec(trie_bits)
+    unit = stream.unit_interior(trie_bits)
+    engine = FastLittleman("\n".join(stream.unit_interior_grid(trie_bits)))
+    pad = 4
+    ux, uy = pad + 2, pad + 2
+    want = {band: (ux, uy + row) for band, row in unit.west.items()}
+    want |= {band: (ux + spec.iw + 1, uy + row) for band, row in unit.east.items()}
+    want |= {band: (ux + col, uy) for band, col in unit.north.items()}
+    want |= {band: (ux + col, uy + spec.ih + 1) for band, col in unit.south.items()}
+    return engine, want
+
+
+@pytest.mark.parametrize("trie_bits", [3, 4])
+def test_every_stream_pipe_still_binds_where_it_should(trie_bits: int):
+    """The engine's own binding for all eleven pipes and every pipe glyph."""
+    engine, want = _unit_grid_engine(trie_bits)
+    assert len(engine.pipes) == stream.EXPECTED_PIPES, "the count drawn vs the count found"
+    assert set(want) == set(stream._spec(trie_bits).west) | set(
+        stream._spec(trie_bits).east
+    ) | {"cmd"} | set(stream._spec(trie_bits).south)
+
+    unit = stream.unit_interior(trie_bits)
+    pad = 4
+    ux, uy = pad + 2, pad + 2
+    for x, y, glyph, band in unit.glyphs:
+        pid = engine._bindings.get((ux + x, uy + y))
+        assert isinstance(pid, int) and pid >= 0, f"{glyph}@{(x, y)} binds no pipe at all"
+        pipe = engine.pipes[pid]
+        attach = pipe.src_attach if glyph == "s" else pipe.dst_attach
+        assert attach == want[band], (
+            f"{glyph}@{(x, y)} should bind {band} at {want[band]} but got {attach}"
+        )
+
+
+@node_required
+@reference_sweeps
+@pytest.mark.parametrize("trie_bits", [3, 4])
+def test_the_reference_interpreter_agrees_about_every_binding(trie_bits: int, tmp_path):
+    """``Littleman.route`` — the judge's own engine — on all eleven pipes."""
+    from randomfun2026solvers.littleman import Littleman
+
+    spec = stream._spec(trie_bits)
+    unit = stream.unit_interior(trie_bits)
+    path = tmp_path / f"unit{trie_bits}.man"
+    path.write_text("\n".join(stream.unit_interior_grid(trie_bits)) + "\n", encoding="utf-8")
+    lm = Littleman()
+    assert len(lm.analyze(path).pipes) == stream.EXPECTED_PIPES
+
+    pad = 4
+    ux, uy = pad + 2, pad + 2
+    want = {band: (ux - 1, uy + row) for band, row in unit.west.items()}
+    want |= {band: (ux + spec.iw + 2, uy + row) for band, row in unit.east.items()}
+    want |= {band: (ux + col, uy - 1) for band, col in unit.north.items()}
+    want |= {band: (ux + col, uy + spec.ih + 2) for band, col in unit.south.items()}
+    for x, y, glyph, band in unit.glyphs:
+        cells = [(c.x, c.y) for c in lm.route(path, ux + x, uy + y)]
+        assert cells, f"{glyph}@{(x, y)} binds no pipe at all"
+        assert want[band] in (cells[0], cells[-1]), (
+            f"{glyph}@{(x, y)} should bind {band} at {want[band]} but got {cells[0], cells[-1]}"
+        )
+
+
+@node_required
+@reference_sweeps
+def test_matmul_grid_is_byte_identical(tmp_path):
+    """The real regression guard, and it does not depend on any test's colour."""
+    from randomfun2026solvers.lm1 import machine
+
+    generated = "\n".join(machine.build_for("matmul").rows) + "\n"
+    assert generated == Path("tasks/solutions/matmul_cpu.man").read_text(encoding="utf-8")

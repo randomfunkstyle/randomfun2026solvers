@@ -140,18 +140,32 @@ def _shift_glyphs(shift: int) -> str:
     raise StreamError(f"no single-digit chunk divides a shift of {shift}")  # pragma: no cover
 
 
+#: The pipes ``UPDB``'s body touches, in body order — which is row order, which is
+#: execution order, because the body is walked down one column one glyph per row.
+#: This tuple is the reason the depth-4 unit's incoming pipes are *all* on the west
+#: wall: ring A's return is read between the accumulator's and ring B's, and
+#: ``ARCH.md`` §7.1's distances only let a reader swap between two walls whose
+#: row-slopes differ. A south pipe's distance falls with the row exactly as a west
+#: pipe's does above its own row, so a south pipe can only ever win *below* every
+#: west pipe the same column reads — never between two of them. North is the mirror
+#: image. So the middle read has to be on the same wall as the outer two, and once
+#: the accumulator's return is on the west wall there is no reason for anything else
+#: to be anywhere else. :func:`_spec4` asserts the drawn arm matches this.
+UPDB_BANDS: tuple[str, ...] = ("p1", "p2", "a_ret", "a_fwd", "b_ret", "b_fwd")
+
+
 def updb_body(shift: int = UPDB_SHIFT) -> str:
     """``UPDB``'s counted-loop body, walked *down* one column, one glyph per row.
 
     One iteration of ``b = ring_b.pop(); g = p1.pop(); p2.push(g);
     ring_b.push(b - ((a * g) >> shift))`` with two hands and no readable backpack::
 
+        r   the accumulator : A = g, one gradient off P1
+        s   the accumulator : g goes on to P2 — it circulates, it is not consumed
+        M   B = g
         r   ring A's return : A = a, the scalar PUSHA left on ring A
         s   ring A's fill   : put it straight back, so the ring is unchanged
-        M   B = a
-        r   the accumulator : A = g
-        s   the accumulator : g circulates onto P2 rather than being consumed
-        *   A = a * g          (B is still a — the multiply does not touch it)
+        *   A = a * g          (B is still g — the multiply does not touch it)
         M9W}}  A >>= shift     (see :func:`_shift_glyphs`; B ends holding 9)
         M   B = (a * g) >> shift
         r   ring B's return : A = b
@@ -160,18 +174,19 @@ def updb_body(shift: int = UPDB_SHIFT) -> str:
 
     The ``r``/``s`` pair on ring A is the same rotate ``MAC`` does on ring B, and it
     is not optional: the scalar has to be re-read every iteration because the shift
-    needs both hands, so the ring *is* UPDB's third register. That makes the drawn
-    arm agree with :meth:`~.store.StreamUnit._updb` — which reads a remembered
-    ``_scalar_a`` and leaves ``ring_a`` alone — exactly when ring A holds that one
-    scalar and nothing else, which is what ``mnist_cnn``'s ``updb_from_acc``
-    (``PUSHA``, ``UPDB``, ``MAC 0``) guarantees and asserts at emit time.
+    needs both hands (:func:`_shift_glyphs`), so **ring A is UPDB's third
+    register**. That makes the drawn arm agree with
+    :meth:`~.store.StreamUnit._updb` — which reads a remembered ``_scalar_a`` and
+    leaves ``ring_a`` alone — exactly when ring A holds that one scalar and nothing
+    else: a rotation of a one-value ring is the identity. That is the precondition
+    ``mnist_cnn``'s ``updb_from_acc`` (``PUSHA``, ``UPDB``, ``MAC 0``) creates, and
+    its ``aq`` model asserts at emit time, so the two tiers cannot drift apart
+    silently. It is the one place the drawn arm is narrower than the model.
 
-    The *order* is forced, not chosen. Rows increase downward and a glyph's row
-    picks its pipe, so this string is also the arm's row map: ring A's return above
-    the accumulator's above ring B's. ``ARCH.md`` §7.1's distances only ever let a
-    reader swap between two walls where the row-slopes differ, so a west-wall pipe
-    read *between* two others has to be west-wall too — which is why the depth-4
-    unit takes all four of its incoming pipes on the west wall.
+    Which pipe each glyph talks to is :data:`UPDB_BANDS`, and it is forced by the
+    row map rather than chosen: the accumulator is read first because ``resp`` has
+    to be the topmost *outgoing* row and it sits below ``in``, which sits below the
+    accumulator's own row.
     """
     return "rsMrs*" + _shift_glyphs(shift) + "Mr-s"
 
@@ -184,12 +199,28 @@ def updb_probe_model(
     The probe's room has one outgoing pipe, so every ``s`` in the body lands in the
     same ``O`` room — which is the point: a wrong glyph order shows up as a wrong
     *interleaving*, not just a wrong number, so a run cannot pass by accident with
-    the arithmetic done in the wrong place.
+    the arithmetic done in the wrong place. The order is :data:`UPDB_BANDS`' own.
     """
+    sends = {"p2": lambda g, b: g, "a_fwd": lambda g, b: scalar, "b_fwd": lambda g, b: b}
     out: list[int] = []
     for b, g in zip(weights, grads, strict=True):
-        out += [scalar, g, b - ((scalar * g) >> shift)]
+        updated = b - ((scalar * g) >> shift)
+        out += [sends[band](g, updated) for band in UPDB_BANDS if band in sends]
     return out
+
+
+def updb_probe_input(scalar: int, weights: list[int], grads: list[int]) -> list[int]:
+    """One command word, then one lap of reads per weight, in :data:`UPDB_BANDS` order.
+
+    Feeding the scalar once per lap is not a shortcut around the arm: it is exactly
+    what ring A hands it, because the drawn body pops the scalar and pushes it
+    straight back every iteration.
+    """
+    reads = {"p1": lambda g, b: g, "a_ret": lambda g, b: scalar, "b_ret": lambda g, b: b}
+    words = [(1 << 4) * len(weights) + 11]  # 16 * n + UPDB's code
+    for b, g in zip(weights, grads, strict=True):
+        words += [reads[band](g, b) for band in UPDB_BANDS if band in reads]
+    return words
 
 
 def build_updb_probe(shift: int = UPDB_SHIFT) -> list[str]:
@@ -202,9 +233,9 @@ def build_updb_probe(shift: int = UPDB_SHIFT) -> list[str]:
     binds whatever the layout — which isolates the part that is actually hard (the
     register juggling and the glyph order) from the part that is geometric.
 
-    The input is one command word ``16 * n + code``, then ``n`` laps of
-    ``(a, g, b)``; the output is ``n`` laps of ``(a, g, b')``. Feeding the scalar
-    per lap is not a cheat: it is precisely what ring A does for the placed arm.
+    The input is :func:`updb_probe_input` and the expected output
+    :func:`updb_probe_model`, both ordered by :data:`UPDB_BANDS`, so the probe reads
+    and writes in exactly the sequence the placed arm's rows impose.
     """
     body = updb_body(shift)
     iw, ih = 12, len(body) + 4
@@ -291,8 +322,12 @@ def _bit_of(level: int) -> int:
     return 1 << (level - 1)
 
 
-def arm_codes() -> dict[str, int]:
-    """Command code per arm, derived from the trie's own geometry.
+def _trie_col(trie_bits: int) -> int:
+    return LEAF0 + LEAF_PITCH * ((1 << trie_bits) - 1) // 2
+
+
+def _leaf_codes(trie_bits: int) -> dict[int, int]:
+    """``leaf column -> command code``, read off the trie's own geometry.
 
     ``x`` turns clockwise on BP's low bit; a man heading *south* turns clockwise
     to the **west**, so a west branch means that bit is 1. The code is therefore
@@ -302,20 +337,35 @@ def arm_codes() -> dict[str, int]:
     codes: dict[int, int] = {}
 
     def walk(level: int, col: int, code: int) -> None:
-        step = LEAF_PITCH * (1 << (TRIE_BITS - level)) // 2
+        step = LEAF_PITCH * (1 << (trie_bits - level)) // 2
         for sign, bit in ((-1, 1), (+1, 0)):
             nxt = col + sign * step
             acc = code | (bit * _bit_of(level))
-            if level < TRIE_BITS:
+            if level < trie_bits:
                 walk(level + 1, nxt, acc)
             else:
                 codes[nxt] = acc
 
-    walk(1, TRIE_COL, 0)
+    walk(1, _trie_col(trie_bits), 0)
+    return codes
+
+
+def arm_codes(trie_bits: int = TRIE_BITS) -> dict[str, int]:
+    """Command code per arm at one decode width, derived from the trie's geometry.
+
+    Not a table: the codes *are* the leaf columns, so moving a leaf moves the code
+    and the tests catch it. A depth-4 trie has sixteen leaves for twelve arms, and
+    which four are spare is therefore not free either — the arms have to sit on the
+    leaves whose paths spell the codes :attr:`~.store.StreamUnit.CODES` already
+    publishes, because ``matmul``'s eight are shipped and the other four are what
+    the emulator model has been tested against since Task 3.
+    """
+    spec = _spec(trie_bits)
+    codes = _leaf_codes(trie_bits)
     leaves = sorted(codes)
-    if len(leaves) != len(ARMS):
-        raise StreamError(f"trie has {len(leaves)} leaves for {len(ARMS)} arms")
-    return {arm: codes[col] for arm, col in zip(ARMS, leaves, strict=True)}
+    if len(leaves) != len(spec.leaves):
+        raise StreamError(f"trie has {len(leaves)} leaves for {len(spec.leaves)} slots")
+    return {arm: codes[col] for arm, col in zip(spec.leaves, leaves, strict=True) if arm}
 
 
 #: ``(loop-entry row, body)`` per arm. The body is walked *down* the arm's own
@@ -332,6 +382,276 @@ _BODIES: dict[str, tuple[int, str] | None] = {
     "FWD": (R_P1 - 1, "rs"),  # r@18 P1, s@19 P2
     "EMIT": (R_P1 - 1, "r s"),  # r@18 P1, s@20 out
 }
+
+
+@dataclass(frozen=True)
+class _Arm:
+    """One arm's glyphs, as rows in its own leaf column.
+
+    ``pre`` and ``straight`` sit in the leaf column itself; ``loop`` is a
+    :meth:`~..circuit.Circuit.counted_loop` whose body walks down column ``x + 1``.
+    A row is a pipe, so these row numbers *are* the arm's bindings.
+    """
+
+    arg: bool = True  # recover the argument (and the loop count) from the word
+    pre: tuple[tuple[int, str], ...] = ()  # glyphs before the loop
+    loop: tuple[int, str] | None = None  # (entry row, body)
+    straight: tuple[tuple[int, str], ...] = ()  # glyphs when there is no loop
+
+
+@dataclass(frozen=True)
+class _Spec:
+    """Everything one decode width draws, so the widths cannot share a constant.
+
+    ``matmul``'s grid is shipped and judged, so the depth-3 spec is the module's
+    original constants verbatim and the depth-4 one is a separate object rather
+    than an edit — which is what makes ``machine.build_for("matmul")``
+    byte-identical something a test can assert rather than something to argue.
+    """
+
+    trie_bits: int
+    leaves: tuple[str, ...]  # leaf order west to east; "" is a spare leaf
+    arms: tuple[str, ...]  # the named arms, in leaf order
+    rows: dict[str, int]  # band -> interior row
+    west: tuple[str, ...]  # incoming bands on the west wall
+    east: tuple[str, ...]  # outgoing bands on the east wall
+    south: tuple[str, ...]  # incoming bands on the south wall (a column, not a row)
+    south_col: dict[str, int]
+    arg: str  # the argument-recovery glyphs, walked down from R_ARG
+    plan: dict[str, _Arm]
+    band_at: dict[tuple[str, int], str]
+    iw: int
+    ih: int
+    arg_row: int
+    collect: int
+
+    def col(self, i: int) -> int:
+        return LEAF0 + LEAF_PITCH * i
+
+    @property
+    def cols(self) -> dict[str, int]:
+        return {arm: self.col(i) for i, arm in enumerate(self.leaves) if arm}
+
+
+def _band_at(rows: dict[str, int], west: tuple[str, ...], east: tuple[str, ...]) -> dict:
+    """``(glyph, row) -> band``. The row *is* the pipe, so this is the whole map.
+
+    Incoming and outgoing pipes are separate pools (``SPEC.md``: ``r`` looks at
+    incoming, ``s`` at outgoing), so an ``r`` row and an ``s`` row may coincide and
+    the key has to carry the glyph. Two *incoming* bands on one row, or two
+    outgoing, would be a genuine ambiguity — hence the check.
+    """
+    out: dict[tuple[str, int], str] = {}
+    for glyph, bands in (("r", west), ("s", east)):
+        for band in bands:
+            key = (glyph, rows[band])
+            if key in out:
+                raise StreamError(f"{band} and {out[key]} both claim {glyph!r} on row {rows[band]}")
+            out[key] = band
+    return out
+
+
+#: Depth 3: ``matmul``'s unit, unchanged. ``p1`` comes back on the *south* wall
+#: under the two eastern arms that read it, which is what lets ``FWD``/``EMIT`` sit
+#: east of everything and the west wall carry only three pipes.
+_WEST3 = ("a_ret", "in", "b_ret")
+_EAST3 = ("resp", "a_fwd", "b_fwd", "prod", "p2", "out")
+_ROWS3 = {
+    "a_ret": R_A_RET,
+    "in": R_IN,
+    "b_ret": R_B_RET,
+    "resp": R_RESP,
+    "a_fwd": R_A_FWD,
+    "b_fwd": R_B_FWD,
+    "prod": R_PROD,
+    "p1": R_P1,
+    "p2": R_P2,
+    "out": R_OUT,
+}
+
+_SPEC3 = _Spec(
+    trie_bits=TRIE_BITS,
+    leaves=ARMS,
+    arms=ARMS,
+    rows=_ROWS3,
+    west=_WEST3,
+    east=_EAST3,
+    south=("p1",),
+    south_col={"p1": LEAF0 + LEAF_PITCH * ARMS.index("EMIT") + 1},
+    arg="M8W/b",
+    plan={
+        arm: _Arm(
+            arg=arm != "RDIN",
+            # The scalar is popped *before* the loop and stays in B for the whole
+            # row, so ring A's return is the only pipe read outside a loop body.
+            pre=((R_A_RET, "r"), (R_A_RET + 1, "M")) if arm == "MAC" else (),
+            loop=_BODIES[arm],
+            straight=((R_IN, "r"), (R_RESP, "s")) if _BODIES[arm] is None else (),
+        )
+        for arm in ARMS
+    },
+    band_at={
+        **_band_at(_ROWS3, _WEST3, _EAST3),
+        ("r", R_P1): "p1",  # south wall: a column, but still one designated row
+    },
+    iw=UNIT_IW,
+    ih=UNIT_IH,
+    arg_row=R_ARG,
+    collect=R_COLLECT,
+)
+
+
+#: Depth 4: twelve arms on sixteen leaves. The leaf *order* is forced — each arm
+#: has to land on the leaf whose trie path spells its published code — so the
+#: layout's only freedom is the row map, and rule 2 changes shape because of it:
+#: ``UPDB`` reads ring A's return, the accumulator and ring B's return in one
+#: column, and :func:`updb_body` shows why the accumulator's read sits *between*
+#: the other two. A pipe read between two west-wall pipes cannot be on the north or
+#: south wall — ``ARCH.md`` §7.1's distances only cross where the row-slopes differ,
+#: and a south pipe's distance falls with the row exactly as a west pipe's does
+#: above its own row — so at depth 4 **all four incoming pipes are on the west
+#: wall**, one row each, and every ``r`` binds its own row for free.
+_LEAVES4: tuple[str, ...] = (
+    "",  # code 15, spare
+    "RDIN",  # 7
+    "UPDB",  # 11
+    "FILLA",  # 3
+    "",  # 13, spare
+    "DRAINB",  # 5
+    "ROTB",  # 9
+    "FILLB",  # 1
+    "",  # 14, spare
+    "MAC",  # 6
+    "RDP",  # 10
+    "ZEROC",  # 2
+    "",  # 12, spare
+    "FWD",  # 4
+    "PUSHA",  # 8
+    "EMIT",  # 0
+)
+
+_WEST4 = ("p1", "in", "a_ret", "b_ret")
+_EAST4 = ("resp", "p2", "out", "a_fwd", "b_fwd", "prod")
+
+
+def _spec4(shift: int) -> _Spec:
+    """The depth-4 unit, with ``UPDB``'s body length deciding the lower rows.
+
+    Everything below the accumulator's row is a consequence of
+    :func:`updb_body`: ring B's return is however far down that body reads it, and
+    ``MAC``'s own loop has to start on the same row because a row *is* a pipe. So
+    the rows are computed from the body rather than written beside it, and a
+    different shift moves them together instead of silently detaching one.
+    """
+    body = updb_body(shift)
+    pipe_ops = [i for i, ch in enumerate(body) if ch in "rs"]
+    if len(pipe_ops) != 6:
+        raise StreamError(f"UPDB's body has {len(pipe_ops)} pipe glyphs, expected 6")
+
+    arg = "M4W}b"  # `}` by 4: the depth-4 trie's own `16 * arg + code`, floored
+    arg_row = R_TRIE + 4  # the trie is one row deeper than depth 3's
+    p1 = arg_row + len(arg) + 1  # 12: the first row an arm's loop body can reach
+
+    # ``UPDB``'s body, padded so its three reads and three writes land on their
+    # rows. Two blanks after the accumulator's read: ``resp`` has to be the topmost
+    # *outgoing* row (it is the one pipe that climbs north, so anything above it
+    # would cross its climb), and ``resp`` sits below ``in``, which sits below the
+    # accumulator — so ``p2`` cannot be the row immediately under ``p1``.
+    updb = body[:1] + "  " + body[1:]
+    rows = {
+        "p1": p1,  # 12  west: partial sums back from the ADDER
+        "in": p1 + 1,  # 13  west: the input room
+        "resp": p1 + 2,  # 14  east: one word back to the CPU
+        "p2": p1 + 3,  # 15  east: partial sums to the ADDER
+        "out": p1 + 4,  # 16  east: the output room
+        "a_ret": p1 + 5,  # 17  west: ring A's return
+        "a_fwd": p1 + 6,  # 18  east: ring A's fill
+        "b_ret": p1 + len(updb) - 3,  # 26  west: ring B's return
+        "b_fwd": p1 + len(updb) - 1,  # 28  east: ring B's rotate-back
+        "prod": p1 + len(updb) + 1,  # 30  east: products to the ADDER
+    }
+    if [p1 + i for i in [pipe_ops[0], *(o + 2 for o in pipe_ops[1:])]] != [
+        rows[band] for band in UPDB_BANDS
+    ]:
+        raise StreamError(f"UPDB's body {updb!r} does not land on the row map {rows}")
+
+    def gap(first: str, last: str) -> str:
+        """A body that reads ``first``'s pipe and writes ``last``'s, blanks between."""
+        return "r" + " " * (rows[last] - rows[first] - 1) + "s"
+
+    plan = {
+        # No count, so no loop: one word in, one word straight back out.
+        "RDIN": _Arm(arg=False, straight=((rows["in"], "r"), (rows["resp"], "s"))),
+        "RDP": _Arm(arg=False, straight=((rows["p1"], "r"), (rows["resp"], "s"))),
+        # PUSHA's argument *is* its value, so the arg block is all the work: after
+        # `M4W}b` A holds the scalar and one `s` puts it on ring A.
+        "PUSHA": _Arm(straight=((rows["a_fwd"], "s"),)),
+        "FILLA": _Arm(loop=(rows["in"] - 1, gap("in", "a_fwd"))),
+        "FILLB": _Arm(loop=(rows["in"] - 1, gap("in", "b_fwd"))),
+        "DRAINB": _Arm(loop=(rows["b_ret"] - 1, "r")),
+        "ROTB": _Arm(loop=(rows["b_ret"] - 1, gap("b_ret", "b_fwd"))),
+        "MAC": _Arm(
+            pre=((rows["a_ret"], "r"), (rows["a_ret"] + 1, "M")),
+            loop=(rows["b_ret"] - 1, "r s*s"),
+        ),
+        "ZEROC": _Arm(loop=(rows["p2"] - 2, "0s")),
+        "FWD": _Arm(loop=(rows["p1"] - 1, gap("p1", "p2"))),
+        "EMIT": _Arm(loop=(rows["p1"] - 1, gap("p1", "out"))),
+        "UPDB": _Arm(loop=(rows["p1"] - 1, updb)),
+    }
+
+    arms = tuple(arm for arm in _LEAVES4 if arm)
+    if set(arms) != set(plan):
+        raise StreamError(f"depth-4 leaves {sorted(arms)} against plan {sorted(plan)}")
+    # The collector has to clear every loop: a counted loop spans
+    # ``entry .. entry + len(body) + 1`` (the test, the body, the turn back up).
+    collect = 1 + max(
+        (a.loop[0] + len(a.loop[1]) + 1 if a.loop else max(r for r, _ in a.straight))
+        for a in plan.values()
+    )
+    east_edge = max(
+        LEAF0 + LEAF_PITCH * i + (2 if arm and plan[arm].loop else 0)
+        for i, arm in enumerate(_LEAVES4)
+    )
+    return _Spec(
+        trie_bits=4,
+        leaves=_LEAVES4,
+        arms=arms,
+        rows=rows,
+        west=_WEST4,
+        east=_EAST4,
+        south=(),
+        south_col={},
+        arg=arg,
+        plan=plan,
+        band_at=_band_at(rows, _WEST4, _EAST4),
+        iw=east_edge + 1,
+        ih=collect,
+        arg_row=arg_row,
+        collect=collect,
+    )
+
+
+def _spec(trie_bits: int = TRIE_BITS, lr_shift: int = UPDB_SHIFT) -> _Spec:
+    """The one drawing this module knows for ``trie_bits``, or a loud refusal.
+
+    A depth-3 unit reads a depth-4 program's ``PUSHA`` word as ``EMIT`` and runs to
+    completion computing nonsense (``StreamUnit``'s docstring works the aliasing
+    out both ways), so an unknown width must never fall back to a known one.
+    """
+    if trie_bits == TRIE_BITS:
+        return _SPEC3
+    if trie_bits == 4:
+        return _spec4(lr_shift)
+    raise StreamError(
+        f"this module draws a depth-3 unit (the original eight arms, {list(ARMS)}) "
+        f"and a depth-4 one (those eight plus PUSHA, ROTB, RDP and UPDB), but the "
+        f"program asked for depth {trie_bits} ({1 << trie_bits} leaves). Widths do "
+        "not substitute for one another: at mod-8 a PUSHA word decodes as EMIT and "
+        "at mod-16 an existing odd-argument FILLA word decodes as a different arm "
+        "entirely, so either substitution produces a machine that runs to "
+        "completion and computes the wrong answer."
+    )
 
 
 @dataclass
@@ -354,11 +674,18 @@ class Unit:
     codes: dict[str, int] = field(default_factory=dict)
 
 
-def unit_interior() -> Unit:
-    """Lay the unit: MAIN, the decode trie, eight arms, the collector."""
-    c = Circuit(UNIT_IW + 1, UNIT_IH + 1)
+def unit_interior(trie_bits: int = TRIE_BITS, *, lr_shift: int = UPDB_SHIFT) -> Unit:
+    """Lay the unit: MAIN, the decode trie, the arms, the collector.
+
+    One drawing routine for both widths, because a second copy is exactly the place
+    a depth-3 fix would fail to reach the depth-4 grid. What differs between them is
+    entirely in :class:`_Spec` — the leaf order, the row map, which wall the
+    accumulator's return arrives on, and the argument-recovery glyphs.
+    """
+    spec = _spec(trie_bits, lr_shift)
+    c = Circuit(spec.iw + 1, spec.ih + 1)
     glyphs: list[tuple[int, int, str, str]] = []
-    cols = {arm: LEAF0 + LEAF_PITCH * i for i, arm in enumerate(ARMS)}
+    trie_col = _trie_col(spec.trie_bits)
 
     # ── MAIN: the riser lands here, one command word, then the trie ──────────
     c.set(1, R_MAIN, ">")
@@ -366,98 +693,152 @@ def unit_interior() -> Unit:
     c.set(3, R_MAIN, "r")
     glyphs.append((3, R_MAIN, "r", "cmd"))
     c.set(4, R_MAIN, "b")
-    c.horizontal(R_MAIN, 4, TRIE_COL)
-    c.set(TRIE_COL, R_MAIN, "v")
+    c.horizontal(R_MAIN, 4, trie_col)
+    c.set(trie_col, R_MAIN, "v")
 
     # ── decode trie, fanning *sideways*: leaves are columns, not rows ────────
     def trie(level: int, col: int) -> None:
         row = R_TRIE + level - 1
-        step = LEAF_PITCH * (1 << (TRIE_BITS - level)) // 2
+        step = LEAF_PITCH * (1 << (spec.trie_bits - level)) // 2
         c.set(col, row, "x")
         for sign in (-1, +1):
             for d in range(1, step + 1):
                 ch = "v" if d == step else ("]" if d == 1 else " ")
                 c.set(col + sign * d, row, ch)
-            if level < TRIE_BITS:
+            if level < spec.trie_bits:
                 trie(level + 1, col + sign * step)
 
-    trie(1, TRIE_COL)
+    trie(1, trie_col)
 
     # ── arms ─────────────────────────────────────────────────────────────────
-    for arm in ARMS:
-        x = cols[arm]
-        body = _BODIES[arm]
-        if arm != "RDIN":
-            # Every looping arm recovers its argument the same way: the command
-            # word is still in A (the trie only touched BP), so `M 8 W /` divides
-            # it by eight — floored, which is why a negative argument survives —
-            # and `b` makes it the loop count.
-            c.run(x, R_ARG, "M8W/b", d=(0, 1))
-        if arm == "MAC":
-            # The scalar is popped *before* the loop and stays in B for the whole
-            # row, so ring A's return is the only pipe read outside a loop body.
-            c.set(x, R_A_RET, "r")
-            glyphs.append((x, R_A_RET, "r", "a_ret"))
-            c.set(x, R_A_RET + 1, "M")
-        if body is None:
-            c.set(x, R_IN, "r")
-            glyphs.append((x, R_IN, "r", "in"))
-            c.set(x, R_RESP, "s")
-            glyphs.append((x, R_RESP, "s", "resp"))
-            c.vertical(x, R_ARG - 1, R_IN)
-            c.vertical(x, R_IN, R_RESP)
-            c.vertical(x, R_RESP, R_COLLECT)
+    for i, arm in enumerate(spec.leaves):
+        x = spec.col(i)
+        if not arm:
+            # A spare leaf. The man still arrives — the trie always turns — so he
+            # walks straight to the collector and the command is a no-op instead of
+            # a `bad-op` on a blank he was never meant to reach.
+            c.vertical(x, spec.arg_row - 1, spec.collect)
             continue
-        y0, text = body
-        c.vertical(x, R_ARG + 4 if arm != "MAC" else R_A_RET + 1, y0)
+        plan = spec.plan[arm]
+        if plan.arg:
+            # Every arm but the two that take no argument recovers it the same way:
+            # the command word is still in A (the trie only touched BP), so a
+            # floored divide by the trie's width — which is why a negative argument
+            # survives — and `b` makes the quotient the loop count.
+            c.run(x, spec.arg_row, spec.arg, d=(0, 1))
+            below = spec.arg_row + len(spec.arg) - 1
+        else:
+            below = spec.arg_row - 1
+        for row, glyph in plan.pre:
+            c.vertical(x, below, row)
+            c.set(x, row, glyph)
+            if glyph in "rs":
+                glyphs.append((x, row, glyph, spec.band_at[(glyph, row)]))
+            below = row
+        for row, glyph in plan.straight:
+            c.vertical(x, below, row)
+            c.set(x, row, glyph)
+            if glyph in "rs":
+                glyphs.append((x, row, glyph, spec.band_at[(glyph, row)]))
+            below = row
+        if plan.loop is None:
+            c.vertical(x, below, spec.collect)
+            continue
+        y0, text = plan.loop
+        c.vertical(x, below, y0)
         c.counted_loop(x, y0, text)
-        for i, ch in enumerate(text):
+        for j, ch in enumerate(text):
             if ch in "rs":
-                glyphs.append((x + 1, y0 + 1 + i, ch, _BAND_AT[(ch, y0 + 1 + i)]))
+                glyphs.append((x + 1, y0 + 1 + j, ch, spec.band_at[(ch, y0 + 1 + j)]))
         c.set(x + 2, y0, "v")
-        c.vertical(x + 2, y0, R_COLLECT)
+        c.vertical(x + 2, y0, spec.collect)
 
     # ── collector: every arm arrives southbound and turns west ───────────────
-    east_edge = max(cols[a] + (0 if _BODIES[a] is None else 2) for a in ARMS)
+    east_edge = max(
+        spec.col(i) + (2 if arm and spec.plan[arm].loop else 0)
+        for i, arm in enumerate(spec.leaves)
+    )
     for x in range(2, east_edge + 1):
-        c.set(x, R_COLLECT, "<")
-    c.set(1, R_COLLECT, "^")
-    c.vertical(1, R_COLLECT, R_MAIN)
+        c.set(x, spec.collect, "<")
+    c.set(1, spec.collect, "^")
+    c.vertical(1, spec.collect, R_MAIN)
 
     cells = {k: v for k, v in c.cell.items() if v != " "}
     return Unit(
         cells=cells,
-        west={"a_ret": R_A_RET, "in": R_IN, "b_ret": R_B_RET},
-        east={
-            "a_fwd": R_A_FWD,
-            "b_fwd": R_B_FWD,
-            "prod": R_PROD,
-            "p2": R_P2,
-            "out": R_OUT,
-            "resp": R_RESP,
-        },
+        width=spec.iw,
+        height=spec.ih,
+        west={band: spec.rows[band] for band in spec.west},
+        east={band: spec.rows[band] for band in spec.east},
         north={"cmd": 3},
-        south={"p1": cols["EMIT"] + 1},
+        south=dict(spec.south_col),
         glyphs=glyphs,
-        codes=arm_codes(),
+        codes=arm_codes(trie_bits),
     )
 
 
 #: Which band a pipe glyph on a given row belongs to. The row *is* the pipe
 #: (module docstring, rule 1), so this table is the single place that mapping
 #: lives and every arm body is checked against it.
-_BAND_AT: dict[tuple[str, int], str] = {
-    ("r", R_A_RET): "a_ret",
-    ("r", R_IN): "in",
-    ("r", R_B_RET): "b_ret",
-    ("r", R_P1): "p1",
-    ("s", R_A_FWD): "a_fwd",
-    ("s", R_B_FWD): "b_fwd",
-    ("s", R_PROD): "prod",
-    ("s", R_P2): "p2",
-    ("s", R_OUT): "out",
-    ("s", R_RESP): "resp",
-}
+_BAND_AT: dict[tuple[str, int], str] = _SPEC3.band_at
+
+
+#: How many pipes the unit's own room has: every incoming band, every outgoing band,
+#: and ``cmd``. Both widths come to eleven, which is the number the module docstring
+#: quotes — depth 4 adds four arms and no pipes, because the new arms reuse the rings
+#: that are already there. ``ARCH.md`` §4.4's failure mode is that a stray ``|`` one
+#: cell behind an arrowhead *deletes* a pipe silently and ``analyze`` simply reports
+#: one fewer, so the count belongs in an assertion and not in an argument.
+EXPECTED_PIPES = 11
+
+
+def unit_pipe_count(trie_bits: int = TRIE_BITS) -> int:
+    spec = _spec(trie_bits)
+    return len(spec.west) + len(spec.east) + len(spec.south) + 1  # + cmd
+
+
+def unit_interior_grid(trie_bits: int = TRIE_BITS, *, lr_shift: int = UPDB_SHIFT) -> list[str]:
+    """The unit's room and all eleven of its pipes, each ending in a bare stub room.
+
+    A loadable grid whose *only* content is the thing under test, so ``analyze`` and
+    ``route`` answer about the unit and nothing else. Where a pipe attaches is the
+    row or column the unit asks for, and that — not the stub's position — is all a
+    binding depends on (``SPEC.md``: nearest is measured to the segment touching
+    *this* room), so the harness pins exactly the property the block relies on
+    without the block's own hundred-cell rings in the way.
+
+    Every leg is a straight run, so no two can cross and a failure here is a
+    statement about the row map rather than about the harness.
+    """
+    spec = _spec(trie_bits, lr_shift)
+    unit = unit_interior(trie_bits, lr_shift=lr_shift)
+    from .machine import _Grid
+
+    g = _Grid()
+    pad = 4  # room for a 2-cell pipe and the stub's own wall
+    ux, uy = pad + 2, pad + 2
+    g.room(ux, uy, ux + spec.iw + 1, uy + spec.ih + 1)
+    g.blit(ux, uy, unit.cells)
+    east_x = ux + spec.iw + 2
+
+    # One stub room per wall, spanning that wall, with a pipe per band. A room may
+    # own any number of pipes; these have no `@`, so nothing runs and nothing but
+    # the parse and the routing is being asked about.
+    g.room(0, uy - 1, pad - 1, uy + spec.ih + 2)
+    for row in unit.west.values():
+        g.draw_pipe([(pad, uy + row), (ux - 1, uy + row)])
+    g.room(east_x + pad - 1, uy - 1, east_x + 2 * pad, uy + spec.ih + 2)
+    for row in unit.east.values():
+        g.draw_pipe([(east_x, uy + row), (east_x + pad - 2, uy + row)])
+    g.room(ux - 1, 0, ux + spec.iw + 2, pad - 1)
+    for col in unit.north.values():
+        g.draw_pipe([(ux + col, pad), (ux + col, uy - 1)])
+    south_y = uy + spec.ih + 2
+    if unit.south:
+        g.room(ux - 1, south_y + pad - 1, ux + spec.iw + 2, south_y + 2 * pad)
+        for col in unit.south.values():
+            g.draw_pipe([(ux + col, south_y + pad - 2), (ux + col, south_y)])
+    return g.rows()
 
 
 # ── the ADDER: the accumulator ring's adding relay ───────────────────────────
@@ -476,9 +857,31 @@ ADDER_P1_COL = ADDER_IW  # north wall: partial sums out
 ADDER_P2_ROW = 1  # east wall: partial sums in
 
 
-def adder_cells() -> dict[tuple[int, int], str]:
+#: The depth-4 ADDER: the same three lines, stretched. Both inlets are on the north
+#: wall either way (the two ``r`` glyphs pick the nearer one each, and addition is
+#: commutative, so which is which does not matter) — but *how far apart* the inlets
+#: are does. At depth 3 the accumulator's row sits below the product's, so ``p2``'s
+#: turn column has to be east of ``prod``'s and the eight-wide room's four-column gap
+#: is enough. At depth 4 the rows are the other way round: ``p2`` leaves the unit
+#: *above* ``prod``, so — by the block's own no-crossing rule that a southbound
+#: pipe's turn column falls as its row rises — ``p2`` must turn **west** of ``prod``,
+#: and the three pipes between them (``out``, ring A, ring B) need columns in the
+#: gap too. Eight columns of separation is what buys those three plus slack.
+_ADDER4 = [
+    ">rM        r+v",
+    "^            s",
+    "^@<<<<<<<<<<<<",
+]
+ADDER4_IW = len(_ADDER4[0])
+ADDER4_IH = len(_ADDER4)
+ADDER4_PROD_COL = 3  # north wall: products in, nearest the first `r`
+ADDER4_P2_COL = 11  # north wall: partial sums in, nearest the second `r`
+ADDER4_P1_ROW = 2  # west wall: partial sums out, on the `s`'s own row
+
+
+def adder_cells(trie_bits: int = TRIE_BITS) -> dict[tuple[int, int], str]:
     out: dict[tuple[int, int], str] = {}
-    for y, row in enumerate(_ADDER, start=1):
+    for y, row in enumerate(_ADDER if trie_bits == TRIE_BITS else _ADDER4, start=1):
         for x, ch in enumerate(row, start=1):
             if ch != " ":
                 out[(x, y)] = ch
@@ -629,8 +1032,49 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
     return pts
 
 
+# ── placement, depth 4: NOT DRAWN YET ────────────────────────────────────────
+# The depth-4 *unit* is drawn and every one of its twenty-eight pipe glyphs is
+# checked against the engine's own ``route`` (:func:`unit_interior_grid`). Placing
+# it — the block: the ADDER, the two ring relays, the I/O rooms and the ten pipes
+# between them — does not close, and the reason is worth recording because it is a
+# consequence of the unit's own row map rather than a routing detail.
+#
+# All four incoming pipes are on the west wall (:data:`UPDB_BANDS` explains why),
+# and the accumulator's return is *structurally* the topmost of them: ``UPDB`` reads
+# it before ring A's and ring B's returns, and a body's rows rise with its
+# execution order. So P1 has to arrive at the top of the west wall — while its
+# source, the ADDER, is fed by ``prod`` and ``p2``, which leave the *bottom* of the
+# east wall. P1 therefore has to cross the whole block from south-east to
+# north-west, and it is the crossing that will not fit:
+#
+# * Each of the four west-wall rows is a corridor — a pipe arriving on one runs east
+#   along it — so every source's pipe has to turn north in a column of its own, west
+#   of the unit. Ordering them (P1 westmost, then ring A's return, then ring B's)
+#   is what stops those four from crossing, and it works.
+# * But P1's *own* leg into that column has to reach it from wherever the ADDER is.
+#   Above the two relays, it crosses their returns' climbs; below them, it crosses
+#   whatever the ring forward pipes use to reach the relays; and east of them, it
+#   cannot get back west at a row above 13 without crossing the unit itself.
+#
+# Every arrangement tried closes three of the four and breaks the fourth. What it
+# needs is a design decision this task should not take alone — the candidates are
+# (a) a second relay for P1 so its long leg is split, (b) moving the ADDER north of
+# the unit and paying for ``prod``/``p2`` to climb the east side, or (c) reordering
+# the unit's east wall so ``prod`` leaves near the top, which costs ``MAC``'s body
+# a longer column. Each changes what Task 7 has to place around this block, so it
+# belongs with Task 7's own placement pass rather than here.
+#
+# Until then :func:`build_stream` refuses depth 4, for the same reason it refuses
+# depth 5: a block it cannot draw correctly must not be approximated.
+
+
 def build_stream(
-    *, a_slots: int, b_slots: int, c_slots: int, trie_bits: int = TRIE_BITS
+    *,
+    a_slots: int,
+    b_slots: int,
+    c_slots: int,
+    trie_bits: int = TRIE_BITS,
+    lr_shift: int = UPDB_SHIFT,
 ) -> StreamBlock:
     """Place the unit, its ADDER, both ring relays and the I/O rooms.
 
@@ -640,24 +1084,32 @@ def build_stream(
     grows a row at a time until the pipes are long enough; capacity *is* length
     (``SPEC.md``: a pipe is a FIFO whose capacity equals its cell count).
 
-    ``trie_bits`` is checked, not honoured: this module draws exactly one decode
-    trie, the depth-3 one with the original eight arms, and a program written
-    against a wider one **must not** be handed it. The failure would otherwise be
-    silent and total — at mod-8 a ``PUSHA`` word decodes as ``EMIT``, a ``ROTB`` as
-    ``FILLB``, and the machine runs to completion computing nonsense — which is
-    the one outcome a builder is allowed to prevent by refusing to build.
+    ``trie_bits`` picks the drawing, and a width this module cannot *place* is
+    refused rather than approximated. Refusing is the point: handing a depth-4
+    program a depth-3 trie reads its ``PUSHA`` as ``EMIT`` and its ``ROTB`` as
+    ``FILLB``, and the machine then runs to completion computing nonsense — the one
+    outcome a builder is allowed to prevent by refusing to build. The depth-4
+    *unit* is drawn and checked (:func:`unit_interior`, :func:`unit_interior_grid`);
+    what is not drawn is the block around it, for the reason recorded above
+    :func:`build_stream`.
+
+    ``lr_shift`` is ``UPDB``'s shift, drawn into the arm's glyphs. It has to match
+    the ``.equ STREAM_LR_SHIFT`` the program declares, because a unit built with a
+    different one is wrong arithmetic with nothing to catch it.
     """
     from .machine import MachineError
 
-    if trie_bits != TRIE_BITS:
+    spec = _spec(trie_bits, lr_shift)  # refuses a width this module cannot draw
+    if spec.trie_bits != TRIE_BITS:
         raise StreamError(
-            f"this block draws a depth-{TRIE_BITS} decode trie ({1 << TRIE_BITS} leaves, "
-            f"arms {list(ARMS)}), but the program asked for depth {trie_bits} "
-            f"({1 << trie_bits} leaves). A depth-{TRIE_BITS} trie reads a depth-4 "
-            "command word as a different arm entirely (PUSHA -> EMIT, ROTB -> FILLB, "
-            "RDP -> ZEROC, UPDB -> FILLA), so building it would produce a machine "
-            "that runs to completion and computes the wrong answer. Drawing the "
-            "depth-4 trie and its twelve arms is Task 6 of the mnist-cnn plan."
+            f"the depth-{spec.trie_bits} unit is drawn ({len(spec.arms)} arms, "
+            f"{unit_pipe_count(spec.trie_bits)} pipes, every glyph checked against the "
+            "engine's own route) but the block around it is not placed yet: the "
+            "accumulator's return is structurally the topmost pipe on the west wall "
+            "while the ADDER that feeds it hangs off the bottom of the east wall, and "
+            "no arrangement tried routes that crossing without cutting one of the "
+            "four west-wall corridors. See the note above build_stream and the "
+            "task-6 report; the decision belongs with Task 7's placement pass."
         )
 
     # ``rows_a`` outer, because the block's height is set by ring A's band — it is
@@ -666,7 +1118,7 @@ def build_stream(
     for rows_a in range(1, 16, 2):
         for rows_b in range(1, 16, 2):
             try:
-                blk = _place(a_slots, b_slots, c_slots, rows_a, rows_b)
+                blk = _place(a_slots, b_slots, c_slots, rows_a, rows_b, lr_shift)
             except MachineError:
                 continue
             if blk.ring_a >= a_slots and blk.ring_b >= b_slots:
@@ -675,8 +1127,10 @@ def build_stream(
 
 
 def _place(
-    a_slots: int, b_slots: int, c_slots: int, rows_a: int, rows_b: int
+    a_slots: int, b_slots: int, c_slots: int, rows_a: int, rows_b: int, _lr_shift: int = UPDB_SHIFT
 ) -> StreamBlock:
+    """The depth-3 block, exactly as ``matmul`` has shipped it. ``_lr_shift`` is
+    accepted and ignored: a depth-3 trie has no ``UPDB`` leaf to shift with."""
     from .machine import MachineError, _Grid
 
     unit = unit_interior()
