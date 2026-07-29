@@ -699,3 +699,41 @@ be. `adapter->store` is 6 either way.
   its roof. Attaching to the gate's west wall two rows higher would save 2 cells
   (~2.1M, ~0.25%) but needs the block's own request stub suppressed — a
   `memory_taped` change, so it belongs with the arms above.
+
+### The follow-up is de-risked: `U` turns off the WALL, not the direction
+
+`scratch/deadman3d-opt/probe_gate_grow.py`. The room here costs one forwarder
+(~5.2 cells, ~0.66%) and its out-stub costs four more. Both would go away if the
+**gate's own room** were grown north to meet the adapter instead — a two-cell
+pipe, no forwarder, no man, no re-serialisation.
+
+What made that non-obvious is that the gate's entry glyph is `U`, not `R`: *"on
+success the man turns away from the side of the room he read from"*. Grow the
+room and the pipe still lands on the **west** wall, but 33 rows above the man.
+If "side" meant the direction from the man to the pipe he would turn *south* and
+the gate would silently mis-route — exactly the failure mode this store has.
+
+Measured, not argued. Gate 0's room pulled 30 rows north, the request fed into
+its west wall two rows below the new roof, every address of the real 601-slot
+plan written and read back individually through the live chain:
+
+```
+lift=30 plan=(352, 164, 15, 69) order=(3, 2, 0, 1)
+  600 addresses, 0 wrong
+```
+
+So `U` reads the wall, and a gate room may be grown to its caller.
+
+Two consequences, both for whoever owns `memory_taped.py` next:
+
+* **This leg can lose its forwarder.** ~6 cells plus the ~5.5M forwarder cost is
+  another ~11.9M, ~1.4% on top of M12. The sky is there: above gate 0's roof,
+  rows 118..147, columns 67..93 are empty in the built grid (only this room's
+  own east wall at 66 and a riser at 94).
+* **It is the same move the `reqK->bankK` arms want** (45/45/44/97 cells, 6.65%)
+  — a gate room grown to its *bank's* wall pays 2 cells instead of 45. That is
+  why it was probed here rather than left to be discovered there.
+
+Not taken in M12 on purpose: it is a `taped_store_block` parameter, not a
+`lm1.machine` one, and `memory_taped.py` is being edited in parallel. The two
+belong in one change on that file, not split across two branches.
