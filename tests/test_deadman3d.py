@@ -25,7 +25,7 @@ if str(PKG) not in sys.path:
 
 from randomfun2026solvers import deadman3d as d3  # noqa: E402
 from randomfun2026solvers import wadimport as wi  # noqa: E402
-from randomfun2026solvers.lm1 import machine, programs  # noqa: E402
+from randomfun2026solvers.lm1 import asm, machine, programs  # noqa: E402
 from randomfun2026solvers.lm1.display import frames_from_writes  # noqa: E402
 from randomfun2026solvers.lm1.emulator import Emulator, Round  # noqa: E402
 
@@ -885,10 +885,152 @@ def test_the_taped_tier_builds_from_the_taped_program() -> None:
     taped = d3.taped_program()
     # The registry keys off the program *name*, so the override must keep it.
     assert taped.name == canonical.name == "deadman-3d"
-    # 16 instructions x 2 words of ROM go with them.
-    assert taped.P == canonical.P - 32
+    # The taped program is the canonical one with every tier lever on, and ROM
+    # words are how the first three show up: -32 for the sixteen deleted
+    # `LD WADDR` (16 instructions x 2 words); +6 for `dda_diff`'s three added
+    # instructions outside the loop (one per per-ray seed arm, one in `whx`) —
+    # the DDA step itself is word-neutral, which is the point; +10 for
+    # `lap_via_jump`'s five (a stub and an exit for each of `boot`/`title`, one
+    # shared stub for the DDA, whose two arms both branch to it).
+    def _src(**kw: object):  # noqa: ANN202
+        return asm.assemble(
+            d3.deadman3d_source(dda_acc_reload=False, **kw), name="deadman-3d"
+        )
+
+    reload_only = _src()
+    diff_only = _src(dda_diff=True)
+    lapped = _src(dda_diff=True, lap_via_jump=True)
+    assert reload_only.P == canonical.P - 32
+    assert diff_only.P == reload_only.P + 6
+    assert lapped.P == diff_only.P + 10
+    # `dda_stepy_split` is the one that is not a small delta — it emits the DDA
+    # twice at `DDA_SPLIT_UNROLL` each. Assert the budget instead of the count:
+    # the drum stops routing above ~4,514 words (rom_headroom.py), so the split
+    # has to stay well inside it, and that is the constraint worth pinning.
+    assert taped.P > lapped.P
+    assert taped.P <= 4_500, "the split DDA must stay inside the drum's routing budget"
     assert machine._tier_program("deadman-3d", "men-v3").words == canonical.words
     assert machine._tier_program("deadman-3d", "taped").words == taped.words
+
+
+def test_dda_diff_keeps_the_difference_instead_of_the_two_side_distances() -> None:
+    """``dda_diff=True`` makes the DDA's compare state the *difference*
+    ``sideDistX - sideDistY``, so the step reads one word where it read two.
+
+    The saving is structural, not incidental: the canonical step re-derives the
+    difference every iteration (``LD SDX`` / ``SUB SDY``) and the x-arm then
+    re-reads ``SDX`` to increment it, four reads of the pair a step. Keeping the
+    difference costs one read at the head and one in each arm. ``sideDistY`` is
+    still carried absolutely so the y-side tail is untouched and the x-side one
+    can rebuild ``sideDistX = SDD + SDY``.
+
+    Two properties are what make it legal, and both are asserted here because a
+    wrong one shows up as corrupted geometry rather than an exception:
+
+    * ``BRN`` preserves ACC, so the x-arm inherits the difference in the
+      accumulator instead of loading it — the emulator's ``_br_neg`` reads
+      ``em.b`` and assigns nothing, and the prologue's ``DIV RDX`` / ``BRN
+      ddxneg`` / ``NEG`` already depends on it on the taken path;
+    * every operation wraps to a signed 64-bit word, so a difference maintained
+      by ``ADD DDX`` / ``SUB DDY`` is bit-identical to one recomputed from the
+      two absolutes, and the branch cannot tell them apart.
+    """
+    src = d3.deadman3d_source(dda_acc_reload=False, dda_diff=True)
+    lines = [ln.rstrip() for ln in src.splitlines()]
+    # The slot is re-purposed in place, not added: same address, new name.
+    assert f".equ SDD    {d3.tape_slots()['SDX']}" in " ".join(lines)
+    assert not any(ln.split(";")[0].rstrip().endswith(" SDX") for ln in lines), \
+        "no instruction may still name SDX once the slot holds the difference"
+    # One read at the head of every unrolled step ...
+    assert lines.count("dda0:   LD  SDD") == 1
+    assert sum(1 for ln in lines if ln.startswith("dda") and ln.endswith("LD  SDD")) \
+        == d3.DDA_UNROLL
+    # ... and the x-arm opens on the accumulator `BRN` left it, with no load.
+    xarms = [i for i, ln in enumerate(lines) if ln.startswith("xarm")]
+    assert len(xarms) == d3.DDA_UNROLL
+    for i in xarms:
+        assert lines[i].split(":")[1].split(";")[0].strip() == "ADD DDX"
+        assert lines[i + 1].strip() == "ST  SDD"
+    # sideDistY is still absolute, so `why` is untouched and `whx` rebuilds.
+    assert "        ADD SDY             ; sideDistX = SDD + sideDistY" in lines
+    # And the gate is one-way: the frozen canonical program never sees it.
+    assert d3.deadman3d_source() == d3.deadman3d_source(dda_diff=False)
+
+
+def test_the_stepy_split_emits_one_pw_arm_per_loop_and_no_stpy() -> None:
+    """``dda_stepy_split=True`` emits the DDA once per sign of stepY.
+
+    The sign of stepY is a fact about the whole *ray*, decided at the seed — but
+    the canonical loop re-decides it every y-step, with a read of ``STPY`` and a
+    branch, and carries both PW arms and both quarter-column wrap arms in every
+    unrolled copy. Splitting the loop deletes the read, the branch and the arm
+    not taken: a copy goes from 88 ring words to 62, and **the 8-ticks-a-word
+    discard the x-step's own ``BRN`` pays to step over the y-arm shrinks with
+    it** — which is where most of the saving is, not in the deleted read.
+
+    The up loop multiplies PW by 16 and wraps via ``INCM WADDR``; the down loop
+    divides and wraps the other way; and because there is only one wrap arm left
+    it falls straight through into the hit test instead of jumping to it.
+    """
+    src = d3.deadman3d_source(
+        dda_acc_reload=False, dda_diff=True, lap_via_jump=True, dda_stepy_split=True
+    )
+    body = [ln.split(";")[0].rstrip() for ln in src.splitlines()]
+    n = d3.DDA_SPLIT_UNROLL
+    # Two loops, each fully unrolled, each with its own label space.
+    for stem, count in (("dda", n), ("ddan", n), ("xarm", n), ("xarmn", n),
+                        ("hity", n), ("hityn", n), ("ywru", n), ("ywrdn", n)):
+        got = sum(1 for ln in body if ln.startswith(f"{stem}{0}")
+                  or any(ln.startswith(f"{stem}{k}:") for k in range(n)))
+        assert got == count, (stem, got, count)
+    # One PW arm per loop, and the arm the loop cannot take is simply absent.
+    # (`MULI 16` / `DIVI 16` also appear in the movement path's cell lookups, so
+    # count only the ones that shift PW itself.)
+    shifts = [b for a, b in zip(body, body[1:]) if a.endswith("LD  PW")]
+    assert shifts.count("        MULI 16") == n
+    assert shifts.count("        DIVI 16") == n
+    assert not [ln for ln in body if ln.endswith(" STPY")], \
+        "the split decides stepY at the seed, so the scalar is never touched"
+    # ... and the surviving wrap arm falls through into the hit test.
+    for k in range(n):
+        i = next(j for j, ln in enumerate(body) if ln.startswith(f"ywru{k}:"))
+        assert body[i + 3].startswith(f"hity{k}:"), body[i:i + 4]
+
+
+def test_every_loop_lap_is_a_jump_so_the_seek_split_can_take_it() -> None:
+    """``lap_via_jump=True`` leaves no *backward* ``BRN``/``BRZ`` in the program.
+
+    ``machine.SEEK_OPS`` is ``("JMPF",)``: the seek split rewrites a jump and
+    nothing else, so a branch keeps its classic discard loop however far it
+    goes — and a backward target's forward-skip count is nearly the whole ring.
+    Each of this program's three laps was therefore recirculating 2,200-3,900
+    words at 8 ticks a word, every lap. Routing them through a two-word ``JMP``
+    stub costs one seek instead.
+
+    This asserts the property rather than the saving: after the rewrite every
+    branch in the program jumps *forward* in ring order, which is exactly the
+    condition under which no branch can pay a whole-ring discard.
+    """
+    for kwargs, want_backward in (
+        ({}, True),
+        ({"lap_via_jump": True}, False),
+        ({"lap_via_jump": True, "dda_stepy_split": True}, False),
+    ):
+        prog = asm.assemble(
+            d3.deadman3d_source(dda_acc_reload=False, dda_diff=True, **kwargs),
+            name="deadman-3d",
+        )
+        split = machine.seek_split(prog)
+        instrs = sorted(split.instrs, key=lambda i: i.pos)
+        index = {ins.pos: k for k, ins in enumerate(instrs)}
+        backward = []
+        for k, ins in enumerate(instrs):
+            if ins.mnemonic not in ("BRN", "BRZ"):
+                continue  # a JMPF long enough to wrap is a JMPS by now
+            target = machine._target_index(split, instrs, index, k)
+            if target <= k:
+                backward.append(ins.mnemonic)
+        assert bool(backward) is want_backward, backward
 
 
 def test_tape_slots_are_the_documented_map() -> None:

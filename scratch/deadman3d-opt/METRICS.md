@@ -1506,3 +1506,263 @@ against the same 902-slot tape, so every store leg is a quarter of the share it
 has on `deadman-3d`. The next lever for this family is in the DOOM unit or the
 router, not the store block, and `frame_ticks` is now the instrument to find it
 with.
+## M14 — the DDA compares a *difference*: 12.5% fewer reads a frame
+
+The first lever aimed at the quantity `scratch/DOOM-OPCODES.md` §5 named as the
+one with room left — **how many store reads the program issues** — rather than
+at what a read costs. Reads are reported here alongside ticks, because ticks
+alone cannot tell a deleted read from a cheapened one.
+
+### The identity
+
+The DDA step's only use of `sideDistX` *inside the loop* is the sign of
+`sideDistX - sideDistY`. The canonical step rebuilds that difference from both
+scalars every iteration and then re-reads `SDX` inside the x-arm to increment
+it:
+
+```asm
+dda{k}: LD  SDX          ; read 1
+        SUB SDY          ; read 2
+        BRN xarm{k}
+xarm{k}: LD  SDX         ; read 3 — the same word again
+        ADD DDX          ; read 4
+        ST  SDX
+```
+
+Keep the **difference** in that slot instead (`SDD`, address 521 unchanged) and
+`sideDistY` absolutely, and the same step is:
+
+```asm
+dda{k}: LD  SDD          ; read 1
+        BRN xarm{k}      ; ACC survives a branch
+xarm{k}: ADD DDX         ; read 2 — ACC is still SDD
+        ST  SDD
+```
+
+`sideDistX += deltaDistX` is `SDD += deltaDistX`; `sideDistY += deltaDistY` is
+`SDD -= deltaDistY`, which is the y-arm's one added `SUB`/`ST` pair. Two facts
+make it legal, and both were checked in the implementation rather than the
+docstring:
+
+* **`BRN` preserves ACC.** `emulator._br_neg` reads `em.b` and assigns nothing,
+  and the micro (`RING_READ SWAP SIGN_BRANCH THREE_WAY`) is a `W`…`W` sandwich.
+  The program already depends on this *on the taken path*: the prologue's
+  `DIV RDX` / `BRN ddxneg` / `ddxneg: NEG` negates the quotient `BRN` jumped on.
+* **The difference is exact.** `emulator.wrap` is applied to every operation, so
+  a difference maintained by `ADD`/`SUB` is the same 64-bit word as one
+  recomputed from the two absolutes — not congruent-modulo-something, identical.
+  `BRN` tests that word's sign, so it cannot distinguish the two forms. This is
+  the equivalence proof M13 asked for before taking this.
+
+What it costs, all outside the hot step: the two per-ray seed arms swap order so
+`sidey` runs first (`sidex` then ends with ACC = sideDistX and folds the seed
+difference in place, `SUB SDY` / `ST SDD` for one `ST SDX`), and the x-side hit
+tail rebuilds `sideDistX = SDD + SDY` — 576 rays and 449 x-hits in nine frames
+against 5,536 x-steps. Net +6 ROM words; **the DDA step itself is word-neutral**.
+
+### Measured — reads first
+
+Gated `WALK[:8]`, native `fast_littleman`, reads counted exactly off the four
+bank→CPU pipes (`scratch/deadman3d-opt/reads_gate.py`):
+
+| | reads / 9 frames | reads/frame | ticks | ticks/frame |
+|---|---:|---:|---:|---:|
+| before | 82,009 | 9,112 | 48,660,903 | 5,406,767 |
+| after | **71,785** | **7,976** | **46,114,271** | **5,123,808** |
+| delta | **-10,224 (-12.47%)** | -1,136 | -2,546,632 | **-5.23%** |
+
+The read model predicted -10,047 (7,120 `SUB SDY` + 5,536 `LD SDX` deleted,
+1,584 + 576 + 449 added); realised -10,224, a 1.8% miss. The DDA-scalar bank
+carries all of it: its pipe goes 47,755 → 37,531 and the other three banks are
+unchanged to the read.
+
+**The marginal price of a read on today's machine is 2,546,632 / 10,224 = 249
+ticks** — not the 470.9 `DOOM-OPCODES.md` measured, because M12/M13b have since
+taken 7.5% off the store path. Any further read-count arithmetic should use 249,
+and the profile's per-opcode means should be re-taken before they are trusted
+again.
+
+### The tour, and why it is smaller
+
+| | ticks | box |
+|---|---:|---|
+| M13b | 683,820,497 | 293x253 |
+| **M14** | **668,862,998** | 293x254 |
+| | **-14,957,499 = -2.187%** | |
+
+**-5.23% on the profiled gate but -2.19% on the 116-round tour**, and the
+difference is workload, not model error: the tour's frames are *more* expensive
+(5.90M against 5.41M before the change) because they run the sprite pass, the
+shot ladder and the HUD hard, and none of that touches the DDA. The gate is
+`WALK[:8]` — the opening walk, where the DDA is the frame. Both figures are
+real; the tour is the one that ships.
+
+A prediction made from `DOOM-OPCODES.md`'s 470.9 ticks a `LD` said -7.06% and
+came in at -2.19% on the tour. Decomposed: about 40% of the gap is the read
+getting cheaper since the profile (470.9 → 249), and the rest is the tour's
+lower DDA share. The reads figure, which was predicted to 1.8%, is the one that
+behaved — which is the argument for reporting it.
+
+### Gates
+
+Emulator over the whole `WALK`, pixel-identical to the golden frames
+(`scratch/deadman3d-opt/dda_diff_gate.py`), and **36,663 fewer instructions
+retired (2.93%)**. `tests/test_deadman3d.py -m slow` **12/12**. DOOM fast set
+129 passed. `deadman-3d.man` / `_trim` / `_v2` still `f62d63fd…`,
+`deadman-3d.input.txt` still `654d35d6…`, and `deadman3d_source()` with default
+arguments still regenerates the checked-in `.asm` byte for byte — the lever
+ships as `deadman3d_source(dda_diff=True)` through the existing
+`machine.TIER_PROGRAM`, exactly as M13 did.
+
+## M15 — the three loop laps were `BRN`/`BRZ`, and `seek_split` only takes `JMPF`
+
+Found while costing M14's follow-ups, and it is the largest single item this
+file has recorded since M12. **`machine.SEEK_OPS` is `("JMPF",)`** — the seek
+split rewrites a *jump* and nothing else, so a `BRN`/`BRZ` keeps its classic
+discard loop however far it goes. A **backward** branch's forward-skip count is
+nearly the whole ring, so every lap of every loop recirculated ~P words at 8
+ticks a word:
+
+| lap | branch | laps/frame | words/lap | ticks/frame |
+|---|---|---:|---:|---:|
+| `xarm15` | `BRZ dda0` | 15.2 | 2,214 | **269,564** |
+| `hity15` | `BRZ dda0` | 3.3 | 1,553 | 41,424 |
+| `boot` | `BRN boot` | round 0 only | 3,828 | 1.71M one-off |
+| `title` | `BRN title` | round 0 only | 3,877 | 1.64M one-off |
+
+The DDA's lap alone was **5.3% of a frame**. Cross-checked against the grid
+profile before building anything: `BRZ`'s whole measured slab bill is 2,384,475
+ticks over nine frames and the two DDA laps predict 2,383,000 of it, so
+essentially *all* of `BRZ`'s discard was the lap. (A ray averages 12.4 steps
+against `DDA_UNROLL = 16`, which is why 861 steps a frame lap only 18.5 times.)
+
+### The fix is three stubs
+
+```asm
+        BRZ lap15           ; forward, over `JMP whx`
+        JMP whx
+lap15:  JMP dda0            ; a JMP, so `seek_split` can make it a seek
+```
+
+`boot`/`title` need one more instruction each because their lap is a
+fall-through loop: `BRN bootl` / `JMP bootd` / `bootl: JMP boot` / `bootd:`.
+Five instructions, ten ROM words, and both DDA arms share one stub.
+
+### Measured
+
+| | tour (116 rounds) | gate (`WALK[:8]`) | ticks/frame | reads/frame |
+|---|---:|---:|---:|---:|
+| M14 | 668,862,998 | 46,114,271 | 5,123,808 | 7,976 |
+| **M15** | **638,946,726** | **42,517,078** | **4,724,120** | 7,976 |
+| | **-29,916,272 = -4.472%** | **-7.80%** | -7.80% | **unchanged** |
+
+Reads are *unchanged*, which is the point of reporting them: this is a
+control-flow lever, not a memory one, and the two are now separable in the log.
+Predicted -5.5% on the tour from `(269,564 + 41,424) x 116 + 3.35M` against
+668.9M; realised -4.47%, the shortfall being the seeks the stubs now pay
+(18.5 a frame at ~1,008) plus ten more ROM words on every fetch.
+
+The box goes back to **293x253** — M14's extra row was the ROM fold, and ten
+words did not re-cross it.
+
+### What is left of the discard bill
+
+`scratch/deadman3d-opt/skip_sites.py` re-runs the census. After M15 every
+remaining non-seekable discard is a `BRN dda{k} -> xarm{k}`: the x-step
+stepping over the y-arm it did not take, ~64 words a step, **~330,000 ticks a
+frame (7%) in total.** It cannot be turned into a seek — a seek costs 1,008 and
+the skip costs 512 — so the only lever on it is *making the y-arm shorter*, and
+the two candidates are costed in the commit message. Neither is taken here.
+
+### Gates
+
+Emulator over the whole `WALK`, pixel-identical to the golden frames. DOOM fast
+set 130 passed, `tests/test_deadman3d.py -m slow` 12/12, default suite 2755
+passed / 68 skipped. `deadman-3d.man` / `_trim` / `_v2` still `f62d63fd…`,
+`deadman-3d.input.txt` still `654d35d6…`, `deadman3d_source()` with default
+arguments still byte-identical to the checked-in `.asm`. Ships as
+`deadman3d_source(lap_via_jump=True)` through `machine.TIER_PROGRAM`.
+
+`test_every_loop_lap_is_a_jump_so_the_seek_split_can_take_it` pins the property
+rather than the saving: after the rewrite **no `BRN`/`BRZ` in the program has a
+backward target**, which is the condition under which none can pay a whole-ring
+discard. It asserts both directions, so deleting the lever fails it.
+
+## M16 — the DDA, emitted once per sign of stepY
+
+M15 left one non-seekable discard on the table and named it: every `BRN dda{k}
+-> xarm{k}` steps the x-arm over the y-arm it did not take, ~64 words at 8
+ticks, **~330,000 ticks a frame (7%)**. It cannot become a seek — a seek is
+1,008 and the skip is 512 — so the lever is a *shorter y-arm*.
+
+The sign of stepY is a fact about the whole **ray**, fixed at the seed. The
+canonical loop re-decides it on every y-step (`LD STPY` + `BRN`) and carries
+both PW arms and both quarter-column wrap arms in all sixteen copies. Emitting
+the DDA twice — once per sign — deletes all of that from the copy:
+
+| per copy | before | after (up / down) |
+|---|---:|---:|
+| the compare head | 4 words | 4 |
+| `LD STPY` + `BRN yneg` | 4 | **0** |
+| the PW shift arms | 20 | 8 |
+| the wrap arms | 20 | 6 / 10 |
+| `hity` + the x-arm | 30 | 30 |
+| **total** | **88** | **62 / 66** |
+
+Two things fall out beyond the deleted read. The surviving wrap arm has nothing
+to jump over, so it **falls straight through into the hit test** instead of
+ending `JMP hity{k}`; and the ray's sign now picks which loop's *own stepX seed*
+it enters, so `sidey` no longer writes `STPY` at all and neither does anything
+else — the scalar is dead.
+
+### The unroll had to be re-swept, because the copy changed size
+
+Two loops at 16 would be ~576 more ROM words, and the drum's routing budget is
+the constraint, not the 300-column ceiling: `rom_headroom.py` (raise
+`DDA_UNROLL` and build) says **P=4,514 binds and P=4,602 does not**, at every
+`ROM_ROWS` — the seek teleport runs out of clear column east of the drum. A
+split copy is smaller, so the sweep is its own question. On the 116-round tour:
+
+| `DDA_SPLIT_UNROLL` | P | box | ticks |
+|---:|---:|---|---:|
+| 11 | 3,972 | 293x253 | 614,341,715 |
+| 12 | 4,096 | 293x254 | 614,817,361 |
+| 13 | 4,220 | 293x253 | 612,124,654 |
+| **14 (shipped)** | **4,344** | 293x254 | **611,021,810** |
+| 15 | 4,468 | 293x253 | 611,591,730 |
+| 16 | 4,600 | — | does not route |
+
+The curve is flat to ±0.6% across the whole feasible range, which is the mark of
+`lap_via_jump` having already taken the lap cost out: at M14 prices a shorter
+unroll would have been ruinous.
+
+### Measured
+
+| | tour | gate (`WALK[:8]`) | ticks/frame | reads/frame |
+|---|---:|---:|---:|---:|
+| M15 | 638,946,726 | 42,517,078 | 4,724,120 | 7,976 |
+| **M16** | **611,021,810** | **41,082,688** | **4,564,743** | **7,813** |
+| | **-27,924,916 = -4.371%** | -3.37% | -3.37% | **-163 (-2.0%)** |
+
+Note the split: reads fall only 2% (the deleted `LD STPY`, 163 a frame) while
+ticks fall 4.4% on the tour. **Most of this lever is the discard, not the
+read** — which is why it pays more on the tour (38.5% y-steps over the full
+walk) than on the gate (22%), the exact opposite of M14. The two halves of the
+session's work have opposite workload sensitivities, and between them the
+measurement is stable.
+
+Emulator over the whole `WALK` is pixel-identical to golden with **1,170,791
+instructions retired against M15's 1,217,933 (-3.9%)**.
+
+### Where the session ends
+
+| | tour | vs start |
+|---|---:|---:|
+| session start (M13b) | 683,820,497 | — |
+| M14, the DDA difference | 668,862,998 | -2.19% |
+| M15, the loop laps | 638,946,726 | -6.56% |
+| **M16, the stepY split** | **611,021,810** | **-10.65%** |
+
+Reads a frame: **9,112 -> 7,813, -14.3%.** Box 293x254, six columns under the
+pinned ceiling. `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`,
+`deadman-3d.input.txt` `654d35d6…`, `deadman-3d_taped.man` `a11edcc6…`.
