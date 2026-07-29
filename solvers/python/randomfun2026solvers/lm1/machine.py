@@ -6291,14 +6291,9 @@ DOOM_LEAF_COLS: dict[tuple[str, str], tuple[int, ...]] = {
 #: * address order     67,253,690  (+8.8%)
 TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
     ("deadman-3d", "taped"): (3, 2, 0, 1),
-    # **Re-derived, not copied.** hires has no `TAPED_BANKS` entry, so it takes
-    # `taped_plan`'s uniform quarters `(226, 226, 226, 223)` rather than
-    # `deadman-3d`'s hand-cut `(256, 195, 64, 85)`, and its tape is 902 slots
-    # with a completely different middle (240 billboard words, 66 numerals, a
-    # 128-slot ZBUF). Measured on the same abstract wire, differencing a
-    # four-frame run against the boot round
-    # (`scratch/deadman3d-opt/hires_banks.py`) — 16,557 reads and 6,223 writes
-    # a gameplay frame:
+    # **Eleven entries, because the cut moved.** This was `(3, 0, 1, 2)`, read
+    # off hires' traffic over the uniform quarters `taped_plan` hands a slug with
+    # no `TAPED_BANKS` entry:
     #
     #     bank  range        reads            writes
     #      0     1.. 226      938   5.67%         0   0.00%
@@ -6306,13 +6301,21 @@ TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
     #      2   453.. 678       36   0.22%         7   0.11%
     #      3   679.. 901   15,032  90.79%     6,214  99.85%
     #
-    # Bank 3 holds the ZBUF, CMD and every per-frame scalar, and at 128x96 the
-    # scalar traffic doubles against the map traffic — so hires is *more*
-    # lopsided than `deadman-3d`, not less. The traffic order comes out the same
-    # permutation for a different reason, and `gate_chain` accepts it (each gate
-    # still peels an end). Mean gates walked: 2.76 -> **0.13** a read and
-    # 3.00 -> **0.00** a write, against `deadman-3d`'s 2.80 -> 1.15.
-    ("deadman-3d_hires", "taped"): (3, 0, 1, 2),
+    # That reading was correct and is now moot: hires *has* a `TAPED_BANKS`
+    # entry, the 223-slot bank holding 90.79% of reads no longer exists, and an
+    # order is only ever a reading of one particular cut's traffic. The two must
+    # move together — the stale order costs 2.8pp on the DP-4 cut, and at
+    # address order the block does not even build (`taped block collision at
+    # (30, 18)`). Re-derived by the same interval DP that picks the cut
+    # (`hires_bankcut.py`), and `gate_chain` accepts it: every gate still peels
+    # an end of what is left, which is what makes the reachable orders exactly
+    # the 2**(n-1) end-peelings rather than all n!.
+    #
+    # What survives from the old reading is the *fact* it recorded, and it is
+    # why the re-cut paid so well: bank 3 held the ZBUF, CMD and every per-frame
+    # scalar, and at 128x96 the scalar traffic doubles against the map traffic —
+    # so hires is *more* lopsided than `deadman-3d`, not less.
+    ("deadman-3d_hires", "taped"): (10, 9, 8, 7, 6, 0, 1, 2, 3, 5, 4),
 }
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
@@ -6465,8 +6468,49 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: Three banks (176 columns, and it would fit) needs bank 0 to swallow
 #: everything below 517 — 516 slots, a block 66 rows deep, which does not route
 #: at any fold either. Four is what the geometry allows.
+#: **``deadman-3d_hires`` is eleven banks because nothing stops it.** Four is
+#: what ``deadman-3d``'s geometry allows, per the paragraph above — the 300-column
+#: ceiling ``tests/test_deadman3d.py`` pins makes a fifth bank unbuildable. hires
+#: has no such ceiling: it is out of contest scope (``AGENTS.md``), and its width
+#: floors on the router wall at :data:`d3_router.BLOCK_X0`'s 496 whatever the
+#: store does. So the bank count is free to sit at the tick optimum instead of at
+#: the last count that fits, and the tick optimum is much further out.
+#:
+#: The cut is a DP over contiguous splits against this family's own per-address
+#: traffic (``scratch/deadman3d-opt/hires_bankcut.py``: the ``lm1.store`` wire
+#: traced per address, a 4-frame gameplay run differenced against boot, 15,342
+#: reads + 6,809 writes a frame), then measured
+#: (``scratch/deadman3d-opt/hires_bankrun.py``) on the 21-round tour over frames
+#: 1..20 — the only metric this family has. Against the uniform quarters
+#: ``taped_plan`` was handing it, **990,895,368 ticks**:
+#:
+#: | banks | plan | box | ticks | Δ |
+#: |---|---|---|---|---|
+#: | 4 (uniform, was) | ``(226, 226, 226, 223)`` | 514x447 | 990,895,368 | — |
+#: | 4 (DP) | ``(127, 673, 22, 79)`` | 514x465 | — | -56.42% (3-round) |
+#: | 10 | — | 514x455 | 367,214,821 | -62.94% |
+#: | **11** | **this** | **514x451** | **365,333,921** | **-63.13%** |
+#: | 12 | — | 547x451 | 372,330,182 | -62.43% |
+#: | 16 | — | 699x451 | — | -63.08% (3-round) |
+#: | 20 | — | 851x447 | — | -61.30% (3-round) |
+#:
+#: The curve turns over at 11: past it a gate hop costs more than the shorter
+#: ring saves. Eleven is also the *narrowest* of the good counts — 514 is HEAD's
+#: own width, so this is -63% for four rows.
+#:
+#: **Why it was worth this much.** The uniform quarters put 93.1% of all accesses
+#: in a single 223-slot ring; the ring tax is ``~8 * local`` an access, so
+#: nine-tenths of the traffic was paying ~1,800 ticks a read. hires' histogram was
+#: already measured — :data:`TAPED_BANK_ORDER` read the bank *order* off it — and
+#: the sizes were simply never re-cut to match. That is the whole finding.
+#:
+#: The order below is **not separable from this**: ``(3, 0, 1, 2)`` was read off
+#: the uniform quarters' traffic, and re-cutting the banks rewrites the traffic it
+#: was read off. Priced on the DP-4 cut, the stale order gives -53.6% where the
+#: matching one gives -56.4%. Any change here needs a new order beside it.
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
-    "deadman-3d": (352, 164, 15, 69)}
+    "deadman-3d": (352, 164, 15, 69),
+    "deadman-3d_hires": (102, 21, 229, 7, 306, 135, 6, 9, 7, 58, 21)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank

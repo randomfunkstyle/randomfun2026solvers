@@ -1716,7 +1716,7 @@ def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -
 
     assert machine.TAPED_BANK_ORDER == {
         ("deadman-3d", "taped"): (3, 2, 0, 1),
-        ("deadman-3d_hires", "taped"): (3, 0, 1, 2),
+        ("deadman-3d_hires", "taped"): (10, 9, 8, 7, 6, 0, 1, 2, 3, 5, 4),
     }
     assert all(tier == "taped" for _slug, tier in machine.TAPED_BANK_ORDER)
     sizes = list(machine.TAPED_BANKS["deadman-3d"])
@@ -1739,18 +1739,20 @@ def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -
     assert (bounds[2] + 1, bounds[3]) == (slots["XCOL"], slots["COLOR"])
     assert bounds[3] + 1 == slots["PW"] and slots["WADDR"] == slots["PW"] + 1
 
-    # hires' order is the same permutation for a *different* reason, and the
-    # thing that makes it non-transferable is that its banks are not these: it
-    # has no ``TAPED_BANKS`` entry, so it takes uniform quarters of a 902-slot
-    # tape. Measured (scratch/deadman3d-opt/hires_banks.py) its bank 3 —
-    # 679..901, the ZBUF, CMD and every per-frame scalar — takes 90.8% of reads
-    # and 99.9% of writes, so descending traffic is (3, 0, 1, 2) here too.
-    assert "deadman-3d_hires" not in machine.TAPED_BANKS
-    hires_sizes = taped_plan(902, 4)
-    assert hires_sizes == [226, 226, 226, 223]
-    hires_chain = gate_chain(hires_sizes,
-                             machine.TAPED_BANK_ORDER[("deadman-3d_hires", "taped")])
-    assert hires_chain[0] == (3, sum(hires_sizes))
+    # hires is cut against its own traffic too, and to a different *shape*: four
+    # banks is what deadman-3d's 300-column ceiling allows, and hires has no
+    # ceiling to respect (out of contest scope; its width floors on the router
+    # wall). So its count sits at the measured tick optimum, which is eleven.
+    hires_sizes = list(machine.TAPED_BANKS["deadman-3d_hires"])
+    assert len(hires_sizes) == 11
+    assert sum(hires_sizes) >= 902 - 1  # covers addresses 1..901
+    hires_order = machine.TAPED_BANK_ORDER[("deadman-3d_hires", "taped")]
+    assert sorted(hires_order) == list(range(11))  # a permutation, every bank once
+    # The cut and the order are one decision: `gate_chain` is what rejects a
+    # pairing, and it is the same check `build` makes.
+    hires_chain = gate_chain(hires_sizes, hires_order)
+    assert hires_chain[0] == (hires_order[0], sum(hires_sizes))
+    assert [k for k, _top in hires_chain] == list(hires_order)
 
 
 @slow

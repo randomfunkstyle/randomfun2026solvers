@@ -25,6 +25,7 @@ if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
 from randomfun2026solvers.fast_littleman import FastLittleman  # noqa: E402
+from randomfun2026solvers.lm1 import machine  # noqa: E402
 from randomfun2026solvers.memory_taped import (  # noqa: E402
     bank_gate,
     gate_chain,
@@ -448,24 +449,34 @@ def test_fresh_slots_read_zero_and_extremes_survive() -> None:
     assert top.fatal is None and top.output == [-1000000, 1000000]
 
 
-#: ``deadman-3d_hires``'s configuration, and it is nothing like ``PLAN``: the
-#: hi-res family has no :data:`machine.TAPED_BANKS` entry, so it takes
-#: :func:`taped_plan`'s **uniform quarters** of its 902-slot tape, and no
-#: :data:`machine.TAPED_SKIP_BATCH` entry either, so its banks are batch-1
-#: rings.  Both differ from the shipped ``deadman-3d`` chain the tests above
-#: cover, and :data:`machine.TAPED_BANK_ORDER` now reorders it.
+#: ``deadman-3d_hires``'s configuration, and it is nothing like ``PLAN``: its
+#: tape is 902 slots, its :data:`machine.TAPED_BANKS` cut is **eleven** banks
+#: against ``deadman-3d``'s four (four is the most that family's 300-column
+#: ceiling allows; hires has no ceiling, so its count sits at the measured tick
+#: optimum), and it has no :data:`machine.TAPED_SKIP_BATCH` entry, so its banks
+#: are batch-1 rings.  Read from the registry rather than restated, so that a
+#: re-cut cannot leave this file testing a plan the machine no longer builds.
 HIRES_N = 902
-HIRES_PLAN = tuple(taped_plan(HIRES_N, 4))
+HIRES_PLAN = tuple(machine.TAPED_BANKS["deadman-3d_hires"])
+HIRES_ORDER = machine.TAPED_BANK_ORDER[("deadman-3d_hires", "taped")]
 
 
-def test_the_hires_bank_plan_is_the_uniform_quarters_the_registry_assumes() -> None:
-    """The order in the registry is read off *these* bounds, so pin them."""
-    assert HIRES_PLAN == (226, 226, 226, 223)
+def test_the_hires_bank_plan_covers_its_tape_and_its_order_is_expressible() -> None:
+    """The cut and the order are one decision; pin that they agree.
+
+    Eleven banks is not a free parameter that happened to build — it is where
+    the tour ticks bottom out (see :data:`machine.TAPED_BANKS`), and the count
+    is what makes the order non-obvious: a gate peels a bank off an END of what
+    it is handed, so of eleven banks' 39,916,800 permutations only ``2**10``
+    exist at all.
+    """
+    assert len(HIRES_PLAN) == 11
     assert sum(HIRES_PLAN) >= HIRES_N - 1
-    # and the measured traffic order is one the hardware can express: a gate
-    # peels a bank off an END of what it is handed, so most permutations do not
-    # exist. (scratch/deadman3d-opt/hires_banks.py measures the traffic itself.)
-    gate_chain(list(HIRES_PLAN), order=[3, 0, 1, 2])
+    assert all(m >= 1 for m in HIRES_PLAN)
+    assert sorted(HIRES_ORDER) == list(range(len(HIRES_PLAN)))
+    # the reachability check itself — the same one ``build`` makes
+    chain = gate_chain(list(HIRES_PLAN), order=list(HIRES_ORDER))
+    assert [k for k, _top in chain] == list(HIRES_ORDER)
 
 
 @pytest.mark.slow
@@ -498,4 +509,4 @@ def test_the_hires_hot_first_chain_resolves_every_address_to_the_same_data() -> 
 
     address_order = readback(None)
     assert address_order == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
-    assert readback((3, 0, 1, 2)) == address_order
+    assert readback(HIRES_ORDER) == address_order
