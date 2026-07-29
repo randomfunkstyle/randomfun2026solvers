@@ -25,7 +25,7 @@ if str(PKG) not in sys.path:
 
 from randomfun2026solvers import deadman3d as d3  # noqa: E402
 from randomfun2026solvers import wadimport as wi  # noqa: E402
-from randomfun2026solvers.lm1 import machine, programs  # noqa: E402
+from randomfun2026solvers.lm1 import asm, machine, programs  # noqa: E402
 from randomfun2026solvers.lm1.display import frames_from_writes  # noqa: E402
 from randomfun2026solvers.lm1.emulator import Emulator, Round  # noqa: E402
 
@@ -885,10 +885,62 @@ def test_the_taped_tier_builds_from_the_taped_program() -> None:
     taped = d3.taped_program()
     # The registry keys off the program *name*, so the override must keep it.
     assert taped.name == canonical.name == "deadman-3d"
-    # 16 instructions x 2 words of ROM go with them.
-    assert taped.P == canonical.P - 32
+    # The taped program is the canonical one with both read-count levers on, and
+    # ROM words are how the two show up here: -32 for the sixteen deleted
+    # `LD WADDR` (16 instructions x 2 words), +6 for `dda_diff`'s three added
+    # instructions outside the loop (one per per-ray seed arm, one in `whx`) —
+    # the DDA step itself is word-neutral, which is the point.
+    reload_only = asm.assemble(
+        d3.deadman3d_source(dda_acc_reload=False), name="deadman-3d"
+    )
+    assert reload_only.P == canonical.P - 32
+    assert taped.P == reload_only.P + 6
     assert machine._tier_program("deadman-3d", "men-v3").words == canonical.words
     assert machine._tier_program("deadman-3d", "taped").words == taped.words
+
+
+def test_dda_diff_keeps_the_difference_instead_of_the_two_side_distances() -> None:
+    """``dda_diff=True`` makes the DDA's compare state the *difference*
+    ``sideDistX - sideDistY``, so the step reads one word where it read two.
+
+    The saving is structural, not incidental: the canonical step re-derives the
+    difference every iteration (``LD SDX`` / ``SUB SDY``) and the x-arm then
+    re-reads ``SDX`` to increment it, four reads of the pair a step. Keeping the
+    difference costs one read at the head and one in each arm. ``sideDistY`` is
+    still carried absolutely so the y-side tail is untouched and the x-side one
+    can rebuild ``sideDistX = SDD + SDY``.
+
+    Two properties are what make it legal, and both are asserted here because a
+    wrong one shows up as corrupted geometry rather than an exception:
+
+    * ``BRN`` preserves ACC, so the x-arm inherits the difference in the
+      accumulator instead of loading it — the emulator's ``_br_neg`` reads
+      ``em.b`` and assigns nothing, and the prologue's ``DIV RDX`` / ``BRN
+      ddxneg`` / ``NEG`` already depends on it on the taken path;
+    * every operation wraps to a signed 64-bit word, so a difference maintained
+      by ``ADD DDX`` / ``SUB DDY`` is bit-identical to one recomputed from the
+      two absolutes, and the branch cannot tell them apart.
+    """
+    src = d3.deadman3d_source(dda_acc_reload=False, dda_diff=True)
+    lines = [ln.rstrip() for ln in src.splitlines()]
+    # The slot is re-purposed in place, not added: same address, new name.
+    assert f".equ SDD    {d3.tape_slots()['SDX']}" in " ".join(lines)
+    assert not any(ln.split(";")[0].rstrip().endswith(" SDX") for ln in lines), \
+        "no instruction may still name SDX once the slot holds the difference"
+    # One read at the head of every unrolled step ...
+    assert lines.count("dda0:   LD  SDD") == 1
+    assert sum(1 for ln in lines if ln.startswith("dda") and ln.endswith("LD  SDD")) \
+        == d3.DDA_UNROLL
+    # ... and the x-arm opens on the accumulator `BRN` left it, with no load.
+    xarms = [i for i, ln in enumerate(lines) if ln.startswith("xarm")]
+    assert len(xarms) == d3.DDA_UNROLL
+    for i in xarms:
+        assert lines[i].split(":")[1].split(";")[0].strip() == "ADD DDX"
+        assert lines[i + 1].strip() == "ST  SDD"
+    # sideDistY is still absolute, so `why` is untouched and `whx` rebuilds.
+    assert "        ADD SDY             ; sideDistX = SDD + sideDistY" in lines
+    # And the gate is one-way: the frozen canonical program never sees it.
+    assert d3.deadman3d_source() == d3.deadman3d_source(dda_diff=False)
 
 
 def test_tape_slots_are_the_documented_map() -> None:

@@ -1312,3 +1312,111 @@ What is left on this path is the last arm, `req3->bank3`: 58 of its 64 cells are
 one horizontal run under bank 2, because the last gate feeds two banks and only
 one of them can be adjacent. It is 3.10% of accesses, so the run is worth ~2.0M
 ticks (~0.28%) — the smallest lever this file has left.
+
+## M14 — the DDA compares a *difference*: 12.5% fewer reads a frame
+
+The first lever aimed at the quantity `scratch/DOOM-OPCODES.md` §5 named as the
+one with room left — **how many store reads the program issues** — rather than
+at what a read costs. Reads are reported here alongside ticks, because ticks
+alone cannot tell a deleted read from a cheapened one.
+
+### The identity
+
+The DDA step's only use of `sideDistX` *inside the loop* is the sign of
+`sideDistX - sideDistY`. The canonical step rebuilds that difference from both
+scalars every iteration and then re-reads `SDX` inside the x-arm to increment
+it:
+
+```asm
+dda{k}: LD  SDX          ; read 1
+        SUB SDY          ; read 2
+        BRN xarm{k}
+xarm{k}: LD  SDX         ; read 3 — the same word again
+        ADD DDX          ; read 4
+        ST  SDX
+```
+
+Keep the **difference** in that slot instead (`SDD`, address 521 unchanged) and
+`sideDistY` absolutely, and the same step is:
+
+```asm
+dda{k}: LD  SDD          ; read 1
+        BRN xarm{k}      ; ACC survives a branch
+xarm{k}: ADD DDX         ; read 2 — ACC is still SDD
+        ST  SDD
+```
+
+`sideDistX += deltaDistX` is `SDD += deltaDistX`; `sideDistY += deltaDistY` is
+`SDD -= deltaDistY`, which is the y-arm's one added `SUB`/`ST` pair. Two facts
+make it legal, and both were checked in the implementation rather than the
+docstring:
+
+* **`BRN` preserves ACC.** `emulator._br_neg` reads `em.b` and assigns nothing,
+  and the micro (`RING_READ SWAP SIGN_BRANCH THREE_WAY`) is a `W`…`W` sandwich.
+  The program already depends on this *on the taken path*: the prologue's
+  `DIV RDX` / `BRN ddxneg` / `ddxneg: NEG` negates the quotient `BRN` jumped on.
+* **The difference is exact.** `emulator.wrap` is applied to every operation, so
+  a difference maintained by `ADD`/`SUB` is the same 64-bit word as one
+  recomputed from the two absolutes — not congruent-modulo-something, identical.
+  `BRN` tests that word's sign, so it cannot distinguish the two forms. This is
+  the equivalence proof M13 asked for before taking this.
+
+What it costs, all outside the hot step: the two per-ray seed arms swap order so
+`sidey` runs first (`sidex` then ends with ACC = sideDistX and folds the seed
+difference in place, `SUB SDY` / `ST SDD` for one `ST SDX`), and the x-side hit
+tail rebuilds `sideDistX = SDD + SDY` — 576 rays and 449 x-hits in nine frames
+against 5,536 x-steps. Net +6 ROM words; **the DDA step itself is word-neutral**.
+
+### Measured — reads first
+
+Gated `WALK[:8]`, native `fast_littleman`, reads counted exactly off the four
+bank→CPU pipes (`scratch/deadman3d-opt/reads_gate.py`):
+
+| | reads / 9 frames | reads/frame | ticks | ticks/frame |
+|---|---:|---:|---:|---:|
+| before | 82,009 | 9,112 | 48,660,903 | 5,406,767 |
+| after | **71,785** | **7,976** | **46,114,271** | **5,123,808** |
+| delta | **-10,224 (-12.47%)** | -1,136 | -2,546,632 | **-5.23%** |
+
+The read model predicted -10,047 (7,120 `SUB SDY` + 5,536 `LD SDX` deleted,
+1,584 + 576 + 449 added); realised -10,224, a 1.8% miss. The DDA-scalar bank
+carries all of it: its pipe goes 47,755 → 37,531 and the other three banks are
+unchanged to the read.
+
+**The marginal price of a read on today's machine is 2,546,632 / 10,224 = 249
+ticks** — not the 470.9 `DOOM-OPCODES.md` measured, because M12/M13b have since
+taken 7.5% off the store path. Any further read-count arithmetic should use 249,
+and the profile's per-opcode means should be re-taken before they are trusted
+again.
+
+### The tour, and why it is smaller
+
+| | ticks | box |
+|---|---:|---|
+| M13b | 683,820,497 | 293x253 |
+| **M14** | **668,862,998** | 293x254 |
+| | **-14,957,499 = -2.187%** | |
+
+**-5.23% on the profiled gate but -2.19% on the 116-round tour**, and the
+difference is workload, not model error: the tour's frames are *more* expensive
+(5.90M against 5.41M before the change) because they run the sprite pass, the
+shot ladder and the HUD hard, and none of that touches the DDA. The gate is
+`WALK[:8]` — the opening walk, where the DDA is the frame. Both figures are
+real; the tour is the one that ships.
+
+A prediction made from `DOOM-OPCODES.md`'s 470.9 ticks a `LD` said -7.06% and
+came in at -2.19% on the tour. Decomposed: about 40% of the gap is the read
+getting cheaper since the profile (470.9 → 249), and the rest is the tour's
+lower DDA share. The reads figure, which was predicted to 1.8%, is the one that
+behaved — which is the argument for reporting it.
+
+### Gates
+
+Emulator over the whole `WALK`, pixel-identical to the golden frames
+(`scratch/deadman3d-opt/dda_diff_gate.py`), and **36,663 fewer instructions
+retired (2.93%)**. `tests/test_deadman3d.py -m slow` **12/12**. DOOM fast set
+129 passed. `deadman-3d.man` / `_trim` / `_v2` still `f62d63fd…`,
+`deadman-3d.input.txt` still `654d35d6…`, and `deadman3d_source()` with default
+arguments still regenerates the checked-in `.asm` byte for byte — the lever
+ships as `deadman3d_source(dda_diff=True)` through the existing
+`machine.TIER_PROGRAM`, exactly as M13 did.

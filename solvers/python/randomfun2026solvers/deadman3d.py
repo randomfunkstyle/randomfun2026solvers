@@ -3007,7 +3007,12 @@ sbnuk:  LD  NUKE
         SND""".splitlines()
 
 
-def deadman3d_source(geom: Geom = GEOM64, *, dda_acc_reload: bool = True) -> str:
+def deadman3d_source(
+    geom: Geom = GEOM64,
+    *,
+    dda_acc_reload: bool = True,
+    dda_diff: bool = False,
+) -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
     Structure: boot loop (round 0's data preamble -> tape slots 1..451, the
@@ -3042,6 +3047,37 @@ def deadman3d_source(geom: Geom = GEOM64, *, dda_acc_reload: bool = True) -> str
     taped family is allowed to move (the same rule :data:`machine.TIER_LAYOUT`,
     :data:`machine.MEM_PAD_FOR` and friends already follow, one level down).
 
+    ``dda_diff`` is the second such tier-only program change, and it attacks the
+    same quantity from the other end: **how many store reads the DDA issues.**
+    The loop's only use of ``sideDistX`` inside the step is the sign of
+    ``sideDistX - sideDistY``, so the canonical form re-derives that difference
+    every step (``LD SDX`` / ``SUB SDY``) and then re-reads ``SDX`` again inside
+    the x-arm to increment it — four reads of the pair per step. Passing ``True``
+    keeps the *difference* in the ``SDX`` slot instead, renamed ``SDD``:
+
+    ======================  =========================  ======================
+    quantity                canonical                  ``dda_diff``
+    ======================  =========================  ======================
+    the compare             ``LD SDX`` / ``SUB SDY``   ``LD SDD``
+    ``sideDistX += ddX``    ``LD SDX``/``ADD DDX``     ``ADD DDX`` (ACC is
+                            /``ST SDX``                already ``SDD``:
+                                                       ``BRN`` preserves it)
+    ``sideDistY += ddY``    ``LD SDY``/``ADD DDY``     the same, **plus**
+                            /``ST SDY``                ``SUB DDY``/``ST SDD``
+    ``perpWallDist`` (x)    ``LD SDX``/``SUB DDX``     ``LD SDD``/``ADD SDY``
+                                                       /``SUB DDX``
+    ======================  =========================  ======================
+
+    ``SDY`` is still carried absolutely, so the y-side tail is untouched and the
+    x-side one reconstructs ``sideDistX = SDD + SDY``. Every value is a signed
+    64-bit word under the same :func:`lm1.emulator.wrap` on every operation, so
+    the incrementally-maintained ``SDD`` is bit-identical to a freshly computed
+    ``SDX - SDY`` and ``BRN`` cannot see a difference. Net over nine frames:
+    the x-arm (5,536 executions) loses one ``LD`` and one ``SUB``, the y-arm
+    (1,584) gains one ``ST``, and the per-ray setup and x-side tail each gain
+    one ``SUB``/``ADD``. Same reasoning, same gate, same tier rule as
+    ``dda_acc_reload``.
+
     Regenerate with::
 
         from randomfun2026solvers.deadman3d import deadman3d_source
@@ -3064,6 +3100,14 @@ def deadman3d_source(geom: Geom = GEOM64, *, dda_acc_reload: bool = True) -> str
     first_free = len(preamble_words(geom)) + 1  # 452: the boot loop's stop address
     assert first_free == slots["ZBUF"], "the boot data ends where ZBUF begins"
     n_mon = len(MONSTERS)
+    # `dda_diff` re-purposes the `SDX` slot to hold `sideDistX - sideDistY`; the
+    # address is unchanged (it is still the hottest word in the machine and stays
+    # in the bank the split was tuned for), only the name and its meaning move.
+    if dda_diff:
+        slots = {("SDD" if k == "SDX" else k): v for k, v in slots.items()}
+    # ... and it needs sideDistY seeded before sideDistX, so the two per-ray
+    # seed arms swap places and `ddy:` falls into the other one.
+    _first_side = "sidey" if dda_diff else "sidex"
     machine_tape = max(slots.values()) + 1  # the tape the registry must cover
     inv = UNITS * UNITS          # 1048576  — deltaDist numerator (1/rayDir, Q10*Q10)
     lh_num = geom.lh_num         # 81920 at 64x48 — lineHeight's numerator
@@ -3082,7 +3126,9 @@ def deadman3d_source(geom: Geom = GEOM64, *, dda_acc_reload: bool = True) -> str
         "CMD": "this round's command word",
         "XCOL": "the column being rendered (lodev x)",
         "CAMX": "lodev cameraX, Q10", "RDX": "lodev rayDirX", "RDY": "lodev rayDirY",
-        "SDX": "lodev sideDistX", "SDY": "lodev sideDistY",
+        "SDX": "lodev sideDistX",
+        "SDD": "lodev sideDistX - sideDistY, maintained incrementally",
+        "SDY": "lodev sideDistY",
         "DDX": "lodev deltaDistX", "DDY": "lodev deltaDistY",
         "S4X": "4*stepX: the word address moves +-4 per x-step",
         "STPY": "lodev stepY (the sign picks the PW shift arm)",
@@ -3621,12 +3667,26 @@ ddy:    LD  RDY             ; deltaDistY, the same three arms
         DIV RDY
         BRN ddyneg
         ST  DDY
-        JMP sidex
+        JMP {_first_side}
 ddyneg: NEG
         ST  DDY
-        JMP sidex
+        JMP {_first_side}
 ddyinf: LDI {BIG}
         ST  DDY
+""".splitlines()
+    # The seeds. `dda_diff` swaps the two arms' order so `sidey` runs first: the
+    # x-arm then still has ACC = sideDistX when it is done (`ST` is the only
+    # thing that would have consumed it) and folds the initial difference in
+    # place — `SUB SDY` / `ST SDD` where the canonical arm writes one `ST SDX`.
+    # Nothing downstream reads sideDistX absolutely again; the x-side hit tail
+    # reconstructs it as SDD + SDY.
+    def _sdx_seed(expr: str) -> str:
+        if not dda_diff:
+            return f"        ST  SDX             ; sideDistX = {expr}\n"
+        return (f"        SUB SDY             ; sideDistX = {expr}\n"
+                f"        ST  SDD             ; ... and only its lead over sideDistY is kept\n")
+
+    _sidex = f"""\
         ; stepX / sideDistX from the fractional position (lodev's two arms);
         ; stepX itself is only ever used to move the word address, so the arm
         ; records S4X = 4*stepX instead of stepX
@@ -3638,15 +3698,15 @@ sidex:  LD  RDX
         SUB FRACX
         MUL DDX
         DIVI {UNITS}
-        ST  SDX             ; sideDistX = (1024 - fracX) * deltaDistX / 1024
-        JMP sidey
+{_sdx_seed("(1024 - fracX) * deltaDistX / 1024")}        JMP {"dda0" if dda_diff else "sidey"}
 sxneg:  LDI 0
         SUBI 4
         ST  S4X             ; stepX = -1 -> -4
         LD  FRACX
         MUL DDX
         DIVI {UNITS}
-        ST  SDX             ; sideDistX = fracX * deltaDistX / 1024
+{_sdx_seed("fracX * deltaDistX / 1024")}"""
+    _sidey = f"""\
 sidey:  LD  RDY             ; stepY / sideDistY, the same two arms
         BRN syneg
         LDI 1
@@ -3656,7 +3716,7 @@ sidey:  LD  RDY             ; stepY / sideDistY, the same two arms
         MUL DDY
         DIVI {UNITS}
         ST  SDY
-        JMP dda0
+        JMP {"sidex" if dda_diff else "dda0"}
 syneg:  LDI 0
         SUBI 1
         ST  STPY
@@ -3664,6 +3724,9 @@ syneg:  LDI 0
         MUL DDY
         DIVI {UNITS}
         ST  SDY
+"""
+    lines += ((_sidey + _sidex) if dda_diff else (_sidex + _sidey)).splitlines()
+    lines += f"""\
         ; the DDA, unrolled {DDA_UNROLL}x: a backward jump costs 8*(P - loop) ticks on
         ; this machine, so only every {DDA_UNROLL}th empty step pays a full lap; a
         ; sideDist tie goes to the Y arm (lodev's else — risk R5)
@@ -3678,10 +3741,28 @@ syneg:  LDI 0
     for k in range(DDA_UNROLL):
         nxt = f"dda{k + 1}" if k < DDA_UNROLL - 1 else "dda0"
         nxt_note = "the next unrolled step" if k < DDA_UNROLL - 1 else "the backward lap"
-        lines += f"""
-dda{k}:   LD  SDX
+        # The step's compare. Canonically two reads (`SDX`, `SDY`) rebuild the
+        # difference every step; under `dda_diff` the difference IS the state, so
+        # the compare is one read and `BRN` hands it to the x-arm in ACC.
+        _head = (f"""dda{k}:   LD  SDD
+        BRN xarm{k}           ; SDD < 0 is sideDistX < sideDistY -> step in x
+        SUB DDY             ; sideDistY += deltaDistY, as a fall in the difference
+        ST  SDD"""
+                 if dda_diff else
+                 f"""dda{k}:   LD  SDX
         SUB SDY
-        BRN xarm{k}           ; sideDistX < sideDistY -> step in x
+        BRN xarm{k}           ; sideDistX < sideDistY -> step in x""")
+        # The x-arm's own increment. `BRN` never assigns ACC (emulator `_br_neg`
+        # reads `em.b` and returns; `ddxneg: NEG` in the prologue above already
+        # depends on it on the taken path), so the difference is still there.
+        _xarm = (f"""xarm{k}:  ADD DDX             ; ACC is still SDD: sideDistX += deltaDistX
+        ST  SDD"""
+                 if dda_diff else
+                 f"""xarm{k}:  LD  SDX
+        ADD DDX
+        ST  SDX""")
+        lines += f"""
+{_head}
         LD  SDY
         ADD DDY
         ST  SDY
@@ -3713,9 +3794,7 @@ hity{k}:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
         MODI 16
         BRZ {nxt}            ; empty -> {nxt_note}
         JMP why             ; a y-side wall: t is dark
-xarm{k}:  LD  SDX
-        ADD DDX
-        ST  SDX
+{_xarm}
         LD  WADDR
         ADD S4X
         ST  WADDR           ; mapX += stepX is the quarter-column slot moving +-4
@@ -3724,6 +3803,15 @@ xarm{k}:  LD  SDX
         MODI 16
         BRZ {nxt}            ; empty -> {nxt_note}
         JMP whx             ; an x-side wall: t is sunlit""".splitlines()
+    # perpWallDist on the x side is the sideDistX the step just consumed. Under
+    # `dda_diff` that absolute is not stored any more, so the tail rebuilds it —
+    # once per wall hit (64 a frame) against the 615 x-steps that paid for it.
+    _perpx = ("""        LD  SDD
+        ADD SDY             ; sideDistX = SDD + sideDistY
+        SUB DDX
+""" if dda_diff else """        LD  SDX
+        SUB DDX
+""")
     lines += f"""
 ; Which arm found the wall picks the whole tail — and, since V3, the texture
 ; stripe: the parity of the map coordinate ALONG the wall face, read straight
@@ -3738,9 +3826,7 @@ whx:    ST  COLOR           ; the wall type t — the dark base
         LDI 1
         SUB TMP
         ST  TMP             ; stripe = 1 - (mapY & 1)
-        LD  SDX
-        SUB DDX
-        ST  PERP
+{_perpx}        ST  PERP
         JMP pclip
 why:    ST  COLOR           ; y-side: stripe = mapX & 1 = (WADDR - 1) / 4 % 2
         LD  WADDR
@@ -4098,19 +4184,23 @@ def install_art(gun_idle: list[tuple[int, int, str]],
 
 
 def taped_program():
-    """The taped tier's program: :func:`deadman3d_source` without the DDA x-arm's
-    redundant ``LD WADDR``.
+    """The taped tier's program: :func:`deadman3d_source` with both read-count
+    levers on — no redundant ``LD WADDR`` in the DDA x-arm (``dda_acc_reload``),
+    and the DDA comparing a maintained difference rather than two scalars
+    (``dda_diff``).
 
     Registered as ``machine.TIER_PROGRAM[("deadman-3d", "taped")]``, so
     ``build_for("deadman-3d", store="taped")`` stays the one-liner that makes the
     shipped taped machine while the canonical men-v3 build keeps loading the
     byte-frozen ``deadman-3d.asm``. Assembled in memory rather than checked in as a
-    second ``.asm``: the two sources differ by sixteen deleted lines and nothing
-    else, and ``deadman-3d_taped.man`` already pins the result byte for byte.
+    second ``.asm``: both differences are generated from this one source, and
+    ``deadman-3d_taped.man`` already pins the result byte for byte.
     """
     from randomfun2026solvers.lm1.asm import assemble
 
-    return assemble(deadman3d_source(dda_acc_reload=False), name="deadman-3d")
+    return assemble(
+        deadman3d_source(dda_acc_reload=False, dda_diff=True), name="deadman-3d"
+    )
 
 
 def _current_program():
