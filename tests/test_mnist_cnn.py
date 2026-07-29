@@ -165,6 +165,24 @@ def test_backward_matches_every_reference_gradient(reference):
     assert wi == after.dense_w
 
 
+@pytest.mark.parametrize("lr_shift", [4, 8])
+def test_the_learning_rate_shift_is_a_parameter_not_a_constant(lr_shift):
+    """The unit's own shift is ``SHIFT + lr_shift``, so it must move with it.
+
+    ``UPDB`` applies one shift for two callers — the weight update and the ring-B
+    write — so a hardcoded 18 would pass at ``lr_shift=6`` and be wrong everywhere
+    else, silently: the weights would still update, just by the wrong amount.
+    """
+    got = mnist_cnn.run_emulator(
+        epochs=0, lr_shift=lr_shift, samples=1, return_params=True
+    )
+    want = mnist_model.init_params(seed=mnist_cnn.SEED)
+    pixels, label = mnist_cnn.first_train_sample()
+    f = mnist_model.forward(want, pixels)
+    mnist_model.sgd_step(want, mnist_model.backward(want, pixels, f, label), lr_shift)
+    assert got == want
+
+
 # ── the gate ─────────────────────────────────────────────────────────────────
 def test_emulator_matches_the_reference_on_one_sample():
     """One sample, one step: every parameter must be bit-identical afterwards."""
