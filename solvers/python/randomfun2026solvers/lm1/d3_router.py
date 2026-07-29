@@ -7,6 +7,14 @@ off a single CPU stream lane.  The hi-res variant (``deadman-3d_hires``) wants
 LM-75 display), so the frame has to be tiled: four 64x48 panels in a 2x2 grid,
 each one exactly the geometry the existing unit already paints.
 
+The four panels are one **cluster**, two columns and three rows apart
+(:func:`build_packed_wall`), so the thing on the grid is a contiguous 128x96
+screen rather than four monitors scattered across it — which took taking the
+panel off the block (:func:`d3_unit.build_logic`) and re-routing all twelve
+port pipes around a shared cluster.  :func:`build_wall`, where each panel
+still sits inside its own block, is kept for the probe and for the tests that
+pin the router's own geometry.
+
 Four panels means four units, and a unit is reached through a pipe.  Which pipe
 an ``s`` talks to is a *static* property of where the glyph sits (``ARCH.md``
 §7.1), so the CPU cannot pick a tile from an operand — the same wall ``DSP p``
@@ -66,9 +74,9 @@ when the four commit counts disagree, which is that invariant made checkable.
 **What it does not guarantee: a common tick.**  Two things pull the four SWAPs
 apart, and they are not the same size.
 
-The small one is pipe length: the four fan-out legs are 91, 322, 224 and 455
+The small one is pipe length: the four fan-out legs are 14, 308, 237 and 531
 cells (:attr:`Wall.legs`), a pipe's length is its latency, so the COMMIT words
-*arrive* up to 364 ticks apart.  Exact alignment is not reachable by padding — a
+*arrive* up to 517 ticks apart.  Exact alignment is not reachable by padding — a
 monotone leg's length is its Manhattan distance, the four distances here differ
 in parity, and the fields that could absorb a detour are crossed by the other
 legs — so it is measured rather than argued.

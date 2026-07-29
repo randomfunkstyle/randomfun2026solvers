@@ -4927,9 +4927,9 @@ ROM_ROWS = {
     #  100 -> 503x399   **102 -> 496x401**   104 -> 496x403   105 -> 496x404
     #  110 -> 496x409
     # Below 102 the ROM is wider than the wall; above it every row is a row of
-    # pure height. Re-sweep whenever the wall narrows again (the packed panel
-    # cluster would take it to ~482), the store block changes shape, or the
-    # program grows — all three have moved this number already.
+    # pure height. Re-sweep whenever the wall narrows again, the store block
+    # changes shape, or the program grows — all three have moved this number
+    # already.
     #
     # And a fourth time, after the two knobs of the consolidation pass. They act
     # on opposite sides of the trade and so had to be swept together:
@@ -4947,10 +4947,16 @@ ROM_ROWS = {
     # crossing already at 88) and 102 -> 496x367 (the lift alone, the crossing
     # unmoved at 102); together, 496x353.
     #
-    # The box is now 143 columns wider than it is tall, which is worth writing
-    # down: `area2` is max(w, h)**2, so from here every row this family saves is
-    # worth nothing at all and every column is the whole score. The next thing
-    # to attack is the wall's 495 columns; nothing above it can pay.
+    # And the wall then became the **packed** one
+    # (:func:`d3_router.build_packed_wall`): the four panels moved out of their
+    # blocks into a single 134x103 cluster, which is what makes the machine
+    # paint a contiguous 128x96 screen. It cost rows and gave back one column —
+    # 495x228 -> 493x305, so the machine is 496x353 -> 494x447 and `area2`
+    # 246,016 -> 244,036. 88 still holds, and for the same reason as before: it
+    # is the shallowest fold whose ROM is no wider than the wall (87 is 497),
+    # and every row past it is now pure height with only 47 rows of slack left
+    # rather than 143. Nothing deeper can pay — the 494 is the wall's floor, not
+    # the ROM's, so folding further narrows a drum that is already inside it.
     "deadman-3d_hires": 88,
 }
 
