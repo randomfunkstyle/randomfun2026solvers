@@ -1494,3 +1494,82 @@ arguments still byte-identical to the checked-in `.asm`. Ships as
 rather than the saving: after the rewrite **no `BRN`/`BRZ` in the program has a
 backward target**, which is the condition under which none can pay a whole-ring
 discard. It asserts both directions, so deleting the lever fails it.
+
+## M16 — the DDA, emitted once per sign of stepY
+
+M15 left one non-seekable discard on the table and named it: every `BRN dda{k}
+-> xarm{k}` steps the x-arm over the y-arm it did not take, ~64 words at 8
+ticks, **~330,000 ticks a frame (7%)**. It cannot become a seek — a seek is
+1,008 and the skip is 512 — so the lever is a *shorter y-arm*.
+
+The sign of stepY is a fact about the whole **ray**, fixed at the seed. The
+canonical loop re-decides it on every y-step (`LD STPY` + `BRN`) and carries
+both PW arms and both quarter-column wrap arms in all sixteen copies. Emitting
+the DDA twice — once per sign — deletes all of that from the copy:
+
+| per copy | before | after (up / down) |
+|---|---:|---:|
+| the compare head | 4 words | 4 |
+| `LD STPY` + `BRN yneg` | 4 | **0** |
+| the PW shift arms | 20 | 8 |
+| the wrap arms | 20 | 6 / 10 |
+| `hity` + the x-arm | 30 | 30 |
+| **total** | **88** | **62 / 66** |
+
+Two things fall out beyond the deleted read. The surviving wrap arm has nothing
+to jump over, so it **falls straight through into the hit test** instead of
+ending `JMP hity{k}`; and the ray's sign now picks which loop's *own stepX seed*
+it enters, so `sidey` no longer writes `STPY` at all and neither does anything
+else — the scalar is dead.
+
+### The unroll had to be re-swept, because the copy changed size
+
+Two loops at 16 would be ~576 more ROM words, and the drum's routing budget is
+the constraint, not the 300-column ceiling: `rom_headroom.py` (raise
+`DDA_UNROLL` and build) says **P=4,514 binds and P=4,602 does not**, at every
+`ROM_ROWS` — the seek teleport runs out of clear column east of the drum. A
+split copy is smaller, so the sweep is its own question. On the 116-round tour:
+
+| `DDA_SPLIT_UNROLL` | P | box | ticks |
+|---:|---:|---|---:|
+| 11 | 3,972 | 293x253 | 614,341,715 |
+| 12 | 4,096 | 293x254 | 614,817,361 |
+| 13 | 4,220 | 293x253 | 612,124,654 |
+| **14 (shipped)** | **4,344** | 293x254 | **611,021,810** |
+| 15 | 4,468 | 293x253 | 611,591,730 |
+| 16 | 4,600 | — | does not route |
+
+The curve is flat to ±0.6% across the whole feasible range, which is the mark of
+`lap_via_jump` having already taken the lap cost out: at M14 prices a shorter
+unroll would have been ruinous.
+
+### Measured
+
+| | tour | gate (`WALK[:8]`) | ticks/frame | reads/frame |
+|---|---:|---:|---:|---:|
+| M15 | 638,946,726 | 42,517,078 | 4,724,120 | 7,976 |
+| **M16** | **611,021,810** | **41,082,688** | **4,564,743** | **7,813** |
+| | **-27,924,916 = -4.371%** | -3.37% | -3.37% | **-163 (-2.0%)** |
+
+Note the split: reads fall only 2% (the deleted `LD STPY`, 163 a frame) while
+ticks fall 4.4% on the tour. **Most of this lever is the discard, not the
+read** — which is why it pays more on the tour (38.5% y-steps over the full
+walk) than on the gate (22%), the exact opposite of M14. The two halves of the
+session's work have opposite workload sensitivities, and between them the
+measurement is stable.
+
+Emulator over the whole `WALK` is pixel-identical to golden with **1,170,791
+instructions retired against M15's 1,217,933 (-3.9%)**.
+
+### Where the session ends
+
+| | tour | vs start |
+|---|---:|---:|
+| session start (M13b) | 683,820,497 | — |
+| M14, the DDA difference | 668,862,998 | -2.19% |
+| M15, the loop laps | 638,946,726 | -6.56% |
+| **M16, the stepY split** | **611,021,810** | **-10.65%** |
+
+Reads a frame: **9,112 -> 7,813, -14.3%.** Box 293x254, six columns under the
+pinned ceiling. `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`,
+`deadman-3d.input.txt` `654d35d6…`, `deadman-3d_taped.man` `a11edcc6…`.

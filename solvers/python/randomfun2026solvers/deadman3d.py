@@ -1984,6 +1984,17 @@ def _scalars_for(geom: Geom) -> tuple[str, ...]:
 #: the +720-word P tax is repaid twice over by the halved backward laps.
 DDA_UNROLL = 16
 
+#: The per-loop unroll when ``deadman3d_source(dda_stepy_split=True)`` emits the
+#: DDA **twice**, once per sign of stepY. Two loops at 16 would be ~576 more ROM
+#: words than one, and the taped machine's drum stops routing between P=4,514 and
+#: P=4,602 (``scratch/deadman3d-opt/rom_headroom.py``: unroll 22 binds, 23 does
+#: not, at every ``ROM_ROWS`` — the seek teleport runs out of clear column east of
+#: the drum). A split copy is *smaller* than an unsplit one — 62 words against 88,
+#: because it carries one PW arm and no ``LD STPY`` — so 14 each fits inside the
+#: same budget, and the only thing a shorter unroll costs is more backward laps,
+#: which ``lap_via_jump`` has already made a ~1,008-tick seek apiece.
+DDA_SPLIT_UNROLL = 14
+
 
 def tape_slots(geom: Geom = GEOM64) -> dict[str, int]:
     """The asm's whole ``.equ`` table, name -> tape address (slot 0 is scratch).
@@ -3013,6 +3024,7 @@ def deadman3d_source(
     dda_acc_reload: bool = True,
     dda_diff: bool = False,
     lap_via_jump: bool = False,
+    dda_stepy_split: bool = False,
 ) -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
@@ -3729,51 +3741,72 @@ ddyinf: LDI {BIG}
         return (f"        SUB SDY             ; sideDistX = {expr}\n"
                 f"        ST  SDD             ; ... and only its lead over sideDistY is kept\n")
 
-    _sidex = f"""\
-        ; stepX / sideDistX from the fractional position (lodev's two arms);
-        ; stepX itself is only ever used to move the word address, so the arm
-        ; records S4X = 4*stepX instead of stepX
-sidex:  LD  RDX
-        BRN sxneg
+    def _sidex_block(suffix: str, after: str) -> str:
+        """The stepX seed arms. ``suffix`` names the DDA loop they feed."""
+        head = (
+            "        ; stepX / sideDistX from the fractional position (lodev's two arms);\n"
+            "        ; stepX itself is only ever used to move the word address, so the arm\n"
+            "        ; records S4X = 4*stepX instead of stepX\n"
+        ) if not suffix else (
+            "        ; the same stepX seed, for rays whose stepY is -1 (dda_stepy_split)\n"
+        )
+        return head + f"""\
+sidex{suffix}: {"" if suffix else " "}LD  RDX
+        BRN sxneg{suffix}
         LDI 4
         ST  S4X             ; stepX = 1 -> the quarter-column slot moves +4
         LDI {UNITS}
         SUB FRACX
         MUL DDX
         DIVI {UNITS}
-{_sdx_seed("(1024 - fracX) * deltaDistX / 1024")}        JMP {"dda0" if dda_diff else "sidey"}
-sxneg:  LDI 0
+{_sdx_seed("(1024 - fracX) * deltaDistX / 1024")}        JMP {after}
+sxneg{suffix}: {"" if suffix else " "}LDI 0
         SUBI 4
         ST  S4X             ; stepX = -1 -> -4
         LD  FRACX
         MUL DDX
         DIVI {UNITS}
 {_sdx_seed("fracX * deltaDistX / 1024")}"""
-    _sidey = f"""\
-sidey:  LD  RDY             ; stepY / sideDistY, the same two arms
-        BRN syneg
-        LDI 1
-        ST  STPY
-        LDI {UNITS}
-        SUB FRACY
-        MUL DDY
-        DIVI {UNITS}
-        ST  SDY
-        JMP {"sidex" if dda_diff else "dda0"}
-syneg:  LDI 0
-        SUBI 1
-        ST  STPY
-        LD  FRACY
-        MUL DDY
-        DIVI {UNITS}
-        ST  SDY
-"""
-    lines += ((_sidey + _sidex) if dda_diff else (_sidex + _sidey)).splitlines()
-    lines += f"""\
-        ; the DDA, unrolled {DDA_UNROLL}x: a backward jump costs 8*(P - loop) ticks on
-        ; this machine, so only every {DDA_UNROLL}th empty step pays a full lap; a
+
+    # `dda_stepy_split` emits the DDA twice, once per sign of stepY, so a copy
+    # carries neither `LD STPY` nor the branch on it nor the PW arm it will never
+    # take. The sign is known here, at the seed, and it picks which loop's own
+    # stepX seed the ray falls into — so the scalar is not needed at all.
+    _sidey_lines = [
+        "sidey:  LD  RDY             ; stepY / sideDistY, the same two arms",
+        "        BRN syneg",
+        *([] if dda_stepy_split else ["        LDI 1", "        ST  STPY"]),
+        f"        LDI {UNITS}",
+        "        SUB FRACY",
+        "        MUL DDY",
+        f"        DIVI {UNITS}",
+        "        ST  SDY",
+        f'        JMP {"sidex" if dda_diff else "dda0"}',
+        *(["syneg:  LD  FRACY"] if dda_stepy_split else
+          ["syneg:  LDI 0", "        SUBI 1", "        ST  STPY", "        LD  FRACY"]),
+        "        MUL DDY",
+        f"        DIVI {UNITS}",
+        "        ST  SDY",
+    ]
+    _sidey = "\n".join(_sidey_lines) + "\n"
+    if dda_stepy_split:
+        # sidey -> the up loop's seed (a jump); syneg falls into the down loop's.
+        lines += (_sidey + _sidex_block("n", "ddan0")).splitlines()
+    elif dda_diff:
+        lines += (_sidey + _sidex_block("", "dda0")).splitlines()
+    else:
+        lines += (_sidex_block("", "sidey") + _sidey).splitlines()
+    _unroll = DDA_SPLIT_UNROLL if dda_stepy_split else DDA_UNROLL
+    _split_note = (f"""\
+        ; ... and it is emitted twice, once per sign of stepY, at {DDA_SPLIT_UNROLL}x each:
+        ; a copy then carries one PW arm instead of two and no `LD STPY` at all,
+        ; which is 26 fewer words for the x-step's own BRN to discard
+""" if dda_stepy_split else "")
+    lines += (f"""\
+        ; the DDA, unrolled {_unroll}x: a backward jump costs 8*(P - loop) ticks on
+        ; this machine, so only every {_unroll}th empty step pays a full lap; a
         ; sideDist tie goes to the Y arm (lodev's else — risk R5)
-""".splitlines()
+""" + _split_note).splitlines()
     # The x-arm's reload of WADDR, kept only for the byte-frozen canonical tier.
     # `ST` is ACC-preserving (isa.py: "store[addr] = ACC (ACC preserved)", and
     # emulator._store writes `em.b` without ever assigning it), so the `LD WADDR`
@@ -3786,37 +3819,45 @@ syneg:  LDI 0
     # not in `machine.SEEK_OPS` — so each lap recirculates ~2,200 ring words at
     # 8 ticks. Under `lap_via_jump` both arms branch to one local stub whose
     # `JMP dda0` the seek split can take.
-    _last = DDA_UNROLL - 1
-    _lap = f"lap{_last}"
-    for k in range(DDA_UNROLL):
-        nxt = f"dda{k + 1}" if k < DDA_UNROLL - 1 else ("dda0" if not lap_via_jump else _lap)
-        nxt_note = "the next unrolled step" if k < DDA_UNROLL - 1 else "the backward lap"
-        # The step's compare. Canonically two reads (`SDX`, `SDY`) rebuild the
-        # difference every step; under `dda_diff` the difference IS the state, so
-        # the compare is one read and `BRN` hands it to the x-arm in ACC.
-        _head = (f"""dda{k}:   LD  SDD
-        BRN xarm{k}           ; SDD < 0 is sideDistX < sideDistY -> step in x
+    # `s` is "" for the single loop and for the stepY = +1 half of a split, "n"
+    # for the stepY = -1 half. Everything the loop names carries it, so the two
+    # halves are two independent label spaces over the same generator.
+    for s in (("n", "") if dda_stepy_split else ("",)):
+        _last = _unroll - 1
+        _lap = f"lap{s}{_last}"
+        if dda_stepy_split and s == "":
+            # The up loop's own stepX seed sits between the two loops: `sidey`'s
+            # positive arm jumps to it and it falls through into `dda0`.
+            lines += _sidex_block("", "dda0").splitlines()
+        for k in range(_unroll):
+            nxt = (f"dda{s}{k + 1}" if k < _last
+                   else (f"dda{s}0" if not lap_via_jump else _lap))
+            nxt_note = "the next unrolled step" if k < _last else "the backward lap"
+            # The step's compare. Canonically two reads (`SDX`, `SDY`) rebuild the
+            # difference every step; under `dda_diff` the difference IS the state,
+            # so the compare is one read and `BRN` hands it to the x-arm in ACC.
+            _head = (f"""dda{s}{k}:{" " * (3 - len(s))}LD  SDD
+        BRN xarm{s}{k}           ; SDD < 0 is sideDistX < sideDistY -> step in x
         SUB DDY             ; sideDistY += deltaDistY, as a fall in the difference
         ST  SDD"""
-                 if dda_diff else
-                 f"""dda{k}:   LD  SDX
+                     if dda_diff else
+                     f"""dda{k}:   LD  SDX
         SUB SDY
         BRN xarm{k}           ; sideDistX < sideDistY -> step in x""")
-        # The x-arm's own increment. `BRN` never assigns ACC (emulator `_br_neg`
-        # reads `em.b` and returns; `ddxneg: NEG` in the prologue above already
-        # depends on it on the taken path), so the difference is still there.
-        _xarm = (f"""xarm{k}:  ADD DDX             ; ACC is still SDD: sideDistX += deltaDistX
+            # The x-arm's own increment. `BRN` never assigns ACC (emulator
+            # `_br_neg` reads `em.b` and returns; `ddxneg: NEG` in the prologue
+            # already depends on it on the taken path), so SDD is still there.
+            _xarm = (f"""xarm{s}{k}:  ADD DDX             ; ACC is still SDD: sideDistX += deltaDistX
         ST  SDD"""
-                 if dda_diff else
-                 f"""xarm{k}:  LD  SDX
+                     if dda_diff else
+                     f"""xarm{k}:  LD  SDX
         ADD DDX
         ST  SDX""")
-        lines += f"""
-{_head}
-        LD  SDY
-        ADD DDY
-        ST  SDY
-        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
+            # mapY += stepY as PW/WADDR increments. Split, the sign is a fact
+            # about the whole loop: one arm, no `LD STPY`, and the wrap arm falls
+            # straight through into the hit test instead of jumping to it.
+            if not dda_stepy_split:
+                _yarm = f"""        LD  STPY            ; mapY += stepY, kept as PW/WADDR increments
         BRN yneg{k}
         LD  PW
         MULI 16             ; mapY += 1: the nibble divisor shifts up ...
@@ -3837,8 +3878,34 @@ ywrd{k}:  LDI {16 ** 15}
         LD  WADDR
         SUBI 1
         ST  WADDR           ; mapY crossed into the lower quarter-column word
+        JMP hity{k}"""
+            elif not s:
+                _yarm = f"""        LD  PW
+        MULI 16             ; mapY += 1: the nibble divisor shifts up ...
+        ST  PW
+        BRZ ywru{k}           ; ... and 16**15 * 16 wraps to exactly 0 (64-bit)
         JMP hity{k}
-hity{k}:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
+ywru{k}:  LDI 1
+        ST  PW
+        INCM WADDR          ; mapY crossed into the upper quarter-column word"""
+            else:
+                _yarm = f"""        LD  PW
+        DIVI 16             ; mapY -= 1: the divisor shifts down ...
+        ST  PW
+        BRZ ywrd{s}{k}          ; ... and 1/16 floors to 0
+        JMP hity{s}{k}
+ywrd{s}{k}: LDI {16 ** 15}
+        ST  PW
+        LD  WADDR
+        SUBI 1
+        ST  WADDR           ; mapY crossed into the lower quarter-column word"""
+            lines += f"""
+{_head}
+        LD  SDY
+        ADD DDY
+        ST  SDY
+{_yarm}
+hity{s}{k}:{" " * (2 - len(s))}LD  WADDR          ; the y-side hit test (its own tail: no side flag)
         LDA                 ; the packed quarter-column word at (mapX, mapY)
         DIV PW
         MODI 16
@@ -3853,12 +3920,13 @@ hity{k}:  LD  WADDR          ; the y-side hit test (its own tail: no side flag)
         MODI 16
         BRZ {nxt}            ; empty -> {nxt_note}
         JMP whx             ; an x-side wall: t is sunlit""".splitlines()
-        if lap_via_jump and k == _last:
-            lines += [
-                f"{_lap + ':':<8}{'JMP dda0':<20}; the lap as a JMP, so `seek_split` can",
-                "                            ; make it a seek: a taken BRZ would",
-                "                            ; recirculate every word back to dda0",
-            ]
+            if lap_via_jump and k == _last:
+                lines += [
+                    f"{_lap + ':':<8}{'JMP dda' + s + '0':<20}"
+                    "; the lap as a JMP, so `seek_split` can",
+                    "                            ; make it a seek: a taken BRZ would",
+                    f"                            ; recirculate every word back to dda{s}0",
+                ]
     # perpWallDist on the x side is the sideDistX the step just consumed. Under
     # `dda_diff` that absolute is not stored any more, so the tail rebuilds it —
     # once per wall hit (64 a frame) against the 615 x-steps that paid for it.
@@ -4255,7 +4323,8 @@ def taped_program():
     from randomfun2026solvers.lm1.asm import assemble
 
     return assemble(
-        deadman3d_source(dda_acc_reload=False, dda_diff=True, lap_via_jump=True),
+        deadman3d_source(dda_acc_reload=False, dda_diff=True, lap_via_jump=True,
+                         dda_stepy_split=True),
         name="deadman-3d",
     )
 

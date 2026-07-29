@@ -18,6 +18,8 @@ if "diff" in sys.argv[1:]:
     kw["dda_diff"] = True
 if "lap" in sys.argv[1:]:
     kw["lap_via_jump"] = True
+if "split" in sys.argv[1:]:
+    kw["dda_stepy_split"] = True
 prog = assemble(d3.deadman3d_source(**kw), name="deadman-3d")
 cmds = list(d3.WALK)
 res = Emulator(prog).run(
