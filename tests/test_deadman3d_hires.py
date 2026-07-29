@@ -640,3 +640,28 @@ def test_the_wall_judges_frame_by_frame_and_reports_what_each_one_cost(
     assert len(res.frame_ticks) == len(rounds) == 2
     # strictly increasing, and the last one is where the run stopped
     assert res.frame_ticks[0] < res.frame_ticks[1] == res.step
+
+
+def test_the_hires_ring_worker_stays_at_batch_one_because_the_cut_took_it() -> None:
+    """``TAPED_SKIP_BATCH`` has no hires entry, and that is a measured decision.
+
+    ``deadman-3d`` runs the two-word counted worker for -13% on its frame gate,
+    so the absence of a hires entry reads like an oversight.  It is not: the
+    lever pays per slot walked, :data:`machine.TAPED_BANKS`' eleven-bank cut
+    already spent the ring length it would have paid on, and batching the cut
+    machine *costs* +2.40% on the 21-round tour (+2.31% even with the cut
+    re-derived for it, +8.83% at batch 4).  The registry docstring carries the
+    table.  This pins the fall-through so a later "port the lever across" reads
+    the decline before it re-measures it.
+    """
+    from randomfun2026solvers.lm1 import machine
+
+    assert "deadman-3d_hires" not in machine.TAPED_SKIP_BATCH
+    assert machine.TAPED_SKIP_BATCH.get("deadman-3d_hires", 1) == 1
+    # the reason, pinned beside it: eleven short banks, none of them long enough
+    # for a batched worker's per-access fixed cost to amortise.
+    banks = machine.TAPED_BANKS["deadman-3d_hires"]
+    assert len(banks) == 11
+    assert max(banks) == 306
+    # and ``deadman-3d`` itself is untouched by this decision
+    assert machine.TAPED_SKIP_BATCH["deadman-3d"] == 2
