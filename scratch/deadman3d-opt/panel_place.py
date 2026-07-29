@@ -86,6 +86,25 @@ channel's three columns are busy over every row between them, so the leg to the
 at ``mx + 16`` — has no free row to cross on.  Two spare rows can be made for
 it, but then the leg's own descent crosses the second block's crossings instead.
 That is the floor, and it is set by the west channel, not by the panels.
+
+And it is a tick win as well as a smaller box
+---------------------------------------------
+
+``packed_probe.py``'s scene — 50 commands, two frames, every corner of every
+tile — bisected for the first tick at which all four panels hold frame two, on
+the reference engine:
+
+    old packed wall  493x305   13,563 ticks
+    new packed wall  499x223   13,014 ticks   -4.0%
+    build_wall       (panels inside their blocks, 15-35 cell port pipes)
+                     572x228   12,988 ticks   the floor
+
+So the packing penalty — what it costs to move four panels out of four blocks
+and into one screen — was 575 ticks and is now 26.  It is the pipes: the four
+command legs went 14/308/237/531 to 9/166/123/280 and the twelve port pipes came
+down with them, and a pipe's length is its latency.  This is the subsystem under
+a probe workload, not the demo: the demo's own frame time is dominated by
+per-tile backlog, which is a driver property and unchanged here.
 """
 from __future__ import annotations
 
