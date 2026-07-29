@@ -110,7 +110,12 @@ def gate_rows(compact: bool = False) -> tuple[int, int, int, int]:
 
 
 def bank_gate(
-    m: int, *, compact: bool = False, high: int | None = None
+    m: int,
+    *,
+    compact: bool = False,
+    high: int | None = None,
+    west_grow: int = 0,
+    north_grow: int = 0,
 ) -> tuple[dict[tuple[int, int], str], int]:
     """One range gate for a bank of ``m`` slots: cells (walls included), width.
 
@@ -118,6 +123,31 @@ def bank_gate(
     caller attaches the request pipe to the west wall at the in row and the two
     outgoing pipes to the east wall at the local / downstream rows — all three
     from :func:`gate_rows`, which is also where ``compact`` is described.
+
+    ``west_grow`` / ``north_grow`` move the **west** and **north** walls that
+    many cells further out, to ``x = -west_grow`` / ``y = -north_grow``; the art,
+    the east wall and the floor do not move by one cell, so the returned width is
+    still the art's and the caller places the room at ``gx - west_grow``. Both
+    default to 0, so every existing caller's grid is byte-identical.
+
+    The point is that **the request pipe may then attach to a wall the man is
+    nowhere near, and the room swallows the distance a pipe would have walked.**
+    ``U`` reads from *any* incoming pipe with no distance term, and it turns away
+    from the **wall the pipe attaches to**, not from the direction the pipe comes
+    from — measured, not argued, by feeding gate 0 through a west wall grown 33
+    rows above its man and reading all 600 addresses back correctly
+    (``scratch/deadman3d-opt/probe_gate_grow.py``). So a gate can be grown until
+    it touches its **caller** — the adapter for gate 0, the previous gate for the
+    rest — and the pipe between them stops existing rather than merely shrinking.
+
+    Only those two walls, and that is not squeamishness. The two **outgoing**
+    pipes share the east wall and ``s`` picks the *nearest* of them, so the north
+    arms must stay closer to the local pipe than to the downstream one; the
+    tightest of the eight ``s`` glyphs has three cells of margin. Moving either
+    outgoing attachment away from the body — which is what growing the room
+    *toward the bank* would need — flips that binding at four rows and routes
+    reads into the wrong tape, silently. A room can reach its caller, but not its
+    callee.
 
     ``high`` turns the gate around: instead of claiming the **first** ``m``
     addresses of the space it is handed, it claims the **last** ``m`` of
@@ -153,6 +183,8 @@ def bank_gate(
         raise ValueError(f"a bank must hold at least one slot, not {m}")
     if high is not None and high - m < 1:
         raise ValueError(f"a high gate over 1..{high} cannot hand {high - m} addresses on")
+    if west_grow < 0 or north_grow < 0:
+        raise ValueError(f"a gate room grows outward, not inward: {(west_grow, north_grow)}")
     h, in_row, _local_row, _down_row = gate_rows(compact)
     # The four arm rows. The shipped body leaves nop spacers between the
     # stations (two above the `d`, one everywhere else); compact leaves none, so
@@ -220,12 +252,13 @@ def bank_gate(
     for y in range(in_row + 1, h):
         put(1, y, "^")
 
-    # walls
-    for x in range(0, cr + 2):
-        put(x, 0, "+" if x in (0, cr + 1) else "-")
-        put(x, h + 1, "+" if x in (0, cr + 1) else "-")
-    for y in range(1, h + 1):
-        put(0, y, "|")
+    # walls — the west and north ones as far out as the caller asked for
+    x0, y0 = -west_grow, -north_grow
+    for x in range(x0, cr + 2):
+        put(x, y0, "+" if x in (x0, cr + 1) else "-")
+        put(x, h + 1, "+" if x in (x0, cr + 1) else "-")
+    for y in range(y0 + 1, h + 1):
+        put(x0, y, "|")
         put(cr + 1, y, "|")
     return g, cr + 2
 
@@ -310,6 +343,9 @@ def taped_store_block(
     answer_west: int | None = None,
     compact_gate: bool = False,
     order: tuple[int, ...] | None = None,
+    chain_reach: bool = False,
+    chain_pad: int = 0,
+    request_roof: int | None = None,
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
 
@@ -340,6 +376,33 @@ def taped_store_block(
     address order, so every existing caller's grid is byte-identical. The banks
     are then laid out west to east in chain order, which is what keeps the floor
     plan (and the block's dimensions) exactly as they were.
+
+    ``chain_reach`` grows every gate but the first **west** until its wall stands
+    beside the previous gate's, so the request stops walking the chain link and
+    crosses a room instead (:func:`bank_gate` says why that is legal and why it
+    is only ever west/north). The link is a hop over the gap the previous bank's
+    feed riser needs and no more: **25 cells become 7**, on every access bound
+    for a bank at chain position ``k`` or later — and DOOM's traffic is lopsided
+    enough that the first link alone carries 68% of the reads. Nothing else
+    moves: ``pitch``, ``gx``, ``bx`` and therefore the block's own width are
+    computed from the *un*grown gates, so the banks are where they were.
+
+    ``chain_pad`` leaves every grown gate that many columns short of its caller,
+    so each chain link is exactly that many cells longer and **nothing else in
+    the grid moves**. It is an instrument, not a knob: it is how the leg's tick
+    derivative gets measured on a real machine rather than argued from pipe
+    lengths (``resp_pad`` in ``lm1.machine`` exists for the same reason, and this
+    family has already been burned twice by the difference — see AGENTS.md's
+    three measurement traps).
+
+    ``request_roof`` is the block-local row the **first** gate's roof is pulled
+    up to, so its west wall reaches the caller — for ``lm1.machine`` that is the
+    adapter's floor, and it deletes the whole request forwarder that used to
+    bridge the corridor. The block's request stub is then a single ``>`` on the
+    west wall at ``request_roof + 2`` (its ``in_cell``) rather than a two-cell
+    run at the gate strip's entry row, because the caller arrives from *above*.
+    ``None`` keeps the shipped stub, so every existing caller's grid is
+    byte-identical.
     """
     from .lm1.machine import tape_block
 
@@ -363,6 +426,40 @@ def taped_store_block(
     gate_y = bank_y + bank_h + 2  # one clear row under the banks
     gx = [4 + k * pitch for k in range(nb - 1)]
     bx = [4 + gate_w + 4 + k * pitch for k in range(nb)]
+
+    # ── how far each gate room reaches back toward its caller ────────────────
+    # West wall of gate k lands one column east of bank k-1's own feed riser
+    # (``bx[k-1] - 2``, which runs from the strip up to the bank and is the only
+    # thing in that corridor), so the link is the riser hop and nothing more.
+    # Gate 0's caller is outside the block, so it grows north instead.
+    west_grow = [0] * (nb - 1)
+    north_grow = [0] * (nb - 1)
+    if chain_pad < 0:
+        raise ValueError(f"chain_pad lengthens a link, it cannot shorten one: {chain_pad}")
+    if chain_pad and not chain_reach:
+        raise ValueError("chain_pad measures how far the gates reach; chain_reach is off")
+    if chain_reach:
+        for k in range(1, nb - 1):
+            west_grow[k] = gx[k] - (bx[k - 1] - 1) - chain_pad
+            if west_grow[k] < 0:
+                raise ValueError(
+                    f"gate {k} cannot reach bank {k - 1}'s riser with chain_pad={chain_pad}"
+                )
+    if request_roof is not None:
+        if not 0 <= request_roof < gate_y:
+            raise ValueError(f"request roof {request_roof} is not above the gate strip")
+        north_grow[0] = gate_y - request_roof
+    if any(west_grow) or any(north_grow):
+        gates = [
+            bank_gate(
+                plan[k],
+                compact=compact_gate,
+                high=top,
+                west_grow=west_grow[j],
+                north_grow=north_grow[j],
+            )
+            for j, (k, top) in enumerate(chain[:-1])
+        ]
 
     cells: dict[tuple[int, int], str] = {}
 
@@ -417,7 +514,7 @@ def taped_store_block(
                     (east + 1, down_y),
                     (east + 2, down_y),
                     (east + 2, gate_y + gate_in_row),
-                    (gx[k + 1], gate_y + gate_in_row),
+                    (gx[k + 1] - west_grow[k + 1], gate_y + gate_in_row),
                 ]
             )
         else:
@@ -460,9 +557,17 @@ def taped_store_block(
         pipe([(out_x, coll_y + 4), (out_x, coll_y + 5)])
 
     # ── the block's own ports ────────────────────────────────────────────────
-    in_y = gate_y + gate_in_row
-    pipe([(gx[0] - 2, in_y), (gx[0], in_y)])
-    in_cell = (gx[0] - 2, in_y)
+    if request_roof is None:
+        in_y = gate_y + gate_in_row
+        pipe([(gx[0] - 2, in_y), (gx[0], in_y)])
+        in_cell = (gx[0] - 2, in_y)
+    else:
+        # The roof came up to meet the caller, so the request arrives from above
+        # and the last cell before the west wall is all the block owns. One cell,
+        # because whatever hands it over has to descend to this row anyway.
+        in_y = request_roof + 2
+        put(gx[0] - 1, in_y, ">")
+        in_cell = (gx[0] - 1, in_y)
     if answer_west is None:
         ox, oy = out_x, 0
         while (ox, oy) not in cells:

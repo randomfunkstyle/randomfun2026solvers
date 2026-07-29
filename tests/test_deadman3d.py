@@ -1197,19 +1197,26 @@ def test_the_first_rounds_judge_clean_on_the_native_engine() -> None:
 TAPED_MAN = REPO / "littleman" / "examples" / "deadman-3d_taped.man"
 
 
-def _without_request_teleport():
-    """The taped machine with :data:`machine.STORE_REQUEST_TELEPORT` withheld.
+def _taped_with(**registries):
+    """The taped machine with named registry keys forced on or off.
 
-    Every other registry key still applies, so the two builds differ in exactly
-    the one thing under test — which is what makes "off by default" a statement
-    about this key rather than about a hand-assembled ``build()`` call.
+    Every other registry key still applies, so two builds differ in exactly the
+    thing under test — which is what makes "off by default" a statement about a
+    key rather than about a hand-assembled ``build()`` call. Names are attributes
+    of :mod:`machine`; values are the membership wanted for ``deadman-3d``'s
+    taped pair.
     """
     key = ("deadman-3d", "taped")
-    machine.STORE_REQUEST_TELEPORT.discard(key)
+    saved = {name: key in getattr(machine, name) for name in registries}
     try:
+        for name, on in registries.items():
+            reg = getattr(machine, name)
+            reg.add(key) if on else reg.discard(key)
         return machine.build_for("deadman-3d", store="taped")
     finally:
-        machine.STORE_REQUEST_TELEPORT.add(key)
+        for name, on in saved.items():
+            reg = getattr(machine, name)
+            reg.add(key) if on else reg.discard(key)
 
 
 def test_taped_registry_pins() -> None:
@@ -1253,29 +1260,29 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     to carry that collector's answer to the CPU. Widening the collector itself
     deletes both relays, so the **answer** path now holds exactly one.
 
-    The second ``@>Rv`` in the taped machine is not an answer relay: it is
-    :data:`machine.STORE_REQUEST_TELEPORT`'s room on the *request* leg, and it
-    is the only ``teleport:`` region the taped machine has.
+    The request leg used to hold the second one. It does not any more: the
+    store's own first gate grew its roof up to the adapter, so the taped machine
+    now has **no** ``teleport:`` region at all — see
+    :data:`machine.STORE_REQUEST_REACH` and the reach test below.
     """
     assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
     taped = machine.build_for("deadman-3d", store="taped")
     regions = {r.name for r in taped.debug_map().regions}
-    # The *answer* path holds no relay room at all now — the widened collector is
-    # the store's own, so it carries no ``teleport:`` name. The one that does is
-    # :data:`machine.STORE_REQUEST_TELEPORT`'s, on the request leg.
-    assert {n for n in regions if n.startswith("teleport:")} == {"teleport:REQ"}
+    # Neither path holds a relay room now. The answer's collector is the store's
+    # own, so it carries no ``teleport:`` name; the request's forwarder is gone.
+    assert not {n for n in regions if n.startswith("teleport:")}
     assert {n for n in regions if n.startswith("seek:")} == {"seek:H", "seek:V"}
-    # Four forward-only loops, and only one is an answer relay — the collector
-    # this test is about. The other three are all request-side and belong to
-    # other registries: :data:`machine.SEEK_TELEPORT`'s pair, and
-    # :data:`machine.STORE_REQUEST_TELEPORT`'s single room.
-    assert sum(r.count("@>Rv") for r in taped.rows) == 4
-    # Turn the request room off and its loop goes with it, leaving the answer
-    # collector and :data:`machine.SEEK_TELEPORT`'s pair — which is what pins the
-    # count above to the *request* room rather than to the machine at large.
-    plain = _without_request_teleport()
-    assert sum(r.count("@>Rv") for r in plain.rows) == 3
-    assert not [r for r in plain.debug_map().regions if r.name.startswith("teleport:")]
+    # Three forward-only loops, and only one is an answer relay — the collector
+    # this test is about. The other two are request-side and belong to another
+    # registry: :data:`machine.SEEK_TELEPORT`'s pair.
+    assert sum(r.count("@>Rv") for r in taped.rows) == 3
+    # Put the request forwarder back and its loop comes with it, which is what
+    # pins the count above to the *rooms* rather than to the machine at large.
+    forwarded = _taped_with(STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True)
+    assert sum(r.count("@>Rv") for r in forwarded.rows) == 4
+    assert {
+        r.name for r in forwarded.debug_map().regions if r.name.startswith("teleport:")
+    } == {"teleport:REQ"}
 
     # men-v3 keeps its pair, and not for want of trying: its collector sits at
     # the block's floor ~190 rows below the response row, so widening it west
@@ -1289,57 +1296,87 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     } == {"teleport:L", "teleport:U"}
 
 
-def test_the_request_teleport_is_opt_in_and_collapses_the_leg_every_access_pays() -> None:
-    """``adapter->store`` crosses a room instead of 58 cells — opt-in, per tier.
+def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() -> None:
+    """The taped store's request legs, all of them, in one test.
 
     The profile behind this: the CPU is blocked on the store answer for 47.19%
-    of a gated nine-round run, 87,490 reads at 332 ticks each, and 20.22% of the
-    run is pure pipe transit inside that wait. ``adapter->store`` is its biggest
-    single term (8.53%) because it is the one leg **no** access avoids — reads,
-    writes, every bank. So the test that matters is the length, and that the
-    request still arrives the way the gate expects.
+    of a gated nine-round run, and pure pipe transit inside that wait is 20.22%
+    of the run. Every one of those legs is a pipe walked cell by cell that a
+    **room** crosses in one instruction, because ``U`` receives from any incoming
+    pipe with no distance term (``SPEC.md`` §Nearest) and turns away from the
+    **wall** the pipe attaches to, not from the direction it comes from. So a
+    gate may be grown until it touches its caller.
+
+    Two registries, and they are separate because they are worth different
+    amounts: :data:`machine.STORE_REQUEST_REACH` on ``adapter->store`` (one leg,
+    every access) and :data:`machine.TAPED_CHAIN_REACH` on the gate-to-gate links
+    (68% and 12% of reads, by :data:`machine.TAPED_BANK_ORDER`). Both keyed by
+    tier: only the taped tier has gate rooms at all.
+
+    Kept in one test on purpose. Everything here is a statement about the same
+    property, and three tests asserting overlapping halves of it is how a
+    mechanical merge ends up with contradictory numbers on one expression.
     """
-    assert machine.STORE_REQUEST_TELEPORT == {("deadman-3d", "taped")}
-    assert all(tier == "taped" for _slug, tier in machine.STORE_REQUEST_TELEPORT)
+    assert machine.STORE_REQUEST_REACH == {("deadman-3d", "taped")}
+    assert machine.TAPED_CHAIN_REACH == {("deadman-3d", "taped")}
+    assert all(tier == "taped" for _slug, tier in machine.STORE_REQUEST_REACH)
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_CHAIN_REACH)
+    # The forwarder this replaced is off, and asking for both is a build error:
+    # a room bridging the gap and a room that spans it are two answers to one
+    # question, and the second one would land inside the first.
+    assert not machine.STORE_REQUEST_TELEPORT
+    with pytest.raises(machine.MachineError):
+        _taped_with(STORE_REQUEST_REACH=True, STORE_REQUEST_TELEPORT=True)
 
     on = machine.build_for("deadman-3d", store="taped")
-    off = _without_request_teleport()
-    assert off.route_lengths["adapter->store"] > 50
-    assert on.route_lengths["adapter->store"] <= 8
-    # Not "fewer cells because the store moved": everything else is where it was.
-    assert on.width == off.width and on.height == off.height
-    assert {k: v for k, v in on.route_lengths.items() if k != "adapter->store"} == {
-        k: v for k, v in off.route_lengths.items() if k != "adapter->store"
-    }
+    plain = _taped_with(STORE_REQUEST_REACH=False, TAPED_CHAIN_REACH=False)
+    forwarded = _taped_with(STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True)
 
-    # One forwarder, not a relay chain: a chain lost to a single forwarder plus
-    # a short pipe on the answer path, and deleting the forwarder altogether
-    # cost +4.14% there. So exactly one loop more than the build without it.
-    assert sum(r.count("@>Rv") for r in on.rows) - sum(r.count("@>Rv") for r in off.rows) == 1
+    # A pipe, then a forwarder plus two stubs, then nothing: 58 -> 6 -> 2.
+    assert plain.route_lengths["adapter->store"] > 50
+    assert forwarded.route_lengths["adapter->store"] <= 8
+    assert on.route_lengths["adapter->store"] < forwarded.route_lengths["adapter->store"]
+    # And no room to show for it — reaching is strictly better than forwarding
+    # here, because a forwarder re-serialises a multi-word request at one word
+    # per six ticks where a pipe pipelines it (M12: ~5.2 cells' worth).
+    assert sum(r.count("@>Rv") for r in on.rows) < sum(r.count("@>Rv") for r in forwarded.rows)
+
+    # Not "fewer cells because the store moved": the box and every other leg are
+    # exactly where they were with none of this on.
+    assert (on.width, on.height) == (plain.width, plain.height)
+    assert {k: v for k, v in on.route_lengths.items() if k != "adapter->store"} == {
+        k: v for k, v in plain.route_lengths.items() if k != "adapter->store"
+    }
 
     def west_wall_entries(m):
         """Every cell where a pipe flows east into some room's west wall."""
         g = {(x, y): ch for y, row in enumerate(m.rows) for x, ch in enumerate(row)}
         return {p for p, ch in g.items() if ch == ">" and g.get((p[0] + 1, p[1])) == "|"}
 
-    # The load-bearing one. The gate's ``U`` turns away from the side of the room
-    # it read from, so the request must keep arriving through the gate strip's
-    # WEST wall — and on its own cell, or the store answers from the wrong bank
-    # without erroring. Pinned as a property of the whole machine rather than of
-    # one coordinate: every west-wall entry there was is still there.
-    assert west_wall_entries(on) == west_wall_entries(off)
+    # The load-bearing one, and the reason this whole change is silent-failure
+    # territory: the request must keep arriving through a gate's WEST wall, on a
+    # cell of its own, or the store answers from the wrong bank without erroring.
+    # Growing a room moves that cell; it must not delete one or add a second.
+    assert len(west_wall_entries(on)) == len(west_wall_entries(plain))
 
-    # The room hangs below the adapter, and the request leaves the adapter's
-    # FLOOR rather than its east wall. That is free: the adapter has exactly one
-    # incoming and one outgoing pipe, so every r/s in it binds unambiguously
-    # wherever they attach (see machine._ADAPTER).
+    # The request leaves the adapter's FLOOR rather than its east wall, which is
+    # free: the adapter has exactly one incoming and one outgoing pipe, so every
+    # r/s in it binds unambiguously wherever they attach (see machine._ADAPTER).
     grid = {(x, y): ch for y, row in enumerate(on.rows) for x, ch in enumerate(row)}
     ax, ay, aw, ah = next(
         (r.x, r.y, r.w, r.h) for r in on.debug_map().regions if r.name == "adapter"
     )
     assert any(grid.get((x, ay + ah)) == "v" for x in range(ax, ax + aw))
-    req = next(r for r in on.debug_map().regions if r.name == "teleport:REQ")
-    assert req.y > ay + ah, "the room must hang below the adapter's floor"
+
+    # ``chain_pad`` is the instrument that priced the links: it leaves the gates
+    # short of their callers and lengthens every link by exactly that much,
+    # moving nothing else. Ten cells of pad against three chain links is 20 (the
+    # last gate feeds a bank, not a gate), so the sum of the routes cannot say
+    # it — the block owns those pipes. The box is what must not move.
+    padded = machine.build_for("deadman-3d", store="taped", store_chain_pad=10)
+    assert (padded.width, padded.height) == (on.width, on.height)
+    assert padded.route_lengths == on.route_lengths
+    assert padded.rows != on.rows
 
 
 def test_the_widened_collector_is_off_by_default() -> None:

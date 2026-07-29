@@ -2851,6 +2851,9 @@ def build(
     store_teleport: bool = False,
     store_answer_west: bool = False,
     store_request_teleport: bool = False,
+    store_chain_reach: bool = False,
+    store_chain_pad: int = 0,
+    store_request_reach: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -3048,6 +3051,9 @@ def build(
                     store_teleport=store_teleport,
                     store_answer_west=store_answer_west,
                     store_request_teleport=store_request_teleport,
+                    store_chain_reach=store_chain_reach,
+                    store_chain_pad=store_chain_pad,
+                    store_request_reach=store_request_reach,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -3109,6 +3115,9 @@ def build(
                     store_teleport=store_teleport,
                     store_answer_west=store_answer_west,
                     store_request_teleport=store_request_teleport,
+                    store_chain_reach=store_chain_reach,
+                    store_chain_pad=store_chain_pad,
+                    store_request_reach=store_request_reach,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -3192,6 +3201,9 @@ def _assemble(
     store_teleport: bool = False,
     store_answer_west: bool = False,
     store_request_teleport: bool = False,
+    store_chain_reach: bool = False,
+    store_chain_pad: int = 0,
+    store_request_reach: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -3485,6 +3497,17 @@ def _assemble(
                 answer_west=(CX + W + 4 - tx_pre) if store_answer_west else None,
                 compact_gate=store_compact_gate,
                 order=store_bank_order,
+                chain_reach=store_chain_reach,
+                chain_pad=store_chain_pad,
+                # Land the first gate's roof one row under the adapter's floor,
+                # so its west wall stands beside the adapter and the request is
+                # a drop, not a corridor. Same trick as ``answer_west``: the
+                # block's origin is known before the block is.
+                request_roof=(
+                    (AY + ADAPTER_H + 2) - (CY + mem_dy + store_dy)
+                    if store_request_reach
+                    else None
+                ),
             )
         elif store == "tape":
             tape = tape_block(
@@ -3511,7 +3534,50 @@ def _assemble(
         moved = bool(mem_dx or mem_dy or store_dx)
         req_tele_pipes = 0
         req_tele_regions: dict[str, tuple[int, int, int, int]] = {}
-        if store_request_teleport:
+        if store_request_reach and store_request_teleport:
+            raise MachineError(
+                "store_request_reach and store_request_teleport are two answers to "
+                "one question: the gate's own room reaching the adapter, or a "
+                "forwarder bridging the gap. Pick one."
+            )
+        if (store_request_reach or store_chain_reach) and store != "taped":
+            raise MachineError(
+                f"only the taped tier has gate rooms to grow, not {store!r}"
+            )
+        if store_request_reach:
+            # No room at all on this leg any more — the STORE's **own** first
+            # gate grew its roof up to the adapter's floor, so what used to be a
+            # 58-cell corridor, and then a forwarder plus two stubs, is now a
+            # two-cell drop off the adapter's south wall onto the gate's west
+            # wall. A forwarder costs ~5.2 cells of re-serialisation (one man on
+            # a six-cell loop against a pipe's free pipelining, M12), so not
+            # having one is worth more than having a short one — and the gate's
+            # ``U`` was reading from *any* incoming pipe with no distance term
+            # the whole time. It turns away from the **wall**, not from the
+            # direction the request came down, which is the only reason the
+            # entry may move 33 rows north of the man who reads it.
+            #
+            # The request leaves the adapter's south wall, which is free: the
+            # adapter has exactly one incoming and one outgoing pipe (see
+            # :data:`_ADAPTER`), so every ``r``/``s`` in it binds wherever they
+            # attach.
+            floor_y = AY + ADAPTER_H + 1
+            if not AX + 1 <= tin_x <= AX + ADAPTER_W:
+                raise MachineError(
+                    f"the store's request column {tin_x} is not under the adapter's "
+                    f"floor ({AX + 1}..{AX + ADAPTER_W}); the drop has nowhere to start"
+                )
+            if tin_y - 1 <= floor_y + 1:
+                raise MachineError(
+                    f"the store's request row {tin_y} leaves no drop below the "
+                    f"adapter's floor at {floor_y}"
+                )
+            # ... down to one cell short of the block's own ``>``, which is the
+            # cell that turns the drop into the gate's west wall.
+            route_lengths["adapter->store"] = g.draw_pipe(
+                [(tin_x, floor_y + 1), (tin_x, tin_y - 1)]
+            )
+        elif store_request_teleport:
             # The request crosses a **room** instead of a 58-cell pipe.
             #
             # This is the same lever the answer path already pulled, on the leg
@@ -5767,7 +5833,55 @@ MEM_PAD_FOR: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 16}
 #: and the room's south wall is placed off the gate strip's own entry row. The
 #: hi-res family is left off for the same reason it is off ``STORE_ANSWER_WEST``
 #: — see that note; absent pairs keep every existing grid byte-identical.
-STORE_REQUEST_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
+#: Superseded for ``deadman-3d`` by :data:`STORE_REQUEST_REACH`, which does the
+#: same job with no room at all; the branch stays because it is the only form
+#: available to a store whose first room cannot grow (men-v3's cannot — its
+#: request stub is mid-block) and because withholding it is how the tests state
+#: what a forwarder is worth. Empty by default: absent pairs keep every existing
+#: grid byte-identical.
+STORE_REQUEST_TELEPORT: set[tuple[str, str]] = set()
+
+#: ``(slug, tier)`` pairs whose STORE grows its **first gate's room** north until
+#: the west wall stands under the adapter's floor, and takes the request as a
+#: two-cell drop. Supersedes :data:`STORE_REQUEST_TELEPORT` for the same key —
+#: setting both is a build error, because the room and the reach are two answers
+#: to one question.
+#:
+#: The forwarder this replaces was already worth -5.92% (M12). What is left to
+#: take is the forwarder *itself*: a pipe is a FIFO and pipelines the request's
+#: two or three words one tick apart, where one man on a six-cell ``@>Rv``/``^s<``
+#: cycle re-serialises them at one word per six ticks — ~5.2 cells' worth, ~0.66%
+#: — plus the four cells of out-stub the room's south wall forced. A grown gate
+#: pays neither: ``U`` receives from any incoming pipe with **no distance term**
+#: (``SPEC.md`` §Nearest), and it turns away from the **wall** the pipe attaches
+#: to rather than from the direction the pipe comes from. That last clause is the
+#: whole permission slip and it was measured, not read: gate 0's room pulled 30
+#: rows north with the request fed 33 rows above its man reads all 600 addresses
+#: of the real plan back correctly (``scratch/deadman3d-opt/probe_gate_grow.py``).
+STORE_REQUEST_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+#: ``(slug, tier)`` pairs whose taped STORE grows every gate after the first
+#: **west** until its wall stands beside the previous gate's, so the chain link
+#: is a hop over the intervening feed riser instead of a run under a whole bank.
+#:
+#: Same mechanism as :data:`STORE_REQUEST_REACH` and the same permission slip; it
+#: is worth stating separately because it is worth more. The link is **25 cells
+#: down to 7**, and unlike the arms below it every one of those cells is on the
+#: critical path of *most* accesses: ``A > 0`` means "not mine, pass downstream",
+#: so a request for the bank at chain position ``k`` walks links 0..k-1 first,
+#: and with :data:`TAPED_BANK_ORDER`'s ``(3, 2, 0, 1)`` over
+#: :data:`TAPED_BANKS`' ``(352, 164, 15, 69)`` the first link alone carries 68%
+#: of the reads and the second 12%.
+#:
+#: What it deliberately does **not** touch is the ``reqK->bankK`` arms
+#: (45/45/44/97 cells). Those want the gate to reach its *callee*, and it cannot:
+#: the two outgoing pipes share the east wall, ``s`` takes the **nearest**, and
+#: the tightest of the gate's eight ``s`` glyphs has three cells of margin
+#: between the local pipe and the downstream one. Move the local attachment more
+#: than four rows off the body and the north arms bind to the downstream pipe —
+#: reads land in the wrong bank with no error at all. Arithmetic in
+#: ``scratch/deadman3d-opt/METRICS.md`` M13.
+TAPED_CHAIN_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
@@ -6187,6 +6301,7 @@ def build_for(
     trim_dead: bool | None = None,
     top_bus: bool | None = None,
     seek: bool | None = None,
+    store_chain_pad: int = 0,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -6200,6 +6315,13 @@ def build_for(
     default generation remains the checked-in layout. ``program`` overrides the
     checked-in ``.asm`` (deadman-3d's ``--wad`` mode builds a locally imported
     level's machine without touching the program directory).
+
+    ``store_chain_pad`` is the one measurement instrument here rather than a
+    registry, for the same reason ``build``'s ``resp_pad`` is: it leaves
+    :data:`TAPED_CHAIN_REACH`'s gates that many columns short of their callers,
+    lengthening each chain link by exactly that much and moving nothing else, so
+    the leg's tick derivative comes out of a division instead of an argument.
+    Default 0 — the shipped grid.
     """
     from . import programs
 
@@ -6253,6 +6375,9 @@ def build_for(
         store_teleport=slug in STORE_TELEPORT and (slug, store) not in STORE_ANSWER_WEST,
         store_answer_west=(slug, store) in STORE_ANSWER_WEST,
         store_request_teleport=(slug, store) in STORE_REQUEST_TELEPORT,
+        store_chain_reach=(slug, store) in TAPED_CHAIN_REACH,
+        store_chain_pad=store_chain_pad,
+        store_request_reach=(slug, store) in STORE_REQUEST_REACH,
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,

@@ -974,3 +974,172 @@ Two consequences, both for whoever owns `memory_taped.py` next:
 Not taken in M12 on purpose: it is a `taped_store_block` parameter, not a
 `lm1.machine` one, and `memory_taped.py` is being edited in parallel. The two
 belong in one change on that file, not split across two branches.
+
+## M13 — the gate rooms reach their *callers*, and the request forwarder goes
+
+M12 left two things on the table and de-risked both with one probe: `U` turns
+away from the **wall** the pipe attaches to, not from the direction the pipe
+comes from, so a gate room may be grown until it touches whoever feeds it and
+the pipe between them stops existing rather than merely shrinking.
+
+Both are taken here, in one change on `memory_taped.py`, behind two additive
+knobs (`chain_reach`, `request_roof`) and two registries
+(`machine.TAPED_CHAIN_REACH`, `machine.STORE_REQUEST_REACH`).
+
+### What moved
+
+| leg | before | after | who pays it |
+|---|---:|---:|---|
+| `adapter->store` | 6 drawn cells **+ a forwarder** | **2 drawn cells, no room** | every access |
+| gate 0 -> gate 1 | 25 cells | **7** | 65.74% of accesses |
+| gate 1 -> gate 2 | 25 cells | **7** | 9.55% |
+
+Gate 0's roof comes up to one row under the adapter's floor, so the request is a
+two-cell drop off the adapter's south wall onto the gate's own west wall. Gates
+1 and 2 grow **west** until their walls stand one column east of the previous
+bank's feed riser — the only thing in that corridor — so the link is the riser
+hop and nothing else. Nothing else in the block moves: `pitch`, `gx` and `bx`
+are computed from the *un*grown gates, so the banks, the box and the census are
+where they were. **287x253 before and after, 20 men before and after.**
+
+The traffic shares are `traffic.json` differenced per frame, mapped through
+`TAPED_BANK_ORDER (3,2,0,1)` over `TAPED_BANKS (352,164,15,69)`: 11,222 reads
+and 3,416 writes a frame, and `A > 0` means "not mine, pass downstream", so
+link *j* is walked by every access bound for chain position *j+1* or later.
+
+### The measurement
+
+Native `fast_littleman`, checked-in 116-round tour, round-gated, `passed=True`
+on all five:
+
+| build | ticks | vs base |
+|---|---:|---:|
+| base (M12: forwarder on, no reach) | 773,267,928 | — |
+| `chain_reach` only | 758,190,382 | **-15,077,546 = -1.950%** |
+| `request_roof` only | 761,842,827 | **-11,425,101 = -1.478%** |
+| **both (shipped)** | **746,765,665** | **-26,502,263 = -3.427%** |
+| both + `chain_pad=5` | 750,953,570 | +4,187,905 |
+| both + `chain_pad=15` | 759,329,892 | +12,564,227 |
+
+The two halves are **additive to 384 ticks** — 15,077,546 + 11,425,101 =
+26,502,647 against a realised 26,502,263 — which is what disjoint legs should
+do and is the cheapest available check that neither knob is quietly moving the
+other's pipe.
+
+### The derivative, and why the estimate was 8% and the result is 3.4%
+
+`chain_pad` leaves the grown gates that many columns short of their callers and
+lengthens every link by exactly that much, moving nothing else — the same
+instrument `resp_pad` is in `lm1.machine`, and the same one that priced
+`adapter->store` in M12.
+
+**+5 cells on each of the two links costs +4,187,905 ticks**; +15 costs
++12,564,227. Weighted by who walks them (`p * (0.6574 + 0.0955)` accesses-weighted
+cells) those are **1,112,472** and **1,112,528** tour ticks per weighted pipe
+cell — linear to five significant figures over a 3x range, and against M12's
+independently measured 1,060,929 on `adapter->store` the same rate to 5%. So the
+store's request legs really do cost one tick per cell per access that walks them,
+and the arithmetic below is trustworthy rather than optimistic:
+
+| | weighted cells | predicted | realised |
+|---|---:|---:|---:|
+| chain links (18 x (0.6574 + 0.0955)) | 13.55 | 15.07M | 15.08M |
+| request leg (5 pipe cells + the forwarder's ~5.2) | ~10.2 | 11.35M | 11.43M |
+
+**Both halves came in within 1% of prediction.** That is the difference from
+M12, where the region profile was 12% optimistic: this time the per-cell rate
+was measured first.
+
+### So where did the predicted 8% go? It was never on this leg
+
+The brief's 6.65% was the `reqK->bankK` arms — 45, 45, 44 and 97 cells from each
+gate's *local* arm to its bank. **Those cannot be taken this way, and the reason
+is worth writing down because it is not a routing problem.**
+
+A gate has **two** outgoing pipes and they share the east wall; `s` sends into
+the **nearest** (`SPEC.md` §Nearest, Manhattan from the instruction). The whole
+design rests on the north arms being nearer the local pipe and the south arms
+nearer the downstream one, and the margins are small — here are all eight `s`
+glyphs of gate 0 (`UbrM`531`-X`, compact body, east wall at column 25):
+
+```
+      s at   d(local, row 1)   d(down, row 6)   margin
+    (15,1)          11               16            5
+    (17,1)           9               14            5
+    (15,2)          12               15            3
+    (17,2)          10               13            3
+    (19,2)           8               11            3      <- tightest
+    (16,5)          14               11            3
+    (18,5)          12                9            3
+    (20,5)          10                7            3
+    (16,6)          15               10            5
+    (18,6)          13                8            5
+```
+
+Move the local attachment `L` rows off the body and the tightest constraint is
+`|c - 19| + L < 11`. **At `L = 4` the north write arm binds to the downstream
+pipe and every local read is answered by the wrong bank, with no error.** The
+33-row climb the arms actually want is `L = 31`.
+
+Three ways round it were checked and all of them cost more than they save:
+
+* **Widen the gate** so the downstream pipe is further from the north arms:
+  `L < 8 + K` for `K` extra columns, so reaching the bank needs `K = 24` — a
+  50-column gate, and the room would then have to be both 50 wide and 31 tall in
+  a band where the only free columns are 0..32 (west of the first bank).
+* **Grow the room symmetrically**, local on the north wall and downstream on the
+  south wall at the same column: that one is *binding-clean at any `L`* (the
+  margins become a constant 4 and 2). But it needs free space above **and**
+  below, which only gate 0 has, and it puts gate 0's downstream pipe 31 rows
+  below gate 1: link0 goes 25 -> ~45 cells on 65.74% of accesses, -12.9 weighted
+  cells against +8.6 saved. **Net negative.**
+* **Move gate 0's body up** to the bank's in-row instead: feed0 45 -> 13 is
+  -10.2 weighted cells, chain link0 25 -> ~51 is +17. **Net negative**, and for
+  the same reason — the gate's traffic is 34% local and 66% downstream, so the
+  gate belongs next to the *majority* path.
+
+The general statement, and it is the useful one: **a room can reach its caller
+but not its callee.** The incoming side is free (`R`/`U` take from any incoming
+pipe with no distance term); the outgoing side is not, the moment there is more
+than one outgoing pipe.
+
+### What is actually left on the bank arms, and what it would cost
+
+The arms are worth 27 weighted cells (~28.6M, ~3.7%) and the only mechanism that
+fits is the one M12 used: **a vertical forwarder room per arm**, in the corridor
+between the bank's in-row and the gate strip. The free-column survey of the
+built block, rows 19..50:
+
+```
+free column runs: (0..32), (80), (128), (176)
+```
+
+Only the band west of the first bank is wide enough today. A 6-column
+`teleport_v` in each inter-bank gap needs `pitch` 48 -> 51, i.e. **+9 block
+columns -> ~296x253**, four cells off the pinned 300-column ceiling, and it adds
+four men (census 20 -> 24, ceiling 30). Estimated **-3.7% before the four
+forwarders' own ~5.2 cells each**, so realistically ~-2.9%. Not taken here
+because it is a different mechanism from the one this change is about and it
+spends the machine's entire remaining width; it is the next thing to try.
+
+### Correctness
+
+The failure mode is silent — a mis-bound arm or a wrong literal answers from the
+wrong bank rather than erroring — so every address of the live plan is written
+and read back **individually**, through the same chain `lm1.machine` builds
+(`TAPED_BANK_ORDER (3,2,0,1)` over `TAPED_BANKS (352,164,15,69)`, both gate
+forms: positions 0 and 1 are `high` gates, position 2 is low):
+
+```
+scratch/deadman3d-opt/readback_reach.py 601 352,164,15,69 3,2,0,1
+  shipped  224x60 in=(2, 54): 600 addresses, 0 wrong
+  chain    224x60 in=(2, 54): 600 addresses, 0 wrong
+  roof     224x60 in=(3, 22): 600 addresses, 0 wrong
+  both     224x60 in=(3, 22): 600 addresses, 0 wrong
+```
+
+Plus every composed frame of the 116-round tour byte-identical (`passed=True`
+above, on all five builds), `tests/test_deadman3d.py -m slow` 12/12, and the
+byte-identity pins: `deadman-3d.man` / `_trim.man` / `_v2.man` still
+`f62d63fd…`, `deadman-3d.input.txt` still `654d35d6…`. Only the taped family
+moved, `c0db5a3f…` -> `bfae891f…`.
