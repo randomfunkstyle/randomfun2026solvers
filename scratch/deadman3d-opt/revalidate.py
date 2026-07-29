@@ -80,15 +80,11 @@ DECLINED: dict[str, dict] = {
     "lane_pitch=1(shipped)": {"kind": "dict2", "reg": "LANE_PITCH", "value": 1},
     # the knob that recovered it; reads ~0.000% while shipped
     "rom_drop=0": {"kind": "dict2", "reg": "ROM_TOUCH_DROP", "value": 0},
-    # SHIPPED by direction, as a ticks-for-rows trade: -0.243% on its own but it
-    # forces SEEK_TELEPORT off, and that costs +1.534%.  Reads ~0.000% while
-    # shipped.  The row that matters now is `seek_teleport` below: if room H is
-    # ever rehoused so the pair can coexist, this trade becomes a pure win.
-    "squash_band(shipped)": {"kind": "setmember", "reg": "SQUASH_BAND"},
-    # What the squash cost us.  BUILD FAILS while SQUASH_BAND is on — room H has
-    # no full-width clear strip — and the day it stops failing is the day to take
-    # back +1.534%.  This is the most valuable row in the table.
-    "seek_teleport": {"kind": "setmember", "reg": "SEEK_TELEPORT"},
+    # Shipped at k=3 (three rows off the box, zero ticks) WITH SEEK_TELEPORT.
+    # The full squash is the interesting counterfactual: k=10 forces the teleport
+    # off and costs +1.288%, which is what shipped briefly in 48c85ce before the
+    # coexistence was measured.  A row count now, not a flag.
+    "squash_band=10": {"kind": "dict2", "reg": "SQUASH_BAND", "value": 10},
 }
 
 

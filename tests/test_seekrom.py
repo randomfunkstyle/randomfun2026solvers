@@ -133,13 +133,15 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert machine.MEM_PAD_FOR[key] == 15
     assert machine.INPUT_NORTH_WEST[key] == 13
     assert key in machine.SEEK_TAKEN_DROP_EAST
-    # `SEEK_TELEPORT` is the one of the five this build no longer has: it cannot
-    # coexist with `SQUASH_BAND`'s shorter room, whose room H needs a full-width
-    # clear strip the squash removes. A forced trade, not a decline, and priced
-    # at +1.534% — see both registries' docstrings.
-    assert key not in machine.SEEK_TELEPORT
-    assert key in machine.SQUASH_BAND
-    assert ("deadman-3d", "taped") in machine.SEEK_TELEPORT  # unaffected
+    # All five, including `SEEK_TELEPORT`. It was briefly traded away for
+    # `SQUASH_BAND` on the belief the two could not coexist; they can, for
+    # k <= 8, because room H is bottom-anchored and its height is `12 - k`.
+    assert key in machine.SEEK_TELEPORT
+    assert machine.SQUASH_BAND[key] == 3
+    # and the drop compensates the squash one-for-one: a squash of k shortens the
+    # ROM corridor by k, so 22 + 3 keeps the effective length the unsquashed
+    # machine had. That identity is why k=3 costs exactly zero ticks.
+    assert machine.ROM_TOUCH_DROP[key] == 22 + machine.SQUASH_BAND[key]
 
     # Nothing was written on the bare slug where a `(slug, tier)` key was meant,
     # which is the mistake that would silently move the canonical hires build.
