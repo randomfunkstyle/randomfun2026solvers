@@ -87,9 +87,14 @@ Expected validation accuracy: **83-86%**.
 
 Two decisions produce that number, and they pull in opposite directions on ticks.
 The store is rings rather than random-access memory, which costs ~2x the ticks and
-saves ~3.5x the wall clock (§4.2). The multiply-accumulate moves into the STREAM
-unit, which saves ~14x on top (§4.2a). The model itself is unchanged from the
-CPU-only plan: the STREAM win is spent entirely on wall clock.
+wins back an unquantified amount of wall clock (§4.2, and §1.1 on why the figure once
+claimed here is withdrawn). The multiply-accumulate moves into the STREAM unit, which
+saves ~14x on top (§4.2a). The model itself is unchanged from the CPU-only plan: the
+STREAM win is spent entirely on wall clock.
+
+**The per-epoch wall clock above is therefore a projection, not a measurement.** It
+will be measured for the first time in Task 8, and §1.1 is the reason to expect it to
+move.
 
 ## 2. Engine facts established by probe
 
