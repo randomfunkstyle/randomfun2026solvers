@@ -582,3 +582,37 @@ def test_matmul_grid_is_byte_identical(tmp_path):
 
     generated = "\n".join(machine.build_for("matmul").rows) + "\n"
     assert generated == Path("tasks/solutions/matmul_cpu.man").read_text(encoding="utf-8")
+
+
+def test_updb_requires_ring_a_to_hold_exactly_its_scalar():
+    """The one place the drawn arm is narrower than the model, now a raise.
+
+    The model reads a remembered ``_scalar_a`` and leaves ``ring_a`` alone; the drawn
+    arm has no register to remember it in (the shift needs both hands), so it rotates
+    ring A once per iteration. Those agree exactly for a one-value ring and would
+    disagree *silently* otherwise — the grid would multiply by whatever was queued
+    ahead of the scalar and the emulator would not. So the generator asserts the
+    precondition at emit time rather than leaving it to a comment.
+    """
+    from randomfun2026solvers import mnist_cnn
+
+    g = mnist_cnn._Gen(lr_shift=6)
+    g.p1 = ["g0", "g1"]
+    with pytest.raises(mnist_cnn._RingError, match="ring A holding"):
+        g.updb(2)  # nothing pushed at all
+
+    g.aq = ["stale", "scalar"]
+    with pytest.raises(mnist_cnn._RingError, match="ring A holding"):
+        g.updb(2)  # a leftover word ahead of the scalar
+
+    g.aq = ["scalar"]
+    g.updb(2)  # exactly the scalar: the shape `updb_from_acc` creates
+    assert g.p2 == ["g0", "g1"], "the gradients circulate onto P2"
+
+
+def test_the_real_program_satisfies_that_precondition():
+    """And the guard is not vacuous: `mnist_cnn`'s own emission passes it."""
+    from randomfun2026solvers import mnist_cnn
+
+    source = mnist_cnn.emit_source(lr_shift=6, single_step=True)
+    assert "UPDB" in source
