@@ -2234,3 +2234,117 @@ caterpillar is worth 4.3% and the band height is worth 8.7%, and only the second
 is reachable without re-deriving the ROM.
 
 If dispatch is picked up again, **§3 is the lever, not §4.**
+
+---
+
+# M19 — the lane band's gap rows: what they are, and the floor under them
+
+The lane band is **43 rows** carrying **21 lanes**. The user's reading of it was
+that the gaps are slack the `x` trie leaves behind, and that a leg feeding a
+later `>]x` could be shortened to close them. **Half of that is exactly right,
+and the half that is wrong is the half that sets the floor.** The band came out
+at 43 rows and it stays at 43; what the investigation produced instead is a
+*measured* floor of 30, a priced ceiling of ~5%, and a permanent guard against
+the silent failure that finding it exposed.
+
+`machine.py` gained the mechanism (`lane_pitch`, `LANE_PITCH`) and an invariant
+check; every grid is byte-identical. `deadman-3d.man` / `_trim` / `_v2`
+`f62d63fd…`, `deadman-3d.input.txt` `654d35d6…`, `deadman-3d_taped.man`
+`684e26e7…`. DOOM fast tier **135 passed**.
+
+## 1. What the band's depth is made of — and what it is not
+
+Measured on the built grid (`scratch/gap_probe.py`, `scratch/cpu_pitch.py`):
+
+| | |
+|---|---|
+| lane rows | 100, 102, … 142 — even, pitch 2, one hole at 134 where an opcode was retired |
+| gap rows | 101, 103, … 141 — **odd, and every one carries exactly one `x` node** |
+| what else is on a gap row | nothing. No micro-program cell, no pipe glyph, no slab cell. Only trie cells in columns 13–21, plus drop columns passing through — and those cross lane rows too |
+| `_SLAB_PITCH` | **irrelevant.** It is 13 *columns* for the structures band **below** the collector. It does not touch a lane row |
+
+So the depth is **trie fan-out geometry and nothing else**: 21 lanes + 20 `x`
+nodes, one per row, 41 occupied rows in a 43-row band. It is already a perfect
+1:1 packing. The gaps are not slack that squaring-off left behind — they are
+the nodes.
+
+## 2. The rule: right about internal legs, wrong about leaf legs
+
+**Right, and it is a real structural fact.** A node at trie level `L` sits in
+column `3 + 2L`, and *every* lane in its subtree is entered from a node at level
+`> L`, so at column `>= 5 + 2L`. A node's column — and both its legs' column —
+is therefore **strictly west of every lane entry beneath it**. A lane's man
+starts east of it and never walks onto it, and a leg never lands inside a lane's
+shift run. **A node can share a lane's row**, and a leg feeding a later `>]x` can
+be shortened exactly as claimed.
+
+**Wrong for a leg that feeds a lane, and that is the binding case.** `x` **always
+turns** — clockwise is south, counter-clockwise is north, and there is no third
+outcome that leaves the man on his own row. So a node's row must lie **strictly
+between its two children's rows**. A node whose two children are both lanes — a
+**cherry** — therefore needs a row between two *adjacent* lanes. No lane row can
+serve it. That row is irreducible.
+
+**This program's trie has 9 cherries** (`scratch/trie_embed.py`; 20 nodes, by
+level 1/2/4/6/7).
+
+### The proof, and why it had to be on the grid
+
+`lane_pitch=1` was built and walked. The trie emitted **12 of its 20 `x` nodes** —
+**exactly 9 lost**, each overwritten by its own up-lane's entry `>` at the same
+cell. Every opcode routed through a lost node then walks east into the **wrong
+lane**: no binding error, no collision, no crash. A pixel diff hundreds of frames
+later is the only symptom.
+
+That is now impossible to ship by accident. `_uneven_trie` records every branch
+cell and re-checks it after laying the tree; a squeezed band raises instead of
+emitting a decoder:
+
+```
+9 decode branch(es) overwritten at [(11, 12), (13, 1), (13, 3), (13, 5)]...:
+an `x` needs a row strictly between its two children, so a node with two lane
+children needs a row between two adjacent lanes.
+```
+
+## 3. The floor, and what it is worth
+
+Leaves keep their rows; every non-cherry node can share one; every cherry cannot.
+
+**Floor = 21 lanes + 9 cherries = 30 rows, against 43 today — 13 removable.**
+Not 21. The band was never going to halve.
+
+Priced on the current grid (`scratch/pitch_probe.py`; the trie walk reproduces
+the profile's stage to the tick):
+
+| stage | today | % run | at the 30-row floor | saved | % run |
+|---|---:|---:|---:|---:|---:|
+| trie descent | 5,234,638 | 8.68% | — of which 1,576,377 is horizontal and fixed | 1,105k | 1.83% |
+| drop to the collector | 3,292,144 | 5.46% | scales with the band | 995k | 1.65% |
+| riser (22 flat) | 3,826,702 | 6.34% | ~15 flat | 1,173k | 1.94% |
+| **total** | **12,353,484** | **20.48%** | | **~3,273k** | **~5.42%** |
+
+**~5% is the ceiling**, and it assumes *perfect* sharing — every one of the 11
+non-cherry nodes finding a lane row that also satisfies betweenness and column
+order. Feasibility only takes bites out of it.
+
+## 4. Why it was not taken
+
+Two costs, and the second is the one that decided it.
+
+* **A new embedder.** `_uneven_trie` derives a node's row from its own subtree
+  (`slot_rows[min(down)] - 1`). Sharing is a global assignment — which node takes
+  which lane row — under betweenness *and* the column-order precondition. That is
+  a different algorithm, not a parameter.
+* **The room cannot shrink where it stands.** With the CPU 20 rows shorter,
+  **no placement was found anywhere**: `store_offset` dy over −30..+30 failed at
+  every value, and the failures are structural, not marginal — block collisions
+  at (63,106)/(65,106)/(105,86), `taped block collision at (4,5)`, `request roof
+  is not above the gate strip`, and `no clear band below the store for the seek
+  teleport`. The store block, the adapter, the gate strip and the seek teleport
+  are all placed against the tall room. A 13-row shrink is the same problem with
+  a smaller number: it is a re-tune of every placement registry at once, to
+  collect ~5%, against a decoder whose failure mode is silent.
+
+The mechanism is left in place and inert — `LANE_PITCH` is empty, `lane_pitch`
+defaults to 2, and every grid is byte-identical — so whoever picks this up starts
+from the guard rather than from the bug.
