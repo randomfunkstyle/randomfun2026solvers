@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .asm import Program
+from .asm import UNIT_TRIE_BITS, Program
 from .isa import DEFAULT_TICKS, Op, Sem, TickModel
 from .store import DictStore, DoomUnit, PathUnit, SnakeUnit, SpillRing, Store, StreamUnit
 
@@ -316,7 +316,11 @@ class Emulator:
                     lambda port, value: self.display_writes.append((port, value))
                 )
             else:
-                self._stream = StreamUnit(self._next_input, self._emit)
+                self._stream = StreamUnit(
+                    self._next_input,
+                    self._emit,
+                    trie_bits=UNIT_TRIE_BITS.get(self.program.unit, 3),
+                )
         return self._stream
 
     # ── STORE helpers (the memory-problem wire protocol) ────────────────────

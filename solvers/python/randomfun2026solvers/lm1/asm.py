@@ -53,7 +53,17 @@ __all__ = [
 #: ``lm1/snake_unit.py``'s body FIFO, which also owns the display and answers nothing.
 #: ``doom`` is ``lm1/d3_unit.py``'s column painter: the deadman-3d panel plus the
 #: baked HUD/FLASH patterns, write-only like ``snake`` and ``path``.
-UNITS = frozenset({"stream", "snake", "path", "doom"})
+#:
+#: ``stream4`` is the *same block* as ``stream`` built with a depth-4 decode trie:
+#: sixteen leaves, twelve arms, and a ``16 * arg + code`` wire format. It is a
+#: separate name rather than a flag because the trie width is wired into the
+#: hardware once and cannot be widened in place — a ``stream`` program's command
+#: words alias into different arms at mod-16 (see :class:`~.store.StreamUnit`'s
+#: docstring), so a program has to name the width it was written against.
+UNITS = frozenset({"stream", "stream4", "snake", "path", "doom"})
+
+#: Decode-trie depth per unit name. Only ``stream``/``stream4`` differ.
+UNIT_TRIE_BITS = {"stream": 3, "stream4": 4}
 
 #: ``ARCH.md`` §2.1: ring capacity must be ``P + slack``; too small deadlocks,
 #: too large starves the CPU.
