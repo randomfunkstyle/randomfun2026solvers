@@ -84,7 +84,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..circuit import Circuit
+from ..circuit import Circuit, E
 
 __all__ = [
     "ARMS",
@@ -93,14 +93,153 @@ __all__ = [
     "StreamBlock",
     "UNIT_IH",
     "UNIT_IW",
+    "UPDB_SHIFT",
     "arm_codes",
+    "build_updb_probe",
     "dual_relay_cells",
     "unit_interior",
+    "updb_body",
+    "updb_probe_model",
 ]
 
 
 class StreamError(RuntimeError):
     """The block's geometry did not close, with the constraint that failed."""
+
+
+# ── UPDB: the one arm whose body does not fit in two hands ────────────────────
+#: The shift ``UPDB`` applies, wired into the drawn glyphs and *not* a field of any
+#: command word. 18, and not 6, because one shift has to serve both of the arm's
+#: callers: the dense weight update wants ``w -= (dz*f >> 12) >> 6`` and floored
+#: shifts compose (``(g >> 12) >> 6 == g >> 18``), while the ring-B *write* — the
+#: only way the CPU can put a value on ring B at all — sends ``g = 1`` and
+#: ``a = (b - v) << 18``, which is an exact multiple of ``2**18`` so the floored
+#: shift recovers ``b - v`` losslessly and the write is exact. A program declares
+#: the shift it was written against with ``.equ STREAM_LR_SHIFT`` (``asm.py``) and
+#: :func:`build_stream` refuses to draw a different one rather than silently doing
+#: different arithmetic. See the task-4 report and ``mnist_cnn``'s module docstring.
+UPDB_SHIFT = 18
+
+
+def _shift_glyphs(shift: int) -> str:
+    """``A >>= shift`` in the fewest glyphs, leaving ``B`` scratch.
+
+    ``}`` is ``A >> B`` *arithmetic*, i.e. floored division by ``2**B``, which is
+    what the model's ``>>`` is. Getting the count into ``B`` costs ``M d W`` — and
+    that is exactly why ``UPDB`` cannot hold its scalar in a register across the
+    shift: a literal writes ``A``, ``W`` then writes ``B``, so loading a constant
+    destroys one of the two live values whichever way round it is done. ``B`` still
+    holds the count afterwards, so *repeating* the same shift is one further glyph;
+    18 is therefore ``M 9 W } }`` and not a five-digit literal.
+    """
+    if shift < 1:
+        raise StreamError(f"UPDB's shift must be at least 1, got {shift}")
+    for digit in range(9, 0, -1):
+        if shift % digit == 0:
+            return f"M{digit}W" + "}" * (shift // digit)
+    raise StreamError(f"no single-digit chunk divides a shift of {shift}")  # pragma: no cover
+
+
+def updb_body(shift: int = UPDB_SHIFT) -> str:
+    """``UPDB``'s counted-loop body, walked *down* one column, one glyph per row.
+
+    One iteration of ``b = ring_b.pop(); g = p1.pop(); p2.push(g);
+    ring_b.push(b - ((a * g) >> shift))`` with two hands and no readable backpack::
+
+        r   ring A's return : A = a, the scalar PUSHA left on ring A
+        s   ring A's fill   : put it straight back, so the ring is unchanged
+        M   B = a
+        r   the accumulator : A = g
+        s   the accumulator : g circulates onto P2 rather than being consumed
+        *   A = a * g          (B is still a — the multiply does not touch it)
+        M9W}}  A >>= shift     (see :func:`_shift_glyphs`; B ends holding 9)
+        M   B = (a * g) >> shift
+        r   ring B's return : A = b
+        -   A = b - ((a * g) >> shift)
+        s   ring B's fill   : the updated weight, back where it came from
+
+    The ``r``/``s`` pair on ring A is the same rotate ``MAC`` does on ring B, and it
+    is not optional: the scalar has to be re-read every iteration because the shift
+    needs both hands, so the ring *is* UPDB's third register. That makes the drawn
+    arm agree with :meth:`~.store.StreamUnit._updb` — which reads a remembered
+    ``_scalar_a`` and leaves ``ring_a`` alone — exactly when ring A holds that one
+    scalar and nothing else, which is what ``mnist_cnn``'s ``updb_from_acc``
+    (``PUSHA``, ``UPDB``, ``MAC 0``) guarantees and asserts at emit time.
+
+    The *order* is forced, not chosen. Rows increase downward and a glyph's row
+    picks its pipe, so this string is also the arm's row map: ring A's return above
+    the accumulator's above ring B's. ``ARCH.md`` §7.1's distances only ever let a
+    reader swap between two walls where the row-slopes differ, so a west-wall pipe
+    read *between* two others has to be west-wall too — which is why the depth-4
+    unit takes all four of its incoming pipes on the west wall.
+    """
+    return "rsMrs*" + _shift_glyphs(shift) + "Mr-s"
+
+
+def updb_probe_model(
+    scalar: int, weights: list[int], grads: list[int], *, shift: int = UPDB_SHIFT
+) -> list[int]:
+    """What :func:`build_updb_probe` must emit: the arm's own send order, per lap.
+
+    The probe's room has one outgoing pipe, so every ``s`` in the body lands in the
+    same ``O`` room — which is the point: a wrong glyph order shows up as a wrong
+    *interleaving*, not just a wrong number, so a run cannot pass by accident with
+    the arithmetic done in the wrong place.
+    """
+    out: list[int] = []
+    for b, g in zip(weights, grads, strict=True):
+        out += [scalar, g, b - ((scalar * g) >> shift)]
+    return out
+
+
+def build_updb_probe(shift: int = UPDB_SHIFT) -> list[str]:
+    """``UPDB`` alone, in one room with one pipe in and one pipe out.
+
+    Probed before it is placed, for the reason ``dsprelay``'s relay and the store
+    selector were: in the unit the arm's six pipe glyphs bind six *different* pipes
+    by geometry, and a room holds one ``O``. Here there is exactly one incoming and
+    one outgoing pipe, so §7.1 has nothing to choose between and every ``r``/``s``
+    binds whatever the layout — which isolates the part that is actually hard (the
+    register juggling and the glyph order) from the part that is geometric.
+
+    The input is one command word ``16 * n + code``, then ``n`` laps of
+    ``(a, g, b)``; the output is ``n`` laps of ``(a, g, b')``. Feeding the scalar
+    per lap is not a cheat: it is precisely what ring A does for the placed arm.
+    """
+    body = updb_body(shift)
+    iw, ih = 12, len(body) + 4
+    r = Circuit(iw + 1, ih + 1)
+
+    # The command word, then the argument: `}` by 4 is the depth-4 trie's own
+    # `16 * arg + code` decode, floored, so a negative argument would survive.
+    r.run(1, 1, "@rM4W}b")
+    exit_x, exit_y = r.counted_loop(8, 1, body)
+    r.set(exit_x, exit_y, "H")
+
+    g = Circuit(iw + 12, ih + 3)
+    ox, oy = 6, 1
+    for (x, y), glyph in r.cell.items():
+        g.set(ox + x, oy + y, glyph)
+    for x in range(-1, iw + 1):
+        g.set(ox + x, oy - 1, "+" if x in (-1, iw) else "-")
+        g.set(ox + x, oy + ih, "+" if x in (-1, iw) else "-")
+    for y in range(ih):
+        g.set(ox - 1, oy + y, "|")
+        g.set(ox + iw, oy + y, "|")
+
+    row = oy + 1  # the spawn's row: the room's only two pipes hang off it
+    for i, line in enumerate(("+-+", "|I|", "+-+")):
+        for j, glyph in enumerate(line):
+            g.set(j, row - 1 + i, glyph)
+    g.run(3, row, ">>", d=E)
+
+    out_x = ox + iw + 3
+    for i, line in enumerate(("+-+", "|O|", "+-+")):
+        for j, glyph in enumerate(line):
+            g.set(out_x + j, row - 1 + i, glyph)
+    g.run(ox + iw + 1, row, ">>", d=E)
+
+    return [line.rstrip() for line in g.rows() if line.strip()]
 
 
 # ── the unit's row map ───────────────────────────────────────────────────────

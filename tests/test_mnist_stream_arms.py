@@ -20,16 +20,50 @@ never one decode trying to serve both.
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections import deque
+from pathlib import Path
 
 import pytest
+from randomfun2026solvers.fast_littleman import FastLittleman
+from randomfun2026solvers.lm1 import stream
 from randomfun2026solvers.lm1.asm import assemble
 from randomfun2026solvers.lm1.emulator import Emulator
 from randomfun2026solvers.lm1.store import StoreError, StreamUnit
 
+REPO = Path(__file__).parents[1]
+LM_MJS = REPO / "littleman" / "lm.mjs"
+node_required = pytest.mark.skipif(
+    shutil.which("node") is None or not LM_MJS.exists(),
+    reason="node and littleman/lm.mjs required",
+)
+reference_sweeps = pytest.mark.skipif(
+    os.environ.get("LM1_SLOW") != "1",
+    reason="set LM1_SLOW=1 to run the reference-interpreter sweeps",
+)
 
-def _unit(trie_bits: int = 3) -> StreamUnit:
-    return StreamUnit(read_input=lambda: 0, emit=lambda v: None, trie_bits=trie_bits)
+
+def _unit(trie_bits: int = 3, lr_shift: int | None = None) -> StreamUnit:
+    return StreamUnit(
+        read_input=lambda: 0, emit=lambda v: None, trie_bits=trie_bits, lr_shift=lr_shift
+    )
+
+
+def _updb_words(n: int) -> int:
+    return 16 * n + StreamUnit.CODES["UPDB"]
+
+
+def _model_updb(
+    scalar: int, weights: list[int], grads: list[int], *, shift: int
+) -> tuple[list[int], list[int]]:
+    """Run the *model's* PUSHA/UPDB pair and return ``(ring_b, p2)``. The oracle."""
+    u = _unit(trie_bits=4, lr_shift=shift)
+    u.ring_b = deque(weights)
+    u.p1 = deque(grads)
+    u.command(16 * scalar + StreamUnit.CODES["PUSHA"])
+    u.command(_updb_words(len(weights)))
+    return list(u.ring_b), list(u.p2)
 
 
 def test_new_arms_have_distinct_codes():
@@ -225,3 +259,120 @@ def test_pusha_rotb_updb_have_no_reply_to_lose():
     assert res.halted
     assert list(em.stream.ring_a) == [5]
     assert em.stream._replies == deque(), "none of these three arms may queue a reply"
+
+
+# ── the grid tier: the arms as drawn, not as modelled ────────────────────────
+# `UPDB` is the only new arm with real register pressure — two reads, a multiply
+# and a shift with two hands and an unreadable backpack — so it is probed alone
+# before it is placed, the way `dsprelay`'s relay and the store selector were. The
+# probe's room has exactly one incoming and one outgoing pipe, which is what takes
+# geometry out of the question and leaves only the glyph order.
+UPDB_CASES = [
+    (3, [1000, 2000, 3000], [4096, 8192, 0]),  # Q12 gradients 1.0, 2.0, 0.0
+    (0, [], []),  # a zero count must run the body zero times
+    (-5, [10, -20], [4096, -4096]),  # floored, so a negative product survives
+    (1 << 18, [0], [7]),  # the ring-B write's own shape: a << shift
+    (7, [-1], [-1]),  # a negative weight and a negative gradient
+]
+
+
+def _probe_input(scalar: int, weights: list[int], grads: list[int]) -> list[int]:
+    """One command word, then one ``(a, g, b)`` lap per weight.
+
+    Feeding the scalar once per lap is not a shortcut around the arm: it is exactly
+    what ring A hands it, because the drawn body pops the scalar and pushes it
+    straight back every iteration (:func:`stream.updb_body`).
+    """
+    words = [_updb_words(len(weights))]
+    for weight, grad in zip(weights, grads, strict=True):
+        words += [scalar, grad, weight]
+    return words
+
+
+def test_the_drawn_updb_body_is_the_shift_the_program_declares():
+    """18, and it has to be *drawn*: nothing about a command word carries it."""
+    from randomfun2026solvers import mnist_cnn
+    from randomfun2026solvers.lm1 import asm
+
+    assert stream.UPDB_SHIFT == 18
+    body = stream.updb_body()
+    assert body == "rsMrs*M9W}}Mr-s"
+    assert body.count("}") == 2 and "9" in body, "9 twice, because floored shifts compose"
+
+    # The program says which shift it was written against; the block must draw that
+    # one or refuse. A mismatch is wrong arithmetic with nothing to catch it.
+    program = assemble(mnist_cnn.emit_source(lr_shift=6, single_step=True))
+    assert program.unit == "stream4", "the depth-4 unit is the one with UPDB on it"
+    assert program.equs[asm.STREAM_LR_SHIFT_EQU] == stream.UPDB_SHIFT
+
+
+def test_the_updb_body_reads_and_writes_in_the_order_its_rows_impose():
+    """The body string *is* the arm's row map, so its glyph order is a contract.
+
+    Rows increase downward and a glyph's row picks its pipe (§7.1), so the sequence
+    below is what forces the depth-4 unit's west wall to carry all four incoming
+    pipes: ring A's return is read between the accumulator's and ring B's, and a
+    pipe read between two west-wall pipes cannot itself be on the north or south
+    wall — the Manhattan distances never cross the right way round.
+    """
+    body = stream.updb_body()
+    pipe_ops = [(i, ch) for i, ch in enumerate(body) if ch in "rs"]
+    assert [ch for _i, ch in pipe_ops] == ["r", "s", "r", "s", "r", "s"]
+    (a_ret, _), (a_fwd, _), (p1, _), (p2, _), (b_ret, _), (b_fwd, _) = pipe_ops
+    assert a_ret < a_fwd < p1 < p2 < b_ret < b_fwd
+    assert a_fwd == a_ret + 1, "the scalar goes straight back: ring A is unchanged"
+    assert p2 == p1 + 1, "the gradient circulates, it is not consumed"
+    assert b_fwd == b_ret + 2, "one `-` between reading the weight and writing it"
+
+
+@pytest.mark.parametrize("shift", [18, 12, 6])
+@pytest.mark.parametrize(("scalar", "weights", "grads"), UPDB_CASES)
+def test_updb_probe_grid_matches_the_model(
+    shift: int, scalar: int, weights: list[int], grads: list[int]
+):
+    """The drawn arm against :class:`StreamUnit`, on an engine, glyph for glyph.
+
+    The probe emits every ``s`` into the same ``O`` room, so the expected output is
+    an *interleaving* — scalar, gradient, updated weight, once per lap. That is
+    deliberate: emitting only the weight would pass for an arm that did the right
+    arithmetic in the wrong place, and this does not.
+    """
+    rows = stream.build_updb_probe(shift)
+
+    # Lesson from Task 5's R1 round: assert the engine saw the construct before
+    # asserting anything about behaviour. A probe whose room or pipes did not parse
+    # would otherwise "pass" while pinning nothing at all.
+    engine = FastLittleman("\n".join(rows))
+    assert [room.kind for room in engine.rooms] == ["compute", "input", "output"]
+    assert len(engine.pipes) == 2, "one pipe in, one pipe out — that is the whole point"
+
+    result = engine.run(_probe_input(scalar, weights, grads), max_ticks=200_000)
+    assert result.fatal is None, result.fatal
+    assert result.halted
+
+    ring_b, p2 = _model_updb(scalar, weights, grads, shift=shift)
+    want: list[int] = []
+    for weight, grad in zip(ring_b, p2, strict=True):
+        want += [scalar, grad, weight]
+    assert result.output == want
+    assert want == stream.updb_probe_model(scalar, weights, grads, shift=shift)
+
+
+@node_required
+@reference_sweeps
+def test_the_updb_probe_runs_the_same_on_the_reference_interpreter(tmp_path):
+    """``fast_littleman`` is an independent engine; the bundled wasm is the judge's."""
+    from randomfun2026solvers.littleman import Littleman
+
+    rows = stream.build_updb_probe()
+    path = tmp_path / "updb-probe.man"
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    lm = Littleman()
+    analysis = lm.analyze(path)
+    assert len(analysis.rooms) == 3
+    assert len(analysis.pipes) == 2
+
+    for scalar, weights, grads in UPDB_CASES:
+        words = " ".join(str(v) for v in _probe_input(scalar, weights, grads))
+        out = list(lm.tick(path, 4000, input=words).output)
+        assert out == stream.updb_probe_model(scalar, weights, grads), (scalar, out)
