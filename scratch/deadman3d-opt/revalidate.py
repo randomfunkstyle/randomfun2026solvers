@@ -80,6 +80,11 @@ DECLINED: dict[str, dict] = {
     "lane_pitch=1(shipped)": {"kind": "dict2", "reg": "LANE_PITCH", "value": 1},
     # the knob that recovered it; reads ~0.000% while shipped
     "rom_drop=0": {"kind": "dict2", "reg": "ROM_TOUCH_DROP", "value": 0},
+    # Worth -0.243% on its own and declined: it cannot coexist with SEEK_TELEPORT,
+    # which is worth +1.534%.  Alone it BUILD FAILS on room H's full-width strip —
+    # the correct result, and the day it stops failing is the day the squash is
+    # free.  See SQUASH_BAND's docstring.
+    "squash_band": {"kind": "setmember", "reg": "SQUASH_BAND"},
 }
 
 
@@ -117,7 +122,11 @@ def main(argv: list[str]) -> int:
         saved: list[tuple] = []
         prog_kw: dict = {}
         if spec:
-            if spec["kind"] == "set":
+            if spec["kind"] == "setmember":
+                reg = getattr(M, spec["reg"])
+                saved.append((reg, None, KEY in reg))
+                reg.add(KEY)
+            elif spec["kind"] == "set":
                 reg = getattr(M, spec["reg"])
                 saved.append((reg, None, KEY in reg))
                 reg.add(KEY)

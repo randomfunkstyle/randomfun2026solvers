@@ -1158,6 +1158,7 @@ def build_cpu(
     tight_drops: bool = False,
     slab_pitch: int = _SLAB_PITCH,
     lane_pitch: int = 2,
+    squash_band: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -1227,7 +1228,8 @@ def build_cpu(
             # as well was tried and is a false economy: it collides with the
             # store, and chasing it with a store offset only re-breaks whichever
             # counterfactual build has a different-shaped block.
-            at = [r + (2 * n_rows - 1) - (at[-1] - y0 + 1) for r in at]
+            if not squash_band:
+                at = [r + (2 * n_rows - 1) - (at[-1] - y0 + 1) for r in at]
         else:
             at = [y0 + 2 * i for i in range(n_rows)]
         row_of = {m: at[rank[(p.row[m] - 1) // 2]] for m in used}
@@ -3006,6 +3008,7 @@ def build(
     doom_leaf_cols: tuple[int, ...] | None = None,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
+    squash_band: bool = False,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -3208,6 +3211,7 @@ def build(
                     doom_leaf_cols=doom_leaf_cols,
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
+                    squash_band=squash_band,
                 )
             except MachineError as exc:
                 last = exc
@@ -3276,6 +3280,7 @@ def build(
                     doom_leaf_cols=doom_leaf_cols,
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
+                    squash_band=squash_band,
                 )
             except MachineError:
                 continue
@@ -3366,6 +3371,7 @@ def _assemble(
     doom_leaf_cols: tuple[int, ...] | None = None,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
+    squash_band: bool = False,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -3386,6 +3392,7 @@ def _assemble(
         seek=seek,
         seek_taken_drop_east=seek_taken_drop_east,
         lane_pitch=lane_pitch,
+        squash_band=squash_band,
     )
     W, H = cpu.width, cpu.height
 
@@ -5809,6 +5816,54 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #:
 #: 22 rather than 26 because they are identical to five figures and 22 leaves four
 #: more rows of binding margin before the wall.
+#: ``(slug, tier)`` pairs whose staggered lane band is **top-aligned**, so the
+#: rows :data:`LANE_PITCH` frees come out of the room's height instead of being
+#: left blank above the band.
+#:
+#: Empty by default because the two are not the same optimisation and the second
+#: one is not free. Bottom-aligning (the default) keeps the collector, the
+#: structures band and the room's height exactly where they were, so **nothing
+#: outside the CPU moves** — every tick the stagger wins is internal vertical
+#: travel, and all three terms measure from the collector. Top-aligning moves the
+#: collector and everything below it up, which shrinks the room and pulls every
+#: block placed against it north: adapter, tape, teleports, the seek ladders and
+#: the store. That shortens the pipes between them, and it moves every touch point
+#: — so it is a §7.1 problem, not a height one.
+#:
+#: On ``deadman-3d`` it was measured at a further **-0.93%** and declined, because
+#: the shrunk room needs the STORE to follow north (``store_offset`` dy -5) and
+#: that offset re-breaks whichever counterfactual build has a differently-shaped
+#: block. hires is a different case on both counts: its store is eleven banks at
+#: batch 2 rather than four at batch 1, and :data:`ROM_TOUCH_DROP` now exists to
+#: absorb the binding shift that the height change causes.
+#:
+#: **Measured on hires and declined — it works, and it is not worth what it costs.**
+#: The squash builds (649x485, ten rows off the box) and is worth **-0.243%**, close
+#: to ``deadman-3d``'s -0.93% once the metric is the same. But it cannot coexist
+#: with :data:`SEEK_TELEPORT`, and that is worth six times more:
+#:
+#: | variant | box | ticks | Δ |
+#: |---|---|---|---|
+#: | shipped | 649x495 | 189,164,256 | — |
+#: | no ``SEEK_TELEPORT`` | 649x495 | 192,066,009 | +1.534% |
+#: | **squashed**, no ``SEEK_TELEPORT`` | 649x485 | 191,600,156 | **+1.288%** |
+#:
+#: The conflict is **placement, not binding**, and not what the ``deadman-3d`` note
+#: predicted. ``_seek_teleport``'s room H is *wide* — ``x 62..648``, 587 columns —
+#: and needs a full-width clear strip between the store's bottom and whatever hangs
+#: below the CPU. Squashing pulls the CPU twelve rows north, the store follows, and
+#: the strip stops being clear: ``seek teleport: no clear band below the store for
+#: room H``. No ``ROM_TOUCH_DROP`` helps, because nothing here is a distance.
+#:
+#: So the open question is not the squash, it is **whether room H can park
+#: elsewhere**. If it can, -0.243% is free. That is a placement search under a
+#: hard full-width constraint — layout-manager work, not a sweep.
+#:
+#: Beware the tour length here: at 3 rounds the squash reads -0.854%, three and a
+#: half times its 21-round value, because a short tour is boot-heavy. Confirm this
+#: one at 21.
+SQUASH_BAND: set[tuple[str, str]] = set()
+
 ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     ("deadman-3d_hires", "taped"): 22,
 }
@@ -7276,6 +7331,7 @@ def build_for(
     store_chain_pad: int = 0,
     lane_pitch: int | None = None,
     rom_touch_drop: int | None = None,
+    squash_band: bool | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -7371,6 +7427,9 @@ def build_for(
             ROM_TOUCH_DROP.get((slug, store), 0)
             if rom_touch_drop is None
             else rom_touch_drop
+        ),
+        squash_band=(
+            ((slug, store) in SQUASH_BAND) if squash_band is None else squash_band
         ),
         lane_pitch=(
             LANE_PITCH.get((slug, store), 2) if lane_pitch is None else lane_pitch
