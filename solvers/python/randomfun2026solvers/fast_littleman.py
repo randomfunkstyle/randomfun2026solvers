@@ -22,7 +22,7 @@ import sys
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -30,8 +30,10 @@ from typing import Literal
 __all__ = [
     "FastLittleman",
     "FastLittlemanError",
+    "FastOpProfile",
     "FastProfile",
     "FastResult",
+    "OpcodeTags",
 ]
 
 MASK64 = (1 << 64) - 1
@@ -168,6 +170,68 @@ class FastProfile:
 
 
 @dataclass(slots=True)
+class OpcodeTags:
+    """What the caller must say before the engine can attribute ticks to opcodes.
+
+    ``classes`` names what a runner is *doing* on a cell (dispatch walk, memory
+    lane, slab, …) and ``ops`` names the instructions.  ``tags`` maps
+    ``(x, y, arrival direction)`` — 0 east, 1 south, 2 west, 3 north — to
+    ``(class index, opcode index or -1)``: a cell that identifies an instruction
+    carries its opcode, every other cell carries only a class.
+
+    The direction is part of the key because one cell can belong to two
+    structures at once: a lane row walked east is also, at the columns where
+    other lanes descend, somebody else's drop column walked south.  Tagging the
+    cell alone would charge every instruction's descent to whichever lanes it
+    happens to cross.
+
+    The engine cuts the focus runner's timeline whenever he *enters* the
+    ``boundary`` class (the instruction fetch) and folds each resulting segment
+    into whichever opcode's cells that segment touched, so the trie descent and
+    the return walk that surround a lane are charged to the instruction that
+    caused them rather than to a shared bucket.
+
+    ``hist_pipe`` asks for an exact histogram of how long each blocked run on
+    that pipe lasted; ``value_pipe`` asks for a census of the values the focus
+    runner sent into it (the store address stream, in practice).  Both are
+    ``-1`` for "do not collect".
+    """
+
+    classes: list[str]
+    ops: list[str]
+    tags: dict[tuple[int, int, int], tuple[int, int]]
+    boundary: int
+    hist_pipe: int = -1
+    value_pipe: int = -1
+
+
+@dataclass(slots=True)
+class FastOpProfile:
+    """Per-opcode tick attribution: exact, every tick, no stride.
+
+    ``ticks[op][cls]`` and ``blocked[op][cls]`` are runner-ticks; ``execs[op]``
+    counts the segments folded into that opcode.  Index ``len(ops)`` is the
+    *unattributed* slot — a segment that never touched an opcode-bearing cell —
+    and it is reported rather than dropped.  ``outside`` counts ticks where no
+    runner stood on a tagged cell at all, and ``multi`` counts ticks where more
+    than one did (which would make the focus ambiguous; it should be zero).
+    """
+
+    classes: list[str]
+    ops: list[str]
+    samples: int
+    outside: int
+    multi: int
+    execs: list[int] = field(default_factory=list)
+    ticks: list[list[int]] = field(default_factory=list)
+    blocked: list[list[int]] = field(default_factory=list)
+    pipe_ticks: dict[tuple[int, int], int] = field(default_factory=dict)
+    pipe_runs: dict[tuple[int, int], int] = field(default_factory=dict)
+    block_hist: dict[int, dict[int, int]] = field(default_factory=dict)
+    values: dict[int, dict[int, int]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class FastResult:
     """Validation-oriented result returned by :class:`FastLittleman`."""
 
@@ -180,6 +244,7 @@ class FastResult:
     passed: bool | None = None
     frames: list[list[str]] = field(default_factory=list)
     profile: FastProfile | None = None
+    opcodes: FastOpProfile | None = None
 
     @property
     def ok(self) -> bool:
@@ -529,6 +594,7 @@ class FastLittleman:
         native: bool = True,
         profile: bool = False,
         profile_stride: int = 1,
+        opcodes: OpcodeTags | None = None,
     ) -> FastResult:
         """Execute from a fresh state.
 
@@ -541,12 +607,19 @@ class FastLittleman:
         exact per-pipe traffic counters.  It is off by default and adds nothing
         to the request when off, so an ordinary run is unchanged; it requires
         the native backend.
+
+        ``opcodes=`` additionally fills :attr:`FastResult.opcodes` with a
+        per-opcode tick attribution (see :class:`OpcodeTags`).  It also requires
+        ``profile=True`` — it is the second, likewise trailing, section of the
+        same reply — and it is likewise absent from a request that omits it.
         """
         input_rounds = self._parse_round_values(input)
         expected_rounds = self._parse_round_values(expected) if expected is not None else None
         frame_rounds = self._parse_frame_rounds(frames)
         if profile and not native:
             raise FastLittlemanError("profiling requires the native backend")
+        if opcodes is not None and not profile:
+            raise FastLittlemanError("opcode attribution requires profile=True")
         if native:
             try:
                 return self._run_native(
@@ -556,6 +629,7 @@ class FastLittleman:
                     max_ticks,
                     profile=profile,
                     profile_stride=profile_stride,
+                    opcodes=opcodes,
                 )
             except (OSError, subprocess.SubprocessError):
                 # A compiler is optional for portability.  The independent
@@ -576,6 +650,7 @@ class FastLittleman:
         *,
         profile: bool = False,
         profile_stride: int = 1,
+        opcodes: OpcodeTags | None = None,
     ) -> FastResult:
         lib = _native_library()
         request = self._native_request(
@@ -585,6 +660,7 @@ class FastLittleman:
             max_ticks,
             profile=profile,
             profile_stride=profile_stride,
+            opcodes=opcodes,
         )
         ptr = lib.flm_run(request.encode("ascii"))
         if not ptr:
@@ -609,7 +685,7 @@ class FastLittleman:
         output = [int(value) for value in fields[10 : 10 + count]]
         if len(output) != count:
             raise FastLittlemanError("native runner returned a truncated output list")
-        tail = fields[10 + count :]
+        tail = iter(fields[10 + count :])
         return FastResult(
             output=output,
             step=step,
@@ -619,12 +695,12 @@ class FastLittleman:
             fatal_pos=None if fatal_pos_raw == (-1, -1) else fatal_pos_raw,
             passed=passed,
             profile=self._parse_profile(tail) if profile else None,
+            opcodes=self._parse_opcodes(tail, opcodes) if opcodes is not None else None,
         )
 
-    def _parse_profile(self, tail: list[str]) -> FastProfile:
-        if not tail or tail[0] != "P":
+    def _parse_profile(self, it: Iterator[str]) -> FastProfile:
+        if next(it, None) != "P":
             raise FastLittlemanError("native runner returned no profile section")
-        it = iter(tail[1:])
         take = lambda: int(next(it))  # noqa: E731
         samples, stride, npipes = take(), take(), take()
         prof = FastProfile(width=self.width, height=self.height, samples=samples, stride=stride)
@@ -642,6 +718,36 @@ class FastLittleman:
                 prof.wait[(x, y)] = waiting
         return prof
 
+    def _parse_opcodes(self, it: Iterator[str], spec: OpcodeTags) -> FastOpProfile:
+        if next(it, None) != "Q":
+            raise FastLittlemanError("native runner returned no opcode section")
+        take = lambda: int(next(it))  # noqa: E731
+        nops, nclass, npipes, samples, outside, multi = (take() for _ in range(6))
+        prof = FastOpProfile(
+            classes=list(spec.classes),
+            ops=[*spec.ops, "(unattributed)"],
+            samples=samples,
+            outside=outside,
+            multi=multi,
+        )
+        if nops != len(spec.ops) + 1 or nclass != len(spec.classes):
+            raise FastLittlemanError("native runner returned a mismatched opcode section")
+        prof.execs = [take() for _ in range(nops)]
+        prof.ticks = [[take() for _ in range(nclass)] for _ in range(nops)]
+        prof.blocked = [[take() for _ in range(nclass)] for _ in range(nops)]
+        for _ in range(take()):
+            op, pid, ticks, runs = take(), take(), take(), take()
+            prof.pipe_ticks[(op, pid)] = ticks
+            prof.pipe_runs[(op, pid)] = runs
+        for _ in range(take()):
+            op, length, n = take(), take(), take()
+            prof.block_hist.setdefault(op, {})[length] = n
+        for _ in range(take()):
+            op, value, n = take(), take(), take()
+            prof.values.setdefault(op, {})[value] = n
+        del npipes
+        return prof
+
     def _native_request(
         self,
         input_rounds: list[list[int]],
@@ -651,6 +757,7 @@ class FastLittleman:
         *,
         profile: bool = False,
         profile_stride: int = 1,
+        opcodes: OpcodeTags | None = None,
     ) -> str:
         values: list[int | str] = ["FLM1", self.width, self.height]
         values.extend(ord(ch) for row in self.grid for ch in row)
@@ -709,6 +816,22 @@ class FastLittleman:
         # the string every existing caller already sends.
         if profile:
             values.extend((1, max(1, profile_stride)))
+            # Trailing again, for the same reason: the heatmap-only profiler's
+            # request is unchanged by the existence of this section.
+            if opcodes is not None:
+                values.extend(
+                    (
+                        1,
+                        len(opcodes.classes),
+                        len(opcodes.ops),
+                        opcodes.boundary,
+                        opcodes.hist_pipe,
+                        opcodes.value_pipe,
+                        len(opcodes.tags),
+                    )
+                )
+                for (x, y, direction), (cls, op) in opcodes.tags.items():
+                    values.extend((y * self.width + x, direction, cls, op))
         return " ".join(str(value) for value in values)
 
     @staticmethod
