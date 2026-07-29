@@ -2853,6 +2853,7 @@ def build(
     store_request_teleport: bool = False,
     store_chain_reach: bool = False,
     store_chain_pad: int = 0,
+    store_feed_teleport: bool = False,
     store_request_reach: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
@@ -3053,6 +3054,7 @@ def build(
                     store_request_teleport=store_request_teleport,
                     store_chain_reach=store_chain_reach,
                     store_chain_pad=store_chain_pad,
+                    store_feed_teleport=store_feed_teleport,
                     store_request_reach=store_request_reach,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
@@ -3117,6 +3119,7 @@ def build(
                     store_request_teleport=store_request_teleport,
                     store_chain_reach=store_chain_reach,
                     store_chain_pad=store_chain_pad,
+                    store_feed_teleport=store_feed_teleport,
                     store_request_reach=store_request_reach,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
@@ -3203,6 +3206,7 @@ def _assemble(
     store_request_teleport: bool = False,
     store_chain_reach: bool = False,
     store_chain_pad: int = 0,
+    store_feed_teleport: bool = False,
     store_request_reach: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
@@ -3499,6 +3503,7 @@ def _assemble(
                 order=store_bank_order,
                 chain_reach=store_chain_reach,
                 chain_pad=store_chain_pad,
+                feed_teleport=store_feed_teleport,
                 # Land the first gate's roof one row under the adapter's floor,
                 # so its west wall stands beside the adapter and the request is
                 # a drop, not a corridor. Same trick as ``answer_west``: the
@@ -5883,6 +5888,23 @@ STORE_REQUEST_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: ``scratch/deadman3d-opt/METRICS.md`` M13.
 TAPED_CHAIN_REACH: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
+#: ``(slug, tier)`` pairs whose taped STORE puts a **vertical forwarder** on every
+#: ``reqK->bankK`` arm — the legs a grown gate room provably cannot take, because
+#: they run to the gate's *callee* (see :data:`TAPED_CHAIN_REACH`).
+#:
+#: They are the block's largest remaining term: 45, 45, 44 and 97 cells, and
+#: every access walks exactly one of them, so weighted by
+#: :data:`TAPED_BANK_ORDER`'s traffic they are ~46.5 accesses-weighted cells
+#: against a measured 1,112,500 tour ticks each. A one-in/one-out room has none of
+#: the gate's binding problem — ``R`` takes from any incoming pipe and ``s`` has a
+#: single outgoing one — so this is the M12 lever again, on four legs at once.
+#:
+#: It costs a man a bank (census 20 -> 24 against the visualizer's own ceiling of
+#: 30) and two columns of pitch: the room is ``memory_men.teleport_v`` in the
+#: corridor between two banks, which is six columns wide and had four. Absent
+#: pairs keep every existing grid byte-identical.
+TAPED_FEED_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
 #: 12-row one. Keyed by tier because only the taped tier has gates at all;
@@ -6377,6 +6399,7 @@ def build_for(
         store_request_teleport=(slug, store) in STORE_REQUEST_TELEPORT,
         store_chain_reach=(slug, store) in TAPED_CHAIN_REACH,
         store_chain_pad=store_chain_pad,
+        store_feed_teleport=(slug, store) in TAPED_FEED_TELEPORT,
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),

@@ -1272,13 +1272,22 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     # own, so it carries no ``teleport:`` name; the request's forwarder is gone.
     assert not {n for n in regions if n.startswith("teleport:")}
     assert {n for n in regions if n.startswith("seek:")} == {"seek:H", "seek:V"}
-    # Three forward-only loops, and only one is an answer relay — the collector
-    # this test is about. The other two are request-side and belong to another
-    # registry: :data:`machine.SEEK_TELEPORT`'s pair.
-    assert sum(r.count("@>Rv") for r in taped.rows) == 3
+    # Exactly one of the machine's forward-only loops is an answer relay — the
+    # collector this test is about. The rest are all request-side and belong to
+    # other registries: :data:`machine.SEEK_TELEPORT`'s pair, and one per bank
+    # from :data:`machine.TAPED_FEED_TELEPORT`. So the count is pinned by
+    # *withholding* those, not by a number that every later change has to edit.
+    loops = sum(r.count("@>Rv") for r in taped.rows)
+    bare = _taped_with(TAPED_FEED_TELEPORT=False)
+    assert loops - sum(r.count("@>Rv") for r in bare.rows) == len(
+        machine.TAPED_BANKS["deadman-3d"]
+    )
+    assert sum(r.count("@>Rv") for r in bare.rows) == 3  # collector + SEEK's pair
     # Put the request forwarder back and its loop comes with it, which is what
-    # pins the count above to the *rooms* rather than to the machine at large.
-    forwarded = _taped_with(STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True)
+    # pins the rest of the count to the *rooms* rather than to the machine.
+    forwarded = _taped_with(
+        STORE_REQUEST_REACH=False, STORE_REQUEST_TELEPORT=True, TAPED_FEED_TELEPORT=False
+    )
     assert sum(r.count("@>Rv") for r in forwarded.rows) == 4
     assert {
         r.name for r in forwarded.debug_map().regions if r.name.startswith("teleport:")
@@ -1377,6 +1386,23 @@ def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() ->
     assert (padded.width, padded.height) == (on.width, on.height)
     assert padded.route_lengths == on.route_lengths
     assert padded.rows != on.rows
+
+    # The fourth leg family, and the one a grown room provably cannot take: the
+    # `reqK->bankK` arms run to the gate's CALLEE, so they get a forwarder each
+    # instead (:data:`machine.TAPED_FEED_TELEPORT`). It is the only part of this
+    # that costs anything — a man a bank and two columns of pitch — so what is
+    # asserted is that the cost is bounded, not what it is.
+    assert machine.TAPED_FEED_TELEPORT == {("deadman-3d", "taped")}
+    assert all(tier == "taped" for _slug, tier in machine.TAPED_FEED_TELEPORT)
+    banks = len(machine.TAPED_BANKS["deadman-3d"])
+    unfed = _taped_with(TAPED_FEED_TELEPORT=False)
+    assert on.height == unfed.height
+    assert on.width == unfed.width + 2 * (banks - 1)
+    assert sum(r.count("@") for r in on.rows) == sum(r.count("@") for r in unfed.rows) + banks
+    # Both ceilings the taped machine actually has to respect (test below pins
+    # the same two, which is the point: this change spends into both of them).
+    assert max(on.width, on.height) <= 300
+    assert sum(r.count("@") for r in on.rows) <= 30
 
 
 def test_the_widened_collector_is_off_by_default() -> None:

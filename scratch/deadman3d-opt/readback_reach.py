@@ -62,6 +62,8 @@ CASES = {
     "chain": {"chain_reach": True},
     "roof": {"request_roof": ROOF},
     "both": {"chain_reach": True, "request_roof": ROOF},
+    "feed": {"feed_teleport": True},
+    "all": {"chain_reach": True, "request_roof": ROOF, "feed_teleport": True},
 }
 bad_total = 0
 for name, kw in CASES.items():

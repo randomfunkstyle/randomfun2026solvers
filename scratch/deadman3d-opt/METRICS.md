@@ -1143,3 +1143,68 @@ above, on all five builds), `tests/test_deadman3d.py -m slow` 12/12, and the
 byte-identity pins: `deadman-3d.man` / `_trim.man` / `_v2.man` still
 `f62d63fd…`, `deadman-3d.input.txt` still `654d35d6…`. Only the taped family
 moved, `c0db5a3f…` -> `bfae891f…`.
+
+### M13b — the arms after all: a forwarder each, in a widened corridor
+
+The arms cannot be taken by growing the gate (above), but they *can* be taken by
+the mechanism M12 used on `adapter->store`: **a room with one pipe in and one
+pipe out has none of the gate's binding problem** — `R` takes from any incoming
+pipe and `s` has a single outgoing one to choose between. So each
+`reqK->bankK` arm gets a `memory_men.teleport_v` in the corridor between the
+banks (`machine.TAPED_FEED_TELEPORT`, `taped_store_block(feed_teleport=True)`).
+
+The corridor is `pitch - bank_w + 1` columns wide — a tape block's own first
+column is empty — so the shipped `pitch` 48 leaves four and `teleport_v` wants
+six. **`pitch` 48 -> 50**, and that is the whole cost besides the men.
+
+| leg | before | after | share of accesses |
+|---|---:|---:|---:|
+| `req0->bank0` | 45 | 4 + 6 stub cells, + one room | 34.26% |
+| `req1->bank1` | 45 | 4 + 6 | 56.19% |
+| `req2->bank2` | 44 | 3 + 6 | 6.45% |
+| `req3->bank3` (the last gate's downstream) | 97 | 58 + 6 | 3.10% |
+
+The chain links get one cell *shorter* on the way past (7 -> 6): the corridor
+obstruction they have to clear is now the forwarder's own entry stub rather than
+a riser, and it stands one column further east.
+
+| build | ticks | vs previous | vs M12 base |
+|---|---:|---:|---:|
+| M13 (chain + roof) | 746,765,665 | — | -3.427% |
+| **+ feed forwarders** | **715,447,099** | **-31,318,566 = -4.194%** | **-57,820,829 = -7.477%** |
+
+Predicted from the same 1,112,500 ticks/weighted-cell: 29.7 weighted cells,
+33.1M. Realised 31.3M — **6% under prediction**, which is the four forwarders'
+own re-serialisation showing up as slightly more than the ~5.2 cells each that
+M12's single room cost.
+
+287x253 -> **293x253**, seven columns under the pinned ceiling, and 20 men -> 24
+against the visualizer's 30. `cpu->drum` follows the block east, 52 -> 63 cells:
+that is jump-notice latency on the longest pipe in the machine and worth 0.019%
+per 437 cells (AGENTS.md trap 1), i.e. nothing.
+
+One thing that bit, and it is a `SPEC.md` rule rather than a geometry mistake:
+**a pipe's first arrowhead must point away from its source room**, so the climb
+into the forwarder cannot start on the gate's own east-wall cell and turn north
+there — the widest gate's east wall already sits against the corridor's first
+column, so the climb uses the room's *second* interior column. The failure was a
+`no-pipe` fatal three ticks in, not a wrong answer, so this one at least is loud.
+
+### Where the taped store now stands
+
+`773,267,928 -> 715,447,099` on the 116-round tour, **-7.48%**, against the
+brief's estimate of ~8% combined. Every request leg in the block is now either a
+two-cell stub or a room:
+
+```
+adapter -> gate0    2 cells, no room      (gate 0's roof reaches the adapter)
+gate0   -> gate1    6 cells, no room      (gate 1's west wall reaches gate 0)
+gate1   -> gate2    6 cells, no room
+gateK   -> bankK    10 cells + one room   (the callee legs; a room is required)
+bankK   -> CPU      6 cells + the collector
+```
+
+What is left on this path is the last arm, `req3->bank3`: 58 of its 64 cells are
+one horizontal run under bank 2, because the last gate feeds two banks and only
+one of them can be adjacent. It is 3.10% of accesses, so the run is worth ~2.0M
+ticks (~0.28%) — the smallest lever this file has left.

@@ -346,6 +346,7 @@ def taped_store_block(
     chain_reach: bool = False,
     chain_pad: int = 0,
     request_roof: int | None = None,
+    feed_teleport: bool = False,
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
 
@@ -403,6 +404,23 @@ def taped_store_block(
     run at the gate strip's entry row, because the caller arrives from *above*.
     ``None`` keeps the shipped stub, so every existing caller's grid is
     byte-identical.
+
+    ``feed_teleport`` puts a **vertical forwarder** on every ``reqK->bankK`` arm,
+    in the corridor between the banks. Those arms are 45/45/44/97 cells and every
+    access walks one, which makes them the block's largest remaining term — but
+    they are the one leg a grown gate room cannot take, because they run to the
+    gate's *callee*: the two outgoing pipes share the east wall and ``s`` takes
+    the nearest, so moving the local attachment more than four rows off the body
+    binds the north arms to the downstream pipe and answers reads from the wrong
+    bank in silence (:func:`bank_gate`). A separate one-in/one-out room has no
+    such constraint, and it is the same lever ``lm1.machine`` already pulled on
+    the answer and request legs.
+
+    The price is a man per bank and two columns of pitch: the room is
+    ``memory_men.teleport_v``'s six cells in a 6-wide corridor, and the shipped
+    pitch leaves four. Everything else is where it was — the room hangs entirely
+    between bank ``k-1``'s east edge and bank ``k``'s empty first column, above
+    the gate strip and below the bank's own request stub row.
     """
     from .lm1.machine import tape_block
 
@@ -420,7 +438,11 @@ def taped_store_block(
     # Banks in one row on top, the gate strip below; bank k sits a half pitch
     # east of gate k so each feed riser climbs the clear column between banks.
     nb = len(sizes)
-    pitch = max(bank_w + 3, gate_w + 8)
+    # The corridor between two banks is ``pitch - bank_w + 1`` columns wide (a
+    # tape block's own first column is empty). Three spare is what the riser
+    # needed; a forwarder room wants six.
+    nb_gap = 5 if feed_teleport else 3
+    pitch = max(bank_w + nb_gap, gate_w + 8)
     coll_y = 5  # collector interior rows 6..7, walls 5 and 8
     bank_y = 9
     gate_y = bank_y + bank_h + 2  # one clear row under the banks
@@ -440,7 +462,10 @@ def taped_store_block(
         raise ValueError("chain_pad measures how far the gates reach; chain_reach is off")
     if chain_reach:
         for k in range(1, nb - 1):
-            west_grow[k] = gx[k] - (bx[k - 1] - 1) - chain_pad
+            # ... one column east of whatever the previous bank's feed put in the
+            # corridor: the riser itself, or the forwarder's own entry stub.
+            corridor = bx[k - 1] - (3 if feed_teleport else 2)
+            west_grow[k] = gx[k] - (corridor + 1) - chain_pad
             if west_grow[k] < 0:
                 raise ValueError(
                     f"gate {k} cannot reach bank {k - 1}'s riser with chain_pad={chain_pad}"
@@ -492,20 +517,41 @@ def taped_store_block(
     for k, t in enumerate(tapes):
         blit(bx[k], bank_y, t.cells)
 
+    # the room facade memory_men._room draws through (also used by the collector)
+    from .memory_men import _room, teleport, teleport_v
+
+    class _Grid:
+        def set(self, x: int, y: int, ch: str) -> None:
+            if ch != " ":
+                put(x, y, ch)
+
+    def feed(source: tuple[int, int], k: int) -> None:
+        """Carry a request from ``source`` (a gate's own east-wall cell) to bank
+        ``k``'s stub — down the corridor as a pipe, or across a room."""
+        tin = (bx[k] + tapes[k].in_cell[0], bank_y + tapes[k].in_cell[1])
+        if not feed_teleport:
+            riser = bx[k] - 2  # the clear column west of bank k
+            # end ON the bank's own first stub cell, so the joining cell is drawn
+            pipe([source, (riser, source[1]), (riser, tin[1]), tin])
+            return
+        # The room fills the corridor from just above the bank's stub row down to
+        # just above the gate strip, and is crossed in one instruction: ``R``
+        # takes from any incoming pipe with no distance term, and with one pipe
+        # each way neither it nor ``s`` has anything to choose between. What is
+        # left is the stub off the gate and the stub into the bank.
+        rx0, ry0, ry1 = bx[k] - 5, tin[1] - 1, gate_y - 1
+        _room(_Grid(), rx0 + 1, ry0 + 1, teleport_v(ry1 - ry0 - 1)[0])
+        # The climb uses the room's *second* interior column, not its first: a
+        # pipe must leave the gate heading east (SPEC.md — the first arrowhead's
+        # backward cell is the source room's border), and the widest gate's own
+        # east wall already sits against the first one.
+        pipe([source, (rx0 + 2, source[1]), (rx0 + 2, ry1)])
+        pipe([(bx[k] + 1, tin[1]), tin])
+
     # ── feeds: gate k's local arm into bank k, its downstream into gate k+1 ──
     for k in range(nb - 1):
         east = gx[k] + gates[k][1] - 1  # this gate's east wall column
-        riser = bx[k] - 2  # the clear column west of bank k
-        # end ON the bank's own first stub cell, so the joining cell is drawn
-        tin = (bx[k] + tapes[k].in_cell[0], bank_y + tapes[k].in_cell[1])
-        pipe(
-            [
-                (east + 1, gate_y + gate_local_row),
-                (riser, gate_y + gate_local_row),
-                (riser, tin[1]),
-                tin,
-            ]
-        )
+        feed((east + 1, gate_y + gate_local_row), k)
         down_y = gate_y + gate_down_row
         if k + 1 < nb - 1:
             # chain: east two cells, up to the next gate's entry row, straight in
@@ -518,15 +564,11 @@ def taped_store_block(
                 ]
             )
         else:
-            # the last gate's downstream IS the last bank's wire, rebased:
-            # run east under the empty last-gate slot, then up its feed riser
-            lt = tapes[-1]
-            ltin = (bx[-1] + lt.in_cell[0], bank_y + lt.in_cell[1])
-            pipe([(east + 1, down_y), (bx[-1] - 2, down_y), (bx[-1] - 2, ltin[1]), ltin])
+            # the last gate's downstream IS the last bank's wire, rebased: it
+            # runs east under the empty last-gate slot and takes the same feed
+            feed((east + 1, down_y), nb - 1)
 
     # ── answers: every bank rises into one collector teleport ────────────────
-    from .memory_men import _room, teleport
-
     coll_x0 = bx[0] + tapes[0].out_cell[0] - 2
     coll_x1 = bx[-1] + tapes[-1].out_cell[0] + 2
     if answer_west is not None:
@@ -534,12 +576,6 @@ def taped_store_block(
             raise ValueError(f"answer_west {answer_west} is not west of the collector")
         coll_x0 = answer_west
     coll_rows, _ = teleport(coll_x1 - coll_x0 + 1)
-
-    class _Grid:  # the tiny facade memory_men._room draws through
-        def set(self, x: int, y: int, ch: str) -> None:
-            if ch != " ":
-                put(x, y, ch)
-
     _room(_Grid(), coll_x0, coll_y + 1, coll_rows)
     for k, t in enumerate(tapes):
         ax = bx[k] + t.out_cell[0]
@@ -579,8 +615,9 @@ def taped_store_block(
     height = max(y for _, y in cells) + 1
     # Pipes the block owns outright (the in/out stubs merge with the machine's
     # request and response runs, men-v3's convention): per bank two ring legs
-    # and one feed and one answer, plus the gate-to-gate chain links.
-    pipes = nb * 4 + (nb - 2)
+    # and one feed and one answer, plus the gate-to-gate chain links. A feed
+    # crossing a forwarder is two pipes, not one.
+    pipes = nb * (5 if feed_teleport else 4) + (nb - 2)
     return V3Store(
         cells=cells,
         width=width,
