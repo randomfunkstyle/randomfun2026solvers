@@ -60,6 +60,33 @@ which on this machine is CPU ops per second, which is **ticks per frame**.
   machine's 300-column ceiling is pinned in `tests/test_deadman3d.py`, and every
   pipe must keep binding. Stay inside those; never minimise for its own sake.
 
+### Test scope: DOOM only
+
+The contest is over and this family is all that is being worked on, so **do not
+spend suite time on other problems' simulations.** When a run is slow because of
+`snake`, `matmul`, `gradebook`, `sudoku-validity`, `brackets`, `tcp`,
+`pathfinder`, `little-little-*` and friends, skip or deselect them and say so —
+`-k`, `--deselect`, or a marker. The DOOM tests are the ones that must be green:
+
+```sh
+uv run pytest tests/test_deadman3d.py tests/test_deadman3d_hires.py \
+              tests/test_memory_taped.py tests/test_wadimport.py -q
+uv run pytest tests/test_deadman3d.py -q -m slow      # the pixel gate: 12/12
+```
+
+**One exception, and it is not optional: keep the byte-identity checks.**
+`machine.py`, `rom.py`, `memory_taped.py` and the CPU builder are shared by every
+slug, so a DOOM change can silently move another machine's grid. Those assertions
+are milliseconds — they are not what makes a run slow, and they are the safety net
+that has caught the most this session. Skip other problems' **simulations**, never
+their **hash pins**.
+
+Also expected and not yours to fix: the 12 pre-existing `-m slow` failures on
+`main` (`test_lm1_two_tier` x2, `test_lm1_snake`, `test_matmul_grid`,
+`test_lm1_pipe_cost`, `test_lm1_grid_store`, `test_lm1_lane_order[deadman-3d]`,
+five `test_public_cases_pass_on_the_real_interpreter` params). Confirm your run
+shows that same set and nothing new.
+
 Three measurement traps this family has already sprung, all of which cost real
 work before they were understood:
 
