@@ -77,24 +77,31 @@ The chosen point on the curve, at 10-30 epochs:
 | MACs per forward pass | 828 |
 | MACs per training step | 1,836 |
 | MACs per epoch | 4.5M |
-| ticks per epoch, MACs on the CPU | ~6.0x10^9 |
-| ticks per epoch, MACs in the STREAM unit (§4.2a) | ~4.4x10^8 |
-| live men | ~25 |
-| **wall clock per epoch** | **~30 s native, ~3 s emulator** |
-| 10 / 20 / 30 epochs, native | 5 min / 10 min / 15 min |
+| CPU instructions per sample, **measured in Task 4** | **~5,450** |
+| instructions in the unrolled program | 9,786 (`P` = 17,207 ring words) |
+| **wall clock per epoch, emulator — measured** | **~23 s** (30 epochs in 11.5 min) |
+| wall clock per epoch, native grid — projected | ~5 min (30 epochs ~2.5 h) |
 
-Expected validation accuracy: **83-86%**.
+Achieved validation accuracy, **measured**: **80-82%**, peaking at epoch 8.
 
-Two decisions produce that number, and they pull in opposite directions on ticks.
-The store is rings rather than random-access memory, which costs ~2x the ticks and
-wins back an unquantified amount of wall clock (§4.2, and §1.1 on why the figure once
+**The native figure once given here — "~30 s an epoch" — is withdrawn.** It budgeted
+~29,000 ticks a sample, which left ~180 CPU instructions for unpacking, ReLU, pooling,
+softmax and the log table. The real figure is ~5,450, so the projection was ~10x
+optimistic. There is no tick cap and no score here, so this costs nothing but the
+claim. Task 8 measures it for the first time.
+
+**Validation loss bottoms at epoch 8 and then climbs** — 2,702 to 4,883 in Q12 — which
+is a fixed learning rate overfitting 2,000 images. The emulator reproduces that
+exactly, because it reproduces the reference model exactly; it is a property of the
+model, not a fault in the machine. Raising accuracy would be a model change (more
+data, a decaying rate, or the wider model §4.2a records as the option not taken).
+
+Two decisions shape those figures, and they pull in opposite directions on ticks. The
+store is rings rather than random-access memory, which costs ~2x the ticks and wins
+back an unquantified amount of wall clock (§4.2, and §1.1 on why the figure once
 claimed here is withdrawn). The multiply-accumulate moves into the STREAM unit, which
 saves ~14x on top (§4.2a). The model itself is unchanged from the CPU-only plan: the
 STREAM win is spent entirely on wall clock.
-
-**The per-epoch wall clock above is therefore a projection, not a measurement.** It
-will be measured for the first time in Task 8, and §1.1 is the reason to expect it to
-move.
 
 ## 2. Engine facts established by probe
 
@@ -287,6 +294,28 @@ and `B` — so it gets designed as a standalone probe grid verified against a Py
 model *before* it is placed, which is how `dsprelay` and the store selector were
 built.
 
+#### Nothing writes ring B from the CPU, and `UPDB` had to become the writer
+
+`MAC n` takes its scalar from ring A and its `n` multiplicands from ring B, so the
+image has to be **in ring B**. `FILLB` fills ring B from the **input room**, not from
+the CPU, and no other arm of the twelve writes it. Found in Task 4, after the arms
+were already drawn in the model.
+
+The way out uses `UPDB` as a store. `UPDB` computes
+`ring_b.append(b - ((a * g) >> shift))`, so with `g = 1` and `a = (b - v) << shift` it
+writes exactly `v`: `(b - v) << shift` is an exact multiple of `2^shift`, so the
+floored right shift recovers it losslessly, negatives included. Three commands a word.
+
+**This fixes the hardware's shift constant at 18, not 6.** One shift has to serve both
+uses, and the weight update reaches the same place by composition —
+`(g >> 12) >> 6 == g >> 18` for floored shifts — so the unit is built with `shift = 18`
+and the CPU pre-shifts. Task 6 must draw it that way and Task 7 must bake that
+constant.
+
+A thirteenth arm `PUSHB` on one of the four spare leaves would be ~10% faster and is
+**not** needed; the twelve stand. Recorded so the option is visible rather than
+rediscovered.
+
 #### The trie width is a parameter, not a widening
 
 The first plan said "add the new arms at codes 8-15, leaving the existing eight at 0-7
@@ -345,15 +374,21 @@ Concretely:
   backward pass and the weight update share **one lap**: iterating `(j, i)` in
   storage order, `df[i] += dz[j]*W[j][i]` and `W[j][i] -= lr*dz[j]*f[i]` both read
   `W[j][i]` exactly once.
-* **Conv as nine offset-sequential passes.** For a fixed tap `t`, `acc[p] +=
-  x[p+t]*W[f][t]` walks both `x` and `acc` in order at a constant offset, so both
-  can be rings. This is ~2x the instructions of a random-access conv, and it is what
-  keeps the man count near 20.
+* **Conv as nine offset-sequential passes, six runs each.** For a fixed tap `t`,
+  `acc[p] += x[p+t]*W[f][t]` walks both `x` and `acc` in order at a constant offset.
+  But an 8x8 image against a 6x6 valid output means a tap's 36 pixels are **six runs
+  of six at stride 8**, not one run of 36 — so it is `6 x MAC 6` per tap, not
+  `MAC 36`. (Measured in Task 4; the original text here assumed contiguity that the
+  geometry does not provide.)
 * **Activations** — the 72 conv pre-activations, 18 pooled values and pool argmax
   indices go in a ring, written forward and read backward.
-* **The scratch RAM holds <=16 words**: the accumulator spills the unrolled code
-  cannot keep in `A`/`B`, plus the 10 `dz` values. At 16 men that is ~30 ns/tick
-  extra, i.e. free, and it removes the only genuinely awkward ordering constraint.
+* **The store holds 351 words, not the 16 estimated here.** Measured in Task 4: the
+  72 conv pre-activations, the previous image, and the two indexed lookup tables
+  cannot live in rings — an indexed table is by definition random-access, and the
+  pre-activations are read in a different order than they are written. The "<=16
+  words" figure was a guess made before the backward pass existed. Combined with
+  §1.1 (store cost is per *access*, not per stored word) this is probably affordable,
+  but it is unquantified, and it is a sizing input Task 7 must take seriously.
 
 ### 4.1 Two of the requested layers are deliberately absent
 
@@ -478,9 +513,10 @@ generator report, this document and the commit message.
 
 ## 9. Open questions
 
-* **Loss axis scaling** is fixed at build time from the reference run's range. If
-  the machine's real loss leaves that range the chart clips. A log scale with a
-  generous ceiling is the plan; revisit if the reference run shows otherwise.
+* **Loss axis scaling — resolved by measurement.** Task 4's 30-epoch run gives the
+  real ranges in Q12: train loss 2,366..7,387, validation loss 2,702..4,883. Task 7
+  scales the panels from those, with headroom above 7,387 since validation loss
+  *rises* after epoch 8 and a longer run could exceed it.
 * **Whether `val_body` is a forward skip or a second unrolled body** is a 2%
   decision, settled by measurement once both exist.
 * **The cost model has been falsified once already** (§1.1) and its replacement is
