@@ -16,7 +16,8 @@ constrains it is wall clock, and that turns out to constrain it *hard*.
 |---|---|---|
 | native engine, ~26 live men | **12.3M ticks/s** | 20M ticks of `deadman-3d_taped.man` in 1.62s |
 | native engine, ~200 live men | **2.5M ticks/s** | 20M ticks of `deadman-3d.man` in 7.91s |
-| fitted cost per tick | **~30 ns fixed + ~1.9 ns per live man** | the two rows above |
+| native engine, 1,643 live men | **7.0M ticks/s** (143 ns/tick) | 1M ticks of `mnist_convnet_display.man` in 0.14s |
+| cost per tick | **proportional to *awake* men, not to live men** | the three rows above; see §1.1 |
 | emulator throughput | **930k instructions/s**, ~60M emulated ticks/s | `lm1.emulator` over 2,001 instructions |
 | one CPU instruction | ~162 ticks | `ARCH.md` §4.1, profiled on `snake` |
 | one tape read / write | 523 / 19 ticks | same |
@@ -24,9 +25,38 @@ constrains it is wall clock, and that turns out to constrain it *hard*.
 | one recirculated ROM word | 4.8 ticks | `ROM-RECIRCULATION.md` |
 
 **Wall clock is the only clock in this project.** There is no judge, so nothing
-charges ticks; what costs is our own simulator, and it charges per live man per
-tick. Every sizing decision below is made against wall clock, and several of them
-come out the opposite way to how they would on a graded problem.
+charges ticks; what costs is our own simulator. Every sizing decision below is made
+against wall clock, and several come out the opposite way to how they would on a
+graded problem.
+
+### 1.1 A live man is not a cost; an *awake* man is
+
+This started as "~30 ns a tick plus ~1.9 ns per live man", fitted from the two
+`deadman-3d` builds. **A third measurement broke it.** `mnist_convnet_display.man` —
+an unrelated hand-built inference machine, 667x1328, 1,643 spawns and no `H` at all —
+runs at **143 ns a tick**, where that model predicts 3,152. It is off by 22x, and in
+the direction that matters: 1,643 men cost *less* per tick than `deadman-3d`'s ~200.
+
+The mechanism is in the engine's own performance notes
+(`fast_littleman_native.cpp`): *"A runner blocked on a pipe op sleeps until an event
+that could change the retry outcome. A failed retry has no side effects, so sleeping
+is observationally identical as long as wake-ups are never missed."* In a dataflow
+grid almost every man is blocked on an `r` at any instant, so almost every man is
+free. Cost tracks the men actually walking.
+
+**What survives, and what does not.** The `deadman-3d` pair is still a real
+measurement — the same program, the same 20M ticks, 1.62s taped against 7.91s on
+man-memory, a genuine 4.9x. And `ARCH.md` §4.1's `little-little-man` result is real:
+52 slots into a man tier raised simulator work 9.7x. So a man-memory does cost, but
+**not because its words are men — because its decoders, router and collector walk,
+and every access broadcasts and wakes the cells.** Cost is per *access*, not per
+stored word.
+
+So the §4.2 conclusion stands — rings hold zero men and cannot be beaten on this axis
+— but **the margin claimed there is not established**, and the mechanism it gives is
+wrong. Treat its table as ordering the options correctly and its numbers as
+unverified. §9's slope measurement is now a requirement rather than a nicety, and it
+must measure awake men per access, not live men.
 
 The emulator is **24x faster than the grid** and runs the same assembly, which is
 what makes this project tractable at all: the development loop and the accuracy
@@ -290,9 +320,13 @@ size; a man-memory RAM is the fastest in ticks and loses anyway.
 | **rings + <=16-word scratch RAM** | ~2 instructions | **~20** | 6.0x10^9 | 14.7M/s | **~7 min** |
 
 So: **rings for everything with a fixed access order, a small man-memory only for
-values that are genuinely random-access.** RAM is faster per access and costs ~3.5x
-more wall clock, which is the `little-little-man` trade again — 52 slots in a man
-tier cut ticks 2.36x and raised simulator work 9.7x.
+values that are genuinely random-access.** The ordering is right — a ring holds zero
+men and so cannot lose on this axis — but **the wall-clock column above is computed
+from the superseded per-live-man model and is not to be trusted** (§1.1). What is
+measured is that a man tier costs per *access*, because a broadcast wakes its cells
+and its router and collector walk: `little-little-man` cut ticks 2.36x and raised
+simulator work 9.7x moving 52 slots into one. Rings remain the choice; the size of
+the win is unquantified.
 
 **Full unrolling is what makes ring order free.** A ring forces a fixed access
 order, which is normally the thing that makes it hard to program. In straight-line
@@ -444,11 +478,10 @@ generator report, this document and the commit message.
   generous ceiling is the plan; revisit if the reference run shows otherwise.
 * **Whether `val_body` is a forward skip or a second unrolled body** is a 2%
   decision, settled by measurement once both exist.
-* **The live-man cost model is fitted from two points**, both on `deadman-3d`, whose
-  man counts are themselves estimates from the docs rather than counted. `~30 ns +
-  1.9 ns per man` is good enough to choose rings over RAM by 3.5x, and not good
-  enough to size the scratch RAM precisely. First implementation task after the
-  data path: build the same trivial program at several `store="grid"` sizes and
-  measure the slope directly.
+* **The cost model has been falsified once already** (§1.1) and its replacement is
+  qualitative: cost tracks awake men and store cost is per access. Before sizing the
+  scratch RAM, build the same trivial program at several `store="grid"` sizes and
+  measure wall clock per access directly — not per stored word, which is the
+  quantity the first model wrongly charged for.
 * **RAM versus rings is settled** (§4.2) and does not need revisiting: rings for
   everything with a fixed access order, <=16 words of man-memory for the rest.
