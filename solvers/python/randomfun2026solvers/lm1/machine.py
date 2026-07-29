@@ -5766,6 +5766,39 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: bind". Neither knob touches the CPU's width or the adapter gap, so the
 #: column arithmetic never moved, which is the expected result and now a
 #: measured one.
+#:
+#: **Re-measured a third time against the shipped hi-res geometry** — the first
+#: two sweeps predate hires having a :data:`TIER_LAYOUT` ``store_offset`` at
+#: all, and :data:`STORE_REQUEST_REACH` now gives it one, which is exactly the
+#: westward move the collapse wanted. The two windows do intersect, and only
+#: just: the collector's wall is ``-18 - store_dx`` and the guard wants ``>= 1``
+#: (so ``dx <= -19``), while the roof needs the request column inside the
+#: adapter's floor (so ``dx in -20..-9``). **dx -19 and -20 satisfy both**, and
+#: the collapse still cannot be placed. The constraint is no longer the one the
+#: note above records, and it is worth naming because it is structural:
+#:
+#: 1. At the shipped ``answer_west``, all **80** attempts (40 ``mem_pad`` x roof
+#:    on/off) fail at **row 107** — the two-tier adapter's own top row. The
+#:    straight ``store->cpu`` leg assumes the collector's exit is *below*
+#:    ``resp_row``; on hires it is above, so the same two corners describe a
+#:    climb, and the climb crosses the adapter. The row never moves because it
+#:    is a CPU coordinate.
+#: 2. Routing that leg around the adapter instead (the instrument the
+#:    ``compact or moved`` branch already uses) clears row 107 and exposes the
+#:    real one: hires' ``resp_row`` sits **inside** the widened collector's own
+#:    row band, so the collector's west wall lands precisely on the cell the
+#:    response pipe must occupy to enter the CPU from the east.
+#: 3. Parking that wall further east frees the approach cell and leaves **no
+#:    free route at all** — verified with the search box opened to the whole
+#:    grid, so it is the machine and not the box. The attachment is enclosed by
+#:    the CPU to the west, the collector to the east and the adapter below, and
+#:    ``_keepout``'s halo forbids running alongside any of them.
+#:
+#: So the room that cannot be absorbed is neither of the two the collapse
+#: deletes — it is the **collector itself**, which on this machine cannot be
+#: both beside the CPU and clear of its response row. `deadman-3d_hires` keeps
+#: its `STORE_TELEPORT` pair. Probes: ``scratch/deadman3d-opt/hires_answer.py``
+#: and ``hires_answer_pads.py``; arithmetic in ``METRICS.md`` H2.
 STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 
 #: ``(slug, tier)`` pairs whose **seek request** reaches the drum through two teleport

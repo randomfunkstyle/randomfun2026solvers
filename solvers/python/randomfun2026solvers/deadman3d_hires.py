@@ -233,8 +233,28 @@ def hires_source() -> str:
     almost exactly, which is the expected answer for a lever that deletes one
     store read per DDA step: the step count scales with the pixel count and so
     does everything else.
+
+    ``dda_diff`` and ``dda_stepy_split`` are the same story one round later —
+    both landed on ``deadman-3d``'s taped tier after this family had already
+    been optimised, and both are program-level, so they arrive here through this
+    one function rather than through any registry.  Measured on the same tour,
+    on top of the shipped store set:
+
+    ==========================================  =============  =========
+    ``dda_diff``                                  997,775,049   -3.708%
+    ``dda_diff`` + ``dda_stepy_split``            990,990,612   **-4.362%**
+    ``lap_via_jump``                            1,036,259,288   +0.006%
+    ==========================================  =============  =========
+
+    ``lap_via_jump`` is **declined** — see the note in ``METRICS.md``; it is
+    worth -4.47% on the 64x48 machine and nothing at all here, and it is the
+    only one of the three that did not transfer.  ``dda_stepy_split`` cannot be
+    taken *alone* at this geometry (the second emission collides on ``dda0`` at
+    hires' unroll factor); with ``dda_diff`` the labels are distinct and it
+    builds, which is the combination ``deadman-3d`` ships anyway.
     """
-    return d3.deadman3d_source(GEOM, dda_acc_reload=False)
+    return d3.deadman3d_source(GEOM, dda_acc_reload=False, dda_diff=True,
+                               dda_stepy_split=True)
 
 
 def install_wad(wad: Path, *, brightness: float | None = None) -> dict:

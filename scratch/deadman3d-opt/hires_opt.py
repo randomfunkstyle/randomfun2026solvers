@@ -54,8 +54,38 @@ VARIANTS: dict[str, dict] = {
                             "TAPED_CHAIN_REACH"]},
 }
 
+SHIPPED = {"reload": False, "sets": ["STORE_REQUEST_REACH", "TAPED_FEED_TELEPORT"],
+           "dx": -14}
+VARIANTS["shipped"] = SHIPPED
+for _k in ("lap_via_jump", "dda_diff", "dda_stepy_split"):
+    VARIANTS[f"+{_k}"] = {**SHIPPED, "prog": {_k: True}}
+VARIANTS["+all3"] = {**SHIPPED, "prog": {"lap_via_jump": True, "dda_diff": True,
+                                         "dda_stepy_split": True}}
+VARIANTS["+diff+jump"] = {**SHIPPED, "prog": {"dda_diff": True, "lap_via_jump": True}}
+VARIANTS["+diff+split"] = {**SHIPPED, "prog": {"dda_diff": True,
+                                               "dda_stepy_split": True}}
+
 SETS = ("STORE_REQUEST_REACH", "TAPED_CHAIN_REACH", "TAPED_FEED_TELEPORT",
-        "STORE_REQUEST_TELEPORT")
+        "STORE_REQUEST_TELEPORT", "STORE_ANSWER_WEST")
+
+# `answer_west` is `(CX + W + 4) - tx_pre` and `tx_pre` carries `store_dx`, so
+# the collector's wall is `-18 - store_dx` and the guard wants >= 1: the answer
+# collapse needs **dx <= -19**.  The roof needs the request column `101 + dx` to
+# land in the adapter's floor `81..92`: **dx in -20..-9**.  The two windows
+# intersect in exactly two offsets, and until `store_offset` existed for hires
+# at all neither was reachable — which is why this is re-measured rather than
+# inherited.
+for _dx in (-19, -20):
+    VARIANTS[f"answer{-_dx}"] = {"dx": _dx, "sets": ["STORE_ANSWER_WEST"]}
+    VARIANTS[f"roof{-_dx}+answer"] = {
+        "dx": _dx, "sets": ["STORE_REQUEST_REACH", "STORE_ANSWER_WEST"]}
+    VARIANTS[f"ship{-_dx}"] = {
+        "reload": False, "dx": _dx,
+        "sets": ["STORE_REQUEST_REACH", "TAPED_FEED_TELEPORT"]}
+    VARIANTS[f"ship{-_dx}+answer"] = {
+        "reload": False, "dx": _dx,
+        "sets": ["STORE_REQUEST_REACH", "TAPED_FEED_TELEPORT",
+                 "STORE_ANSWER_WEST"]}
 
 
 def main(argv: list[str]) -> int:
@@ -89,7 +119,8 @@ def main(argv: list[str]) -> int:
         M.TIER_LAYOUT.pop(KEY, None)
         if "dx" in spec:
             M.TIER_LAYOUT[KEY] = {"store_offset": (spec["dx"], 0)}
-        src = d3.deadman3d_source(d3.GEOM128, dda_acc_reload=spec.get("reload", True))
+        knobs = {"dda_acc_reload": spec.get("reload", True), **spec.get("prog", {})}
+        src = d3.deadman3d_source(d3.GEOM128, **knobs)
         prog = assemble(src, name=SLUG)
         t0 = time.time()
         try:
@@ -107,7 +138,7 @@ def main(argv: list[str]) -> int:
         walk = res.frame_ticks[-1] - res.frame_ticks[0]
         results[name] = (res.step, walk, box)
         vs = ""
-        if "base" in results and name != "base":
+        if "base" in results and name != "base" and results["base"][1]:
             b = results["base"][1]
             vs = f"  walk {walk - b:+,} = {100.0 * (walk - b) / b:+.3f}%"
         print(f"  {name:>11}: {box} P={prog.P} total={res.step:,} "
