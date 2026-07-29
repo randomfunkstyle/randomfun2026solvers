@@ -6762,6 +6762,23 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: already measured — :data:`TAPED_BANK_ORDER` read the bank *order* off it — and
 #: the sizes were simply never re-cut to match. That is the whole finding.
 #:
+#: **Re-validated after ``a15b200``** (which landed :data:`LANE_PITCH` and
+#: :data:`TAPED_CHAIN_REACH`, taking the machine to 340,720,837). The count is a
+#: trade of ring length against gate hops, and both sides of it moved — so it was
+#: re-swept rather than assumed. Eleven holds, and the curve *sharpened* around
+#: it (3-round tour):
+#:
+#: | banks | ticks | Δ | (was, pre-``a15b200``) |
+#: |---|---|---|---|
+#: | 10 | 31,224,062 | +0.112% | +0.10% |
+#: | **11** | **31,189,000** | — | — |
+#: | 12 | 31,559,311 | +1.187% | +0.69% |
+#: | 13 | 31,829,636 | +2.054% | — |
+#:
+#: The 12-bank penalty nearly doubled. A faster CPU makes a gate hop relatively
+#: more expensive than the ring it saves, which pushes the optimum toward *fewer*
+#: banks — eleven is now further from twelve than it was, not closer.
+#:
 #: The order below is **not separable from this**: ``(3, 0, 1, 2)`` was read off
 #: the uniform quarters' traffic, and re-cutting the banks rewrites the traffic it
 #: was read off. Priced on the DP-4 cut, the stale order gives -53.6% where the
