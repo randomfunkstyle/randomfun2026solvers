@@ -353,9 +353,11 @@ def test_the_hires_opcode_map_is_its_own_and_a_win(wad_installed) -> None:
     key = ("deadman-3d_hires", "taped")
     slots = machine.OPCODE_SLOTS[key]
     program = assemble(wad_installed.hires_source(), name="deadman-3d_hires")
-    # exactly what `build_for` plans with: no LANE_ORDER entry, no seek split
+    # exactly what `build_for` plans with: no LANE_ORDER entry, and the seek
+    # split's JMPS filtered out by `_relabel_slots` (see the map's own test in
+    # `test_seekrom.py` — the DP's twenty-one assignments are what is checked here)
     assert machine.LANE_ORDER.get("deadman-3d_hires") is None
-    assert "deadman-3d_hires" not in machine.SEEK_DRUM
+    slots = {m: s for m, s in slots.items() if m != "JMPS"}
     base = machine.plan(program, middle_order=None)
     relabelled = machine.plan(program, middle_order=None, slots=slots)
 
@@ -368,10 +370,12 @@ def test_the_hires_opcode_map_is_its_own_and_a_win(wad_installed) -> None:
 
     assert cells(relabelled) < cells(base)
 
-    # not deadman-3d's: no JMPS lane at all, and a different assignment besides
+    # not deadman-3d's: both name JMPS now, but the assignment is its own — the
+    # DP was re-run on hires' histogram and agrees on six of twenty-one lanes.
     other = machine.OPCODE_SLOTS[("deadman-3d", "taped")]
-    assert "JMPS" in other and "JMPS" not in slots
-    assert slots != other
+    assert "JMPS" in other and "JMPS" in machine.OPCODE_SLOTS[key]
+    assert machine.OPCODE_SLOTS[key] != other
+    assert sum(1 for m, s in slots.items() if other.get(m) == s) < len(slots)
 
 
 @needs_iwad

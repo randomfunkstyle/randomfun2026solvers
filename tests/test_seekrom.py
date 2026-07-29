@@ -81,27 +81,105 @@ def test_seek_of_covers_every_classic_target_sem() -> None:
     assert set(SEEK_OF.values()) == SEEK_SEMS
 
 
+#: The two DOOM slugs are the whole of :data:`machine.SEEK_DRUM`. Named once so a
+#: third slug joining has to touch this line and read the tests below it.
+_SEEKING = {"deadman-3d", "deadman-3d_hires"}
+
+
 def test_registry_is_narrow_so_every_other_machine_stays_byte_identical() -> None:
-    """Only ``deadman-3d`` seeks; the seek path must be unreachable elsewhere.
+    """Only the DOOM slugs seek; the seek path must be unreachable elsewhere.
 
     The seek drum is a per-slug opt-in precisely so that turning it on for the
     DOOM demo cannot move any other checked-in grid. Assert the *scope*, not
     emptiness — the registry stopped being empty when the re-measured drum
-    landed (canonical 372x377 -> 382x382 for -18.7% on the tour).
+    landed (canonical 372x377 -> 382x382 for -18.7% on the tour), and stopped
+    being one slug when ``deadman-3d_hires`` measured -36.04%.
     """
-    assert machine.SEEK_DRUM == {"deadman-3d"}
+    assert machine.SEEK_DRUM == _SEEKING
     # Every other registered slug builds the classic drum: `seek=None` (the
     # registry's own answer) must agree with an explicit `seek=False`.
     for slug in sorted(machine.TAPE_SIZE):
-        if slug == "deadman-3d":
+        if slug in _SEEKING:
             continue
         assert slug not in machine.SEEK_DRUM
         assert slug not in machine.SEEK_MEM_PAD
+        assert slug not in machine.SEEK_SLAB_PITCH
         assert not any(k[0] == slug for k in machine.SEEK_TIER_LAYOUT)
     assert (
         machine.build(load("brackets")).rows
         == machine.build(load("brackets"), seek=False).rows
     )
+
+
+def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
+    """``deadman-3d_hires``' seek build needs five registries, all keyed to it.
+
+    Turning the drum on for a slug is not one line: ``build_for`` resolves a
+    family of coupled registries differently under ``seek``, and hires needed a
+    non-default value in every one of them (see :data:`machine.SEEK_DRUM`'s
+    table, where each is knocked back off one at a time and re-timed).
+
+    The point of the test is the *keying*. Every entry is on the hires slug or on
+    ``("deadman-3d_hires", "taped")``, so no other machine — and in particular not
+    ``deadman-3d``, whose three grids are hash-pinned — can move a byte because of
+    any of it. Its own named test, deliberately: the assertion it replaces
+    ("hires is not in SEEK_DRUM") lived inside two unrelated tests, and merging
+    contradictory claims into a shared test is how this file got confusing before.
+    """
+    key = ("deadman-3d_hires", "taped")
+    assert "deadman-3d_hires" in machine.SEEK_DRUM
+    assert machine.SEEK_TIER_LAYOUT[key] == {"rom_rows": 119}
+    assert machine.SEEK_SLAB_PITCH["deadman-3d_hires"] == 11
+    assert machine.MEM_PAD_FOR[key] == 15
+    assert machine.INPUT_NORTH_WEST[key] == 13
+    assert key in machine.SEEK_TELEPORT
+    assert key in machine.SEEK_TAKEN_DROP_EAST
+
+    # Nothing was written on the bare slug where a `(slug, tier)` key was meant,
+    # which is the mistake that would silently move the canonical hires build.
+    assert "deadman-3d_hires" not in machine.SEEK_MEM_PAD
+    assert "deadman-3d_hires" not in machine.MEM_PAD
+    assert "deadman-3d_hires" not in machine.SLAB_PITCH  # classic pitch: declined
+    assert "deadman-3d_hires" not in machine.ROM_BUFFER  # antagonistic to seeking
+    # and TIGHT_STRUCT_DROPS can never fire under seek, so it must not be asked to
+    assert "deadman-3d_hires" not in machine.TIGHT_STRUCT_DROPS
+
+    # `deadman-3d`'s own seek registries are untouched by all of it.
+    assert machine.SEEK_MEM_PAD == {"deadman-3d": 22}
+    assert machine.MEM_PAD_FOR[("deadman-3d", "taped")] == 16
+    assert machine.SEEK_TIER_LAYOUT[("deadman-3d", "men-v3")] == {"rom_rows": 60}
+    assert machine.SEEK_TIER_LAYOUT[("deadman-3d", "taped")] == {"rom_rows": 84}
+
+
+def test_the_hires_slot_map_names_jmps_and_stays_inert_without_it() -> None:
+    """The 22nd lane a seek build grows has to be named, and naming it is free.
+
+    ``_relabel_slots`` rejects a map that does not name every *used* opcode, so
+    ``OPCODE_SLOTS[("deadman-3d_hires", "taped")]`` — a 21-lane DP solution over a
+    classic plan — made ``build_for(..., seek=True)`` fail outright. The fix is
+    the one the function documents ("one registered map has to serve
+    ``seek=True`` and ``seek=False`` alike"): name ``JMPS``, and let the classic
+    build filter it back out.
+
+    Both halves are asserted here because only the pair is safe. That ``JMPS``
+    is present is what makes the seek build possible; that it is *ignored*
+    without a seek split is what keeps the classic build byte-identical, and
+    that is checked structurally rather than by rebuilding, since the program is
+    IWAD-only.
+    """
+    slots = machine.OPCODE_SLOTS[("deadman-3d_hires", "taped")]
+    assert slots["JMPS"] == 25
+    # rank-preserving: the only gap the shipped 21 leave it is JMPF(24)..SND(28)
+    assert slots["JMPF"] < slots["JMPS"] < slots["SND"]
+    assert len(set(slots.values())) == len(slots)
+
+    # inert without a seek split: `_relabel_slots` drops names the build never
+    # placed, so the surviving assignment is exactly the 21 the DP chose.
+    classic = sorted(set(slots) - {"JMPS"}, key=lambda m: slots[m])
+    placed = {m: i for i, m in enumerate(classic)}
+    kept = machine._relabel_slots(placed, slots, 32)
+    assert "JMPS" not in kept
+    assert kept == {m: s for m, s in slots.items() if m != "JMPS"}
 
 
 def test_seek_declines_when_no_jump_is_long_enough() -> None:

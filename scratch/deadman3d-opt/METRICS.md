@@ -2601,3 +2601,85 @@ whose destinations are NW/NE/SW/SE in tile order and `S` binds all four
 (`FastLittleman._bindings`, the same nearest-pipe rule the engine uses).
 `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`, `_taped.man` `a11edcc6…`,
 `deadman-3d.input.txt` `654d35d6…`.
+
+## The seek drum on `deadman-3d_hires` — **-36.04%**, the largest single win
+
+`SEEK_DRUM` had never contained the hires slug. Not a considered decline: the set
+has had exactly two values in its whole history, `set()` at `994b4f1` and
+`{"deadman-3d"}` at `886ea07`, and there was no entry in this file either. Nobody
+had measured it.
+
+Harness `hires_seek.py` (build / lit / fold / run modes); `build_for` takes an
+explicit `seek=`, so the whole sweep ran before a registry moved. Native
+`fast_littleman`, 21-round tour, `frame_tiles=(2, 2)`, `frame_ticks[-1] -
+frame_ticks[0]`, every row `fatal is None and passed is True`. Baseline is
+`add1e25`'s classic hires machine, **365,333,921 ticks at 514x451**.
+
+| build | box | `mem_pad` | tour ticks | vs baseline |
+|---|---|---:|---:|---:|
+| classic (baseline) | 514x451 | 15 | 365,333,921 | — |
+| seek alone, fold 120 | 531x497 | 35 | 258,146,477 | -29.35% |
+| + `SEEK_SLAB_PITCH` 11 | 517x496 | 18 | 236,380,143 | -35.30% |
+| + `INPUT_NORTH_WEST` 13 / `MEM_PAD_FOR` 15 | 517x496 | 15 | 234,324,256 | -35.86% |
+| + `SEEK_TAKEN_DROP_EAST` | 517x496 | 15 | 233,851,301 | -35.99% |
+| + `SEEK_TELEPORT` (**shipped**) | 517x496 | 15 | **233,658,800** | **-36.04%** |
+
+Each row is the shipped build with exactly one registry knocked back off, so
+every entry is proved load-bearing rather than assumed.
+
+### Why it is worth three times the parent's -11.0%
+
+Scale, and it is the one part of this that transfers as an argument rather than
+as a number. A taken long jump discards `2 * ((t - k - 1) mod n)` words of the
+ROM man's lap, so the classic drum's cost per long jump is linear in `P` while
+the seek ladder's is logarithmic in the fold. hires is P=9,225 against
+`deadman-3d`'s ~4,300.
+
+### Nothing else transferred, and one registry inverted
+
+* **The fold is a different feasible region, not a re-pick.** `ROM_ROWS`' 88 does
+  not build under the drum at all — a seek row addresses its words as
+  `row*K + offset` with `K = 128`, and at 88 rows the first row holds 152. The
+  fold has to *deepen*, the opposite direction to the classic width/height trade.
+  110 is the shallowest that builds; **111 the shallowest that runs** — 110 and
+  121..123 build and then fail `FastLittleman` with "numeric literal does not fit
+  signed 64 bits", the reverse-reading hazard, landing in a different place than
+  it does on `deadman-3d`. Box is 517 wide and pad 15 across the whole range, so
+  the fold is a pure tick pick: 111 235,095,528 / 115 234,590,527 / 118
+  234,768,727 / **119 233,658,800** / 120 234,200,405 / 124 235,121,255 / 128
+  234,237,503 / 130 234,888,187. Span 0.63%, non-monotone — a pin, not a
+  crossing.
+* **`SEEK_SLAB_PITCH` inverted sign against its own docstring**, and is the
+  second-largest thing here at **-8.85%**. `SLAB_PITCH` declines hires twice on
+  the grounds that its width is the router wall's, not its CPU's, so there is
+  nothing to trade CPU columns into. True, and the wrong question: what the pitch
+  buys on a seek hires is the `mem_pad` **floor**. Pitch 13 -> 35, pitch 12 ->
+  28, pitch 11 -> 18, and `INPUT_NORTH_WEST` takes it to 15 — which is where the
+  *classic* build already binds. Twenty columns of memory band, walked twice by
+  every memory instruction. On `deadman-3d` the same knob pushes the pad the
+  other way (a narrower CPU is a closer rival to `mem_resp`); the rival that
+  binds is simply not the same one on the two machines.
+* **The slot map needed one name added.** A seek build grows a 22nd lane and
+  `OPCODE_SLOTS[("deadman-3d_hires", "taped")]` is a 21-lane DP solution, so
+  `build_for(..., seek=True)` failed outright with "opcode slot map does not name
+  the used opcodes ['JMPS']". The DP was **not** re-run: the twenty-one
+  assignments are untouched and `JMPS` takes a free slot in the only gap rank
+  preservation leaves it, `JMPF`(24)..`SND`(28). All three candidates 25/26/27
+  bit-reverse to a two-digit opcode (same 345 drum cells) and the 21-round tour
+  is identical to the tick at all three, so the trie cannot separate them either.
+  Naming it is inert for the classic build — `_relabel_slots` filters names the
+  build does not use — which is what that function's docstring is for.
+
+### What was left alone
+
+`ROM_BUFFER` stays empty: it is antagonistic to seeking by construction
+(`ROM-RECIRCULATION.md` §170) — the buffer's value is draining a pre-filled queue
+during the discard loop, and seeking deletes the loop. `TIGHT_STRUCT_DROPS` can
+never fire under seek (`not seek and name in ...`), so hires is not added to it.
+`SEEK_OPS` stays `("JMPF",)`: splitting `BRZ`/`BRN` would need two further lanes
+named in the map, and the parent's own table has it as a loss.
+`TAPED_BANKS` / `TAPED_BANK_ORDER` untouched.
+
+`deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`, `deadman-3d.input.txt`
+`654d35d6…`, `_taped.man` `16d77f35…`, all unmoved: every registry entry is keyed
+to the hires slug or to `("deadman-3d_hires", "taped")`.
