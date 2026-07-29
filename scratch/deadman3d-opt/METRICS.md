@@ -717,3 +717,91 @@ kind to the one just deleted. It is not:
 
 Measured negative by construction: the walk is conserved, so it is recorded rather
 than built.
+
+# M11c — `io:I` west: worth nothing by itself, worth 0.62% through `mem_pad`
+
+Taped tier only, opt-in via `machine.INPUT_NORTH_WEST` and `machine.MEM_PAD_FOR`.
+Baseline: the M11b grid, **837,925,922**.
+
+## What pinned x=21
+
+Nothing geometric. `build_cpu` sets `in_col = lane_x0`, so under `INPUT_NORTH` the
+I room's pipe drops onto the IN lane's own `r` — a convention, not a constraint.
+The band it lives in (`rom_bottom+1 .. CY-1`) is empty from column 2 to 285; the
+ROM corridor descends in column 1 and nothing else is there at all. The westward
+limit is the CPU's own north wall: `in_x >= CX + 1 = 9`, at which point the room's
+west wall shares the CPU's west wall *column* (on different rows) and the pipe
+still lands on a wall cell rather than the corner. That is 13 columns of travel.
+
+## Moving it is worth exactly zero, measured
+
+| | io:I x=21 | io:I x=8 |
+|---|---|---|
+| `input->cpu` | 2 cells | 2 cells |
+| box | 287x253 | 287x253 |
+| 116-round tour | 837,925,922 | **837,925,922** |
+
+Bit-identical. The pipe is at its two-cell minimum either way, the box is
+store-bound, and the room is the only thing that moves. `INPUT_NORTH` also costs a
+fixed 5 rows of `cpu_gap` (3 room rows + 2 pipe rows, against `ROM_CPU_GAP = 1`)
+and that is independent of the column, so no height comes back either.
+
+## What it *does* buy: two columns of `mem_pad`
+
+The input pipe is one of the three rivals `check_bindings` weighs every memory `r`
+in the CPU against, and shrinking `mem_pad` walks the memory band **west, toward
+it**. So the room's column is the pin on the pad, not on the layout.
+
+Swept (build-only, then on the tour):
+
+| `mem_pad` | I room at x=21 | I room at x=8 |
+|---|---|---|
+| 22 (`SEEK_MEM_PAD`, was shipped) | builds — 837,925,922 | builds — 837,925,922 |
+| 18 | builds — **827,599,542** (-1.23%) | builds |
+| 17 | `'r' at (41,103)` wants `mem_resp`, `in` is nearer | builds |
+| 16 | fails on `in` | builds — **822,436,488** (-1.85%) |
+| 15 | fails on `in` | fails on `rom` |
+
+Two findings, and they are separable:
+
+1. **`SEEK_MEM_PAD = 22` was four columns above its own floor.** Its docstring
+   still claims 22 is where the classic slabs' `r` stops beating `mem_resp`; that
+   was measured before `SEEK_SLAB_PITCH`, `STORE_ANSWER_WEST` and M10 moved every
+   glyph it was weighed against. Re-swept, the floor with the room where it is
+   today is **18**, and taking it is worth **-1.23%** on its own.
+2. **The last two columns are the input room's**, and they are worth a further
+   **-0.62%**. At 16 with the room moved the rival becomes the ROM pipe, which no
+   amount of moving the I room affects — so 16 is a real floor, not another stale
+   one.
+
+| | before | after |
+|---|---|---|
+| `io:I` | x=21 | **x=8** |
+| `mem_pad` (taped) | 22 | **16** |
+| lane width (e.g. `cpu:lane:IN`) | 32 | **26** |
+| taped box | 287x253 | 287x253 (unmoved) |
+| 116-round tour | 837,925,922 | **822,436,488** (**-1.85%**) |
+
+Keyed by `(slug, tier)` and gated on `seek`: the canonical machine keeps
+`SEEK_MEM_PAD`'s 22 and its `f62d63fd` grid, and `build_for(..., seek=False)` keeps
+`MEM_PAD`'s 17 (`test_lm1_slab_entry.py` pins that).
+
+# M11 — the three levers together
+
+| | 116-round tour | Δ |
+|---|---|---|
+| baseline `merge-staging` `2a20a64` | 838,511,442 | — |
+| M11 seek teleport (437 -> 52 cells) | 838,353,122 | -0.019% |
+| M11b JMPS U-turn deleted | 837,925,922 | -0.051% |
+| M11c `io:I` west + `mem_pad` 22 -> 16 | **822,436,488** | **-1.85%** |
+| **total** | | **-1.92%** |
+
+Box unmoved at 287x253 throughout — every column of it is the store's.
+
+**The ranking is the lesson.** The task ordered these by *pipe length* and the
+longest pipe on the machine came last by two orders of magnitude. Traversal length
+is a latency budget, not a tick count: a pipe shifts in O(1) a tick whatever its
+length, so what a route costs is `length x frequency`, and the seek request is used
+~150 times a frame against the store's ~15k reads. The cheap win here was not on
+any pipe at all — it was six columns of lane walk that every memory instruction
+pays twice.

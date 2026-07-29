@@ -2860,6 +2860,7 @@ def build(
     seek_ops: Sequence[str] = SEEK_OPS,
     seek_teleport: bool = False,
     seek_taken_drop_east: bool = False,
+    in_west: int = 0,
     doom_loop_row: int | None = None,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
@@ -3053,6 +3054,7 @@ def build(
                     seek_layout=seek_layout,
                     seek_teleport=seek_teleport,
                     seek_taken_drop_east=seek_taken_drop_east,
+                    in_west=in_west,
                     doom_loop_row=doom_loop_row,
                 )
             except MachineError as exc:
@@ -3112,6 +3114,7 @@ def build(
                     seek_layout=seek_layout,
                     seek_teleport=seek_teleport,
                     seek_taken_drop_east=seek_taken_drop_east,
+                    in_west=in_west,
                     doom_loop_row=doom_loop_row,
                 )
             except MachineError:
@@ -3193,6 +3196,7 @@ def _assemble(
     seek_layout=None,
     seek_teleport: bool = False,
     seek_taken_drop_east: bool = False,
+    in_west: int = 0,
     doom_loop_row: int | None = None,
 ) -> Machine:
     seek = seek_layout is not None
@@ -3332,7 +3336,9 @@ def _assemble(
     # `r` in the room (§7.1 is nearest, not nearest-useful) — `palette` reads no
     # input at all.
     iy = CY + cpu.in_row
-    in_x = CX + cpu.in_col
+    in_x = CX + cpu.in_col - in_west
+    if in_west and not CX + 1 <= in_x <= CX + W:
+        raise MachineError(f"in_west {in_west} puts the input pipe off the CPU north wall")
     if cpu.has_in and in_north:
         # INPUT_NORTH: the I room sits in the corridor band and its pipe drops
         # into the north wall directly above the IN lane's own `r`. On the west
@@ -5346,6 +5352,12 @@ SEEK_OPS_FOR: dict[str, tuple[str, ...]] = {}
 #: ``MEM_PAD``'s replacement while the seek drum is on: the extra lane and slab
 #: move the band, so the pinned pad no longer binds. Searched once and recorded
 #: here so a seek build stays deterministic (and fast).
+#:
+#: **The "22 is the floor" claim below is stale for the taped tier** — see
+#: :data:`MEM_PAD_FOR`, which re-swept it on the current machine and found 18
+#: without moving anything and 16 with :data:`INPUT_NORTH_WEST`. It is left at 22
+#: here because the canonical tier's grid is pinned at ``f62d63fd``; the taped tier
+#: overrides it by ``(slug, tier)``.
 SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 
 #: :data:`TIER_LAYOUT`'s overlay while the seek drum is on. Seeking re-shapes
@@ -5601,6 +5613,50 @@ SEEK_TELEPORT: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: canonical machine would take the same win, but its grid is pinned at
 #: ``f62d63fd`` and only the taped family is allowed to move.
 SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {("deadman-3d", "taped")}
+
+#: How many columns west of ``lane_x0`` an :data:`INPUT_NORTH` I room sits, per
+#: ``(slug, tier)``. Absent (0) keeps the shipped column, which is ``lane_x0``
+#: itself — the pipe drops onto the IN lane's own ``r``.
+#:
+#: **The move is worth exactly zero on its own, and that is measured**: the pipe is
+#: two cells wherever the room goes, the box is store-bound at 287x253, and the
+#: 116-round tour is *bit-identical* at 837,925,922 with the room at x=21 and at
+#: x=8. Nothing about the room's column is geometric.
+#:
+#: What it is worth is :data:`MEM_PAD_FOR`. The input pipe is one of the three
+#: rivals every memory ``r`` in the CPU is checked against, and pulling the memory
+#: band west (a smaller ``mem_pad``) walks those ``r``\ s *toward* it. With the room
+#: at ``lane_x0`` the pad floors at 18 — ``'r' at (41,103) must bind 'mem_resp' but
+#: 'in' is 25`` — and with the room at the CPU's north-west corner the rival becomes
+#: the ROM pipe instead and the floor falls to **16**. Two columns of memory band,
+#: bought by moving a 3x3 room thirteen columns west.
+#:
+#: The westernmost legal column is ``CX + 1``: the room's own west wall then shares
+#: the CPU's west wall column (they are on different rows) and the pipe still lands
+#: on a north-wall cell rather than the corner.
+INPUT_NORTH_WEST: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 13}
+
+#: Per-``(slug, tier)`` ``mem_pad``, overriding :data:`MEM_PAD` /
+#: :data:`SEEK_MEM_PAD`. The pad is how far east of the trie the memory band starts;
+#: every column of it is paid twice by every memory instruction's lane walk.
+#:
+#: :data:`SEEK_MEM_PAD`'s 22 was recorded as the binding floor ("at 21 and below the
+#: classic slabs' ``r`` can no longer beat ``mem_resp`` to the ROM pipe"). That note
+#: is **stale** — ``SEEK_SLAB_PITCH``, :data:`STORE_ANSWER_WEST` and M10 all moved
+#: the glyphs it was measured against. Re-swept on the current taped machine:
+#:
+#: | ``mem_pad`` | I room at x=21 | I room at x=8 (:data:`INPUT_NORTH_WEST`) |
+#: |---|---|---|
+#: | 22 (was shipped) | builds — 837,925,922 | builds |
+#: | 18 | builds — **827,599,542** (-1.23%) | builds |
+#: | 17 | binds against ``in`` | builds |
+#: | 16 | binds against ``in`` | builds — **822,436,488** (-1.85%) |
+#: | 15 | binds against ``in`` | binds against ``rom`` |
+#:
+#: 16 is the floor with the room moved, and the rival there is the ROM pipe, which
+#: the room's column cannot help with. Keyed by tier so the canonical machine, whose
+#: grid is pinned at ``f62d63fd``, keeps ``SEEK_MEM_PAD``'s 22 untouched.
+MEM_PAD_FOR: dict[tuple[str, str], int] = {("deadman-3d", "taped"): 16}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
@@ -6065,7 +6121,11 @@ def build_for(
         program if program is not None else programs.load(slug),
         tape_n=TAPE_SIZE[slug],
         rom_rows=tier.get("rom_rows", ROM_ROWS.get(slug)),
-        mem_pad=(SEEK_MEM_PAD.get(slug, MEM_PAD.get(slug)) if _seek else MEM_PAD.get(slug)),
+        mem_pad=(
+            MEM_PAD_FOR.get((slug, store), SEEK_MEM_PAD.get(slug, MEM_PAD.get(slug)))
+            if _seek
+            else MEM_PAD.get(slug)
+        ),
         display=display_for(slug),
         stream=STREAM_SIZE.get(slug),
         store=store,
@@ -6086,6 +6146,7 @@ def build_for(
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
         seek_teleport=_seek and (slug, store) in SEEK_TELEPORT,
+        in_west=INPUT_NORTH_WEST.get((slug, store), 0),
         seek_taken_drop_east=_seek and (slug, store) in SEEK_TAKEN_DROP_EAST,
         seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
