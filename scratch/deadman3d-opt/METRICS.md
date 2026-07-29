@@ -2815,3 +2815,49 @@ is 12/12.
 * The floor is **30** rows and this reaches **31** — one row, because the band is
   laid from a single pass rather than by matching each node to the best of the
   two lane rows it may share. Worth ~0.16%, and not worth a solver.
+
+# M21 — the slot map shapes the decode trie too, **-2.080%**
+
+**Numbering note.** This finding was written as "M18" in commit `b4f94fd` and in
+the `OPCODE_SLOTS` / `SEEK_TIER_LAYOUT` docstrings, because it and the `a`/`d`
+decline (the real M18, above) were developed in parallel from the same base and
+both reached for the next free number. It is **M21**; the docstrings still say
+M18 and that is the only place the old number survives. See `AGENTS.md`
+§"Optimisation work" — milestone numbers come from the integration branch, not
+from the base you branched off.
+
+`OPCODE_SLOTS`' docstring called it "a ROM-encoding knob and nothing else", and
+its DP scored only the drum's opcode digits. But `_uneven_trie` splits the slot
+*space* at each dyadic midpoint, so the slot values choose every branch of the
+decode trie — and how many fall in `[0,16)` **is** the root's in-order position.
+Writing the dispatch loop out, with the collector at `C`, the root at `F` and a
+lane at `r`:
+
+    cost(r) = 2C - 2*min(r, F) - 1 + zigzag(r)
+
+Below the root the descent and the drop telescope, so the live quantities are the
+**zigzag** and the **riser** (`collector - root`). Both are set by the trie's
+shape. It was a two-objective problem being solved on one objective, and the two
+are in real tension — the dispatch optimum alone costs 9,098 opcode cells against
+the drum DP's 6,557.
+
+| map | cells | dispatch | fold | box | tour ticks | |
+|---|---:|---:|---:|---|---:|---:|
+| drum DP (was shipped) | 6,557 | 12,426,204 | 81 | 293x254 | 609,871,597 | |
+| cheapest drum that helps | 6,617 | 11,747,422 | 81 | 293x254 | 602,765,896 | -1.165% |
+| dispatch-only optimum | 9,098 | **11,167,796** | 90 | 293x262 | 598,773,720 | -1.820% |
+| **joint (shipped)** | 7,631 | **11,167,796** | 84 | 293x257 | **597,185,956** | **-2.080%** |
+
+## Its optimum is stale, and deliberately not re-run here
+
+This was searched against a **43-row lane band**. M20 then staggered that band to
+**31 rows**, which moves the riser (22 -> 16 flat) — one of the two terms the
+search minimises. The shipped map is therefore optimal for a machine that no
+longer exists, and the two findings are **not additive**: both were measured from
+the same 609,871,597 baseline, so neither number survives the other landing.
+
+What was done instead of assuming: the artifacts were regenerated from the merged
+builder rather than taking either side of the merge conflict, giving
+`deadman-3d_taped.man` = `1bc5e791…` (M21 alone was `16d77f35…`, M20 alone
+`51d356d6…`). Re-running `band_root_probe.search_joint` against the 31-row band is
+the open item.

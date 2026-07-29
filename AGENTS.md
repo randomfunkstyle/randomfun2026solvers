@@ -193,3 +193,56 @@ underneath you. Before pushing: fetch, merge `origin/main` into your branch,
 re-verify, then push. **Do not fast-forward another checkout's working tree** — it
 may hold someone's uncommitted work; push `HEAD:main` instead, which moves the
 remote and leaves every working tree alone.
+
+## Optimisation work: the measurement is not separable
+
+The most expensive mistake in this repo is treating an optimisation's measured
+value as a property of the optimisation. It is a property of the optimisation
+**and the machine it was measured on**, because these levers compete for one
+critical path and whoever owns that path absorbs everyone else's gains.
+
+Measured on `deadman-3d_hires` — same builder change, same program, before and
+after the 11-bank store cut (`c51a748`) landed:
+
+| lever | before | after |
+|---|---|---|
+| `LANE_PITCH` | −0.401% | **−4.351%** |
+| `TAPED_CHAIN_REACH` | −0.020% *(declined)* | **−2.678%** *(shipped)* |
+| `TAPED_SKIP_BATCH` | −27.29% | **+0.185%** *(declined)* |
+
+Two of the three reversed. The store was ~68% of that run, so before it was fixed
+every CPU-side lever was measuring idle time and every store-side lever was
+measuring a bottleneck about to vanish. Nothing was wrong with the measurements —
+they were answers to a question that stopped applying.
+
+Four rules follow, and they are cheap:
+
+**1. Agents do not commit generated artifacts.** `.man`, `.debug.html` and
+`.debug.json` are derived; regenerate them once at the landing point. Every merge
+conflict this workflow has produced was a generated artifact or `METRICS.md`,
+while `machine.py` has auto-merged clean every time. An agent that commits no
+artifact merges with zero conflicts — that is measured, not hoped.
+
+**2. Order by profile share, not by convenience.** Optimise the subsystem owning
+the largest fraction of the run, land it, re-profile, then pick again.
+Parallelising *across* subsystems is safe only when they are weakly coupled (the
+ROM block and the store block are; the store block and anything CPU-side are not).
+Parallelising *within* one lever — sweeping eight bank counts — is always safe:
+the variants are mutually exclusive and only one wins.
+
+**3. Agents search; one owner ships.** An agent's deliverable is a measured table
+and a candidate config. Registry edits, artifact regeneration and the landing
+commit belong to whoever holds the integration branch. Search parallelises
+cleanly; landing is what collides.
+
+**4. Re-validate after every landing; do not reason about it.**
+`scratch/deadman3d-opt/revalidate.py` re-runs the shipped config plus every
+declined lever on a 3-round tour, ~30s a variant. Run it after anything lands. A
+decline is a fact about a machine and the machine keeps changing:
+`TAPED_CHAIN_REACH` sat declined at −0.020% while being worth −2.678%, and
+nothing in the suite could have noticed.
+
+**Numbering.** `METRICS.md` milestones (`M<n>`) are one global sequence. Agents
+branching from the same base all reach for the same next number — M18 was
+allocated twice. Take the number from the *integration branch's* `METRICS.md` at
+the moment you write it, not from the base you branched off.
