@@ -2357,3 +2357,94 @@ Two costs, and the second is the one that decided it.
 The mechanism is left in place and inert — `LANE_PITCH` is empty, `lane_pitch`
 defaults to 2, and every grid is byte-identical — so whoever picks this up starts
 from the guard rather than from the bug.
+
+---
+
+# M20 — the band staggers: 43 rows to 31, **-4.04%**
+
+M19 read the band's floor as 30 rows and did not take it, on two grounds that
+both turned out to be soft. This takes it. **Tour 609,871,597 -> 585,257,450,
+-4.04%, box 293x254 unchanged.** `deadman-3d.man` / `_trim` / `_v2` `f62d63fd…`,
+input `654d35d6…`, taped moves to `51d356d6…`. DOOM tier **139 passed**, pixel
+gate **12/12**.
+
+## What the rule turned out to be
+
+A gap row is owed to a node **only when its up half is a single lane**. Nine of
+this trie's twenty nodes. The other eleven share the lane row above them, and
+they can because of a column invariant that holds structurally:
+
+> a node at trie level `L` sits in column `3 + 2L`, and every lane in its subtree
+> is entered from a node at level `> L`, hence at column `>= 5 + 2L`. A node's
+> column — and both its legs' column — is therefore strictly **west** of every
+> lane entry beneath it.
+
+So the lane's man begins east of the node and never walks onto it, and no leg
+ever lands inside a lane's shift run. That is the user's rule, and it is right.
+
+The nine that cannot share are forced by `x` itself: it **always turns**, so a
+node's row must lie strictly *between* its two children's rows, and a node whose
+up child is a lane needs a row between two **adjacent** lanes. `_uneven_gaps`
+computes that set. **`_uneven_trie` needed no change at all** — its
+`slot_rows[min(down)] - 1` already places a node correctly once the leaves are
+spaced right, which is the tell that the gap was in the *spacing* and never in
+the trie.
+
+## Bottom-aligning it is what made it shippable
+
+M19's blocker was that the shorter room does not place. It does not have to be
+shorter. The eleven saved rows are left **blank above the band**, so the
+collector, the whole structures band below it and the room's own height stay
+exactly where they were — and so does every block placed against them.
+
+This costs nothing that matters, because all three winnings measure from the
+collector: the drop is `collector - 1 - row`, the riser is `collector - centre`,
+and the trie descent is the band's own height. The fetch row simply moves from
+121 to 127 and the band ends where it always did.
+
+**Shrinking the room as well was built and measured, and rejected.** With the
+CPU 12 rows shorter the machine is 293x242 and the tour is **579,543,849,
+-4.97%** — 0.93% better. It needs the STORE to follow it north (`store_offset`
+dy -5; the window is -10..-5, closed at -4 by the seek teleport's "no clear band
+below the store"). That extra 0.93% is real and still on the table, but the
+offset that fits the shipped grid does not fit a counterfactual build with a
+differently shaped store block, and chasing it with a fallback search cost three
+minutes a test run and still left two pins failing. Bottom-aligning gets 81% of
+the win for none of that.
+
+## Measured
+
+Nine-frame profile case, stages walked on the emitted cells
+(`scratch/pitch_probe.py`) — the win is near-perfect thirds, which is what you
+expect when the thing removed is the band's height and all three terms are
+vertical travel inside it:
+
+| stage | pitch 2 | staggered | saved | % run |
+|---|---:|---:|---:|---:|
+| trie descent | 5,234,638 | 4,183,452 | 1,051,186 | **1.74%** |
+| drop to the collector | 3,292,144 | 2,261,706 | 1,030,438 | **1.71%** |
+| riser (22 flat -> 16 flat) | 3,826,702 | 2,783,056 | 1,043,646 | **1.73%** |
+| **total** | **12,353,484** | **9,228,214** | **3,125,270** | **5.18%** |
+
+| | tour | vs baseline |
+|---|---:|---:|
+| M19 baseline | 609,871,597 | — |
+| **M20, staggered band** | **585,257,450** | **-4.04%** |
+| (shrunk room, not taken) | 579,543,849 | -4.97% |
+
+## Correctness
+
+A mis-decode is silent — the wrong lane runs and the grid still loads — so this
+is checked three ways rather than trusted. The branch-overwrite guard added in
+M19 does **not** fire on the staggered band (it fires on a uniform one-row band,
+losing all nine at once, which is pinned as a test). The decoder is walked on the
+emitted cells and every opcode reaches a *distinct* lane row. And the pixel gate
+is 12/12.
+
+## What is left here
+
+* **0.93%** in shrinking the room, if the store's placement is made to follow the
+  CPU's height rather than be pinned against it.
+* The floor is **30** rows and this reaches **31** — one row, because the band is
+  laid from a single pass rather than by matching each node to the best of the
+  two lane rows it may share. Worth ~0.16%, and not worth a solver.
