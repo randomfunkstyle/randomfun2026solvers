@@ -6593,6 +6593,7 @@ def build_for(
     top_bus: bool | None = None,
     seek: bool | None = None,
     store_chain_pad: int = 0,
+    lane_pitch: int | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -6684,7 +6685,9 @@ def build_for(
         store_shape=STORE_SHAPE.get(slug),
         doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
         doom_leaf_cols=DOOM_LEAF_COLS.get((slug, store)),
-        lane_pitch=LANE_PITCH.get((slug, store), 2),
+        lane_pitch=(
+            LANE_PITCH.get((slug, store), 2) if lane_pitch is None else lane_pitch
+        ),
     )
 
 

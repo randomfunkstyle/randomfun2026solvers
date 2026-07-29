@@ -1821,3 +1821,37 @@ def test_input_txt_is_the_flattened_cases_input() -> None:
     txt = (REPO / "littleman" / "examples" / "deadman-3d.input.txt").read_text().split()
     assert txt == flat
     assert txt == [str(w) for w in d3.input_words(list(d3.WALK))]
+
+
+def test_a_squeezed_lane_band_raises_instead_of_mis_decoding() -> None:
+    """The CPU's lane band cannot be packed one row per lane, and the failure it
+    would otherwise produce is invisible.
+
+    ``x`` **always turns** — clockwise is south, counter-clockwise north, and
+    there is no outcome that leaves the man on his own row. So a node's row must
+    lie strictly *between* its two children's rows, and a node whose children are
+    both lanes needs a row between two **adjacent** lanes. Squeeze the band and
+    that node's own up-lane lands on its row and overwrites the ``x`` with its
+    entry ``>``; every opcode routed through it then walks east into the wrong
+    lane, with no binding error and no collision to notice. This program's trie
+    has nine such nodes and a one-row band loses all nine at once.
+
+    So :func:`machine._uneven_trie` re-checks every branch cell after laying the
+    tree. The band's floor is lanes + those nodes, not lanes.
+    """
+    with pytest.raises(machine.MachineError, match="strictly between its two children"):
+        machine.build_for("deadman-3d", store="taped", lane_pitch=1)
+
+    # and the knob is inert: no registered slug asks for anything but the pair,
+    # which is what keeps every checked-in grid byte-identical.
+    assert machine.LANE_PITCH == {}
+
+
+def test_lane_pitch_needs_the_pruned_trie() -> None:
+    """The uniform trie's step is ``1 << (k - level)`` rows and the untrimmed band
+    puts a lane at ``2 * slot + 1``; only :func:`machine._uneven_trie` derives its
+    geometry from ``slot_rows``, which is what makes a pitch a variable at all."""
+    prog = machine._tier_program("deadman-3d", "taped")
+    p = machine.plan(prog, middle_order=machine.LANE_ORDER.get("deadman-3d"))
+    with pytest.raises(machine.MachineError, match="requires trim_dead"):
+        machine.build_cpu(prog, p, trim_dead=False, lane_pitch=1)
