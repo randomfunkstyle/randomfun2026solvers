@@ -85,7 +85,13 @@ def test_both_registries_name_only_the_slugs_that_measured_them() -> None:
     """
     assert machine.TIGHT_STRUCT_DROPS == {SLUG}
     assert machine.SLAB_PITCH == {SLUG: 11}
-    assert machine.SEEK_SLAB_PITCH == {"deadman-3d": 11}
+    # The claim is the *asymmetry* above, so assert that and not an inventory.
+    # This line used to read ``== {"deadman-3d": 11}`` and went red the moment
+    # ``deadman-3d_hires`` legitimately measured its own pitch — a whole-registry
+    # equality breaks on every addition while protecting nothing, which is the
+    # failure mode ``a70da0f`` ("pin properties, not bounding boxes") was about.
+    assert machine.SEEK_SLAB_PITCH["deadman-3d"] == 11
+    assert SLUG not in machine.SEEK_SLAB_PITCH  # the asymmetry this test is named for
 
 
 def test_the_pitch_registry_is_read_only_on_a_seek_build() -> None:

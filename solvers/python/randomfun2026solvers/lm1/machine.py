@@ -7293,6 +7293,19 @@ SEEK_TELEPORT: set[tuple[str, str]] = {
 SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {
     ("deadman-3d", "taped"),
     ("deadman-3d_hires", "taped"),
+    # men-v3 wants it for the same reason taped did, and it was simply never
+    # keyed here. Worth **-0.914%** on a 3-round tour, and additive with
+    # :data:`TUCKED_DROPS` to the third decimal (-1.593 + -0.914 = -2.507 against
+    # -2.507 measured) — not luck, but because they touch disjoint columns: a
+    # *simple* lane's drop against a *seek jump*'s taken row, so neither can
+    # absorb the other's win.
+    #
+    # Note where the win is **not**: the taken row lives at ``bottom + 1``, inside
+    # no ``cpu:*`` region, so neither ``cpu:return:collector`` nor
+    # ``cpu:return:riser`` can see it in a profile. It is still a return cost —
+    # a taken jump's walk back to the fetch site, paid on the 4.1% of
+    # instructions that are ``JMPF``.
+    ("deadman-3d_hires", "men-v3"),
 }
 
 #: How many columns west of ``lane_x0`` an :data:`INPUT_NORTH` I room sits, per
