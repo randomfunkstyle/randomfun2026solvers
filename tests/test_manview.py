@@ -13,7 +13,6 @@ exactly the space being reasoned about.
 from __future__ import annotations
 
 import pytest
-
 from randomfun2026solvers import manview
 
 
