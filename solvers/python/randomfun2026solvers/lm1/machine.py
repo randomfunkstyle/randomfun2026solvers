@@ -945,7 +945,7 @@ def _flat_lane(
     return out
 
 
-def _uneven_gaps(k: int, slots: Sequence[int]) -> set[int]:
+def _uneven_gaps(k: int, slots: Sequence[int], straight: bool = False) -> set[int]:
     """Which adjacent lane pairs still need a blank row between them.
 
     The band has historically been laid at a uniform pitch of two: one row per
@@ -969,6 +969,31 @@ def _uneven_gaps(k: int, slots: Sequence[int]) -> set[int]:
     ``i`` from lane ``i + 1`` has a **single-lane up half**. Everywhere else the
     two lanes may sit one row apart.
 
+    ``straight`` (:data:`STRAIGHT_TRIE`) dissolves most of what is left, and it is
+    ``x``'s "always turns" that it trades away. ``SPEC.md``:
+
+        ``d`` — turn **clockwise** if BP > 0, else go straight.
+
+    So a node drawn as ``d`` leaves the man on its own row when ``BP == 0``, and
+    can therefore *be* its up child's entry rather than colliding with it. The
+    equivalence is exact where it is used and nowhere else: after the ``L - 1``
+    ``]``-shifts a level-``L`` node owes, ``BP`` is the slot's **offset inside that
+    node's dyadic interval** (``slot - lo``), so
+
+    * ``x`` sends the man north on offset-bit ``top`` clear, south on it set;
+    * ``d`` sends him straight on ``offset == 0`` and south otherwise.
+
+    Those agree iff the up half is exactly ``{lo}`` — one lane, sitting at the
+    interval's base. The down half always has ``offset > 0``, so that side never
+    needs checking. Slots are non-negative, so ``x``'s "a negative backpack is not
+    treated as zero" caveat cannot bite either.
+
+    Every gap this function currently reports comes from a single-lane up half, and
+    under the contiguous packing that lane is always at ``lo`` — which is why the
+    flag removes **all ten** of ``deadman-3d_hires``' gaps and takes its band from
+    32 rows to 22. A searched slot map can put the lone up lane somewhere other
+    than ``lo`` (``{1, 2}`` inside ``[0, 4)``, say), and there the gap stays.
+
     Returns the set of ranks after which a gap is required. Mirrors
     :func:`_uneven_trie`'s recursion, including its single-child contraction, so
     the tree it measures is the one that gets built.
@@ -989,7 +1014,7 @@ def _uneven_gaps(k: int, slots: Sequence[int]) -> set[int]:
             lo, hi = (lo, mid) if up else (mid, hi)
         if len(sl) <= 1:
             return
-        if len(up) == 1:
+        if len(up) == 1 and not (straight and up[0] == lo):
             gaps.add(rank[max(up)])
         node(lo, mid)
         node(mid, hi)
@@ -999,7 +1024,7 @@ def _uneven_gaps(k: int, slots: Sequence[int]) -> set[int]:
 
 
 def _uneven_trie(
-    k: int, slot_rows: dict[int, int], lane_x0: int
+    k: int, slot_rows: dict[int, int], lane_x0: int, straight: bool = False
 ) -> tuple[int, dict[tuple[int, int], str]]:
     """Lay a depth-``k`` decode trie pruned to the *used* leaf slots.
 
@@ -1019,6 +1044,14 @@ def _uneven_trie(
       may be entered with junk in BP. That is safe: no lane micro-program reads BP
       before writing it (flat lanes never touch it; jump lanes open with ``b``,
       branch arms with ``W`` then ``b``).
+
+    ``straight`` (:data:`STRAIGHT_TRIE`) draws the nodes that would otherwise force
+    a blank row as ``d`` instead of ``x``. ``d`` goes **straight** on ``BP == 0``
+    rather than turning, so such a node sits *on its own up child's row* and is
+    that lane's entry: no ``>``, no collision, no gap row. :func:`_uneven_gaps`
+    carries the proof that the two glyphs are equivalent exactly there, and this
+    function additionally requires the two rows to have actually been packed
+    together — a ``d`` on a blank row would send the man east along nothing.
 
     Returns the root entry row — the fetch row — and the cells. Opcode numbers are
     untouched: the ROM image is byte-identical to the uniform trie's.
@@ -1046,13 +1079,23 @@ def _uneven_trie(
             return slot_rows[sl[0]], None
         col = 3 + 2 * level
         xrow = slot_rows[min(down)] - 1  # the gap row above the down half
-        cells[(col, xrow)] = "x"
+        # The one node shape that may go straight instead of turning: a single-lane
+        # up half sitting at the interval's base (so ``BP == 0`` picks it exactly),
+        # already packed onto the row this node wants. See :func:`_uneven_gaps`.
+        inline = (
+            straight
+            and len(up) == 1
+            and up[0] == lo
+            and slot_rows[up[0]] == xrow
+        )
+        cells[(col, xrow)] = "d" if inline else "x"
         nodes[(col, xrow)] = level
         for half, sign in (((lo, mid), -1), ((mid, hi), +1)):
             crow, clevel = node(level + 1, *half)
-            for yy in range(xrow + sign, crow, sign):
-                cells[(col, yy)] = "."
-            cells[(col, crow)] = ">"
+            if not (inline and sign < 0):
+                for yy in range(xrow + sign, crow, sign):
+                    cells[(col, yy)] = "."
+                cells[(col, crow)] = ">"  # the inline child's entry *is* the ``d``
             shifts = 0 if clevel is None else clevel - level
             end = (2 + 2 * clevel) if clevel is not None else (lane_x0 - 1)
             for i, cx in enumerate(range(col + 1, end + 1)):
@@ -1076,7 +1119,7 @@ def _uneven_trie(
     # opcode routed through it then walks east into the wrong lane, silently, with
     # no binding error and no collision. Nine of this program's twenty nodes are
     # such pairs, so a naive one-row band loses nine of them at once.
-    lost = sorted(pos for pos in nodes if cells[pos] != "x")
+    lost = sorted(pos for pos in nodes if cells[pos] not in ("x", "d"))
     if lost:
         raise MachineError(
             f"{len(lost)} decode branch(es) overwritten at {lost[:4]}"
@@ -1163,6 +1206,7 @@ def build_cpu(
     slab_pitch: int = _SLAB_PITCH,
     lane_pitch: int = 2,
     squash_band: bool | int = False,
+    straight_trie: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -1191,6 +1235,11 @@ def build_cpu(
             raise MachineError("lane_pitch requires trim_dead (the pruned trie)")
         if not 1 <= lane_pitch <= 2:
             raise MachineError(f"lane_pitch must be 1 or 2, got {lane_pitch}")
+    if straight_trie and not trim_dead:
+        # Only the pruned trie derives its geometry from ``slot_rows``; the uniform
+        # one hard-wires a lane to ``2 * slot + 1`` and there is no packed pair for
+        # a ``d`` to stand on.
+        raise MachineError("straight_trie requires trim_dead (the pruned trie)")
     if tight_drops and not short_return:
         raise MachineError("tight_drops requires the short-return drop rule")
     if tuck_drops and not short_return:
@@ -1221,7 +1270,7 @@ def build_cpu(
             # where the ``x`` splitting the pair has nowhere else to stand. See
             # :func:`_uneven_gaps` — most nodes can share the lane row above them,
             # because a node is always strictly west of the lanes in its subtree.
-            gaps = _uneven_gaps(k, slots)
+            gaps = _uneven_gaps(k, slots, straight_trie)
             at = [y0]
             for i in range(n_rows - 1):
                 at.append(at[-1] + (2 if i in gaps else 1))
@@ -1273,7 +1322,7 @@ def build_cpu(
     all_rows = list(at)
     if trim_dead:
         centre, trie_cells = _uneven_trie(
-            k, {(p.row[m] - 1) // 2: row_of[m] for m in used}, lane_x0
+            k, {(p.row[m] - 1) // 2: row_of[m] for m in used}, lane_x0, straight_trie
         )
     else:
         centre, trie_cells = (1 << k) + (y0 - 1), None
@@ -3125,6 +3174,7 @@ def build(
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
+    straight_trie: bool = False,
     tuck_drops: bool = False,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
@@ -3335,6 +3385,7 @@ def build(
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
+                    straight_trie=straight_trie,
                     tuck_drops=tuck_drops,
                 )
             except MachineError as exc:
@@ -3411,6 +3462,7 @@ def build(
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
+                    straight_trie=straight_trie,
                     tuck_drops=tuck_drops,
                 )
             except MachineError:
@@ -3509,6 +3561,7 @@ def _assemble(
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
+    straight_trie: bool = False,
     tuck_drops: bool = False,
 ) -> Machine:
     seek = seek_layout is not None
@@ -3531,6 +3584,7 @@ def _assemble(
         seek_taken_drop_east=seek_taken_drop_east,
         lane_pitch=lane_pitch,
         squash_band=squash_band,
+        straight_trie=straight_trie,
         tuck_drops=tuck_drops,
     )
     W, H = cpu.width, cpu.height
@@ -6249,7 +6303,31 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: To go back to the tick-optimal geometry: set this to 3, restore
 #: ``("deadman-3d_hires", "taped")`` to :data:`SEEK_TELEPORT`, and set
 #: :data:`ROM_TOUCH_DROP` to 25.
-SQUASH_BAND: dict[tuple[str, str], int] = {("deadman-3d_hires", "taped"): 12}
+#: **The men tier's 7 is not a footprint pick, it is what makes
+#: :data:`STRAIGHT_TRIE` bind.** ``d`` takes the band from 32 rows to 22, and the
+#: band is bottom-aligned, so by default all ten freed rows appear blank *above*
+#: it and every lane — including the nine that decide ``mem_out_row`` — moves ten
+#: rows south. The men tier's store request is a straight leg onto the router
+#: strip's corner (``store_request_west``), so the adapter's output row and the
+#: store's request wall have to be level to the row, and ``mem_out_row`` 20 -> 27
+#: breaks it: *"the store's request wall is on row 157 and the adapter's request
+#: leaves on row 164"*.
+#:
+#: ``squash_band`` moves the opposite way — it takes ``take`` of the freed rows out
+#: of the room, pulling the band, the collector and the machine's height north by
+#: exactly that many — so ``mem_out_row = 6 + slack - take`` and there is exactly
+#: one ``take`` that lands back on 20. Swept 0..21, build-only, and it is a knife
+#: edge: the adapter's row falls one per ``take`` and **7 is the only value that
+#: binds** with the store where it is. Everything else needs ``store_offset`` dy to
+#: follow it, which is a second knob and its own measurement.
+#:
+#: The tick model is *indifferent* to ``take`` — band and collector move together,
+#: so every ``collector - row`` is unchanged — which is why this can be spent
+#: entirely on binding without costing the decode anything.
+SQUASH_BAND: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "taped"): 12,
+    ("deadman-3d_hires", "men-v3"): 7,
+}
 
 ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # 5 at k=12: a squash of k is a negative drop of k, so the full pack pushes the
@@ -6264,6 +6342,26 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # nothing about the ROM path changed. 26 is the §7.1 ceiling at k=3 (it ties
     # the fetch `r` against `in`), which is also why k=4 is unreachable.
     ("deadman-3d_hires", "taped"): 5,
+    # **The men tier's 7 is that same identity, and it is the difference between
+    # :data:`STRAIGHT_TRIE` being a 9.7% win and a 4.2% loss.** ``SQUASH_BAND`` 7
+    # pulls ``cpu.centre`` seven rows north, so without this the corridor between
+    # the ROM's touch point and the fetch site is seven cells shorter than the
+    # shipped machine's. That corridor is a FIFO whose *length is its capacity*,
+    # and this family has measured wanting it longer — so the decode saving was
+    # being handed straight back. Swept at 3 rounds against the shipped
+    # 13,825,442, with ``STRAIGHT_TRIE`` and ``SQUASH_BAND`` 7 in:
+    #
+    #     drop   box       ticks        Δ
+    #     0      601x630   14,404,232   +4.19%
+    #     4      598x630   13,936,427   +0.80%
+    #     **7**  595x630   12,485,229   **-9.69%**   <- the identity, and the pick
+    #     10     595x630   12,669,645   -8.36%
+    #
+    # Note the *width* moving with it: ``build_for`` picks ``mem_pad`` by taking
+    # the smallest feasible footprint, and a shorter corridor makes the narrow
+    # pads infeasible. At the identity value the box returns to the shipped
+    # 595x630 exactly, which is the tell that nothing outside the band has moved.
+    ("deadman-3d_hires", "men-v3"): 7,
 }
 
 LANE_PITCH: dict[tuple[str, str], int] = {
@@ -6330,6 +6428,39 @@ LANE_PITCH: dict[tuple[str, str], int] = {
     # after. Nothing about the pitch is tier-specific; only the registry was.
     ("deadman-3d_hires", "men-v3"): 1,
 }
+
+#: ``(slug, tier)`` pairs whose decode trie draws its row-forcing nodes as ``d``
+#: instead of ``x`` — the last thing standing between :data:`LANE_PITCH`'s
+#: staggered band and a band with no gap rows at all.
+#:
+#: :func:`_uneven_gaps` explains why every remaining gap exists: ``x`` **always
+#: turns**, so a node whose up half is one lane cannot sit on that lane's row —
+#: the lane's entry ``>`` would overwrite it and every opcode routed through would
+#: walk east into the wrong lane, silently and with every pipe still bound.
+#: ``SPEC.md`` gives ``d`` the property ``x`` refuses: *turn clockwise if BP > 0,
+#: **else go straight***. A ``d`` on the lane's own row therefore **is** that
+#: lane's entry, and the row is not needed twice.
+#:
+#: The equivalence is exact and narrow, and :func:`_uneven_gaps` carries the
+#: derivation: after the ``L - 1`` shifts a level-``L`` node owes, ``BP`` is the
+#: slot's offset inside that node's dyadic interval, so ``BP == 0`` picks the up
+#: half iff the up half is exactly ``{lo}``. Under the contiguous packing every
+#: single-lane up half *is* ``{lo}``, so all ten of ``deadman-3d_hires``' gaps go
+#: and the band falls **32 rows -> 22**, ten rows the profile could see: ten of the
+#: band's 55 rows carried nothing but ``>]x``.
+#:
+#: Why that is a tick lever and not a footprint one: the band is bottom-aligned
+#: (:func:`build_cpu`, ``squash_band`` off), so the rows it saves are left blank
+#: *above* the band and every lane moves **south, toward the collector**. A lane's
+#: drop is ``collector - row`` and the trie's descent is ``|centre - row|``, so ten
+#: rows come off both at once. Measured, 21-round men-v3 tour: see the table in
+#: the commit.
+#:
+#: Off by default and keyed by ``(slug, tier)``, so every other machine's
+#: checked-in grid is byte-identical. It is also inert at ``lane_pitch = 2`` — the
+#: rows are two apart there and the ``d`` never fires — so the pair is
+#: :data:`LANE_PITCH` **and** this, never this alone.
+STRAIGHT_TRIE: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
@@ -8060,6 +8191,7 @@ def build_for(
     lane_pitch: int | None = None,
     rom_touch_drop: int | None = None,
     squash_band: bool | int | None = None,
+    straight_trie: bool | None = None,
     tuck_drops: bool | None = None,
     program=None,
 ) -> Machine:
@@ -8171,6 +8303,9 @@ def build_for(
         ),
         lane_pitch=(
             LANE_PITCH.get((slug, store), 2) if lane_pitch is None else lane_pitch
+        ),
+        straight_trie=(
+            (slug, store) in STRAIGHT_TRIE if straight_trie is None else straight_trie
         ),
     )
 

@@ -39,9 +39,17 @@ sys.path.insert(0, str(REPO / "solvers" / "python"))
 
 from randomfun2026solvers.lm1 import machine  # noqa: E402
 
-from test_lm1_opcode_slots import LOADABLE, _trie_of, _walk_trie  # noqa: E402
+from test_lm1_opcode_slots import (  # noqa: E402
+    LOADABLE,
+    _seek_plan,
+    _trie_of,
+    _walk_trie,
+)
 
 #: The four glyphs the trie is allowed to draw, and which of them do anything.
+#: ``d`` joins them only under :data:`machine.STRAIGHT_TRIE`, which the tests at
+#: the foot of this file cover on their own; the cases above it are the ``x``-only
+#: trie every other machine still gets.
 OPERATIONS = frozenset({"x", "]", ">"})
 PASS_THROUGH = "."
 
@@ -151,3 +159,113 @@ def test_every_pass_through_has_a_neighbour_in_its_own_run(key) -> None:
         vertical = (x, y - 1) in cells or (x, y + 1) in cells
         horizontal = (x - 1, y) in cells
         assert vertical or horizontal, f"orphan pass-through at {(x, y)}"
+
+
+# ── STRAIGHT_TRIE: the row floor the four glyphs above cannot get under ──────
+#
+# Everything before this point reasons about a trie drawn in ``x``, and reaches
+# the same floor twice: ``x`` **always turns**, so a node whose up half is one
+# lane cannot share that lane's row — the lane's entry ``>`` would land on the
+# node's own cell. That is one blank row per such node, ten of them on
+# ``deadman-3d_hires``, and it is what ``_uneven_gaps`` exists to count.
+#
+# ``SPEC.md`` gives ``d`` the property ``x`` refuses: *turn clockwise if BP > 0,
+# else go straight*. These cases pin that the substitution is (a) inert where the
+# builder does not make it, (b) worth a row every time it does, and (c) still
+# routes every opcode into its own lane — which is the failure ``d`` could
+# otherwise cause with every pipe bound and no error anywhere.
+
+#: A checked-in program, so all of this stays build-free and in the fast tier.
+#: ``deadman-3d_hires``' own trie is IWAD-derived and is covered in
+#: ``tests/test_deadman3d_hires.py`` behind that file's skip.
+STRAIGHT_KEY = ("deadman-3d", "taped")
+
+
+def _straight_pair(pitch: int = 1):
+    """The same plan's trie with and without the substitution."""
+    slug, _tier = STRAIGHT_KEY
+    slots = machine.OPCODE_SLOTS[STRAIGHT_KEY]
+    return (
+        _trie_of(slug, slots, pitch=pitch, straight=False),
+        _trie_of(slug, slots, pitch=pitch, straight=True),
+    )
+
+
+def test_the_substitution_is_inert_at_a_pitch_of_two() -> None:
+    """Why the flag cannot change any machine that does not stagger its band.
+
+    A ``d`` has to sit on its up child's *own* row, and at a pitch of two there is
+    always a spare row between the two — so the builder never makes the swap and
+    the emitted cells are identical, glyph for glyph. That is what lets
+    :data:`machine.STRAIGHT_TRIE` be a registry key rather than a fork.
+    """
+    (_p, rows_x, _x0, entry_x, cells_x), (_q, rows_d, _x1, entry_d, cells_d) = (
+        _straight_pair(pitch=2)
+    )
+    assert cells_x == cells_d and entry_x == entry_d and rows_x == rows_d
+    assert "d" not in set(cells_d.values())
+
+
+def test_going_straight_buys_exactly_the_rows_x_was_costing() -> None:
+    """The saving, counted rather than asserted: one row per row-forcing node.
+
+    ``_uneven_gaps`` reports the ranks that need a blank row after them. Under the
+    contiguous-with-a-pinned-tail packing every single-lane up half sits at its
+    interval's base, which is precisely the case ``d`` decides correctly — so the
+    whole gap set goes and the band contracts by its size.
+    """
+    slug, _tier = STRAIGHT_KEY
+    _, p = _seek_plan(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
+    used = sorted((p.row[m] - 1) // 2 for m in p.number)
+    gaps_x = machine._uneven_gaps(p.k, used, False)
+    gaps_d = machine._uneven_gaps(p.k, used, True)
+    assert gaps_x, "vacuous: this plan needs no gap rows even with `x`"
+    assert gaps_d < gaps_x, "the substitution must not invent a gap"
+
+    (_a, rows_x, _b, _c, _d0), (_e, rows_d, _f, _g, _h) = _straight_pair(pitch=1)
+    span_x = max(rows_x.values()) - min(rows_x.values()) + 1
+    span_d = max(rows_d.values()) - min(rows_d.values()) + 1
+    assert span_x - span_d == len(gaps_x) - len(gaps_d)
+
+
+def test_every_opcode_still_decodes_to_its_own_lane_through_a_d() -> None:
+    """The one that matters. ``d`` reads ``BP > 0``; ``x`` reads BP's low bit.
+
+    They are the same test only where the up half is a single lane at the
+    interval's base, because after the ``L - 1`` shifts a level-``L`` node owes,
+    ``BP`` **is** the slot's offset inside that node's interval. Get that wrong and
+    the grid binds, renders, and sends an opcode to the wrong lane — so replay
+    every one of them.
+    """
+    slug, _tier = STRAIGHT_KEY
+    p, slot_rows, lane_x0, entry, cells = _trie_of(
+        slug, machine.OPCODE_SLOTS[STRAIGHT_KEY], pitch=1, straight=True
+    )
+    assert "d" in set(cells.values()), "nothing was substituted; the case is vacuous"
+    assert set(cells.values()) <= OPERATIONS | {PASS_THROUGH, "d"}
+    for m, number in p.number.items():
+        landed = _walk_trie(cells, number, entry, lane_x0)
+        assert landed == slot_rows[(p.row[m] - 1) // 2], m
+
+
+def test_a_d_only_ever_stands_on_a_lane_row() -> None:
+    """The precondition, read off the grid rather than trusted from the code.
+
+    A ``d`` on a blank row would send the man east along nothing when ``BP == 0``.
+    Every ``d`` must therefore be on a row some lane occupies — and the replay
+    above proves it is the *right* lane by arriving there.
+    """
+    slug, _tier = STRAIGHT_KEY
+    _p, slot_rows, _x0, _entry, cells = _trie_of(
+        slug, machine.OPCODE_SLOTS[STRAIGHT_KEY], pitch=1, straight=True
+    )
+    lane_rows = set(slot_rows.values())
+    ds = [(x, y) for (x, y), g in cells.items() if g == "d"]
+    assert ds, "vacuous"
+    for x, y in ds:
+        assert y in lane_rows, f"`d` at {(x, y)} is on a row no lane occupies"
+
+
+def test_the_registry_names_only_the_tier_that_measured_it() -> None:
+    """``STRAIGHT_TRIE`` is opt-in, so every other machine stays byte-identical."""
+    assert machine.STRAIGHT_TRIE == {("deadman-3d_hires", "men-v3")}

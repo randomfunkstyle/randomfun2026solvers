@@ -153,14 +153,28 @@ _CW = {"E": "S", "S": "W", "W": "N", "N": "E"}
 _CCW = {"E": "N", "N": "W", "W": "S", "S": "E"}
 
 
-def _trie_of(slug: str, slots: dict[str, int]):
-    """The trie the generator emits for ``slots``, in interior coordinates."""
+def _trie_of(slug: str, slots: dict[str, int], *, pitch: int = 2, straight: bool = False):
+    """The trie the generator emits for ``slots``, in interior coordinates.
+
+    ``pitch``/``straight`` mirror :func:`machine.build_cpu`'s ``lane_pitch`` and
+    :data:`machine.STRAIGHT_TRIE`. At the default pitch of two the pair is inert —
+    a ``d`` needs its up child packed onto its own row and there is no such pair
+    two rows apart — which is what makes the flag byte-identical for every machine
+    that does not stagger.
+    """
     _, p = _seek_plan(slug, slots)
     used = sorted((p.row[m] - 1) // 2 for m in p.number)
     rank = {s: i for i, s in enumerate(used)}
-    slot_rows = {s: 1 + 2 * rank[s] for s in used}
+    if pitch == 1:
+        gaps = machine._uneven_gaps(p.k, used, straight)
+        at = [1]
+        for i in range(len(used) - 1):
+            at.append(at[-1] + (2 if i in gaps else 1))
+        slot_rows = {s: at[rank[s]] for s in used}
+    else:
+        slot_rows = {s: 1 + 2 * rank[s] for s in used}
     lane_x0 = 4 + 2 * p.k
-    entry, cells = machine._uneven_trie(p.k, slot_rows, lane_x0)
+    entry, cells = machine._uneven_trie(p.k, slot_rows, lane_x0, straight)
     return p, slot_rows, lane_x0, entry, cells
 
 
@@ -171,6 +185,11 @@ def _walk_trie(cells, bp: int, entry_row: int, lane_x0: int) -> int:
         g = cells.get((x, y), " ")
         if g == "x":
             d = _CW[d] if (bp & 1) else _CCW[d]
+        elif g == "d":
+            # ``SPEC.md``: turn clockwise if BP > 0, **else go straight**. The
+            # straight case is the whole point — it is how a node can sit on its
+            # own up child's row instead of demanding one above it.
+            d = _CW[d] if bp > 0 else d
         elif g == "]":
             bp >>= 1
         elif g == ">":
