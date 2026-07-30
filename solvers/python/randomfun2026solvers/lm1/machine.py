@@ -3091,6 +3091,14 @@ class Machine:
     def footprint(self) -> int:
         return max(self.width, self.height) ** 2
 
+    def text(self) -> str:
+        """The grid as a ``.man`` file's contents — trailing newline included.
+
+        One place that says what "the artifact" is, so a checked-in ``.man`` and the
+        assertion that it matches its generator cannot disagree about the newline.
+        """
+        return "\n".join(self.rows) + "\n"
+
     def report(self) -> str:
         panel = ", " + " + ".join(f"LM-75 {w}x{h}" for w, h in self.panels) if self.panels else ""
         stream = f", stream_pad={self.stream_pad}" if self.stream else ""
@@ -5190,7 +5198,9 @@ def _polyline(route: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
     for (x0, y0), (x1, y1) in zip(route, route[1:], strict=False):
         if x0 != x1 and y0 != y1:
             raise MachineError(f"leg {(x0, y0)} -> {(x1, y1)} is not axis-aligned")
-        step = (0 if x1 == x0 else (1 if x1 > x0 else -1), 0 if y1 == y0 else (1 if y1 > y0 else -1))
+        dx = 0 if x1 == x0 else (1 if x1 > x0 else -1)
+        dy = 0 if y1 == y0 else (1 if y1 > y0 else -1)
+        step = (dx, dy)
         x, y = x0, y0
         while True:
             if not cells or cells[-1] != (x, y):

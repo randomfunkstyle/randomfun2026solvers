@@ -1621,8 +1621,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args(argv)
 
-    src = emit_source(lr_shift=args.lr_shift)
-    program = asm.assemble(src, name="mnist", isa=isa.LM1_EXT)
+    # The `.man` build and the `OUT` build are two variants of one program (see
+    # `emit_source`), so `--man` selects which one this invocation is about: the grid
+    # paints panels and emits nothing, and the reference run emits four words an epoch.
+    grid = bool(args.man or args.html or args.json)
+    src = emit_source(
+        lr_shift=args.lr_shift,
+        panels=grid,
+        epochs_from_input=not grid,
+        epochs=MACHINE_EPOCHS if grid else 1,
+    )
+    program = asm.assemble(src, name="mnist-cnn" if grid else "mnist", isa=isa.LM1_EXT)
     print(program.report())
     print(f"STORE words: {STORE_WORDS}, ring sizes {RING_SIZES}")
     if args.asm:
@@ -1650,13 +1659,43 @@ def main(argv: list[str] | None = None) -> int:
             )
         payload["stats"] = [vars(s) for s in run.stats]
         payload["instructions_executed"] = run.instructions
+
+    m = build_machine() if grid else None
+    if m is not None:
+        print(m.report())
+        payload |= {
+            "width": m.width,
+            "height": m.height,
+            "footprint": m.footprint,
+            "panels": [list(p) for p in m.panels],
+            "epochs": MACHINE_EPOCHS,
+            "placement": {
+                "rom_rows": ROM_ROWS,
+                "mem_pad": MEM_PAD,
+                "stream_pad": STREAM_PAD,
+                "dsp_pad": DSP_PAD,
+                "rom_touch_drop": ROM_TOUCH_DROP,
+            },
+            "panel_ports": [
+                {band: list(cell) for band, cell in ports.items()} for ports in m.panel_ports
+            ],
+        }
     if args.json:
-        args.json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # The house sidecar is the region map (``tools/debug-trace.mjs`` reads it); the
+        # program's own facts ride alongside it under one key rather than in a second
+        # file, so the two can never describe different builds.
+        doc = m.debug_map().to_dict() if m is not None else {}
+        doc["mnist"] = payload
+        args.json.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {args.json}")
-    if args.html:
-        raise NotImplementedError("--html renders the curve panels: Task 7")
-    if args.man:
-        raise NotImplementedError("--man needs the two-panel machine build: Task 7")
+    # All three in one invocation, so an overlay can never describe a grid it was not
+    # generated beside (AGENTS.md § Generators emit their own debug sidecars).
+    if args.html and m is not None:
+        m.debug_map().write_html(m.rows, args.html)
+        print(f"wrote {args.html}")
+    if args.man and m is not None:
+        args.man.write_text(m.text(), encoding="utf-8")
+        print(f"wrote {args.man}")
     return 0
 
 
