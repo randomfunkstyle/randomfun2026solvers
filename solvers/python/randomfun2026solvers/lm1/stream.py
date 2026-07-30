@@ -1331,7 +1331,66 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
 
 
 
-# ── placement, depth 4 ───────────────────────────────────────────────────────
+# ── placement, depth 4: the drawing does not close ───────────────────────────
+# The topology closes (:func:`block_crossings` with ``prod`` through ring B's relay)
+# and every room it needs is drawn and verified. The *drawing* does not, and the
+# failure is of exactly the kind that function cannot see — four legs of one room,
+# plus one climb — so it is recorded here in full.
+#
+# **The chain.** Three forced facts meet:
+#
+# 1. Rule 2 makes ``prod``'s drop column the **smallest** of the five. Its east-wall
+#    row is the lowest, so its turn column is smallest (rule 1), so its corridor row
+#    is smallest, so its drop column is smallest.
+# 2. Rule 3 makes ``b_ret``'s climb column the **largest** of the four west climbs
+#    (its wall row is the largest) and, separately, **smaller than every drop column**
+#    — otherwise the corridors' westbound legs cross it. So
+#    ``c_b_ret < D_prod < every other drop``.
+# 3. ``prod`` and ``b_ret`` both terminate at the *same room*. Whichever of its four
+#    walls each takes, ``b_ret`` leaves at a column east of ``c_b_ret`` and has to jog
+#    west to reach it, and ``prod``'s descent lies between the two — so the jog crosses
+#    it.
+#
+# Six wall assignments were tried; each moves the collision rather than removing it,
+# because ``prod`` has to *arrive* at the relay from the same side ``b_ret`` *leaves*
+# toward:
+#
+# ==========================  ==================  ============================
+# ``prod`` in / ``b_ret`` out  what it fixes       what it then collides with
+# ==========================  ==================  ============================
+# north 3 / west 2             prod's descent      b_ret's westward leg at the
+#                              is clear of the     relay's row crosses prod's
+#                              room               descent column
+# north 3 / north 2            b_ret climbs        b_ret's climb column is
+#                              straight off        ``relay_x + 2 > D_prod``
+# west 8 / north 2             b_ret's climb is    b_ret's jog below row 36 has
+#                              west of the drops   to cross prod's descent
+# west 8 / south 2             b_ret goes round    ``prod2`` then has to exit
+#                              the bottom          north or west, and both
+#                                                  cross b_ret's climb
+# east 8 / south 2             prod arrives from   rule 2 wants ``D_prod`` the
+#                              the east            smallest, not the largest
+# north 3 / south 2            prod2 exits north   the ADDER above the relay puts
+#                              to an ADDER above   its rows across ``b_fwd``'s
+#                                                  descent, and moving that east
+#                                                  collides with ``p2``'s leg into
+#                                                  the ADDER's east wall
+# ==========================  ==================  ============================
+#
+# The constants below are the layout the topology asks for and are kept as the
+# starting point for the next attempt; :func:`build_stream` still refuses depth 4.
+#
+# **What would break the chain** — each is a decision rather than a derivation, which
+# is why none was taken here:
+#
+# * Let ``prod`` reach the ADDER *without* passing through ring B's relay, and make
+#   ring B's ports leaves of the tree some other way (a second pass-through of some
+#   pipe that does not have ``prod``'s rule-2 position).
+# * Split ``b_ret`` with its own turnaround room, so its climb starts west of
+#   ``prod``'s descent instead of having to jog across it.
+# * Split the unit into two rooms, which changes the port set the rules apply to.
+#
+# ── placement constants, depth 4 ─────────────────────────────────────────────
 # The embedding the planarity result implies (see the note above
 # :func:`block_crossings`): the ADDER's legs to ``p2`` and ``p1`` form an enclosure,
 # ring B's *shared* relay sits inside it, and ring A's band and relay together with
