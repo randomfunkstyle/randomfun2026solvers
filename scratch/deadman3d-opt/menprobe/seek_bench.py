@@ -62,6 +62,17 @@ the slack runs out somewhere past 400 cells. The total does not move. A resident
 reader at the ``r`` is the ``walk 4`` row, so the Y split's ceiling is zero — and
 the same experiment on the real grid agrees: padding the walk by 44 cells costs
 +0.0016%, by 132 costs +0.09%, by 220 costs +0.25%.
+
+``--corridor`` does not work, and that is worth knowing before you use it
+--------------------------------------------------------------------------
+Swept 25..73 it moves the flush by **0.1 ticks a seek**, because this drum
+emits a fixed batch of ``nfill // word`` words per lap and only then walks to its
+``q``. The corridor therefore never fills, so its length is not what decides how
+many words are in flight — the batch is. The real drum *does* fill its corridor
+and stall at a send, which is a different regime the synthetic one does not
+reach. **Sweep the corridor on the real machine**
+(``corr_gate.py`` + ``flushprobe.py``), not here; a flat row from this bench is
+an artefact of the drum model and not a fact about corridors.
 """
 from __future__ import annotations
 
@@ -138,7 +149,13 @@ def literal(n: int) -> str:
 
 
 def build(
-    walk: int = 46, latency: int = 0, corridor: int = 49, rem: int = 38, word: int = 6
+    walk: int = 46,
+    latency: int = 0,
+    corridor: int = 49,
+    rem: int = 38,
+    word: int = 6,
+    lap: int = 6,
+    disc: int = 2,
 ) -> list[str]:
     """The seek tail plus a synthetic drum, as a loadable grid.
 
@@ -177,21 +194,47 @@ def build(
     # 3..5 the flush loop and its sentinel exit, 6..9 the counted discard.
     s_x = walk + 2                       # the `s`; its turn `v` is one east
     cw = max(s_x + 1, 7)                 # interior width; the sentinel exit needs 6
-    g.room(0, 0, cw + 1, 10)
+    g.room(0, 0, cw + 1, 8 + disc)       # rows 1..7+disc; the discard sets the depth
     g.run(1, 1, ">@")                    # the riser's turn, and the spawn
     g.run(3, 1, "." * (s_x - 3))
     g.run(s_x, 1, "sv")                  # send, then turn south
     g.put(s_x + 1, 2, "<")               # the westbound walk
     g.run(4, 2, "." * (s_x - 3))
-    g.run(2, 2, ">v")                    # the flush loop's return, and its top
-    g.run(2, 3, "^r")                    # the flush read
+    # ``lap`` is the flush loop's cost per positive word, and **six is provably
+    # the floor**; ``lap=4`` is kept only because it is the proof.
+    #
+    # The tempting shape closes the loop one row lower — `r` at (3, 3) with the
+    # return `>` at (2, 3) landing straight on it, four cells for `r X ^ >` — and
+    # it dies `wall` on the seventh lap. `r` does not turn, so the direction the
+    # man *leaves* `r` is the direction he *entered* it: entering from the west he
+    # walks east out of the `r` and into the blank beside it, never reaching the
+    # `X`. So the edge into `r` and the edge out of it must be parallel. A closed
+    # walk on a 4-connected lattice has even length, and in a 4-cycle consecutive
+    # edges are perpendicular — so no 4-cycle can contain a read feeding a test.
+    # Six is the next even number and the shipped loop already achieves it.
+    #
+    # Which is also the answer to "why is the seek flush 6 ticks a word when the
+    # counted discard is 4": a counted loop amortises its `m` over two reads, and
+    # a sentinel-tested loop cannot amortise anything, because every word has to
+    # be looked at. The only way below 6 is to read k words per test, which needs
+    # the *drum* to emit k sentinels — a protocol change, not a geometry one.
+    if lap == 6:
+        g.run(2, 2, ">v")                # the flush loop's return, and its top
+        g.run(2, 3, "^r")                # the flush read
+    elif lap == 4:
+        g.put(3, 2, "v")                 # entry only; (2, 2) stays blank
+        g.run(2, 3, ">r")                # the return lands straight on the `r`
+    else:
+        raise ValueError("lap is 6 (shipped) or 4 (tight)")
     g.run(2, 4, "^Xrbv")                 # sign test; A<0 goes east to the remainder
     g.run(2, 5, "^<")
     g.put(6, 5, ".")
+    # The remainder discard: ``disc`` reads a lap, so ``2 * disc + 3`` cells for
+    # ``disc`` words. disc=2 is the shipped 2x4.
     g.run(1, 6, "^a<..<")                # the discard loop's entry
-    g.run(2, 7, "rm")
-    g.run(2, 8, "rm")
-    g.run(2, 9, ">^")
+    for i in range(disc):
+        g.run(2, 7 + i, "rm")
+    g.run(2, 7 + disc, ">^")
     g.run(1, 2, "." * 4, 0, 1)           # the riser back to the taken row
 
     # ── the drum: notice, delay, sentinel, remainder, and a filler stream ─────
@@ -264,6 +307,12 @@ def measure(rows: list[str], ticks: int = 400_000) -> dict:
     for name, pred in parts.items():
         h, w = box(pred)
         out[name] = (h / max(1, n), w / max(1, n))
+    # Words a seek, per part: the `r` glyphs are the only cells that consume one.
+    for name in ("flush", "discard"):
+        pred = parts[name]
+        out[name + "_w"] = sum(
+            v for c, v in heat.items() if pred(c) and rows[c[1]][c[0]] == "r"
+        ) / max(1, n)
     return out
 
 
@@ -273,35 +322,46 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--latency", type=int, nargs="+", default=[0])
     ap.add_argument("--corridor", type=int, nargs="+", default=[49])
     ap.add_argument("--word", type=int, nargs="+", default=[6])
+    ap.add_argument("--lap", type=int, nargs="+", default=[6])
+    ap.add_argument("--disc", type=int, nargs="+", default=[2])
     ap.add_argument("--rem", type=int, default=38)
     ap.add_argument("--ticks", type=int, default=400_000)
     ap.add_argument("--dump", action="store_true", help="print the grid and stop")
     a = ap.parse_args(argv)
 
     if a.dump:
-        print("\n".join(build(a.walk[0], a.latency[0], a.corridor[0], a.rem, a.word[0])))
+        print("\n".join(build(a.walk[0], a.latency[0], a.corridor[0], a.rem,
+                              a.word[0], a.lap[0], a.disc[0])))
         return 0
 
-    print(f"{'walk':>5} {'lat':>5} {'corr':>5} {'word':>5} | {'t/seek':>8} {'walk':>7} "
-          f"{'flush':>8} {'(blk)':>8} {'disc':>7} {'(blk)':>7}")
+    print(f"{'walk':>5} {'lat':>5} {'corr':>5} {'word':>5} {'lap':>4} {'dsc':>4} | "
+          f"{'t/seek':>8} {'walk':>6} {'flush':>8} {'(blk)':>8} {'wds':>5} "
+          f"{'disc':>7} {'(blk)':>7} {'wds':>5}")
     base = None
     for word in a.word:
-        for corridor in a.corridor:
-            for latency in a.latency:
-                for walk in a.walk:
-                    r = measure(build(walk, latency, corridor, a.rem, word), a.ticks)
-                    head = f"{walk:>5} {latency:>5} {corridor:>5} {word:>5} |"
-                    if r["fatal"]:
-                        print(f"{head} FATAL {r['fatal']}")
-                        continue
-                    if base is None:
-                        base = r["per_seek"]
-                    print(
-                        f"{head} {r['per_seek']:>8.1f} "
-                        f"{r['walk'][0]:>7.1f} {r['flush'][0]:>8.1f} {r['flush'][1]:>8.1f} "
-                        f"{r['discard'][0]:>7.1f} {r['discard'][1]:>7.1f}"
-                        f"   {100 * (r['per_seek'] - base) / base:+7.2f}%"
-                    )
+        for disc in a.disc:
+            for lap in a.lap:
+                for corridor in a.corridor:
+                    for latency in a.latency:
+                        for walk in a.walk:
+                            r = measure(
+                                build(walk, latency, corridor, a.rem, word, lap, disc), a.ticks
+                            )
+                            head = (f"{walk:>5} {latency:>5} {corridor:>5} {word:>5} "
+                                    f"{lap:>4} {disc:>4} |")
+                            if r["fatal"]:
+                                print(f"{head} FATAL {r['fatal']}")
+                                continue
+                            if base is None:
+                                base = r["per_seek"]
+                            print(
+                                f"{head} {r['per_seek']:>8.1f} "
+                                f"{r['walk'][0]:>6.1f} {r['flush'][0]:>8.1f} "
+                                f"{r['flush'][1]:>8.1f} {r['flush_w']:>5.1f} "
+                                f"{r['discard'][0]:>7.1f} {r['discard'][1]:>7.1f} "
+                                f"{r['discard_w']:>5.1f}"
+                                f"   {100 * (r['per_seek'] - base) / base:+7.2f}%"
+                            )
     return 0
 
 

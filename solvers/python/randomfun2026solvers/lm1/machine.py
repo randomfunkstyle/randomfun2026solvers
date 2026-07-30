@@ -1321,6 +1321,7 @@ def build_cpu(
     stream_pad: int = 0,
     short_return: bool = True,
     drain_unit_bits: int = 0,
+    drain_ops: tuple[str, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
     seek: bool = False,
@@ -1502,17 +1503,30 @@ def build_cpu(
     # A drain hangs *below* the entry row rather than beside it, so it sets the
     # slab's depth: a jump is its entry row plus the block, a branch is its four
     # rows of `X` fan-out and turn row plus the block.
-    if seek and drain_unit_bits:
-        raise MachineError("seek mode replaces the discard entirely; no drain to size")
     if seek:
         # Hybrid: a *seek* slab is shallow (a drop to the taken row, plus the
         # branch's X fan-out); a *classic* slab keeps its counted discard, which
         # short jumps are already good at. Bases start at 5 because the seek
         # tail owns columns 1..4 (flush loop, remainder read, its discard).
+        #
+        # ``drain_unit_bits`` used to be refused outright here — "seek mode
+        # replaces the discard entirely; no drain to size". That is true of the
+        # *seek* slabs and false of the classic ones, which still run
+        # :func:`_discard_loop` at four ticks a word and are the only part of the
+        # discard pool that never blocks. Sizing them like the classic build does
+        # is the whole of the fix; :func:`_slab` already takes the parameter and
+        # already routes it on both the jump and the branch path.
+        _drain_h = 0
+        if drain_unit_bits:
+            from .drain import build_drain
+
+            _drain_h = build_drain(0, unit_bits=drain_unit_bits, even=True).height
         slab_rows = {}
         for m in structured:
             if p.sem[m] in _SEEK_SEMS:
                 slab_rows[m] = 2 if p.sem[m] in _JUMP_SEMS else 5
+            elif _drained(m, drain_unit_bits, drain_ops):
+                slab_rows[m] = (1 if p.sem[m] in _JUMP_SEMS else 5) + _drain_h
             else:
                 slab_rows[m] = (
                     _JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS
@@ -1988,10 +2002,16 @@ def build_cpu(
         for m in order:
             s0, base = slab_at[m], slab_base[m]
             if p.sem[m] not in _SEEK_SEMS:
-                # A short jump keeps the classic counted discard, verbatim.
+                # A short jump keeps the classic counted discard, verbatim —
+                # unless this mnemonic is one the registry drains (see
+                # :data:`SEEK_CLASSIC_DRAIN`). The choice is per-mnemonic because
+                # the drain's own `r` cells are what decide §7.1: the easternmost
+                # classic slab's block reaches far enough east to tie 'rom'
+                # against 'mem_resp', and the western ones do not.
                 with g.part(f"slab:{m}"):
                     struct_drops |= _slab(
-                        g, m, p, s0, base, collector, pipe_glyphs, drain_unit_bits
+                        g, m, p, s0, base, collector, pipe_glyphs,
+                        drain_unit_bits if _drained(m, drain_unit_bits, drain_ops) else 0,
                     )
             elif p.sem[m] in _JUMP_SEMS:
                 # never west of ``base`` (that is the shipped column and the floor),
@@ -2389,6 +2409,72 @@ DRAIN_UNIT_BITS: dict[str, int] = {
     "little-little-man": 2,
 }
 
+#: The same ladder+loop, for the **classic** slabs of a *seek* build — the short
+#: jumps and the two branches the drum does not handle. Keyed on ``(slug, tier)``
+#: because a seek machine's registry is, and empty by default so every existing
+#: build is byte-identical.
+#:
+#: This was flatly refused until it was measured (``seek mode replaces the
+#: discard entirely; no drain to size``). The refusal conflated two halves of a
+#: hybrid band: the *seek* slabs really do have no discard to drain, and the
+#: *classic* ones still run :func:`_discard_loop` — on ``deadman-3d_hires``
+#: men-v3 that is ``cpu:discard:BRN`` + ``cpu:discard:BRZ`` + ``cpu:slab:JMPF``,
+#: 4.70% of the run at 4.06 ticks a word and, uniquely in the discard pool,
+#: **0.02% of it blocked**. Everything else in that pool waits on the drum, so it
+#: is the only part where making the CPU faster makes the machine faster.
+#:
+#: 21-round tour, ``store="men-v3"``, ``frame_tiles=(2, 2)``, ``passed=True`` on
+#: every row, all at the shipped 594x630 / ``mem_pad`` 9 / ``rom_capacity`` 49:
+#:
+#: | variant | box | pad | ticks | Δ |
+#: |---|---|---|---|---|
+#: | shipped | 594x630 | 9 | 111,492,961 | — |
+#: | **bits 2, JMPF+BRZ** | **594x630** | **9** | **111,057,278** | **-0.391%** |
+#:
+#: and the 6-round rows that decide the shape, against 26,779,571:
+#:
+#: | variant | box | pad | ticks | Δ |
+#: |---|---|---|---|---|
+#: | bits 2, all three | 597x630 | **29** | 30,812,483 | +15.06% |
+#: | bits 0, pad forced to 29 | 597x630 | 29 | 31,052,917 | +15.96% |
+#: | bits 2, all three, ``ROM_TOUCH_DROP`` 10 | 594x630 | 9 | 26,729,256 | -0.188% |
+#: | **bits 2, JMPF+BRZ** | 594x630 | 9 | **26,667,549** | **-0.418%** |
+#:
+#: Read rows one and two together: **the drain itself is worth -0.774% and the
+#: pad it forces costs +15.96%.** Draining all three slabs is not a bad idea
+#: badly tuned, it is a good idea paying a §7.1 toll — which is why
+#: :data:`SEEK_CLASSIC_DRAIN_OPS` exists and why row three, which buys BRN back
+#: by moving the ROM touch instead of the memory band, still loses: drop 10 is the
+#: nearest drop that unties BRN and it lengthens the corridor 49 -> 52, worth
+#: +0.699% on its own.
+#:
+#: ``bits`` above 2 does not build at this pitch: at 3 the block is six columns
+#: wide and its east edge lands on ``JMPS``'s drop column
+#: (``collision at (17, 41)``). :data:`SEEK_SLAB_PITCH` is already at
+#: :data:`_SLAB_PITCH_FLOOR`, so that would need the drops re-solved, not a wider
+#: band.
+SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "men-v3"): 2,
+}
+
+#: Which classic mnemonics :data:`SEEK_CLASSIC_DRAIN` actually applies to.
+#: ``None``/absent means all of them.
+#:
+#: This exists because the drain's cost on a seek band is **not its depth, it is
+#: §7.1**. Measured on hires/men-v3 at ``unit_bits=2``: the block hangs below the
+#: entry row, so the *easternmost* classic slab's lowest ``r`` lands at CPU
+#: (36, 53) — grid (44, 183) — where ``rom`` and ``mem_resp`` are both 47 cells
+#: away. A tie fails, and the only pad that separates them is 29 against the
+#: shipped 9. Restricting the drain to the western slabs keeps every added ``r``
+#: nearer the ROM and leaves the pad alone.
+#: ``BRN`` is the easternmost classic slab and the only one that ties, which is
+#: also the annoying part: it is the *biggest* of the three (3,115,539 ticks at 21
+#: rounds against ``BRZ``'s 1,544,178 and ``JMPF``'s 1,479,323). Reordering the
+#: band so it sits west would collect it for free and is the open question here.
+SEEK_CLASSIC_DRAIN_OPS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("deadman-3d_hires", "men-v3"): ("JMPF", "BRZ"),
+}
+
 #: Per-program opt-in for **tight slab entry columns** — the walk *to* a jump or
 #: branch, which is a different cost from the discard it performs there.
 #:
@@ -2741,6 +2827,16 @@ SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
 #: machines (hires is :data:`INPUT_NORTH`-fed with a 2x2 router wall east of
 #: everything), so this is a per-slug measurement and not a rule.
 SEEK_SLAB_PITCH: dict[str, int] = {"deadman-3d": 11, "deadman-3d_hires": 11}
+
+
+def _drained(mnemonic: str, unit_bits: int, ops: tuple[str, ...] | None) -> bool:
+    """Does this classic slab get the ladder+loop rather than the counted loop?
+
+    ``ops is None`` means every classic slab, which is what the non-seek build
+    has always done. A tuple restricts it, because on a seek band the choice is
+    forced by §7.1 rather than by ticks: see :data:`SEEK_CLASSIC_DRAIN`.
+    """
+    return bool(unit_bits) and (ops is None or mnemonic in ops)
 
 
 def _drain_block(
@@ -4088,7 +4184,12 @@ def _assemble(
         mem_pad=mem_pad,
         stream_pad=stream_pad,
         short_return=short_return,
-        drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
+        drain_unit_bits=(
+            SEEK_CLASSIC_DRAIN.get((program.name, store), 0)
+            if seek
+            else DRAIN_UNIT_BITS.get(program.name, 0)
+        ),
+        drain_ops=SEEK_CLASSIC_DRAIN_OPS.get((program.name, store)) if seek else None,
         tight_drops=(
             (program.name, store) in SEEK_TIGHT_STRUCT_DROPS
             if seek
