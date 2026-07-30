@@ -1401,7 +1401,9 @@ LEG_W, LEG_E = 5, 62  # serpentine leg span; the last leg reaches the climb colu
 CLIMB = {"a": 1, "b": 3}
 
 
-def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
+def _serpentine(
+    y0: int, rows: int, climb: int, *, leg_w: int = LEG_W, leg_e: int = LEG_E
+) -> list[tuple[int, int]]:
     """Boustrophedon corners, west first and ending west at ``climb``.
 
     ``rows`` is forced odd by the caller so the last leg is westbound: the ring's
@@ -1413,7 +1415,7 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
     for i in range(rows):
         y = y0 + i
         last = i == rows - 1
-        pts.append(((climb if last else LEG_W) if i % 2 == 0 else LEG_E, y))
+        pts.append(((climb if last else leg_w) if i % 2 == 0 else leg_e, y))
         if not last:
             pts.append((pts[-1][0], y + 1))
     return pts
@@ -1548,37 +1550,48 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
 # recorded here only so it is not reinvented.
 #
 # ── placement constants, depth 4 ─────────────────────────────────────────────
-# The embedding the planarity result implies (see the note above
-# :func:`block_crossings`): the ADDER's legs to ``p2`` and ``p1`` form an enclosure,
-# ring B's *shared* relay sits inside it, and ring A's band and relay together with
-# the two I/O rooms sit outside it, ring A's chord passing south of the whole
-# assembly. North to south: the unit; the five westbound corridors; ring B's band;
-# ring B's shared relay; the ADDER; ring A's band; ring A's relay.
-UX4, UY4 = 40, 1
-RESP_X4 = 120  # east of every turn column, so nothing above resp reaches its climb
-#: ``band -> (turn column, corridor row, the column it drops down at)``. Turn columns
-#: fall as the east-wall row rises (rule 1); corridor rows and drop columns rise with
-#: the turn column (rule 2), so the five nest instead of braiding.
-CORRIDOR4 = {
-    "prod": (110, 36, 7),
-    "b_fwd": (112, 38, 12),
-    "p2": (114, 40, 111),
-    "out": (116, 42, 113),
-    "a_fwd": (118, 44, 115),
-}
-#: Far-west climb column per incoming pipe, ordered by the wall row each feeds — the
-#: pipe climbing highest goes furthest west, so a leg spanning ``[climb, unit]``
-#: excludes every climb west of it (rule 3). All are west of every drop column, which
-#: is what keeps the corridors' legs clear of them.
-W_CLIMB4 = {"a_ret": 1, "in": 2, "p1": 3, "b_ret": 5}
-IO_IN_Y4 = 8  # the I room, *above* every west climb so none of them passes it
-BAND_B4 = 46  # ring B's band, immediately below the corridors
-LEG_W4, LEG_E4 = 20, 106  # ring B's leg span: east of every western drop
-RELAY_B_X4 = 9  # the shared relay: `prod` in at its west wall, out at its south
-O_ROOM_Y4 = 47  # beside ring B's band, which stops well west of it
-ADDER_X4 = 6  # `prod` lands on its north wall inlet; `p2` comes west into its east
-RELAY_A_X4 = 3
-O_ROOM_X4 = 112
+# The depth-3 idiom, transcribed. Nothing crosses from the east wall to the west side
+# through a *western* drop column (the refuted rule 2); everything that has to change
+# sides goes round the outside — east to its own turn column, south past the unit,
+# west along a corridor of its own, north up a far-west column, into its room.
+#
+# **Rule 1 survives**: turn columns fall as the east-wall row rises, so the pipe that
+# leaves highest runs furthest east before turning south and the five never braid.
+# ``resp`` is the exception and hugs the block, because it climbs *north* and the only
+# rows it crosses are the ones above its own, where nothing else is.
+#
+# **The corridors nest the other way round**: a pipe with a *smaller* turn column has
+# to turn west at a row *above* one with a larger turn column, or the outer pipe's
+# westbound leg cuts the inner pipe's descent. So north to south below the unit:
+# ``prod``'s corridor, ring B's band, ``p2``'s corridor, ring A's band. ``out`` never
+# goes west at all — like depth 3 it drops into the O room in the east strip.
+#
+# **Rule 3 survives**: each far-west climb column is ordered so a leg spanning
+# ``[climb, its room]`` excludes every climb west of it. ``a`` is westmost because ring
+# A's chord encloses everything, then ``p2``, then ``b``.
+#
+# North to south in the west channel: ring A's relay (``a_ret`` at wall row 13), the I
+# room (``in`` at 14), ``p1``'s boustrophedon and the ADDER (``p1`` at 15), the shared
+# relay (``b_ret`` at 27). The ADDER sits *above* the shared relay so ``pass_out`` is a
+# two-cell climb between them, and ``p1`` — which needs a whole row of C — takes its
+# length from a boustrophedon in the channel rather than from a fold under the unit.
+UX4, UY4 = 34, 1
+#: Far-west climb column per pipe that has to come back up the west side. Ring A's is
+#: westmost because its chord encloses the whole assembly (:func:`block_crossings`).
+CLIMB4 = {"a": 1, "p2": 2, "b": 3}
+LEG_W4 = 5  # both bands' intermediate west legs stop here, clear of every climb
+RELAY_A4 = (5, 2)  # ring A's relay: `a_fwd` in at its west wall, `a_ret` out east
+IO_IN4 = (5, 8)  # the I room
+ADDER4 = (6, 16)  # `p2` in at its west wall, `pass_out` up into its south, `p1` out east
+RELAY_B4 = (7, 23)  # the shared relay: ring B west-to-east, `prod` south-to-north
+#: Jog column for the two west-wall pipes that come from rooms above their own row.
+#: ``in``'s is west of ``a_ret``'s, which is what makes the two jogs nest — the same
+#: ordering depth 3 uses, for the same reason.
+J4 = {"in": 10, "a_ret": 11}
+P1_ROWS4 = (15, 21)  # p1's boustrophedon, north to south; its last leg is row 15
+P1_LEG_W4 = 19  # its west limit: one column clear of p1's own descent at 17
+PROD_ROW4 = 36  # prod's corridor: below the unit's south wall, above ring B's band
+BAND_B4 = 38  # ring B's band, immediately below prod's corridor
 
 
 def build_stream(
@@ -1601,10 +1614,9 @@ def build_stream(
     refused rather than approximated. Refusing is the point: handing a depth-4
     program a depth-3 trie reads its ``PUSHA`` as ``EMIT`` and its ``ROTB`` as
     ``FILLB``, and the machine then runs to completion computing nonsense — the one
-    outcome a builder is allowed to prevent by refusing to build. The depth-4
-    *unit* is drawn and checked (:func:`unit_interior`, :func:`unit_interior_grid`);
-    what is not drawn is the block around it, for the reason recorded above
-    :func:`build_stream`.
+    outcome a builder is allowed to prevent by refusing to build. Both widths are
+    now drawn and placed; a third is still refused, and the depth-3 unit still
+    refuses a depth-4 program (:func:`_spec`).
 
     ``lr_shift`` is ``UPDB``'s shift, drawn into the arm's glyphs. It has to match
     the ``.equ STREAM_LR_SHIFT`` the program declares, because a unit built with a
@@ -1613,17 +1625,7 @@ def build_stream(
     from .machine import MachineError
 
     spec = _spec(trie_bits, lr_shift)  # refuses a width this module cannot draw
-    if spec.trie_bits != TRIE_BITS:
-        raise StreamError(
-            f"the depth-{spec.trie_bits} unit is drawn ({len(spec.arms)} arms, "
-            f"{unit_pipe_count(spec.trie_bits)} pipes, every glyph checked against the "
-            "engine's own route) and the topology closes (block_crossings), but the "
-            "block is not drawn yet. See the note above build_stream: the obstruction "
-            "reported through round 7 came from a westbound-corridor layout this "
-            "module invented, and the depth-3 block — rendered with manview — shows "
-            "the idiom that avoids it, in which prod is routed like a ring forward "
-            "rather than dropped down a western column."
-        )
+    place = _place if spec.trie_bits == TRIE_BITS else _place4
 
     # ``rows_a`` outer, because the block's height is set by ring A's band — it is
     # the lowest thing in the block, so ring B's extra rows are free until they
@@ -1631,12 +1633,230 @@ def build_stream(
     for rows_a in range(1, 16, 2):
         for rows_b in range(1, 16, 2):
             try:
-                blk = _place(a_slots, b_slots, c_slots, rows_a, rows_b, lr_shift)
+                blk = place(a_slots, b_slots, c_slots, rows_a, rows_b, lr_shift)
             except MachineError:
                 continue
             if blk.ring_a >= a_slots and blk.ring_b >= b_slots:
                 return blk
     raise MachineError(f"no serpentine holds {a_slots} + {b_slots} values; widen the band")
+
+
+def _place4(
+    a_slots: int, b_slots: int, c_slots: int, rows_a: int, rows_b: int, lr_shift: int = UPDB_SHIFT
+) -> StreamBlock:
+    """The depth-4 block: twelve arms, a shared relay, and ``prod`` routed as a forward.
+
+    Same idiom as :func:`_place` and a different set of rooms, because the depth-4 row
+    map moves the accumulator's return from the unit's *south* wall to its **west** wall
+    and puts ring B's return 12 rows below everything else. Three consequences:
+
+    * ``p1`` arrives on the west wall, so the ADDER moves into the west channel, and
+      ``p2`` — not ``p1`` — is the accumulator leg that goes the long way round.
+    * ``prod`` is routed like a ring forward (east, south, west, north) into the shared
+      relay's south wall, and leaves the relay's north wall two cells into the ADDER.
+    * ``p1`` gets its capacity from a boustrophedon in the channel between the ADDER and
+      the unit, rather than from depth 3's fold under the unit's south wall.
+    """
+    from .machine import MachineError, _Grid
+
+    spec = _spec(4, lr_shift)
+    unit = unit_interior(4, lr_shift=lr_shift)
+    g = _Grid()
+    iw, ih = spec.iw, spec.ih
+    ux, uy = UX4, UY4
+    east_x = ux + iw + 2  # first free column east of the unit's east wall
+    row = {band: uy + r for band, r in {**unit.west, **unit.east}.items()}
+
+    # ── the unit room ────────────────────────────────────────────────────────
+    g.room(ux, uy, ux + iw + 1, uy + ih + 1)
+    g.blit(ux, uy, unit.cells)
+
+    # ── turn columns: falling as the east-wall row rises (rule 1) ────────────
+    order = sorted(spec.east, key=lambda b: row[b])  # resp, a_fwd, out, p2, b_fwd, prod
+    turn = {band: east_x + 2 * (len(order) - i) for i, band in enumerate(order)}
+    turn["resp"] = east_x + 1  # climbs north, so it hugs the block instead
+
+    # ── the west channel: ring A's relay, the I room, the ADDER, the relay ───
+    rax, ray = RELAY_A4
+    g.room(rax, ray, rax + RELAY_IW + 1, ray + RELAY_IH + 1)
+    g.blit(rax, ray, relay_cells())
+    iox, ioy = IO_IN4
+    g.room(iox, ioy, iox + 2, ioy + 2)
+    g.put(iox + 1, ioy + 1, "I")
+    adx, ady = ADDER4
+    g.room(adx, ady, adx + ADDER_IW + 1, ady + ADDER_IH + 1)
+    g.blit(adx, ady, adder_cells())
+    rbx, rby = RELAY_B4
+    g.room(rbx, rby, rbx + SHARED_RELAY_IW + 1, rby + SHARED_RELAY_IH + 1)
+    g.blit(rbx, rby, shared_relay_cells())
+
+    npipes = 0
+    laid = 0  # cells this routine believes it drew, against the cells that exist
+
+    def pipe(points: list[tuple[int, int]]) -> int:
+        nonlocal npipes, laid
+        npipes += 1
+        n = g.draw_pipe(points)
+        laid += n
+        return n
+
+    # ── the two jogs: rooms above their own wall row, jogging down to it ─────
+    a_ret = pipe(
+        [
+            (rax + RELAY_IW + 2, ray + 1),
+            (J4["a_ret"], ray + 1),
+            (J4["a_ret"], row["a_ret"]),
+            (ux - 1, row["a_ret"]),
+        ]
+    )
+    pipe(
+        [
+            (iox + 3, ioy + 1),
+            (J4["in"], ioy + 1),
+            (J4["in"], row["in"]),
+            (ux - 1, row["in"]),
+        ]
+    )
+
+    # ── resp: the topmost east row, so its climb crosses nothing ─────────────
+    resp_x = turn["resp"]
+    npipes += 1
+    resp_len = g.draw_pipe([(east_x, row["resp"]), (resp_x, row["resp"]), (resp_x, 1)])
+    laid += resp_len
+    g.put(resp_x, 0, "^")  # the caller carries it north from here
+    resp_len += 1
+
+    # ── the accumulator ring: p2 the long way, prod through the shared relay ─
+    # `p2` must clear ring B's band before it turns west, or its westbound leg cuts
+    # ring B's descent; `prod` must turn west *above* the band for the same reason
+    # applied the other way round. That ordering is the whole reason `p2` is the leg
+    # that goes round and `p1` the one that stays in the channel.
+    band_b_last = BAND_B4 + rows_b - 1
+    p2_row = band_b_last + 2
+    band_a = p2_row + 2
+    leg_e = turn["b_fwd"] - 1  # both bands stop west of ring B's own descent
+    p2 = pipe(
+        [
+            (east_x, row["p2"]),
+            (turn["p2"], row["p2"]),
+            (turn["p2"], p2_row),
+            (CLIMB4["p2"], p2_row),
+            (CLIMB4["p2"], ady + 1),
+            (adx - 1, ady + 1),
+        ]
+    )
+    pipe(
+        [
+            (east_x, row["prod"]),
+            (turn["prod"], row["prod"]),
+            (turn["prod"], PROD_ROW4),
+            (rbx + SHARED_RELAY_PORTS["pass_in"][1], PROD_ROW4),
+            (rbx + SHARED_RELAY_PORTS["pass_in"][1], rby + SHARED_RELAY_IH + 2),
+        ]
+    )
+    pass_col = rbx + SHARED_RELAY_PORTS["pass_out"][1]
+    pipe([(pass_col, rby - 1), (pass_col, ady + ADDER_IH + 2)])
+
+    # `p1` holds a whole row of C, so it takes its length from a boustrophedon in the
+    # channel rather than from depth 3's fold under the unit.
+    #
+    # It leaves the ADDER's *east* wall, so ``SPEC.md``'s first parse rule applies with
+    # teeth: a pipe starts with the arrowhead whose **backward** cell is on the source
+    # room's border, so the first cell has to step straight east before it may turn.
+    # Drawn with the turn on the attach cell itself the whole pipe silently fails to
+    # parse — ``analyze`` reports one fewer and nothing else complains — which is
+    # exactly ARCH.md §4.4's family, and is why the pipe count is asserted.
+    #
+    # Then: down column ``p1_desc``, and every leg stops at ``P1_LEG_W4`` two columns
+    # east of it, so the descent and the leg ends are never adjacent without being
+    # consecutive. The row count is odd, so the first leg and the last both run east
+    # and the last one carries straight on into the unit's west wall.
+    p1_top, p1_bot = P1_ROWS4
+    p1_desc = adx + ADDER_IW + 3
+    p1_east = ux - 3
+    p1_pts: list[tuple[int, int]] = [(p1_desc - 1, ady + 2), (p1_desc, ady + 2)]
+    if p1_bot != ady + 2:
+        p1_pts.append((p1_desc, p1_bot))
+    for i, y in enumerate(range(p1_bot, p1_top - 1, -1)):
+        p1_pts.append((p1_east if i % 2 == 0 else P1_LEG_W4, y))
+        if y > p1_top:
+            p1_pts.append((p1_pts[-1][0], y - 1))
+    p1_pts.append((ux - 1, p1_top))
+    p1 = pipe(p1_pts)
+
+    # ── the long rings: east wall -> band -> far-west climb -> its relay ─────
+    b_fwd = pipe(
+        [
+            (east_x, row["b_fwd"]),
+            (turn["b_fwd"], row["b_fwd"]),
+            (turn["b_fwd"], BAND_B4),
+            *_serpentine(BAND_B4, rows_b, CLIMB4["b"], leg_w=LEG_W4, leg_e=leg_e),
+            (CLIMB4["b"], row["b_ret"]),
+            (rbx - 1, row["b_ret"]),
+        ]
+    )
+    b_ret = pipe([(rbx + SHARED_RELAY_IW + 2, row["b_ret"]), (ux - 1, row["b_ret"])])
+    a_fwd = pipe(
+        [
+            (east_x, row["a_fwd"]),
+            (turn["a_fwd"], row["a_fwd"]),
+            (turn["a_fwd"], band_a),
+            *_serpentine(band_a, rows_a, CLIMB4["a"], leg_w=LEG_W4, leg_e=leg_e),
+            (CLIMB4["a"], ray + 3),
+            (rax - 1, ray + 3),
+        ]
+    )
+
+    # ── the output room, in the east strip like depth 3 ──────────────────────
+    ox, oy = turn["out"] - 1, row["out"] + 2
+    g.room(ox, oy, ox + 2, oy + 2)
+    g.put(ox + 1, oy + 1, "O")
+    pipe([(east_x, row["out"]), (turn["out"], row["out"]), (turn["out"], oy - 1)])
+
+    # Two pipes may not share a cell — and ``_Grid.put`` only catches it when the two
+    # glyphs *differ*, so a horizontal leg crossing another horizontal leg (both ``-``)
+    # is silent and produces a machine that routes values into the wrong room. Every
+    # cell this routine laid must therefore be distinct.
+    if len(g.drawn) != laid:
+        raise MachineError(
+            f"{laid} pipe cells drawn but only {len(g.drawn)} distinct: "
+            f"{laid - len(g.drawn)} cells are shared by two pipes"
+        )
+    if min(p1, p2) < c_slots:
+        raise MachineError(
+            f"the accumulator ring holds {min(p1, p2)} values, {c_slots} needed; "
+            "widen p1's boustrophedon (P1_ROWS4) or move the unit east (UX4)"
+        )
+
+    rows = g.rows()
+    width = max(len(r) for r in rows)
+    regions = {
+        "unit": (ux, uy, iw + 2, ih + 2),
+        "adder": (adx, ady, ADDER_IW + 2, ADDER_IH + 2),
+        "relay:A": (rax, ray, RELAY_IW + 2, RELAY_IH + 2),
+        "relay:B": (rbx, rby, SHARED_RELAY_IW + 2, SHARED_RELAY_IH + 2),
+        "io:I": (iox, ioy, 3, 3),
+        "io:O": (ox, oy, 3, 3),
+        "ring:A": (CLIMB4["a"], band_a, leg_e, rows_a),
+        "ring:B": (CLIMB4["b"], BAND_B4, leg_e, rows_b),
+        "ring:C": (P1_LEG_W4, p1_top, p1_east - P1_LEG_W4, p1_bot - p1_top + 1),
+    }
+    return StreamBlock(
+        cells=g.c,
+        width=width,
+        height=len(rows),
+        cmd_cell=(ux + unit.north["cmd"], uy - 1),
+        resp_cell=(resp_x, 0),
+        ring_a=a_fwd + a_ret,
+        ring_b=b_fwd + b_ret,
+        ring_c=min(p1, p2),
+        rows_a=rows_a,
+        rows_b=rows_b,
+        regions=regions,
+        pipes=npipes,
+        glyphs=[(ux + x, uy + y, gl, band) for x, y, gl, band in unit.glyphs],
+        codes=unit.codes,
+    )
 
 
 def _place(
