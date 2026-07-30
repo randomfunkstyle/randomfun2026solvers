@@ -770,6 +770,30 @@ def test_frames_and_single_step_are_refused_together():
 
 
 @needs_engine
+def test_the_per_panel_region_boxes_are_where_the_engine_finds_the_displays():
+    """The ``display:panel:i`` boxes must be the engine's own display extents.
+
+    They are derived by the placement rather than read back off the grid, and
+    ``_lane_reaches`` trusts the ``display:relay:i`` boxes beside them — so if these
+    drifted, the first-hop oracle would be asking about the wrong rectangle and would
+    keep passing. The overlay reads them too.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    m = mnist_cnn.build_machine()
+    info = Littleman().analyze(m.text())
+    assert len(info.displays) == 2
+    for i, d in enumerate(info.displays):
+        (x0, y0), (x1, y1) = d["min"], d["max"]
+        assert m.regions[f"display:panel:{i}"] == (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+    # And each relay box really contains that relay's three arm `s` glyphs.
+    for i, ports in enumerate(m.panel_ports):
+        rx, ry, rw, rh = m.regions[f"display:relay:{i}"]
+        for x, y in ports.values():
+            assert rx < x < rx + rw - 1 and ry < y < ry + rh - 1, (i, (x, y))
+
+
+@needs_engine
 def test_a_small_sample_grid_runs_the_same_program_over_fewer_images():
     """``samples=`` exists because the grid's cost can only be *measured*.
 
