@@ -92,6 +92,13 @@ COMPACT_GATE_IN_ROW = 3
 COMPACT_GATE_LOCAL_ROW = 1
 COMPACT_GATE_DOWN_ROW = 6
 
+#: Block-local row of the answer collector's **north wall**; its interior is the
+#: two rows below and its south wall the row below those. Named because a caller
+#: that wants to know where its own response row falls relative to the collector
+#: has to compute this before the block exists — which is the same reason
+#: ``answer_west`` and ``request_roof`` are stated in block coordinates.
+COLLECTOR_ROW = 5
+
 
 def gate_rows(compact: bool = False) -> tuple[int, int, int, int]:
     """``(height, in row, local out row, downstream out row)`` for a bank gate.
@@ -341,6 +348,7 @@ def taped_store_block(
     *,
     skip_batch: int = 1,
     answer_west: int | None = None,
+    answer_exit_west: bool = False,
     compact_gate: bool = False,
     order: tuple[int, ...] | None = None,
     chain_reach: bool = False,
@@ -365,6 +373,18 @@ def taped_store_block(
     what lets ``lm1.machine`` drop its own two forwarding rooms: with the answer
     already beside the CPU, a stub pipe finishes the job. ``None`` keeps the
     shipped north riser, so every existing caller's grid is byte-identical.
+
+    ``answer_exit_west`` turns that exit stub through ninety degrees again, out
+    of the collector's **west wall** on its first interior row, and is what a
+    caller whose response row lands *inside* the collector's own row band needs.
+    South only works while the caller is below the room: a caller level with it
+    would have its riser climb back around the outside of the room it just left,
+    past the adapter, to reach a cell one column from where it started. Leaving
+    west instead makes the stub a single cell — and that cell can be the
+    caller's own response attachment, so the response pipe is not merely short,
+    it is the one cell the plain pipe already ended on and no ``r`` binding
+    moves at all. Needs ``answer_west >= 2`` (the stub owns the column west of
+    the wall) and is ignored without ``answer_west``.
 
     ``compact_gate`` builds the gates from :data:`COMPACT_GATE_H`'s spacer-free
     body instead of the shipped 12-row one — five fewer rows per gate and a
@@ -443,7 +463,7 @@ def taped_store_block(
     # needed; a forwarder room wants six.
     nb_gap = 5 if feed_teleport else 3
     pitch = max(bank_w + nb_gap, gate_w + 8)
-    coll_y = 5  # collector interior rows 6..7, walls 5 and 8
+    coll_y = COLLECTOR_ROW  # collector interior rows 6..7, walls 5 and 8
     bank_y = 9
     gate_y = bank_y + bank_h + 2  # one clear row under the banks
     gx = [4 + k * pitch for k in range(nb - 1)]
@@ -574,6 +594,11 @@ def taped_store_block(
     if answer_west is not None:
         if not 1 <= answer_west <= coll_x0:
             raise ValueError(f"answer_west {answer_west} is not west of the collector")
+        if answer_exit_west and answer_west < 2:
+            raise ValueError(
+                f"a west exit stub owns the column outside the wall, so the "
+                f"collector's interior cannot start at column {answer_west}"
+            )
         coll_x0 = answer_west
     coll_rows, _ = teleport(coll_x1 - coll_x0 + 1)
     _room(_Grid(), coll_x0, coll_y + 1, coll_rows)
@@ -584,6 +609,14 @@ def taped_store_block(
     out_x = coll_x0 + 2
     if answer_west is None:
         pipe([(out_x, coll_y - 1), (out_x, 0)])
+    elif answer_exit_west:
+        # West instead of south: the caller's response row *is* this room's own
+        # first interior row, so there is nothing to climb and nothing to walk
+        # back — the answer leaves through the west wall and the single cell
+        # beyond it is already the caller's attachment. The four bank answers
+        # attach to the south wall further east and `s` still has exactly one
+        # outgoing pipe to choose from.
+        put(coll_x0 - 2, coll_y + 1, "<")
     else:
         # South instead of north: the collector's west end is now beside the
         # caller's response row, which is *below* it, so the riser would only
@@ -608,6 +641,8 @@ def taped_store_block(
         ox, oy = out_x, 0
         while (ox, oy) not in cells:
             oy += 1  # the stub draw stops one short: name the real topmost cell
+    elif answer_exit_west:
+        ox, oy = coll_x0 - 2, coll_y + 1  # ... and westward it is the only one
     else:
         ox, oy = out_x, coll_y + 4  # ... and southward it is the bottommost
 

@@ -1496,7 +1496,12 @@ def test_taped_registry_pins() -> None:
     hires = machine.TIER_LAYOUT[("deadman-3d_hires", "taped")]
     assert set(hires) == {"store_offset"}
     assert -20 <= hires["store_offset"][0] <= -9  # the window the roof binds in
-    assert hires["store_offset"][1] == 0
+    # Both components are pinned by :data:`machine.STORE_ANSWER_WEST`, not free:
+    # dx sits at the window's west end because that is what leaves the collector
+    # a column for its west exit stub, and dy lifts the block one row so the
+    # CPU's response row is the collector's first *interior* row rather than its
+    # north wall — a wall has nothing to attach to.
+    assert hires["store_offset"] == (-20, -1)
     # The taped store is a quarter of the men-v3 block's height, so its fold
     # goes far deeper than the canonical machine's height budget allows.
     assert tier["rom_rows"] > machine.ROM_ROWS["deadman-3d"]
@@ -1520,7 +1525,15 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     now has **no** ``teleport:`` region at all — see
     :data:`machine.STORE_REQUEST_REACH` and the reach test below.
     """
-    assert machine.STORE_ANSWER_WEST == {("deadman-3d", "taped")}
+    # Both taped machines, and only the taped ones. hires joined late and by a
+    # different door: its response row is level with the collector rather than
+    # below it, so its answer leaves the room's **west** wall instead of its
+    # south one (``taped_store_block``'s ``answer_exit_west``, which
+    # :func:`machine.build` selects on that geometry alone).
+    assert machine.STORE_ANSWER_WEST == {
+        ("deadman-3d", "taped"),
+        ("deadman-3d_hires", "taped"),
+    }
     taped = machine.build_for("deadman-3d", store="taped")
     regions = {r.name for r in taped.debug_map().regions}
     # Neither path holds a relay room now. The answer's collector is the store's

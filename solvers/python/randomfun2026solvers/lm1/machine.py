@@ -3742,6 +3742,8 @@ def _assemble(
             route_lengths["cpu->adapter"] = g.draw_pipe([cpu_out, adapter_in])
 
         # ── tape, east of the adapter ────────────────────────────────────────
+        # Only the taped tier has a collector to widen, so only it can set this.
+        answer_exit_west = False
         if store == "men":
             from ..memory_men_store import men_block
 
@@ -3767,12 +3769,24 @@ def _assemble(
             else:
                 tape = v3_store_block(tape_n, ops=v3_ops)
         elif store == "taped":
-            from ..memory_taped import taped_store_block
+            from ..memory_taped import COLLECTOR_ROW, taped_store_block
 
             # The block's own placement does not depend on the block, so its
             # origin is known before it is built — which is what lets the answer
             # collector be widened to a column named in *machine* coordinates.
             tx_pre = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
+            # ... and, for the same reason, which of the collector's own rows the
+            # CPU's response row lands on. A caller *below* the widened collector
+            # takes the answer out of its south wall and walks up; a caller level
+            # with the collector's first interior row cannot — its riser would
+            # climb back around the outside of the room to reach a cell one column
+            # from where it started, which is the geometry that kept this machine
+            # on two forwarding rooms. Level with it, the answer leaves **west**
+            # instead, straight onto the response attachment cell.
+            answer_exit_west = (
+                store_answer_west
+                and (CY + mem_dy + store_dy) + COLLECTOR_ROW + 1 == resp_row_check
+            )
             tape = taped_store_block(
                 tape_n,
                 TAPED_BANKS.get(program.name, 4),
@@ -3783,8 +3797,18 @@ def _assemble(
                 ),
                 # Land the collector's west wall on ``CX + W + 3``: the column
                 # the deleted teleport U used to occupy, one clear of the
-                # response pipe's own attachment cell.
-                answer_west=(CX + W + 4 - tx_pre) if store_answer_west else None,
+                # response pipe's own attachment cell. A west exit stub owns that
+                # clear column instead, so the wall stands one further east — and
+                # what is left is teleport U's own two-cell hand-off, cell for
+                # cell, which is why nothing rebinds. (A pipe is two cells or it
+                # is not a pipe: ``fast_littleman._parse_pipes``.)
+                answer_west=(
+                    None
+                    if not store_answer_west
+                    else (CX + W + 5 - tx_pre) if answer_exit_west
+                    else (CX + W + 4 - tx_pre)
+                ),
+                answer_exit_west=answer_exit_west,
                 compact_gate=store_compact_gate,
                 order=store_bank_order,
                 chain_reach=store_chain_reach,
@@ -3994,10 +4018,26 @@ def _assemble(
             # could simply have handed the value over itself. It leaves on
             # ``resp_row``'s own attachment cell, so every memory ``r``'s
             # binding is untouched.
-            n1 = g.draw_pipe(
-                [(tout_x, tout_y + 1), (tout_x, resp_row), (CX + W + 2, resp_row)]
-            )
-            route_lengths["store->cpu"] = n1
+            if answer_exit_west:
+                # Level with the collector's first interior row there is nothing
+                # to climb and nothing to route: the block's own west exit stands
+                # on ``CX + W + 3`` and the response is the two cells from there
+                # into the CPU's east wall — teleport U's hand-off exactly, minus
+                # the room. The block already drew the first of the two, so this
+                # is idempotent on it.
+                if (tout_x, tout_y) != (CX + W + 3, resp_row):
+                    raise MachineError(
+                        f"the collector's west exit is at {(tout_x, tout_y)}, not "
+                        f"beside the response attachment cell "
+                        f"{(CX + W + 2, resp_row)}"
+                    )
+                route_lengths["store->cpu"] = g.draw_pipe(
+                    [(tout_x, tout_y), (CX + W + 2, resp_row)]
+                )
+            else:
+                route_lengths["store->cpu"] = g.draw_pipe(
+                    [(tout_x, tout_y + 1), (tout_x, resp_row), (CX + W + 2, resp_row)]
+                )
         elif store_teleport:
             # The response comes home through two teleports instead of a long
             # pipe. ``R`` receives from any incoming pipe with **no distance
@@ -5756,7 +5796,17 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     # only thing crossing the gap is the drop and the rest is translation. -14
     # is the middle, so the drop has five columns of margin either side.
     # ``rom_rows`` is deliberately absent and falls through to ROM_ROWS' 88.
-    ("deadman-3d_hires", "taped"): {"store_offset": (-14, 0)},
+    #
+    # **Both components are now pinned by the answer collapse, not chosen.**
+    # ``dx`` is the west end of the roof window because :data:`STORE_ANSWER_WEST`
+    # needs the collector's interior to start at block column 2 or more (the west
+    # exit stub owns the column outside the wall), which wants ``tx <= CX+W+2``,
+    # which wants ``dx <= -20``. The roof wants ``dx >= -20``. One value satisfies
+    # both, and the "five columns of margin either side" above is spent.
+    # ``dy = -1`` lifts the block one row so ``resp_row`` lands on the collector's
+    # **first interior row** instead of its north wall — the difference between
+    # an exit that can attach beside the CPU and one that cannot attach at all.
+    ("deadman-3d_hires", "taped"): {"store_offset": (-20, -1)},
 }
 
 
@@ -6583,6 +6633,14 @@ TOP_RETURN_BUS: set[str] = set()
 #: cells on ``deadman-3d``) to three short stubs (~7 cells) — first-order on a
 #: machine making ~15k grid-store reads a frame. Costs two men; opt-in per slug
 #: so every other machine's checked-in grid stays byte-identical.
+#:
+#: Keyed by **slug**, and :data:`STORE_ANSWER_WEST` is keyed by ``(slug, tier)``
+#: and wins, so both DOOM slugs are listed here and neither taped machine builds
+#: a room: the pair survives only on the tiers whose collector cannot be widened
+#: (``deadman-3d``'s canonical men-v3, whose collector is at the block's floor).
+#: Which is why removing an entry here is the wrong way to delete a teleport —
+#: it falls through to the long pipe. The right way is to give the store's own
+#: collector the job, which is what that registry does.
 STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 
 #: ``(slug, tier)`` pairs whose STORE **widens its own answer collector** to the
@@ -6612,7 +6670,10 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #: block's floor, ~190 rows below ``resp_row``, so widening it west does not
 #: shorten anything — the answer still has to climb. Keyed by tier for that
 #: reason; absent pairs keep the two-room build byte-identical.
-#: ``deadman-3d_hires`` is deliberately **not** here, and it is not an oversight.
+#: ``deadman-3d_hires`` took four sweeps to get here and was three times
+#: recorded as structurally impossible, so the history stays: every entry below
+#: is a correct reading of a machine that no longer exists, and the last one is
+#: the reading that was wrong about *why*.
 #: The collector's west wall is asked for at ``CX + W + 4 - tx_pre``; on hires
 #: that is **-18**, because its CPU is narrower (no seek drum, its own
 #: ``mem_pad``) while the store block sits at the same adapter gap — so the
@@ -6659,12 +6720,34 @@ STORE_TELEPORT: set[str] = {"deadman-3d", "deadman-3d_hires"}
 #:    the CPU to the west, the collector to the east and the adapter below, and
 #:    ``_keepout``'s halo forbids running alongside any of them.
 #:
-#: So the room that cannot be absorbed is neither of the two the collapse
-#: deletes — it is the **collector itself**, which on this machine cannot be
-#: both beside the CPU and clear of its response row. `deadman-3d_hires` keeps
-#: its `STORE_TELEPORT` pair. Probes: ``scratch/deadman3d-opt/hires_answer.py``
-#: and ``hires_answer_pads.py``; arithmetic in ``METRICS.md`` H2.
-STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
+#: **And that third reading is where it went wrong, so read points 1-3 again.**
+#: All three describe *routing a pipe from the collector's south stub to the
+#: response row*, and all three are true. None of them is about the collector:
+#: they are about the **exit stub's direction**, which was south because the
+#: only caller that had ever wanted one was below the room. hires is level with
+#: it. A room level with its caller does not need a route at all — the answer
+#: leaves through the **west wall**, on the interior row the caller is already
+#: standing on, and the one cell beyond that wall *is* ``(CX + W + 2,
+#: resp_row)``. Nothing is routed, so there is nothing for the CPU, the adapter
+#: or ``_keepout``'s halo to enclose, and no ``r`` binding moves because the
+#: response pipe is the same single cell teleport U used to hand over on.
+#:
+#: That is :func:`~..memory_taped.taped_store_block`'s ``answer_exit_west``, and
+#: :func:`build` picks it on geometry — ``resp_row`` equal to the collector's
+#: first interior row — rather than on a registry key, because it is the only
+#: condition under which it is correct. Two things had to move to meet it, both
+#: in :data:`TIER_LAYOUT`: ``store_offset`` dx to -20 (the west end of the roof
+#: window, so the interior starts at block column 2 and the stub has its column)
+#: and dy to -1 (so ``resp_row`` is the interior row and not the north wall).
+#:
+#: Result on the 21-round tour: three forwarders and a six-cell response become
+#: **one forwarder and one cell**, teleports L and U are gone, and the machine
+#: is 649x388 -> 643x387. Probes: ``scratch/deadman3d-opt/hires_answer.py`` and
+#: ``hires_answer_pads.py``; arithmetic in ``METRICS.md`` H2.
+STORE_ANSWER_WEST: set[tuple[str, str]] = {
+    ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
+}
 
 #: ``(slug, tier)`` pairs whose **seek request** reaches the drum through two teleport
 #: rooms instead of one pipe around the outside of the machine. See
@@ -6889,8 +6972,10 @@ STORE_REQUEST_TELEPORT: set[tuple[str, str]] = set()
 #: store's request column is 101 against an adapter floor of 81..92, so out of
 #: the box the build fails outright ("the drop has nowhere to start") rather
 #: than merely costing more. A :data:`TIER_LAYOUT` ``store_offset`` of
-#: ``(-14, 0)`` pulls the block into the window — see that entry for why the
-#: exact value is arbitrary. **-0.469% net** on the 21-round hi-res tour
+#: ``(-20, -1)`` pulls the block into the window — the window's west end, and
+#: no longer an arbitrary point in it: :data:`STORE_ANSWER_WEST` needs the same
+#: knob and only that one value satisfies both. **-0.469% net** on the 21-round
+#: hi-res tour, measured when the offset was still free at ``(-14, 0)``
 #: (1,090,194,166 -> 1,085,082,598 over frames 1..20), which is the roof's own
 #: -0.550% less the +0.081% the offset costs on its own. Not the -1.478%
 #: ``deadman-3d`` got, and the reason is the same one that shrinks every store
