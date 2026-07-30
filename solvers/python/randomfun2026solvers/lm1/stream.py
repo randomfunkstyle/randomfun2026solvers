@@ -1355,12 +1355,13 @@ CORRIDOR4 = {
 #: excludes every climb west of it (rule 3). All are west of every drop column, which
 #: is what keeps the corridors' legs clear of them.
 W_CLIMB4 = {"a_ret": 1, "in": 2, "p1": 3, "b_ret": 5}
-IO_IN_Y4 = 20  # the I room: its pipe leaves the north wall and climbs
+IO_IN_Y4 = 8  # the I room, *above* every west climb so none of them passes it
 BAND_B4 = 46  # ring B's band, immediately below the corridors
 LEG_W4, LEG_E4 = 20, 106  # ring B's leg span: east of every western drop
 RELAY_B_X4 = 9  # the shared relay: `prod` in at its west wall, out at its south
+O_ROOM_Y4 = 47  # beside ring B's band, which stops well west of it
 ADDER_X4 = 6  # `prod` lands on its north wall inlet; `p2` comes west into its east
-RELAY_A_X4 = 2
+RELAY_A_X4 = 3
 O_ROOM_X4 = 112
 
 
@@ -1400,13 +1401,13 @@ def build_stream(
         raise StreamError(
             f"the depth-{spec.trie_bits} unit is drawn ({len(spec.arms)} arms, "
             f"{unit_pipe_count(spec.trie_bits)} pipes, every glyph checked against the "
-            "engine's own route) but the block around it is not placed yet. P1's own "
-            "crossing is solved — a turnaround relay dedicated to it splits the leg — "
-            "and what is still open is that the two rings' bands cannot both be "
-            "entered from the west and left toward their relays while sharing one leg "
-            "span. See the note above build_stream: the fix is disjoint leg spans or a "
-            "column band per ring, which is a capacity trade and so a placement "
-            "decision for Task 7 rather than a derivation."
+            "engine's own route) and the topology closes (block_crossings), but the "
+            "drawing does not. Rule 2 forces prod's drop column to be the smallest of "
+            "the five and rule 3 forces b_ret's climb column to be smaller still, so "
+            "prod's descent always lies between the shared relay and b_ret's climb — "
+            "and b_ret's jog out of the relay crosses it whichever of the room's four "
+            "walls each port takes. See the note above build_stream for the six wall "
+            "assignments tried and what each collides with."
         )
 
     # ``rows_a`` outer, because the block's height is set by ring A's band — it is
