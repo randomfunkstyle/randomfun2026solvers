@@ -157,8 +157,13 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert "deadman-3d_hires" not in machine.MEM_PAD
     assert "deadman-3d_hires" not in machine.SLAB_PITCH  # classic pitch: declined
     assert "deadman-3d_hires" not in machine.ROM_BUFFER  # antagonistic to seeking
-    # and TIGHT_STRUCT_DROPS can never fire under seek, so it must not be asked to
+    # A drum build reads SEEK_TIGHT_STRUCT_DROPS, never TIGHT_STRUCT_DROPS, so the
+    # tight entries have to be asked for on the seek side or they are dead config.
+    # (They used to be *refused* under the drum; see SEEK_TIGHT_STRUCT_DROPS for
+    # why that guard was an untested assumption and what replaced it.)
     assert "deadman-3d_hires" not in machine.TIGHT_STRUCT_DROPS
+    assert ("deadman-3d_hires", "men-v3") in machine.SEEK_TIGHT_STRUCT_DROPS
+    assert ("deadman-3d_hires", "taped") not in machine.SEEK_TIGHT_STRUCT_DROPS
 
     # `deadman-3d`'s own seek registries are untouched by all of it.
     assert machine.SEEK_MEM_PAD == {"deadman-3d": 22}

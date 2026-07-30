@@ -1212,6 +1212,14 @@ def _tight_struct_entry(
     * a counted-discard jump owns ``a<`` at ``base``/``base + 1``, so ``base + 2``;
     * a drained jump (:func:`_drain_block`) turns south on the block's spine at
       ``base - 1 + spine``, so the drop must land at least one cell east of it.
+
+    None of that mentions a slab's *body*, which is why it carries to the seek
+    drum unchanged: a seek branch's arms are the same ``base + 3/6/9`` and a seek
+    jump turns south somewhere in ``[base, drop_x - 1]``, both already covered.
+    Slab 0's ``base - 1`` is column 1, which is also the seek tail's shared riser,
+    and the tail is otherwise strictly below the band. See
+    :data:`SEEK_TIGHT_STRUCT_DROPS` for what the drum *does* change — the taken
+    row's eastward run, which is a price, not a collision.
     """
     order = sorted(structured, key=lambda m: -row_of[m])
     base = {m: struct_x0 + i * pitch for i, m in enumerate(order)}
@@ -1269,7 +1277,9 @@ def build_cpu(
     :data:`FOLDED_LANES`); ``slab_pitch`` narrows the staircase's step. All six
     default off/unchanged and leave the layout byte-identical; opt in per slug via
     :data:`TRIM_DEAD_LANES` / :data:`TOP_RETURN_BUS` / :data:`TIGHT_STRUCT_DROPS` /
-    :data:`TUCKED_DROPS` / :data:`FOLDED_LANES` / :data:`SLAB_PITCH`.
+    :data:`TUCKED_DROPS` / :data:`FOLDED_LANES` / :data:`SLAB_PITCH` — the last two
+    of those reading :data:`SEEK_TIGHT_STRUCT_DROPS` / :data:`SEEK_SLAB_PITCH`
+    instead while the drum is on.
     """
     if (trim_dead or top_bus) and not short_return:
         raise MachineError("trim_dead/top_bus require the short-return drop rule")
@@ -1304,11 +1314,16 @@ def build_cpu(
             f"slab pitch {slab_pitch} is below the {_SLAB_PITCH_FLOOR}-column span a "
             "branch slab occupies (`base - 1` .. `base + 9`); slabs would overlap"
         )
-    if tight_drops and seek:
-        # Seek slabs are a different shape (a taken row *below* the band, a shared
-        # flush tail in columns 1..4) and their entry geometry has not been proved
-        # against a tightened column. Say so rather than emit an unvalidated grid.
-        raise MachineError("tight_drops is not supported with the seek drum")
+    if tight_drops and seek and not seek_taken_drop_east:
+        # A *seek* jump slab has no body: its entry row is one `<` run and a turn
+        # south, and the column it turns at is chosen at draw time — ``base``
+        # without :data:`SEEK_TAKEN_DROP_EAST`, and the last column west of the
+        # request `s` with it. Tightening the entry column pulls that turn west
+        # too, and at ``base`` the man then walks the *taken* row back east from
+        # column 2 to the send site, which is the whole slab band again with the
+        # sign flipped. The two knobs are one knob: see
+        # :data:`SEEK_TIGHT_STRUCT_DROPS`.
+        raise MachineError("tight_drops under the seek drum requires seek_taken_drop_east")
     k, lanes = p.k, p.lanes
     used = list(p.number)
     bus_row = 1
@@ -2277,9 +2292,105 @@ DRAIN_UNIT_BITS: dict[str, int] = {
 #: their floor freely again as they always have west of the band.
 #:
 #: Empty by default, so every machine not named here is byte-identical. Requires
-#: the short-return drop rule and is not available under the seek drum, whose
-#: slabs are a different shape.
+#: the short-return drop rule. Under the seek drum the same lever is keyed per
+#: ``(slug, tier)`` in :data:`SEEK_TIGHT_STRUCT_DROPS` instead, for the reason the
+#: :data:`SLAB_PITCH` / :data:`SEEK_SLAB_PITCH` split already gives.
 TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
+
+#: :data:`TIGHT_STRUCT_DROPS`'s replacement while the seek drum is on — the same
+#: split :data:`MEM_PAD` / :data:`SEEK_MEM_PAD` and :data:`SLAB_PITCH` /
+#: :data:`SEEK_SLAB_PITCH` already make, and keyed per ``(slug, tier)`` because
+#: the drop columns are a tier's own measurement.
+#:
+#: ``build_cpu`` used to refuse ``tight_drops`` under the drum outright, on the
+#: grounds that "seek slabs are a different shape ... and their entry geometry has
+#: not been proved against a tightened column". That was accurate about its own
+#: evidence and wrong about the conclusion. :func:`_tight_struct_entry` never
+#: reasoned about slab *bodies* — it reserves ``base - 1`` and ``base + 3/6/9``
+#: because those columns carry **risers to the collector**, and it floors each
+#: entry one cell east of wherever that slab turns its man south. Both statements
+#: survive the drum verbatim:
+#:
+#: * a classic slab under the drum is drawn by the same :func:`_slab`, so its
+#:   riser and arm columns are literally the ones the reservation names;
+#: * a *seek* branch has no ``base - 1`` riser at all (its two not-taken arms rise
+#:   on ``base + 3/6/9``, which are already reserved), so the reservation is
+#:   merely conservative there;
+#: * the seek tail's shared riser on column 1 is ``base - 1`` of slab 0, which
+#:   ``struct_x0 == _STRUCT_X0 == 2`` makes reserved for free;
+#: * the tail itself lives strictly *below* the band, on rows no entry column
+#:   crosses.
+#:
+#: What is genuinely new is the **seek jump**, and it is a cost, not a collision.
+#: It has no body: the entry row turns him south at ``turn_x`` and he drops to the
+#: taken row, where he walks **east** to the request `s` at ``e_s = struct_east +
+#: 2`` and sends. :data:`SEEK_TAKEN_DROP_EAST` already puts that turn as far east
+#: as the entry column allows — ``turn_x == drop_x - 1`` — so the three legs are
+#: ``(drop_x - lane_x0) + 1 + (e_s - drop_x + 1)`` and **the drop column cancels**.
+#: A seek jump costs ``e_s + 2 - lane_x0`` wherever its entry sits: 36 ticks here,
+#: before and after, to the tick. The win is entirely the classic slabs'.
+#:
+#: Which is why the guard now demands ``seek_taken_drop_east`` rather than refusing
+#: outright. Without it ``turn_x == base``, the cancellation is gone, and a
+#: tightened entry hands the man the whole band twice — a real loss, and the one
+#: true statement inside the old refusal.
+#:
+#: Measured on ``deadman-3d_hires`` men-v3, 21 rounds, ``frame_tiles=(2, 2)``,
+#: everything else at the shipped values, against a rebuilt baseline of
+#: **118,411,196** ticks at 595x630 (``passed``, ``fatal=None``):
+#:
+#: | lane | slab | ``base`` | ``drop_x`` before | after | ticks saved / exec |
+#: |---|---|---|---|---|---|
+#: | `JMPS` | seek jump | 2 | 47 | **18** | 0 — the taken row takes it back |
+#: | `JMPF` | classic jump | 13 | 48 | **19** | 58 |
+#: | `BRZ` | classic branch | 24 | 49 | **25** | 48 |
+#: | `BRN` | classic branch | 35 | 50 | **36** | 28 |
+#:
+#: A column is worth two ticks — east along the lane to the turn, west back along
+#: the slab's entry row to its body — the same arithmetic :data:`TUCKED_DROPS` and
+#: :data:`FOLDED_LANES` record, except that the return leg here is the entry row
+#: rather than the collector, so the slab's own column cancels out of it.
+#:
+#: **111,492,961 at 594x630, -5.843%**, ``passed``, ``fatal=None``, ``route_lengths``
+#: ``adapter->store`` 4 / ``store->cpu`` 6 unchanged. The profile puts the win where
+#: the argument put it (native ``FastLittleman``, ``profile=True``,
+#: ``profile_stride=17``, same tour, heat summed over ``cpu:*`` — the CPU is one
+#: runner, so its samples over ``profile.samples`` is the fraction of the run):
+#:
+#: | region | %run before | %run after | ticks before | ticks after |
+#: |---|---|---|---|---|
+#: | `cpu:lane:BRN` | 2.39% | **1.81%** | 2,830,028 | 2,018,023 |
+#: | `cpu:lane:BRZ` | 2.32% | **0.81%** | 2,747,140 | 903,093 |
+#: | `cpu:lane:JMPF` | 1.42% | **0.35%** | 1,681,439 | 390,225 |
+#: | `cpu:lane:JMPS` | 0.82% | **0.24%** | 971,172 | 267,583 |
+#: | four lanes | **6.95%** | **3.21%** | 8,229,779 | 3,578,924 |
+#:
+#: All four are **0.00% blocked** before and after: this is walking, not waiting,
+#: which is why it scales with columns at all. `JMPS`' lane shrinks like the rest
+#: and its time reappears on the taken row, which is in no ``cpu:*`` region — the
+#: 4.65M the lanes give up against the 6.92M the run gives up is the rest of the
+#: band and the collector following them west.
+#:
+#: **It does narrow the CPU, and only by one.** :data:`FOLDED_LANES`' note above is
+#: right that ``ret_x`` was the structured drops' — 50, `BRN`'s — and the box does
+#: not care (595 is the router wall's). What it becomes is 49, and *not* because a
+#: drop is there: under the drum ``ret_x`` is floored at ``struct_east + 3``, the
+#: taken row's send site plus its ``v``, and with the drops at 18..36 that floor is
+#: what the east wall now stands on. So the next column of CPU has to come from
+#: ``e_s`` — which is ``struct_east + 2`` = 48 and needs only to be east of the
+#: taken drops (17 here) and of the flush loop's columns 2..6. Every one of those
+#: 30 columns is walked on the taken row by every taken seek jump, and shrinking
+#: them is the term this change leaves on the table. It belongs to the seek tail's
+#: own geometry — where the request `s` binds — and is left alone here.
+#:
+#: A one-column narrower band also re-runs the ``mem_pad`` search into a closer
+#: bind, 10 -> 9, which is why the memory lanes move too and ``cpu->drum`` is
+#: 1145 -> 1144.
+#:
+#: Empty by default, so every machine not named here is byte-identical. The
+#: ``taped`` tier of the same slug is deliberately **not** here: it is a different
+#: band with a different store and has not been measured.
+SEEK_TIGHT_STRUCT_DROPS: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
 
 #: Per-``(slug, tier)`` opt-in for **drop columns floored by operations rather than
 #: by cells** — the simple lanes' half of what :data:`TIGHT_STRUCT_DROPS` does for
@@ -2400,10 +2511,18 @@ TUCKED_DROPS: set[tuple[str, str]] = {
 #:
 #: **It does not narrow the CPU, and the reason is not the lanes.** The box is
 #: 595x630 before and after and the collector is 49 cells wide both times, because
-#: ``ret_x`` is set by the *structured* drops out at 55..58 — floored at
-#: ``struct_east + 1``, the seek slab band's east edge — which no lane fold can
-#: reach. :data:`TIGHT_STRUCT_DROPS` is the lever that would, and ``build_cpu``
-#: refuses it under the seek drum.
+#: ``ret_x`` is set by the *structured* drops — floored at ``struct_east + 1``, the
+#: seek slab band's east edge — which no lane fold can reach. The tight-entry
+#: registry is the lever that would, and ``build_cpu`` refused it under the seek
+#: drum when this was written.
+#:
+#: It does not any more, and both halves of that last sentence turned out to be
+#: worth re-reading. The refusal was an untested assumption and is gone
+#: (:data:`SEEK_TIGHT_STRUCT_DROPS`, -5.84% on this tier), and the drop columns
+#: quoted here as 55..58 are the *last* pad the search tried, not the one it
+#: shipped: at the winning ``mem_pad`` of 10 they were 47..50 and ``ret_x`` was 50.
+#: The mechanism above is unaffected — read ``build_for(...).regions``, not a
+#: traced ``build_cpu`` call, when quoting a column.
 #:
 #: Empty for everything else, so every machine not named here is byte-identical.
 #: Requires the short-return drop rule and no top bus.
@@ -3805,7 +3924,11 @@ def _assemble(
         stream_pad=stream_pad,
         short_return=short_return,
         drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
-        tight_drops=not seek and program.name in TIGHT_STRUCT_DROPS,
+        tight_drops=(
+            (program.name, store) in SEEK_TIGHT_STRUCT_DROPS
+            if seek
+            else program.name in TIGHT_STRUCT_DROPS
+        ),
         slab_pitch=(SEEK_SLAB_PITCH if seek else SLAB_PITCH).get(
             program.name, _SLAB_PITCH
         ),

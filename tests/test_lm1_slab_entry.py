@@ -2,8 +2,9 @@
 
 Two opt-in structures-band features, both default-off per slug:
 
-* ``tight_drops`` (:data:`machine.TIGHT_STRUCT_DROPS`): a structured lane's drop
-  lands in its own slab's column band instead of east of the whole band.
+* ``tight_drops`` (:data:`machine.TIGHT_STRUCT_DROPS`, or
+  :data:`machine.SEEK_TIGHT_STRUCT_DROPS` under the drum): a structured lane's
+  drop lands in its own slab's column band instead of east of the whole band.
 * ``slab_pitch`` (:data:`machine.SLAB_PITCH`): the staircase's step, floored at
   the eleven columns a branch slab actually occupies.
 
@@ -76,15 +77,26 @@ def _bases(cpu) -> dict[str, int]:
 def test_both_registries_name_only_the_slugs_that_measured_them() -> None:
     """Every checked-in machine stays byte-identical unless its slug opts in.
 
-    ``deadman-3d`` opts into :data:`machine.SLAB_PITCH` but **not** into
-    :data:`machine.TIGHT_STRUCT_DROPS`, and the asymmetry is geometry, not
-    oversight: ``build`` computes ``tight_drops=not seek and name in
-    TIGHT_STRUCT_DROPS``, so the seek drum — which only ``deadman-3d`` has —
-    makes that registry unreachable for it. Naming it there would be dead config
-    reading as an intent nobody can act on.
+    Both levers are split classic/seek — :data:`machine.SLAB_PITCH` against
+    :data:`machine.SEEK_SLAB_PITCH`, :data:`machine.TIGHT_STRUCT_DROPS` against
+    :data:`machine.SEEK_TIGHT_STRUCT_DROPS` — because the drum reshapes the band
+    and a value swept against one form does not carry to the other. So a slug
+    under the drum must be named in the *seek* registry and stays out of the
+    classic one; a slug without a drum is the mirror image.
+
+    This docstring used to argue the stronger thing, that ``tight_drops`` was
+    *unreachable* under the drum and naming a drum slug anywhere would be dead
+    config. That was the guard's own comment repeated, not a measurement: the
+    entry rule never reasoned about slab bodies, only about which columns carry
+    risers to the collector, and it transfers to the drum intact. See
+    :data:`machine.SEEK_TIGHT_STRUCT_DROPS`.
     """
     assert machine.TIGHT_STRUCT_DROPS == {SLUG}
     assert machine.SLAB_PITCH == {SLUG: 11}
+    # No slug is in both halves of either split, which is the property the two
+    # registries exist to keep — ``build`` reads exactly one of each per build.
+    assert not machine.TIGHT_STRUCT_DROPS & {s for s, _t in machine.SEEK_TIGHT_STRUCT_DROPS}
+    assert not set(machine.SLAB_PITCH) & set(machine.SEEK_SLAB_PITCH)
     # The claim is the *asymmetry* above, so assert that and not an inventory.
     # This line used to read ``== {"deadman-3d": 11}`` and went red the moment
     # ``deadman-3d_hires`` legitimately measured its own pitch — a whole-registry
@@ -192,12 +204,81 @@ def test_the_pitch_floor_is_the_span_a_branch_slab_occupies(program) -> None:
         _cpu(program, tight=True, pitch=10)
 
 
-def test_tight_entries_need_the_short_return_and_refuse_the_seek_drum(program) -> None:
+def test_tight_entries_need_the_short_return(program) -> None:
     p = machine.plan(program)
     with pytest.raises(machine.MachineError, match="short-return"):
         machine.build_cpu(program, p, tight_drops=True, short_return=False)
-    with pytest.raises(machine.MachineError, match="seek drum"):
+
+
+def test_tight_entries_under_the_drum_need_the_taken_drop_east(program) -> None:
+    """The one thing the drum really does add, and it is a cost, not a collision.
+
+    A *seek* jump slab has no body: its entry row is a ``<`` run and a turn south,
+    and the man then walks the **taken** row back east to the request ``s`` at
+    ``struct_east + 2``. So the columns a tight entry saves on the lane are handed
+    straight back on the taken row — a wash with :data:`machine.SEEK_TAKEN_DROP_EAST`
+    on, which pins the turn as far east as the entry column allows, and a net
+    **loss** without it, where the turn is ``base`` and the taken walk is the whole
+    band. ``build_cpu`` refuses that combination rather than emit it.
+    """
+    p = machine.plan(program)
+    with pytest.raises(machine.MachineError, match="seek_taken_drop_east"):
         machine.build_cpu(program, p, tight_drops=True, seek=True)
+
+
+def test_a_seek_band_takes_the_tight_entries_and_still_binds(monkeypatch) -> None:
+    """The claim the old guard denied, end to end on a real drum build.
+
+    ``deadman-3d`` is not in :data:`machine.SEEK_TIGHT_STRUCT_DROPS` — the shipped
+    grid is measured at the default and stays byte-identical — but it is the
+    WAD-free slug that has a drum, so it is what can carry the proof here. Every
+    entry lands inside its own pitch-wide band, no entry sits on a riser column,
+    and ``build_for`` still binds every pipe (it raises otherwise), which is the
+    half of "unvalidated" that only a whole machine can answer.
+    """
+    key = ("deadman-3d", "taped")
+    shipped = machine.build_for(*key[:1], store=key[1])
+    monkeypatch.setattr(machine, "SEEK_TIGHT_STRUCT_DROPS", {key})
+    tight = machine.build_for(*key[:1], store=key[1])
+
+    def cpu_drops(m):
+        x0 = m.regions["cpu:fetch"][0] - 1
+        return {
+            n.split(":", 2)[2]: x + w - 1 - x0
+            for n, (x, _y, w, _h) in m.regions.items()
+            if n.startswith("cpu:lane:")
+        }
+
+    def cpu_bases(m):
+        x0 = m.regions["cpu:fetch"][0] - 1
+        return {
+            n.split(":", 2)[2]: x - x0
+            for n, (x, _y, _w, _h) in m.regions.items()
+            if n.startswith("cpu:slab:")
+        }
+
+    drops, bases = cpu_drops(tight), cpu_bases(tight)
+    was = cpu_drops(shipped)
+    pitch = machine.SEEK_SLAB_PITCH["deadman-3d"]
+    struct_east = machine._STRUCT_X0 + len(bases) * pitch
+    risers = set()
+    for m, base in bases.items():
+        risers.add(base - 1)
+        risers |= {base + 3, base + 6, base + 9}
+    for m, base in bases.items():
+        # Every entry is east of its own slab's turn column and west of where the
+        # default rule put it. Not ``<= base + pitch``: an entry is also floored by
+        # the lanes *below* it, which can legitimately push the shallowest slab's
+        # column past its own band without ever leaving the band as a whole.
+        assert base < drops[m] < was[m], (m, drops[m], base, was[m])
+        assert drops[m] not in risers, (m, drops[m], sorted(risers))
+    # Which is the claim: the drops are inside the band now, not east of all of it.
+    assert max(drops[m] for m in bases) <= struct_east < min(was[m] for m in bases)
+    # No simple lane may share a slab entry column — its drop would sail past the
+    # collector into that slab. ``build_cpu`` raises on this, so assert it directly
+    # rather than trust the absence of an exception.
+    entries = {drops[m] for m in bases}
+    assert not entries & {drops[m] for m in drops if m not in bases}
 
 
 def test_a_narrower_pitch_pulls_the_cpu_east_wall_in(program) -> None:
