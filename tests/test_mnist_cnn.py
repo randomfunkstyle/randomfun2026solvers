@@ -761,3 +761,109 @@ def test_frames_and_single_step_are_refused_together():
 def test_more_epochs_than_the_panels_have_columns_is_refused():
     with pytest.raises(ValueError, match="epoch columns"):
         mnist_cnn.build_machine(epochs=mnist_cnn.MAX_EPOCH_COLS + 1)
+
+
+# ── the placement's own guards ───────────────────────────────────────────────
+# Every guard added for the two-panel path, made to fire. An unfired guard is
+# indistinguishable from a comment: two of these are credited as the only protection
+# against a silent leg-on-leg overlap (``_Grid.put`` raises only when the two glyphs
+# *differ*), and that credit has to be earned.
+def test_display_must_be_a_pair_or_a_sequence_of_pairs():
+    assert machine._panel_sizes(None) == ()
+    assert machine._panel_sizes((64, 32)) == ((64, 32),)
+    assert machine._panel_sizes([(64, 32), (8, 8)]) == ((64, 32), (8, 8))
+    with pytest.raises(machine.MachineError, match="not a .width, height. pair"):
+        machine._panel_sizes((64, 32, 1))
+    with pytest.raises(machine.MachineError, match="not a .width, height. pair"):
+        machine._panel_sizes([(64, 32, 1)])
+    with pytest.raises(machine.MachineError, match="panel-less display"):
+        machine._panel_sizes([])
+
+
+def test_a_diagonal_leg_is_refused_rather_than_walked_forever():
+    assert machine._polyline([(0, 0), (0, 2), (2, 2)]) == [(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)]
+    with pytest.raises(machine.MachineError, match="axis-aligned"):
+        machine._polyline([(0, 0), (2, 2)])
+
+
+def test_a_route_over_an_occupied_cell_is_refused():
+    """The guard that stands in for a pipe-on-pipe check inside ``draw_pipe``.
+
+    ``_Grid.put`` is silent when the glyphs match, so one ``-`` leg crossing another's
+    ``-`` would be drawn without complaint and the engine would read the two as one
+    pipe. This is the only thing between that and a wrong answer.
+    """
+    g = machine._Grid()
+    machine._check_route_clear(g, [(0, 0), (5, 0)], what="a leg over empty grid")
+    g.put(3, 0, "-")
+    with pytest.raises(machine.MachineError, match="would run over 1 occupied cell"):
+        machine._check_route_clear(g, [(0, 0), (5, 0)], what="a leg crossing another's `-`")
+
+
+def test_a_corridor_with_no_free_row_is_refused_not_worked_around():
+    g = machine._Grid()
+    # One free row is enough for one lane...
+    assert machine._detour_lanes(g, 100, [20], east=30, floor=104) == {0: 102}
+    # ...but two lanes need two, and each must be lower than the one east of it.
+    assert machine._detour_lanes(g, 100, [20, 26], east=30, floor=104) == {0: 103, 1: 102}
+    with pytest.raises(machine.MachineError, match="no clear corridor row"):
+        machine._detour_lanes(g, 100, [20, 26], east=30, floor=103)
+    # And an occupied row is skipped rather than drawn over. Only the *leg* is blocked
+    # here (column 20 stays clear), because blocking the descent column blocks every
+    # row below it too — which is itself the behaviour the raise above pins.
+    for x in range(21, 31):
+        g.put(x, 102, "-")
+    assert machine._detour_lanes(g, 100, [20], east=30, floor=105) == {0: 103}
+
+
+def _cpu_for(src: str):
+    program = asm.assemble(src, name="guard-probe", isa=isa.LM1_EXT)
+    return machine.build_cpu(program, machine.plan(program))
+
+
+PORT_LANES = "        LDI 0\n        DSPA\n        DSPD\n        DSPS\n        HALT\n"
+RELAY_LANE = "        LDI 0\n        DSP 0\n        HALT\n"
+
+
+def test_the_three_port_form_refuses_a_second_panel():
+    """It is single-panel by construction: those three pipes go straight into the panel,
+    so a second panel would make the CPU feed two displays — which R1 forbids."""
+    cpu = _cpu_for(PORT_LANES)
+    with pytest.raises(machine.MachineError, match="three-port opcodes"):
+        machine._display_stack(
+            machine._Grid(), cpu, 8, 100, ((64, 32), (64, 32)), east_limit=400
+        )
+
+
+def test_a_panel_without_a_relay_lane_is_refused():
+    """One lane per panel, in order, so a program that writes to only one panel cannot
+    be given two — the second would be an unwired display before a wired one (R2)."""
+    cpu = _cpu_for(RELAY_LANE)
+    with pytest.raises(machine.MachineError, match="relay lanes"):
+        machine._display_stack(
+            machine._Grid(), cpu, 8, 100, ((64, 32), (64, 32)), east_limit=400, floor=200
+        )
+
+
+def test_a_relay_command_pipe_that_misses_its_north_wall_is_refused():
+    """The bug that produced the first ``fatal:no-pipe``: with ``dsp_pad`` pushing the
+    lanes east, the detour came back to the lane's own column, which is far east of the
+    relay room — a pipe ending over empty grid, which ``analyze`` still counts."""
+    g = machine._Grid()
+    far = 8 + machine._RELAY_W + 40
+    with pytest.raises(machine.MachineError, match="not strictly between the corners"):
+        machine._dsp_relay(g, 8, 100, far, y0=120, route=[(far, 101), (far, 119)])
+    # A corner is refused too: legal for a room, but a geometric ambiguity.
+    with pytest.raises(machine.MachineError, match="not strictly between the corners"):
+        machine._dsp_relay(machine._Grid(), 8, 100, 8, y0=120, route=[(8, 101), (8, 119)])
+
+
+def test_a_panel_that_would_overdraw_is_refused():
+    """The occupancy check that replaces the adapter-column comparison when a panel sits
+    below the whole machine, where there is no adapter beside it to compare against."""
+    cpu = _cpu_for(PORT_LANES)
+    cols = {b: 8 + c for b, c in cpu.dsp_cols.items()}
+    g = machine._Grid()
+    machine._display(g, cpu, 8, 100, None, (16, 8), cols=cols)
+    with pytest.raises(machine.MachineError, match="would overdraw"):
+        machine._display(g, cpu, 8, 100, None, (16, 8), cols=cols)
