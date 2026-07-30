@@ -117,8 +117,10 @@ encloses ``prod`` and the ADDER is outside it. So exactly one pipe has to cross 
 chord, and the only place a pipe may cross another is *inside a room*:
 :func:`shared_relay_cells` is that room, two men from one ``Y``, ring B turned around
 west-to-east through the middle and ``prod`` passed south-to-north across it.
-:func:`boundary_owners` is why it has to be built that way and
-:data:`DUAL_RELAY_PORTS` records the arrangement that cannot.
+:func:`pipe_bindings` decides which pipe each glyph takes, in ``SPEC.md``'s own
+direction, and :data:`DUAL_RELAY_PORTS` records the assignment that leaves both of
+``prod``'s ports on one side of the chord — and the round-9 over-claim that grew out of
+reading that rule backwards.
 """
 
 from __future__ import annotations
@@ -133,7 +135,11 @@ __all__ = [
     "DUAL_RELAY_PORTS",
     "dual_relay_probe",
     "block_crossings",
-    "boundary_owners",
+    "boundary_clockwise",
+    "pipe_bindings",
+    "wall_segments",
+    "shared_relay_bindings",
+    "SHARED_RELAY_MIN_MARGIN",
     "perimeter_order",
     "DUAL_RELAY_IH",
     "DUAL_RELAY_IW",
@@ -1115,17 +1121,37 @@ def dual_relay_cells() -> dict[tuple[int, int], str]:
 #: timing, so the two can never meet — which matters because ``SPEC.md`` kills both
 #: men on a same-cell arrival, silently and with no fatal error.
 #:
-#: **This stacked room cannot be the block's shared relay, and that is a fourth
-#: refuted constraint** — see :func:`shared_relay_cells`. Four pipes bind here and no
-#: two of these four legs cross, both of which this module verified; what it did not
-#: check is the property the planarity argument actually needs, which is that
-#: ``prod`` enter on one side of ring B's chord and leave on the other.
-#: :func:`boundary_owners` computes the answer: the two loops' ``r`` arcs and ``s``
-#: arcs are *identical* here, because both loops put ``r`` and ``s`` on the same row
-#: three columns apart, so whichever pair of ports ring B takes, ``prod``'s two ports
-#: land in the same arc and its pass-through never crosses the chord. The room is kept
-#: because it is the smaller demonstration of the ``Y`` idiom the block relies on, and
-#: because the refutation is worth more visible than deleted.
+#: **As written, these four ports do not let ``prod`` cross ring B's chord** — and that
+#: is a defect in the *assignment*, not in the room.
+#:
+#: The property the planarity argument needs is one nobody had stated: a room that turns
+#: ring B around *and* passes ``prod`` through must have ``prod`` enter on one side of
+#: ring B's chord and leave on the other, because the room is the only place a pipe may
+#: cross another. The chord meets the room at ``turn_in`` and ``turn_out``, which split
+#: the boundary into two arcs, so ``pass_in`` and ``pass_out`` have to fall in
+#: *different* ones. These four do not: reading clockwise they come out ``turn_out``,
+#: ``turn_in``, ``pass_out``, ``pass_in``, with both passed ports on one side. The two
+#: checks this module *did* run — four pipes bind, with a minimum margin of 5, and no
+#: two of the four legs need to cross — are both true of it and neither can see that.
+#:
+#: **Round 9 over-claimed this, and the over-claim is corrected rather than deleted**,
+#: the way §R7.1 is kept as a wrong frame. It said the stacked room could not do it *for
+#: any port assignment at any size*. That is false. Enumerating every ordered 4-tuple of
+#: attach positions at 3x9 under :func:`pipe_bindings` finds **1238 strictly-binding
+#: interleaved assignments**, and ``test_the_stacked_relay_can_interleave_after_all``
+#: pins one of them — ``turn_in`` north 2, ``pass_in`` west 3, ``turn_out`` west 7,
+#: ``pass_out`` east 8 — verified on the engine, not on the model.
+#:
+#: What survives is narrower and is what actually decided the drawing: **no assignment
+#: with the four ports on four distinct walls binds and interleaves here** — 0 of them,
+#: against 2809 for :func:`shared_relay_cells` — and four distinct walls is what
+#: :func:`_place4`'s geometry wants, because ring B arrives from the far west, returns
+#: east into the unit, ``prod`` climbs from below and ``pass_out`` leaves north into the
+#: ADDER. So the crossed room is the one that fits *this* placement; the stacked room is
+#: not unusable, and a different placement could well be built on it.
+#:
+#: The room is kept because it is the smaller demonstration of the ``Y`` idiom the block
+#: relies on, and because a corrected claim beside it is worth more than a deletion.
 DUAL_RELAY_PORTS = {
     "turn_in": ("north", 3),  # the ring's fill drops onto the upper `r`
     "turn_out": ("north", 2),  # the ring's return climbs straight off the upper `s`
@@ -1207,54 +1233,83 @@ def dual_relay_probe(upper_driven: bool = True) -> list[str]:
     return g.rows()
 
 
-# ── which glyph owns which wall cell, and why that decides the whole block ────
-def boundary_owners(
-    iw: int, ih: int, glyphs: Sequence[tuple[str, tuple[int, int]]]
-) -> list[tuple[str, int, str]]:
-    """``(wall, offset, owning glyph)`` for every attachable cell, clockwise from the NW.
+# ── which pipe a glyph binds, in SPEC's own direction ─────────────────────────
+def wall_segments(iw: int, ih: int) -> dict[tuple[str, int], tuple[int, int]]:
+    """``(wall, interior offset) -> the pipe segment cell just outside that wall``.
 
-    ``SPEC.md``: nearest is Manhattan from the instruction to the pipe segment touching
-    this room, ties by reading order. So *which* glyph a port binds is a function of the
-    port's wall cell alone, and the room's boundary partitions into arcs, one per glyph.
-
-    That partition is what decides whether a room can pass a pipe **across** a ring it
-    also turns around, which is the whole load-bearing claim of
-    :func:`block_crossings`' ``tree`` parameter. A ring entering at one port and leaving
-    at another cuts the room's boundary into two arcs; the passed pipe's ``in`` and
-    ``out`` ports have to fall in *different* ones, or its two legs are on the same side
-    of the ring's chord and the crossing it was supposed to remove is still there.
-    Since ``r`` and ``s`` are separate pools, that is possible only if the ``r`` arcs and
-    the ``s`` arcs partition the boundary *differently* — which is a property of where
-    the four glyphs sit, and is the property :func:`dual_relay_cells` does not have and
-    :func:`shared_relay_cells` does.
-
-    ``glyphs`` are interior coordinates, 1-based like :func:`relay_cells`. Compare only
-    glyphs of one kind: ``r`` against ``r``, ``s`` against ``s``.
+    Interior coordinates, 1-based like :func:`relay_cells`, so the walls themselves are
+    at 0 and ``iw+1``/``ih+1`` and a pipe's own first (or last) cell is one further out.
+    That outer cell is what ``SPEC.md`` measures to: "the pipe segment attached to the
+    current room".
     """
-    out: list[tuple[str, int, str]] = []
-    walls: list[tuple[str, int, tuple[int, int]]] = []
-    walls += [("north", x, (x, 0)) for x in range(1, iw + 1)]
-    walls += [("east", y, (iw + 1, y)) for y in range(1, ih + 1)]
-    walls += [("south", x, (x, ih + 1)) for x in range(iw, 0, -1)]
-    walls += [("west", y, (0, y)) for y in range(ih, 0, -1)]
-    for wall, off, (cx, cy) in walls:
-        name, _ = min(
-            glyphs, key=lambda g: (abs(g[1][0] - cx) + abs(g[1][1] - cy), g[1][1], g[1][0])
+    out: dict[tuple[str, int], tuple[int, int]] = {}
+    for x in range(1, iw + 1):
+        out[("north", x)] = (x, -1)
+        out[("south", x)] = (x, ih + 2)
+    for y in range(1, ih + 1):
+        out[("west", y)] = (-1, y)
+        out[("east", y)] = (iw + 2, y)
+    return out
+
+
+def boundary_clockwise(iw: int, ih: int) -> list[tuple[str, int]]:
+    """Every position a pipe may attach to, clockwise from the north-west corner."""
+    return (
+        [("north", x) for x in range(1, iw + 1)]
+        + [("east", y) for y in range(1, ih + 1)]
+        + [("south", x) for x in range(iw, 0, -1)]
+        + [("west", y) for y in range(ih, 0, -1)]
+    )
+
+
+def pipe_bindings(
+    glyphs: Sequence[tuple[str, tuple[int, int]]],
+    ports: Sequence[tuple[str, tuple[int, int]]],
+) -> dict[str, tuple[str, int]]:
+    """``glyph name -> (the port it binds, the margin to the runner-up)``.
+
+    ``SPEC.md``, "Which pipe do I talk to?", in **its own direction**: a pipe glyph takes
+    the *nearest pipe*, Manhattan, measured from the instruction to the pipe segment
+    attached to this room, ties broken by that **segment's** reading order (top to
+    bottom, left to right).
+
+    The direction matters and getting it backwards is a real bug, which this module made:
+    "port ``F`` is nearer glyph ``a`` than glyph ``b``" is a different proposition from
+    "glyph ``a`` is nearer port ``F`` than port ``P``", and only the second is what the
+    engine evaluates. An earlier version of this helper computed the first, partitioned
+    the room's boundary into "arcs" on that basis, and an impossibility claim was built
+    on top of it. See :func:`dual_relay_cells` for what that cost.
+
+    ``glyphs`` and ``ports`` must be in one coordinate frame, and ``ports`` are segment
+    cells (:func:`wall_segments`). Call it once per pool — ``r`` against the incoming
+    pipes, ``s`` against the outgoing — because ``SPEC.md`` keeps those separate. A
+    margin of 0 means the binding rests on the tie-break rather than on distance.
+    """
+    if len(ports) < 2:
+        raise StreamError("pipe_bindings compares pipes; give it at least two")
+    out: dict[str, tuple[str, int]] = {}
+    for name, (gx, gy) in glyphs:
+        ranked = sorted(
+            (abs(px - gx) + abs(py - gy), py, px, port) for port, (px, py) in ports
         )
-        out.append((wall, off, name))
+        out[name] = (ranked[0][3], ranked[1][0] - ranked[0][0])
     return out
 
 
 #: The shared relay the block places: two men from one ``Y``, ring B turned around
 #: **west to east** through the middle and ``prod`` passed **south to north** across it.
 #:
-#: The two channels cross at right angles, and that is the entire point. The ring's
-#: ``r`` is west and its ``s`` east; the passed loop's ``r`` is south and its ``s``
-#: north. So the ``r`` arcs split the boundary north/east-of-centre against
-#: south/west-of-centre, while the ``s`` arcs split it the other way, and the four
-#: ports interleave ``turn_in, pass_in, turn_out, pass_out`` around the room —
-#: which is exactly the condition :func:`boundary_owners` explains and
-#: :func:`dual_relay_cells` fails.
+#: The two channels cross at right angles, and that is what makes the four ports
+#: **interleave**: clockwise they come out ``pass_out, turn_out, pass_in, turn_in``, so
+#: ring B's two separate ``prod``'s two and ``prod`` really does cross the chord inside
+#: the room. That is the condition :data:`DUAL_RELAY_PORTS`' assignment misses, and the
+#: reason this room exists.
+#:
+#: Its concrete advantage over the stacked room is narrower than round 9 claimed: with
+#: the four ports on **four distinct walls** — which is what :func:`_place4` wants, since
+#: ring B arrives from the far west, returns east into the unit, ``prod`` climbs from
+#: below and ``pass_out`` leaves north into the ADDER — this room has 2809 strictly
+#: binding interleaved assignments and the stacked one has none.
 #:
 #: The two loops are *nested*, which they have to be: the ring's loop connects a west
 #: cell to an east cell and the passed loop a south cell to a north cell, so one has to
@@ -1274,9 +1329,14 @@ def boundary_owners(
 SHARED_RELAY_IW = 9
 SHARED_RELAY_IH = 7
 
-#: ``band -> (wall, interior offset)``. Every one is the middle of its wall, which is
-#: what makes all four margins 5 cells rather than the 1-cell margins elsewhere in this
-#: block.
+#: ``band -> (wall, interior offset)``, each in the middle of its wall.
+#:
+#: The binding margins are **3, 7, 3, 7** — minimum :data:`SHARED_RELAY_MIN_MARGIN`, and
+#: asserted, because an unasserted margin is how the round-9 figure came to be wrong in
+#: both value and direction. (It said 5, and said that beat the stacked room's; the
+#: stacked room's documented ports are the ones with a minimum of 5. Margin was never the
+#: reason to prefer this room — interleaving was.) 3 is comfortable: the tightest margin
+#: anywhere else in this block is 1 cell, inside the unit.
 SHARED_RELAY_PORTS = {
     "turn_in": ("west", 4),  # ring B's fill arrives eastward at the inner `r`
     "turn_out": ("east", 4),  # ring B's return leaves eastward from the inner `s`
@@ -1292,6 +1352,28 @@ SHARED_RELAY_GLYPHS = {
     "pass_in": ("r", (5, 7)),
     "pass_out": ("s", (5, 1)),
 }
+
+#: The smallest distance by which any of the four glyphs prefers its own pipe to the
+#: other of its kind. Asserted rather than commented (``test_the_shared_relays_ports``).
+SHARED_RELAY_MIN_MARGIN = 3
+
+
+def shared_relay_bindings() -> dict[str, tuple[str, int]]:
+    """``band -> (the band each glyph actually binds, its margin)``, by SPEC's rule.
+
+    One call per pool, since ``SPEC.md`` keeps incoming and outgoing pipes separate. The
+    block, the probe and the enumeration all go through this, so there is one place where
+    "which pipe does this glyph take" is computed.
+    """
+    seg = wall_segments(SHARED_RELAY_IW, SHARED_RELAY_IH)
+    out: dict[str, tuple[str, int]] = {}
+    for kind in "rs":
+        bands = [b for b, (g, _c) in SHARED_RELAY_GLYPHS.items() if g == kind]
+        out |= pipe_bindings(
+            [(b, SHARED_RELAY_GLYPHS[b][1]) for b in bands],
+            [(b, seg[SHARED_RELAY_PORTS[b]]) for b in bands],
+        )
+    return out
 
 
 def shared_relay_cells() -> dict[tuple[int, int], str]:
@@ -1531,22 +1613,35 @@ def _serpentine(
 #   exactly its job: east wall to a west-side relay. Rules 1 and 3 survive; this one
 #   is recorded so it is not re-derived a second time.
 # * **A shared relay with its two loops stacked — each loop's ``r`` and ``s`` on one
-#   row — cannot pass ``prod`` across ring B's chord at all.** This is the one that had
-#   actually been blocking the drawing, and it went unnoticed for four rounds because
-#   the two checks that were run (four pipes bind with margin 6; no two of the four legs
-#   need to cross) are both true of it. The property the planarity result needs is a
-#   third one: ``prod`` must *enter on one side of ring B's chord and leave on the
-#   other*, since the room is the only place a pipe may cross another. ``SPEC.md``'s
-#   nearest rule makes that a function of where the four glyphs sit, and
-#   :func:`boundary_owners` computes it: with both loops laid out the same way the
-#   ``r`` arcs and the ``s`` arcs partition the room's boundary *identically*, so ring
-#   B's two ports can never separate ``prod``'s two. :func:`shared_relay_cells` is the
-#   room that does: ring B west-to-east through the middle, ``prod`` south-to-north
-#   across it, the two loops nested so the splits run opposite ways.
+#   row — does not let ``prod`` cross ring B's chord, and no assignment of its four
+#   ports to four *distinct walls* does either.** The property the planarity result
+#   needs is a third one nobody had stated: ``prod`` must *enter on one side of ring B's
+#   chord and leave on the other*, since the room is the only place a pipe may cross
+#   another. The chord meets the room at two points, splitting its boundary into two
+#   arcs, so the passed pipe's two ports must fall in different ones. The stacked room's
+#   documented ports do not, and the two checks that were run of it — four pipes bind
+#   with a minimum margin of 5, no two of the four legs need to cross — are both true
+#   and neither can see that.
 #
-#   The general lesson, since it is the same one three times: every negative result on
-#   this task came from checking a property nobody had thought to state. A verified
-#   artifact is only verified against the checks it was given.
+#   **Round 9 stated this far too strongly and the over-claim is corrected here rather
+#   than deleted.** It said the stacked room could not do it for *any* assignment at any
+#   size. That is false: 1238 assignments at 3x9 bind strictly and interleave, and
+#   ``test_the_stacked_relay_can_interleave_after_all`` pins one on the engine. What
+#   holds is the four-distinct-wall statement above — 0 against 2809 for
+#   :func:`shared_relay_cells` — and four distinct walls is what :func:`_place4`'s
+#   geometry wants. The crossed room fits *this* placement; the stacked room is not
+#   unusable.
+#
+#   The over-claim had a cause worth recording: the helper it rested on computed
+#   "which glyph is this port nearest to" when ``SPEC.md`` asks "which pipe is this
+#   glyph nearest to". Those are different propositions, the second is the engine's, and
+#   :func:`pipe_bindings` now computes that one — checked against the engine on 35 real
+#   bindings.
+#
+#   The general lesson, since it is the same one four times: every negative result on
+#   this task came from checking a property nobody had thought to state, and the one
+#   false result came from checking the converse of the property that mattered. A
+#   verified artifact is only verified against the checks it was given.
 
 
 
@@ -1586,9 +1681,9 @@ def _serpentine(
 # fall as the east-wall row rises) and rule 3 (each incoming pipe's own climb column,
 # ordered by the wall row it feeds) both survive; rule 2 as stated does not, and is
 # recorded here only so it is not reinvented. What the correction did *not* predict is
-# that ``prod`` cannot pass through the relay this module had built for it — see
-# :func:`boundary_owners` and :data:`DUAL_RELAY_PORTS` for that, the fourth refuted
-# constraint, and the one that had actually been blocking the drawing.
+# that the relay this module had already built does not, at the ports it documents, let
+# ``prod`` cross ring B's chord — see :data:`DUAL_RELAY_PORTS` for that, the fourth
+# refuted constraint, and for the round-9 over-claim that came with it.
 #
 # ── placement constants, depth 4 ─────────────────────────────────────────────
 # The depth-3 idiom, transcribed. Nothing crosses from the east wall to the west side

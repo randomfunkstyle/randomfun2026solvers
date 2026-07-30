@@ -848,75 +848,212 @@ def test_the_two_refuted_fixes_stay_refuted():
 
 
 # ── the crossed shared relay: the room that actually passes prod across ring B ──
-def test_the_stacked_relays_two_loops_cannot_straddle_a_chord():
-    """The fourth refuted constraint, computed rather than argued.
+def _interleaves(iw: int, ih: int, ports: dict[str, tuple[str, int]]) -> bool:
+    """Do ring B's two ports separate the passed pipe's two, around the boundary?
 
-    ``dual_relay_cells`` binds four pipes with margin 6 and none of its four legs need
-    to cross, which is what this module checked and pinned. It is not enough. A room
-    that turns ring B around *and* passes ``prod`` through has to put ``prod``'s two
-    ports on **opposite** sides of ring B's chord, or ``prod``'s pass-through is on one
-    side and the crossing ``block_crossings`` promised to remove is still there.
-
-    ``SPEC.md``'s nearest rule makes that a property of where the four glyphs sit: the
-    stacked room puts each loop's ``r`` and ``s`` on the same row, so the ``r`` arcs and
-    the ``s`` arcs partition the boundary *identically* and ``prod``'s two ports always
-    land together.
+    The topological condition, and the only reason a shared relay is worth having: the
+    chord meets the room at ``turn_in`` and ``turn_out``, splitting its boundary into two
+    arcs, and ``prod`` can only cross the chord if it enters on one and leaves on the
+    other. Nothing about ``SPEC.md``'s binding rule enters here — this is the geometry.
     """
-    stacked = stream.boundary_owners(
-        stream.DUAL_RELAY_IW,
-        stream.DUAL_RELAY_IH,
-        [("upper", (3, 2)), ("lower", (3, 8))],
-    )
-    stacked_s = stream.boundary_owners(
-        stream.DUAL_RELAY_IW,
-        stream.DUAL_RELAY_IH,
-        [("upper", (2, 2)), ("lower", (2, 8))],
-    )
-    assert [o for _, _, o in stacked] == [o for _, _, o in stacked_s], (
-        "if these ever differ the stacked room could pass a pipe across its ring"
+    order = stream.boundary_clockwise(iw, ih)
+    at = {port: i for i, port in enumerate(order)}
+    lo, hi = sorted((at[ports["turn_in"]], at[ports["turn_out"]]))
+    return sum(lo < at[ports[b]] < hi for b in ("pass_in", "pass_out")) == 1
+
+
+def _binds(iw: int, ih: int, glyphs: dict, ports: dict) -> dict[str, tuple[str, int]]:
+    """Every glyph's bound port and margin, both pools, via SPEC's own direction."""
+    seg = stream.wall_segments(iw, ih)
+    out: dict[str, tuple[str, int]] = {}
+    for kind in "rs":
+        bands = [b for b, (g, _c) in glyphs.items() if g == kind]
+        out |= stream.pipe_bindings(
+            [(b, glyphs[b][1]) for b in bands], [(b, seg[ports[b]]) for b in bands]
+        )
+    return out
+
+
+STACKED_GLYPHS = {
+    "turn_in": ("r", (3, 2)),
+    "turn_out": ("s", (2, 2)),
+    "pass_in": ("r", (3, 8)),
+    "pass_out": ("s", (2, 8)),
+}
+
+
+def test_the_stacked_relays_documented_ports_do_not_let_prod_cross():
+    """The real defect in ``DUAL_RELAY_PORTS``, stated at exactly its true strength.
+
+    All four pipes bind, with a minimum margin of 5, and no two of the four legs need to
+    cross — which is what this module checked, and neither check can see the property
+    that matters: ``prod`` has to enter on one side of ring B's chord and leave on the
+    other. These four ports put both passed ports on one side.
+    """
+    iw, ih = stream.DUAL_RELAY_IW, stream.DUAL_RELAY_IH
+    bound = _binds(iw, ih, STACKED_GLYPHS, stream.DUAL_RELAY_PORTS)
+    assert all(got == band for band, (got, _m) in bound.items()), bound
+    assert min(m for _b, m in bound.values()) == 5, bound
+    assert not _interleaves(iw, ih, stream.DUAL_RELAY_PORTS), (
+        "if this ever interleaves the stacked room could carry the block after all"
     )
 
 
-def test_the_shared_relays_r_and_s_arcs_interleave():
-    """And the crossed room's do differ — which is what makes the block drawable.
+def test_the_stacked_relay_can_interleave_after_all():
+    """Round 9 claimed the stacked room could not do it at any size. That was false.
 
-    Ring B crosses west to east through the middle and ``prod`` south to north, so the
-    ``r`` split runs one way round the boundary and the ``s`` split the other. Read
-    clockwise the four ports come out interleaved — ``pass_out``, ``turn_out``,
-    ``pass_in``, ``turn_in`` — so ring B's two ports separate ``prod``'s two.
+    The claim rested on a helper that computed ``port -> nearest glyph`` when
+    ``SPEC.md`` binds ``glyph -> nearest pipe``; those are different propositions and
+    only the second is what the engine evaluates. Correcting the direction
+    (:func:`~randomfun2026solvers.lm1.stream.pipe_bindings`) leaves **1238** strictly
+    binding interleaved assignments at 3x9, and this pins one of them.
+
+    It is verified on the engine rather than on the model, because a model is what got
+    this wrong once already.
+    """
+    iw, ih = stream.DUAL_RELAY_IW, stream.DUAL_RELAY_IH
+    witness = {
+        "turn_in": ("north", 2),
+        "pass_in": ("west", 3),
+        "turn_out": ("west", 7),
+        "pass_out": ("east", 8),
+    }
+    bound = _binds(iw, ih, STACKED_GLYPHS, witness)
+    assert all(got == band for band, (got, _m) in bound.items()), bound
+    assert min(m for _b, m in bound.values()) >= 1, "must not rest on the tie-break"
+    assert _interleaves(iw, ih, witness)
+
+    rows = _relay_probe(stream.dual_relay_cells(), iw, ih, witness)
+    engine = FastLittleman("\n".join(rows))
+    assert len(engine.pipes) == 4
+    for band, (kind, (gx, gy)) in STACKED_GLYPHS.items():
+        pipe = engine.pipes[engine._bindings[(_RX + gx, _RY + gy)]]
+        attach = pipe.src_attach if kind == "s" else pipe.dst_attach
+        assert attach == _wall_cell(iw, ih, witness[band]), (
+            f"the engine binds {band}'s {kind} to {attach}, not its own port"
+        )
+
+
+_RX, _RY = 14, 14
+
+
+def _wall_cell(iw: int, ih: int, port: tuple[str, int]) -> tuple[int, int]:
+    wall, off = port
+    return {
+        "north": (_RX + off, _RY),
+        "south": (_RX + off, _RY + ih + 1),
+        "west": (_RX, _RY + off),
+        "east": (_RX + iw + 1, _RY + off),
+    }[wall]
+
+
+def _relay_probe(cells: dict, iw: int, ih: int, ports: dict) -> list[str]:
+    """A relay room with one two-cell stub leg per port — the shortest legal pipe.
+
+    Short legs on purpose: nothing about the *leg* may influence the binding, so if the
+    engine disagrees with the model it is about the glyphs and the walls and nothing else.
+    """
+    from randomfun2026solvers.lm1.machine import _Grid
+
+    g = _Grid()
+    g.room(_RX, _RY, _RX + iw + 1, _RY + ih + 1)
+    g.blit(_RX, _RY, cells)
+    step = {"north": (0, -1), "south": (0, 1), "west": (-1, 0), "east": (1, 0)}
+    for band, port in ports.items():
+        wx, wy = _wall_cell(iw, ih, port)
+        dx, dy = step[port[0]]
+        near, far = (wx + dx, wy + dy), (wx + 2 * dx, wy + 2 * dy)
+        home = (wx + 4 * dx, wy + 4 * dy)
+        g.room(home[0] - 1, home[1] - 1, home[0] + 1, home[1] + 1)
+        g.draw_pipe([far, near] if band.endswith("_in") else [near, far])
+    return g.rows()
+
+
+def test_what_actually_favours_the_crossed_room_is_four_distinct_walls():
+    """The narrowed claim, enumerated: 0 for the stacked room against 2809 here.
+
+    Four distinct walls is what :func:`~randomfun2026solvers.lm1.stream._place4` wants —
+    ring B arrives from the far west, returns east into the unit, ``prod`` climbs from
+    below, ``pass_out`` leaves north into the ADDER — and it is the only sense in which
+    the stacked room is unable to do this job. It is *not* unusable in general.
+    """
+    from itertools import permutations
+
+    def four_wall_solutions(cells_iw, cells_ih, glyphs):
+        order = stream.boundary_clockwise(cells_iw, cells_ih)
+        n = 0
+        for combo in permutations(order, 4):
+            if len({wall for wall, _off in combo}) != 4:
+                continue
+            ports = dict(zip(("turn_in", "pass_in", "turn_out", "pass_out"), combo, strict=True))
+            bound = _binds(cells_iw, cells_ih, glyphs, ports)
+            if any(got != band or m < 1 for band, (got, m) in bound.items()):
+                continue
+            n += _interleaves(cells_iw, cells_ih, ports)
+        return n
+
+    assert four_wall_solutions(stream.DUAL_RELAY_IW, stream.DUAL_RELAY_IH, STACKED_GLYPHS) == 0
+    crossed = four_wall_solutions(
+        stream.SHARED_RELAY_IW, stream.SHARED_RELAY_IH, stream.SHARED_RELAY_GLYPHS
+    )
+    assert crossed == 2809, crossed
+
+
+def test_the_shared_relays_ports_bind_interleaved_at_the_margin_it_claims():
+    """The drawn assignment: every glyph on its own pipe, interleaved, margin asserted.
+
+    The margin is asserted because the round-9 figure for it was wrong in both value and
+    direction — it said 5, and said that beat the stacked room, when 5 is the stacked
+    room's. Interleaving, not margin, is why this room is here.
     """
     iw, ih = stream.SHARED_RELAY_IW, stream.SHARED_RELAY_IH
-    owners = {}
-    for kind in "rs":
-        glyphs = [
-            (band, cell)
-            for band, (g, cell) in stream.SHARED_RELAY_GLYPHS.items()
-            if g == kind
-        ]
-        owners[kind] = {(w, o): who for w, o, who in stream.boundary_owners(iw, ih, glyphs)}
+    bound = stream.shared_relay_bindings()
+    assert all(got == band for band, (got, _m) in bound.items()), bound
+    assert sorted(m for _b, m in bound.values()) == [3, 3, 7, 7], bound
+    assert min(m for _b, m in bound.values()) == stream.SHARED_RELAY_MIN_MARGIN
+    assert _interleaves(iw, ih, stream.SHARED_RELAY_PORTS)
 
-    order = [w for w, _, _ in stream.boundary_owners(iw, ih, [("x", (1, 1))])]
-    assert len(order) == 2 * (iw + ih)
-
-    # each port lands in the arc of the glyph it must bind
-    for band, (kind, _cell) in stream.SHARED_RELAY_GLYPHS.items():
-        wall, off = stream.SHARED_RELAY_PORTS[band]
-        assert owners[kind][(wall, off)] == band, f"{band} would bind the other {kind}"
-
-    # and clockwise the four are interleaved, not paired
-    ring = ("turn_in", "turn_out")
     clockwise = [
         band
-        for w, o, _ in stream.boundary_owners(iw, ih, [("x", (1, 1))])
+        for pos in stream.boundary_clockwise(iw, ih)
         for band, port in stream.SHARED_RELAY_PORTS.items()
-        if port == (w, o)
+        if port == pos
     ]
-    assert len(clockwise) == 4, clockwise
-    cut = clockwise.index(ring[0])
-    rotated = clockwise[cut:] + clockwise[:cut]  # starts at turn_in
-    between = rotated[1 : rotated.index(ring[1])]
-    assert between == ["pass_out"], f"ring B's ports must separate prod's two: {rotated}"
-    assert rotated[rotated.index(ring[1]) + 1 :] == ["pass_in"], rotated
+    cut = clockwise.index("turn_in")
+    rotated = clockwise[cut:] + clockwise[:cut]
+    assert rotated == ["turn_in", "pass_out", "turn_out", "pass_in"], rotated
+
+
+def test_pipe_bindings_models_specs_direction_and_not_its_converse():
+    """The two readings genuinely disagree, so a regression to the wrong one fails here.
+
+    Round 9's helper asked "which glyph is port ``F`` nearest to"; ``SPEC.md`` asks
+    "which pipe is glyph ``a`` nearest to". The relation is not symmetric and it is not
+    invertible: several glyphs may bind one pipe, and a pipe's nearest glyph need not be
+    a glyph that binds it. An impossibility argument built on the converse is unsound,
+    which is what happened.
+
+    In the case below ``SPEC.md`` binds ``a -> F`` and ``b -> P``, so both pipes are
+    served; the converse reading calls ``a`` the nearest glyph to *both* ports, which
+    would have put ``P`` in ``a``'s "arc" and concluded that ``a`` binds ``P``.
+    """
+    glyphs = [("a", (1, 1)), ("b", (5, 1))]
+    ports = [("F", (1, -1)), ("P", (2, -1))]
+
+    spec = {g: port for g, (port, _m) in stream.pipe_bindings(glyphs, ports).items()}
+    assert spec == {"a": "F", "b": "P"}, spec
+
+    converse = {
+        port: min(glyphs, key=lambda g: abs(g[1][0] - c[0]) + abs(g[1][1] - c[1]))[0]
+        for port, c in ports
+    }
+    assert converse == {"F": "a", "P": "a"}, converse
+    assert spec["a"] != "P", "SPEC's direction does not give a the port the converse does"
+
+    # and a margin of 0 is reported honestly, because a tie is decided by reading order
+    # of the *segments* and so is not something a layout should be resting on
+    tied = stream.pipe_bindings([("a", (1, 1))], [("F", (0, 1)), ("P", (2, 1))])
+    assert tied["a"] == ("F", 0), tied
 
 
 def test_the_shared_relays_two_loops_each_read_before_they_send():
