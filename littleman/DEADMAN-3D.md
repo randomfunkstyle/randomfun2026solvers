@@ -37,7 +37,7 @@ Two files: a machine and an input stream.
 
 ```sh
 # in the contest web editor: paste the machine, then the input
-littleman/examples/deadman-3d_taped.man        # 395x231, ~26 men — use THIS one in the editor
+littleman/examples/deadman-3d_taped.man        # 293x257, ~26 men — use THIS one in the editor
 littleman/examples/deadman-3d.input.txt        # the 57-frame demo walk
 ```
 
@@ -60,8 +60,8 @@ over 816 differential runs.
 
 | file | size | use it for |
 |---|---|---|
-| `deadman-3d.man` (= `_v2`, `_trim`) | 379×376 | headless runs — about 2× faster |
-| `deadman-3d_taped.man` (= `_m6_taped`) | 395×231 | **the web editor** |
+| `deadman-3d.man` (= `_v2`, `_trim`) | 382×382 | headless runs — about 2× faster |
+| `deadman-3d_taped.man` (= `_m6_taped`) | 293×257 | **the web editor** |
 
 They run the same program and take the same input; they differ only in how
 memory is built. The canonical machine uses man-memory (hundreds of little men);
@@ -141,24 +141,18 @@ feed it `deadman-3d.input.txt`, and it plays — no WAD, no assets, nothing else
 on disk. **A WAD is only needed if you want to build a machine from a different
 level or different art.**
 
-### What a WAD is for, and why it is not in this repo
+### What a WAD is for, and why one is not in this repo
 
 A WAD is DOOM's archive format: the level geometry, the wall textures, the
 palette, the title screen and every sprite live inside it. The demo needs that
-data to have anything to draw — but *which* WAD supplies it is a licensing
-question, not a technical one:
+data to have anything to draw.
 
-* **Freedoom** is a BSD-licensed, from-scratch replacement for DOOM's data. It is
-  freely redistributable, so its level and art are what this repository ships,
-  already baked into the committed machines.
-* **id Software's IWADs** (`DOOM.WAD`, `DOOM2.WAD`, and the shareware
-  `DOOM1.WAD`) are not redistributable. Owning a copy and using it yourself is
-  fine; putting its data in a public repository is not. So none of it is here,
-  `littleman/examples/local/` is in `.gitignore`, and no test in the suite reads
-  an IWAD.
-
-That is the entire reason for the two-mode pipeline. It is not that Freedoom is
-preferred — it is that Freedoom can be published.
+**id Software's IWADs are not redistributable.** Owning a copy and using it
+yourself is fine; putting its data in a public repository is not. So no IWAD is
+here, `littleman/examples/local/` is in `.gitignore`, and no test in the suite
+reads one. That is the entire reason for the two-mode pipeline: the committed
+machines carry data that may be published, and `--wad` lets you build machines
+from data that may not.
 
 ### From a clean clone to real DOOM, step by step
 
@@ -175,12 +169,25 @@ cd randomfun2026solvers
 uv sync
 ```
 
-**2. Get a WAD.** Any DOOM IWAD works. The shareware `DOOM1.WAD` is the easiest
-and is enough for everything here — it contains E1M1, the title screen, the
-palette, the pistol, the status-bar faces and the monsters. If you own DOOM on
-Steam or GOG, the IWAD sits in that installation directory. On Windows-installer
-shareware distributions the WAD may be inside the installer archive; extract it
-with `7z` or similar first.
+**2. Get a WAD.** Any DOOM IWAD works, and the shareware `DOOM1.WAD` is enough
+for everything here — E1M1, the title screen, the palette, the pistol, the
+status-bar faces and the monsters are all in it. Where to find one:
+
+| source | where the IWAD lives |
+|---|---|
+| **DOOM shareware** (free, and all you need) | distributed for decades as `doom1.wad` inside archives such as `doom19s.zip` / `DOOM1_9.zip` on the Internet Archive and the idgames mirrors. Unzip and take `DOOM1.WAD`. |
+| **Steam** — DOOM / DOOM II / The Ultimate DOOM | `steamapps/common/Ultimate Doom/base/DOOM.WAD` (macOS: inside `Doom 3 BFG Edition/base/wads/`) |
+| **GOG** | the install directory, or `game.gog`/`.bin` for older releases — mount or extract it |
+| **A retail CD or a bought copy** | the IWAD is a plain file on the disc |
+| **`DOOM2.WAD`, `TNT.WAD`, `PLUTONIA.WAD`, PWADs** | all work; pass `--wad-map MAP01` for DOOM II-style names |
+
+Windows-installer shareware distributions keep the WAD inside the installer
+archive — extract it with `7z x` (or `unzip`) first. Any file that begins with
+the four bytes `IWAD` or `PWAD` will do; the importer is stdlib-only and does not
+care where it came from.
+
+If you have no WAD at all, you can still run everything in "Quick start" above —
+the committed machines are standalone. `--wad` is only for building your own.
 
 **3. Build machines from it.**
 
@@ -195,15 +202,15 @@ It prints what it found and what it wrote:
 ```
 installed iwad:DOOM1.WAD:E1M1: spawn (27, 30) heading 4, 467 wall cells,
 72 nukage cells, 3 monsters, 1120 title runs; WAD art: 11+14 pistol runs,
-4 faces, 60 monster sprite words
-wrote .../littleman/examples/local/deadman-3d_local.man (375x376)
-wrote .../littleman/examples/local/deadman-3d_local_taped.man (395x231)
+4 faces, 58 status-bar runs, 60 monster sprite words
+wrote .../littleman/examples/local/deadman-3d_local.man (383x382)
+wrote .../littleman/examples/local/deadman-3d_local_taped.man (293x256)
 wrote .../littleman/examples/local/deadman-3d_local.cases.json, .input.txt, frames/
 ```
 
 Three monsters is correct, not a bug: E1M1 "Hangar" really is that sparse on
-medium skill. Freedoom's first level has sixteen, which is why the committed
-demo is the busier one.
+medium skill, and the importer takes only the things that are actual monsters at
+medium skill inside cells the player can reach.
 
 **4. Look at what it made.** `littleman/examples/local/frames/` holds a PNG per
 frame; `frame-00.png` is the real `TITLEPIC` — the marine, the fire, the logo —
@@ -281,15 +288,20 @@ sectors, the title screen (`TITLEPIC`), the palette (`PLAYPAL`), the pistol
 
 ### Where the art actually comes from
 
-| element | committed build | your `--wad` build |
-|---|---|---|
-| level geometry | Freedoom E1M1 | your WAD's map |
-| wall colours | Freedoom textures | your WAD's textures |
-| title screen | Freedoom `TITLEPIC` | your `TITLEPIC` |
-| pistol | Freedoom | your `PISGA0`/`PISFA0` |
-| HUD face | Freedoom | your `STFST*` — real DOOM art |
-| monsters | Freedoom | your `POSSA1`/`TROOA1` |
-| health/ammo bars | **generated** — not from any WAD | same |
+Everything visible except the bars is imported from a WAD at build time — the
+committed machines from the redistributable one named in Credits, yours from
+whichever you pass to `--wad`:
+
+| element | lump it comes from |
+|---|---|
+| level geometry | `VERTEXES`, `LINEDEFS`, `SIDEDEFS`, `SECTORS`, `THINGS` |
+| wall colours | `TEXTURE1` / `PNAMES`, reduced to each cell's dominant hue |
+| title screen | `TITLEPIC` |
+| pistol | `PISGA0` / `PISFA0` |
+| HUD face | `STFST01` / `STFST21` / `STFST41`, `STFEVL0` |
+| monsters | `POSSA1` / `TROOA1` / `POSSL0` |
+| palette | `PLAYPAL` |
+| health/ammo bars | **generated** — not from any WAD |
 
 At 64×48 the original status bar's numbers would be two pixels wide, so the
 readouts are proportional bars rather than DOOM's digit font.
@@ -360,7 +372,13 @@ store tiers and per-slug tuning live in `lm1/machine.py`.
 
 ## Credits
 
-Level geometry, title screen, pistol, faces and monster sprites in the committed
-machines come from [Freedoom](https://freedoom.github.io/) Phase 1 (commit
-`d14dbbe`, BSD licence). The raycaster is lodev's, transliterated. DOOM is
-id Software's; none of it is included here.
+The raycaster is lodev's, transliterated. DOOM is id Software's, and **none of
+id's data is included in this repository** — you supply that yourself with
+`--wad`.
+
+The level geometry, title screen, pistol, faces and monster sprites baked into
+the *committed* machines come from [Freedoom](https://freedoom.github.io/)
+Phase 1 (commit `d14dbbe`), which is BSD-licensed and therefore publishable. That
+licence requires attribution, so this notice stays as long as those artifacts
+ship — it is a legal obligation, not a preference. Build with `--wad` and none of
+it is in your output.
