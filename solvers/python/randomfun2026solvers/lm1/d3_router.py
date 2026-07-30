@@ -642,12 +642,45 @@ PACK_MARGIN_E = 3  # the east margin's turn-round columns
 #: above a block's north wall.  Both blocks in a row share one, exactly as
 #: :func:`build_wall` has them, and that is not cosmetic: the leg fan is only
 #: planar when the two legs of a row can take two lanes of the same corridor.
+#:
+#: ``build_packed_wall``'s ``north_up`` raises the north row off this (see
+#: :data:`machine.DOOM_PACK_NORTH_UP`); the two legs stay on one shared command
+#: row as they must, and what stops the rise is that same corridor running out —
+#: its two lanes are ``row_n - 2`` and ``row_n - 3`` and the router's outlets are
+#: on row 11.
 PACK_ROW_N = 18
 PACK_ROW_S = 217
 
 #: The cluster's north-west wall corner row.  It has to sit between the two
 #: block rows with its band straddling the one row the T3 leg crosses on
 #: (:attr:`Cluster.lane`); see :func:`build_packed_wall`.
+#:
+#: *Between* is forced, and it is worth writing down because the obvious way to
+#: raise the screens is to stop stacking the blocks above them.  The blocks and
+#: the cluster are column-disjoint — 17..118 and 259..360 against 123..256 — so
+#: nothing about the *bodies* stops the cluster rising beside the north row.  What
+#: stops it is the east block's six-cell detour.  T1's ports face away from the
+#: cluster, so its pipes leave the east wall, run to the margin and come back west
+#: **underneath their own block**, into the strip between the block's south edge
+#: and the cluster's north face; north of the block is the router's command lane,
+#: and the two fans cross there unconditionally.  Raise the cluster into the
+#: block's rows and that strip is gone, so the pipes would have to return over the
+#: top — where T1's leg already is.
+#:
+#: The crossing is topological rather than a matter of choosing lanes.  T1's leg
+#: runs east to ``cmd_x`` (inside the block's own column span, ``cmd_cell`` is
+#: ``(16, 0)``) and then descends to the block; that L separates the quadrant, and
+#: ADDR has to get from east of ``cmd_x`` and below the leg's foot to west of it
+#: and above, because its terminal is :attr:`Cluster.north`.  Every route does.
+#: The same argument run the other way pins the south row below the cluster, so
+#: the sandwich is the only arrangement: a block feeding a *north* panel must be
+#: north of the cluster, one feeding a *south* panel south of it.
+#:
+#: A west block has no such constraint — its command column is west of its ports,
+#: so leg and pipes never share territory — which is why the one arrangement that
+#: would free the rows is **both north blocks in west columns**, side by side, at
+#: the cluster's own rows.  That needs a third logic column and two widened
+#: channels; it is not built.
 PACK_CLUSTER_Y = 110
 
 #: How many cells SWAP must lead DATA by.  ``build_doom`` only refuses a tie
@@ -682,6 +715,7 @@ def build_packed_wall(
     loop_row: int | None = None,
     leaf_cols: tuple[int, ...] | None = None,
     lift: int = 0,
+    north_up: int = 0,
 ) -> Wall:
     """The router, four **panel-less** DOOM blocks, and one 2x2 panel cluster.
 
@@ -802,7 +836,8 @@ def build_packed_wall(
     ex = cx + cl.width + PACK_CH_E  # the east logic column
     m1, m2, m3 = (ex + lw + 1 + i for i in range(PACK_MARGIN_E))  # the east margin
 
-    anchors = {0: (wx, PACK_ROW_N), 1: (ex, PACK_ROW_N),
+    row_n = PACK_ROW_N - north_up
+    anchors = {0: (wx, row_n), 1: (ex, row_n),
                2: (wx, (PACK_ROW_S - lift)), 3: (ex, (PACK_ROW_S - lift))}
     for tile, (bx, by) in anchors.items():
         g.blit(bx, by, logic[tile].cells)
@@ -942,7 +977,7 @@ def build_packed_wall(
     #: own: within a block row the leg that reaches further east turns two rows
     #: above the one it crosses.  T3's is the exception and it is the reason the
     #: gutter is three rows rather than two — see below.
-    lanes = {0: PACK_ROW_N - 2, 1: PACK_ROW_N - 3, 2: (PACK_ROW_S - lift) - 2, 3: cl.lane}
+    lanes = {0: row_n - 2, 1: row_n - 3, 2: (PACK_ROW_S - lift) - 2, 3: cl.lane}
     legs: list[int] = []
     for tile, (bx, by) in anchors.items():
         ox = RX + outlets[tile]
