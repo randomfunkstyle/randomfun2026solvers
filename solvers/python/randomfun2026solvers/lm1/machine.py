@@ -5269,9 +5269,13 @@ def _detour_lanes(
 
     Two rules decide this, and both are geometry rather than taste:
 
-    * **No pipe may turn on ``wall_y + 1``.** Every other south-wall pipe in the
-      machine descends at least one cell before it turns, and a pipe that turns in
-      the cell it attaches by does not parse as the generator meant.
+    * **No pipe may turn on ``wall_y + 1``** — the cell it attaches by. That is
+      ``ARCH.md`` §7.2b, which holds for a horizontal wall exactly as it does for a
+      vertical one, and its symptom here is the worst of the two: ``analyze`` reports
+      the pipe with the right length and the *right count*, with ``src = -1``, and the
+      run dies ``fatal:no-pipe`` on the ``s`` that thought it had a pipe.
+      ``littleman/examples/turn-on-attach-cell.man`` is the minimal case and
+      ``tests/test_lm1_display.py`` runs it.
     * **The easternmost lane takes the highest row.** A pipe's eastward leg runs
       over every column east of its own, so if a western pipe turned higher, its leg
       would cross the cell an eastern pipe leaves the wall on. Taking the lanes

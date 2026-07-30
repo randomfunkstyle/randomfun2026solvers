@@ -1244,6 +1244,35 @@ glyphs, correct pipes, and an infinite two-cell refetch loop. Assert entry
 headings with the wasm's `flow(rows)` (per-cell reachable headings) as part of
 generation, not as a debugging step.
 
+### 7.2b A pipe must step away from the wall before it may turn — either orientation
+
+**A pipe's first cell, the one adjacent to the wall it attaches to, must continue
+straight out of that wall. It may only turn on the second cell or later.** This is
+one rule, not two: it holds for a vertical wall (leave east or west, then turn) and
+for a horizontal one (leave south or north, then turn), and it is a corollary of §7.2
+— the attachment cell's heading *is* part of the port, so an arrowhead there pointing
+across the wall names a heading the wall cannot supply, and the pipe is not attached
+to that room at all.
+
+**How it fails is what makes it expensive.** The two orientations were found
+separately, months apart, because neither failure looks like a geometry error:
+
+| | what the generator sees | what the engine sees |
+|---|---|---|
+| vertical (found building the STREAM arms) | nothing | `analyze` reports **one pipe fewer** |
+| horizontal (found building the two-panel display stack) | nothing | `analyze` reports **the same number of pipes**, with `src = -1`; the run dies `fatal:no-pipe` |
+
+The horizontal case is the nastier of the two, and it is the reason a pipe *count* is
+necessary and not sufficient: the count is unchanged, the room count is unchanged, and
+the only signals are the pipe's `src`/`dst` endpoints and the run itself.
+
+The minimal pair is checked in as `littleman/examples/turn-on-attach-cell.man` (the
+bad one) and `turn-after-step.man` (the same grid with one cell of clearance);
+`tests/test_lm1_display.py::test_a_pipe_may_not_turn_in_the_cell_it_attaches_by` runs
+both on the engine. Generators that route to a wall — `machine._display_stack`,
+`machine._detour_lanes`, `stream.py`'s arm exits, `matmul_y` — all reserve that first
+cell.
+
 ### 7.4b Pipe length is a tick cost, on both sides
 
 Measured on `triangle` (9×9, same 11 glyphs, only the pipe lengths varied):

@@ -96,6 +96,53 @@ def test_each_port_is_a_w_s_w_sandwich_on_its_own_band(sem: Sem) -> None:
     assert len({b for _, b in micro if b}) == 1
 
 
+@node_required
+@pytest.mark.parametrize(
+    ("example", "attached", "outcome"),
+    [("turn-on-attach-cell", False, "fatal:no-pipe"), ("turn-after-step", True, "done")],
+)
+def test_a_pipe_may_not_turn_in_the_cell_it_attaches_by(
+    example: str, attached: bool, outcome: str
+) -> None:
+    """``ARCH.md`` §7.2b, on the engine, in both orientations' shared form.
+
+    A pipe's first cell must continue straight out of the wall; it may only turn on the
+    second. The two example grids differ by exactly one cell of clearance.
+
+    The reason this is a *test* and not a comment is the failure mode: ``analyze``
+    reports **the same number of pipes** either way, so the pipe-count check that
+    catches corner ambiguity cannot see this at all. What changes is the pipe's ``src``
+    — -1, meaning attached to no room — and the run, which dies ``fatal:no-pipe`` on the
+    ``s`` that thought it had a pipe. (The vertical orientation was found first, on the
+    STREAM arms, where it reports one pipe *fewer*; same rule, louder symptom.)
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    path = REPO / "littleman" / "examples" / f"{example}.man"
+    info = Littleman().analyze(path)
+    assert len(info.rooms) == 2
+    assert len(info.pipes) == 1, "one pipe drawn and one pipe found, either way"
+    assert (info.pipes[0].src != -1) is attached, (
+        "an unattached pipe is the whole signal: src == -1 while the count is unchanged"
+    )
+    assert info.pipes[0].dst == 1, "the far end reaches the reader's room in both grids"
+
+    out = _run_example(path)
+    assert outcome in out, out
+    assert ("done" in out) is attached
+
+
+def _run_example(path: Path) -> str:
+    import subprocess
+
+    done = subprocess.run(
+        [str(LM_MJS), "run", str(path), "--max-steps", "200"],
+        capture_output=True,
+        text=True,
+    )
+    return done.stdout + done.stderr
+
+
 def test_the_three_bands_are_exactly_the_three_ports() -> None:
     """``DSP_BANDS`` means the panel's three sides, and stays three.
 

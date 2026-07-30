@@ -1242,6 +1242,11 @@ def test_the_placed_block_has_every_pipe_it_drew(trie_bits: int):
     vertical wall has to step away from it before it may turn. Drawn with the turn on
     the attach cell, ``p1`` silently did not parse at all — ``analyze`` reported one
     fewer pipe and nothing else complained.
+
+    The rule is orientation-agnostic and is now written down as ``ARCH.md`` §7.2b, with
+    a minimal probe in ``tests/test_lm1_display.py``: on a *horizontal* wall the same
+    mistake leaves the pipe count **unchanged** and only moves ``src`` to -1, which is
+    why a count alone cannot stand in for it.
     """
     rows, blk, _origin = _block_harness(trie_bits)
     engine = FastLittleman("\n".join(rows))
