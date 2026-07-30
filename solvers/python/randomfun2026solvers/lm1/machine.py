@@ -59,7 +59,10 @@ shared collector row. Lanes stay one row tall and the trie stays untouched.
 
 **Drop columns are a descending staircase.** A lane returns to the fetch site by
 turning south at its own end; that column crosses every row beneath it, so it must
-sit east of every lane below (``drop_x[r] = max(lane_end[q] for q >= r) + 1``).
+sit east of every lane below (``drop_x[r] = max(lane_end[q] for q >= r) + 1``, or,
+under :data:`TUCKED_DROPS`, clear of every *operation* below it — the same rule
+read per column instead of as one number, since a lane's ``.`` padding blocks
+nothing).
 Equal values are fine — the columns merge, and both men are going to the same
 place. A floor keeps them east of the structures band so a simple lane's drop can
 pass straight through it.
@@ -1156,6 +1159,7 @@ def build_cpu(
     seek: bool = False,
     seek_taken_drop_east: bool = False,
     tight_drops: bool = False,
+    tuck_drops: bool = False,
     slab_pitch: int = _SLAB_PITCH,
     lane_pitch: int = 2,
     squash_band: bool | int = False,
@@ -1169,10 +1173,12 @@ def build_cpu(
     ``trim_dead`` removes the unused leaf slots' rows (see :func:`_uneven_trie`);
     ``top_bus`` adds a second return bus above the band and routes each simple
     lane over whichever bus is cheaper; ``tight_drops`` walks each slab's entry
-    column back to its own band (:func:`_tight_struct_entry`); ``slab_pitch``
-    narrows the staircase's step. All four default off/unchanged and leave the
-    layout byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
-    :data:`TOP_RETURN_BUS` / :data:`TIGHT_STRUCT_DROPS` / :data:`SLAB_PITCH`.
+    column back to its own band (:func:`_tight_struct_entry`); ``tuck_drops`` lets a
+    *simple* lane's drop sit inside another lane's ``.`` padding (:data:`TUCKED_DROPS`);
+    ``slab_pitch`` narrows the staircase's step. All five default off/unchanged and
+    leave the layout byte-identical; opt in per slug via :data:`TRIM_DEAD_LANES` /
+    :data:`TOP_RETURN_BUS` / :data:`TIGHT_STRUCT_DROPS` / :data:`TUCKED_DROPS` /
+    :data:`SLAB_PITCH`.
     """
     if (trim_dead or top_bus) and not short_return:
         raise MachineError("trim_dead/top_bus require the short-return drop rule")
@@ -1187,6 +1193,10 @@ def build_cpu(
             raise MachineError(f"lane_pitch must be 1 or 2, got {lane_pitch}")
     if tight_drops and not short_return:
         raise MachineError("tight_drops requires the short-return drop rule")
+    if tuck_drops and not short_return:
+        # The long path is kept verbatim so its slugs regenerate byte-for-byte; it
+        # has no per-column bookkeeping and is not getting any.
+        raise MachineError("tuck_drops requires the short-return drop rule")
     if slab_pitch < _SLAB_PITCH_FLOOR:
         raise MachineError(
             f"slab pitch {slab_pitch} is below the {_SLAB_PITCH_FLOOR}-column span a "
@@ -1356,6 +1366,16 @@ def build_cpu(
             lane_cells[(lane_x0, r)] = (pre, None)
             lane_end[r] = lane_x0
 
+    #: Per row, the columns that carry an **operation** — everything a lane draws
+    #: except ``.``. A lane's cells are not all operations: :func:`_flat_lane` pads
+    #: with ``.`` while pushing a band's first glyph out to its column, so a lane
+    #: whose memory block sits at ``mem_x`` has a run of a dozen inert cells in the
+    #: middle of it. This is what :data:`TUCKED_DROPS` reads instead of ``lane_end``.
+    lane_ops: dict[int, set[int]] = {r: set() for r in all_rows}
+    for (x, yy), (glyph, _band) in lane_cells.items():
+        if glyph != ".":
+            lane_ops[yy].add(x)
+
     # ── bus choice: which lanes return over the top instead of the bottom ────
     # The top bus (row 1) is the collector's mirror: a lane exits east, *rises* on a
     # column clear of every lane above it — the running prefix maximum of
@@ -1429,11 +1449,17 @@ def build_cpu(
     if short_return:
         floor = lane_x0
         struct_min = lane_x0
+        #: The same suffix walk as ``floor``, kept per column instead of as one
+        #: number: every column at or below the current row that carries an
+        #: operation. ``floor`` is its coarse envelope — ``max(blocked) + 1`` — and
+        #: the gap between them is what :data:`TUCKED_DROPS` recovers.
+        blocked: set[int] = set()
         for r in sorted(all_rows, reverse=True):
             # Halting rows carry no drop but do carry glyphs, so they still raise the
             # floor for everything above them — as do top-bus lanes, whose return
             # leaves by the ascent column assigned after the drops.
             floor = max(floor, lane_end[r] + 1)
+            blocked |= lane_ops[r]
             if r in halting or r in top_lanes:
                 continue
             m = by_row.get(r)
@@ -1472,8 +1498,20 @@ def build_cpu(
                 # (a southbound man keeps his heading over a `v`), and every lane
                 # east of ``struct_east`` otherwise pays for a uniqueness it never
                 # needed against its neighbours.
-                c = floor
-                while c in struct_cols or (not tight_drops and c > struct_east and c in assigned):
+                #
+                # ``tuck_drops`` keeps that argument and drops only the scalar: the
+                # thing a descent may not cross is an *operation*, and ``floor`` is
+                # a suffix maximum of last **cells**, which is a strictly weaker
+                # statement. See :data:`TUCKED_DROPS` — the column still has to
+                # clear the lane's own micro-program (``lane_end[r] + 1``, the man
+                # walks over every cell of it) and every operation below it, which
+                # is exactly ``blocked``.
+                c = (lane_end[r] + 1) if tuck_drops else floor
+                while (
+                    c in struct_cols
+                    or (tuck_drops and c in blocked)
+                    or (not tight_drops and c > struct_east and c in assigned)
+                ):
                     c += 1
             drop_x[r] = c
             assigned.add(c)
@@ -2041,6 +2079,59 @@ DRAIN_UNIT_BITS: dict[str, int] = {
 #: the short-return drop rule and is not available under the seek drum, whose
 #: slabs are a different shape.
 TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
+
+#: Per-``(slug, tier)`` opt-in for **drop columns floored by operations rather than
+#: by cells** — the simple lanes' half of what :data:`TIGHT_STRUCT_DROPS` does for
+#: the structured ones.
+#:
+#: A simple lane returns by turning south at ``drop_x[r]``, and that column crosses
+#: every row beneath it, so the default rule floors it at the suffix maximum
+#: ``max(lane_end[q] for q >= r) + 1``. ``lane_end`` is the lane's **last cell** —
+#: and a lane's cells are not all operations. :func:`_flat_lane` pushes a band's
+#: first glyph out to its column and pads the gap with ``.``, so a lane with a
+#: memory block at ``mem_x`` is ``>`` ``M`` then a dozen inert cells then
+#: ``s r W N s ...``. The suffix maximum sees only the eastmost ``s``; it cannot
+#: see the hole in the middle.
+#:
+#: ``.`` has no direction. A southbound man crosses it unchanged, exactly as the
+#: eastbound lane man does, which is the fact ``tests/test_lm1_cpu_trie_pack.py``
+#: pins for the decode trie and the drop comment above has always relied on for the
+#: descent's own body. So a drop may sit **inside** a lane's padding run: the
+#: constraint is per column, not per row, and ``floor`` is only its envelope.
+#:
+#: Measured on ``deadman-3d_hires``, whose band has exactly two rows with slack —
+#: the two the eye picks out of the grid, because every other lane already ends
+#: within a column or two of its turn. Both land on column 17, sharing it with the
+#: six immediate lanes that were already there:
+#:
+#: | lane | last op | drop before | drop after | execs / 21 rounds | ticks |
+#: |---|---|---|---|---|---|
+#: | `IN` (``>rM``) | 15 | 38 | **17** | ~4,700, all boot | **-170,772** (-0.089%) |
+#: | `DIVI` (``>W/M``) | 16 | 33 | **17** | ~21,000, per frame | **-757,984** (-0.396%) |
+#: | both | | | | | **-928,756** (-0.485%) |
+#:
+#: Against a 21-round baseline of 191,601,893 ticks at 649x388, both variants
+#: ``passed``, and the two are exactly additive because a column is worth precisely
+#: two ticks per execution — the walk east to the turn and the walk back west along
+#: the collector — and nothing else on the critical path moves. ``IN`` is a boot
+#: lever (it reads the whole 4,676-word preamble and then two words a round), so it
+#: reads ~3.5x larger on a short tour; ``DIVI`` is per-frame and does not.
+#:
+#: Nothing else moves geometrically either: ``ret_x`` and therefore the CPU's width
+#: are set by the structured drops out at 47..50, which this does not touch, so the
+#: box, every pipe binding and every block placed against the CPU stay where they
+#: were — 649x388 before and after.
+#:
+#: What it does **not** relax is the reason simple and structured columns must stay
+#: disjoint: a slab entry leaves ``.`` on the collector row and a ``<`` that turns
+#: an arriving man west, so a simple man sharing that column sails past his turn and
+#: is swallowed. ``struct_cols`` still refuses those columns explicitly, and the
+#: ``clash`` check below the drops still fails the build if one ever gets through.
+#:
+#: Empty by default, so every machine not named here is byte-identical. Requires the
+#: short-return drop rule; orthogonal to the seek drum and to ``tight_drops``, since
+#: it only ever moves a *simple* lane's column.
+TUCKED_DROPS: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 
 #: Per-program **slab pitch**, the staircase's step. The default 13 gives a branch
 #: slab two spare columns it never uses: its glyphs run from the exit riser at
@@ -3031,6 +3122,7 @@ def build(
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
+    tuck_drops: bool = False,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -3237,6 +3329,7 @@ def build(
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
+                    tuck_drops=tuck_drops,
                 )
             except MachineError as exc:
                 last = exc
@@ -3309,6 +3402,7 @@ def build(
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
+                    tuck_drops=tuck_drops,
                 )
             except MachineError:
                 continue
@@ -3403,6 +3497,7 @@ def _assemble(
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
+    tuck_drops: bool = False,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -3424,6 +3519,7 @@ def _assemble(
         seek_taken_drop_east=seek_taken_drop_east,
         lane_pitch=lane_pitch,
         squash_band=squash_band,
+        tuck_drops=tuck_drops,
     )
     W, H = cpu.width, cpu.height
 
@@ -7630,6 +7726,7 @@ def build_for(
     lane_pitch: int | None = None,
     rom_touch_drop: int | None = None,
     squash_band: bool | int | None = None,
+    tuck_drops: bool | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -7728,6 +7825,9 @@ def build_for(
             ROM_TOUCH_DROP.get((slug, store), 0)
             if rom_touch_drop is None
             else rom_touch_drop
+        ),
+        tuck_drops=(
+            (slug, store) in TUCKED_DROPS if tuck_drops is None else tuck_drops
         ),
         squash_band=(
             SQUASH_BAND.get((slug, store), 0) if squash_band is None else squash_band
