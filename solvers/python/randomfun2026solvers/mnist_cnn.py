@@ -168,10 +168,18 @@ WEIGHT_BIAS = SCALE
 
 # ── the STORE map ────────────────────────────────────────────────────────────
 class _Store:
-    """Named STORE addresses, allocated in one place so the map is auditable."""
+    """Named STORE addresses, allocated in one place so the map is auditable.
+
+    **Allocation starts at 1, not 0.** The hardware STORE encodes read-vs-write in
+    the *sign* of the address word, so slot 0 is sign-ambiguous and unaddressable
+    (``machine.rom_words`` refuses ``ST 0`` outright). The emulator's ``DictStore``
+    does not care, which is exactly why this has to be pinned here: allocating from
+    zero built a program that ran perfectly on the emulator and could not be turned
+    into a machine at all. Slot 0 is left permanently unused.
+    """
 
     def __init__(self) -> None:
-        self._next = 0
+        self._next = 1
         self.names: dict[str, tuple[int, int]] = {}
 
     def alloc(self, name: str, n: int = 1) -> int:
