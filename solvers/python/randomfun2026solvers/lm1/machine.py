@@ -957,6 +957,99 @@ _JUMP_SLAB_ROWS = 4
 _BRANCH_SLAB_ROWS = 8
 
 
+def _slab_east_span(
+    p: _Plan,
+    m: str,
+    drain_unit_bits: int,
+    drain_ops: tuple[str, ...] | None,
+    jump_east: bool,
+    seek_jump_gap: int = 0,
+) -> int:
+    """How many columns **east of ``base``** slab ``m``'s own glyphs reach.
+
+    The pitch is one number for the whole band, floored at the eleven columns a
+    *branch* spans (:data:`_SLAB_PITCH_FLOOR`). Only a branch spans eleven. This
+    is the per-slab truth the uniform step rounds up to, and
+    :data:`PACKED_SLAB_BAND` is what spends it:
+
+    * a **branch**, classic or seek, fans out to the ``neg`` arm at ``base + 9``;
+    * a **classic jump** is the counted discard loop's ``a<`` at ``base``/``base
+      + 1`` — or, drained, a :func:`_drain_block` pinned at ``base - 1``, whose
+      east edge is ``base + width - 2``;
+    * a **seek jump** has no body at all. It is one turn south and a drop, and
+      under :data:`SEEK_TAKEN_DROP_EAST` that turn is at ``struct_east + 1``,
+      far east of the band — so its ``base`` column is drawn on by nobody and
+      the slab costs the staircase nothing but its exit riser's column.
+      Without that registry the turn falls back *to* ``base``, and the drop then
+      runs from the entry row all the way down to the taken row, crossing every
+      deeper slab's body: that one keeps a branch's span rather than reasoning
+      about it.
+
+    ``seek_jump_gap`` is the one number here that is a *tuning* value and not a
+    measurement of glyphs. A seek jump draws nothing, but the column it turns
+    south on has to be free from its entry row to the taken row — below every
+    slab — and it may not be east of its own drop. Pack the band flat and the
+    only such column left is ``base`` itself, which is the U-turn
+    :data:`SEEK_TAKEN_DROP_EAST` exists to remove. Leaving a couple of columns
+    open beside the jump gives the turn somewhere nearer the drop to land.
+    See :data:`PACKED_SLAB_BAND`.
+
+    The riser of the *next* slab lives at its own ``base - 1``, which is why the
+    caller steps by ``span + 2`` and not ``span + 1``.
+    """
+    sem = p.sem[m]
+    if sem is Sem.JUMP_SEEK:
+        return seek_jump_gap if jump_east else 9
+    drained = 0
+    if _drained(m, drain_unit_bits, drain_ops):
+        from .drain import build_drain
+
+        # The block is pinned at ``base - 1`` (:func:`_drain_block`), so its east
+        # edge is ``base + width - 2``.
+        drained = build_drain(0, unit_bits=drain_unit_bits, even=True).width - 2
+    if sem in _JUMP_SEMS:
+        return max(1, drained)
+    # A drained branch keeps its ``X`` fan-out as well; whichever reaches further.
+    return max(9, drained)
+
+
+def _slab_bases(
+    p: _Plan,
+    order: list[str],
+    struct_x0: int,
+    pitch: int,
+    *,
+    packed: bool = False,
+    drain_unit_bits: int = 0,
+    drain_ops: tuple[str, ...] | None = None,
+    jump_east: bool = False,
+    seek_jump_gap: int = 0,
+) -> tuple[dict[str, int], int]:
+    """``(base per slab, struct_east)`` for the staircase.
+
+    The unpacked answer is the shipped one — ``struct_x0 + i * pitch``, and
+    ``struct_east`` a whole pitch past the last slab. ``packed`` steps by what
+    each slab actually draws (:func:`_slab_east_span`) instead, and defines
+    ``struct_east`` the same way the uniform step happens to: two columns past
+    the deepest slab's east edge, which is the first column east of every body.
+    """
+    uniform = struct_x0 + max(1, len(order)) * pitch
+    if not packed:
+        return {m: struct_x0 + i * pitch for i, m in enumerate(order)}, uniform
+    bases: dict[str, int] = {}
+    b = struct_x0
+    #: The first column east of every body. With no structured opcodes at all there
+    #: are no bodies, and the uniform answer's one-slab floor is what the rest of
+    #: the builder has always been handed.
+    east = uniform - 2
+    for m in order:
+        bases[m] = b
+        span = _slab_east_span(p, m, drain_unit_bits, drain_ops, jump_east, seek_jump_gap)
+        east = b + span
+        b += span + 2
+    return bases, east + 2
+
+
 @dataclass
 class _Cpu:
     """A laid-out CPU room: cells in interior coordinates, plus its port rows."""
@@ -1371,6 +1464,7 @@ def _tight_struct_entry(
     struct_x0: int,
     drain_unit_bits: int,
     pitch: int = _SLAB_PITCH,
+    bases: dict[str, int] | None = None,
 ) -> tuple[dict[str, int], frozenset[int]]:
     """Westmost legal entry column per slab, and the columns no entry may use.
 
@@ -1412,7 +1506,7 @@ def _tight_struct_entry(
     row's eastward run, which is a price, not a collision.
     """
     order = sorted(structured, key=lambda m: -row_of[m])
-    base = {m: struct_x0 + i * pitch for i, m in enumerate(order)}
+    base = bases if bases is not None else {m: struct_x0 + i * pitch for i, m in enumerate(order)}
     spine = 0
     if drain_unit_bits:
         from .drain import build_drain
@@ -1453,6 +1547,9 @@ def build_cpu(
     straight_trie: bool = False,
     high_collector: bool = False,
     tight_trie_cols: bool = False,
+    packed_band: bool = False,
+    seek_jump_gap: int = 0,
+    sparse_collector: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -1727,7 +1824,22 @@ def build_cpu(
             for m in structured
         }
         struct_x0 = _STRUCT_X0
-    struct_east = struct_x0 + max(1, len(structured)) * slab_pitch
+    # The staircase, solved before the drops because ``struct_east`` is a floor for
+    # them (and, under ``tight_drops``, each slab's own base is). ``band_order`` is
+    # the order the *rows* imply; the drop solver re-derives it from the columns it
+    # picks and the two are checked against each other below.
+    band_order = sorted(structured, key=lambda m: -row_of[m])
+    band_base, struct_east = _slab_bases(
+        p,
+        band_order,
+        struct_x0,
+        slab_pitch,
+        packed=packed_band,
+        drain_unit_bits=drain_unit_bits,
+        drain_ops=drain_ops,
+        jump_east=seek_taken_drop_east,
+        seek_jump_gap=seek_jump_gap,
+    )
 
     # ── lane extents ─────────────────────────────────────────────────────────
     lane_cells: dict[tuple[int, int], tuple[str, str | None]] = {}
@@ -1883,7 +1995,9 @@ def build_cpu(
     assigned: set[int] = set()
     struct_cols: set[int] = set()
     tight_first, tight_reserved = (
-        _tight_struct_entry(p, structured, row_of, struct_x0, drain_unit_bits, slab_pitch)
+        _tight_struct_entry(
+            p, structured, row_of, struct_x0, drain_unit_bits, slab_pitch, band_base
+        )
         if tight_drops
         else ({}, frozenset())
     )
@@ -2028,10 +2142,13 @@ def build_cpu(
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
     order = sorted(structured, key=lambda m: drop_x[row_of[m]])
-    if tight_drops and order != sorted(structured, key=lambda m: -row_of[m]):
+    if (tight_drops or packed_band) and order != band_order:
         # ``tight_first`` priced each slab against the base this order gives it, so a
         # disagreement means the two disciplines have drifted and the entry columns
         # would be measured against the wrong slabs. Fail rather than mis-wire.
+        # ``packed_band`` needs the same agreement for a stronger reason: its step is
+        # a function of *which* slab sits where, so a reordering would put a branch
+        # on a jump's three columns.
         raise MachineError("tight slab entries: the drop order left the slab order")
     slab_at: dict[str, int] = {}
     slab_base: dict[str, int] = {}
@@ -2056,9 +2173,12 @@ def build_cpu(
     # must pass *through* an entry row leave `.` holes in its `<` run (they are
     # drawn first; the `<`s are ``soft``), and a westbound man keeps his heading
     # over a `.` — the same mechanism the drop columns have always used.
+    # ``slab_base`` is ``band_base``, solved with ``struct_east`` above: under
+    # ``packed_band`` the step is per-slab (:func:`_slab_east_span`) rather than the
+    # uniform ``slab_pitch``, so it cannot be re-derived from ``i`` here.
     for i, m in enumerate(order):
         slab_at[m] = collector + 1 + i
-        slab_base[m] = struct_x0 + i * slab_pitch
+        slab_base[m] = band_base[m]
     bottom = max((slab_at[m] + slab_rows[m] for m in order), default=collector + 1)
     taken_row = bottom + 1  # seek mode only: the eastbound send row below the slabs
     if seek:
@@ -2206,7 +2326,42 @@ def build_cpu(
             elif p.sem[m] in _JUMP_SEMS:
                 # never west of ``base`` (that is the shipped column and the floor),
                 # never east of the lane's own drop (its `<` owns that cell).
+                #
+                # And never *through* another slab. The comment above is only true
+                # while ``jump_x`` itself is reachable: cap it at ``drop_x - 1`` and
+                # the column lands wherever that lane's drop happened to, which at
+                # the shipped pitch is a gap between two slabs and under
+                # :data:`PACKED_SLAB_BAND` is not — the band closes up under the
+                # drop and the descent runs straight down a neighbour's exit riser
+                # (``collision at (17, 46): '.' vs '^'``). The descent spans the
+                # entry row to the taken row, which is *below* every slab's body, so
+                # every other slab's columns are forbidden and not only the deeper
+                # ones. Walk west to the first column that is nobody's; ``base`` is
+                # always one, because a seek jump draws nothing there.
                 jx = base if jump_x is None else max(base, min(jump_x, drop_x[row_of[m]] - 1))
+                if jx != base:
+                    busy: set[int] = set()
+                    for other in order:
+                        if other is m:
+                            continue
+                        b2 = slab_base[other]
+                        busy |= set(
+                            range(
+                                b2 - 1,
+                                b2
+                                + 1
+                                + _slab_east_span(
+                                    p,
+                                    other,
+                                    drain_unit_bits,
+                                    drain_ops,
+                                    seek_taken_drop_east,
+                                    seek_jump_gap,
+                                ),
+                            )
+                        )
+                    while jx > base and jx in busy:
+                        jx -= 1
                 with g.part(f"slab:{m}"):
                     for yy in range(s0 + 1, taken_row):
                         if jx != base and (jx, yy) in g.c:
@@ -2352,9 +2507,32 @@ def build_cpu(
     ret_x = max([*drop_x.values(), *struct_drops, lane_x0])
     if seek:
         ret_x = max(ret_x, struct_east + 3)  # the taken row's send site + its `v`
+    #: The columns a man ever *arrives* on this row, as opposed to merely walks. Two
+    #: kinds, and they approach from opposite directions:
+    #:
+    #: * a **simple lane's drop**, southbound, landing here because this is where its
+    #:   descent stops (:func:`_stop`). A slab lane is not one of these — its drop
+    #:   falls straight through to ``slab_at`` and needs the ``.`` it already wrote;
+    #: * a **slab's riser**, northbound, one per exit column and one per not-taken
+    #:   branch arm — exactly what :func:`_slab` hands back in ``struct_drops``.
+    #:
+    #: Plus column 3, which is not an arrival but the spawn's first step: ``@`` at 2
+    #: faces east, so the cell beside him has to turn him back.
+    #:
+    #: Everything between those is a cell a westbound man crosses, and a westbound
+    #: man keeps his heading over a ``.``. See :data:`SPARSE_COLLECTOR`.
+    arrivals = set(struct_drops) | {3}
+    for r in all_rows:
+        if r in halting or r in top_lanes:
+            continue
+        mm = by_row.get(r)
+        if mm is not None and mm in slab_at:
+            continue
+        if _stop(r, mm) == collector:
+            arrivals.add(drop_x[r])
     with g.part("return:collector"):
         for x in range(3, ret_x + 1):
-            g.soft(x, collector, "<")
+            g.soft(x, collector, "<" if (x in arrivals or not sparse_collector) else ".")
     with g.part("return:riser"):
         g.put(1, collector, "^")
         for yy in range(centre + 1, collector):
@@ -2707,7 +2885,50 @@ DRAIN_UNIT_BITS: dict[str, int] = {
 #: correct, it is measured, and it becomes available again the moment the band
 #: gains a row from anywhere else. The ``BRN``-sits-easternmost note below is still
 #: the open question, and reordering the band would pay for both at once.
-SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {}
+#:
+#: **Recovered on hires/men-v3 by :data:`PACKED_SLAB_BAND`, and it paid for both at
+#: once exactly as the paragraph above guessed.** Packing the staircase walks the
+#: whole band seventeen columns west, which moves every drained ``r`` seventeen
+#: columns *nearer* the ROM pipe on the west wall and that much further from
+#: ``mem_resp`` on the east. Both halves of the old refusal go with it: the pad no
+#: longer has to escape to 29, and the ``collision at (15, 41): '.' vs ']'`` that
+#: made the ladder and :data:`HIGH_COLLECTOR` mutually exclusive does not occur —
+#: they now both build, and ``HIGH_COLLECTOR`` is untouched.
+#:
+#: 21-round tour, ``store="men-v3"``, ``frame_tiles=(2, 2)``, ``passed=True`` on
+#: every row, all on top of ``PACKED_SLAB_BAND``:
+#:
+#: | variant | box | ticks | Δ |
+#: |---|---|---|---|
+#: | packed, drain off | 577x630 | 93,901,187 | — |
+#: | bits 2, ``JMPF`` + ``BRZ`` (the old restriction) | 579x630 | 93,726,592 | -0.186% |
+#: | bits 2, ``BRN`` alone | 577x630 | 93,134,530 | -0.816% |
+#: | **bits 2, all three** | **579x630** | **92,913,125** | **-1.052%** |
+#: | bits 3, all three | 580x630 | (3-round: +0.68% on bits 2) | — |
+#:
+#: Note ``BRN`` alone beats ``JMPF`` + ``BRZ`` together by four to one, which is the
+#: tick census the note below predicted and the reason the restriction was worth
+#: attacking rather than tuning. ``bits 3`` now *builds* (it could not at the
+#: shipped pitch — ``collision at (17, 41)``) and is simply worse.
+#:
+#: **taped takes it too, but only on ``BRN``, and the §7.1 sign is the other way
+#: round.** At taped's re-derived :data:`MEM_PAD_FOR` of 4 the ladder binds on
+#: ``BRN`` alone and on nothing else — draining ``JMPF`` or ``BRZ`` puts an ``r`` at
+#: (28, 151) that ties ``rom`` 29 against ``mem_resp``, and no pad in the sweep
+#: separates them. Which is the exact mirror of men-v3's old restriction, on the
+#: *western* slabs rather than the eastern one, and a reminder that the tie is a
+#: property of one machine's walls and never a rule. 21-round tour, ``store="taped"``,
+#: at pad 4:
+#:
+#: | variant | box | ticks | Δ |
+#: |---|---|---|---|
+#: | drain off | 626x386 | 175,267,384 | — |
+#: | **bits 2, ``BRN`` alone** | **626x392** | **174,497,560** | **-0.439%** |
+#: | bits 2, any set containing ``JMPF`` or ``BRZ`` | — | does not bind | — |
+SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "men-v3"): 2,
+    ("deadman-3d_hires", "taped"): 2,
+}
 
 #: Which classic mnemonics :data:`SEEK_CLASSIC_DRAIN` actually applies to.
 #: ``None``/absent means all of them.
@@ -2723,8 +2944,24 @@ SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {}
 #: also the annoying part: it is the *biggest* of the three (3,115,539 ticks at 21
 #: rounds against ``BRZ``'s 1,544,178 and ``JMPF``'s 1,479,323). Reordering the
 #: band so it sits west would collect it for free and is the open question here.
+#:
+#: **Answered, and without reordering anything.** ``BRN`` is still the easternmost
+#: classic slab — the band's order is the lane rows' and none of them moved — but
+#: :data:`PACKED_SLAB_BAND` walks the whole staircase seventeen columns west, so
+#: "easternmost" is no longer far enough east to tie. ``BRN``'s lowest ``r`` clears
+#: ``mem_resp`` at the shipped pad, the restriction has nothing left to protect, and
+#: the entry is gone: men-v3 drains all three. It was worth **-0.87%** over the
+#: two-slab restriction on the 21-round tour, which is roughly the ratio of ``BRN``'s
+#: own ticks to the other two's.
+#:
+#: Keep the mechanism. The tie is a property of where the deepest slab's block
+#: lands, so any future lever that widens the band east — or any pad that moves —
+#: can bring it back, and it will come back on whichever slab is easternmost then.
+#: **It came back immediately, on the other tier and on the other slabs**: taped, at
+#: its re-derived pad of 4, binds the ladder on ``BRN`` and refuses it on ``JMPF``
+#: and ``BRZ``. Same mechanism, opposite restriction, same registry.
 SEEK_CLASSIC_DRAIN_OPS: dict[tuple[str, str], tuple[str, ...]] = {
-    ("deadman-3d_hires", "men-v3"): ("JMPF", "BRZ"),
+    ("deadman-3d_hires", "taped"): ("BRN",),
 }
 
 #: Per-program opt-in for **tight slab entry columns** — the walk *to* a jump or
@@ -3099,6 +3336,100 @@ SLAB_PITCH: dict[str, int] = {"little-little-man": 11}
 #: machines (hires is :data:`INPUT_NORTH`-fed with a 2x2 router wall east of
 #: everything), so this is a per-slug measurement and not a rule.
 SEEK_SLAB_PITCH: dict[str, int] = {"deadman-3d": 11, "deadman-3d_hires": 11}
+
+#: Step the slab staircase by **what each slab draws** instead of by one uniform
+#: :data:`SEEK_SLAB_PITCH`. Keyed on ``(slug, tier)``; empty by default, so every
+#: machine that does not name itself here is byte-identical.
+#:
+#: The pitch is floored at :data:`_SLAB_PITCH_FLOOR` = 11, "the eleven columns a
+#: branch slab actually occupies". That floor is exactly right and it is a floor on
+#: the wrong thing: it is uniform, and the band is not. On ``deadman-3d_hires`` the
+#: four structured opcodes are two branches and two jumps, and the jumps are almost
+#: free (:func:`_slab_east_span`):
+#:
+#: | slab | kind | columns it draws | pitch it was given |
+#: |---|---|---|---|
+#: | ``JMPS`` | seek jump | **none** — :data:`SEEK_TAKEN_DROP_EAST` turns it south at ``struct_east + 1`` | 11 |
+#: | ``JMPF`` | classic jump | 3 (``base - 1`` riser, ``a<``) | 11 |
+#: | ``BRZ`` | classic branch | 11 | 11 |
+#: | ``BRN`` | classic branch | 11 | — |
+#:
+#: So the shipped band spends 22 columns on two slabs that draw 3 between them, and
+#: the whole staircase east of ``JMPS`` sits 17 columns further east than the
+#: geometry needs. Packed, ``struct_x0`` 2 gives bases 2 / 4 / 7 / 18 against the
+#: shipped 2 / 13 / 24 / 35, and ``struct_east`` 29 against 46.
+#:
+#: Which is worth ticks in three places, all of them walks:
+#:
+#: * the **seek send site** ``e_s = struct_east + 2`` and the westbound corridor
+#:   back from it are each one ``struct_east`` long, walked by every seek
+#:   instruction;
+#: * a structured lane's **entry row**, from its drop column west to ``base`` —
+#:   under :data:`SEEK_TIGHT_STRUCT_DROPS` the drop follows ``base`` west, and
+#:   without it the drop is floored at ``struct_east + 1`` and follows that;
+#: * the **collector** back to the riser, which is the same column, twice.
+#:
+#: It is not free of §7.1: it walks the deepest slab's discard ``r`` west, which is
+#: the CPU's east wall, and :data:`SEEK_SLAB_PITCH`'s note is the record of how
+#: sharply that cuts both ways on the two machines. Re-derive ``mem_pad`` per tier.
+#:
+#: **The value is the seek jump's gap** (:func:`_slab_east_span`), and it is the one
+#: number here that had to be swept rather than derived. Packing the band flat costs
+#: ``JMPS`` its :data:`SEEK_TAKEN_DROP_EAST` column: the turn has to be free all the
+#: way down to the taken row, so it may not be inside another slab, and a flat band
+#: leaves only ``base``. Two columns beside it are enough to land the turn near the
+#: drop again, and they are not paid twice — the whole staircase east of ``JMPS``
+#: moves with them.
+#:
+#: **Both tiers want 0 anyway, and the reason it is still a parameter is that the
+#: 3-round triage says otherwise.** men-v3, everything else at the shipped values:
+#:
+#: | gap | box | 3-round | 21-round |
+#: |---|---|---|---|
+#: | **0** | **577x630** | 10,087,912 | **93,901,187** |
+#: | 1 | 578x630 | 10,107,480 | 94,195,567 |
+#: | 2 | 579x630 | **10,037,298** (-0.50%) | 94,126,993 (+0.24%) |
+#: | 3 | 580x630 | 10,110,374 | 94,775,023 (+0.93%) |
+#: | 4 | 581x630 | 10,112,640 | — |
+#: | 6 | 583x630 | 10,232,532 | — |
+#: | 9 (a branch's own span) | 586x630 | 10,288,652 | — |
+#:
+#: Gap 2 wins the triage by half a point and loses the tour by a quarter of one.
+#: Three rounds is boot plus the title plus one corridor frame, and the U-turn this
+#: buys back is paid per taken ``JMPS`` — a rate the early frames do not sample. On
+#: taped the sweep is flat-to-monotone the other way (187,002,731 at 0 against
+#: 190,456,633 at 3) because taped's ``JMPS`` never lost its column: its drop sits
+#: east of the whole band, so ``jump_x`` is reachable at any gap and every column
+#: added is dead width.
+PACKED_SLAB_BAND: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "men-v3"): 0,
+    ("deadman-3d_hires", "taped"): 0,
+}
+
+#: Draw the collector's ``<`` only where a man **arrives** on it, and ``.``
+#: everywhere else. Keyed on ``(slug, tier)``; empty by default, so every machine
+#: that does not name itself here is byte-identical.
+#:
+#: The row is a solid ``<`` run from column 3 to ``ret_x`` — 43 of them on
+#: ``deadman-3d_hires`` men-v3, in four runs with ``.`` holes punched at the four
+#: columns a slab lane's drop passes through. Only about a quarter of those turn
+#: anybody: a westbound man keeps his heading over a ``.`` just as well, so the
+#: cells that have to be ``<`` are the ones where a man arrives *facing another
+#: way* — a simple lane's drop coming south, a slab riser coming north, and the
+#: spawn's first step east out of ``@``.
+#:
+#: **It is worth zero ticks and that is the point.** ``<`` and ``.`` are both one
+#: tick to walk over, so nothing on the return path changes; what changes is that
+#: the row stops *claiming* forty-odd columns. A ``<`` turns anything that steps on
+#: it, which is why a drop crossing the collector needs its ``.`` — and the builder
+#: already gets that right by drawing the drops first and the ``<``\ s ``soft``, so
+#: the relaxation unlocks nothing the current drop solver was fighting. What it
+#: removes is the *reason* it would have to fight: any future descent through this
+#: row is legal by construction rather than by draw order.
+SPARSE_COLLECTOR: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "men-v3"),
+    ("deadman-3d_hires", "taped"),
+}
 
 
 def _drained(mnemonic: str, unit_bits: int, ops: tuple[str, ...] | None) -> bool:
@@ -4478,6 +4809,9 @@ def _assemble(
         slab_pitch=(SEEK_SLAB_PITCH if seek else SLAB_PITCH).get(
             program.name, _SLAB_PITCH
         ),
+        packed_band=(program.name, store) in PACKED_SLAB_BAND,
+        seek_jump_gap=PACKED_SLAB_BAND.get((program.name, store), 0),
+        sparse_collector=(program.name, store) in SPARSE_COLLECTOR,
         trim_dead=trim_dead,
         top_bus=top_bus,
         seek=seek,
@@ -8242,9 +8576,47 @@ INPUT_NORTH_WEST: dict[tuple[str, str], int] = {
 #: of the build. The floor is a joint property of :data:`SEEK_SLAB_PITCH` (35 at the
 #: default pitch, 18 at 11) and :data:`INPUT_NORTH_WEST` (18 -> 15); re-sweep it if
 #: either moves.
+#:
+#: **It moved: :data:`PACKED_SLAB_BAND` takes hires/taped from 15 to 4.** The floor
+#: is the CPU's *east wall* against ``mem_resp``, and packing the staircase walks
+#: that wall eight columns west — so the rival recedes and the band may follow it in.
+#: The pin is not a tuning value, it is the floor, and it was 3 rows of the sweep
+#: away from binding at all; 21-round tour, everything else at the shipped values:
+#:
+#: | pad | box | ticks |
+#: |---|---|---|
+#: | 0..3 | — | ``'r' at (24, 138) must bind 'mem_resp'`` |
+#: | **4** | **626x386** | **175,267,384** |
+#: | 5 | 626x386 | 176,134,710 |
+#: | 6 | 626x386 | 177,002,036 |
+#: | 8 | 628x386 | 178,777,989 |
+#: | 15 (the old pin) | 635x386 | 187,002,731 |
+#: | 21 | 640x386 | 191,350,051 |
+#:
+#: Monotone above the floor at ~0.5% a column — every column of pad is walked twice
+#: by every memory instruction — so the rule here is simply "take the floor", and
+#: the only thing worth re-deriving when the CPU's width moves is where the floor is.
+#:
+#: **men-v3's floor moved the same way and is deliberately not pinned here.** It
+#: falls 9 -> 3 under the same lever (0..2 die on ``'r' at (22, 152) must bind
+#: 'mem_resp'``, and 3..12 are monotone at ~0.45% a column), and the search finds 3
+#: on its own. Leaving it searched costs three doomed passes and buys the tier the
+#: ability to re-floor itself when the next lever moves its east wall, which is
+#: exactly what this note is a record of not happening automatically for taped.
 MEM_PAD_FOR: dict[tuple[str, str], int] = {
     ("deadman-3d", "taped"): 16,
-    ("deadman-3d_hires", "taped"): 15,
+    # 1, and the history of this one number is the argument for never carrying a
+    # pad across a geometry change. It was 15 when the slab band was loose; the
+    # band packed and the floor fell to 4; then `SEEK_TIGHT_STRUCT_DROPS` walked
+    # the structured drops west and the east wall with them, and the floor fell
+    # again. Re-swept on the merged geometry: 0 refuses (`'r' at (22,..)`), **1 is
+    # the floor**, and it is monotone above — 2 is +0.322%, 4 is +1.379%, 8 is
+    # +2.966%. Carrying the 4 would have cost 1.4% invisibly.
+    #
+    # The pad is a *consequence* of where the CPU's east wall lands against
+    # `mem_resp`, so it moves whenever anything moves that wall. Re-sweep it after
+    # any band, drop or trie-width change rather than trusting this literal.
+    ("deadman-3d_hires", "taped"): 1,
 }
 #: ``(slug, tier)`` pairs whose **request** leg crosses a room instead of a pipe
 #: — the mirror image of :data:`STORE_ANSWER_WEST`, on the leg that was left.

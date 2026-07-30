@@ -130,7 +130,7 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert "deadman-3d_hires" in machine.SEEK_DRUM
     assert machine.SEEK_TIER_LAYOUT[key] == {"rom_rows": 119}
     assert machine.SEEK_SLAB_PITCH["deadman-3d_hires"] == 11
-    assert machine.MEM_PAD_FOR[key] == 15
+    assert machine.MEM_PAD_FOR[key] == 1  # re-swept floor; see MEM_PAD_FOR
     # 11, not the 13 this used to pin, and the number was never the claim. This is
     # a distance *west of* ``lane_x0``, and both values name the same column —
     # ``CX + 1``, the westernmost the room may legally take, which is the placement
