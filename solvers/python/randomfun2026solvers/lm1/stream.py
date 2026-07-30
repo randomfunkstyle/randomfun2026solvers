@@ -224,13 +224,13 @@ def drawn_shift(body: str) -> int:
     with nothing to catch it, which is the one failure this project's whole verification
     ladder exists to prevent.
     """
-    for i, ch in enumerate(body):
-        if ch == "M" and body[i + 1 : i + 3][1:] == "W" and body[i + 1].isdigit():
-            digit, k = int(body[i + 1]), 0
-            while i + 3 + k < len(body) and body[i + 3 + k] == "}":
-                k += 1
-            if k:
-                return digit * k
+    for i in range(len(body) - 3):
+        digit, w = body[i + 1], body[i + 2]
+        if body[i] != "M" or not digit.isdigit() or w != "W":
+            continue
+        run = len(body[i + 3 :]) - len(body[i + 3 :].lstrip("}"))
+        if run:
+            return int(digit) * run
     raise StreamError(f"no `M<digit>W}}...` shift run in {body!r}")
 
 
