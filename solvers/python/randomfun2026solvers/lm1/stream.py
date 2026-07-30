@@ -133,9 +133,16 @@ __all__ = [
     "DUAL_RELAY_PORTS",
     "dual_relay_probe",
     "block_crossings",
+    "boundary_owners",
     "perimeter_order",
     "DUAL_RELAY_IH",
     "DUAL_RELAY_IW",
+    "SHARED_RELAY_GLYPHS",
+    "SHARED_RELAY_IH",
+    "SHARED_RELAY_IW",
+    "SHARED_RELAY_PORTS",
+    "shared_relay_cells",
+    "shared_relay_probe",
     "StreamBlock",
     "UNIT_IH",
     "UNIT_IW",
@@ -1755,10 +1762,8 @@ def _place4(
     # ── resp: the topmost east row, so its climb crosses nothing ─────────────
     resp_x = turn["resp"]
     npipes += 1
-    resp_len = g.draw_pipe([(east_x, row["resp"]), (resp_x, row["resp"]), (resp_x, 1)])
-    laid += resp_len
+    laid += g.draw_pipe([(east_x, row["resp"]), (resp_x, row["resp"]), (resp_x, 1)])
     g.put(resp_x, 0, "^")  # the caller carries it north from here
-    resp_len += 1
 
     # ── the accumulator ring: p2 the long way, prod through the shared relay ─
     # `p2` must clear ring B's band before it turns west, or its westbound leg cuts
