@@ -1100,10 +1100,10 @@ def dual_relay_cells() -> dict[tuple[int, int], str]:
 #: and leaves westward. That is what keeps ``b_ret``'s climb out of ``prod``'s
 #: descent, which every west-wall arrangement of these four ports collides with.
 DUAL_RELAY_PORTS = {
-    "turn_in": ("north", 3),  # the ring's fill arrives at the upper `r`
+    "turn_in": ("north", 3),  # the ring's fill drops onto the upper `r`
     "turn_out": ("north", 2),  # the ring's return climbs straight off the upper `s`
-    "pass_in": ("south", 3),  # the passed pipe arrives at the lower `r`
-    "pass_out": ("west", 8),  # and leaves westward from the lower `s`
+    "pass_in": ("west", 8),  # the passed pipe arrives westward at the lower `r`
+    "pass_out": ("south", 2),  # and drops on southward from the lower `s`
 }
 
 
@@ -1133,28 +1133,37 @@ def dual_relay_probe(upper_driven: bool = True) -> list[str]:
         }[wall]
 
     def feed(band: str, label: str | None) -> None:
-        """A source room three cells out from ``band``, with a pipe into the relay."""
+        """A source room out beyond ``band``, with a pipe into the relay."""
+        wall, _off = DUAL_RELAY_PORTS[band]
         x, y = outer(band)
-        if DUAL_RELAY_PORTS[band][0] == "north":
-            # offset east, so the neighbouring north port's climb stays clear
+        if wall == "north":
             g.room(x, y - 4, x + 2, y - 2)
             g.draw_pipe([(x, y - 1), (x, y)])
             spot = (x + 1, y - 3)
-        else:  # south
-            g.room(x - 1, y + 2, x + 1, y + 4)
+        elif wall == "south":
+            g.room(x, y + 2, x + 2, y + 4)
             g.draw_pipe([(x, y + 1), (x, y)])
-            spot = (x, y + 3)
+            spot = (x + 1, y + 3)
+        else:  # west
+            g.room(x - 5, y - 1, x - 3, y + 1)
+            g.draw_pipe([(x - 2, y), (x, y)])
+            spot = (x - 4, y)
         if label:
             g.put(*spot, label)
 
     def drain(band: str, label: str | None) -> None:
         """A sink room out beyond ``band``, with a pipe out of the relay."""
+        wall, _off = DUAL_RELAY_PORTS[band]
         x, y = outer(band)
-        if DUAL_RELAY_PORTS[band][0] == "north":
+        if wall == "north":
             # climb clear of the neighbouring north port's room, then turn west
             g.room(x - 8, y - 7, x - 6, y - 5)
             g.draw_pipe([(x, y), (x, y - 6), (x - 5, y - 6)])
             spot = (x - 7, y - 6)
+        elif wall == "south":
+            g.room(x - 8, y + 5, x - 6, y + 7)
+            g.draw_pipe([(x, y), (x, y + 6), (x - 5, y + 6)])
+            spot = (x - 7, y + 6)
         else:  # west
             g.room(x - 4, y - 1, x - 2, y + 1)
             g.draw_pipe([(x, y), (x - 1, y)])
