@@ -892,6 +892,16 @@ def block_crossings(
       leg span, band depth or column allocation can move a pair across a boundary —
       only the perimeter order or the tree can.
 
+    **What this does not decide.** It adjudicates whether a *chord* can be routed —
+    whether a ring's two ports lie in one sector — and nothing else. It is necessary
+    and **not sufficient**: it cannot see whether the four legs of a single *room* can
+    be drawn without crossing each other, which is a separate question and one that
+    bit this module. The shared relay's four ports first collided on its west wall
+    (``b_ret`` leaving westward across ``prod``'s descent) in a configuration this
+    function calls planar, and the fix was to move ``b_ret`` to the room's north wall.
+    So a planar verdict here licenses attempting the drawing; it does not promise the
+    drawing closes. Trust it exactly that far.
+
     ``order`` overrides the drawn perimeter, which is what makes this a *search* tool
     rather than a check: candidate row maps can be adjudicated before any of them is
     drawn. Every search must keep the depth-3 block as a control — a configuration
