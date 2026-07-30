@@ -102,10 +102,23 @@ the row exactly as a west pipe's does above its own row, so one of them always
 wins, and north is the mirror image. With every incoming pipe on one wall, rule 2
 collapses into rule 1 and no per-arm argument is needed at all.
 
-The depth-4 *unit* is drawn and checked (:func:`unit_interior_grid` renders it
-with all eleven pipes for ``analyze``/``route`` to answer about). The *block*
-around it is **not planar** and so not placed: :func:`block_crossings` proves it,
-and the note above :func:`build_stream` says what removes the obstruction.
+Both widths are drawn and placed
+-------------------------------
+
+The depth-4 unit is 65x32 against depth 3's 33x23 — sixteen leaves at pitch 4 set
+the width and ``UPDB``'s 17-glyph body sets the height — and the placed block is
+112x51 against depth 3's 67x45.
+
+The depth-4 block needs one thing depth 3 does not. ``prod`` leaves the unit's east
+wall *between* ring B's two ports in the perimeter's cyclic order (``MAC`` must push
+``b`` back before it can multiply, so ``prod`` is below ``b_fwd``; ``UPDB`` reads ring
+B last, so ``b_ret`` is the bottom-most west port), which means ring B's chord
+encloses ``prod`` and the ADDER is outside it. So exactly one pipe has to cross that
+chord, and the only place a pipe may cross another is *inside a room*:
+:func:`shared_relay_cells` is that room, two men from one ``Y``, ring B turned around
+west-to-east through the middle and ``prod`` passed south-to-north across it.
+:func:`boundary_owners` is why it has to be built that way and
+:data:`DUAL_RELAY_PORTS` records the arrangement that cannot.
 """
 
 from __future__ import annotations
@@ -1421,11 +1434,12 @@ def _serpentine(
     return pts
 
 
-# ── placement, depth 4: the unit is drawn, the block is NOT PLANAR ───────────
-# The depth-4 *unit* is drawn and all twenty-eight of its pipe glyphs are checked
-# against the engine's own ``route`` (:func:`unit_interior_grid`). The block around
-# it cannot be placed, and this is now a *proof* rather than a failed search:
-# :func:`block_crossings` computes it and the tests pin it.
+# ── placement, depth 4: why the ADDER alone cannot do it ─────────────────────
+# The topology argument that decides the whole depth-4 block, kept because it is what
+# makes the shared relay *necessary* rather than convenient: with the ADDER's three
+# legs as the only tree, the block is not planar, and no choice of port rows, leg
+# span, band depth or column allocation changes that. :func:`block_crossings`
+# computes it and ``test_the_two_refuted_fixes_stay_refuted`` pins it.
 #
 # **The argument.** ``cmd`` enters and ``resp`` leaves through the north wall, and
 # both run to the CPU above, so no pipe can cross the top: the region the block's
@@ -1509,15 +1523,32 @@ def _serpentine(
 #   withdrawn. ``prod`` should be routed like a ring *forward* pipe, because that is
 #   exactly its job: east wall to a west-side relay. Rules 1 and 3 survive; this one
 #   is recorded so it is not re-derived a second time.
+# * **A shared relay with its two loops stacked — each loop's ``r`` and ``s`` on one
+#   row — cannot pass ``prod`` across ring B's chord at all.** This is the one that had
+#   actually been blocking the drawing, and it went unnoticed for four rounds because
+#   the two checks that were run (four pipes bind with margin 6; no two of the four legs
+#   need to cross) are both true of it. The property the planarity result needs is a
+#   third one: ``prod`` must *enter on one side of ring B's chord and leave on the
+#   other*, since the room is the only place a pipe may cross another. ``SPEC.md``'s
+#   nearest rule makes that a function of where the four glyphs sit, and
+#   :func:`boundary_owners` computes it: with both loops laid out the same way the
+#   ``r`` arcs and the ``s`` arcs partition the room's boundary *identically*, so ring
+#   B's two ports can never separate ``prod``'s two. :func:`shared_relay_cells` is the
+#   room that does: ring B west-to-east through the middle, ``prod`` south-to-north
+#   across it, the two loops nested so the splits run opposite ways.
+#
+#   The general lesson, since it is the same one three times: every negative result on
+#   this task came from checking a property nobody had thought to state. A verified
+#   artifact is only verified against the checks it was given.
 
 
 
-# ── placement, depth 4: not drawn, and the reason is not what it looked like ──
-# The topology closes (:func:`block_crossings` with ``prod`` through ring B's relay)
-# and every room it needs is drawn and verified. The drawing is not done, but the
-# obstruction recorded here through round 7 was **an artefact of a layout scheme this
-# module invented, not a property of the block**, and the correction is worth more
-# than the obstruction was.
+# ── the withdrawn obstruction, kept so the wrong frame is not reinvented ─────
+# The depth-4 block is drawn now (:func:`_place4`). What follows is the obstruction
+# this module reported for three rounds instead, and it was **an artefact of a layout
+# scheme this module invented, not a property of the block**. It is kept because the
+# correction is worth more than the obstruction was, and because ``prod``'s actual
+# route in :func:`_place4` is the thing the correction predicted.
 #
 # **What was claimed.** That rule 2 — "each southbound pipe runs west along a corridor
 # row of its own and drops down a column of its own, corridor rows and drop columns
@@ -1544,10 +1575,13 @@ def _serpentine(
 # the unit's west wall like the other two returns. The far west then needs three climb
 # columns (ring A's forward, ring B's forward, ``prod``) rather than two.
 #
-# That is the next attempt, and it is a placement, not a search. Rule 1 (turn columns
+# That is what :func:`_place4` does, and it is what closed it. Rule 1 (turn columns
 # fall as the east-wall row rises) and rule 3 (each incoming pipe's own climb column,
 # ordered by the wall row it feeds) both survive; rule 2 as stated does not, and is
-# recorded here only so it is not reinvented.
+# recorded here only so it is not reinvented. What the correction did *not* predict is
+# that ``prod`` cannot pass through the relay this module had built for it — see
+# :func:`boundary_owners` and :data:`DUAL_RELAY_PORTS` for that, the fourth refuted
+# constraint, and the one that had actually been blocking the drawing.
 #
 # ── placement constants, depth 4 ─────────────────────────────────────────────
 # The depth-3 idiom, transcribed. Nothing crosses from the east wall to the west side
