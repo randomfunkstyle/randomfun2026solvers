@@ -21,6 +21,10 @@ WAD = Path.home() / "Downloads" / "doom1_0" / "DOOM1.WAD"
 SLUG = "deadman-3d_hires"
 KEY = (SLUG, "taped")
 
+#: ``d3_router.PACK_NW_CLUSTER_Y`` as shipped — read, not repeated, so a variant
+#: that does not name a ``cy`` measures whatever the tree currently holds.
+SHIPPED_CY: int = -1
+
 #: name -> the registry overrides to apply on top of HEAD.
 VARIANTS: dict[str, dict] = {
     # HEAD before this branch: the cluster lifted 21, the north row where it
@@ -34,13 +38,31 @@ VARIANTS: dict[str, dict] = {
     "up4": {"lift": 25, "up": 4},
     # the lift alone, past its own ceiling, for the collision message
     "lift22": {"lift": 22, "up": 0},
+    # both north blocks west of the cluster, on its own rows: the block row
+    # comes off the wall's height outright and the lift/up levers do not apply
+    "west": {"lift": 24, "up": 3, "west": True},
+    # one row past the floor: T1's ADDR lane lands on the router's outlet row,
+    # so its eastward run touches the router's own south wall and becomes a
+    # rival for every leaf `s` (ARCH.md §7.1).  Gated, not assumed.
+    "west15": {"lift": 24, "up": 3, "west": True, "cy": 15},
+    "west17": {"lift": 24, "up": 3, "west": True, "cy": 17},
+    "west14": {"lift": 24, "up": 3, "west": True, "cy": 14},
+    "west13": {"lift": 24, "up": 3, "west": True, "cy": 13},
+    "west12": {"lift": 24, "up": 3, "west": True, "cy": 12},
 }
 
 
 def apply(name: str, M) -> None:
+    global SHIPPED_CY
+    from randomfun2026solvers.lm1 import d3_router as R
+
+    if SHIPPED_CY < 0:
+        SHIPPED_CY = R.PACK_NW_CLUSTER_Y
     v = VARIANTS[name]
     M.DOOM_CLUSTER_LIFT[KEY] = v["lift"]
     M.DOOM_PACK_NORTH_UP[KEY] = v["up"]
+    M.DOOM_PACK_NORTH_WEST[KEY] = v.get("west", False)
+    R.PACK_NW_CLUSTER_Y = v.get("cy", SHIPPED_CY)
 
 
 def regions(m) -> None:
@@ -107,8 +129,13 @@ def main(argv: list[str]) -> int:
                   flush=True)
             continue
         box = f"{m.width}x{m.height}"
-        res = FastLittleman("\n".join(m.rows)).run(
-            inp, frames=frames, frame_tiles=(2, 2), max_ticks=40_000_000_000)
+        try:
+            res = FastLittleman("\n".join(m.rows)).run(
+                inp, frames=frames, frame_tiles=(2, 2), max_ticks=40_000_000_000)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {name:>10}: {box} ENGINE REFUSED — {type(exc).__name__}: {exc}",
+                  flush=True)
+            continue
         if res.fatal is not None or res.passed is not True:
             print(f"  {name:>10}: {box} RUN FAILED — fatal={res.fatal} "
                   f"passed={res.passed} at {res.step:,}", flush=True)

@@ -37,7 +37,7 @@ def main(argv: list[str]) -> int:
           f"  cluster {cl.corners[0][1]}..{cl.corners[0][1] + cl.height - 1}"
           f"  S {R.PACK_ROW_S - lift}..{R.PACK_ROW_S - lift + lh - 1}"
           f"  fan {R.PACK_ROW_S - lift + lh}..{R.PACK_ROW_S - lift + lh + 2}")
-    print(f"outlets={R.outlet_cols()}  (abs {[R.RX + c for c in R.outlet_cols().values()]})")
+    print(f"outlets={R.outlet_cols()}  (abs {[R.RX + c for c in R.outlet_cols()]})")
     w = R.build_packed_wall(loop_row=10, leaf_cols=(3, 7, 27, 33, 37, 41, 73, 79),
                             lift=lift)
     print(f"wall {w.width}x{w.height} legs={w.legs} panels={w.panels}")
