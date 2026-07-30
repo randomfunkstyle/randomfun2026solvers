@@ -3255,6 +3255,18 @@ def build(
     LM-75's interior ``(width, height)`` and is required by any program using a
     ``DSP*`` opcode — the panel resolution is the problem's, not the program's.
 
+    ``display`` also takes a **sequence** of such pairs, one per panel, and then places
+    one relay room plus one panel per entry in that order — which is the order the
+    engine numbers its displays in. More than one panel needs one relay lane per panel
+    (:data:`DSP_PANEL_BANDS`), because a room may feed at most one display and the CPU
+    is one room. The bare pair and a one-element sequence mean the same thing.
+
+    ``mem_pad`` and ``stream_pad`` are searched when left as ``None``; pass either to
+    pin it, which on a large ROM is the difference between one build and 800.
+    ``dsp_pad`` walks the display lanes east and is *not* searched — it only matters on
+    a machine that has both a STREAM block and its own panels, where it is what gives
+    each panel's command pipe a corridor row to turn in (:func:`_display_stack`).
+
     ``tape_skip_batch`` selects the tape worker: ``1`` is the compact legacy loop,
     ``2`` the wider two-word counted ring, and ``4`` the exact power-of-two worker
     with a configurable fat relay. Pass ``None`` to choose batch 2 when
