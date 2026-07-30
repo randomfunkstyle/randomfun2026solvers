@@ -6822,7 +6822,16 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     # dy 20 and dx -10 all fail on ``collision at (93, 146): '+' vs '-'`` — a pipe
     # collision, not a wall, so the remaining ~1.6% is recoverable by re-routing
     # rather than blocked by geometry.
-    ("deadman-3d_hires", "men-v3"): {"store_offset": (0, 10)},
+    # dx -2 is the hard floor: at -3 "the store's request corner leaves no leg
+    # east of the adapter's outlet". Worth -0.634% alone, and additive with the
+    # narrower :data:`STORE_SHAPE` (-0.543% alone, -1.150% together).
+    #
+    # dy is **not** free to sweep: it is one half of the level equation the
+    # binding gate actually enforces, `adapter_out_row = 164 - squash_band`
+    # against `store_in_row = 147 + store_dy`. Every squash k in 0..15 binds if
+    # dy follows as `17 - k`; hold dy fixed and the adapter walks off the store
+    # wall. See `scratch/deadman3d-opt/menprobe/hz_geom.py`.
+    ("deadman-3d_hires", "men-v3"): {"store_offset": (-2, 10)},
 }
 
 
@@ -8855,7 +8864,15 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
                                            # therefore the wrong trade; 18 columns is
                                            # the fewest that reach 902 at a depth the
                                            # fold still takes.
-                                           "deadman-3d_hires": (18, 51)}
+                                           #
+                                           # **That depth limit was assumed, not tested.**
+                                           # 14 columns at 65 rows folds fine, and it is
+                                           # worth -0.543% on its own; 15x61 ties it. The
+                                           # column term (~0.42 t/access) beats the depth
+                                           # term (51 -> 76 moves the tour 0.56%), so
+                                           # narrow-and-deep is the right trade and 18 was
+                                           # the wrong end of it.
+                                           "deadman-3d_hires": (14, 65)}
 
 #: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
 #: 600 slots as banked pipe tapes behind a gate chain. This tier exists for the
