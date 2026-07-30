@@ -5987,21 +5987,44 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #:
 #: ``scratch/deadman3d-opt/squash_{h_probe,grid,compensate,tour}.py`` and
 #: ``scratch/layout2/`` (which solves the drop interval instead of sweeping it).
-#: **Shipped at k=3.** Three rows off the box, 189,164,256 ticks — identical to
-#: the unsquashed machine to the digit — with :data:`SEEK_TELEPORT` kept. The
-#: earlier full-squash configuration (`48c85ce`) traded that teleport away for
-#: +1.288% on the strength of conclusion 1 above, which was wrong: the pair
-#: coexists, so the trade never needed making.
-SQUASH_BAND: dict[tuple[str, str], int] = {("deadman-3d_hires", "taped"): 3}
+#: **Shipped at k=12 — the band fully packed, zero blank rows.** A deliberate
+#: choice to bank the structural change now and buy the ticks back through routing
+#: later, on the grounds that routing is the tractable half and CPU packing is not.
+#:
+#: With the cluster lift also in (:data:`DOOM_CLUSTER_LIFT`), the depths price out
+#: on the 3-round tour as:
+#:
+#: | k | drop | teleport | box | blank rows | Δ |
+#: |---|---|---|---|---|---|
+#: | 3 | 25 | yes | 649x471 | 9 | — |
+#: | 7 | 22 | yes | 649x467 | 5 | +0.199% |
+#: | 8 | 18 | yes | 649x466 | 4 | +0.359% |
+#: | 10 | 5 | no | 649x464 | 2 | +0.641% |
+#: | **12** | **5** | **no** | **649x464** | **0** | **+0.643%** |
+#:
+#: k<=8 keeps :data:`SEEK_TELEPORT`; zero blank rows needs k>=12, which forces it
+#: off, and that is where the 0.6% goes — not into the squash itself. Note k=10 and
+#: k=12 share a box: the last two rows are free, so taking the band all the way
+#: costs 0.002% over stopping short of it.
+#:
+#: To go back to the tick-optimal geometry: set this to 3, restore
+#: ``("deadman-3d_hires", "taped")`` to :data:`SEEK_TELEPORT`, and set
+#: :data:`ROM_TOUCH_DROP` to 25.
+SQUASH_BAND: dict[tuple[str, str], int] = {("deadman-3d_hires", "taped"): 12}
 
 ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
+    # 5 at k=12: a squash of k is a negative drop of k, so the full pack pushes the
+    # effective corridor well below the unsquashed machine's and §7.1 floors the
+    # drop at 5 (the BRN slab's discard `r` against `mem_resp`). The note below is
+    # the k=3 reasoning, kept because it is the identity that made k=3 free.
+    #
     # 25, not 22, because :data:`SQUASH_BAND` k=3 moves ``cpu.centre`` three rows
     # north and ``fetch_y = CY + cpu.centre + rom_touch_drop`` — so a squash of k
     # is a **negative drop of k**, and 22 + 3 restores the effective corridor the
     # unsquashed machine had. That is why k=3/drop=25 ties 189,164,256 exactly:
     # nothing about the ROM path changed. 26 is the §7.1 ceiling at k=3 (it ties
     # the fetch `r` against `in`), which is also why k=4 is unreachable.
-    ("deadman-3d_hires", "taped"): 25,
+    ("deadman-3d_hires", "taped"): 5,
 }
 
 LANE_PITCH: dict[tuple[str, str], int] = {
@@ -6573,7 +6596,6 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {("deadman-3d", "taped")}
 #: separable" and the sharpest example of it in the tree.
 SEEK_TELEPORT: set[tuple[str, str]] = {
     ("deadman-3d", "taped"),
-    ("deadman-3d_hires", "taped"),
 }
 
 #: Slugs whose **seek jump** turns south at the east end of its entry row instead of

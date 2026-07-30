@@ -80,11 +80,14 @@ DECLINED: dict[str, dict] = {
     "lane_pitch=1(shipped)": {"kind": "dict2", "reg": "LANE_PITCH", "value": 1},
     # the knob that recovered it; reads ~0.000% while shipped
     "rom_drop=0": {"kind": "dict2", "reg": "ROM_TOUCH_DROP", "value": 0},
-    # Shipped at k=3 (three rows off the box, zero ticks) WITH SEEK_TELEPORT.
-    # The full squash is the interesting counterfactual: k=10 forces the teleport
-    # off and costs +1.288%, which is what shipped briefly in 48c85ce before the
-    # coexistence was measured.  A row count now, not a flag.
+    # Shipped at k=12 — band fully packed, zero blank rows, teleport off.  k=10 is
+    # the counterfactual: same box, two blank rows left, and 524 ticks cheaper
+    # (-0.002%).  Taking the band all the way is therefore very nearly free once
+    # the teleport has already been given up, which is why k=12 rather than 10.
     "squash_band=10": {"kind": "dict2", "reg": "SQUASH_BAND", "value": 10},
+    # The prize.  BUILD FAILS while the band is packed past k=8; the day it binds
+    # is the day +0.6% comes back.  Routing is the tractable half of that.
+    "seek_teleport": {"kind": "setmember", "reg": "SEEK_TELEPORT"},
 }
 
 

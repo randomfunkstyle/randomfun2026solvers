@@ -133,15 +133,19 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert machine.MEM_PAD_FOR[key] == 15
     assert machine.INPUT_NORTH_WEST[key] == 13
     assert key in machine.SEEK_TAKEN_DROP_EAST
-    # All five, including `SEEK_TELEPORT`. It was briefly traded away for
-    # `SQUASH_BAND` on the belief the two could not coexist; they can, for
-    # k <= 8, because room H is bottom-anchored and its height is `12 - k`.
-    assert key in machine.SEEK_TELEPORT
-    assert machine.SQUASH_BAND[key] == 3
-    # and the drop compensates the squash one-for-one: a squash of k shortens the
-    # ROM corridor by k, so 22 + 3 keeps the effective length the unsquashed
-    # machine had. That identity is why k=3 costs exactly zero ticks.
-    assert machine.ROM_TOUCH_DROP[key] == 22 + machine.SQUASH_BAND[key]
+    # Four of the five. `SEEK_TELEPORT` is given up to `SQUASH_BAND`: the two do
+    # coexist for k <= 8 (room H is bottom-anchored, its height is `12 - k`), but
+    # a fully packed band is k = 12, and past 8 room H has nowhere to stand.
+    # Deliberate — the packing is banked now and the ticks are to be recovered by
+    # routing, which is the tractable half. +0.6% is the price, and
+    # `revalidate.py`'s `seek_teleport` row is what watches for it coming back.
+    assert machine.SQUASH_BAND[key] == 12
+    assert key not in machine.SEEK_TELEPORT
+    assert ("deadman-3d", "taped") in machine.SEEK_TELEPORT  # unaffected
+    # At full squash §7.1 floors the drop at 5: a squash of k is a negative drop
+    # of k, so the effective corridor is already below what the BRN slab's discard
+    # `r` needs against `mem_resp`.
+    assert machine.ROM_TOUCH_DROP[key] == 5
 
     # Nothing was written on the bare slug where a `(slug, tier)` key was meant,
     # which is the mistake that would silently move the canonical hires build.
