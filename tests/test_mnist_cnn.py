@@ -105,19 +105,33 @@ def test_a_stream4_program_cannot_be_built_on_a_depth_three_unit():
 
     At mod-8 a ``PUSHA`` word decodes as ``EMIT``, a ``ROTB`` as ``FILLB``, so a
     machine built from ``stream.py``'s depth-3 trie would run this program to
-    completion and train nothing. Refusing to build the wrong one is a correctness
-    property; what the refusal *says* changed with Task 6, which drew the depth-4
-    unit (twelve arms, eleven pipes, every glyph checked against the engine's own
-    ``route``) but did not place the block around it — so the refusal is now about
-    the placement rather than about the trie. Either way it is a raise, and this
-    test pins the raise, not the wording of the part that is still to do.
+    completion and train nothing. Both widths are now drawn *and placed*, so this is
+    no longer a stopgap about the missing drawing — it is the guard it was always
+    meant to be: a depth-**3** unit refusing a depth-**4** program.
+
+    The refusal has to live at the already-decoded ``(code, arg)`` pair, because no
+    *word* can reach it: ``word % 8`` is always < 8, which is exactly why a depth-3
+    unit handed a depth-4 word cannot notice on its own.
     """
-    with pytest.raises(StreamError, match="not drawn yet"):
-        stream.build_stream(
-            a_slots=16, b_slots=64, c_slots=16, trie_bits=asm.UNIT_TRIE_BITS["stream4"]
-        )
-    # matmul's own width still builds.
+    from randomfun2026solvers.lm1.store import StreamUnit
+
+    # A depth-3 unit has no leaf for any of the four new arms, so the codes this
+    # program emits do not exist at that width at all.
+    assert not ({"PUSHA", "ROTB", "RDP", "UPDB"} & set(stream.arm_codes(3)))
+    assert {"PUSHA", "ROTB", "RDP", "UPDB"} <= set(stream.arm_codes(4))
+
+    # And it refuses the decoded pair rather than aliasing it onto an original arm.
+    three = StreamUnit(lambda: 0, lambda _v: None, trie_bits=3)
+    with pytest.raises(StoreError, match="3-bit"):
+        three._dispatch(StreamUnit.CODES["PUSHA"], 0)
+
+    # Both widths build; a width this module does not draw is still refused.
     assert stream.build_stream(a_slots=16, b_slots=64, c_slots=16, trie_bits=3)
+    assert stream.build_stream(
+        a_slots=16, b_slots=64, c_slots=16, trie_bits=asm.UNIT_TRIE_BITS["stream4"]
+    )
+    with pytest.raises(StreamError, match="depth 5"):
+        stream.build_stream(a_slots=16, b_slots=64, c_slots=16, trie_bits=5)
 
 
 def test_an_out_of_range_store_access_faults(reference):

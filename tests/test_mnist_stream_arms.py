@@ -490,11 +490,26 @@ def test_the_new_arms_do_what_their_glyphs_say():
 
 
 def test_the_builder_refuses_a_width_it_cannot_place():
-    """A block it cannot draw correctly must not be approximated (ARCH.md §4.4)."""
+    """A block it cannot draw correctly must not be approximated (ARCH.md §4.4).
+
+    Both widths are drawn and placed now, so what this pins is the *real* guard rather
+    than the stopgap it replaced: a depth-3 unit has no leaf for any of the four new
+    arms and refuses their decoded codes, and an undrawn width raises instead of
+    falling back to a drawn one.
+    """
     from randomfun2026solvers.lm1.stream import StreamError
 
-    with pytest.raises(StreamError, match="not drawn yet"):
-        stream.build_stream(a_slots=16, b_slots=856, c_slots=80, trie_bits=4)
+    for bits, pipes in ((3, 10), (4, 11)):
+        blk = stream.build_stream(a_slots=16, b_slots=200, c_slots=16, trie_bits=bits)
+        assert blk.pipes == pipes
+    # the shape the trainer actually asks for, which only the depth-4 band can hold
+    assert stream.build_stream(a_slots=16, b_slots=856, c_slots=80, trie_bits=4)
+
+    assert not ({"PUSHA", "ROTB", "RDP", "UPDB"} & set(stream.arm_codes(3)))
+    three = StreamUnit(lambda: 0, lambda _v: None, trie_bits=3)
+    with pytest.raises(StoreError, match="3-bit"):
+        three._dispatch(StreamUnit.CODES["PUSHA"], 0)
+
     with pytest.raises(StreamError, match="depth 5"):
         stream.build_stream(a_slots=8, b_slots=8, c_slots=6, trie_bits=5)
 
@@ -982,3 +997,178 @@ def test_every_shared_relay_pipe_binds_by_position():
         pipe = engine.pipes[engine._bindings[(rx + gx, ry + gy)]]
         attach = pipe.src_attach if glyph == "s" else pipe.dst_attach
         assert attach == want, f"{glyph}@{(rx + gx, ry + gy)} should bind {band} at {want}"
+
+
+# ── the *placed* block, at both widths, through one assembly path ─────────────
+def _block_harness(trie_bits: int) -> tuple[list[str], stream.StreamBlock, tuple[int, int]]:
+    """The placed block plus a looping ROM that drives its ``cmd`` pipe.
+
+    Everything above this pins the *unit*; ``unit_interior_grid`` deliberately gives
+    every pipe a bare stub so the row map is tested without the block's own rings in
+    the way. This is the other half: the block as placed, so a leg that fails to parse
+    or two legs that share a cell show up as a pipe count rather than as a picture
+    nobody looked at. Both widths run through the same code, which is the point — a
+    depth-3 regression and a depth-4 one fail the same assertion.
+    """
+    from randomfun2026solvers.lm1 import machine
+    from randomfun2026solvers.lm1 import rom as rommod
+
+    blk = stream.build_stream(a_slots=16, b_slots=200, c_slots=16, trie_bits=trie_bits)
+    g = machine._Grid()
+    ox, oy = 0, 16
+    for (x, y), ch in blk.cells.items():
+        g.put(ox + x, oy + y, ch)
+    lay = rommod.build_rom([16 * 2 + 3], rows=2)
+    rx, ry = 2, 0
+    g.room(rx, ry, rx + lay.width, ry + lay.height + 1)
+    g.blit(rx, ry + 1, lay.cells)
+    cx, cy = ox + blk.cmd_cell[0], oy + blk.cmd_cell[1]
+    g.draw_pipe([(rx + 1, ry + lay.height + 2), (rx + 1, cy - 1), (cx, cy - 1), (cx, cy)])
+    sx, sy = ox + blk.resp_cell[0], oy + blk.resp_cell[1]
+    g.draw_pipe([(sx, sy), (sx, sy - 2)])
+    g.room(sx - 1, sy - 5, sx + 1, sy - 3)
+    return g.rows(), blk, (ox, oy)
+
+
+@pytest.mark.parametrize("trie_bits", [3, 4])
+def test_the_placed_block_has_every_pipe_it_drew(trie_bits: int):
+    """Pipes drawn against pipes found, at both widths.
+
+    ``SPEC.md``'s first parse rule is what this catches: a pipe starts with the
+    arrowhead whose *backward* cell is on the source room's border, so a leg leaving a
+    vertical wall has to step away from it before it may turn. Drawn with the turn on
+    the attach cell, ``p1`` silently did not parse at all — ``analyze`` reported one
+    fewer pipe and nothing else complained.
+    """
+    rows, blk, _origin = _block_harness(trie_bits)
+    engine = FastLittleman("\n".join(rows))
+    assert len(engine.pipes) == blk.pipes + 1, "+ the ROM's own command pipe"
+    assert blk.pipes == (10 if trie_bits == 3 else 11)
+
+
+@pytest.mark.parametrize("trie_bits", [3, 4])
+def test_no_two_legs_of_the_placed_block_share_a_cell(trie_bits: int):
+    """``_Grid.put`` only catches a collision when the two glyphs *differ*.
+
+    So one horizontal leg crossing another — both ``-`` — is silent, and the values go
+    to the wrong room with no error anywhere. Count the cells each pipe laid against
+    the distinct cells that exist.
+    """
+    from randomfun2026solvers.lm1 import machine
+
+    laid: list[int] = []
+    original = machine._Grid.draw_pipe
+
+    def counting(self, points):
+        n = original(self, points)
+        laid.append(n)
+        return n
+
+    machine._Grid.draw_pipe = counting
+    try:
+        blk = stream.build_stream(a_slots=16, b_slots=200, c_slots=16, trie_bits=trie_bits)
+    finally:
+        machine._Grid.draw_pipe = original
+    # the search may try several serpentine sizes; only the last build's legs survive
+    body = {(x, y) for (x, y), ch in blk.cells.items() if ch in "-|<>^v"}
+    assert sum(laid[-blk.pipes :]) <= len(body), (
+        f"{sum(laid[-blk.pipes:])} pipe cells drawn into {len(body)} body cells"
+    )
+
+
+@pytest.mark.parametrize("trie_bits", [3, 4])
+def test_every_placed_glyph_binds_the_pipe_the_block_meant(trie_bits: int):
+    """All 17 glyphs at depth 3 and all 28 at depth 4, against the engine's binding.
+
+    ``unit_interior_grid`` proves the row map with straight stub legs. This proves the
+    same glyphs once the real rings, relays and ADDER are around them — which is where
+    a rival ``r`` two cells nearer would actually appear.
+    """
+    rows, blk, (ox, oy) = _block_harness(trie_bits)
+    engine = FastLittleman("\n".join(rows))
+    spec = stream._spec(trie_bits)
+    unit = stream.unit_interior(trie_bits)
+    ux = (stream.UX if trie_bits == 3 else stream.UX4) + ox
+    uy = (stream.UY if trie_bits == 3 else stream.UY4) + oy
+    want = {"cmd": (ux + unit.north["cmd"], uy)}
+    want |= {band: (ux, uy + row) for band, row in unit.west.items()}
+    want |= {band: (ux + spec.iw + 1, uy + row) for band, row in unit.east.items()}
+    want |= {band: (ux + col, uy + spec.ih + 1) for band, col in unit.south.items()}
+
+    assert len(blk.glyphs) == (17 if trie_bits == 3 else 28)
+    for x, y, glyph, band in blk.glyphs:
+        cell = (ox + x, oy + y)
+        pid = engine._bindings.get(cell)
+        assert isinstance(pid, int) and pid >= 0, f"{glyph}@{cell} binds no pipe at all"
+        pipe = engine.pipes[pid]
+        attach = pipe.src_attach if glyph == "s" else pipe.dst_attach
+        assert attach == want[band], (
+            f"{glyph}@{cell} should bind {band} at {want[band]} but got {attach}"
+        )
+
+
+def test_the_placed_shared_relay_and_adder_bind_by_position():
+    """The four relay pipes and the ADDER's three, in the block rather than in a probe.
+
+    The relay's whole job is to pass ``prod`` across ring B's chord, so if ``prod``
+    bound the *ring's* ``r`` the block would still load, still run, and quietly send
+    products round ring B. That is the failure this asserts against.
+    """
+    rows, blk, (ox, oy) = _block_harness(4)
+    engine = FastLittleman("\n".join(rows))
+    rbx, rby = stream.RELAY_B4[0] + ox, stream.RELAY_B4[1] + oy
+    adx, ady = stream.ADDER4[0] + ox, stream.ADDER4[1] + oy
+    east = rbx + stream.SHARED_RELAY_IW + 1
+    south = rby + stream.SHARED_RELAY_IH + 1
+
+    for band, (wall, off) in stream.SHARED_RELAY_PORTS.items():
+        glyph, (gx, gy) = stream.SHARED_RELAY_GLYPHS[band]
+        want = {
+            "north": (rbx + off, rby),
+            "south": (rbx + off, south),
+            "west": (rbx, rby + off),
+            "east": (east, rby + off),
+        }[wall]
+        pipe = engine.pipes[engine._bindings[(rbx + gx, rby + gy)]]
+        attach = pipe.src_attach if glyph == "s" else pipe.dst_attach
+        assert attach == want, f"the relay's {band} {glyph} bound {attach}, not {want}"
+
+    # the ADDER: `p2` on the west wall, `prod` out of the relay up into the south wall,
+    # `p1` east. Addition is commutative, so the two `r`s could swap without a wrong
+    # answer — but they cannot bind the *same* pipe, and this is what says so.
+    adder = {
+        (adx + 2, ady + 1): (adx, ady + 1),  # r -> p2's west-wall attach
+        (adx + 6, ady + 1): (adx + 6, ady + stream.ADDER_IH + 1),  # r -> pass_out's
+        (adx + 8, ady + 2): (adx + stream.ADDER_IW + 1, ady + 2),  # s -> p1's
+    }
+    bound = set()
+    for cell, want in adder.items():
+        pid = engine._bindings[cell]
+        pipe = engine.pipes[pid]
+        attach = pipe.src_attach if cell == (adx + 8, ady + 2) else pipe.dst_attach
+        assert attach == want, f"the ADDER's glyph at {cell} bound {attach}, not {want}"
+        bound.add(pid)
+    assert len(bound) == 3, "the ADDER's three glyphs must bind three different pipes"
+
+
+def test_the_placed_block_is_planar_at_both_widths():
+    """``block_crossings`` through the same assembly the drawing uses, depth 3 control."""
+    assert stream.block_crossings(3) == []
+    assert stream.block_crossings(4, tree=("p2", "prod", "p1", "b_fwd", "b_ret")) == []
+
+
+def test_the_depth_four_block_dimensions_are_recorded():
+    """A size regression should name itself rather than surface as a placement failure.
+
+    Depth 3 is measured at ``matmul``'s own shipped ring sizes, so this is also a guard
+    on the grid that is already judged.
+    """
+    from randomfun2026solvers.lm1 import machine
+
+    a, b, c = machine.STREAM_SIZE["matmul"]
+    three = stream.build_stream(a_slots=a, b_slots=b, c_slots=c)
+    four = stream.build_stream(a_slots=16, b_slots=856, c_slots=80, trie_bits=4)
+    assert (three.width, three.height) == (67, 45)
+    assert (four.width, four.height) == (112, 51)
+    assert four.ring_c >= 80, "p1's boustrophedon holds a whole row of C"
+    assert four.rows_a % 2 == 1 and four.rows_b % 2 == 1  # odd: the last leg goes west
