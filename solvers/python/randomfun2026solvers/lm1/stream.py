@@ -1331,64 +1331,42 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
 
 
 
-# ── placement, depth 4: the drawing does not close ───────────────────────────
+# ── placement, depth 4: not drawn, and the reason is not what it looked like ──
 # The topology closes (:func:`block_crossings` with ``prod`` through ring B's relay)
-# and every room it needs is drawn and verified. The *drawing* does not, and the
-# failure is of exactly the kind that function cannot see — four legs of one room,
-# plus one climb — so it is recorded here in full.
+# and every room it needs is drawn and verified. The drawing is not done, but the
+# obstruction recorded here through round 7 was **an artefact of a layout scheme this
+# module invented, not a property of the block**, and the correction is worth more
+# than the obstruction was.
 #
-# **The chain.** Three forced facts meet:
+# **What was claimed.** That rule 2 — "each southbound pipe runs west along a corridor
+# row of its own and drops down a column of its own, corridor rows and drop columns
+# rising with the turn column" — forces ``prod``'s drop column to be the westmost of
+# five, that rule 3 forces ``b_ret``'s climb west of all of them, and that ``b_ret``'s
+# jog out of the shared relay therefore always crosses ``prod``'s descent.
 #
-# 1. Rule 2 makes ``prod``'s drop column the **smallest** of the five. Its east-wall
-#    row is the lowest, so its turn column is smallest (rule 1), so its corridor row
-#    is smallest, so its drop column is smallest.
-# 2. Rule 3 makes ``b_ret``'s climb column the **largest** of the four west climbs
-#    (its wall row is the largest) and, separately, **smaller than every drop column**
-#    — otherwise the corridors' westbound legs cross it. So
-#    ``c_b_ret < D_prod < every other drop``.
-# 3. ``prod`` and ``b_ret`` both terminate at the *same room*. Whichever of its four
-#    walls each takes, ``b_ret`` leaves at a column east of ``c_b_ret`` and has to jog
-#    west to reach it, and ``prod``'s descent lies between the two — so the jog crosses
-#    it.
+# **Why that was the wrong frame.** Rendering the *depth-3* block (``manview``) shows
+# it uses no western drop columns at all. Everything that has to cross from the east
+# wall to the west side goes **around the outside**: east to an outer turn column,
+# south to a serpentine band, west along the band, north up a far-west column (1 or 3),
+# and into its relay — which is why the two ring relays sit beside the unit at its own
+# rows and the returns are short horizontal runs. Only the rooms in the *strip* between
+# the unit and the bands (the ADDER, the O room) are reached by a middling turn column
+# descending part-way. The westbound-corridor discipline was this module's own
+# invention and it is what created the collision; the block's own idiom does not have
+# it.
 #
-# Six wall assignments were tried; each moves the collision rather than removing it,
-# because ``prod`` has to *arrive* at the relay from the same side ``b_ret`` *leaves*
-# toward:
+# **What that means for ``prod``.** ``prod`` has to get from the east wall to the shared
+# relay on the west side, which is exactly what a ring *forward* pipe does. So it
+# should be routed like one — east, down, west along a band-like row, up a far-west
+# column of its own, into the relay — and then there is no western descent for
+# ``b_ret``'s exit to cross, because ``b_ret``'s exit is a short horizontal run into
+# the unit's west wall like the other two returns. The far west then needs three climb
+# columns (ring A's forward, ring B's forward, ``prod``) rather than two.
 #
-# ==========================  ==================  ============================
-# ``prod`` in / ``b_ret`` out  what it fixes       what it then collides with
-# ==========================  ==================  ============================
-# north 3 / west 2             prod's descent      b_ret's westward leg at the
-#                              is clear of the     relay's row crosses prod's
-#                              room               descent column
-# north 3 / north 2            b_ret climbs        b_ret's climb column is
-#                              straight off        ``relay_x + 2 > D_prod``
-# west 8 / north 2             b_ret's climb is    b_ret's jog below row 36 has
-#                              west of the drops   to cross prod's descent
-# west 8 / south 2             b_ret goes round    ``prod2`` then has to exit
-#                              the bottom          north or west, and both
-#                                                  cross b_ret's climb
-# east 8 / south 2             prod arrives from   rule 2 wants ``D_prod`` the
-#                              the east            smallest, not the largest
-# north 3 / south 2            prod2 exits north   the ADDER above the relay puts
-#                              to an ADDER above   its rows across ``b_fwd``'s
-#                                                  descent, and moving that east
-#                                                  collides with ``p2``'s leg into
-#                                                  the ADDER's east wall
-# ==========================  ==================  ============================
-#
-# The constants below are the layout the topology asks for and are kept as the
-# starting point for the next attempt; :func:`build_stream` still refuses depth 4.
-#
-# **What would break the chain** — each is a decision rather than a derivation, which
-# is why none was taken here:
-#
-# * Let ``prod`` reach the ADDER *without* passing through ring B's relay, and make
-#   ring B's ports leaves of the tree some other way (a second pass-through of some
-#   pipe that does not have ``prod``'s rule-2 position).
-# * Split ``b_ret`` with its own turnaround room, so its climb starts west of
-#   ``prod``'s descent instead of having to jog across it.
-# * Split the unit into two rooms, which changes the port set the rules apply to.
+# That is the next attempt, and it is a placement, not a search. Rule 1 (turn columns
+# fall as the east-wall row rises) and rule 3 (each incoming pipe's own climb column,
+# ordered by the wall row it feeds) both survive; rule 2 as stated does not, and is
+# recorded here only so it is not reinvented.
 #
 # ── placement constants, depth 4 ─────────────────────────────────────────────
 # The embedding the planarity result implies (see the note above
@@ -1461,12 +1439,11 @@ def build_stream(
             f"the depth-{spec.trie_bits} unit is drawn ({len(spec.arms)} arms, "
             f"{unit_pipe_count(spec.trie_bits)} pipes, every glyph checked against the "
             "engine's own route) and the topology closes (block_crossings), but the "
-            "drawing does not. Rule 2 forces prod's drop column to be the smallest of "
-            "the five and rule 3 forces b_ret's climb column to be smaller still, so "
-            "prod's descent always lies between the shared relay and b_ret's climb — "
-            "and b_ret's jog out of the relay crosses it whichever of the room's four "
-            "walls each port takes. See the note above build_stream for the six wall "
-            "assignments tried and what each collides with."
+            "block is not drawn yet. See the note above build_stream: the obstruction "
+            "reported through round 7 came from a westbound-corridor layout this "
+            "module invented, and the depth-3 block — rendered with manview — shows "
+            "the idiom that avoids it, in which prod is routed like a ring forward "
+            "rather than dropped down a western column."
         )
 
     # ``rows_a`` outer, because the block's height is set by ring A's band — it is

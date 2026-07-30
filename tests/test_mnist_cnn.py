@@ -112,7 +112,7 @@ def test_a_stream4_program_cannot_be_built_on_a_depth_three_unit():
     the placement rather than about the trie. Either way it is a raise, and this
     test pins the raise, not the wording of the part that is still to do.
     """
-    with pytest.raises(StreamError, match="the drawing does not"):
+    with pytest.raises(StreamError, match="not drawn yet"):
         stream.build_stream(
             a_slots=16, b_slots=64, c_slots=16, trie_bits=asm.UNIT_TRIE_BITS["stream4"]
         )

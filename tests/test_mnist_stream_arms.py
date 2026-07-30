@@ -493,7 +493,7 @@ def test_the_builder_refuses_a_width_it_cannot_place():
     """A block it cannot draw correctly must not be approximated (ARCH.md §4.4)."""
     from randomfun2026solvers.lm1.stream import StreamError
 
-    with pytest.raises(StreamError, match="the drawing does not"):
+    with pytest.raises(StreamError, match="not drawn yet"):
         stream.build_stream(a_slots=16, b_slots=856, c_slots=80, trie_bits=4)
     with pytest.raises(StreamError, match="depth 5"):
         stream.build_stream(a_slots=8, b_slots=8, c_slots=6, trie_bits=5)
