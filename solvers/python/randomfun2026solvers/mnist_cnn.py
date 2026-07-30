@@ -1227,11 +1227,16 @@ def emit_source(
 
     g = _Gen(lr_shift=lr_shift)
     _header(g, lr_shift=lr_shift, train_n=train_n, val_n=val_n)
-    _boot(g, epochs_from_input=epochs_from_input and not single_step, epochs=epochs)
     if panels:
+        # Before the boot, not after: the axes depend on nothing, and painting them
+        # first means the machine puts a frame on both walls within its first few
+        # thousand ticks instead of after the 856-word `FILLB`. That is what makes the
+        # grid checkable on a real engine at all — the whole training run is far past
+        # any tick cap, but "both panels commit their axes" is not.
         _axes(g)
         g.ldi(COL0, "the first epoch's plot column")
         g.st(S.PCOL)
+    _boot(g, epochs_from_input=epochs_from_input and not single_step, epochs=epochs)
 
     if single_step:
         g.blank()

@@ -4258,6 +4258,12 @@ def _assemble(
             doom_cluster_lift=doom_cluster_lift,
             doom_north_up=doom_north_up,
             doom_north_west=doom_north_west,
+            # One extra corridor row per panel beyond the first: each panel's command
+            # pipe has to turn in the gap between the CPU and the block, and it may
+            # not turn in the cell it attaches by (measured — see `_detour_lanes`).
+            # Zero unless this machine has both a block and its own panels, so every
+            # checked-in grid is untouched.
+            gap=max(0, len(display) - 1) if display and cpu.dsp_cols else 0,
         )
 
     # ── the LM-75s, below everything ─────────────────────────────────────────
@@ -5041,6 +5047,7 @@ def _stream(
     doom_cluster_lift: int = 0,
     doom_north_up: int = 0,
     doom_north_west: bool = False,
+    gap: int = 0,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -5053,6 +5060,14 @@ def _stream(
     Which block is placed comes from the program's ``.unit`` (``asm.UNITS``). The
     snake unit brings its own ring *and* the LM-75 panel, so on that machine there is
     no separate ``_display`` call and the CPU has no display lanes at all.
+
+    ``gap`` lowers the block, buying that many extra rows in the corridor under the
+    CPU. It is 0 on every machine whose grid is checked in, and non-zero only when a
+    machine has both a block and its *own* LM-75s: their command pipes have to cross
+    this corridor to reach the panels below, and the block's own two pipes turn in it
+    (the command leg on ``by - 3``, the response leg on ``by - 2``), so the number of
+    rows a display pipe can turn in is set by how far down the block sits. See
+    :func:`_detour_lanes`, which measures rather than assumes.
     """
     if unit == "snake":
         from . import snake_unit
@@ -5118,7 +5133,7 @@ def _stream(
             trie_bits=UNIT_TRIE_BITS.get(unit, streammod.TRIE_BITS),
             lr_shift=streammod.UPDB_SHIFT if lr_shift is None else lr_shift,
         )
-    bx, by = 1, wall_y + 5
+    bx, by = 1, wall_y + 5 + gap
     if unit in ("doom", "doom4"):
         # The DOOM block is ~172 columns wide — far wider than the CPU — and the
         # grid STORE's man-memory runs hundreds of rows down the machine's east
@@ -5167,6 +5182,87 @@ _RELAY_PITCH = 12
 
 #: The relay's interior, and where its inlet meets the north wall.
 _RELAY_W, _RELAY_H = 14 + 2 * _RELAY_PITCH, 13
+
+
+def _polyline(route: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Every cell an axis-aligned polyline covers, in order, without repeats."""
+    cells: list[tuple[int, int]] = []
+    for (x0, y0), (x1, y1) in zip(route, route[1:], strict=False):
+        if x0 != x1 and y0 != y1:
+            raise MachineError(f"leg {(x0, y0)} -> {(x1, y1)} is not axis-aligned")
+        step = (0 if x1 == x0 else (1 if x1 > x0 else -1), 0 if y1 == y0 else (1 if y1 > y0 else -1))
+        x, y = x0, y0
+        while True:
+            if not cells or cells[-1] != (x, y):
+                cells.append((x, y))
+            if (x, y) == (x1, y1):
+                break
+            x, y = x + step[0], y + step[1]
+    return cells or list(route)
+
+
+def _check_route_clear(g: _Grid, route: Sequence[tuple[int, int]], *, what: str) -> None:
+    """Refuse a pipe route that would run over anything already drawn.
+
+    ``_Grid.put`` only raises when the two glyphs *differ*, so one ``-`` leg crossing
+    another's ``-`` is silent: the engine reads the two as one pipe and an instruction
+    binds to the wrong end. Checking the cells before drawing them is the only
+    protection at the call site (a guard inside ``draw_pipe`` was considered and
+    deferred; see the ledger).
+    """
+    hit = [c for c in _polyline(route) if c in g.c]
+    if hit:
+        raise MachineError(
+            f"{what} would run over {len(hit)} occupied cell(s), first at {hit[0]} "
+            f"({g.c[hit[0]]!r}): route {list(route)}"
+        )
+
+
+def _detour_lanes(
+    g: _Grid,
+    wall_y: int,
+    in_cols: Sequence[int],
+    *,
+    east: int,
+    floor: int,
+) -> dict[int, int]:
+    """One clear corridor row per panel, in the gap under the CPU's south wall.
+
+    Two rules decide this, and both are geometry rather than taste:
+
+    * **No pipe may turn on ``wall_y + 1``.** Every other south-wall pipe in the
+      machine descends at least one cell before it turns, and a pipe that turns in
+      the cell it attaches by does not parse as the generator meant.
+    * **The easternmost lane takes the highest row.** A pipe's eastward leg runs
+      over every column east of its own, so if a western pipe turned higher, its leg
+      would cross the cell an eastern pipe leaves the wall on. Taking the lanes
+      east-to-west and stepping strictly *downward* means each descent only ever
+      passes legs that are east of it, and each leg only ever passes descents that
+      stop above it.
+
+    Which rows are actually free is then *measured*, not assumed: the STREAM block's
+    own command and response pipes cross this gap and their legs reach different
+    columns, so the free rows depend on the block. Every candidate is tested against
+    the grid as drawn.
+    """
+    lanes: dict[int, int] = {}
+    row = wall_y + 1
+    for i in sorted(range(len(in_cols)), key=lambda k: -in_cols[k]):
+        row = max(row + 1, wall_y + 2)
+        while row < floor:
+            descent = [(in_cols[i], y) for y in range(wall_y + 1, row + 1)]
+            leg = [(x, row) for x in range(in_cols[i], east + 1)]
+            if not any(c in g.c for c in descent + leg):
+                break
+            row += 1
+        else:
+            raise MachineError(
+                f"no clear corridor row for the panel whose lane is at column "
+                f"{in_cols[i]}: rows {wall_y + 2}..{floor - 1} under the CPU are all "
+                "crossed by something. Widen the gap or move the lane east (dsp_pad)"
+            )
+        lanes[i] = row
+    return lanes
 
 
 #: Rows between one panel's stack and the next: the previous panel's SWAP leg runs
@@ -5243,6 +5339,15 @@ def _display_stack(
     # East of everything drawn so far, so a detour's descent clears the block. Taken
     # once, before the first panel widens the grid with its own descent.
     east_of_all = (max(x for x, _ in g.c) + 2) if floor is not None else 0
+    lanes: dict[int, int] = {}
+    if floor is not None:
+        lanes = _detour_lanes(
+            g,
+            wall_y,
+            [cx + cpu.dsp_cols[b] for b in relays],
+            east=east_of_all + 2 * (len(panels) - 1),
+            floor=floor,
+        )
     for i, (band, size) in enumerate(zip(relays, panels, strict=True)):
         in_col = cx + cpu.dsp_cols[band]
         y0 = top + 4  # three corridor rows, exactly as the panel takes below the CPU
@@ -5250,14 +5355,7 @@ def _display_stack(
         if floor is not None:
             # East along this panel's own corridor row, south past the block, then
             # west to the entry column and one step down into the north wall.
-            #
-            # **The rows go the other way from the columns**, and they have to: every
-            # panel's pipe leaves the same wall, and an eastward leg on row *r* runs
-            # over every lane column east of its own. So the easternmost lane turns
-            # on the highest row — otherwise panel 0's leg crosses the cell panel 1's
-            # pipe leaves the wall on, which is a collision that ``_Grid.put`` would
-            # only catch because the two glyphs happen to differ.
-            lane = wall_y + 1 + (len(panels) - 1 - i)
+            lane = lanes[i]
             descent = east_of_all + 2 * i
             # The pipe comes back to a column *inside the relay's own span* rather
             # than to the lane column it started from: with ``dsp_pad`` pushing the
@@ -5276,6 +5374,7 @@ def _display_stack(
                 (entry, y0 - 2),
                 (entry, y0 - 1),
             ]
+            _check_route_clear(g, route, what=f"panel {i}'s command pipe")
         cols, relay_wall, glyphs = _dsp_relay(g, cx, wall_y, in_col, y0=y0, route=route)
         touches[band] = (in_col, wall_y + 1)
         ports = _display(
