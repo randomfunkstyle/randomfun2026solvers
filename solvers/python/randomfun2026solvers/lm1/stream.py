@@ -1330,6 +1330,40 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
 #   up outside ring B's on the perimeter.
 
 
+
+# ── placement, depth 4 ───────────────────────────────────────────────────────
+# The embedding the planarity result implies (see the note above
+# :func:`block_crossings`): the ADDER's legs to ``p2`` and ``p1`` form an enclosure,
+# ring B's *shared* relay sits inside it, and ring A's band and relay together with
+# the two I/O rooms sit outside it, ring A's chord passing south of the whole
+# assembly. North to south: the unit; the five westbound corridors; ring B's band;
+# ring B's shared relay; the ADDER; ring A's band; ring A's relay.
+UX4, UY4 = 40, 1
+RESP_X4 = 120  # east of every turn column, so nothing above resp reaches its climb
+#: ``band -> (turn column, corridor row, the column it drops down at)``. Turn columns
+#: fall as the east-wall row rises (rule 1); corridor rows and drop columns rise with
+#: the turn column (rule 2), so the five nest instead of braiding.
+CORRIDOR4 = {
+    "prod": (110, 36, 7),
+    "b_fwd": (112, 38, 12),
+    "p2": (114, 40, 111),
+    "out": (116, 42, 113),
+    "a_fwd": (118, 44, 115),
+}
+#: Far-west climb column per incoming pipe, ordered by the wall row each feeds — the
+#: pipe climbing highest goes furthest west, so a leg spanning ``[climb, unit]``
+#: excludes every climb west of it (rule 3). All are west of every drop column, which
+#: is what keeps the corridors' legs clear of them.
+W_CLIMB4 = {"a_ret": 1, "in": 2, "p1": 3, "b_ret": 5}
+IO_IN_Y4 = 20  # the I room: its pipe leaves the north wall and climbs
+BAND_B4 = 46  # ring B's band, immediately below the corridors
+LEG_W4, LEG_E4 = 20, 106  # ring B's leg span: east of every western drop
+RELAY_B_X4 = 9  # the shared relay: `prod` in at its west wall, out at its south
+ADDER_X4 = 6  # `prod` lands on its north wall inlet; `p2` comes west into its east
+RELAY_A_X4 = 2
+O_ROOM_X4 = 112
+
+
 def build_stream(
     *,
     a_slots: int,
