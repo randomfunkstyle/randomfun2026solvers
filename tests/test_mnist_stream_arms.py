@@ -1430,21 +1430,38 @@ def test_the_placed_block_is_planar_at_both_widths():
     assert stream.block_crossings(4, tree=("p2", "prod", "p1", "b_fwd", "b_ret")) == []
 
 
-def test_the_depth_four_block_dimensions_are_recorded():
-    """A size regression should name itself rather than surface as a placement failure.
+def test_the_block_width_is_fixed_and_the_height_is_a_formula():
+    """The dimension a caller needs is the width, and it does not depend on ring size.
 
-    Depth 3 is measured at ``matmul``'s own shipped ring sizes, so this is also a guard
-    on the grid that is already judged.
+    Round 9 reported "112x51" as the depth-4 block's size. That height holds only at
+    ``b_slots=856``: it is 43 with both bands at one row and 59 with both at nine. What
+    *is* fixed is the width — the unit plus a fixed east strip of six turn columns, the O
+    room and ``resp``'s climb, none of which grows — and that is the number to check
+    against a grid cap. So this derives rather than hard-codes.
     """
     from randomfun2026solvers.lm1 import machine
 
+    widths, heights = set(), {}
+    for a, b in ((16, 1), (16, 200), (16, 856), (200, 200), (400, 856), (900, 856)):
+        blk = stream.build_stream(a_slots=a, b_slots=b, c_slots=80, trie_bits=4)
+        widths.add(blk.width)
+        heights[(blk.rows_a, blk.rows_b)] = blk.height
+        assert blk.rows_a % 2 == 1 and blk.rows_b % 2 == 1  # odd: last leg goes west
+        assert blk.ring_c >= 80, "p1's boustrophedon holds a whole row of C"
+        assert blk.pipes == 11
+    assert widths == {112}, f"the depth-4 width must not depend on ring size: {widths}"
+    for (rows_a, rows_b), height in heights.items():
+        assert height == 41 + rows_a + rows_b, (rows_a, rows_b, height)
+
+    # depth 3's width is fixed the same way, measured at matmul's own shipped sizes
     a, b, c = machine.STREAM_SIZE["matmul"]
     three = stream.build_stream(a_slots=a, b_slots=b, c_slots=c)
-    four = stream.build_stream(a_slots=16, b_slots=856, c_slots=80, trie_bits=4)
+    assert three.width == 67
+    assert {stream.build_stream(a_slots=x, b_slots=x, c_slots=6).width
+            for x in (8, 200, 257)} == {67}
+    # and the figure this report carried since round 3 was wrong: it is 67x45 here, not
+    # 68x51, and matmul is byte-identical, so the grid never changed
     assert (three.width, three.height) == (67, 45)
-    assert (four.width, four.height) == (112, 51)
-    assert four.ring_c >= 80, "p1's boustrophedon holds a whole row of C"
-    assert four.rows_a % 2 == 1 and four.rows_b % 2 == 1  # odd: the last leg goes west
 
 
 @node_required

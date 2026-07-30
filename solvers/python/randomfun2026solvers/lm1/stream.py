@@ -106,8 +106,15 @@ Both widths are drawn and placed
 -------------------------------
 
 The depth-4 unit is 65x32 against depth 3's 33x23 — sixteen leaves at pitch 4 set
-the width and ``UPDB``'s 17-glyph body sets the height — and the placed block is
-112x51 against depth 3's 67x45.
+the width and ``UPDB``'s 17-glyph body sets the height.
+
+The placed block's **width is 112 at every ring size**, because it is set by the unit
+plus the fixed east strip (six turn columns, the O room and ``resp``'s climb) and
+nothing there grows: depth 3's is 67 the same way. That is the number a caller needs
+against a grid cap. Only the **height** grows with the rings, as
+``41 + rows_a + rows_b`` — 43 with both bands at one row, 51 at the trainer's
+``b_slots=856``, 59 with both bands at nine. Quoting one height as "the" size is how
+round 9 handed on 112x51 as if it were fixed.
 
 The depth-4 block needs one thing depth 3 does not. ``prod`` leaves the unit's east
 wall *between* ring B's two ports in the perimeter's cyclic order (``MAC`` must push
