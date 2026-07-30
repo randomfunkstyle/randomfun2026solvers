@@ -3306,7 +3306,21 @@ def _assemble(
                 "the program drives the STREAM block but no ring sizes were given; "
                 "pass stream=(a_slots, b_slots, c_slots) from the problem's maximum"
             )
-        blk, stream_touches, (SX, SY) = _stream(g, cpu, CX, CY + H + 1, stream, unit=program.unit)
+        # The declared shift travels with the declared unit: `build_stream` checks the
+        # glyphs it draws really implement it, and refuses rather than drawing 18 while
+        # the emulator models what the program asked for.
+        from .asm import STREAM_LR_SHIFT_EQU
+        from .stream import UPDB_SHIFT
+
+        blk, stream_touches, (SX, SY) = _stream(
+            g,
+            cpu,
+            CX,
+            CY + H + 1,
+            stream,
+            unit=program.unit,
+            lr_shift=program.equs.get(STREAM_LR_SHIFT_EQU, UPDB_SHIFT),
+        )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
     # Drawn last so its northbound leg can clear everything already placed. Its
@@ -3977,6 +3991,7 @@ def _stream(
     sizes: tuple[int, int, int] | None,
     *,
     unit: str = "stream",
+    lr_shift: int | None = None,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -4023,6 +4038,7 @@ def _stream(
             b_slots=b_slots,
             c_slots=c_slots,
             trie_bits=UNIT_TRIE_BITS.get(unit, streammod.TRIE_BITS),
+            lr_shift=streammod.UPDB_SHIFT if lr_shift is None else lr_shift,
         )
     bx, by = 1, wall_y + 5
     if unit == "doom":

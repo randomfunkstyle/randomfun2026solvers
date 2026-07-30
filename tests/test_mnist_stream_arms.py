@@ -1523,3 +1523,80 @@ def test_updb_applies_its_rank_one_update_on_the_placed_grid():
         for b, g in zip(weights, grads, strict=True)
     ]
     assert result.output[:3] == want, (result.output[:3], want)
+
+
+# ── the declared shift, and the seam that has to carry it ─────────────────────
+def _updb_column(shift: int) -> str:
+    """``UPDB``'s body as actually drawn, read back off the unit's cells."""
+    spec = stream._spec(4, shift)
+    cells = stream.unit_interior(4, lr_shift=shift).cells
+    col = stream.LEAF0 + stream.LEAF_PITCH * stream._LEAVES4.index("UPDB") + 1
+    top = spec.rows["a_ret"]
+    body = stream.updb_body(shift)
+    return "".join(cells.get((col, top + i), " ") for i in range(len(body)))
+
+
+def test_the_declared_shift_reaches_the_drawn_glyphs():
+    """``.equ STREAM_LR_SHIFT`` has to reach ``build_stream``, and until round 10 did not.
+
+    ``UPDB_SHIFT``'s docstring promised the builder refuses a shift disagreeing with the
+    program's declaration. Nothing compared them and ``machine._stream`` never passed the
+    declared value, so ``.equ STREAM_LR_SHIFT 7`` drew 18 while the emulator modelled 7 —
+    a grid-versus-emulator divergence in the weight update, silent, and exactly what this
+    project's verification ladder exists to prevent.
+
+    So the shift is read back off the glyphs rather than remembered, at three levels: the
+    generator's own string, the drawn unit's cells, and a built block.
+    """
+    for shift in (1, 2, 6, 7, 9, 12, 18, 27):
+        assert stream.drawn_shift(stream.updb_body(shift)) == shift
+    with pytest.raises(stream.StreamError, match="shift run"):
+        stream.drawn_shift("rMrWsWs*Mr-s")  # a body with no `}` at all
+
+    for shift in (6, 9, 18):
+        drawn = _updb_column(shift)
+        assert drawn == stream.updb_body(shift), (shift, drawn)
+        assert stream.drawn_shift(drawn) == shift, drawn
+        blk = stream.build_stream(
+            a_slots=16, b_slots=200, c_slots=80, trie_bits=4, lr_shift=shift
+        )
+        assert blk.pipes == 11
+
+
+def test_a_depth_three_unit_refuses_a_shift_it_has_no_arm_for():
+    """Asking matmul's width for a weight-update shift is a declaration mismatch."""
+    with pytest.raises(stream.StreamError, match="no UPDB arm"):
+        stream.build_stream(a_slots=8, b_slots=8, c_slots=6, trie_bits=3, lr_shift=7)
+    # the default is not a declaration, so matmul's own build is untouched
+    assert stream.build_stream(a_slots=8, b_slots=8, c_slots=6, trie_bits=3)
+
+
+@pytest.mark.slow
+def test_machine_hands_the_programs_declared_shift_to_the_builder():
+    """The seam, observed: what ``machine`` actually passes to ``build_stream``.
+
+    Slow because it builds the whole ``matmul`` machine, which is the only way to watch
+    the real call. The three checks above cover the shift itself in the fast tier.
+
+    Asserted by watching the call rather than by reading the source, because the defect
+    this replaces was precisely a documented argument that no call site supplied.
+    """
+    from randomfun2026solvers.lm1 import machine
+    from randomfun2026solvers.lm1 import stream as stream_module
+
+    seen: list[dict] = []
+    original = stream_module.build_stream
+
+    def spy(**kw):
+        seen.append(dict(kw))
+        return original(**kw)
+
+    stream_module.build_stream = spy
+    try:
+        machine.build_for("matmul")
+    finally:
+        stream_module.build_stream = original
+
+    assert seen, "matmul's build must go through build_stream"
+    assert seen[-1]["lr_shift"] == stream.UPDB_SHIFT, seen[-1]
+    assert seen[-1]["trie_bits"] == 3, seen[-1]

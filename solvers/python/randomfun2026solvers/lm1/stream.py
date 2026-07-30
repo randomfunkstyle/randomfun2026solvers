@@ -180,9 +180,12 @@ class StreamError(RuntimeError):
 #: only way the CPU can put a value on ring B at all — sends ``g = 1`` and
 #: ``a = (b - v) << 18``, which is an exact multiple of ``2**18`` so the floored
 #: shift recovers ``b - v`` losslessly and the write is exact. A program declares
-#: the shift it was written against with ``.equ STREAM_LR_SHIFT`` (``asm.py``) and
-#: :func:`build_stream` refuses to draw a different one rather than silently doing
-#: different arithmetic. See the task-4 report and ``mnist_cnn``'s module docstring.
+#: the shift it was written against with ``.equ STREAM_LR_SHIFT`` (``asm.py``);
+#: ``machine._stream`` reads that ``equ`` and hands it to :func:`build_stream`, which
+#: checks the glyphs it is about to draw really implement it (:func:`drawn_shift`) and
+#: refuses otherwise. Until round 10 that sentence was a claim with nothing behind it —
+#: nothing passed the declared value at all, so ``.equ STREAM_LR_SHIFT 7`` drew 18 while
+#: the emulator modelled 7. See the task-4 report and ``mnist_cnn``'s module docstring.
 UPDB_SHIFT = 18
 
 
@@ -203,6 +206,25 @@ def _shift_glyphs(shift: int) -> str:
         if shift % digit == 0:
             return f"M{digit}W" + "}" * (shift // digit)
     raise StreamError(f"no single-digit chunk divides a shift of {shift}")  # pragma: no cover
+
+
+def drawn_shift(body: str) -> int:
+    """How far the ``}`` run in a drawn ``UPDB`` body actually shifts.
+
+    Read back off the glyphs rather than remembered, so :func:`build_stream` can check
+    that what it is about to draw is what the program declared. A grid that shifts by a
+    different amount than the emulator models is arithmetic that differs between tiers
+    with nothing to catch it, which is the one failure this project's whole verification
+    ladder exists to prevent.
+    """
+    for i, ch in enumerate(body):
+        if ch == "M" and body[i + 1 : i + 3][1:] == "W" and body[i + 1].isdigit():
+            digit, k = int(body[i + 1]), 0
+            while i + 3 + k < len(body) and body[i + 3 + k] == "}":
+                k += 1
+            if k:
+                return digit * k
+    raise StreamError(f"no `M<digit>W}}...` shift run in {body!r}")
 
 
 #: The pipes ``UPDB``'s body touches, in body order — which is row order, which is
@@ -1754,13 +1776,32 @@ def build_stream(
     now drawn and placed; a third is still refused, and the depth-3 unit still
     refuses a depth-4 program (:func:`_spec`).
 
-    ``lr_shift`` is ``UPDB``'s shift, drawn into the arm's glyphs. It has to match
-    the ``.equ STREAM_LR_SHIFT`` the program declares, because a unit built with a
-    different one is wrong arithmetic with nothing to catch it.
+    ``lr_shift`` is ``UPDB``'s shift, drawn into the arm's glyphs, and it is checked
+    rather than trusted: the glyphs about to be drawn are read back
+    (:func:`drawn_shift`) and a disagreement is a refusal. A depth-3 unit has no
+    ``UPDB`` at all, so asking one for a shift is refused too — the program wants
+    arithmetic that width cannot do, and drawing it anyway is the silent
+    grid-versus-emulator divergence this check exists to stop.
     """
     from .machine import MachineError
 
     spec = _spec(trie_bits, lr_shift)  # refuses a width this module cannot draw
+    if spec.trie_bits == TRIE_BITS:
+        if lr_shift != UPDB_SHIFT:
+            raise StreamError(
+                f"the program declares .equ STREAM_LR_SHIFT {lr_shift}, but a depth-3 "
+                "unit has no UPDB arm to shift with — it draws matmul's original eight "
+                "arms. Declare `.unit stream4` for a program that updates weights."
+            )
+    else:
+        got = drawn_shift(updb_body(lr_shift))
+        if got != lr_shift:
+            raise StreamError(
+                f"UPDB's drawn glyphs {updb_body(lr_shift)!r} shift by {got}, not the "
+                f"{lr_shift} the program declares with .equ STREAM_LR_SHIFT. Drawing "
+                "this would make the grid and the emulator disagree about the weight "
+                "update with nothing to catch it."
+            )
     place = _place if spec.trie_bits == TRIE_BITS else _place4
 
     # ``rows_a`` outer, because the block's height is set by ring A's band — it is
