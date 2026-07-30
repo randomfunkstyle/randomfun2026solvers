@@ -91,7 +91,8 @@ order and the routing — see :func:`_display`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+import contextlib
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -384,17 +385,57 @@ class _Grid:
         #: both a wall and a vertical pipe body — so a router that wants to keep its
         #: legs off other pipes has to be told, and this is the record.
         self.drawn: set[tuple[int, int]] = set()
+        #: The functional part currently being drawn, and every cell each part
+        #: claimed.  A generated grid carries no comments, so ``Machine.regions``
+        #: is the only record of what a cell *means* — and a box drawn by hand
+        #: from remembered geometry goes stale silently and misattributes profile
+        #: heat (``cpu:trie``'s box over-reached its content by fourteen rows for
+        #: exactly that reason).  Recording the cells as they are drawn makes the
+        #: box a *consequence* of the drawing instead of a claim about it, so it
+        #: cannot drift: see :func:`_mark_boxes`.
+        self.stack: list[str] = []
+        self.marks: dict[str, list[tuple[int, int]]] = {}
+
+    def _claim(self, x: int, y: int) -> None:
+        for name in self.stack:
+            self.marks.setdefault(name, []).append((x, y))
+
+    @contextlib.contextmanager
+    def part(self, name: str | None, *, exclusive: bool = False) -> Iterator[None]:
+        """Attribute every cell drawn inside the block to ``name``.
+
+        Parts **nest**: a cell drawn inside ``slab:BRZ`` > ``discard:BRZ`` is
+        claimed by both, so the outer box is the union of its children and the
+        inner one is the tight sub-box — which is exactly the reading a profile
+        wants ("the slab" and "the two ``r``s inside it that block on the ROM").
+
+        ``exclusive=True`` breaks out of the enclosing parts instead, for a run
+        that is drawn *by* a structure but does not belong *inside* its box — a
+        slab's exit riser climbs past every shallower slab to the collector, and
+        rolling it up would stretch the slab's box over the whole band above it.
+        """
+        prev = self.stack
+        self.stack = ([] if exclusive else list(prev)) + ([name] if name else [])
+        try:
+            yield
+        finally:
+            self.stack = prev
 
     def put(self, x: int, y: int, ch: str) -> None:
         old = self.c.get((x, y))
         if old is not None and old != ch:
             raise MachineError(f"collision at {(x, y)}: {old!r} vs {ch!r}")
         self.c[(x, y)] = ch
+        self._claim(x, y)
 
     def soft(self, x: int, y: int, ch: str) -> None:
         """Place ``ch`` only if the cell is empty (used for filler dots)."""
         if (x, y) not in self.c:
             self.c[(x, y)] = ch
+        # Claimed either way: a `soft` that lost to an earlier glyph is still a
+        # cell this part walks (that is the whole point of the run), and the box
+        # has to contain it.
+        self._claim(x, y)
 
     def text(self, x: int, y: int, s: str) -> None:
         for i, ch in enumerate(s):
@@ -462,6 +503,30 @@ class _Grid:
         while out and not out[-1]:
             out.pop()
         return out
+
+
+def _mark_boxes(g: _Grid) -> dict[str, tuple[int, int, int, int]]:
+    """Each marked part's bounding box — tight by construction.
+
+    An over-reaching region box is *worse* than no box at all: ``_region_of``
+    hands a cell to the smallest box containing it, so a box claiming rows it
+    never draws on silently absorbs whoever really owns them. Deriving the box
+    from :meth:`_Grid.part`'s own cells makes that impossible — the box is the
+    extent of the drawing, and moving a glyph moves the box with it.
+    """
+    out: dict[str, tuple[int, int, int, int]] = {}
+    for name, cells in g.marks.items():
+        xs = [x for x, _ in cells]
+        ys = [y for _, y in cells]
+        box = (min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
+        # Two names for one box make ``_region_of``'s smallest-wins tie-break
+        # arbitrary, and a name that never wins is a label nobody can act on.
+        # It happens where a nested part fills its parent exactly — a *jump*
+        # slab is nothing but its discard loop — so the outer, more general name
+        # is the one to keep (parts are claimed outermost-first).
+        if box not in out.values():
+            out[name] = box
+    return out
 
 
 def _bitrev(v: int, k: int) -> int:
@@ -918,6 +983,13 @@ class _Cpu:
     #: Named boxes in *interior* coordinates, for profiling and overlays. The grid
     #: cannot carry comments, so this is the only record of what a cell means.
     regions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
+    #: Which part drew which cells (:meth:`_Grid.part`) — the evidence the boxes
+    #: in ``regions`` were derived from. ``regions`` is the bounding box of each
+    #: of these lists; this keeps the lists themselves so a test can check that
+    #: the boxes actually hand each part its own cells back rather than merely
+    #: being tight (``tests/test_lm1_cpu_regions.py``). Cells appear under more
+    #: than one part where the drawing genuinely shares them.
+    marks: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
 
 
 def _flat_lane(
@@ -1385,7 +1457,6 @@ def build_cpu(
         n_rows = lanes
         lane_x0 = 5 + k
         at = [y0 + 2 * i for i in range(n_rows)]
-    span = at[-1] - y0 + 1
     by_row = {row_of[m]: m for m in used}
     all_rows = list(at)
     if trim_dead:
@@ -1815,7 +1886,8 @@ def build_cpu(
             pipe_glyphs.append((x, yy, glyph, band))
 
     # ── fetch: opcode -> BP, then the operand word -> A (fixed width, §5.2) ──
-    g.text(1, centre, ">rbr")
+    with g.part("fetch"):
+        g.text(1, centre, ">rbr")
     pipe_glyphs += [(2, centre, "r", "rom"), (4, centre, "r", "rom")]
 
     # ── decode trie: one `x` per level, `]` shifting BP on each branch ────────
@@ -1828,37 +1900,52 @@ def build_cpu(
             if level < k:
                 trie(level + 1, row + sign * step)
 
-    if trie_cells is None:
-        trie(1, centre)
-    else:
-        # Dead-lane removal: the pruned, contracted trie (see _uneven_trie).
-        for (x, yy), ch in trie_cells.items():
-            g.put(x, yy, ch)
+    with g.part("trie"):
+        if trie_cells is None:
+            trie(1, centre)
+        else:
+            # Dead-lane removal: the pruned, contracted trie (see _uneven_trie).
+            for (x, yy), ch in trie_cells.items():
+                g.put(x, yy, ch)
 
     for (x, yy), (glyph, band) in lane_cells.items():
         emit(x, yy, glyph, band)
     for r in all_rows:
         if r in halting:
             continue
-        for x in range(lane_end[r] + 1, (asc_x[r] if r in top_lanes else drop_x[r])):
-            g.soft(x, r, ".")
+        # Without ``trim_dead`` an unused leaf slot still gets a row, a trie
+        # terminal `>` and a run out to a drop column — live glyphs no opcode can
+        # reach. They have no mnemonic and so no ``lane:`` box; naming them keeps
+        # the map total, and a region that never takes a sample is itself the
+        # finding (see :func:`_uneven_trie` and :data:`TRIM_DEAD_LANES`).
+        with g.part(None if by_row.get(r) else "lanes:unused"):
+            for x in range(lane_end[r] + 1, (asc_x[r] if r in top_lanes else drop_x[r])):
+                g.soft(x, r, ".")
 
     # ── drops: simple lanes to the collector, structured ones to their slab ──
     # Only the *head* of a drop is a `v`; the rest is `.`. A southbound man keeps
     # his heading over a `.`, and so does a westbound one — which is what lets a
     # drop cross a slab's westbound entry row at all. A `v` there would turn the
     # entry man south into the middle of the drop.
-    for r in all_rows:
-        if r in halting or r in top_lanes:
-            continue
-        g.put(drop_x[r], r, "v")
-    for r in all_rows:
-        if r in halting or r in top_lanes:
-            continue
-        m = by_row.get(r)
-        stop = slab_at[m] if (m is not None and m in slab_at) else collector
-        for yy in range(r + 1, stop):
-            g.soft(drop_x[r], yy, ".")  # crosses the collector row for a slab lane
+    #
+    # ``drops`` is deliberately one *band* rather than a box per column. A drop
+    # crosses every lane row between its own and the collector, so a per-column
+    # box would be smaller than the lane boxes it crosses and would take their
+    # cells away from them — the crossing is genuinely shared and the lane is the
+    # more useful reading. The band's area beats every lane, slab and collector
+    # box, so it wins only where nothing tighter claims the cell.
+    with g.part("drops"):
+        for r in all_rows:
+            if r in halting or r in top_lanes:
+                continue
+            g.put(drop_x[r], r, "v")
+        for r in all_rows:
+            if r in halting or r in top_lanes:
+                continue
+            m = by_row.get(r)
+            stop = slab_at[m] if (m is not None and m in slab_at) else collector
+            for yy in range(r + 1, stop):
+                g.soft(drop_x[r], yy, ".")  # crosses the collector row for a slab lane
 
     # ── the top bus: rises east of the band, returns along row 1, drops col 1 ──
     # Heads first (hard), then the runs (soft), so two ascents sharing a column
@@ -1902,55 +1989,65 @@ def build_cpu(
             s0, base = slab_at[m], slab_base[m]
             if p.sem[m] not in _SEEK_SEMS:
                 # A short jump keeps the classic counted discard, verbatim.
-                struct_drops |= _slab(
-                    g, m, p, s0, base, collector, pipe_glyphs, drain_unit_bits
-                )
+                with g.part(f"slab:{m}"):
+                    struct_drops |= _slab(
+                        g, m, p, s0, base, collector, pipe_glyphs, drain_unit_bits
+                    )
             elif p.sem[m] in _JUMP_SEMS:
                 # never west of ``base`` (that is the shipped column and the floor),
                 # never east of the lane's own drop (its `<` owns that cell).
                 jx = base if jump_x is None else max(base, min(jump_x, drop_x[row_of[m]] - 1))
-                for yy in range(s0 + 1, taken_row):
-                    if jx != base and (jx, yy) in g.c:
-                        raise MachineError(f"seek jump drop column {jx} is occupied at y={yy}")
-                    g.soft(jx, yy, ".")
+                with g.part(f"slab:{m}"):
+                    for yy in range(s0 + 1, taken_row):
+                        if jx != base and (jx, yy) in g.c:
+                            raise MachineError(
+                                f"seek jump drop column {jx} is occupied at y={yy}"
+                            )
+                        g.soft(jx, yy, ".")
                 taken_drops.append(jx)
                 turn_x[m] = jx
             else:
-                g.soft(base, s0 + 1, ".")
-                g.put(base, s0 + 2, ">")
-                g.put(base + 1, s0 + 2, "X")
-                g.put(base + 1, s0 + 1, ">")
-                g.put(base + 1, s0 + 3, ">")
-                arm_rows = {"neg": s0 + 1, "zero": s0 + 2, "pos": s0 + 3}
-                arm_cols = {"neg": base + 9, "zero": base + 6, "pos": base + 3}
-                taken = "zero" if p.sem[m] is Sem.BR_ZERO_SEEK else "neg"
-                for arm, row in arm_rows.items():
-                    g.put(base + 2, row, "W")
-                    for cc in range(base + 3, arm_cols[arm]):
-                        g.soft(cc, row, ".")
-                    if arm == taken:
-                        g.put(arm_cols[arm], row, "v")
-                        for yy in range(row + 1, taken_row):
-                            g.soft(arm_cols[arm], yy, ".")
-                        taken_drops.append(arm_cols[arm])
-                    else:
-                        g.put(arm_cols[arm], row, "^")
-                        for yy in range(collector + 1, row):
-                            g.soft(arm_cols[arm], yy, ".")
-                        struct_drops.add(arm_cols[arm])
+                with g.part(f"slab:{m}"):
+                    g.soft(base, s0 + 1, ".")
+                    g.put(base, s0 + 2, ">")
+                    g.put(base + 1, s0 + 2, "X")
+                    g.put(base + 1, s0 + 1, ">")
+                    g.put(base + 1, s0 + 3, ">")
+                    arm_rows = {"neg": s0 + 1, "zero": s0 + 2, "pos": s0 + 3}
+                    arm_cols = {"neg": base + 9, "zero": base + 6, "pos": base + 3}
+                    taken = "zero" if p.sem[m] is Sem.BR_ZERO_SEEK else "neg"
+                    for arm, row in arm_rows.items():
+                        g.put(base + 2, row, "W")
+                        for cc in range(base + 3, arm_cols[arm]):
+                            g.soft(cc, row, ".")
+                        if arm == taken:
+                            g.put(arm_cols[arm], row, "v")
+                            for yy in range(row + 1, taken_row):
+                                g.soft(arm_cols[arm], yy, ".")
+                            taken_drops.append(arm_cols[arm])
+                        else:
+                            # The not-taken arms rise past the slab band to the
+                            # collector — their own part, or the slab's box would
+                            # stretch up over every shallower slab's rows.
+                            with g.part(f"riser:{m}", exclusive=True):
+                                g.put(arm_cols[arm], row, "^")
+                                for yy in range(collector + 1, row):
+                                    g.soft(arm_cols[arm], yy, ".")
+                            struct_drops.add(arm_cols[arm])
         for m in order:
             s0, dx = slab_at[m], drop_x[row_of[m]]
             base = slab_base[m]
-            g.put(dx, s0, "<")
-            if p.sem[m] not in _SEEK_SEMS and p.sem[m] in _JUMP_SEMS:
-                # the classic discard loop owns `a<` at base..base+1
-                for x in range(base + 2, dx):
-                    g.soft(x, s0, "<")
-            else:
-                turn = turn_x.get(m, base)
-                for x in range(turn + 1, dx):
-                    g.soft(x, s0, "<")
-                g.put(turn, s0, "v")
+            with g.part(f"entry:{m}"):
+                g.put(dx, s0, "<")
+                if p.sem[m] not in _SEEK_SEMS and p.sem[m] in _JUMP_SEMS:
+                    # the classic discard loop owns `a<` at base..base+1
+                    for x in range(base + 2, dx):
+                        g.soft(x, s0, "<")
+                else:
+                    turn = turn_x.get(m, base)
+                    for x in range(turn + 1, dx):
+                        g.soft(x, s0, "<")
+                    g.put(turn, s0, "v")
 
         # ── the seek tail, entirely BELOW the slab band ───────────────────────
         # Nothing here shares a row with a slab, so the classic slabs keep their
@@ -1969,60 +2066,75 @@ def build_cpu(
         # sentinel is -1, so the sign is the whole test and ACC is never touched.
         t = taken_row
         e_s = struct_east + 2
-        for col in taken_drops:
-            g.put(col, t, ">")
-        for x in range(min(taken_drops), e_s):
-            g.soft(x, t, ".")
-        emit(e_s, t, "s", "cmd")
-        g.put(e_s + 1, t, "v")
-        g.put(e_s + 1, t + 1, "<")
-        for x in range(4, e_s + 1):
-            g.soft(x, t + 1, ".")
-        # flush loop: `r` then a sign `X`, both walked southbound
-        g.put(3, t + 1, "v")
-        emit(3, t + 2, "r", "rom")
-        g.put(3, t + 3, "X")
-        g.put(2, t + 3, "^")  # A>0: keep flushing
-        g.put(2, t + 2, "^")
-        g.put(2, t + 1, ">")
-        g.put(3, t + 4, "<")  # A==0: keep flushing
-        g.put(2, t + 4, "^")
+        with g.part("seek:taken"):
+            for col in taken_drops:
+                g.put(col, t, ">")
+            for x in range(min(taken_drops), e_s):
+                g.soft(x, t, ".")
+        with g.part("seek:send"):
+            emit(e_s, t, "s", "cmd")
+            g.put(e_s + 1, t, "v")
+        # The westbound corridor back to the flush loop's column. This is the walk
+        # whose cost the drum's seek latency hides — see :data:`SEEK_DRUM`.
+        with g.part("seek:walk"):
+            g.put(e_s + 1, t + 1, "<")
+            for x in range(4, e_s + 1):
+                g.soft(x, t + 1, ".")
+        # flush loop: `r` then a sign `X`, both walked southbound. The `v` at the
+        # corridor's west end is the loop's *top*, not the walk's last cell — the
+        # man re-enters it once a lap and crosses it once on the way in — so it
+        # belongs here, and keeping the two boxes column-disjoint is what stops a
+        # 5x5 flush box from claiming the first four cells of a 47-cell walk.
+        with g.part("seek:flush"):
+            g.put(3, t + 1, "v")
+            emit(3, t + 2, "r", "rom")
+            g.put(3, t + 3, "X")
+            g.put(2, t + 3, "^")  # A>0: keep flushing
+            g.put(2, t + 2, "^")
+            g.put(2, t + 1, ">")
+            g.put(3, t + 4, "<")  # A==0: keep flushing
+            g.put(2, t + 4, "^")
         # A<0 — the sentinel: read the remainder, park it in BP, drop to the
         # counted discard. Every seek offset is even (rows pack even word
         # counts), which is exactly the 2x4 burst loop's invariant.
-        emit(4, t + 3, "r", "rom")
-        g.put(5, t + 3, "b")
-        g.put(6, t + 3, "v")
-        g.put(6, t + 4, ".")
-        g.put(6, t + 5, "<")
-        g.soft(5, t + 5, ".")
-        g.soft(4, t + 5, ".")
-        _discard_loop(g, 2, t + 5, pipe_glyphs)
+        with g.part("seek:sentinel"):
+            emit(4, t + 3, "r", "rom")
+            g.put(5, t + 3, "b")
+            g.put(6, t + 3, "v")
+            g.put(6, t + 4, ".")
+            g.put(6, t + 5, "<")
+            g.soft(5, t + 5, ".")
+            g.soft(4, t + 5, ".")
+        with g.part("seek:discard"):
+            _discard_loop(g, 2, t + 5, pipe_glyphs)
         # the loop leaves westbound with BP == 0; rise column 1 to the collector
-        g.put(1, t + 5, "^")
-        for yy in range(collector + 1, t + 5):
-            g.soft(1, yy, ".")
+        with g.part("seek:riser"):
+            g.put(1, t + 5, "^")
+            for yy in range(collector + 1, t + 5):
+                g.soft(1, yy, ".")
     else:
         for m in order:
-            struct_drops |= _slab(
-                g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
-            )
+            with g.part(f"slab:{m}"):
+                struct_drops |= _slab(
+                    g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
+                )
 
         # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place
         # and only fills the genuinely free cells with `<`.
         for m in order:
             s0, dx = slab_at[m], drop_x[row_of[m]]
             base = slab_base[m]
-            g.put(dx, s0, "<")
-            if p.sem[m] in _JUMP_SEMS:
-                # The compact discard loop owns `a<` at base..base+1 and is entered
-                # directly from the westbound slab-entry corridor.
-                for x in range(base + 2, dx):
-                    g.soft(x, s0, "<")
-            else:
-                for x in range(base + 1, dx):
-                    g.soft(x, s0, "<")
-                g.put(base, s0, "v")
+            with g.part(f"entry:{m}"):
+                g.put(dx, s0, "<")
+                if p.sem[m] in _JUMP_SEMS:
+                    # The compact discard loop owns `a<` at base..base+1 and is
+                    # entered directly from the westbound slab-entry corridor.
+                    for x in range(base + 2, dx):
+                        g.soft(x, s0, "<")
+                else:
+                    for x in range(base + 1, dx):
+                        g.soft(x, s0, "<")
+                    g.put(base, s0, "v")
 
     # ── collector -> west riser -> back into the fetch cell ──────────────────
     # `soft` after the drops, so a slab-entry column that has to pass *through* the
@@ -2030,16 +2142,19 @@ def build_cpu(
     ret_x = max([*drop_x.values(), *struct_drops, lane_x0])
     if seek:
         ret_x = max(ret_x, struct_east + 3)  # the taken row's send site + its `v`
-    for x in range(3, ret_x + 1):
-        g.soft(x, collector, "<")
-    g.put(1, collector, "^")
-    for yy in range(centre + 1, collector):
-        g.soft(1, yy, ".")
+    with g.part("return:collector"):
+        for x in range(3, ret_x + 1):
+            g.soft(x, collector, "<")
+    with g.part("return:riser"):
+        g.put(1, collector, "^")
+        for yy in range(centre + 1, collector):
+            g.soft(1, yy, ".")
     # The man spawns *on* the collector row: he starts facing east, the `<` beside
     # him turns him straight back west, and he joins the return path to the fetch
     # site. A dedicated spawn row below the collector would just walk him into the
     # east wall, since nothing down there steers him.
-    g.put(2, collector, "@")
+    with g.part("return:collector"):
+        g.put(2, collector, "@")
 
     # A simple drop *stops* at the collector, and the collector sits above the slabs,
     # so being west of ``struct_east`` is harmless — that used to be forbidden back
@@ -2082,12 +2197,22 @@ def build_cpu(
     out_cols = [lane_x0 + 1]
 
     # ── name every region, so a profile is readable ───────────────────────────
-    regions: dict[str, tuple[int, int, int, int]] = {
-        "fetch": (1, centre, 4, 1),
-        "trie": (5, y0, lane_x0 - 5, span),
-        "return:riser": (1, centre + 1, 1, collector - centre),
-        "return:collector": (2, collector, ret_x - 1, 1),
-    }
+    #
+    # Every box here is the bounding box of the cells the part actually drew
+    # (:meth:`_Grid.part`, :func:`_mark_boxes`), so it cannot over-reach: the box
+    # *is* the drawing.  That matters because ``profile._region_of`` gives a cell
+    # to the **smallest** box containing it, so a box claiming rows it never
+    # draws on quietly absorbs its neighbours' heat.  ``trie``'s hand-written box
+    # ran from ``y0`` for the full lane span and so swallowed fourteen blank rows
+    # above the first ``x``; ``slab:<seek jump>`` was declared a full pitch wide
+    # while holding nothing but a drop column, and owned the *next* slab's exit
+    # riser.  Both are counted, not remembered, now.
+    #
+    # ``lane:<OP>`` stays hand-written: a lane's box runs to its drop column,
+    # which is drawn by ``drops`` and not by the lane, and the lane band is the
+    # one place where the useful reading is the row rather than the glyph run
+    # (``AGENTS.md``: "a ``cpu:lane:*`` region is not that lane").
+    regions: dict[str, tuple[int, int, int, int]] = _mark_boxes(g)
     if asc_x:
         regions["return:topbus"] = (1, bus_row, max(asc_x.values()), 1)
     for r in all_rows:
@@ -2096,8 +2221,6 @@ def build_cpu(
             continue
         end = asc_x.get(r, drop_x.get(r, lane_end[r]))
         regions[f"lane:{m}"] = (lane_x0, r, max(1, end - lane_x0 + 1), 1)
-    for m in order:
-        regions[f"slab:{m}"] = (slab_base[m], slab_at[m], slab_pitch, slab_rows[m])
 
     return _Cpu(
         cells=g.c,
@@ -2122,6 +2245,7 @@ def build_cpu(
         mem_in_row=max(mem_out_row - 4, 1),
         ports={},
         regions=regions,
+        marks=g.marks,
         pipe_glyphs=pipe_glyphs,
         has_in=bool(in_rows),
         has_out=any(p.sem[m] is Sem.OUTPUT for m in used),
@@ -2169,14 +2293,19 @@ def _slab(
     exit_x = base - 1
 
     if sem in _JUMP_SEMS:
-        if drain_unit_bits:
-            ey = _drain_block(g, base, s0, pipe_glyphs, drain_unit_bits)
-        else:
-            _discard_loop(g, base, s0, pipe_glyphs)
-            ey = s0
-        g.put(exit_x, ey, "^")
-        for yy in range(collector + 1, ey):
-            g.soft(exit_x, yy, ".")
+        with g.part(f"discard:{mnemonic}"):
+            if drain_unit_bits:
+                ey = _drain_block(g, base, s0, pipe_glyphs, drain_unit_bits)
+            else:
+                _discard_loop(g, base, s0, pipe_glyphs)
+                ey = s0
+        # The riser climbs past every shallower slab to the collector, so it gets
+        # its own box: inside this slab's it would stretch the slab up over rows
+        # that belong to the band above.
+        with g.part(f"riser:{mnemonic}", exclusive=True):
+            g.put(exit_x, ey, "^")
+            for yy in range(collector + 1, ey):
+                g.soft(exit_x, yy, ".")
         return {exit_x}
 
     g.soft(base, s0 + 1, ".")
@@ -2208,9 +2337,10 @@ def _slab(
                 g.soft(cols[arm], y, ".")
         else:
             # Not-taken arms rise to the collector above the slab.
-            g.put(cols[arm], row, "^")
-            for y in range(collector + 1, row):
-                g.soft(cols[arm], y, ".")
+            with g.part(f"riser:{mnemonic}", exclusive=True):
+                g.put(cols[arm], row, "^")
+                for y in range(collector + 1, row):
+                    g.soft(cols[arm], y, ".")
             drops.add(cols[arm])
 
     # The taken arm turns west along `turn_row` and runs back to the slab's west
@@ -2222,14 +2352,16 @@ def _slab(
     g.put(cols[taken], turn_row, "<")
     for c in range(base + 2, cols[taken]):
         g.soft(c, turn_row, ".")
-    if drain_unit_bits:
-        end_row = _drain_block(g, base, turn_row, pipe_glyphs, drain_unit_bits)
-    else:
-        _discard_loop(g, base, turn_row, pipe_glyphs)
-        end_row = turn_row
-    g.put(exit_x, end_row, "^")
-    for y in range(collector + 1, end_row):
-        g.soft(exit_x, y, ".")
+    with g.part(f"discard:{mnemonic}"):
+        if drain_unit_bits:
+            end_row = _drain_block(g, base, turn_row, pipe_glyphs, drain_unit_bits)
+        else:
+            _discard_loop(g, base, turn_row, pipe_glyphs)
+            end_row = turn_row
+    with g.part(f"riser:{mnemonic}", exclusive=True):
+        g.put(exit_x, end_row, "^")
+        for y in range(collector + 1, end_row):
+            g.soft(exit_x, y, ".")
     drops.add(exit_x)
     return drops
 
@@ -3399,6 +3531,30 @@ class Machine:
             "cpu:trie": f"depth-{self.plan.k} backpack trie; leaves are bit-reversed",
             "cpu:return:collector": "every lane funnels west along here",
             "cpu:return:riser": "up to the fetch row — paid once per instruction",
+            "cpu:drops": (
+                "the drop-column band: every lane's descent from its row to the "
+                "collector or to its slab. One band, not a box per column — a drop "
+                "crosses the lane rows below it, and the crossing is shared, so this "
+                "box is deliberately larger than every lane's and claims only what "
+                "nothing tighter does"
+            ),
+            "cpu:seek:taken": "seek: the taken jump/branch drops land here and run east to the `s`",
+            "cpu:seek:send": (
+                "seek: `s` — one word, row*K+rem, out the east-wall request pipe to the "
+                "drum. The drum notices it the tick it enters the pipe, so everything "
+                "after this overlaps the seek"
+            ),
+            "cpu:seek:walk": (
+                "seek: the westbound corridor from the send back to the flush loop. "
+                "Hidden latency — the drum is still seeking for the whole of it"
+            ),
+            "cpu:seek:flush": (
+                "seek: `r`/`X` — discard the corridor's in-flight words until the drum's "
+                "-1 sentinel. This is where the seek's real latency is paid"
+            ),
+            "cpu:seek:sentinel": "seek: past the -1, read `rem` and park it in BP",
+            "cpu:seek:discard": "seek: the stock 2x4 counted discard for the remainder",
+            "cpu:seek:riser": "seek: back up to the collector once the target row is at the head",
         }
         if self.program.name == "deadman-3d":
             # The demo's input protocol rides the sidecar, so the grid itself
@@ -3425,6 +3581,15 @@ class Machine:
                 note = f"opcode {self.plan.number.get(mnemonic, '?')} — {mnemonic}"
             elif not note and name.startswith("cpu:slab:"):
                 note = f"{name.rsplit(':', 1)[1]}: discard loop / X fan-out (2-D, so not a lane)"
+            elif not note and name.startswith("cpu:discard:"):
+                note = (
+                    f"{name.rsplit(':', 1)[1]}: the 2x4 counted ROM discard — two `r`s a "
+                    f"lap, blocking on the ROM corridor"
+                )
+            elif not note and name.startswith("cpu:riser:"):
+                note = f"{name.rsplit(':', 1)[1]}: not-taken / BP==0 exits, rising to the collector"
+            elif not note and name.startswith("cpu:entry:"):
+                note = f"{name.rsplit(':', 1)[1]}: the westbound slab-entry corridor"
             dbg.region(name, x, y, w, h, note=note, color=palette.get(kind, "#64748b"), tags=[kind])
         return dbg
 
