@@ -649,16 +649,21 @@ def test_accuracy_maps_the_whole_axis_with_no_clamp():
     assert set(rows) <= set(range(mnist_cnn.PLOT_ROWS))
 
 
-def test_the_machine_plots_exactly_where_the_reference_mapping_says():
+@pytest.mark.parametrize(("epochs", "samples"), [(2, 8), (3, 5)])
+def test_the_machine_plots_exactly_where_the_reference_mapping_says(epochs, samples):
     """The emitted asm against ``loss_row``/``acc_row``, through the emulator.
 
     This is the test that would fail if the branchy clamp were emitted wrong: it
-    compares the *painted pixel* of every epoch against the row the pure function
-    gives for the number the ``OUT`` build reports for that same epoch.
+    compares the *painted pixel* of every epoch against the row the pure function gives
+    for the number the ``OUT`` build reports for that same epoch.
+
+    Two settings, not one: this pair of assertions is the only thing tying the panels
+    variant's arithmetic to the ``OUT`` variant's, and one point can be satisfied by a
+    coincidence of two curves that happen to agree there.
     """
-    run = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8, frames=True)
-    stats = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8)
-    assert [len(f) for f in run.frames] == [3, 3], "the axes frame plus one an epoch"
+    run = mnist_cnn.run_emulator(epochs=epochs, lr_shift=6, samples=samples, frames=True)
+    stats = mnist_cnn.run_emulator(epochs=epochs, lr_shift=6, samples=samples)
+    assert [len(f) for f in run.frames] == [epochs + 1] * 2, "axes plus one an epoch"
     train, val = f"{mnist_cnn.TRAIN_COLOUR:x}", f"{mnist_cnn.VAL_COLOUR:x}"
 
     def check(frame, col, train_row, val_row):
@@ -736,18 +741,25 @@ def test_panel_zeros_writes_still_reach_display_writes_unchanged():
     ]
 
 
-def test_the_out_build_and_the_panel_build_report_the_same_numbers():
-    """The two variants of one program have to agree, or the panels are a fiction.
+def test_both_variants_train_identically_and_only_one_of_them_emits():
+    """The two variants of one program have to be the same program underneath.
 
-    The ``OUT`` build is what every equality test against the reference model reads,
-    and the panel build is what the grid runs; nothing else ties them together.
+    Same parameters after the same run, and the panels variant emits **nothing at all**
+    — which is the property that lets it have a display in the first place (``SPEC.md``:
+    a display-judged machine must not emit) and the reason its epoch report cannot be
+    compared word for word against the other's. What ties the *numbers* together is the
+    shared ``_mean_loss``/``_accuracy`` emitters plus the pixel test above.
     """
-    stats = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8)
-    run = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8, frames=True)
-    assert run.params == mnist_cnn.run_emulator(
-        epochs=2, lr_shift=6, samples=8, report=True
-    ).params
-    assert len(stats) == 2
+    out = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8, report=True)
+    panels = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8, frames=True)
+    assert panels.params == out.params
+    assert panels.stats == [], "the panels variant has no OUT to report through"
+    assert out.stats and len(out.stats) == 2
+    # And the shared derivation is really shared: one copy of each in the listing.
+    src = mnist_cnn.emit_source(lr_shift=6, panels=True, train_samples=8, val_samples=8)
+    ref = mnist_cnn.emit_source(lr_shift=6, train_samples=8, val_samples=8)
+    for text in (src, ref):
+        assert text.count("MULI 100") == 2, "one accuracy derivation per curve, shared"
 
 
 def test_frames_and_single_step_are_refused_together():
@@ -755,6 +767,17 @@ def test_frames_and_single_step_are_refused_together():
         mnist_cnn.run_emulator(epochs=0, frames=True)
     with pytest.raises(ValueError, match="single_step"):
         mnist_cnn.emit_source(lr_shift=6, panels=True, single_step=True)
+
+
+@needs_engine
+def test_the_lr_shift_reaches_the_built_grid():
+    """A grid built at the default while the listing reports another shift would train
+    by the wrong amount and say so nowhere — the divergence ``.equ STREAM_LR_SHIFT``
+    was added to close. The knob has to reach the machine, not only the report."""
+    default = mnist_cnn.build_machine(epochs=2)
+    other = mnist_cnn.build_machine(epochs=2, lr_shift=4)
+    assert default.text() != other.text()
+    assert other.program.equs[asm.STREAM_LR_SHIFT_EQU] == mnist_model.SHIFT + 4
 
 
 @needs_engine

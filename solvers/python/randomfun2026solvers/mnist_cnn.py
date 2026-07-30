@@ -1048,23 +1048,37 @@ def _backward(g: _Gen) -> None:
     g.acc_empty("end of backward")
 
 
+def _mean_loss(g: _Gen, addr: int, n: int) -> None:
+    """ACC = the epoch's mean Q12 loss.
+
+    Shared by the two epoch reports on purpose. The ``OUT`` variant is what every
+    equality test against the reference model reads and the panels variant is what the
+    grid paints, so if the two derived this number separately they could round it
+    differently and nothing would notice — the curves would simply be of a slightly
+    different quantity from the one the tests check.
+    """
+    g.ld(addr)
+    g.op(f"DIVI {n}")
+
+
+def _accuracy(g: _Gen, addr: int, n: int) -> None:
+    """ACC = the epoch's accuracy in percent, from a correct count. Shared, as above."""
+    g.ld(addr)
+    g.op("MULI 100")
+    g.op(f"DIVI {n}")
+
+
 def _epoch_report(g: _Gen, *, train_n: int, val_n: int) -> None:
     """Four ``OUT``s an epoch: train loss, train accuracy, val loss, val accuracy."""
     g.blank()
     g.say("four words an epoch: train loss, train acc, val loss, val acc")
-    g.ld(S.LOSS)
-    g.op(f"DIVI {train_n}")
+    _mean_loss(g, S.LOSS, train_n)
     g.op("OUT")
-    g.ld(S.CORRECT)
-    g.op("MULI 100")
-    g.op(f"DIVI {train_n}")
+    _accuracy(g, S.CORRECT, train_n)
     g.op("OUT")
-    g.ld(S.VLOSS)
-    g.op(f"DIVI {val_n}")
+    _mean_loss(g, S.VLOSS, val_n)
     g.op("OUT")
-    g.ld(S.VCORRECT)
-    g.op("MULI 100")
-    g.op(f"DIVI {val_n}")
+    _accuracy(g, S.VCORRECT, val_n)
     g.op("OUT")
 
 
@@ -1147,9 +1161,7 @@ def _plot_acc(g: _Gen, addr: int, n: int, colour: int) -> None:
     it) and then the row, so the pixel is always on the row the reported number
     means. No clamp is needed — 0% is row 29 and 100% is row 0 exactly.
     """
-    g.ld(addr)
-    g.op("MULI 100")
-    g.op(f"DIVI {n}", "the percentage the epoch report would print")
+    _accuracy(g, addr, n)  # the very percentage the `OUT` variant prints
     g.op(f"MULI {PLOT_ROWS - 1}")
     g.op("DIVI 100")
     g.op(f"SUBI {PLOT_ROWS - 1}")
@@ -1165,12 +1177,10 @@ def _plot(g: _Gen, *, train_n: int, val_n: int) -> None:
     """
     g.blank()
     g.say("the epoch's four points: train/val loss, then train/val accuracy")
-    g.ld(S.LOSS)
-    g.op(f"DIVI {train_n}")
+    _mean_loss(g, S.LOSS, train_n)
     g.st(S.TMP)
     _plot_loss(g, S.TMP, TRAIN_COLOUR, "ptl")
-    g.ld(S.VLOSS)
-    g.op(f"DIVI {val_n}")
+    _mean_loss(g, S.VLOSS, val_n)
     g.st(S.TMP)
     _plot_loss(g, S.TMP, VAL_COLOUR, "pvl")
     g.ldi(1)
@@ -1576,21 +1586,24 @@ ROM_ROWS = 220
 MACHINE_EPOCHS = 30
 
 
-def build_machine(*, epochs: int = MACHINE_EPOCHS):  # -> machine.Machine
+def build_machine(  # -> machine.Machine
+    *, epochs: int = MACHINE_EPOCHS, lr_shift: int = 6
+):
     """The two-panel grid: CPU, ROM, tape STORE, STREAM block, two relay-fed LM-75s.
 
-    ``store="tape"`` and not ``"grid"``: the man-memory grid is 36x1,065 at 352
-    slots, which reaches hundreds of rows below the CPU and straight through the
-    STREAM block's own 112 columns. The tape is 33x46 and fits beside the CPU, above
-    the block. It is the slower tier per access and that is accepted — this machine
-    is a demo, not a scored submission, and no tick target applies to it.
+    ``store="tape"`` and not ``"grid"``: the man-memory grid is 36x1,065 at this
+    program's ``STORE_WORDS`` slots, which reaches hundreds of rows below the CPU and
+    straight through the STREAM block's own 112 columns. The tape is 33x46 and fits
+    beside the CPU, above the block. It is the slower tier per access and that is
+    accepted: this machine is a demo, not a scored submission, and no tick target
+    applies to it.
     """
     from randomfun2026solvers.lm1 import machine
 
     if not 1 <= epochs <= MAX_EPOCH_COLS:
         raise ValueError(f"the panels hold {MAX_EPOCH_COLS} epoch columns, not {epochs}")
     program = asm.assemble(
-        emit_source(lr_shift=6, panels=True, epochs_from_input=False, epochs=epochs),
+        emit_source(lr_shift=lr_shift, panels=True, epochs_from_input=False, epochs=epochs),
         name="mnist-cnn",
         isa=isa.LM1_EXT,
     )
@@ -1660,7 +1673,12 @@ def main(argv: list[str] | None = None) -> int:
         payload["stats"] = [vars(s) for s in run.stats]
         payload["instructions_executed"] = run.instructions
 
-    m = build_machine() if grid else None
+    # The same ``lr_shift`` the report above was printed for. Threading it is not a
+    # nicety: ``UPDB``'s shift is wired into the built unit and travels with the program
+    # as ``.equ STREAM_LR_SHIFT``, so a grid built at the default while the listing says
+    # something else is a machine that trains by the wrong amount and says so nowhere —
+    # the exact divergence that guard was added to close in Task 6.
+    m = build_machine(lr_shift=args.lr_shift) if grid else None
     if m is not None:
         print(m.report())
         payload |= {
