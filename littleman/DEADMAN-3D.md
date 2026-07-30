@@ -12,6 +12,15 @@ the machine — that equality is the project's contract, checked on every run.
 
 [lodev]: https://lodev.org/cgtutor/raycasting.html
 
+| 64×48 — the committed machine | 128×96 — the hi-res family |
+|---|---|
+| ![title, 64x48](images/deadman-3d_title.png) | ![title, 128x96](images/deadman-3d_hires_title.png) |
+| ![gameplay, 64x48](images/deadman-3d_64x48.png) | ![gameplay, 128x96](images/deadman-3d_hires_128x96.png) |
+
+Left: the machine in `littleman/examples/`, rendered from redistributable data
+and runnable straight from a clone. Right: the hi-res variant, four tiled LM-75
+panels driven as one 128×96 screen — built from your own IWAD (see below).
+
 ---
 
 ## What this family is optimised for
