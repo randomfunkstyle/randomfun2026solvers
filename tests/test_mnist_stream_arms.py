@@ -806,3 +806,27 @@ def test_every_dual_relay_pipe_binds_by_position():
         pipe = engine.pipes[engine._bindings[cell]]
         attach = pipe.src_attach if glyph == "s" else pipe.dst_attach
         assert attach == wall[band], f"{glyph}@{cell} should bind {band} at {wall[band]}"
+
+
+def test_the_two_refuted_fixes_stay_refuted():
+    """The load-bearing negative results, so neither can be proposed a third time.
+
+    Both of these were proposed and both are refuted by the enumeration in the task-6
+    report (114 admissible row maps x 4 trees, with the depth-3 block as a control run
+    through the search's own assembly code). They are asserted here because a negative
+    result that lives only in prose gets re-proposed.
+    """
+    # (1) The ADDER alone never closes: a shared relay is *necessary*, so no
+    #     capacity-shaped idea — disjoint leg spans, deeper bands, more columns —
+    #     can work, because the obstruction is not capacity.
+    assert stream.block_crossings(4, tree=("p2", "prod", "p1")) == [("b_fwd", "b_ret")]
+    # (2) It has to be ring B's relay. Ring A's chord encloses ring B's — forced,
+    #     because UPDB reads ring A before the accumulator and ring B after it — so
+    #     passing prod through ring A's relay leaves ring B crossing instead.
+    assert stream.block_crossings(4, tree=("p2", "prod", "p1", "a_fwd", "a_ret")) == [
+        ("b_fwd", "b_ret")
+    ]
+    # (3) and ring B's relay does close it.
+    assert stream.block_crossings(4, tree=("p2", "prod", "p1", "b_fwd", "b_ret")) == []
+    # The control, through the same call: the depth-3 block is placed and judged.
+    assert stream.block_crossings(3) == []

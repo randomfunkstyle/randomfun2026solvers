@@ -1084,11 +1084,16 @@ def dual_relay_cells() -> dict[tuple[int, int], str]:
 #: the other cycling. Their steady-state cell sets are disjoint by **layout**, not by
 #: timing, so the two can never meet — which matters because ``SPEC.md`` kills both
 #: men on a same-cell arrival, silently and with no fatal error.
+#: The walls are chosen so that no two of the four legs need to cross: the ring's
+#: fill comes down onto the north wall and its return climbs straight back off the
+#: north wall two columns west, while the passed pipe comes up onto the south wall
+#: and leaves westward. That is what keeps ``b_ret``'s climb out of ``prod``'s
+#: descent, which every west-wall arrangement of these four ports collides with.
 DUAL_RELAY_PORTS = {
     "turn_in": ("north", 3),  # the ring's fill arrives at the upper `r`
-    "turn_out": ("west", 2),  # the ring's return leaves from the upper `s`
+    "turn_out": ("north", 2),  # the ring's return climbs straight off the upper `s`
     "pass_in": ("south", 3),  # the passed pipe arrives at the lower `r`
-    "pass_out": ("west", 8),  # and leaves from the lower `s`
+    "pass_out": ("west", 8),  # and leaves westward from the lower `s`
 }
 
 
@@ -1121,9 +1126,10 @@ def dual_relay_probe(upper_driven: bool = True) -> list[str]:
         """A source room three cells out from ``band``, with a pipe into the relay."""
         x, y = outer(band)
         if DUAL_RELAY_PORTS[band][0] == "north":
-            g.room(x - 1, y - 4, x + 1, y - 2)
+            # offset east, so the neighbouring north port's climb stays clear
+            g.room(x, y - 4, x + 2, y - 2)
             g.draw_pipe([(x, y - 1), (x, y)])
-            spot = (x, y - 3)
+            spot = (x + 1, y - 3)
         else:  # south
             g.room(x - 1, y + 2, x + 1, y + 4)
             g.draw_pipe([(x, y + 1), (x, y)])
@@ -1132,12 +1138,19 @@ def dual_relay_probe(upper_driven: bool = True) -> list[str]:
             g.put(*spot, label)
 
     def drain(band: str, label: str | None) -> None:
-        """A sink room three cells west of ``band``, with a pipe out of the relay."""
-        x, y = outer(band)  # every outgoing port of this room is on the west wall
-        g.room(x - 4, y - 1, x - 2, y + 1)
-        g.draw_pipe([(x, y), (x - 1, y)])
+        """A sink room out beyond ``band``, with a pipe out of the relay."""
+        x, y = outer(band)
+        if DUAL_RELAY_PORTS[band][0] == "north":
+            # climb clear of the neighbouring north port's room, then turn west
+            g.room(x - 8, y - 7, x - 6, y - 5)
+            g.draw_pipe([(x, y), (x, y - 6), (x - 5, y - 6)])
+            spot = (x - 7, y - 6)
+        else:  # west
+            g.room(x - 4, y - 1, x - 2, y + 1)
+            g.draw_pipe([(x, y), (x - 1, y)])
+            spot = (x - 3, y)
         if label:
-            g.put(x - 3, y, label)
+            g.put(*spot, label)
 
     driven_in, driven_out = ("turn_in", "turn_out") if upper_driven else ("pass_in", "pass_out")
     idle_in, idle_out = ("pass_in", "pass_out") if upper_driven else ("turn_in", "turn_out")
@@ -1277,7 +1290,25 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
 #
 # Both change the block's internals only: no port moves wall, and no port order
 # changes except within the unit's own east and west walls, which is the row map the
-# unit already owns. That is the next round's work; it is not a placement search.
+# unit already owns.
+#
+# **Two negative results, and they are the load-bearing part.** Each was proposed —
+# twice, by different people — and each is refuted by an enumeration over all 114
+# admissible row maps (five admissible ``updb_body`` interleavings x every legal
+# placement of ``in``/``resp``/``out``) crossed with four trees, with the depth-3
+# block as a control run through the search's own code. Both are pinned as tests, in
+# ``test_the_two_refuted_fixes_stay_refuted``, because a negative result that lives
+# only in prose gets re-proposed:
+#
+# * **The ADDER alone closes 0 of 114.** No choice of port rows, leg span, band depth
+#   or column allocation makes the block planar without a shared relay. A relay is
+#   *necessary*. That is why "give the two bands disjoint leg spans" — and every other
+#   capacity-shaped idea — cannot work: the obstruction is not capacity.
+# * **Ring A's relay closes 0 of 114; it has to be ring B's.** Ring A's chord
+#   *encloses* ring B's, so passing ``prod`` through ring A's relay leaves ring B
+#   crossing instead. The asymmetry is forced rather than incidental: ``UPDB`` reads
+#   ring A *before* the accumulator and ring B *after* it, so ring A's two ports end
+#   up outside ring B's on the perimeter.
 
 
 def build_stream(
