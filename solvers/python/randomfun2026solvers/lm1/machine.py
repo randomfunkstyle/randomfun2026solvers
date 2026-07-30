@@ -3105,6 +3105,7 @@ def build(
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
+    store_request_west: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -3316,6 +3317,7 @@ def build(
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
+                    store_request_west=store_request_west,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -3391,6 +3393,7 @@ def build(
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
+                    store_request_west=store_request_west,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -3488,6 +3491,7 @@ def _assemble(
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
+    store_request_west: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -3773,8 +3777,19 @@ def _assemble(
                         f"STORE shape {v3_cols}x{v3_rows} holds {v3_cols * v3_rows} "
                         f"cells but the tape needs {tape_n}"
                     )
-                tape = v3_store_grid_block(v3_cols, v3_rows, ops=v3_ops)
+                tape = v3_store_grid_block(
+                    v3_cols, v3_rows, ops=v3_ops, request_west=store_request_west
+                )
             else:
+                if store_request_west:
+                    # The one-column block is a different function with a different
+                    # floor plan, and its router is entered on its west wall
+                    # already. Say so rather than ignoring the flag and then drawing
+                    # a leg to a coordinate the roof stub named.
+                    raise MachineError(
+                        "store_request_west needs the multi-column men-v3 grid; the "
+                        "one-column block already enters its router on a west wall"
+                    )
                 tape = v3_store_block(tape_n, ops=v3_ops)
         elif store == "taped":
             from ..memory_taped import COLLECTOR_ROW, taped_store_block
@@ -3869,7 +3884,53 @@ def _assemble(
             raise MachineError(
                 f"only the taped tier has gate rooms to grow, not {store!r}"
             )
-        if store_request_reach:
+        if store_request_west and store != "men-v3":
+            raise MachineError(
+                f"only the men-v3 tier's router strip is entered on a wall, not {store!r}"
+            )
+        if store_request_west and (store_request_reach or store_request_teleport):
+            raise MachineError(
+                "store_request_west already *is* the short request: a straight leg "
+                "onto the strip's corner. Do not also grow a gate or add a forwarder."
+            )
+        if store_request_west:
+            # The mirror of ``answer_exit_west`` on the leg the request walks, and
+            # it is the same discovery: a block level with its caller needs no
+            # route. The men-v3 store used to be entered over its **roof** — the
+            # request left the adapter east, climbed eight rows up the free column
+            # west of the block, ran east along the corridor above it and dropped
+            # into the router strip's north wall — because the block's only named
+            # touch point was that roof stub. It was not level-ness that was
+            # missing; ``store_offset``'s dy already puts the strip's **south wall
+            # on the adapter's own output row**. What was missing was a touch point
+            # on that wall.
+            #
+            # So the leg is the cells between the adapter's east wall and the
+            # block's south-west corner — four of them on hires — and the corner is
+            # where it attaches:
+            # ``ARCH.md`` §7.4b, a plain room may be attached at a corner (only
+            # displays forbid it), verified by :func:`_check_pipe_count` — the same
+            # counter that catches a leg running *alongside* a corner and being
+            # read as a second pipe. Here the leg terminates on the corner with an
+            # arrowhead pointing into it, so there is nothing alongside.
+            #
+            # The strip owns exactly one incoming pipe (``memory_men_grid``'s
+            # ``build_grid``), so moving where that pipe attaches rebinds nothing:
+            # "nearest" only picks *which* pipe, and there is still only one.
+            if store_in[1] != adapter_out[1]:
+                raise MachineError(
+                    f"the store's request wall is on row {store_in[1]} and the "
+                    f"adapter's request leaves on row {adapter_out[1]}: a straight "
+                    "leg needs them level (TIER_LAYOUT's store_offset dy)"
+                )
+            if store_in[0] <= adapter_out[0]:
+                raise MachineError(
+                    f"the store's request corner {tin_x} leaves no leg east of the "
+                    f"adapter's outlet {adapter_out[0]}: a pipe is two cells or it is "
+                    "not a pipe, so the corner has to stand at least two columns clear"
+                )
+            route_lengths["adapter->store"] = g.draw_pipe([adapter_out, store_in])
+        elif store_request_reach:
             # No room at all on this leg any more — the STORE's **own** first
             # gate grew its roof up to the adapter's floor, so what used to be a
             # 58-cell corridor, and then a forwarder plus two stubs, is now a
@@ -7032,6 +7093,67 @@ STORE_REQUEST_REACH: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
 }
 
+#: ``(slug, tier)`` pairs whose **men-v3** STORE is entered on its router strip's
+#: south-west **corner**, so the request is the straight leg between the adapter's
+#: east wall and the block — instead of climbing over the block's roof.
+#:
+#: This is :data:`STORE_ANSWER_WEST`'s discovery applied to the other leg, and the
+#: same sentence covers it: *a block level with its caller needs no route at all.*
+#: The men-v3 block named exactly one request touch point, the two-cell stub into
+#: the router strip's **north** wall, whose far end stands eight rows above the
+#: adapter's outlet — so the leg left the adapter east, turned north up the free
+#: column west of the block, climbed those eight rows, ran east along the corridor
+#: above it and dropped back down. Four legs and 14 cells (16 as the engine counts
+#: them, stub included) to cross a four-cell gap.
+#:
+#: The level-ness was never missing. ``TIER_LAYOUT``'s ``store_offset`` dy of 10
+#: already lands the strip's **south wall on the adapter's own output row** — the
+#: request wall and the request row are the same row and have been all along. What
+#: was missing was a touch point on that wall, which is
+#: ``memory_men_grid.build_grid(..., request_west=True)``: no stub, and ``in_cell``
+#: names the strip's south-west corner instead of the roof.
+#:
+#: Three things make it legal, and all three are load-bearing:
+#:
+#: 1. **A plain room may be attached at a corner** (``ARCH.md`` §7.4b — the input
+#:    pipe's backward cell is I's top-left ``+``). Only *displays* forbid it, which
+#:    is what the ``SPEC.md`` line about corner attachment being a load error is
+#:    scoped to. The men strip is a plain room.
+#: 2. **The leg terminates on the corner rather than running past it.**
+#:    ``ARCH.md`` §7.1's converse hazard — a leg *alongside* a corner read as a
+#:    second pipe, silently — is what :func:`_check_pipe_count` exists for, and it
+#:    runs on every build. ``draw_pipe`` puts an arrowhead on the last cell, so
+#:    ``>`` at the corner's west neighbour is the whole attachment and the block's
+#:    own south wall east of the corner is not continuous with it.
+#: 3. **The strip owns exactly one incoming pipe**, so *where* that pipe attaches
+#:    rebinds nothing: "nearest" only picks which pipe (``SPEC.md`` §Nearest) and
+#:    there is still only one to pick. The strip's outgoing column feeds are
+#:    unaffected — a send needs a pipe flowing *out*, and this one flows in.
+#:
+#: ``adapter->store`` **14 -> 4** and the drawn polyline goes from four straight
+#: legs (east, north, east, south) to **one**. As the engine sees it the request is
+#: **16 cells down to 4**, because the roof stub merged into the same pipe;
+#: ``store->cpu`` is untouched at 6, and so is every binding in the machine — 1914
+#: pipes and 76 rooms either way, and of 20,946 pipe glyphs exactly the eight that
+#: use this pipe change, all of them to the *same* pipe in its new shape (verified
+#: against ``littleman``'s own ``route`` oracle, not just :func:`check_bindings`).
+#:
+#: **-2.937%** on the 21-round hi-res men-v3 tour (138,204,104 -> 134,144,756 at
+#: 595x630, ``passed``, and the grid does not move a column). Twelve cells off a
+#: leg every one of ~87k store accesses a frame walks in full, which is the shape
+#: of the number: the same arithmetic as :data:`TAPED_BANK_LIFT`'s riser, on the
+#: request side, and much bigger than the taped tier's own request collapse
+#: because men-v3 has no gate rooms to have shortened it already.
+#:
+#: Keyed by tier because only ``men-v3`` has a router strip, and by slug so every
+#: other men-v3 grid keeps its roof stub and its byte-identical block. Notably
+#: **absent: ``("deadman-3d", "men-v3")``** — that pair is the canonical
+#: hash-pinned grid and is deliberately not in :data:`TIER_LAYOUT` either, so its
+#: strip is nowhere near level with its adapter and the build would refuse.
+STORE_REQUEST_WEST: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "men-v3"),
+}
+
 #: ``(slug, tier)`` pairs whose taped STORE grows every gate after the first
 #: **west** until its wall stands beside the previous gate's, so the chain link
 #: is a hop over the intervening feed riser instead of a run under a whole bank.
@@ -8020,6 +8142,7 @@ def build_for(
         store_bank_lift=TAPED_BANK_LIFT.get((slug, store), 0),
         store_feed_tuck=TAPED_FEED_TUCK.get((slug, store), 0),
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
+        store_request_west=(slug, store) in STORE_REQUEST_WEST,
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,

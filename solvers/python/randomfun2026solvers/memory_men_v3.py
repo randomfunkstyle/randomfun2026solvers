@@ -425,7 +425,9 @@ def v3_store_block(n: int, *, ops: int = 500) -> V3Store:
     )
 
 
-def v3_store_grid_block(cols: int, rows: int, *, ops: int = 500) -> V3Store:
+def v3_store_grid_block(
+    cols: int, rows: int, *, ops: int = 500, request_west: bool = False
+) -> V3Store:
     """:func:`build_v3_grid` as a placeable block: the multi-column store.
 
     The wire and the addressing are :func:`v3_store_block`'s exactly — column
@@ -438,15 +440,31 @@ def v3_store_grid_block(cols: int, rows: int, *, ops: int = 500) -> V3Store:
     ``ops`` is honoured exactly: the router unrolls ``ops`` blocks (``ops=1`` is
     the single looping block — v2's footprint, the walk home paid every lap) and
     the snake is folded to whatever width the strip can hold.
+
+    ``request_west`` moves the request's touch point from the roof stub to the
+    router strip's south-west corner; see :func:`memory_men_grid.build_grid`. It is
+    a touch point, not a shape: the block's cells are otherwise identical bar the
+    two stub cells the caller no longer has to reach over.
     """
     if cols == 1:
+        if request_west:
+            raise ValueError(
+                "request_west is the grid form's touch point; the one-column block is "
+                "v3_store_block, whose router is entered on its own west wall already"
+            )
         return v3_store_block(rows, ops=ops)
     from .memory_men_grid import build_grid
 
     g = None
     for per_row in range(min(max(ops, 1), 64), 0, -1):
         try:
-            g = build_grid(cols, rows, router=router_rows(ops, per_row=per_row), io=False)
+            g = build_grid(
+                cols,
+                rows,
+                router=router_rows(ops, per_row=per_row),
+                io=False,
+                request_west=request_west,
+            )
             break
         except Exception:  # noqa: BLE001 - the strip is simply too narrow; fold deeper
             continue

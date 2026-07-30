@@ -1576,6 +1576,66 @@ def test_store_answer_west_is_opt_in_per_tier() -> None:
     } == {"teleport:L", "teleport:U"}
 
 
+def test_the_men_v3_request_enters_on_a_wall_and_only_where_it_is_level() -> None:
+    """The men-v3 STORE's request is a touch point, not a route.
+
+    :data:`machine.STORE_ANSWER_WEST`'s discovery on the other leg: a block level
+    with its caller needs no route. The men-v3 block named exactly one request
+    touch point — a two-cell stub into the router strip's **north** wall — so the
+    request had to leave the adapter east, climb the free column west of the block,
+    run east along the corridor above it and drop back in. Four legs to cross three
+    columns of gap. ``store_offset``'s dy already put the strip's **south wall on
+    the adapter's own output row**; what was missing was a touch point on it.
+
+    ``ARCH.md`` §7.4b: a plain room may be attached at a corner (the ``SPEC.md``
+    line forbidding it is scoped to *displays*), which is what lets the leg end on
+    the strip's south-west ``+``. The converse hazard — a leg running *alongside*
+    a corner and read as a second pipe, silently — is what
+    :func:`machine._check_pipe_count` exists for and it runs on every build, so it
+    is asserted here by *building*.
+    """
+    from randomfun2026solvers.memory_men_grid import build_grid
+    from randomfun2026solvers.memory_men_v3 import v3_store_grid_block
+
+    assert machine.STORE_REQUEST_WEST == {("deadman-3d_hires", "men-v3")}
+    # Keyed by tier because only men-v3 has a router strip to enter, and the
+    # canonical hash-pinned build must stay out — as it does of TIER_LAYOUT, which
+    # is what leaves its strip nowhere near level with its adapter.
+    assert all(tier == "men-v3" for _slug, tier in machine.STORE_REQUEST_WEST)
+    assert ("deadman-3d", "men-v3") not in machine.STORE_REQUEST_WEST
+    assert ("deadman-3d", "men-v3") not in machine.TIER_LAYOUT
+
+    # The block changes by exactly two cells: the stub it no longer draws. The
+    # touch point moves from the roof to the strip's south-west corner, and the
+    # corner is a ``+`` the block already had.
+    roof = v3_store_grid_block(4, 6, ops=1)
+    wall = v3_store_grid_block(4, 6, ops=1, request_west=True)
+    sx, sy = roof.in_cell
+    assert set(roof.cells) - set(wall.cells) == {(sx, sy), (sx, sy + 1)}
+    assert set(wall.cells) - set(roof.cells) == set()
+    assert wall.cells[wall.in_cell] == "+"
+    assert (wall.width, wall.height, wall.pipes) == (roof.width, roof.height, roof.pipes)
+    # Same strip, entered on its other side: the corner is the strip's own west
+    # wall column — the block's first, so there is nothing west of it to reach over
+    # — and it is *below* the roof the stub used to drop through.
+    assert wall.in_cell[0] == 0 == roof.in_cell[0] - 2
+    assert wall.in_cell[1] > roof.in_cell[1]
+
+    # It is the block form's touch point and the grid form's: the standalone grid
+    # has an I room feeding that stub, and the one-column block is a different
+    # function whose router is entered on its west wall already.
+    with pytest.raises(ValueError):
+        build_grid(4, 6, router=None, io=True, request_west=True)
+    with pytest.raises(ValueError):
+        v3_store_grid_block(1, 6, ops=1, request_west=True)
+    # And on the machine side it is men-v3's alone: the taped store is entered
+    # through a gate room, and :data:`machine.STORE_REQUEST_REACH` is that leg's
+    # answer. Asking for this one there says so instead of drawing a leg at a
+    # coordinate the taped block never named.
+    with pytest.raises(machine.MachineError, match="men-v3"):
+        _taped_with(STORE_REQUEST_WEST=True)
+
+
 def test_the_gate_rooms_reach_their_callers_and_every_request_leg_collapses() -> None:
     """The taped store's request legs, all of them, in one test.
 

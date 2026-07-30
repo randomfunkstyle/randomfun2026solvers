@@ -158,7 +158,12 @@ class Grid:
 
 
 def build_grid(
-    cols: int, rows: int, *, router: Sequence[str] | None = None, io: bool = True
+    cols: int,
+    rows: int,
+    *,
+    router: Sequence[str] | None = None,
+    io: bool = True,
+    request_west: bool = False,
 ) -> Grid:
     """``cols`` columns of ``rows`` cells each, addresses running column by column.
 
@@ -182,11 +187,23 @@ def build_grid(
     the tall room crosses its whole height in one instruction). That keeps the
     block's outlet where ``lm1.machine``'s STORE teleport expects every man-memory
     outlet to be, at the cost of one man and two short stubs.
+
+    ``request_west`` drops that stub and names the strip's **south-west corner**
+    as ``in_cell`` instead, so a caller standing level with the corner delivers
+    the request in one straight leg rather than climbing over the block's roof.
+    Nothing inside the strip moves: the room owns exactly one incoming pipe, so
+    every ``r`` in it binds to that pipe wherever it attaches, and the *place* it
+    attaches is free (``SPEC.md`` §Nearest — "nearest" only picks which pipe, and
+    the walk to it costs nothing). ``ARCH.md`` §7.4b: a plain room may be attached
+    at its corner; only displays forbid it. Block form only — the standalone grid
+    has an I room to feed the stub.
     """
     if cols < 1 or rows < 1:
         raise ValueError("a grid needs at least one column of at least one cell")
     if not io and cols == 1:
         raise ValueError("the one-column block form is memory_men_v3.v3_store_block")
+    if request_west and io:
+        raise ValueError("request_west is the block form's touch point; io=True has an I room")
     if cols == 1:
         # One column needs none of this: the repeater would be a pass-through
         # costing a pipeline stage and two pipes, and a strip spanning one column
@@ -261,8 +278,17 @@ def build_grid(
     _room(grid, x0, router_y, router_body)
     if io:
         _io_room(grid, x0 + 1, router_y - 5, "I")
-    draw_pipe(grid, [(x0 + 1, router_y - 3), (x0 + 1, router_y - 2), (x0 + 1, router_y - 1)])
-    in_cell = None if io else (x0 + 1, router_y - 3)
+    if request_west:
+        # No stub at all: the caller's own leg ends one cell west of the strip's
+        # south-west corner and that is the whole attachment. Drawing a stub here
+        # as well would leave the block owning a *second* incoming pipe, which is
+        # the one property the strip's `r` glyphs rely on not being true.
+        in_cell = (x0 - 1, router_y + router_h)
+    else:
+        draw_pipe(
+            grid, [(x0 + 1, router_y - 3), (x0 + 1, router_y - 2), (x0 + 1, router_y - 1)]
+        )
+        in_cell = None if io else (x0 + 1, router_y - 3)
 
     # ── the collector strip ───────────────────────────────────────────────────
     coll_body = [r.ljust(strip_w) for r in collector_rows(1)[0]]
