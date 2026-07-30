@@ -823,28 +823,94 @@ def test_every_dual_relay_pipe_binds_by_position():
         assert attach == wall[band], f"{glyph}@{cell} should bind {band} at {wall[band]}"
 
 
-def test_the_two_refuted_fixes_stay_refuted():
-    """The load-bearing negative results, so neither can be proposed a third time.
+def _admissible_row_maps():
+    """Every depth-4 row map the unit's own arms allow, as a perimeter order.
 
-    Both of these were proposed and both are refuted by the enumeration in the task-6
-    report (114 admissible row maps x 4 trees, with the depth-3 block as a control run
-    through the search's own assembly code). They are asserted here because a negative
-    result that lives only in prose gets re-proposed.
+    Two facts do the constraining, and both are already argued in the module:
+
+    * every incoming pipe is on the west wall and every outgoing one on the east
+      (:data:`~randomfun2026solvers.lm1.stream.UPDB_BANDS` — ``UPDB`` reads the
+      accumulator *between* two west-wall reads, and §7.1's distances never let a south
+      or north pipe win there), so a row map is just an order within each wall;
+    * ``b_ret`` is the bottom-most west port because ``UPDB`` reads ring B last, and
+      ``b_fwd`` is above ``prod`` because ``MAC`` must push ``b`` back before it can
+      multiply and send the product.
+
+    Everything else — where ``in``, ``resp`` and ``out`` sit, and how the accumulator's
+    ports interleave with the rings' — is free, which is 2160 maps.
     """
-    # (1) The ADDER alone never closes: a shared relay is *necessary*, so no
-    #     capacity-shaped idea — disjoint leg spans, deeper bands, more columns —
-    #     can work, because the obstruction is not capacity.
-    assert stream.block_crossings(4, tree=("p2", "prod", "p1")) == [("b_fwd", "b_ret")]
-    # (2) It has to be ring B's relay. Ring A's chord encloses ring B's — forced,
-    #     because UPDB reads ring A before the accumulator and ring B after it — so
-    #     passing prod through ring A's relay leaves ring B crossing instead.
-    assert stream.block_crossings(4, tree=("p2", "prod", "p1", "a_fwd", "a_ret")) == [
-        ("b_fwd", "b_ret")
-    ]
-    # (3) and ring B's relay does close it.
+    from itertools import permutations
+
+    west_bands = ("a_ret", "in", "p1", "b_ret")
+    east_bands = ("resp", "a_fwd", "out", "p2", "b_fwd", "prod")
+    for west in permutations(west_bands):
+        if west[-1] != "b_ret":
+            continue
+        for east in permutations(east_bands):
+            if east.index("b_fwd") > east.index("prod"):
+                continue
+            # clockwise from the top of the east wall, down it and back up the west
+            yield list(east) + list(reversed(west))
+
+
+def test_the_two_refuted_fixes_stay_refuted():
+    """The load-bearing negative results, enumerated rather than quoted.
+
+    Round 6 recorded these as "0 of 114 admissible row maps". That enumeration was never
+    landed, so as pinned they only ever held at the single drawn map — which is not what a
+    refutation is for. They exist so nobody re-proposes the ADDER-alone and
+    ring-A-relay ideas, and that needs the whole space.
+
+    So the space is rebuilt here from the two facts the module argues
+    (:func:`_admissible_row_maps`) and comes to **2160** maps, not 114. Both negative
+    results survive it, which is a stronger statement than the one they replace.
+    """
+    maps = list(_admissible_row_maps())
+    assert len(maps) == 2160, len(maps)
+    assert stream.perimeter_order(4) in maps, "the drawn map must be in its own space"
+
+    closes = {"adder": 0, "ring_a": 0, "ring_b": 0}
+    trees = {
+        "adder": ("p2", "prod", "p1"),
+        "ring_a": ("p2", "prod", "p1", "a_fwd", "a_ret"),
+        "ring_b": ("p2", "prod", "p1", "b_fwd", "b_ret"),
+    }
+    for order in maps:
+        for name, tree in trees.items():
+            closes[name] += stream.block_crossings(4, order=order, tree=tree) == []
+
+    # (1) The ADDER alone never closes, at any admissible row map. A shared relay is
+    #     *necessary*, so no capacity-shaped idea — disjoint leg spans, deeper bands,
+    #     more columns — can work: the obstruction is not capacity.
+    assert closes["adder"] == 0, closes
+    # (2) Nor does ring A's. Ring A's chord encloses ring B's, forced because UPDB reads
+    #     ring A before the accumulator and ring B after it, so passing prod through ring
+    #     A's relay leaves ring B crossing instead.
+    assert closes["ring_a"] == 0, closes
+    # (3) Ring B's relay closes 72 of the 2160, the drawn map among them.
+    assert closes["ring_b"] == 72, closes
     assert stream.block_crossings(4, tree=("p2", "prod", "p1", "b_fwd", "b_ret")) == []
+    assert stream.block_crossings(4, tree=("p2", "prod", "p1")) == [("b_fwd", "b_ret")]
     # The control, through the same call: the depth-3 block is placed and judged.
     assert stream.block_crossings(3) == []
+
+
+def test_block_crossings_refuses_a_tree_band_the_order_does_not_have():
+    """A silently-ignored tree band is how round 5 produced a false positive.
+
+    ``tree`` names the ports a shared room makes leaves of the ADDER's tree. If a caller
+    passes an ``order`` that does not contain one of them — a typo, or a row map built
+    from a stale band list — the old code dropped it and answered about a *smaller* tree,
+    which reads as "this configuration is planar" when the question asked was different.
+    """
+    order = stream.perimeter_order(4)
+    with pytest.raises(stream.StreamError, match="prod"):
+        stream.block_crossings(4, order=[b for b in order if b != "prod"])
+    with pytest.raises(stream.StreamError, match="typo"):
+        stream.block_crossings(4, order=order, tree=("p2", "typo", "p1"))
+    # and the pairs are checked the same way, since a missing pair is the same bug
+    with pytest.raises(stream.StreamError, match="nonesuch"):
+        stream.block_crossings(4, order=order, pairs=(("nonesuch", "a_ret"),))
 
 
 # ── the crossed shared relay: the room that actually passes prod across ring B ──

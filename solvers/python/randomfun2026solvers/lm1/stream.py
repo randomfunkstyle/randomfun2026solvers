@@ -962,6 +962,17 @@ def block_crossings(
     at ring A's adds ``a_fwd``/``a_ret``.
     """
     order = list(order) if order is not None else perimeter_order(trie_bits, lr_shift=lr_shift)
+    # A band named in `tree` or `pairs` but missing from `order` used to be dropped, and
+    # the function then answered about a *smaller* tree — which reads as "planar" when the
+    # question asked was a different one. That is the shape of round 5's false positive,
+    # where `prod` fell out of the port set unnoticed, so it is a refusal now.
+    missing = sorted({*tree, *(b for pair in pairs for b in pair)}.difference(order))
+    if missing:
+        raise StreamError(
+            f"block_crossings was asked about {missing} but the perimeter order "
+            f"{order} does not contain them; a silently smaller tree answers a "
+            "different question and reports planar"
+        )
     if "resp" in order:
         cut = order.index("resp")
         arcs = [order[:cut], order[cut + 1 :]]
@@ -1603,18 +1614,23 @@ def _serpentine(
 # unit already owns.
 #
 # **Two negative results, and they are the load-bearing part.** Each was proposed —
-# twice, by different people — and each is refuted by an enumeration over all 114
-# admissible row maps (five admissible ``updb_body`` interleavings x every legal
-# placement of ``in``/``resp``/``out``) crossed with four trees, with the depth-3
-# block as a control run through the search's own code. Both are pinned as tests, in
-# ``test_the_two_refuted_fixes_stay_refuted``, because a negative result that lives
-# only in prose gets re-proposed:
+# twice, by different people — and each is refuted by an enumeration over every row map
+# the unit's own arms allow: all four incoming ports on the west wall and all six outgoing
+# on the east, ``b_ret`` bottom-most west (``UPDB`` reads ring B last) and ``b_fwd`` above
+# ``prod`` (``MAC`` pushes ``b`` back before it multiplies). That is **2160** maps, crossed
+# with four trees, with the depth-3 block as a control through the same call.
 #
-# * **The ADDER alone closes 0 of 114.** No choice of port rows, leg span, band depth
+# Round 6 quoted these as "0 of 114" from a search that was never landed, so as pinned
+# they held only at the single drawn map — which is not what a refutation is for. The
+# enumeration is now the test (``test_the_two_refuted_fixes_stay_refuted``), so the
+# results are reproducible from the code rather than from a lost script, and the space is
+# larger than the one they were originally claimed over:
+#
+# * **The ADDER alone closes 0 of 2160.** No choice of port rows, leg span, band depth
 #   or column allocation makes the block planar without a shared relay. A relay is
 #   *necessary*. That is why "give the two bands disjoint leg spans" — and every other
 #   capacity-shaped idea — cannot work: the obstruction is not capacity.
-# * **Ring A's relay closes 0 of 114; it has to be ring B's.** Ring A's chord
+# * **Ring A's relay closes 0 of 2160; it has to be ring B's.** Ring A's chord
 #   *encloses* ring B's, so passing ``prod`` through ring A's relay leaves ring B
 #   crossing instead. The asymmetry is forced rather than incidental: ``UPDB`` reads
 #   ring A *before* the accumulator and ring B *after* it, so ring A's two ports end
