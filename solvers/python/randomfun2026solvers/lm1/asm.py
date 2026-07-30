@@ -53,6 +53,12 @@ __all__ = [
 #: ``lm1/snake_unit.py``'s body FIFO, which also owns the display and answers nothing.
 #: ``doom`` is ``lm1/d3_unit.py``'s column painter: the deadman-3d panel plus the
 #: baked HUD/FLASH patterns, write-only like ``snake`` and ``path``.
+#: ``doom4`` is ``lm1/d3_router.py``'s tiled wall — the *same* unit four times over
+#: behind a 1-of-4 router, so one ``SND`` lane drives a 128x96 framebuffer as four
+#: 64x48 panels.  The panel's interior is capped at 64x64 (``SPEC.md``), so tiling
+#: is the only way past it; the word carries a tile selector in its low three bits
+#: (:func:`d3_router.word`) and everything above that is the unmodified ``doom``
+#: protocol.
 #:
 #: ``stream4`` is the *same block* as ``stream`` built with a depth-4 decode trie:
 #: sixteen leaves, twelve arms, and a ``16 * arg + code`` wire format. It is a
@@ -60,7 +66,7 @@ __all__ = [
 #: hardware once and cannot be widened in place — a ``stream`` program's command
 #: words alias into different arms at mod-16 (see :class:`~.store.StreamUnit`'s
 #: docstring), so a program has to name the width it was written against.
-UNITS = frozenset({"stream", "stream4", "snake", "path", "doom"})
+UNITS = frozenset({"stream", "stream4", "snake", "path", "doom", "doom4"})
 
 #: Decode-trie depth per unit name. Only ``stream``/``stream4`` differ.
 UNIT_TRIE_BITS = {"stream": 3, "stream4": 4}

@@ -22,7 +22,7 @@ import sys
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -30,7 +30,10 @@ from typing import Literal
 __all__ = [
     "FastLittleman",
     "FastLittlemanError",
+    "FastOpProfile",
+    "FastProfile",
     "FastResult",
+    "OpcodeTags",
 ]
 
 MASK64 = (1 << 64) - 1
@@ -138,6 +141,99 @@ class _DisplayState:
 
 
 @dataclass(slots=True)
+class FastProfile:
+    """Where a run spent itself, when :meth:`FastLittleman.run` was asked.
+
+    ``heat`` is a per-cell count of runner *samples*: every ``stride`` ticks each
+    live runner's cell is recorded, so a man parked on an ``r`` waiting for a
+    pipe is counted every sample.  Blocked time is time, and this is the metric
+    that shows it — an instruction counter would hide exactly the men who cost
+    the most.  ``wait`` is the sleeping-on-a-pipe subset of the same samples.
+
+    The pipe counters are exact (not sampled): every value that entered or left
+    each pipe, plus the retries that found the pipe full/empty.  A block is
+    counted once per park, not once per tick, because the engine sleeps a
+    blocked runner rather than re-testing him — use ``pipe_wait`` (sampled) for
+    blocked *duration* and ``recv_blocked``/``send_blocked`` for how often.
+    """
+
+    width: int
+    height: int
+    samples: int
+    stride: int
+    heat: dict[Cell, int] = field(default_factory=dict)
+    wait: dict[Cell, int] = field(default_factory=dict)
+    send: list[int] = field(default_factory=list)
+    recv: list[int] = field(default_factory=list)
+    send_blocked: list[int] = field(default_factory=list)
+    recv_blocked: list[int] = field(default_factory=list)
+    query: list[int] = field(default_factory=list)
+    pipe_wait: list[int] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class OpcodeTags:
+    """What the caller must say before the engine can attribute ticks to opcodes.
+
+    ``classes`` names what a runner is *doing* on a cell (dispatch walk, memory
+    lane, slab, …) and ``ops`` names the instructions.  ``tags`` maps
+    ``(x, y, arrival direction)`` — 0 east, 1 south, 2 west, 3 north — to
+    ``(class index, opcode index or -1)``: a cell that identifies an instruction
+    carries its opcode, every other cell carries only a class.
+
+    The direction is part of the key because one cell can belong to two
+    structures at once: a lane row walked east is also, at the columns where
+    other lanes descend, somebody else's drop column walked south.  Tagging the
+    cell alone would charge every instruction's descent to whichever lanes it
+    happens to cross.
+
+    The engine cuts the focus runner's timeline whenever he *enters* the
+    ``boundary`` class (the instruction fetch) and folds each resulting segment
+    into whichever opcode's cells that segment touched, so the trie descent and
+    the return walk that surround a lane are charged to the instruction that
+    caused them rather than to a shared bucket.
+
+    ``hist_pipe`` asks for an exact histogram of how long each blocked run on
+    that pipe lasted; ``value_pipe`` asks for a census of the values the focus
+    runner sent into it (the store address stream, in practice).  Both are
+    ``-1`` for "do not collect".
+    """
+
+    classes: list[str]
+    ops: list[str]
+    tags: dict[tuple[int, int, int], tuple[int, int]]
+    boundary: int
+    hist_pipe: int = -1
+    value_pipe: int = -1
+
+
+@dataclass(slots=True)
+class FastOpProfile:
+    """Per-opcode tick attribution: exact, every tick, no stride.
+
+    ``ticks[op][cls]`` and ``blocked[op][cls]`` are runner-ticks; ``execs[op]``
+    counts the segments folded into that opcode.  Index ``len(ops)`` is the
+    *unattributed* slot — a segment that never touched an opcode-bearing cell —
+    and it is reported rather than dropped.  ``outside`` counts ticks where no
+    runner stood on a tagged cell at all, and ``multi`` counts ticks where more
+    than one did (which would make the focus ambiguous; it should be zero).
+    """
+
+    classes: list[str]
+    ops: list[str]
+    samples: int
+    outside: int
+    multi: int
+    execs: list[int] = field(default_factory=list)
+    ticks: list[list[int]] = field(default_factory=list)
+    blocked: list[list[int]] = field(default_factory=list)
+    pipe_ticks: dict[tuple[int, int], int] = field(default_factory=dict)
+    pipe_runs: dict[tuple[int, int], int] = field(default_factory=dict)
+    block_hist: dict[int, dict[int, int]] = field(default_factory=dict)
+    values: dict[int, dict[int, int]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class FastResult:
     """Validation-oriented result returned by :class:`FastLittleman`."""
 
@@ -149,6 +245,16 @@ class FastResult:
     fatal_pos: Cell | None = None
     passed: bool | None = None
     frames: list[list[str]] = field(default_factory=list)
+    #: Tick stamps, one per *logical* frame accepted by the display judge — the
+    #: tick the slowest panel committed it on.  Filled only when ``frames=`` was
+    #: supplied; the cost of frame *n* is ``frame_ticks[n] - frame_ticks[n-1]``.
+    #: On a tiled wall (``frame_tiles=``) a logical frame spans every panel, so
+    #: the stamp is the slowest tile's; with independent per-display specs each
+    #: display advances its own judge, and the stamp is likewise the slowest
+    #: judged display's *n*-th commit.
+    frame_ticks: list[int] = field(default_factory=list)
+    profile: FastProfile | None = None
+    opcodes: FastOpProfile | None = None
     _frames_by_display: list[list[list[str]]] = field(default_factory=list)
     _native: bool = True
 
@@ -529,8 +635,12 @@ class FastLittleman:
         *,
         expected: str | Sequence[int] | None = None,
         frames: FrameSpec | Sequence[FrameSpec | None] | None = None,
+        frame_tiles: tuple[int, int] | None = None,
         max_ticks: int = 5_000_000,
         native: bool = True,
+        profile: bool = False,
+        profile_stride: int = 1,
+        opcodes: OpcodeTags | None = None,
     ) -> FastResult:
         """Execute from a fresh state.
 
@@ -539,27 +649,66 @@ class FastLittleman:
         are released only after the preceding expected round has been emitted.
 
         ``frames`` judges committed display frames against expected content.
-        A program with exactly one display room takes that display's own
-        sequence of rounds directly (the original, single-display calling
-        convention).  A program with more display rooms takes one such
-        sequence per room, in reading order; ``None`` in a slot leaves that
-        display unjudged.  Regardless of ``frames``, every display's actually
-        committed frames are available afterwards via
+        There are two shapes, for the two things more than one panel can mean,
+        and they are chosen by ``frame_tiles``:
+
+        * **Independent panels** (``frame_tiles`` omitted).  A program with
+          exactly one display room takes that display's own sequence of rounds
+          directly (the original, single-display calling convention).  A program
+          with more display rooms takes one such sequence per room, in reading
+          order; ``None`` in a slot leaves that display unjudged.
+        * **One tiled wall** (``frame_tiles=(cols, rows)``, below).  Every
+          display paints one tile of a single logical frame, so ``frames`` stays
+          one frame stream however many panels there are.
+
+        The two are not interchangeable and a spec of the wrong depth raises
+        rather than being reinterpreted.  Regardless of ``frames``, every
+        display's actually committed frames are available afterwards via
         :meth:`FastResult.frames_per_display`.
+
+        ``profile=True`` additionally fills :attr:`FastResult.profile` with a
+        per-cell occupancy heatmap (sampled every ``profile_stride`` ticks) and
+        exact per-pipe traffic counters.  It is off by default and adds nothing
+        to the request when off, so an ordinary run is unchanged; it requires
+        the native backend.
+
+        ``opcodes=`` additionally fills :attr:`FastResult.opcodes` with a
+        per-opcode tick attribution (see :class:`OpcodeTags`).  It also requires
+        ``profile=True`` — it is the second, likewise trailing, section of the
+        same reply — and it is likewise absent from a request that omits it.
+
+        ``frame_tiles=(cols, rows)`` judges a **tiled wall**: a machine whose
+        ``cols * rows`` displays each paint one tile of the expected frame, in
+        display (reading) order.  Each panel is checked against its own tile of
+        expected frame *n* on its *n*-th COMMIT, and a round is released only
+        once the slowest panel has committed — composition is by frame index,
+        exactly as :func:`lm1.display.tiled_frames_from_writes` does it.
         """
         input_rounds = self._parse_round_values(input)
         expected_rounds = self._parse_round_values(expected) if expected is not None else None
-        frame_rounds_by_display = self._parse_frame_rounds(frames)
+        frame_specs, tiled = self._frame_specs(frames, frame_tiles)
+        if profile and not native:
+            raise FastLittlemanError("profiling requires the native backend")
+        if opcodes is not None and not profile:
+            raise FastLittlemanError("opcode attribution requires profile=True")
         if native:
             try:
                 return self._run_native(
-                    input_rounds, expected_rounds, frame_rounds_by_display, max_ticks
+                    input_rounds,
+                    expected_rounds,
+                    frame_specs,
+                    max_ticks,
+                    tiled=tiled,
+                    profile=profile,
+                    profile_stride=profile_stride,
+                    opcodes=opcodes,
                 )
             except (OSError, subprocess.SubprocessError):
                 # A compiler is optional for portability.  The independent
                 # Python engine remains a correct (but slower) fallback.
-                pass
-        if frame_rounds_by_display is not None:
+                if profile:
+                    raise
+        if frame_specs is not None:
             raise FastLittlemanError("display judging requires the native backend")
         machine = _Machine(self, input_rounds, expected_rounds)
         return machine.run(max_ticks)
@@ -568,12 +717,24 @@ class FastLittleman:
         self,
         input_rounds: list[list[int]],
         expected_rounds: list[list[int]] | None,
-        frame_rounds_by_display: list[list[list[list[int]]] | None] | None,
+        frame_specs: list[list[list[list[int]]] | None] | None,
         max_ticks: int,
+        *,
+        tiled: bool = False,
+        profile: bool = False,
+        profile_stride: int = 1,
+        opcodes: OpcodeTags | None = None,
     ) -> FastResult:
         lib = _native_library()
         request = self._native_request(
-            input_rounds, expected_rounds, frame_rounds_by_display, max_ticks
+            input_rounds,
+            expected_rounds,
+            frame_specs,
+            max_ticks,
+            tiled=tiled,
+            profile=profile,
+            profile_stride=profile_stride,
+            opcodes=opcodes,
         )
         ptr = lib.flm_run(request.encode("ascii"))
         if not ptr:
@@ -599,7 +760,15 @@ class FastLittleman:
         output = [int(value) for value in fields[10:output_end]]
         if len(output) != count:
             raise FastLittlemanError("native runner returned a truncated output list")
-        frames_by_display = self._decode_committed_frames(fields, output_end)
+        # The committed-frame section is unconditional and positional, so it comes
+        # first; the opt-in sections after it are self-describing (``P``/``Q``/``F``)
+        # and are read in the order the native side appends them.
+        frames_by_display, tail_start = self._decode_committed_frames(fields, output_end)
+        tail = iter(fields[tail_start:])
+        prof = self._parse_profile(tail) if profile else None
+        ops = self._parse_opcodes(tail, opcodes) if opcodes is not None else None
+        judged = frame_specs is not None and any(spec is not None for spec in frame_specs)
+        ticks = self._parse_frame_ticks(tail) if judged else []
         return FastResult(
             output=output,
             step=step,
@@ -608,14 +777,23 @@ class FastLittleman:
             fatal=fatal,
             fatal_pos=None if fatal_pos_raw == (-1, -1) else fatal_pos_raw,
             passed=passed,
+            profile=prof,
+            opcodes=ops,
+            frame_ticks=ticks,
             # The single-display convenience: unambiguous only when there is
             # exactly one display room, which is every existing caller.
             frames=frames_by_display[0] if len(frames_by_display) == 1 else [],
             _frames_by_display=frames_by_display,
         )
 
-    def _decode_committed_frames(self, fields: list[str], start: int) -> list[list[list[str]]]:
-        """Parse the response's trailing per-display committed-frame section."""
+    def _decode_committed_frames(
+        self, fields: list[str], start: int
+    ) -> tuple[list[list[list[str]]], int]:
+        """Parse the response's per-display committed-frame section.
+
+        Returns the frames and the index one past the section, so the opt-in
+        profile/opcode/frame-tick sections after it can be read from there.
+        """
         idx = start
         n_displays = int(fields[idx])
         idx += 1
@@ -638,14 +816,76 @@ class FastLittleman:
                 ]
                 frames.append(rows)
             result.append(frames)
-        return result
+        return result, idx
+
+    @staticmethod
+    def _parse_frame_ticks(it: Iterator[str]) -> list[int]:
+        if next(it, None) != "F":
+            raise FastLittlemanError("native runner returned no frame-tick section")
+        count = int(next(it))
+        return [int(next(it)) for _ in range(count)]
+
+    def _parse_profile(self, it: Iterator[str]) -> FastProfile:
+        if next(it, None) != "P":
+            raise FastLittlemanError("native runner returned no profile section")
+        take = lambda: int(next(it))  # noqa: E731
+        samples, stride, npipes = take(), take(), take()
+        prof = FastProfile(width=self.width, height=self.height, samples=samples, stride=stride)
+        for _ in range(npipes):
+            prof.send.append(take())
+            prof.recv.append(take())
+            prof.send_blocked.append(take())
+            prof.recv_blocked.append(take())
+            prof.query.append(take())
+            prof.pipe_wait.append(take())
+        for _ in range(take()):
+            x, y, hot, waiting = take(), take(), take(), take()
+            prof.heat[(x, y)] = hot
+            if waiting:
+                prof.wait[(x, y)] = waiting
+        return prof
+
+    def _parse_opcodes(self, it: Iterator[str], spec: OpcodeTags) -> FastOpProfile:
+        if next(it, None) != "Q":
+            raise FastLittlemanError("native runner returned no opcode section")
+        take = lambda: int(next(it))  # noqa: E731
+        nops, nclass, npipes, samples, outside, multi = (take() for _ in range(6))
+        prof = FastOpProfile(
+            classes=list(spec.classes),
+            ops=[*spec.ops, "(unattributed)"],
+            samples=samples,
+            outside=outside,
+            multi=multi,
+        )
+        if nops != len(spec.ops) + 1 or nclass != len(spec.classes):
+            raise FastLittlemanError("native runner returned a mismatched opcode section")
+        prof.execs = [take() for _ in range(nops)]
+        prof.ticks = [[take() for _ in range(nclass)] for _ in range(nops)]
+        prof.blocked = [[take() for _ in range(nclass)] for _ in range(nops)]
+        for _ in range(take()):
+            op, pid, ticks, runs = take(), take(), take(), take()
+            prof.pipe_ticks[(op, pid)] = ticks
+            prof.pipe_runs[(op, pid)] = runs
+        for _ in range(take()):
+            op, length, n = take(), take(), take()
+            prof.block_hist.setdefault(op, {})[length] = n
+        for _ in range(take()):
+            op, value, n = take(), take(), take()
+            prof.values.setdefault(op, {})[value] = n
+        del npipes
+        return prof
 
     def _native_request(
         self,
         input_rounds: list[list[int]],
         expected_rounds: list[list[int]] | None,
-        frame_rounds_by_display: list[list[list[list[int]]] | None] | None,
+        frame_specs: list[list[list[list[int]]] | None] | None,
         max_ticks: int,
+        *,
+        tiled: bool = False,
+        profile: bool = False,
+        profile_stride: int = 1,
+        opcodes: OpcodeTags | None = None,
     ) -> str:
         values: list[int | str] = ["FLM1", self.width, self.height]
         values.extend(ord(ch) for row in self.grid for ch in row)
@@ -692,10 +932,17 @@ class FastLittleman:
             values.append(len(expected_rounds))
             for round_values in expected_rounds:
                 values.extend((len(round_values), *round_values))
+        # Do the judged panels form one logical screen?  It is the one thing the
+        # engine cannot infer from the frame lists themselves, and it decides two
+        # things: whether "logical frame *n* is complete" exists as an event (it
+        # does for a wall — the slowest tile's *n*-th commit; it does not for
+        # independent charts, whose *n*-th frames are unrelated), and therefore
+        # whether round-gated input has a stream to gate against.
+        values.append(1 if tiled else 0)
         # One block per display room, in reading order; the count itself is
         # not sent because the native side derives it from the room list
         # above, so it cannot desync from it.
-        display_specs = frame_rounds_by_display
+        display_specs = frame_specs
         if display_specs is None:
             display_specs = [None] * len(self.display_rooms)
         for spec in display_specs:
@@ -707,6 +954,26 @@ class FastLittleman:
                     for frame in round_frames:
                         values.extend((len(frame), *frame))
         values.append(max_ticks)
+        # Trailing and omitted when off, so a non-profiling request is exactly
+        # the string every existing caller already sends.
+        if profile:
+            values.extend((1, max(1, profile_stride)))
+            # Trailing again, for the same reason: the heatmap-only profiler's
+            # request is unchanged by the existence of this section.
+            if opcodes is not None:
+                values.extend(
+                    (
+                        1,
+                        len(opcodes.classes),
+                        len(opcodes.ops),
+                        opcodes.boundary,
+                        opcodes.hist_pipe,
+                        opcodes.value_pipe,
+                        len(opcodes.tags),
+                    )
+                )
+                for (x, y, direction), (cls, op) in opcodes.tags.items():
+                    values.extend((y * self.width + x, direction, cls, op))
         return " ".join(str(value) for value in values)
 
     @staticmethod
@@ -720,10 +987,165 @@ class FastLittleman:
             ]
         return [[int(item) for item in value]]
 
-    def _parse_frame_rounds(
+    def _frame_specs(
         self,
         frames: FrameSpec | Sequence[FrameSpec | None] | None,
-    ) -> list[list[list[list[int]]] | None] | None:
+        frame_tiles: tuple[int, int] | None,
+    ) -> tuple[list[list[list[list[int]]] | None] | None, bool]:
+        """Normalise ``frames`` to one optional round list per display, plus ``tiled``.
+
+        Two different things can be behind more than one panel, and the engine is
+        given the same shape for both — a frame list per display room, in reading
+        order — because judging is per panel either way.  What differs is only
+        whether the panels' *n*-th frames belong together:
+
+        * ``frame_tiles=(cols, rows)`` — one logical screen.  The expected frame
+          is cut into ``cols * rows`` tiles and dealt out to the panels that paint
+          them, so logical frame *n* is complete when the slowest tile commits its
+          *n*-th.  ``tiled`` is ``True`` and that event gates input rounds.
+        * ``frame_tiles`` omitted — independent panels (or the single display every
+          caller before them had).  Panel A's third frame and panel B's third
+          frame are unrelated events, so there is no logical frame to gate on and
+          ``tiled`` is ``False``.
+
+        Neither subsumes the other, so a spec of the wrong depth raises here rather
+        than being reinterpreted: a silent misread of this seam is the failure both
+        conventions were written to prevent.
+        """
+        if frames is None:
+            return None, False
+        n_displays = len(self.display_rooms)
+        if frame_tiles is not None or n_displays <= 1:
+            if frame_tiles is not None and self._looks_per_display(frames):
+                raise FastLittlemanError(
+                    "frames= is nested one level too deep for frame_tiles=: a tiled "
+                    "wall takes one logical frame stream (rounds, of frames, of row "
+                    "strings) which is then cut into tiles, whereas a sequence of "
+                    "per-display specs describes independent panels. The two are "
+                    "different machines, not two spellings of one — drop frame_tiles= "
+                    "to judge the panels independently, or compose one logical frame "
+                    "per round to judge them as a single wall."
+                )
+            logical = self._parse_frame_rounds(frames, frame_tiles)
+            assert logical is not None  # frames is not None
+            return self._spread_tiles(logical, frame_tiles or (1, 1)), True
+        return self._parse_frame_rounds_by_display(frames), False
+
+    @staticmethod
+    def _looks_per_display(frames: object) -> bool:
+        """Is ``frames`` a sequence of per-display specs rather than one stream?
+
+        A logical frame stream bottoms out in a row string three levels down
+        (``frames[round][frame][row]``); a per-display sequence puts a whole spec
+        where a round belongs, so the same descent lands one level short of the
+        string.  ``None`` in a slot is decisive on its own — a round is never
+        ``None``, an unjudged display is.
+        """
+        if isinstance(frames, str) or not isinstance(frames, Sequence):
+            return False
+        if any(item is None for item in frames):
+            return True
+        node: object = frames
+        for _ in range(3):
+            if isinstance(node, str) or not isinstance(node, Sequence) or not node:
+                return False
+            node = node[0]
+        return not isinstance(node, str)
+
+    @staticmethod
+    def _spread_tiles(
+        logical: list[list[list[int]]], frame_tiles: tuple[int, int]
+    ) -> list[list[list[list[int]]] | None]:
+        """Deal a tiled wall's logical frames out to the panels that paint them.
+
+        :meth:`_parse_frame_rounds` has already cut each expected frame into
+        ``cols * rows`` equal tiles laid end to end in reading order, which is the
+        order the displays are discovered in, so this is a pure re-slicing: panel
+        *i* is judged against tile *i* of every frame, on its own *i*-th commit.
+
+        This is what lets one engine representation serve both abstractions. The
+        native side never needs to know the panels form a screen, because tiling
+        is entirely a statement about *expected content* — which pixels a panel
+        owns — and not about the judging rule, which is per panel regardless. The
+        one thing it does need is :meth:`_frame_specs`' ``tiled`` flag, for the
+        slowest-tile event that has no counterpart on independent panels.
+        """
+        cols, rows = frame_tiles
+        count = cols * rows
+        per_display: list[list[list[list[int]]] | None] = []
+        for tile in range(count):
+            tile_rounds: list[list[list[int]]] = []
+            for round_frames in logical:
+                tile_frames: list[list[int]] = []
+                for frame in round_frames:
+                    size = len(frame) // count
+                    tile_frames.append(frame[tile * size : (tile + 1) * size])
+                tile_rounds.append(tile_frames)
+            per_display.append(tile_rounds)
+        return per_display
+
+    def _parse_frame_rounds(
+        self,
+        frames: Sequence[Sequence[Sequence[str]]] | None,
+        frame_tiles: tuple[int, int] | None = None,
+    ) -> list[list[list[int]]] | None:
+        """Expected frames as flat pixel lists, one tile after another.
+
+        A single display is the ``(1, 1)`` case and the list is just the frame.
+        A tiled wall is cut into ``cols * rows`` tiles in reading order and the
+        tiles concatenated, which is the order the native runner indexes its
+        displays in — the panels are discovered top-to-bottom, left-to-right.
+        :meth:`_spread_tiles` then deals those tiles out to their panels.
+        """
+        if frames is None:
+            return None
+        display_ids = self.display_rooms
+        cols, rows = frame_tiles or (1, 1)
+        if cols < 1 or rows < 1:
+            raise FastLittlemanError(f"frame_tiles must be positive, got {(cols, rows)}")
+        if len(display_ids) != cols * rows:
+            raise FastLittlemanError(
+                f"display judging needs exactly {cols * rows} display(s) for "
+                f"frame_tiles={(cols, rows)}, found {len(display_ids)}"
+            )
+        boxes = [self.rooms[rid] for rid in display_ids]
+        sizes = {
+            (room.max[0] - room.min[0] - 1, room.max[1] - room.min[1] - 1) for room in boxes
+        }
+        if len(sizes) != 1:
+            raise FastLittlemanError(
+                f"a tiled wall needs displays of one size, found {sorted(sizes)}"
+            )
+        tile_w, tile_h = sizes.pop()
+        width, height = tile_w * cols, tile_h * rows
+        parsed: list[list[list[int]]] = []
+        for round_frames in frames:
+            parsed_round: list[list[int]] = []
+            for frame in round_frames:
+                # ``isinstance(row, str)`` rather than ``str(row)``: stringifying a
+                # row that is really a nested list is exactly how a mis-nested spec
+                # gets judged against the wrong data instead of refused.
+                if len(frame) != height or any(
+                    not isinstance(row, str) or len(row) != width for row in frame
+                ):
+                    raise FastLittlemanError(f"expected frame is not {width}x{height}")
+                try:
+                    grid = [[int(ch, 16) for ch in row] for row in frame]
+                except ValueError as exc:
+                    raise FastLittlemanError("expected frame contains a non-hex color") from exc
+                pixels: list[int] = []
+                for tile in range(cols * rows):
+                    y0, x0 = (tile // cols) * tile_h, (tile % cols) * tile_w
+                    for y in range(y0, y0 + tile_h):
+                        pixels.extend(grid[y][x0 : x0 + tile_w])
+                parsed_round.append(pixels)
+            parsed.append(parsed_round)
+        return parsed
+
+    def _parse_frame_rounds_by_display(
+        self,
+        frames: FrameSpec | Sequence[FrameSpec | None],
+    ) -> list[list[list[list[int]]] | None]:
         """Parse ``frames`` into one optional round list per display, in reading order.
 
         A program with exactly one display keeps the original calling
@@ -744,8 +1166,6 @@ class FastLittleman:
         never ``str``), so a mis-nested shape is caught here instead of quietly
         judging the wrong data.
         """
-        if frames is None:
-            return None
         display_ids = self.display_rooms
         if not display_ids:
             raise FastLittlemanError("display judging requires a display room")
@@ -798,9 +1218,7 @@ class FastLittleman:
                     if len(frame) != height or any(
                         not isinstance(row, str) or len(row) != width for row in frame
                     ):
-                        raise FastLittlemanError(
-                            f"expected frame is not {width}x{height}"
-                        )
+                        raise FastLittlemanError(f"expected frame is not {width}x{height}")
                     try:
                         pixels = [int(ch, 16) for row in frame for ch in row]
                     except ValueError as exc:

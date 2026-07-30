@@ -16,3 +16,6 @@ __pycache__/
 
 # deadman-3d --wad outputs: derived from a locally owned retail IWAD — never commit
 littleman/examples/local/
+
+# IWAD-derived traffic trace: never committable (AGENTS.md, DOOM1.WAD rules)
+scratch/deadman3d-opt/hires_traffic.json

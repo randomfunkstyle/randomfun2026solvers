@@ -32,6 +32,7 @@ __all__ = [
     "SnakeUnit",
     "PathUnit",
     "DoomUnit",
+    "DoomWall",
 ]
 
 READ = 0
@@ -691,7 +692,17 @@ class DoomUnit:
     WIDTH, H3D = 64, 40  # panel columns; viewport rows 0..39 (HUD below)
     FLOOR = 8
 
-    def __init__(self, write_display: Callable[[int, int], None]) -> None:
+    def __init__(
+        self,
+        write_display: Callable[[int, int], None],
+        *,
+        floor_row: int = H3D - 1,
+    ) -> None:
+        # ``floor_row`` is the last panel row COL's floor run fills — the two-digit
+        # literal baked into the real arm (``d3_unit.FLOOR_ROW``). It is 39 on the
+        # 64x48 panel and per-tile-row on the tiled wall, where the 128x96 viewport
+        # ends inside the bottom tiles rather than at the panel's own bottom.
+        self._floor_row = floor_row
         self._write = write_display
         self.words = 0  # command words across the CPU's pipe
         self.pixels = 0  # pixels painted (ADDR/DATA pairs plus HUD runs)
@@ -745,10 +756,10 @@ class DoomUnit:
         for i in range(n_wall):
             v += 1024
             addr, colour = v // 16, v % 16
-            if not 0 <= addr < self.WIDTH * self.H3D:
+            if not 0 <= addr < self.WIDTH * (self._floor_row + 1):
                 raise StoreError(f"DOOM: COL wall pixel {addr} is outside the viewport")
             self._paint(addr, colour & self.MASKS[i % 4])
-        for _ in range(self.H3D - 1 - addr // self.WIDTH):
+        for _ in range(self._floor_row - addr // self.WIDTH):
             addr += self.WIDTH
             self._paint(addr, self.FLOOR)
 
@@ -776,3 +787,84 @@ class DoomUnit:
         self._write(self.ADDR, cell)
         self._write(self.DATA, colour)
         self.pixels += 1
+
+
+class DoomWall:
+    """A model of ``d3_router.py``'s tiled wall — four :class:`DoomUnit`s, one lane.
+
+    The LM-75's interior stops at 64x64 (``SPEC.md``), so a 128x96 framebuffer has
+    to be four panels.  The wall is the unmodified DOOM unit instantiated four
+    times behind a 1-of-4 router, and the wire format is the unit's own with a
+    selector in the low three bits::
+
+        router word = 8 * (unit word) + sel = 8 * (8 * arg + code) + sel
+
+    :data:`SEL` names the destinations.  ``T0..T3`` are the tiles, ``ALL`` is the
+    router's broadcast leaf — an ``S``, which ``SPEC.md`` defines as *"send A into
+    every outgoing pipe at once ... never writes to only some"*.
+
+    Why the broadcast matters.  Each panel commits on its own SWAP, so four
+    separate COMMITs would leave the wall showing a frame half-old.  ``S`` makes
+    the four COMMIT words leave on **one tick**, which guarantees the property the
+    composed image actually depends on: every panel has committed exactly the same
+    number of frames in the same order, so tile frame *N* always belongs to
+    logical frame *N* (:func:`display.tiled_frames_from_writes` composes by
+    index).  Tick-level alignment is weaker and separate — see that module and the
+    router's own notes.
+    """
+
+    #: Destination -> selector, read off the router's trie (``d3_router.SEL``);
+    #: repeated here so the emulator model stays free of the generator, and pinned
+    #: equal by the tests exactly as ``CODES`` is against ``d3_unit.arm_codes``.
+    SEL = {"T2": 7, "T3": 3, "T0": 5, "T1": 1, "ALL": 6}
+
+    #: The logical framebuffer, and the tile grid it is cut into.
+    WIDTH, HEIGHT = 128, 96
+    TILE_W, TILE_H = DoomUnit.WIDTH, 48
+
+    #: The 3D viewport is logical rows 0..79 and the HUD is 80..95, so COL's floor
+    #: run ends at a different panel row on a top tile than on a bottom one; pinned
+    #: equal to ``d3_router.TILE_FLOOR_ROW`` by the tests.
+    FLOOR_ROW = (47, 47, 31, 31)
+
+    def __init__(self, write_display: Callable[[int, int, int], None]) -> None:
+        self._write = write_display
+        self.units = [
+            DoomUnit(
+                lambda port, value, t=tile: write_display(t, port, value),
+                floor_row=row,
+            )
+            for tile, row in enumerate(self.FLOOR_ROW)
+        ]
+        self.words = 0
+        self._by_sel = {v: k for k, v in self.SEL.items()}
+
+    @property
+    def pixels(self) -> int:
+        return sum(u.pixels for u in self.units)
+
+    @property
+    def frames(self) -> int:
+        """Commits per tile — one number, because the broadcast keeps them equal."""
+        counts = {u.frames for u in self.units}
+        if len(counts) != 1:
+            raise StoreError(f"DOOM wall: the tiles have committed {counts} frames each")
+        return counts.pop()
+
+    # ── wire protocol ────────────────────────────────────────────────────────
+    def send(self, word: int) -> None:
+        """One router word: ``8 * unit_word + sel``, floored so a negative COL
+        seed survives (the unit's own ``/`` is floored for the same reason)."""
+        self.words += 1
+        sel, payload = word % 8, word // 8
+        dest = self._by_sel.get(sel)
+        if dest is None:
+            raise StoreError(f"DOOM wall: no leaf for selector {sel}")
+        if dest == "ALL":
+            for unit in self.units:
+                unit.send(payload)
+        else:
+            self.units[int(dest[1])].send(payload)
+
+    def recv(self) -> int:
+        raise StoreError("DOOM wall: the units answer nothing; a program with RCV cannot bind")

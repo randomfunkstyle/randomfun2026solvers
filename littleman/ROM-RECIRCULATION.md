@@ -82,13 +82,123 @@ throughout, and a backward jump would then drain a *pre-filled* buffer instead o
 pacing the man.
 
 It is implemented, opt-in, behind `machine.ROM_BUFFER` (empty by default; with no
-entry every machine is byte-identical to before). **It does not work.**
+entry every machine is byte-identical to before). **It does not work** — flat on
+the three programs first tried, and on the one machine where it finally does
+something, that machine has a seek drum and the sign is inverted. See "DOOM" below.
 
 | build | corridor | avg ticks | Δ |
 |---|---|---|---|
 | `brackets` + buffer | 357 — 4.7× the whole program | 24,549 | **+1.4%** |
 | `tcp` + buffer | 139 | 88,168 | **0.0%** |
 | `gradebook` + buffer | 265 | 295,933 | **0.0%** |
+
+### DOOM, and the one case where it is not flat but *backwards* (2026-07-28)
+
+The table above had no row for `deadman-3d`, which is the largest program here and
+the only slug with a `SEEK_DRUM`. It turns out to be the interesting case, in both
+directions.
+
+All numbers are the **native/fast engine** (`fast_littleman`), taped tier, the same
+fixed 57-command `WALK` on every arm, all `passed=True`. The reference engine cannot
+referee any of this: it OOMs its 4 GB Go/wasm heap on DOOM.
+
+The full length sweep, because one extreme point gives a direction but not a shape,
+and "a shorter buffer might still win" is the obvious next question. DOOM's image is
+**P = 4,002 words**, and the corridor it already has by accident of routing is **44
+cells**, so that is the zero of this curve rather than nothing. Corridor capacity is
+quantised to ~130 words (the boustrophedon takes two rows at a time across a
+65-column span), so 130 is the *shortest buffer that can be built at all*.
+
+| corridor | ≈ of P | box | ticks | Δ |
+|---|---|---|---|---|
+| 44 (routing accident) | 1/91 | 295x269 | 591,485,564 | — |
+| 130 | 1/32 | 295x272 | 593,636,532 | **+0.36%** |
+| 250 | 1/16 | 295x274 | 599,111,202 | **+1.29%** |
+| 500 | 1/8 | 295x278 | 611,878,828 | **+3.45%** |
+| 1,000 | 1/4 | 295x286 | 639,137,034 | **+8.06%** |
+| 1,677 | 2/5 | 295x296 | 675,651,202 | **+14.23%** |
+| 2,000 | 1/2 | 295x300 | 690,875,164 | **+16.80%** |
+
+**There is no dip, and no optimum: cost rises monotonically from the first buildable
+row-pair.** Even the shortest possible buffer is already a loss. Canonical at 1,677
+is **+30.3%** on the same change.
+
+The curve is not merely monotone, it is *linear*, to within 0.5% over a 45× range of
+length — slope **50,813 ticks per corridor word**. That slope is the whole
+explanation. DOOM takes 186 long jumps a gameplay frame and this input runs 57 of
+them, so:
+
+    50,813 ticks/word / (186 x 57 seeks) = 4.79 ticks per word per seek
+
+which is the **4.8 ticks a recirculated word** measured at the top of this document.
+The flush drains at exactly the rate ordinary recirculation does, so a buffer does
+not trade discard for anything — it converts discard the seek drum had *removed*
+straight back into discard the CPU pays, one word for one word. There is no length
+at which that trade is favourable, which is why the curve has no knee to find.
+
+The classic-drum control, for contrast — same program, same input, seek drum off:
+
+| build | seek drum | box | ticks | Δ |
+|---|---|---|---|---|
+| corridor 44 | **off** | 279x258 | 653,734,716 | — |
+| corridor 1,677 | **off** | 279x291 | 629,578,991 | **-3.7%** |
+
+**On the classic drum the buffer works.** −3.7% is small but it is the first
+positive reading this feature has ever produced, and it is on the one program big
+enough for its discard bill to matter. The three flat rows above were measured on
+programs whose whole image is smaller than the buffer under test. Note this does
+*not* contradict the `max(6 ticks CPU loop, ROM ticks/word)` model below: the model
+says buffering cannot expose a saving, and −3.7% against the drum's −9.5% is
+consistent with it being a second-order smoothing effect, not the first-order win
+the feature was proposed for.
+
+**On the seek drum the same corridor costs +14.2%, and the mechanism is in
+`seekrom.py`'s own protocol.** A seek is not free of the corridor — the docstring
+says it plainly: a taken long jump costs "notice (< one row) + seek (~3 t/row) +
+**the corridor flush**". The station emits a `-1` sentinel and the CPU *discards
+every word already in flight* until it sees it. So the corridor's length is paid in
+full by every long jump. A buffer is precisely a longer corridor, and it therefore
+prices each seek at its own capacity: the seek drum's entire purpose is to stop
+paying for words in front of the target, and the buffer puts 1,677 of them back.
+
+The regression is monotone in corridor length in both tiers, which is the flush
+model rather than noise. It also does not compose: adding `BRZ` to `SEEK_OPS` on
+top is **super**-additive (+17.3% together, against +13.8% predicted from the two
+alone), because each extra split family makes more seeks and every seek flushes
+again.
+
+**So `ROM_BUFFER` and `SEEK_DRUM` are antagonistic by construction**, and the two
+features should never be named for the same slug. `ROM_BUFFER` stays empty.
+
+This was proposed on the reasoning that DOOM is the biggest discard bill in the
+repo and so the best case for a buffer, which was a good hypothesis — it was
+tested rather than argued down, and the answer is that the seek drum got there
+first. The drum already removes ~68% of the frame's discard, so the buffer is left
+hiding the third the drum declined to take, and the flush it adds to every one of
+the drum's 186 long jumps swamps that remainder several times over. The bigger the
+program, the worse the trade, which is the opposite of the intuition.
+
+### The other half of the same experiment: `BRZ` in `SEEK_OPS`
+
+Measured at the same time because the two changes attack overlapping work. `BRZ`
+delivers exactly the discard bill it was predicted to and still does not pay:
+
+| build | box | ticks | Δ | share of frame-1 discard split |
+|---|---|---|---|---|
+| `JMPF` (shipped) | 295x269 | 591,485,564 | — | 263,260 / 387,532 = 67.9% |
+| `JMPF`+`BRZ` | **309x271** | 588,983,630 | **-0.42%** | 327,429 / 387,532 = **84.5%** |
+
++16.6 points of the bill for four tenths of a percent of ticks. The extra 13-column
+slab lifts the `mem_pad` floor 22 → 29, and that pad charges every memory
+instruction the extra walk twice — DOOM's taped tier is memory-bound, so the pad
+gives back nearly the whole discard win. The 14 columns are not recoverable by
+re-folding: `rom_rows` 80, 84, 88, 92, 96, 100, 104 and 110 all land on width 309,
+because the *store* binds the taped width, not the drum. 309 breaks the taped
+machine's checked-in 300 ceiling. Not shipped.
+
+`SEEK_THRESHOLD` does not want re-tuning once `BRZ` is in: the sweep is the same
+plateau it is for `JMPF` alone (thr 64 → 84.7%, 128 → 84.7%, 192 → 84.6%, 256 →
+84.5%, 384 → 82.9%), so 256 is still the corner.
 
 ### The control, and the cost model it gives
 
@@ -288,6 +398,147 @@ forever and is never heard from again.
 Ring capacity must be an exact multiple of the program length, or the window that
 recirculates is not a whole image and the CPU sees a rotation that never
 resynchronises.
+
+## The drum's *contents*: where DOOM's 4,304 words actually go (2026-07-29)
+
+Everything above is about the lap's *length* as a thing to buffer, skip or
+re-emit faster. This section profiles what is in the lap. Measured on
+`deadman-3d`, taped tier, the shipped seek drum
+(`scratch/rom-opt/{words,words2,pack,bound}.py`).
+
+**The image, before anything was changed.** P = 4,304 words = 2,152 fixed-width
+`(opcode, operand)` pairs, in 19,912 token cells — **4.626 cells a word**, not the
+3.36 the cost model above was written against. The 3.36 was `sudoku-validity`'s;
+a program with 599 store slots and 4,304-word jump distances has wider operands
+than one with 31.
+
+| token | words | cells | share |
+|---|---|---|---|
+| `Ns` — one digit | 1,138 | 2,276 | 11.4% |
+| `` `NN`s `` | 1,862 | 9,310 | **46.8%** |
+| `` `NNN`s `` | 1,143 | 6,858 | **34.4%** |
+| 4–5 digits | 141 | 1,070 | 5.4% |
+| 7–10 digits | 4 | 46 | 0.2% |
+| 19 digits (16 × 2⁶⁰) | 16 | 352 | 1.8% |
+
+**The widest literal costs nothing here, which is worth saying because on the
+*unpacked* ROM it would cost everything.** `rom.digit_width` sizes `build_rom`'s
+every group by the widest word in the image, so DOOM's sixteen `2⁶⁰` constants
+would set a 19-digit width and charge all 4,304 words 23 cells — a 99,000-cell
+lap. The packed drum prices each token on its own value, so the same sixteen
+outliers cost 352 cells in total, 1.8%. There is no width-outlier problem on this
+machine and no restructuring of those constants to do.
+
+Split by glyph rather than by token: **digits 48%, the `s` 25%, backticks 27%**.
+The `s` is one per word and structural. Split by half-word:
+
+* **opcodes: 8,930 cells, 44.8% of the drum.** Twenty-two opcodes need `k = 5`,
+  so codes run 0..31 and a code of ten or more costs `` `NN`s `` = 5 cells
+  against `Ns` = 2. The default numbering left **1,542 of 2,152** opcode words
+  two-digit. That is the whole of §`OPCODE_SLOTS` below.
+* **operands: 10,982 cells.** 961 of them are store addresses, every one in
+  **353..599** and therefore three digits — 5,766 cells, **29% of the drum, in
+  one shape.** 302 more are the mandatory zero of a zero-operand opcode
+  (`SND` 220, `LDA` 55, `IN` 25, `NEG` 2), which the two-word fetch requires and
+  which already cost the minimum 2 cells.
+
+### `OPCODE_SLOTS`: relabel the trie's leaves, keep every lane where it is
+
+Under `TRIM_DEAD_LANES` a lane's row is its leaf slot's **rank** among the used
+slots, not the slot itself — so *any rank-preserving relabelling of the slots
+leaves every row, drop column and lane tick exactly where it was* and moves only
+`number = _bitrev(slot, k)`. DOOM uses 22 of 32 slots; the ten spare ones are
+free to spend, and exactly ten slots — `0, 2, 4, 8, 12, 16, 18, 20, 24, 28` —
+bit-reverse below ten. The contiguous default (`0..N-1`, plus the pinned tail at
+31) cannot aim at that spread; a DP over slot × rank against the **static**
+opcode histogram can.
+
+| quantity | default | relabelled |
+|---|---|---|
+| one-digit opcode words | 610 of 2,152 | **1,401 of 2,152** |
+| opcode cells | 8,930 | **6,557** |
+| whole drum | 19,912 cells, 4.626/word | **17,539, 4.075/word** |
+| drum block | 284x94 | **252x93** |
+| data area `data_w x rows` | 23,048 cells | **20,060** |
+
+(The data area is the lap's dominant term — the man also walks each row's two
+turn cells and its gadget pair, the wrap riser and the two connectors, ~700 cells
+in all, which the fold moves and the encoding does not.)
+
+Ticks, native/fast engine, `passed=True` throughout:
+
+| gate | before | after | Δ |
+|---|---|---|---|
+| 8-command (boot + 8 frames) | 61,826,043 | 61,570,950 | **-0.41%** |
+| 115-frame tour, 116 rounds | 839,384,674 | **838,737,298** | **-0.077%** |
+| taped box | 287x271 | **287x270** | width store-floored |
+
+It is also *not* paid back at the decode: the pruned trie's execution-weighted
+walk **falls** 64,444 → 54,722 cells, because the spread leaves fewer contracted
+single-child chains to unwind (`scratch/rom-opt/trie.py`). Eighty-one slot sets
+reach the same 6,557; their walks span 53,539..55,371, i.e. 3.4%, so which one is
+picked is worth ~0.02% of the tour and the DP's first answer was shipped as-is.
+
+### What the two Δs above actually say about the drum
+
+**The 13% shorter lap bought 0.077% of the tour.** That is the finding, and it is
+worth more than the win. The `+1 blank cell per token` control — a pure lap
+inflation, no other change — costs **+1.09% on the 8-command gate for +18.2% of
+lap**, so the drum is ~6% of a *boot-heavy* gate; across the 115-frame tour it is
+**~0.6% of ticks in total.** `max(6 ticks CPU loop, ROM ticks/word)` is
+comfortably CPU-bound here at 4.6 cells a word, exactly as the model says, and
+DOOM's real workload is store-bound rather than fetch-bound besides. **Density in
+the drum is an area knob for this machine and very nearly nothing else.**
+
+And the area is not binding either. The taped machine's width floors at
+`TX 61 + the store's 224 columns + the east return pipe` = **287**; the drum's
+east edge was 284, one column under it, and is now 252. So the ROM block, which
+is the largest single block on the grid, has **35 columns of slack** and the next
+column of width has to come from the store. What the relabelling really bought is
+that reserve: the box is the widest block's east edge plus its two walls (store
+east 285 → 287, measured both before and after), so the *drum's* floor on the
+taped width was 286 and is now **254**. A store narrow enough to matter would
+have run straight into the old one.
+
+### Three things that do not pay, with the arithmetic
+
+**1. Re-numbering the store's addresses. Worth ~3,400 cells; unsound.** All 961
+static addresses sit in 353..599 because slots 1..352 are the map. Moved to
+1..247 and assigned by static frequency, ~99 of them would fall to `` `NN`s ``
+and nine to `Ns`. It cannot be done as a build-time image rewrite the way
+`seek_split` is, because `LDA` (`ACC = store[ACC]`, 55 uses) and `MOVA`
+(`store[ACC] = store[addr]`, 10 uses) compute addresses **at run time** from
+values the rewrite cannot see; and it cannot be done in the source, because
+`deadman-3d.asm` is shared with the canonical tier, which must stay
+byte-identical. Recorded so it is not re-derived: the prize is real, the
+mechanism is not available.
+
+**2. A smarter packer. The 12% blank is the vertical-backtick rule, and it is not
+slide-waste.** `pack_rows_even` leaves 2,671 of 20,210 cells blank. Decomposed by
+turning each rule off in turn (`scratch/rom-opt/bound.py`, same tokens, same
+`data_w = 235`):
+
+| rules | rows | area | blank |
+|---|---|---|---|
+| parity + even-word (shipped) | 86 | 20,210 | 2,671 (13.2%) |
+| parity only | 86 | 20,210 | 2,671 (13.2%) |
+| even-word only | **76** | 17,860 | **321 (1.8%)** |
+| neither | 76 | 17,860 | 321 (1.8%) |
+
+So the even-words-per-row rule the seek protocol needs costs **nothing**, the
+row ends cost 321 cells, and the vertical pairing hazard — a column whose running
+backtick parity is odd may not take an `s` — costs **ten rows, 2,350 cells**. A
+lookahead packer does not recover them: scoring the leftmost feasible start
+against the next 4 and next 12 tokens, over five widths, returns the **identical**
+row count in all fifteen combinations (`scratch/rom-opt/beam.py`). Greedy
+leftmost is already optimal for this token stream; the loss is the constraint
+itself, not the search. At 0.6% of tour ticks for the whole lap, those 2,350
+cells are worth ~0.07% — against a change to a shared packer whose failure mode
+is a *load error* rather than a slow grid.
+
+**3. `SEEK_K` 128 → 64, to shave a digit off the 39 wide jump literals.** Worth 39
+cells. `SEEK_K` must exceed the words on any packed row and the widest row holds
+66. Not available, and would be 0.2% of the drum if it were.
 
 ## Still open
 
