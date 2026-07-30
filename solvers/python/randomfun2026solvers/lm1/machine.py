@@ -2989,6 +2989,13 @@ class Machine:
     #: since the machine otherwise runs to completion painting the wrong thing
     #: (``ARCH.md`` §4.4).
     panel_ports: tuple[dict[str, tuple[int, int]], ...] = ()
+    #: Per panel, in panel order: the **CPU** lane ``s`` glyph whose pipe must reach
+    #: *that* panel's relay room. The first of the two hops, and the one
+    #: :attr:`panel_ports` cannot speak for: both hops are decided by §7.1's
+    #: nearest-pipe rule and each can be wrong on its own. A mis-bound first hop paints
+    #: both curves on one panel, with every port still landing on the right side of the
+    #: panel it reaches. Empty on the direct three-lane form, which has no first hop.
+    panel_lanes: tuple[tuple[int, int], ...] = ()
     #: The placed STREAM block, when the program uses one (see ``stream.py``).
     stream: object | None = None
     #: Cells in the ROM -> CPU corridor, which by ``SPEC.md`` is also its capacity in
@@ -3118,6 +3125,18 @@ class Machine:
             f"mem_pad={self.mem_pad}{stream}{panel}{routes}"
             f"{placement}"
         )
+
+
+def _panel_lane_glyphs(cpu: _Cpu, cx: int, cy: int, n: int) -> tuple[tuple[int, int], ...]:
+    """The CPU ``s`` glyph that feeds each panel's relay, in panel order, in grid cells.
+
+    Empty when there are no relays (the direct three-lane form has no CPU→relay hop).
+    """
+    first: dict[str, tuple[int, int]] = {}
+    for x, y, glyph, band in cpu.pipe_glyphs:
+        if glyph == "s" and band in DSP_PANEL_BANDS and band not in first:
+            first[band] = (cx + x, cy + y)
+    return tuple(first[b] for b in DSP_PANEL_BANDS if b in first)[:n]
 
 
 def _panel_sizes(
@@ -4282,8 +4301,9 @@ def _assemble(
     # this is the same drawing it always was (see :func:`_display_stack`).
     dsp_touches: dict[str, tuple[int, int]] = {}
     panel_ports: tuple[dict[str, tuple[int, int]], ...] = ()
+    dsp_boxes: dict[str, tuple[int, int, int, int]] = {}
     if display and cpu.dsp_cols:
-        dsp_touches, panel_ports = _display_stack(
+        dsp_touches, panel_ports, dsp_boxes = _display_stack(
             g,
             cpu,
             CX,
@@ -4374,6 +4394,12 @@ def _assemble(
             max(x for x, _ in panel) - px + 1,
             max(y for _, y in panel) - py + 1,
         )
+    # ...but on a multi-panel machine that bounding box spans both panels *and* the
+    # relay between them, so the placement's own per-panel boxes go in beside it. They
+    # are what lets a test ask which *room* a CPU lane's command pipe reaches, rather
+    # than only whether it reaches one — the difference between catching a mis-bound
+    # hop and catching an unbound one (``ARCH.md`` §4.4).
+    regions.update(dsp_boxes)
 
     touches = {
         "rom": (CX - 1, CY + cpu.centre + rom_touch_drop),
@@ -4433,6 +4459,9 @@ def _assemble(
         display=display[0] if dsp_touches else None,
         panels=display if dsp_touches else (),
         panel_ports=panel_ports,
+        # One cell per panel: a `DSP p` lane sends *two* words down its pipe and so has
+        # two `s` glyphs on the same band; either binds the same pipe, so take the first.
+        panel_lanes=_panel_lane_glyphs(cpu, CX, CY, len(panel_ports) if dsp_touches else 0),
         dsp_glyphs={
             band: (CX + x, CY + y) for x, y, _glyph, band in cpu.pipe_glyphs if band in DSP_BANDS
         },
@@ -5290,12 +5319,18 @@ def _display_stack(
     *,
     east_limit: int,
     floor: int | None = None,
-) -> tuple[dict[str, tuple[int, int]], tuple[dict[str, tuple[int, int]], ...]]:
+) -> tuple[
+    dict[str, tuple[int, int]],
+    tuple[dict[str, tuple[int, int]], ...],
+    dict[str, tuple[int, int, int, int]],
+]:
     """Place one relay room + panel per entry, and wire every pipe.
 
-    Returns ``(touches, port_glyphs)`` — the pipe attachment points the binding
-    checker needs, and one ``band -> cell`` map per panel naming the exact ``s``
-    glyph that must reach each side of *that* panel.
+    Returns ``(touches, port_glyphs, boxes)`` — the pipe attachment points the binding
+    checker needs, one ``band -> cell`` map per panel naming the exact ``s`` glyph that
+    must reach each side of *that* panel, and one named box per relay room and panel so
+    a test can ask the engine which *room* a CPU lane's pipe reaches, not merely
+    whether it reaches one.
 
     **Why one room per panel.** A room may feed at most one display — the rule
     ``tests/test_mnist_display.py`` pins as R1, found by bisection against the
@@ -5321,7 +5356,7 @@ def _display_stack(
     glyph wants but every one of which is still a pipe to be counted.
     """
     if not panels:
-        return {}, ()
+        return {}, (), {}
     relays = [b for b in DSP_PANEL_BANDS if b in cpu.dsp_cols]
     if not relays:
         # The three-opcode form: the CPU's own port lanes *are* the panel's ports,
@@ -5333,9 +5368,12 @@ def _display_stack(
                 f"lane (one of {', '.join(DSP_PANEL_BANDS)})"
             )
         cy = wall_y - cpu.height - 1  # `_assemble` draws the room as CY .. CY + H + 1
+        dw, dh = panels[0]
         return (
             _display(g, cpu, cx, wall_y, east_limit, panels[0]),
             ({b: (cx + x, cy + y) for x, y, _gl, b in cpu.pipe_glyphs if b in DSP_BANDS},),
+            {"display:panel:0": (_panel_x(dw, {b: cx + c for b, c in cpu.dsp_cols.items()}),
+                                 wall_y + 4, dw + 2, dh + 2)},
         )
     if len(relays) != len(panels):
         raise MachineError(
@@ -5345,6 +5383,7 @@ def _display_stack(
 
     touches: dict[str, tuple[int, int]] = {}
     port_glyphs: list[dict[str, tuple[int, int]]] = []
+    boxes: dict[str, tuple[int, int, int, int]] = {}
     top = wall_y if floor is None else floor
     # East of everything drawn so far, so a detour's descent clears the block. Taken
     # once, before the first panel widens the grid with its own descent.
@@ -5392,8 +5431,12 @@ def _display_stack(
         )
         touches |= {f"{b}@{i}": t for b, t in ports.items()}
         port_glyphs.append(glyphs)
+        boxes[f"display:relay:{i}"] = (cx, y0, _RELAY_W + 2, _RELAY_H + 2)
+        boxes[f"display:panel:{i}"] = (
+            _panel_x(size[0], cols), relay_wall + 4, size[0] + 2, size[1] + 2
+        )
         top = relay_wall + 4 + size[1] + 1 + _STACK_GAP
-    return touches, tuple(port_glyphs)
+    return touches, tuple(port_glyphs), boxes
 
 
 def _dsp_relay(

@@ -482,6 +482,82 @@ def test_every_port_routes_to_its_own_panels_own_side():
         assert _port_sides(text, panel, ports) == WANT_SIDE, f"panel {panel}"
 
 
+def _lane_reaches(text: str, regions: dict, cell: tuple[int, int]) -> str | None:
+    """Which relay room's north wall the pipe from ``cell`` ends above, by name.
+
+    The *first* hop, CPU lane -> relay room. Both hops are decided by the same
+    nearest-pipe rule and each can be wrong on its own, so each needs its own oracle:
+    a mis-bound first hop paints both curves on one panel while every port still lands
+    on the right side of the panel it reaches.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    cells = Littleman().route(text, *cell)
+    assert cells, f"the lane `s` at {cell} binds no pipe at all"
+    ex, ey = cells[-1].as_tuple()
+    for name, (x0, y0, w, _h) in regions.items():
+        if name.startswith("display:relay:") and ey == y0 - 1 and x0 < ex < x0 + w - 1:
+            return name
+    return None
+
+
+@needs_engine
+def test_each_cpu_lane_reaches_its_own_panels_relay_room():
+    """The first hop, on the real grid — the half ``panel_ports`` cannot speak for.
+
+    ``machine.check_bindings`` computes this in Python at build time; this asks the
+    engine. The margin is only a couple of cells (the two lanes are ``_DSP_PITCH``
+    apart on one wall and their relays are 60 rows apart), so it is worth an oracle
+    rather than an argument.
+    """
+    m = mnist_cnn.build_machine()
+    assert len(m.panel_lanes) == 2
+    text = m.text()
+    for panel, cell in enumerate(m.panel_lanes):
+        assert m.rows[cell[1]][cell[0]] == "s"
+        assert _lane_reaches(text, m.regions, cell) == f"display:relay:{panel}", (
+            f"panel {panel}'s CPU lane does not reach its own relay room"
+        )
+
+
+@needs_engine
+def test_a_lane_bound_to_the_wrong_panels_relay_is_caught():
+    """The **wrong-panel** mis-bind, which is the one that paints a plausible picture.
+
+    Swap the two CPU lanes' ``s`` glyphs and every port still lands on the correct
+    side of the panel it reaches — the pipe count, the display count and the whole of
+    ``test_every_port_routes_to_its_own_panels_own_side`` still pass. What changes is
+    only which *panel* each curve lands on, so only the first-hop oracle can notice.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    m = mnist_cnn.build_machine()
+    rows = list(m.rows)
+    (x0, y0), (x1, y1) = m.panel_lanes
+    for (xa, ya), (xb, _yb) in (((x0, y0), (x1, y1)), ((x1, y1), (x0, y0))):
+        row = list(rows[ya])
+        assert row[xa] == "s" and row[xb] in " .", (row[xa], row[xb])
+        row[xa], row[xb] = " ", "s"
+        rows[ya] = "".join(row)
+    text = "\n".join(rows) + "\n"
+
+    info = Littleman().analyze(text)
+    assert len(info.pipes) == 26, "unchanged, which is why the count cannot catch this"
+    assert len(info.displays) == 2
+
+    # The port-level check is blind to this, and that is the point of having both.
+    for panel, ports in enumerate(m.panel_ports):
+        assert _port_sides(text, panel, ports) == WANT_SIDE, (
+            f"panel {panel}'s ports are untouched by a first-hop swap"
+        )
+
+    swapped = ((x1, y0), (x0, y1))
+    reached = [_lane_reaches(text, m.regions, cell) for cell in swapped]
+    assert reached == ["display:relay:1", "display:relay:0"], (
+        f"the lanes now feed each other's relays and the check must say so: {reached}"
+    )
+
+
 @needs_engine
 def test_a_deliberately_mis_bound_port_is_caught_by_the_route_check():
     """The meta-test: a check that cannot fail is worth nothing.
@@ -527,6 +603,9 @@ def test_a_deliberately_mis_bound_port_is_caught_by_the_route_check():
     assert sides[machine.Band.DSP_ADDR] == "bottom", "ADDR now reaches SWAP's wall"
     assert sides[machine.Band.DSP_SWAP] == "top", "SWAP now reaches ADDR's wall"
     assert sides[machine.Band.DSP_DATA] == "left", "and DATA is untouched"
+    # ...and the first-hop check is blind to *this* one, symmetrically.
+    for panel, cell in enumerate(m.panel_lanes):
+        assert _lane_reaches(text, m.regions, cell) == f"display:relay:{panel}"
 
 
 @needs_engine
