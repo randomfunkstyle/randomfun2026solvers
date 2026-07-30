@@ -830,3 +830,155 @@ def test_the_two_refuted_fixes_stay_refuted():
     assert stream.block_crossings(4, tree=("p2", "prod", "p1", "b_fwd", "b_ret")) == []
     # The control, through the same call: the depth-3 block is placed and judged.
     assert stream.block_crossings(3) == []
+
+
+# ── the crossed shared relay: the room that actually passes prod across ring B ──
+def test_the_stacked_relays_two_loops_cannot_straddle_a_chord():
+    """The fourth refuted constraint, computed rather than argued.
+
+    ``dual_relay_cells`` binds four pipes with margin 6 and none of its four legs need
+    to cross, which is what this module checked and pinned. It is not enough. A room
+    that turns ring B around *and* passes ``prod`` through has to put ``prod``'s two
+    ports on **opposite** sides of ring B's chord, or ``prod``'s pass-through is on one
+    side and the crossing ``block_crossings`` promised to remove is still there.
+
+    ``SPEC.md``'s nearest rule makes that a property of where the four glyphs sit: the
+    stacked room puts each loop's ``r`` and ``s`` on the same row, so the ``r`` arcs and
+    the ``s`` arcs partition the boundary *identically* and ``prod``'s two ports always
+    land together.
+    """
+    stacked = stream.boundary_owners(
+        stream.DUAL_RELAY_IW,
+        stream.DUAL_RELAY_IH,
+        [("upper", (3, 2)), ("lower", (3, 8))],
+    )
+    stacked_s = stream.boundary_owners(
+        stream.DUAL_RELAY_IW,
+        stream.DUAL_RELAY_IH,
+        [("upper", (2, 2)), ("lower", (2, 8))],
+    )
+    assert [o for _, _, o in stacked] == [o for _, _, o in stacked_s], (
+        "if these ever differ the stacked room could pass a pipe across its ring"
+    )
+
+
+def test_the_shared_relays_r_and_s_arcs_interleave():
+    """And the crossed room's do differ — which is what makes the block drawable.
+
+    Ring B crosses west to east through the middle and ``prod`` south to north, so the
+    ``r`` split runs one way round the boundary and the ``s`` split the other. Read
+    clockwise the four ports come out interleaved — ``pass_out``, ``turn_out``,
+    ``pass_in``, ``turn_in`` — so ring B's two ports separate ``prod``'s two.
+    """
+    iw, ih = stream.SHARED_RELAY_IW, stream.SHARED_RELAY_IH
+    owners = {}
+    for kind in "rs":
+        glyphs = [
+            (band, cell)
+            for band, (g, cell) in stream.SHARED_RELAY_GLYPHS.items()
+            if g == kind
+        ]
+        owners[kind] = {(w, o): who for w, o, who in stream.boundary_owners(iw, ih, glyphs)}
+
+    order = [w for w, _, _ in stream.boundary_owners(iw, ih, [("x", (1, 1))])]
+    assert len(order) == 2 * (iw + ih)
+
+    # each port lands in the arc of the glyph it must bind
+    for band, (kind, _cell) in stream.SHARED_RELAY_GLYPHS.items():
+        wall, off = stream.SHARED_RELAY_PORTS[band]
+        assert owners[kind][(wall, off)] == band, f"{band} would bind the other {kind}"
+
+    # and clockwise the four are interleaved, not paired
+    ring = ("turn_in", "turn_out")
+    clockwise = [
+        band
+        for w, o, _ in stream.boundary_owners(iw, ih, [("x", (1, 1))])
+        for band, port in stream.SHARED_RELAY_PORTS.items()
+        if port == (w, o)
+    ]
+    assert len(clockwise) == 4, clockwise
+    cut = clockwise.index(ring[0])
+    rotated = clockwise[cut:] + clockwise[:cut]  # starts at turn_in
+    between = rotated[1 : rotated.index(ring[1])]
+    assert between == ["pass_out"], f"ring B's ports must separate prod's two: {rotated}"
+    assert rotated[rotated.index(ring[1]) + 1 :] == ["pass_in"], rotated
+
+
+def test_the_shared_relays_two_loops_each_read_before_they_send():
+    """Neither man may push the 0 he was born holding.
+
+    The ``Y`` sits in the annulus between the two nested loops, and each child is born
+    facing into its own loop at a cell *after* that loop's ``s`` and *before* its ``r``.
+    """
+    cells = stream.shared_relay_cells()
+    steps = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}
+
+    def walk(pos, direction, n=60):
+        seen = []
+        for _ in range(n):
+            glyph = cells.get(pos, " ")
+            seen.append((pos, glyph))
+            direction = steps.get(glyph, direction)
+            pos = (pos[0] + direction[0], pos[1] + direction[1])
+        return seen
+
+    for start, direction in (((4, 3), (0, 1)), ((4, 1), (0, -1))):
+        ops = [g for _, g in walk(start, direction) if g in "rs"]
+        assert ops[:4] == ["r", "s", "r", "s"], f"loop from {start} is {ops[:4]}"
+
+
+def test_the_shared_relays_two_men_cannot_meet():
+    """Nested loops, disjoint cells — and the starter's own two cells in neither.
+
+    ``SPEC.md`` kills both men on a same-cell arrival without a fatal error, so this
+    has to be a property of the drawing. The inner loop is rows 3..5 x columns 3..7;
+    the outer one is the frame; the ``@``/``Y`` pair is in the annulus between them.
+    """
+    cells = stream.shared_relay_cells()
+    steps = {">": (1, 0), "<": (-1, 0), "^": (0, -1), "v": (0, 1)}
+
+    def cycle(pos, direction, skip, n=90):
+        seen = []
+        for i in range(n):
+            glyph = cells.get(pos, " ")
+            if i >= skip:
+                seen.append(pos)
+            direction = steps.get(glyph, direction)
+            pos = (pos[0] + direction[0], pos[1] + direction[1])
+        return set(seen)
+
+    inner, outer = cycle((4, 3), (0, 1), 14), cycle((4, 1), (0, -1), 30)
+    assert len(inner) == 12 and len(outer) == 28, (len(inner), len(outer))
+    assert not (inner & outer), f"the two men share {inner & outer}"
+    assert not ({(3, 2), (4, 2)} & (inner | outer)), "the starter sits on a loop"
+
+
+@pytest.mark.parametrize("inner_driven", [True, False])
+def test_the_shared_relay_passes_a_pipe_through_without_starving_its_ring(inner_driven: bool):
+    """Four pipes, two men, one loop's ``r`` on a manless stub — and values still flow."""
+    rows = stream.shared_relay_probe(inner_driven)
+    engine = FastLittleman("\n".join(rows))
+    assert len(engine.pipes) == 4, "two loops, one in and one out each"
+    result = engine.run([11, 22, 33], max_ticks=40_000)
+    assert result.fatal is None, result.fatal
+    assert result.output == [11, 22, 33]
+
+
+def test_every_shared_relay_pipe_binds_by_position():
+    """All four, against the engine's own binding — ARCH.md §4.4's silent-misbind family."""
+    rows = stream.shared_relay_probe(True)
+    engine = FastLittleman("\n".join(rows))
+    rx, ry = 12, 12
+    south = ry + stream.SHARED_RELAY_IH + 1
+    east = rx + stream.SHARED_RELAY_IW + 1
+    for band, (wall, off) in stream.SHARED_RELAY_PORTS.items():
+        glyph, (gx, gy) = stream.SHARED_RELAY_GLYPHS[band]
+        want = {
+            "north": (rx + off, ry),
+            "south": (rx + off, south),
+            "west": (rx, ry + off),
+            "east": (east, ry + off),
+        }[wall]
+        pipe = engine.pipes[engine._bindings[(rx + gx, ry + gy)]]
+        attach = pipe.src_attach if glyph == "s" else pipe.dst_attach
+        assert attach == want, f"{glyph}@{(rx + gx, ry + gy)} should bind {band} at {want}"

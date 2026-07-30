@@ -1094,11 +1094,18 @@ def dual_relay_cells() -> dict[tuple[int, int], str]:
 #: the other cycling. Their steady-state cell sets are disjoint by **layout**, not by
 #: timing, so the two can never meet — which matters because ``SPEC.md`` kills both
 #: men on a same-cell arrival, silently and with no fatal error.
-#: The walls are chosen so that no two of the four legs need to cross: the ring's
-#: fill comes down onto the north wall and its return climbs straight back off the
-#: north wall two columns west, while the passed pipe comes up onto the south wall
-#: and leaves westward. That is what keeps ``b_ret``'s climb out of ``prod``'s
-#: descent, which every west-wall arrangement of these four ports collides with.
+#:
+#: **This stacked room cannot be the block's shared relay, and that is a fourth
+#: refuted constraint** — see :func:`shared_relay_cells`. Four pipes bind here and no
+#: two of these four legs cross, both of which this module verified; what it did not
+#: check is the property the planarity argument actually needs, which is that
+#: ``prod`` enter on one side of ring B's chord and leave on the other.
+#: :func:`boundary_owners` computes the answer: the two loops' ``r`` arcs and ``s``
+#: arcs are *identical* here, because both loops put ``r`` and ``s`` on the same row
+#: three columns apart, so whichever pair of ports ring B takes, ``prod``'s two ports
+#: land in the same arc and its pass-through never crosses the chord. The room is kept
+#: because it is the smaller demonstration of the ``Y`` idiom the block relies on, and
+#: because the refutation is worth more visible than deleted.
 DUAL_RELAY_PORTS = {
     "turn_in": ("north", 3),  # the ring's fill drops onto the upper `r`
     "turn_out": ("north", 2),  # the ring's return climbs straight off the upper `s`
@@ -1177,6 +1184,163 @@ def dual_relay_probe(upper_driven: bool = True) -> list[str]:
     drain(driven_out, "O")
     feed(idle_in, None)  # a manless stub: nothing ever sends, so this loop parks
     drain(idle_out, None)
+    return g.rows()
+
+
+# ── which glyph owns which wall cell, and why that decides the whole block ────
+def boundary_owners(
+    iw: int, ih: int, glyphs: Sequence[tuple[str, tuple[int, int]]]
+) -> list[tuple[str, int, str]]:
+    """``(wall, offset, owning glyph)`` for every attachable cell, clockwise from the NW.
+
+    ``SPEC.md``: nearest is Manhattan from the instruction to the pipe segment touching
+    this room, ties by reading order. So *which* glyph a port binds is a function of the
+    port's wall cell alone, and the room's boundary partitions into arcs, one per glyph.
+
+    That partition is what decides whether a room can pass a pipe **across** a ring it
+    also turns around, which is the whole load-bearing claim of
+    :func:`block_crossings`' ``tree`` parameter. A ring entering at one port and leaving
+    at another cuts the room's boundary into two arcs; the passed pipe's ``in`` and
+    ``out`` ports have to fall in *different* ones, or its two legs are on the same side
+    of the ring's chord and the crossing it was supposed to remove is still there.
+    Since ``r`` and ``s`` are separate pools, that is possible only if the ``r`` arcs and
+    the ``s`` arcs partition the boundary *differently* — which is a property of where
+    the four glyphs sit, and is the property :func:`dual_relay_cells` does not have and
+    :func:`shared_relay_cells` does.
+
+    ``glyphs`` are interior coordinates, 1-based like :func:`relay_cells`. Compare only
+    glyphs of one kind: ``r`` against ``r``, ``s`` against ``s``.
+    """
+    out: list[tuple[str, int, str]] = []
+    walls: list[tuple[str, int, tuple[int, int]]] = []
+    walls += [("north", x, (x, 0)) for x in range(1, iw + 1)]
+    walls += [("east", y, (iw + 1, y)) for y in range(1, ih + 1)]
+    walls += [("south", x, (x, ih + 1)) for x in range(iw, 0, -1)]
+    walls += [("west", y, (0, y)) for y in range(ih, 0, -1)]
+    for wall, off, (cx, cy) in walls:
+        name, _ = min(
+            glyphs, key=lambda g: (abs(g[1][0] - cx) + abs(g[1][1] - cy), g[1][1], g[1][0])
+        )
+        out.append((wall, off, name))
+    return out
+
+
+#: The shared relay the block places: two men from one ``Y``, ring B turned around
+#: **west to east** through the middle and ``prod`` passed **south to north** across it.
+#:
+#: The two channels cross at right angles, and that is the entire point. The ring's
+#: ``r`` is west and its ``s`` east; the passed loop's ``r`` is south and its ``s``
+#: north. So the ``r`` arcs split the boundary north/east-of-centre against
+#: south/west-of-centre, while the ``s`` arcs split it the other way, and the four
+#: ports interleave ``turn_in, pass_in, turn_out, pass_out`` around the room —
+#: which is exactly the condition :func:`boundary_owners` explains and
+#: :func:`dual_relay_cells` fails.
+#:
+#: The two loops are *nested*, which they have to be: the ring's loop connects a west
+#: cell to an east cell and the passed loop a south cell to a north cell, so one has to
+#: go round the other. The ring takes the inner ring (rows 3..5, columns 3..7) and the
+#: passed pipe the outer frame, and the ``@``/``Y`` sits in the annulus between them so
+#: each child walks into its own loop without ever stepping on the other's cells.
+#: Both children reach their ``r`` before their ``s``, so neither sends the 0 it was
+#: born holding::
+#:
+#:      v<<<s<<<<      outer loop (prod): the frame. `r` south, `s` north.
+#:      v @Y    ^      the starter, in the annulus; Y's children go north and south
+#:      v v<<<< ^      inner loop (ring B): rows 3..5, columns 3..7
+#:      v r   s ^      `r` west at (3,4), `s` east at (7,4)
+#:      v >>>>^ ^
+#:      v       ^
+#:      >>>>r>>>^
+SHARED_RELAY_IW = 9
+SHARED_RELAY_IH = 7
+
+#: ``band -> (wall, interior offset)``. Every one is the middle of its wall, which is
+#: what makes all four margins 5 cells rather than the 1-cell margins elsewhere in this
+#: block.
+SHARED_RELAY_PORTS = {
+    "turn_in": ("west", 4),  # ring B's fill arrives eastward at the inner `r`
+    "turn_out": ("east", 4),  # ring B's return leaves eastward from the inner `s`
+    "pass_in": ("south", 5),  # prod climbs onto the south wall, at the outer `r`
+    "pass_out": ("north", 5),  # and leaves northward from the outer `s`
+}
+
+#: ``band -> the interior cell that must bind it``, so the probe and the block check the
+#: same four facts.
+SHARED_RELAY_GLYPHS = {
+    "turn_in": ("r", (3, 4)),
+    "turn_out": ("s", (7, 4)),
+    "pass_in": ("r", (5, 7)),
+    "pass_out": ("s", (5, 1)),
+}
+
+
+def shared_relay_cells() -> dict[tuple[int, int], str]:
+    """Two nested relay loops seeded by one ``Y``, crossing at right angles."""
+    rows = (
+        "v<<<s<<<<",
+        "v @Y    ^",
+        "v v<<<< ^",
+        "v r   s ^",
+        "v >>>>^ ^",
+        "v       ^",
+        ">>>>r>>>^",
+    )
+    if {len(row) for row in rows} != {SHARED_RELAY_IW} or len(rows) != SHARED_RELAY_IH:
+        raise StreamError("shared relay rows are not the declared size")
+    return {
+        (x, y): ch
+        for y, row in enumerate(rows, start=1)
+        for x, ch in enumerate(row, start=1)
+        if ch != " "
+    }
+
+
+def shared_relay_probe(inner_driven: bool = True) -> list[str]:
+    """The crossed shared relay alone, with one loop fed from ``I`` and drained to ``O``.
+
+    Same shape of check as :func:`dual_relay_probe`: the idle loop's ``r`` hangs off a
+    manless stub, so §2.1's "a shared relay blocks on the first empty ring" would show
+    up as no output at all rather than as an argument.
+    """
+    from .machine import _Grid
+
+    g = _Grid()
+    rx, ry = 12, 12  # the relay room's north-west wall corner
+    g.room(rx, ry, rx + SHARED_RELAY_IW + 1, ry + SHARED_RELAY_IH + 1)
+    g.blit(rx, ry, shared_relay_cells())
+
+    def outer(band: str) -> tuple[int, int]:
+        """The cell just outside the wall this port attaches to."""
+        wall, off = SHARED_RELAY_PORTS[band]
+        return {
+            "north": (rx + off, ry - 1),
+            "south": (rx + off, ry + SHARED_RELAY_IH + 2),
+            "west": (rx - 1, ry + off),
+            "east": (rx + SHARED_RELAY_IW + 2, ry + off),
+        }[wall]
+
+    def stub(band: str, label: str | None, *, into: bool) -> None:
+        """A 3x3 room four cells out along ``band``'s wall, and the two-cell pipe to it.
+
+        Cell 1 out is the pipe's near end, cell 2 its far end, cell 3 the stub's wall
+        and cell 4 its interior — the shortest legal pipe (``SPEC.md``: two cells, an
+        arrowhead on each end), so nothing about the *leg* can affect the binding.
+        """
+        wall, _off = SHARED_RELAY_PORTS[band]
+        near = outer(band)
+        dx, dy = {"north": (0, -1), "south": (0, 1), "west": (-1, 0), "east": (1, 0)}[wall]
+        far = (near[0] + dx, near[1] + dy)
+        home = (near[0] + dx * 3, near[1] + dy * 3)
+        g.room(home[0] - 1, home[1] - 1, home[0] + 1, home[1] + 1)
+        g.draw_pipe([far, near] if into else [near, far])
+        if label:
+            g.put(*home, label)
+
+    driven, idle = (("turn", "pass") if inner_driven else ("pass", "turn"))
+    stub(f"{driven}_in", "I", into=True)
+    stub(f"{driven}_out", "O", into=False)
+    stub(f"{idle}_in", None, into=True)  # nothing ever sends, so this loop parks
+    stub(f"{idle}_out", None, into=False)
     return g.rows()
 
 
