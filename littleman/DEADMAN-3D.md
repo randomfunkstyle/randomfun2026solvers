@@ -72,6 +72,13 @@ over 816 differential runs.
 | `deadman-3d.man` (= `_v2`, `_trim`) | 382×382 | headless runs — about 2× faster |
 | `deadman-3d_taped.man` (= `_m6_taped`) | 293×257 | **the web editor** |
 
+![the 64x48 machine running in the contest editor](images/deadman-3d_editor_64x48.png)
+
+The 64×48 machine in the official web editor — one LM-75 display, the whole
+frame on it, with the editor's own cursor readout underneath. The dotted lines
+are pipes and the little squares are men; everything you can see around the
+screen is the machine drawing it.
+
 They run the same program and take the same input; they differ only in how
 memory is built. The canonical machine uses man-memory (hundreds of little men);
 the taped one uses a banked tape with a couple of dozen, because the editor
@@ -278,6 +285,16 @@ P=9237, tape=902) and 27 frames
 | `--out DIR` | override the output directory |
 | `--frames N` | how many walk frames; the monster billboard arrives at frame 20, so a shorter run has none |
 | `--no-pngs` | skip the PNG previews |
+
+![the 128x96 machine running as four tiled panels](images/deadman-3d_hires_editor_128x96.png)
+
+The same demo at 128×96 in the editor, and this is what "four tiled panels"
+means in practice: four separate LM-75 displays, each drawing its own quarter,
+butted up with a 2-column / 3-row gutter so the seams fall inside the picture
+rather than around it. The `+` handles between them are the editor's, not the
+machine's. Getting those four quarters to agree frame-for-frame — one router
+demultiplexing a single command stream into four units — is most of what the
+hi-res family *is*.
 
 **Verifying it needs a different call, not the `fast_littleman` CLI.** That CLI
 assumes one display, and this machine has four:
