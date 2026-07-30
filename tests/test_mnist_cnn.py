@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 from randomfun2026solvers import mnist_cnn, mnist_data, mnist_model
+from randomfun2026solvers.fast_littleman import FastLittleman
 from randomfun2026solvers.lm1 import asm, isa, machine, stream
 from randomfun2026solvers.lm1.emulator import Emulator
 from randomfun2026solvers.lm1.store import DictStore, StoreError
@@ -822,6 +823,68 @@ def test_a_small_sample_grid_runs_the_same_program_over_fewer_images():
     assert len(mnist_cnn.machine_input(epochs=1, train_samples=5, val_samples=1)) == (
         mnist_cnn.RING_B + 6 * per
     )
+
+
+#: The differential run's size. Three epochs so the plot column advances more than
+#: once, two images an epoch so it costs ~57 million ticks instead of 14.9 billion.
+DIFF_EPOCHS, DIFF_SAMPLES = 3, 2
+
+
+@pytest.mark.slow
+@needs_engine
+def test_the_grid_commits_the_frames_the_emulator_does():
+    """The emulator is this machine's oracle, and this is what earns it that role.
+
+    Every claim about what the machine learns is made by running the emulator, because
+    30 epochs cost 11.5 minutes there and hours on the grid. That is only legitimate if
+    the two tiers paint the same pixels, so here the *engine's* own per-panel frames are
+    compared against the emulator's, frame for frame.
+
+    A prefix of the real run, deliberately: what can disagree between the tiers — arm
+    codes, ring offsets, which relay room a panel is fed by, the plot column arithmetic
+    — disagrees on the first epoch or never, and a full epoch is 14.9 billion ticks,
+    which is not a test.
+
+    **Two runs, because neither sees what the other does.** Saying what each cannot
+    catch is the point:
+
+    * The **judged** run (``frames=``) compares every pixel of every frame and stops
+      the moment the last expected frame commits. So it cannot see a frame the grid
+      would commit *after* that one: an extra epoch column is invisible to it, because
+      the judge ended the run before it could be painted.
+    * The **capped** run, at twice the judged run's ticks and with no expectation at
+      all, is what covers exactly that gap — the machine never halts, so a fourth frame
+      would still be recorded if one were coming.
+
+    Neither can catch anything about the *numbers* being right: they only pin the two
+    tiers together, and the reference model is what pins the emulator (above).
+
+    Nothing here asserts on ``halted``, and the capped run's ``reason``/``step`` are
+    ignored on purpose: the STREAM rings and the tape worker never halt, so that run's
+    reason is always ``tick-cap`` and its step always just the cap, whatever the machine
+    actually accomplished. Frames are the only signal.
+    """
+    kw = {"epochs": DIFF_EPOCHS, "samples": DIFF_SAMPLES}
+    emu = mnist_cnn.run_emulator(frames=True, **kw)
+    assert [len(f) for f in emu.frames] == [DIFF_EPOCHS + 1] * 2, "axes plus one an epoch"
+
+    # One kwargs dict for both calls, and that is not tidiness: the unrolled body reads
+    # exactly as many words as it was built to read, so a build/input mismatch starves
+    # the machine and every man blocks on `r` — indistinguishable from a deadlock.
+    engine = FastLittleman(mnist_cnn.build_machine(**kw).text())
+    words = mnist_cnn.machine_input(**kw)
+
+    # No leading epoch count: the grid bakes its epoch count (the STREAM block owns the
+    # machine's one legal `I` room). The emulator's stream carries one; this must not.
+    judged = engine.run(words, frames=[[f] for f in emu.frames], max_ticks=10**9)
+    assert judged.fatal is None, judged.fatal
+    assert judged.passed is True, "the engine judged every panel's every frame"
+    assert judged.frames_per_display() == emu.frames
+    assert judged.reason == "output-settled", "a judged run settles rather than capping"
+
+    capped = engine.run(words, max_ticks=judged.step * 2)
+    assert capped.fatal is None, capped.fatal
+    assert capped.frames_per_display() == emu.frames, "and no further frame is coming"
 
 
 @needs_engine
