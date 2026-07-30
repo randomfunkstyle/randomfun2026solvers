@@ -4,9 +4,13 @@ Team **randomfunkstyle**'s work for the **ICFP Contest 2026** — the one where 
 write programs in `littleman`, a 2D ASCII language of little men walking a grid
 of rooms and talking through pipes.
 
-16 problems solved, every public and private case passing. The story of how, with
-a timeline and one decision tree per problem, is in **[`WRITEUP.md`](WRITEUP.md)**
-(illustrated version: [`writeup.html`](writeup.html)).
+16 problems solved, every public and private case passing. The story of how is in
+**[`WRITEUP-HUMAN.md`](WRITEUP-HUMAN.md)** — start there.
+
+If you would rather read the agent's version 0 — the same story with a timeline
+and one decision tree per problem, written before a human went near it — it is in
+[`WRITEUP.md`](WRITEUP.md), with an illustrated build at
+[`writeup.html`](writeup.html). :)
 
 Two things live here:
 
