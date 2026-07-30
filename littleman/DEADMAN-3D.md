@@ -141,6 +141,19 @@ feed it `deadman-3d.input.txt`, and it plays — no WAD, no assets, nothing else
 on disk. **A WAD is only needed if you want to build a machine from a different
 level or different art.**
 
+### Freedoom got it started; a real IWAD is what it runs on now
+
+Early versions of this family were built entirely from **Freedoom**, the
+BSD-licensed replacement data — that is what made a publishable demo possible at
+all, and it is still what the committed machines contain. Development since then
+has moved onto **id's own IWADs**, and that is where the work happens: the
+importer, the art pipeline, the monster and status-bar handling and the hi-res
+family are all developed and measured against real DOOM data.
+
+**`DOOM1.WAD` (shareware) is the battle-tested path.** Every `--wad` instruction
+below is verified end to end against it, and the hi-res family is IWAD-only —
+it has no other source.
+
 ### What a WAD is for, and why one is not in this repo
 
 A WAD is DOOM's archive format: the level geometry, the wall textures, the
@@ -230,6 +243,62 @@ web editor, with the console patch above.
 
 Everything under `littleman/examples/local/` is gitignored, so nothing you build
 this way can be committed by accident.
+
+### The hi-res variant — 128×96, four tiled panels
+
+The same demo at four times the pixels, drawn across a 2×2 cluster of LM-75
+panels that reads as one contiguous screen. **This family is IWAD-only** — there
+is no committed machine and no Freedoom fallback, because everything it produces
+is WAD-derived and therefore unpublishable. It exists only as something you build.
+
+```sh
+cd solvers/python
+uv run python -m randomfun2026solvers.deadman3d_hires \
+    --wad /path/to/DOOM1.WAD --build
+```
+
+```
+wrote .../littleman/examples/local/deadman-3d_hires.* (649x464, store=taped,
+P=9237, tape=902) and 27 frames
+```
+
+| flag | meaning |
+|---|---|
+| `--wad PATH` | the IWAD — required, this family has no other source |
+| `--build` | write the artifact set (`.man`, `.input.txt`, `.cases.json`, `.asm`, sidecars) |
+| `--out DIR` | override the output directory |
+| `--frames N` | how many walk frames; the monster billboard arrives at frame 20, so a shorter run has none |
+| `--no-pngs` | skip the PNG previews |
+
+**Verifying it needs a different call, not the `fast_littleman` CLI.** That CLI
+assumes one display, and this machine has four:
+
+```
+FAIL deadman-3d_hires: display judging needs exactly 1 display(s)
+for frame_tiles=(1, 1), found 4
+```
+
+The judge has to be told the panels are a 2×2 tiling. From the repository root:
+
+```python
+import json, pathlib, sys
+sys.path.insert(0, "solvers/python")
+from randomfun2026solvers.fast_littleman import FastLittleman
+
+d = pathlib.Path("littleman/examples/local")
+rounds = json.loads((d / "deadman-3d_hires.cases.json").read_text())[
+    "publicTestData"][0]["rounds"]
+res = FastLittleman((d / "deadman-3d_hires.man").read_text()).run(
+    " / ".join(" ".join(r["in"]) for r in rounds),
+    frames=[r["frames"] for r in rounds],
+    frame_tiles=(2, 2), max_ticks=40_000_000_000)
+print(res.passed, res.fatal, f"{res.step:,}")
+# True None 257,777,946
+```
+
+It is a much heavier machine — roughly 9.4 million ticks a frame against the
+64×48 machine's 1.9 — hence the larger cap. The web editor is not a realistic
+target for it even with the console patch above.
 
 ### Build time, not run time
 
