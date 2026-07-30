@@ -2857,10 +2857,22 @@ TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
 #: bind, 10 -> 9, which is why the memory lanes move too and ``cpu->drum`` is
 #: 1145 -> 1144.
 #:
-#: Empty by default, so every machine not named here is byte-identical. The
-#: ``taped`` tier of the same slug is deliberately **not** here: it is a different
-#: band with a different store and has not been measured.
-SEEK_TIGHT_STRUCT_DROPS: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
+#: **The taped tier has now been measured, and takes it: -3.227%** on the 21-round
+#: tour (181,008,755 -> 175,167,094 at 642x384, ``passed``), measured on top of
+#: :data:`STRAIGHT_TRIE` at the re-derived corridor. Against men-v3's -5.84%.
+#:
+#: The precondition the guard demands holds on taped **structurally, not by
+#: luck**: ``build_cpu`` refuses ``tight_drops`` under the drum without
+#: ``seek_taken_drop_east``, and taped has been in :data:`SEEK_TAKEN_DROP_EAST`
+#: since that lever landed — so ``turn_x == drop_x - 1``, the three legs telescope
+#: and the seek jump's drop column cancels here exactly as it does on men-v3. A
+#: build that lost the precondition would raise rather than quietly regress.
+#:
+#: Empty by default, so every machine not named here is byte-identical.
+SEEK_TIGHT_STRUCT_DROPS: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+    ("deadman-3d_hires", "men-v3"),
+}
 
 #: Per-``(slug, tier)`` opt-in for **drop columns floored by operations rather than
 #: by cells** — the simple lanes' half of what :data:`TIGHT_STRUCT_DROPS` does for
@@ -2994,9 +3006,17 @@ TUCKED_DROPS: set[tuple[str, str]] = {
 #: The mechanism above is unaffected — read ``build_for(...).regions``, not a
 #: traced ``build_cpu`` call, when quoting a column.
 #:
+#: **The taped tier takes it too, at -0.21%** — 175,167,094 -> 174,808,400 on the
+#: 21-round tour, against men-v3's -0.27%. The smallest of the five and the one
+#: that transfers most nearly unchanged, because what it folds is a property of the
+#: *program*'s micro-programs rather than of the tier.
+#:
 #: Empty for everything else, so every machine not named here is byte-identical.
 #: Requires the short-return drop rule and no top bus.
-FOLDED_LANES: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
+FOLDED_LANES: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+    ("deadman-3d_hires", "men-v3"),
+}
 
 #: Per-program **slab pitch**, the staircase's step. The default 13 gives a branch
 #: slab two spare columns it never uses: its glyphs run from the exit riser at
@@ -7225,8 +7245,20 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: build-only over ``take`` 5..9 x dy 8..12, and 6/10 is again the only pair that
 #: binds with the store where it is (7/9 and 8/8 also build, and both move the
 #: store). The box is unchanged at 594x630 either way.
+#: **The taped tier is 13, and the number stopped being the interesting part.**
+#: With :data:`STRAIGHT_TRIE` on, the tour depends on ``squash_band`` and
+#: :data:`ROM_TOUCH_DROP` *only through their difference* — the effective ROM
+#: corridor ``drop - squash`` — provided the store is levelled to follow. Measured
+#: on the 21-round taped tour with all five dispatch levers in, ``store_offset``
+#: dy tracking the squash, ticks are **identical to the tick** at ``(13, 12)``,
+#: ``(14, 13)``, ``(15, 14)`` and ``(16, 15)`` — 162,827,800 every time — and only
+#: the box moves (642x385 down to 642x382). So the squash is spent on footprint,
+#: which this family does not score, and 13 is chosen because it is the value the
+#: **shipped** ``store_offset`` dy of -1 already levels: taped's own level equation
+#: is ``store_dy = 12 - squash_band``, derived the same way men-v3's was, and 13 is
+#: the one row of it that costs no store movement at all.
 SQUASH_BAND: dict[tuple[str, str], int] = {
-    ("deadman-3d_hires", "taped"): 12,
+    ("deadman-3d_hires", "taped"): 13,
     ("deadman-3d_hires", "men-v3"): 6,
 }
 
@@ -7242,7 +7274,23 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # unsquashed machine had. That is why k=3/drop=25 ties 189,164,256 exactly:
     # nothing about the ROM path changed. 26 is the §7.1 ceiling at k=3 (it ties
     # the fetch `r` against `in`), which is also why k=4 is unreachable.
-    ("deadman-3d_hires", "taped"): 5,
+    # **12 now, and 5 was never a free choice — it was the only drop a fully
+    # packed band could bind.** ``STRAIGHT_TRIE`` does not build at all at
+    # ``(12, 5)``: `'r' at (43, 176) must bind 'rom' but distances are
+    # [('mem_resp', 48), ('rom', 50), ...]`. Raising the drop is what separates
+    # them, and once it does the tour depends only on ``drop - squash``:
+    #
+    #     eff = drop - squash   ticks (21 rounds, all five levers)
+    #     -4                    162,932,xxx
+    #     -2                    162,858,xxx
+    #     **-1**                **162,827,800**   <- the pick
+    #      0                    +2.8%             <- a cliff, not a slope
+    #
+    # -1 is the last value before the cliff and the tick optimum, and the cliff at
+    # 0 is sharp in both directions (swept squash 8..16 x drop 5..20). So the pin
+    # in ``tests/test_seekrom.py`` asserts the *difference*, which is the invariant,
+    # rather than either number, which is not.
+    ("deadman-3d_hires", "taped"): 12,
     # **The men tier's 7 is that same identity, and it is the difference between
     # :data:`STRAIGHT_TRIE` being a 9.7% win and a 4.2% loss.** ``SQUASH_BAND`` 7
     # pulls ``cpu.centre`` seven rows north, so without this the corridor between
@@ -7361,7 +7409,21 @@ LANE_PITCH: dict[tuple[str, str], int] = {
 #: checked-in grid is byte-identical. It is also inert at ``lane_pitch = 2`` — the
 #: rows are two apart there and the ``d`` never fires — so the pair is
 #: :data:`LANE_PITCH` **and** this, never this alone.
-STRAIGHT_TRIE: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
+#: **The taped tier takes it, and it does not transfer as a single key.** At
+#: taped's shipped :data:`SQUASH_BAND` 12 / :data:`ROM_TOUCH_DROP` 5 it does not
+#: build; the pair has to be re-derived for this tier (12/5 -> 13/12, effective
+#: corridor -1), and at the re-derived pair it is **-4.643%** on the 21-round tour:
+#: 189,821,916 -> 181,008,755 at 643x384, ``passed``. The pair *alone*, without the
+#: trie, is worth -0.047% — so effectively all of it is this lever.
+#:
+#: It reads smaller here than men-v3's -10.37% and the absolute saving is smaller
+#: too (8.81M against ~13.9M), which is what a dispatch lever does on a machine
+#: whose memory stall is ~135 ticks an access against men-v3's ~42: the walk it
+#: deletes is a smaller share of a longer instruction.
+STRAIGHT_TRIE: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+    ("deadman-3d_hires", "men-v3"),
+}
 
 #: ``(slug, tier)`` pairs that run a **second collector one row above the fetch**,
 #: so a lane above the trie root stops there instead of falling past the fetch row
@@ -7423,7 +7485,30 @@ STRAIGHT_TRIE: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
 #: byte-identical. It requires ``trim_dead`` and ``lane_pitch = 1`` (the corridor is
 #: paid for out of the stagger) and refuses :data:`TOP_RETURN_BUS`, which wants the
 #: same column 1 above the fetch for the opposite heading.
-HIGH_COLLECTOR: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
+#: **The taped tier takes it, and what stood in the way was its opcode map.**
+#: The corridor row is the row the trie root's up half leaves blank, and the
+#: assertion above it is that the trie parked nothing that *turns* there. Under
+#: taped's tuned :data:`OPCODE_SLOTS` it always did, at every squash from 10 to 14:
+#: `the trie put [(9, '>'), (11, 'x')] on the corridor row`. men-v3 has no
+#: ``OPCODE_SLOTS`` entry, so it falls through to the contiguous packing 0..20,
+#: every up-half node lands on a lane row, and the corridor is clean by accident of
+#: the default.
+#:
+#: The cause is one hole: taped's map left **slot 15 unused**, the only gap in the
+#: root's up half, so the node splitting ``{12..15}`` had nowhere to stand but the
+#: row above lane 14 — exactly the row this opens. Filling 15 fixes it, and a
+#: build-free screen over every rank-preserving map within three slots of the
+#: shipped one (848 candidates) finds **18 that clear the corridor**, of which
+#: ``MODI 13 -> 14, NEG 14 -> 15`` is the only one that also keeps the shipped
+#: ``lane_x0`` of 12 under :data:`TIGHT_TRIE_COLS` *and* the shipped drum cost. The
+#: map change is worth +3,291 ticks on its own — 0.002%, i.e. free.
+#:
+#: Worth **-5.34%** as the marginal inside the full five-lever stack (172,012,101
+#: -> 162,827,800 on the 21-round tour), against -6.32% on men-v3.
+HIGH_COLLECTOR: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+    ("deadman-3d_hires", "men-v3"),
+}
 
 #: ``(slug, tier)`` pairs whose decode trie prices its columns **per node** instead
 #: of two per level. See :func:`_trie_columns` for the rule and why one column a
@@ -7434,7 +7519,28 @@ HIGH_COLLECTOR: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
 #: walk (paid once an instruction), off ``mem_x`` and every lane's length, off every
 #: drop column, and off the walk back west (paid again). ``deadman-3d_hires``
 #: men-v3 goes ``lane_x0`` **14 -> 12**.
-TIGHT_TRIE_COLS: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
+#: **The taped tier takes it, at -1.64% — within a hundredth of men-v3's -1.65%,
+#: which is the tell that this one is pure geometry.** It moves ``lane_x0`` 14 ->
+#: 12 on both tiers.
+#:
+#: Two taped-only couplings, neither of which men-v3 could have shown:
+#:
+#: * :data:`INPUT_NORTH_WEST` is keyed on taped and not on men-v3, and it is a
+#:   distance *west of* ``lane_x0``. Narrowing the trie walks the I room off the
+#:   north wall — `in_west 13 puts the input pipe off the CPU north wall` — so the
+#:   two move together: 13 -> 11, which is again ``CX + 1``, the westernmost legal
+#:   column.
+#: * it does **not** compose with :data:`SEEK_TIGHT_STRUCT_DROPS` if ``lane_x0``
+#:   goes below 12. The tightened structured drops are floored at ``lane_x0``, and
+#:   at 11 a simple lane's descent lands on a slab entry's ``<``
+#:   (`collision at (14, 34)`). That is why the opcode map above is chosen for
+#:   keeping ``lane_x0`` at 12 rather than for the narrowest trie: the 11-column
+#:   maps exist and are 2.7% *worse*, because they cost the whole of
+#:   ``SEEK_TIGHT_STRUCT_DROPS``.
+TIGHT_TRIE_COLS: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+    ("deadman-3d_hires", "men-v3"),
+}
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
@@ -7807,9 +7913,24 @@ OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
     },
     ("deadman-3d_hires", "taped"): {
         "IN": 0, "INCM": 1, "MOVA": 2, "DIV": 3, "ST": 4, "SUB": 5,
-        "ADD": 8, "LDA": 9, "MUL": 10, "DIVI": 11, "LD": 12, "MODI": 13,
-        "NEG": 14, "SUBI": 16, "ADDI": 17, "MULI": 18, "LDI": 20, "BRN": 21,
-        "BRZ": 22, "JMPF": 24, "JMPS": 25, "SND": 28,
+        "ADD": 8, "LDA": 9, "MUL": 10, "DIVI": 11, "LD": 12,
+        # ``MODI`` 13 -> 14 and ``NEG`` 14 -> 15, and the pair is a **third**
+        # objective this map has to solve: the corridor :data:`HIGH_COLLECTOR`
+        # opens. Slot 15 was the only hole in the root's up half, which left the
+        # node splitting ``{12..15}`` standing its ``x`` on the one row the
+        # corridor needs blank; filling 15 puts every up-half node back on a lane
+        # row. Rank order is untouched — ``MODI`` and ``NEG`` keep their places and
+        # every lane's row, micro-program and drop column are where they were — and
+        # the drum pays the same, because 14 and 15 bit-reverse to two-digit
+        # opcodes exactly as 13 and 14 did.
+        #
+        # Chosen out of the 18 rank-preserving repairs within three slots that
+        # clear the corridor: it is the only one that also leaves ``lane_x0`` at 12
+        # under :data:`TIGHT_TRIE_COLS`, which :data:`SEEK_TIGHT_STRUCT_DROPS`
+        # needs (see there). Worth +3,291 ticks on the 21-round tour on its own —
+        # 0.002%, against the -5.34% it unblocks.
+        "MODI": 14, "NEG": 15, "SUBI": 16, "ADDI": 17, "MULI": 18, "LDI": 20,
+        "BRN": 21, "BRZ": 22, "JMPF": 24, "JMPS": 25, "SND": 28,
     },
 }
 
@@ -8079,9 +8200,16 @@ SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {
 #: seek-gated — ``build_for`` passes ``in_west`` unconditionally — so it moves a
 #: classic hires build too; that is safe here because hires commits no grid (its
 #: program is IWAD-derived, ``DEADMAN-3D.md``) and it now ships as a seek build.
+#: **hires/taped is 11, not 13, because :data:`TIGHT_TRIE_COLS` moved the wall the
+#: 13 was measured against.** This is a distance *west of* ``lane_x0``, and the
+#: tighter trie takes ``lane_x0`` 14 -> 12, so the shipped 13 walks the room off
+#: the CPU's north wall entirely (`in_west 13 puts the input pipe off the CPU north
+#: wall`). 11 is the same room in the same place — ``CX + 1``, the westernmost
+#: legal column, which is what the 13 was always naming — and ``mem_pad`` still
+#: floors at 15, so nothing this registry exists to buy has changed.
 INPUT_NORTH_WEST: dict[tuple[str, str], int] = {
     ("deadman-3d", "taped"): 13,
-    ("deadman-3d_hires", "taped"): 13,
+    ("deadman-3d_hires", "taped"): 11,
 }
 
 #: Per-``(slug, tier)`` ``mem_pad``, overriding :data:`MEM_PAD` /

@@ -131,7 +131,21 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert machine.SEEK_TIER_LAYOUT[key] == {"rom_rows": 119}
     assert machine.SEEK_SLAB_PITCH["deadman-3d_hires"] == 11
     assert machine.MEM_PAD_FOR[key] == 15
-    assert machine.INPUT_NORTH_WEST[key] == 13
+    # 11, not the 13 this used to pin, and the number was never the claim. This is
+    # a distance *west of* ``lane_x0``, and both values name the same column —
+    # ``CX + 1``, the westernmost the room may legally take, which is the placement
+    # that buys the pad. What moved is ``lane_x0``: ``TIGHT_TRIE_COLS`` prices the
+    # hires trie's columns per node and takes it 14 -> 12, and the room has to walk
+    # with it or the input pipe leaves the CPU's north wall (the build says so).
+    #
+    # So assert the *difference against the sibling slug*, which is the invariant:
+    # ``deadman-3d`` is not in ``TIGHT_TRIE_COLS``, its trie is still 14 wide, and
+    # its 13 is untouched — hires' value is two smaller for exactly the two columns
+    # the tighter trie saved. ``lane_x0`` itself cannot be computed here because the
+    # hires program is assembled from a locally owned IWAD (see ``_WAD_ONLY`` in
+    # ``tests/test_lm1_opcode_slots.py``).
+    assert machine.INPUT_NORTH_WEST[("deadman-3d", "taped")] == 13
+    assert machine.INPUT_NORTH_WEST[key] == 13 - 2
     assert key in machine.SEEK_TAKEN_DROP_EAST
     # All five now. `SEEK_TELEPORT` used to be given up to `SQUASH_BAND` — the two
     # coexist for k <= 8 (room H is bottom-anchored, its height is `12 - k`), and a
@@ -143,13 +157,30 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     # 21-round tour (185,004,449 -> 183,026,898). So the squash keeps its 12 and
     # the teleport comes back — the k <= 8 arithmetic above describes the unlifted
     # geometry and is kept only to explain why it ever had to be a choice.
-    assert machine.SQUASH_BAND[key] == 12
+    #
+    # **The squash is 13 now, and it is no longer a number worth pinning.** With
+    # ``STRAIGHT_TRIE`` on this tier the tour depends on ``squash_band`` and
+    # ``ROM_TOUCH_DROP`` *only through their difference* — see the pin below — and
+    # the squash on its own only moves the box: 13, 14, 15 and 16 all run
+    # 162,827,800 to the tick on the 21-round tour, with ``store_offset`` dy
+    # following ``12 - squash_band``. 13 is the one that costs no store movement,
+    # because it is the value the shipped dy of -1 already levels. So what is
+    # asserted is the coexistence this test was really written for.
+    assert machine.SQUASH_BAND[key] >= 8, "the band is still packed, not bottom-aligned"
     assert key in machine.SEEK_TELEPORT
     assert ("deadman-3d", "taped") in machine.SEEK_TELEPORT  # unaffected
-    # At full squash §7.1 floors the drop at 5: a squash of k is a negative drop
-    # of k, so the effective corridor is already below what the BRN slab's discard
-    # `r` needs against `mem_resp`.
-    assert machine.ROM_TOUCH_DROP[key] == 5
+    # **The invariant is the difference, not either number.** A squash of k is a
+    # negative drop of k, so what the ROM path actually sees is the *effective
+    # corridor* ``rom_touch_drop - squash_band``. This used to read `drop == 5` at
+    # `squash == 12` — effective -7 — which was not a choice: at full squash that
+    # was the only drop §7.1 would bind, and `STRAIGHT_TRIE` does not build there
+    # at all ('r' at (43, 176) must bind 'rom' but 'mem_resp' is nearer).
+    #
+    # Once the drop is free to move, the pair collapses to this one number, and it
+    # is a cliff rather than a slope: swept squash 8..16 x drop 5..20 on the
+    # 21-round tour, every pair with effective corridor <= -1 lands on the same
+    # curve, -1 is its minimum, and 0 is +2.8% instantly. Pin the -1.
+    assert machine.ROM_TOUCH_DROP[key] - machine.SQUASH_BAND[key] == -1
 
     # Nothing was written on the bare slug where a `(slug, tier)` key was meant,
     # which is the mistake that would silently move the canonical hires build.
@@ -163,7 +194,14 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     # why that guard was an untested assumption and what replaced it.)
     assert "deadman-3d_hires" not in machine.TIGHT_STRUCT_DROPS
     assert ("deadman-3d_hires", "men-v3") in machine.SEEK_TIGHT_STRUCT_DROPS
-    assert ("deadman-3d_hires", "taped") not in machine.SEEK_TIGHT_STRUCT_DROPS
+    # The taped tier has them now too, at -3.227% on the 21-round tour. It was
+    # excluded for not having been measured, not for a geometric reason, and the
+    # precondition ``build_cpu`` demands under the drum — ``seek_taken_drop_east``,
+    # without which the tightened entry hands the man the whole band twice — has
+    # been true on this tier since that lever landed. Assert the pair, since the
+    # tight entries are dead config (or a real loss) without it.
+    assert key in machine.SEEK_TIGHT_STRUCT_DROPS
+    assert key in machine.SEEK_TAKEN_DROP_EAST
 
     # `deadman-3d`'s own seek registries are untouched by all of it.
     assert machine.SEEK_MEM_PAD == {"deadman-3d": 22}

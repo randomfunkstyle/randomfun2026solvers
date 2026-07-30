@@ -266,9 +266,21 @@ def test_a_d_only_ever_stands_on_a_lane_row() -> None:
         assert y in lane_rows, f"`d` at {(x, y)} is on a row no lane occupies"
 
 
-def test_the_registry_names_only_the_tier_that_measured_it() -> None:
-    """``STRAIGHT_TRIE`` is opt-in, so every other machine stays byte-identical."""
-    assert machine.STRAIGHT_TRIE == {("deadman-3d_hires", "men-v3")}
+def test_the_registry_names_only_the_slug_that_measured_it() -> None:
+    """``STRAIGHT_TRIE`` is opt-in, so every other machine stays byte-identical.
+
+    This used to name the men-v3 tier alone. The taped tier now takes it too
+    (-4.643% on the 21-round tour, once its :data:`machine.SQUASH_BAND` /
+    :data:`machine.ROM_TOUCH_DROP` pair is re-derived — at the shipped pair it does
+    not build), so the tier is no longer the invariant.
+
+    **The invariant that has not moved is the slug.** What this test protects is
+    ``deadman-3d``, whose three grids are hash-pinned and which shares every CPU
+    registry with hires; asserting the exact tier set only made an intended,
+    measured change look like a regression. Assert the property the pin exists
+    for — nothing outside ``deadman-3d_hires`` is named — and let the tiers move.
+    """
+    assert {slug for slug, _tier in machine.STRAIGHT_TRIE} == {"deadman-3d_hires"}
 
 
 # ── HIGH_COLLECTOR / TIGHT_TRIE_COLS: the corridor row, and per-node columns ──
@@ -359,6 +371,15 @@ def test_per_node_columns_are_narrower_and_can_never_be_wider() -> None:
     assert _tight_lane_x0(p.k, slot_rows, True) < _tight_lane_x0(p.k, slot_rows, False)
 
 
-def test_the_two_new_registries_name_only_the_tier_that_measured_them() -> None:
-    assert machine.HIGH_COLLECTOR == {("deadman-3d_hires", "men-v3")}
-    assert machine.TIGHT_TRIE_COLS == {("deadman-3d_hires", "men-v3")}
+def test_the_two_new_registries_name_only_the_slug_that_measured_them() -> None:
+    """Both tiers of hires now, and nothing else — see the note above.
+
+    ``HIGH_COLLECTOR`` reaching the taped tier needed one more thing than a key:
+    taped's :data:`machine.OPCODE_SLOTS` map left slot 15 unused, which parked a
+    turning ``x`` on the very row the corridor opens, and the build refused. The
+    map was repaired (``MODI`` 13 -> 14, ``NEG`` 14 -> 15) rather than the lever
+    weakened, which is why the corridor assertion in ``build_cpu`` is still a
+    whitelist and still fires.
+    """
+    for reg in (machine.HIGH_COLLECTOR, machine.TIGHT_TRIE_COLS):
+        assert {slug for slug, _tier in reg} == {"deadman-3d_hires"}
