@@ -1172,3 +1172,147 @@ def test_the_depth_four_block_dimensions_are_recorded():
     assert (four.width, four.height) == (112, 51)
     assert four.ring_c >= 80, "p1's boustrophedon holds a whole row of C"
     assert four.rows_a % 2 == 1 and four.rows_b % 2 == 1  # odd: the last leg goes west
+
+
+@node_required
+@reference_sweeps
+@pytest.mark.parametrize("trie_bits", [3, 4])
+def test_the_reference_interpreter_agrees_about_the_placed_block(trie_bits: int, tmp_path):
+    """``Littleman.analyze``/``route`` — the judge's own engine — on the placed block.
+
+    ``FastLittleman`` agrees with the reference everywhere it has been checked, but the
+    thing being asserted here is a *load* property and the judge is the authority on
+    those. So the pipe count and every unit glyph go through ``lm.mjs`` as well.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    rows, blk, (ox, oy) = _block_harness(trie_bits)
+    path = tmp_path / f"block{trie_bits}.man"
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    lm = Littleman()
+    assert len(lm.analyze(path).pipes) == blk.pipes + 1, "+ the ROM's own command pipe"
+
+    spec = stream._spec(trie_bits)
+    unit = stream.unit_interior(trie_bits)
+    ux = (stream.UX if trie_bits == 3 else stream.UX4) + ox
+    uy = (stream.UY if trie_bits == 3 else stream.UY4) + oy
+    want = {"cmd": (ux + unit.north["cmd"], uy - 1)}
+    want |= {band: (ux - 1, uy + row) for band, row in unit.west.items()}
+    want |= {band: (ux + spec.iw + 2, uy + row) for band, row in unit.east.items()}
+    want |= {band: (ux + col, uy + spec.ih + 2) for band, col in unit.south.items()}
+    for x, y, glyph, band in blk.glyphs:
+        cells = [(c.x, c.y) for c in lm.route(path, ox + x, oy + y)]
+        assert cells, f"{glyph}@{(x, y)} binds no pipe at all"
+        assert want[band] in (cells[0], cells[-1]), (
+            f"{glyph}@{(x, y)} should bind {band} at {want[band]} but got {cells[0], cells[-1]}"
+        )
+
+
+# ── the placed depth-4 block, running ─────────────────────────────────────────
+def _driven(words: list[int]) -> tuple[list[str], stream.StreamBlock]:
+    """The depth-4 block with a looping ROM replaying ``words`` as commands, forever."""
+    from randomfun2026solvers.lm1 import machine
+    from randomfun2026solvers.lm1 import rom as rommod
+
+    blk = stream.build_stream(a_slots=8, b_slots=8, c_slots=6, trie_bits=4)
+    g = machine._Grid()
+    ox, oy = 0, 16
+    for (x, y), ch in blk.cells.items():
+        g.put(ox + x, oy + y, ch)
+    lay = rommod.build_rom(words, rows=2)
+    rx, ry = 2, 0
+    g.room(rx, ry, rx + lay.width, ry + lay.height + 1)
+    g.blit(rx, ry + 1, lay.cells)
+    cx, cy = ox + blk.cmd_cell[0], oy + blk.cmd_cell[1]
+    g.draw_pipe([(rx + 1, ry + lay.height + 2), (rx + 1, cy - 1), (cx, cy - 1), (cx, cy)])
+    sx, sy = ox + blk.resp_cell[0], oy + blk.resp_cell[1]
+    g.draw_pipe([(sx, sy), (sx, sy - 2)])
+    g.room(sx - 1, sy - 5, sx + 1, sy - 3)
+    return g.rows(), blk
+
+
+def test_the_depth_four_block_computes_a_dot_product():
+    """1x2x1 on the placed depth-4 grid: A = [5, 7], B = [[3], [4]] -> 43, then -> 23.
+
+    The same two numbers ``test_the_block_computes_a_dot_product...`` asks of depth 3,
+    which is the point: every glyph could bind the right pipe and the *shared relay*
+    still be wrong, because ``prod`` now reaches the ADDER through it. The second lap is
+    the interesting one — it says ring B came back into alignment and the accumulator
+    ring came back empty, so the depth-4 block is reusable rather than a one-shot.
+    """
+    c, w = StreamUnit.CODES, 16
+    m, k = 2, 1
+    words = [w * m + c["FILLA"], w * (m * k) + c["FILLB"], w * k + c["ZEROC"], w * k + c["MAC"]]
+    for _ in range(m - 1):
+        words += [w * k + c["FWD"], w * k + c["MAC"]]
+    words += [w * k + c["EMIT"], w * (m * k) + c["DRAINB"]]
+
+    rows, blk = _driven(words)
+    engine = FastLittleman("\n".join(rows))
+    assert len(engine.pipes) == blk.pipes + 1
+    result = engine.run([5, 7, 3, 4, 2, 3, 4, 5], max_ticks=300_000)
+    assert result.fatal is None, result.fatal
+    assert result.output[:2] == [43, 23], result.output
+
+
+def test_rotb_and_pusha_do_on_the_grid_what_they_do_in_the_model():
+    """Two new arms, observed through ``MAC``/``EMIT`` because ``resp`` goes to the CPU.
+
+    ``PUSHA 1`` makes ``MAC``'s products equal ring B's values, so the accumulator ring
+    reports ring B's contents — which is how a rotation becomes observable at the O room
+    without a second output pipe.
+    """
+    c, w = StreamUnit.CODES, 16
+    words = [
+        w * 3 + c["FILLB"],
+        w * 1 + c["ROTB"],
+        w * 1 + c["PUSHA"],
+        w * 3 + c["ZEROC"],
+        w * 3 + c["MAC"],
+        w * 3 + c["EMIT"],
+        w * 3 + c["DRAINB"],
+    ]
+    rows, _blk = _driven(words)
+    result = FastLittleman("\n".join(rows)).run([10, 20, 30], max_ticks=300_000)
+    assert result.fatal is None, result.fatal
+    assert result.output[:3] == [20, 30, 10], result.output
+
+
+def test_updb_applies_its_rank_one_update_on_the_placed_grid():
+    """The whole ``UPDB`` round, on the grid, with the drawn 18-bit shift.
+
+    ``UPDB``'s six pipe glyphs bind six *different* pipes by geometry, and ``prod``
+    reaches the ADDER through the shared relay, so this is the one check that exercises
+    every part of the depth-4 topology at once against arithmetic with a known answer.
+
+    Gradients have to reach the accumulator ring the way the trainer sends them — as
+    ``MAC`` products against a unit scalar — so the round is: load ``g`` onto ring B,
+    push it round the ADDER onto ``p1``, empty ring B, load the weights, ``PUSHA`` the
+    scalar, ``UPDB``, then read the updated weights back out through ``MAC``/``EMIT``
+    (which also confirms ``UPDB`` left ``g`` circulating on ``p2`` rather than eating it).
+    """
+    c, w = StreamUnit.CODES, 16
+    grads = [1 << stream.UPDB_SHIFT, 2 << stream.UPDB_SHIFT, 0]
+    weights = [1000, 2000, 3000]
+    scalar = 3
+    words = [
+        w * 1 + c["PUSHA"],  # a = 1, so MAC's products are ring B itself
+        w * 3 + c["FILLB"],  # ring B <- the gradients
+        w * 3 + c["ZEROC"],
+        w * 3 + c["MAC"],  # p1 <- the gradients, through the ADDER
+        w * 3 + c["DRAINB"],
+        w * 3 + c["FILLB"],  # ring B <- the weights
+        w * scalar + c["PUSHA"],
+        w * 3 + c["UPDB"],  # the update, in place
+        w * 3 + c["MAC"],  # products = scalar * updated weight, paired with p2 = g
+        w * 3 + c["EMIT"],
+        w * 3 + c["DRAINB"],
+    ]
+    rows, _blk = _driven(words)
+    result = FastLittleman("\n".join(rows)).run(grads + weights, max_ticks=900_000)
+    assert result.fatal is None, result.fatal
+    want = [
+        scalar * (b - ((scalar * g) >> stream.UPDB_SHIFT)) + g
+        for b, g in zip(weights, grads, strict=True)
+    ]
+    assert result.output[:3] == want, (result.output[:3], want)
