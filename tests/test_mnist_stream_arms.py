@@ -285,7 +285,7 @@ def test_the_drawn_updb_body_is_the_shift_the_program_declares():
 
     assert stream.UPDB_SHIFT == 18
     body = stream.updb_body()
-    assert body == "rsMrs*M9W}}Mr-s"
+    assert body == "rMrWsWs*M9W}}Mr-s"
     assert body.count("}") == 2 and "9" in body, "9 twice, because floored shifts compose"
 
     # The program says which shift it was written against; the block must draw that
@@ -306,12 +306,15 @@ def test_the_updb_body_reads_and_writes_in_the_order_its_rows_impose():
     """
     body = stream.updb_body()
     pipe_ops = [(i, ch) for i, ch in enumerate(body) if ch in "rs"]
-    assert [ch for _i, ch in pipe_ops] == ["r", "s", "r", "s", "r", "s"]
-    (a_ret, _), (a_fwd, _), (p1, _), (p2, _), (b_ret, _), (b_fwd, _) = pipe_ops
-    assert a_ret < a_fwd < p1 < p2 < b_ret < b_fwd
-    assert a_fwd == a_ret + 1, "the scalar goes straight back: ring A is unchanged"
-    assert p2 == p1 + 1, "the gradient circulates, it is not consumed"
+    assert [ch for _i, ch in pipe_ops] == ["r", "r", "s", "s", "r", "s"]
+    (a_ret, _), (p1, _), (a_fwd, _), (p2, _), (b_ret, _), (b_fwd, _) = pipe_ops
+    # Both reads first, then both pushes: the *interleaved* order. It costs two `W`
+    # glyphs to shuffle a value out of B, and it is the only one of the five
+    # admissible orders that lets the whole block be routed (see the planarity tests).
+    assert a_ret < p1 < a_fwd < p2 < b_ret < b_fwd
+    assert body[a_ret + 1] == "M" and body[p1 + 1] == "W" and body[a_fwd + 1] == "W"
     assert b_fwd == b_ret + 2, "one `-` between reading the weight and writing it"
+    assert list(stream.UPDB_BANDS) == ["a_ret", "p1", "a_fwd", "p2", "b_ret", "b_fwd"]
 
 
 @pytest.mark.parametrize("shift", [18, 12, 6])
@@ -439,7 +442,7 @@ def test_every_depth_four_pipe_glyph_sits_on_its_own_pipes_row():
         assert rows[band] == y, f"{glyph}@{(x, y)} claims {band}, whose row is {rows[band]}"
 
     # rule 2, stated: the west rows are distinct and rise in UPDB's read order.
-    assert unit.west["p1"] < unit.west["a_ret"] < unit.west["b_ret"]
+    assert unit.west["a_ret"] < unit.west["p1"] < unit.west["b_ret"]
     assert len(set(unit.west.values())) == len(unit.west)
     assert len(set(unit.east.values())) == len(unit.east)
     # `resp` must be the topmost outgoing row. It is the one pipe that leaves the
@@ -454,7 +457,7 @@ def test_the_drawn_updb_arm_touches_the_pipes_the_probe_proved():
     col = stream._spec(4).cols["UPDB"] + 1  # a counted loop's body is one column east
     body = [(y, glyph, band) for x, y, glyph, band in unit.glyphs if x == col]
     assert [band for _y, _g, band in sorted(body)] == list(stream.UPDB_BANDS)
-    assert [g for _y, g, _b in sorted(body)] == ["r", "s", "r", "s", "r", "s"]
+    assert [g for _y, g, _b in sorted(body)] == ["r", "r", "s", "s", "r", "s"]
 
 
 def test_the_new_arms_do_what_their_glyphs_say():
@@ -499,7 +502,7 @@ def test_the_builder_refuses_a_width_it_cannot_place():
 def test_an_undrawable_shift_is_refused_rather_than_rounded():
     from randomfun2026solvers.lm1.stream import StreamError
 
-    assert stream.updb_body(9) == "rsMrs*M9W}Mr-s"
+    assert stream.updb_body(9) == "rMrWsWs*M9W}Mr-s"
     with pytest.raises(StreamError, match="at least 1"):
         stream.updb_body(0)
 
@@ -635,7 +638,7 @@ def test_the_depth_three_block_is_planar_and_the_depth_four_one_is_not():
     had better report it planar. It does.
     """
     assert stream.block_crossings(3) == []
-    assert stream.block_crossings(4) == [("a_fwd", "a_ret"), ("b_fwd", "b_ret")]
+    assert stream.block_crossings(4) == [("b_fwd", "b_ret")]
 
 
 def test_the_remaining_depth_four_crossing_is_forced_by_two_arms():
@@ -668,15 +671,12 @@ def test_routing_prod_through_ring_bs_relay_makes_the_block_planar():
     §2.1's caution is about sharing a relay with a ring that can *drain*: ring B holds
     the weights and is permanently full, the product stream is not.
     """
-    # One dual relay is not enough: `prod` has to reach the ADDER through *both*
-    # rings' relays, because ring A's pair encloses ring B's and the ADDER has to end
-    # up outside both. So `prod` -> ring B's relay -> ring A's relay -> ADDER, and
-    # each of those relays turns its own ring around as well.
-    assert stream.block_crossings(4, tree=("p2", "p1", "b_fwd", "b_ret")) == [
-        ("a_fwd", "a_ret")
-    ]
-    grown = ("p2", "p1", "b_fwd", "b_ret", "a_fwd", "a_ret")
+    grown = ("p2", "prod", "p1", "b_fwd", "b_ret")
     assert stream.block_crossings(4, tree=grown) == []
+    # and it is ring B's relay specifically: ring A's would leave ring B crossing.
+    assert stream.block_crossings(4, tree=("p2", "prod", "p1", "a_fwd", "a_ret")) == [
+        ("b_fwd", "b_ret")
+    ]
     # And the dual relay this needs is already drawn and already has two loops.
     cells = stream.dual_relay_cells()
     assert list(cells.values()).count("Y") == 1
@@ -697,8 +697,17 @@ def test_resp_leaving_northward_is_what_pins_the_unit_s_row_order():
     assert spec.rows["resp"] == min(spec.rows[b] for b in spec.east)
     order = stream.perimeter_order(4)
     assert order[0] == "resp", "nothing may sit above resp on the east wall"
-    # and with resp first, its cut takes nothing with it
-    assert stream.block_crossings(4, tree=("p2", "p1", "b_fwd", "b_ret", "a_fwd", "a_ret")) == []
+
+    # The cut is not decoration: move ring A's fill above `resp` — the one order the
+    # arm's semantics allow that does so — and ring A becomes unroutable by *any*
+    # layout, tree or relay, which is a different and worse failure than a crossing.
+    severed = ["a_fwd", "resp", "out", "p2", "b_fwd", "prod", "b_ret", "p1", "in", "a_ret"]
+    assert stream.block_crossings(4, order=severed, tree=("p2", "prod", "p1")) == [
+        ("a_fwd", "a_ret")
+    ]
+    assert stream.block_crossings(
+        4, order=severed, tree=("p2", "prod", "p1", "a_fwd", "a_ret", "b_fwd", "b_ret")
+    ) == [("a_fwd", "a_ret")], "no tree can reconnect what the cut severed"
 
 
 # ── the four-pipe dual relay: one room, two men, two jobs ────────────────────

@@ -110,6 +110,7 @@ and the note above :func:`build_stream` says what removes the obstruction.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ..circuit import Circuit, E
@@ -189,7 +190,7 @@ def _shift_glyphs(shift: int) -> str:
 #: image. So the middle read has to be on the same wall as the outer two, and once
 #: the accumulator's return is on the west wall there is no reason for anything else
 #: to be anywhere else. :func:`_spec4` asserts the drawn arm matches this.
-UPDB_BANDS: tuple[str, ...] = ("p1", "p2", "a_ret", "a_fwd", "b_ret", "b_fwd")
+UPDB_BANDS: tuple[str, ...] = ("a_ret", "p1", "a_fwd", "p2", "b_ret", "b_fwd")
 
 
 def updb_body(shift: int = UPDB_SHIFT) -> str:
@@ -198,17 +199,26 @@ def updb_body(shift: int = UPDB_SHIFT) -> str:
     One iteration of ``b = ring_b.pop(); g = p1.pop(); p2.push(g);
     ring_b.push(b - ((a * g) >> shift))`` with two hands and no readable backpack::
 
-        r   the accumulator : A = g, one gradient off P1
-        s   the accumulator : g goes on to P2 — it circulates, it is not consumed
-        M   B = g
         r   ring A's return : A = a, the scalar PUSHA left on ring A
-        s   ring A's fill   : put it straight back, so the ring is unchanged
-        *   A = a * g          (B is still g — the multiply does not touch it)
+        M   B = a
+        r   the accumulator : A = g, one gradient off P1
+        W   A = a, B = g       — both live, swapped so `a` can be sent
+        s   ring A's fill   : put the scalar straight back, ring A unchanged
+        W   A = g, B = a       — swapped back
+        s   the accumulator : g goes on to P2 — it circulates, it is not consumed
+        *   A = a * g          (B is still a — the multiply does not touch it)
         M9W}}  A >>= shift     (see :func:`_shift_glyphs`; B ends holding 9)
         M   B = (a * g) >> shift
         r   ring B's return : A = b
         -   A = b - ((a * g) >> shift)
         s   ring B's fill   : the updated weight, back where it came from
+
+    The two ``W``s are the price of *interleaving* the two reads — a, g, then push a,
+    push g — instead of finishing with ring A before starting on the accumulator. They
+    buy the thing the block cannot do without: this order, and only this order among
+    the five the arm's semantics allow, lets the whole block be routed with a single
+    shared relay (:func:`block_crossings`; the search is in the task-6 report). Two
+    glyphs a lap against a block that otherwise does not close.
 
     The ``r``/``s`` pair on ring A is the same rotate ``MAC`` does on ring B, and it
     is not optional: the scalar has to be re-read every iteration because the shift
@@ -221,16 +231,15 @@ def updb_body(shift: int = UPDB_SHIFT) -> str:
     its ``aq`` model asserts at emit time, so the two tiers cannot drift apart
     silently. It is the one place the drawn arm is narrower than the model.
 
-    Which pipe each glyph talks to is :data:`UPDB_BANDS`, and the accumulator being
-    read *first* is forced, not chosen. ``resp`` is the one pipe that leaves the block
-    northward, so it cuts the routing region and **every port above it is cut off
-    from every other** (:func:`block_crossings`); ``resp`` must therefore be the
-    topmost outgoing row, and it sits below ``in``, which sits below the
-    accumulator's. The other valid order (ring A's return first) computes exactly the
-    same thing for the same glyphs but puts ring A's fill above ``resp``, which makes
-    ring A's pair unroutable at any cost — this module tried it and reverted.
+    Which pipe each glyph talks to is :data:`UPDB_BANDS`, and the order is *searched*,
+    not chosen. Five interleavings satisfy the arm's semantics; a sixth (finish with
+    ring A, then the accumulator) is inadmissible because it puts ring A's fill above
+    ``resp``, and ``resp`` — the one pipe that leaves the block northward — cuts the
+    routing region, so every port above it is severed from every other. Of the five,
+    exactly one lets the block close with a single shared relay. See
+    :func:`block_crossings` and the enumeration recorded in the task-6 report.
     """
-    return "rsMrs*" + _shift_glyphs(shift) + "Mr-s"
+    return "rMrWsWs*" + _shift_glyphs(shift) + "Mr-s"
 
 
 def updb_probe_model(
@@ -594,28 +603,26 @@ def _spec4(shift: int) -> _Spec:
     arg_row = R_TRIE + 4  # the trie is one row deeper than depth 3's
     top = arg_row + len(arg) + 1  # 12: the first row an arm's loop body can reach
 
-    # ``UPDB``'s body, padded so its three reads and three writes land on their rows.
-    # Two blanks after the accumulator's read, because ``resp`` **must** be the
-    # topmost outgoing row — it is the one pipe that leaves the block northward, so
-    # it cuts the routing region, and any port above it is cut off from every other
-    # (:func:`block_crossings`). ``resp`` sits below ``in``, which sits below the
-    # accumulator's own row, so ``p2`` cannot be the row immediately under ``p1``.
-    updb = body[:1] + "  " + body[1:]
+    # ``UPDB``'s body needs no padding at this order: its six pipe glyphs already fall
+    # on alternating rows, and ``in``, ``resp`` and ``out`` slot into the gaps. ``resp``
+    # has to be the topmost *outgoing* row — it is the one pipe that leaves the block
+    # northward, so it cuts the routing region and anything above it is severed from
+    # everything else (:func:`block_crossings`) — and it also has to sit below ``in``
+    # (``RDIN``) and below the accumulator's row (``RDP``), which is what fixes it here.
+    updb = body
     rows = {
-        "p1": top,  # 12  west: partial sums back from the ADDER
+        "a_ret": top,  # 12  west: ring A's return  (UPDB's scalar, and MAC's)
         "in": top + 1,  # 13  west: the input room
-        "resp": top + 2,  # 14  east: one word back to the CPU — the topmost outgoing
-        "p2": top + 3,  # 15  east: partial sums to the ADDER
-        "out": top + 4,  # 16  east: the output room
-        "a_ret": top + 5,  # 17  west: ring A's return
-        "a_fwd": top + 6,  # 18  east: ring A's fill
+        "p1": top + 2,  # 14  west: partial sums back from the ADDER
+        "resp": top + 3,  # 15  east: one word back to the CPU — the topmost outgoing
+        "a_fwd": top + 4,  # 16  east: ring A's fill
+        "out": top + 5,  # 17  east: the output room
+        "p2": top + 6,  # 18  east: partial sums to the ADDER
         "b_ret": top + len(updb) - 3,  # 26  west: ring B's return
         "b_fwd": top + len(updb) - 1,  # 28  east: ring B's rotate-back
         "prod": top + len(updb) + 1,  # 30  east: products to the ADDER
     }
-    if [top + i for i in [pipe_ops[0], *(o + 2 for o in pipe_ops[1:])]] != [
-        rows[band] for band in UPDB_BANDS
-    ]:
+    if [top + i for i in pipe_ops] != [rows[band] for band in UPDB_BANDS]:
         raise StreamError(f"UPDB's body {updb!r} does not land on the row map {rows}")
 
     def gap(first: str, last: str) -> str:
@@ -640,7 +647,7 @@ def _spec4(shift: int) -> _Spec:
         "ZEROC": _Arm(loop=(rows["p2"] - 2, "0s")),
         "FWD": _Arm(loop=(rows["p1"] - 1, gap("p1", "p2"))),
         "EMIT": _Arm(loop=(rows["p1"] - 1, gap("p1", "out"))),
-        "UPDB": _Arm(loop=(rows["p1"] - 1, updb)),
+        "UPDB": _Arm(loop=(rows["a_ret"] - 1, updb)),
     }
 
     arms = tuple(arm for arm in _LEAVES4 if arm)
@@ -866,6 +873,7 @@ def block_crossings(
     lr_shift: int = UPDB_SHIFT,
     tree: tuple[str, ...] = ("p2", "prod", "p1"),
     pairs: tuple[tuple[str, str], ...] = (("a_fwd", "a_ret"), ("b_fwd", "b_ret")),
+    order: Sequence[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Which ring pairs *cannot* be routed outside the unit. Empty means planar.
 
@@ -884,13 +892,18 @@ def block_crossings(
       leg span, band depth or column allocation can move a pair across a boundary —
       only the perimeter order or the tree can.
 
+    ``order`` overrides the drawn perimeter, which is what makes this a *search* tool
+    rather than a check: candidate row maps can be adjudicated before any of them is
+    drawn. Every search must keep the depth-3 block as a control — a configuration
+    that reports it non-planar is a bug in this function, not a result.
+
     ``tree`` is a parameter because growing it is the fix: a *room* is not a point,
     so a relay that also passes another pipe through makes that pipe's ports leaves
     of the same tree, and leaves are adjacent to a tree rather than separated by it.
     Routing ``prod`` through ring B's relay adds ``b_fwd``/``b_ret``; doing the same
     at ring A's adds ``a_fwd``/``a_ret``.
     """
-    order = perimeter_order(trie_bits, lr_shift=lr_shift)
+    order = list(order) if order is not None else perimeter_order(trie_bits, lr_shift=lr_shift)
     if "resp" in order:
         cut = order.index("resp")
         arcs = [order[:cut], order[cut + 1 :]]
