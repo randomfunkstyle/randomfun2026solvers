@@ -102,16 +102,43 @@ SCALE = 2
 #: which is more than twice ``MON_FAR``.  Walk ``deadman3d.WALK`` here and not one
 #: frame in fifty-seven contains a billboard.
 #:
-#: So the route below was searched rather than composed: the shortest sequence of
-#: turns and steps from id's own spawn that puts a monster in the **near** 20x28
-#: band **under the crosshair**.  It arrives at frame 20 with the sergeant at
-#: depth 3513 spanning columns 51..70 and rows 36..63 — across the seam at x = 64
-#: **and** the seam at y = 48, so the one billboard is a piece of all four
-#: panels — then FIREs (he has 1 HP: the frame that kills still shows him
-#: standing) and holds twice on the corpse.
+#: So the route below was searched rather than composed, and it is searched
+#: against the **benchmark's own window**: this family is measured over 21 rounds
+#: — round 0's boot burst plus commands 0..19 — so a walk whose first billboard
+#: lands at command 20 is measured as a monster-free stroll.  Every tick figure
+#: taken before this route describes exactly that.  The score maximized was, in
+#: order: kills, connecting shots, frames whose billboard straddles both tile
+#: seams, frames that paint a corpse, frames that paint anything at all, and
+#: painted columns; the guide out of the start hall is a grid-BFS potential
+#: toward the cells that have line of sight to a monster within ``MON_FAR``.
+#: Beam search over the nine movement chords — turn *and* step in one command
+#: word, which is what buys the six commands the old route spent standing still
+#: to turn.
+#:
+#: The result, beat by beat (``walk_beats``): north out of the alcove and east
+#: through the y = 36 corridor — the only gap in the x = 31..32 wall — wading the
+#: nukage pool at x = 35..41 on the way, which is 15 health; then southeast into
+#: the great room.  **Command 14** puts the sergeant at (56, 30) on screen at
+#: depth 6552, eight columns of the far 8x10 band; command 15 has him at 4504 in
+#: the 12x18 band; **command 16** at 2916 in the near 20x28 band, columns 61..80
+#: over rows either side of 48 — across the seam at x = 64 **and** the seam at
+#: y = 48, so that billboard is a piece of all four panels — and that is the
+#: frame that FIREs and kills him (1 HP: the frame that kills still shows him
+#: standing).  Command 17 turns down the x = 55 corridor, the only line of sight
+#: to the imp at (55, 18), who appears at depth 11686 — **2 HP, so commands 18
+#: and 19 are two connecting shots**, both of them billboards across the x = 64
+#: seam, and the second is the one the 21-round window ends on.
+#:
+#: The four commands after the window are the demo's own: it walks on down the
+#: corridor and the corpse stripe grows 8 -> 12 -> 20 columns in its face, the
+#: last frame firing a live round into a corpse — which by contract hits nothing.
+#:
+#: Six of the twenty measured frames paint a billboard (the old route: none),
+#: three of them are shots that connect, and health reads 75 by the end instead
+#: of a pristine 100.
 WALK_CHORDS: list[str] = (
-    ["."] + ["w"] * 2 + ["d"] * 2 + ["w", "d", "w", "d"] + ["w"] * 7 + ["d"]
-    + ["w"] * 5 + ["d"] + [" ", ".", "."]
+    ["wd", "w"] + ["wd"] * 3 + ["w"] * 6 + ["wd", "wa", "w", "wd", "w"]
+    + ["wd ", "wd", "wd ", "w "] + ["w"] * 3 + [". "]
 )
 
 #: :data:`WALK_CHORDS` encoded — the command words the machine reads.

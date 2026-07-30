@@ -472,10 +472,13 @@ def test_a_billboard_paints_and_the_machine_agrees_across_both_seams(
     ``deadman3d.WALK`` is Freedoom's choreography and id's E1M1 puts its three
     kept monsters twenty-seven cells from the spawn, so that walk never renders
     one — which is exactly how the port could have looked finished while
-    painting nothing.  :data:`deadman3d_hires.WALK` is this level's own route:
-    it stands the sergeant in the near 20x28 band under the crosshair, across
-    the seam at x = 64 *and* the seam at y = 48, shoots him, and holds on the
-    corpse.
+    painting nothing.  :data:`deadman3d_hires.WALK` is this level's own route,
+    and it is choreographed inside the 21-round benchmark window (commands
+    0..19), not merely somewhere in the demo: the first billboard is command 14,
+    command 16 stands the sergeant in the near 20x28 band under the crosshair —
+    across the seam at x = 64 *and* the seam at y = 48 — and kills him, and
+    commands 18 and 19 are two connecting shots on the 2-HP imp down the x = 55
+    corridor.  The four commands after the window hold on both corpses.
     """
     from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers.lm1 import display
@@ -497,13 +500,18 @@ def test_a_billboard_paints_and_the_machine_agrees_across_both_seams(
     painted = {k for k in range(1, len(want))
                if any(want[k][r] != bare[k - 1][r] for r in range(96))}
     assert painted, "no frame in the hi-res walk contains a monster"
-    assert {24, 25, 26} <= painted  # the shot, and two beats on the corpse
+    # want[k] is command k - 1, so the benchmark's 21 rounds are k <= 20.  The
+    # sighting, the kill, the two connecting shots — all inside it — and the two
+    # corpse beats after it.
+    assert {15, 17, 19, 20, 21, 22} <= painted
+    assert len(painted & set(range(1, 21))) == 6, "the measured window must paint"
 
-    # and the one that matters spans both seams: rows either side of 48 and
-    # columns either side of 64 all carry sprite pixels
-    view = want[24]
+    # and the one that matters — command 16, the near-band kill, inside the
+    # window — spans both seams: rows either side of 48 and columns either side
+    # of 64 all carry sprite pixels
+    view = want[17]
     cells = [(r, x) for r in range(96) for x in range(128)
-             if view[r][x] != bare[23][r][x]]
+             if view[r][x] != bare[16][r][x]]
     assert min(r for r, _x in cells) < 48 <= max(r for r, _x in cells)
     assert min(x for _r, x in cells) < 64 <= max(x for _r, x in cells)
 
