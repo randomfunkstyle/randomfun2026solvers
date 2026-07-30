@@ -51,12 +51,13 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from randomfun2026solvers import mnist_data as md
 from randomfun2026solvers import mnist_model as mm
 from randomfun2026solvers.lm1 import asm, isa
+from randomfun2026solvers.lm1.dsprelay import PORT_ADDR, PORT_DATA, PORT_SWAP
 from randomfun2026solvers.lm1.emulator import Emulator
 from randomfun2026solvers.lm1.store import DictStore, StreamUnit
 
@@ -64,9 +65,13 @@ __all__ = [
     "SEED",
     "RING_SIZES",
     "PANEL",
+    "PANELS",
     "LOSS_PANEL",
     "ACC_PANEL",
     "STORE_WORDS",
+    "acc_row",
+    "build_machine",
+    "loss_row",
     "EXP_TABLE",
     "LN_MANT_TABLE",
     "LN2",
@@ -82,10 +87,57 @@ __all__ = [
 #: The init seed, shared with :func:`mnist_model.init_params`.
 SEED = 1
 
-#: Panel geometry (Task 7 draws them; this build reports through ``OUT``).
+#: Panel geometry: two 64x32 LM-75s, the loss curve on the first and the accuracy
+#: curve on the second. Panel order is the grid's reading order, which is also the
+#: order the engine numbers its displays in, so ``LOSS_PANEL``/``ACC_PANEL`` index
+#: ``machine.build(display=PANELS)`` and ``RunResult.panel_frames`` alike.
 PANEL = (64, 32)
+PANELS = (PANEL, PANEL)
 LOSS_PANEL = 0
 ACC_PANEL = 1
+
+# ── the panel layout ─────────────────────────────────────────────────────────
+#: Rows 0..29 are the plot area, row 30 the x-axis, row 31 spare; columns 0..1 are
+#: the y-axis and columns 2..63 one per epoch. 62 columns is the epoch ceiling the
+#: geometry gives, and an epoch past it repaints the last column rather than
+#: wrapping onto the y-axis (:func:`_plot`).
+PLOT_ROWS = 30
+AXIS_ROW = 30
+Y_AXIS_COLS = 2
+COL0 = Y_AXIS_COLS
+MAX_EPOCH_COLS = PANEL[0] - COL0
+
+#: Colours: background, axes, the training curve, the validation curve.
+BG_COLOUR, AXIS_COLOUR, TRAIN_COLOUR, VAL_COLOUR = 0, 8, 9, 14
+
+#: The loss panel's fixed vertical scale, in Q12 units, and the Q12 per plotted
+#: row that follows from it. The measured 30-epoch range is train 2,366..7,387 and
+#: validation 2,702..4,839, so 2,000..8,000 covers both with a margin and divides
+#: into 30 rows exactly — a whole number of Q12 units a row is what keeps the
+#: emitted ``DIVI`` a single instruction.
+LOSS_LO, LOSS_HI = 2000, 8000
+LOSS_PER_ROW = (LOSS_HI - LOSS_LO) // PLOT_ROWS
+
+
+def loss_row(loss: int) -> int:
+    """Which plot row a Q12 loss lands on: low loss at the bottom, clamped.
+
+    The oracle for the emitted arithmetic — :func:`_plot_value` emits exactly this
+    and ``tests/test_mnist_cnn.py`` compares the two over the whole range,
+    including both clamps.
+    """
+    q = (loss - LOSS_LO) // LOSS_PER_ROW if loss >= LOSS_LO else -1
+    return PLOT_ROWS - 1 - min(max(q, 0), PLOT_ROWS - 1)
+
+
+def acc_row(acc: int) -> int:
+    """Which plot row an accuracy percentage lands on: 0% at the bottom.
+
+    ``* 29 // 100`` rather than ``* 30 // 100`` so that 100% lands on row 0 and 0%
+    on row 29 without a clamp — the two ends of the axis are exactly the two ends
+    of the plot area.
+    """
+    return PLOT_ROWS - 1 - min(max(acc, 0), 100) * (PLOT_ROWS - 1) // 100
 
 C = StreamUnit.CODES
 
@@ -230,6 +282,11 @@ S.alloc("VCORRECT")
 S.alloc("TCOUNT")
 S.alloc("VCOUNT")
 S.alloc("EPOCHS")
+#: The plot column the next epoch paints, so the panels do not have to derive it
+#: from the epoch count — which is an *input* word and therefore unknown at emit
+#: time. Held in the STORE rather than a ring slot because ``ADD`` reads it
+#: straight into the ADDR word (``row * 64 + PCOL``).
+S.alloc("PCOL")
 STORE_WORDS = S.size
 
 
@@ -1011,6 +1068,130 @@ def _epoch_report(g: _Gen, *, train_n: int, val_n: int) -> None:
     g.op("OUT")
 
 
+# ── the panels ───────────────────────────────────────────────────────────────
+#: The relay opcode that reaches each panel. One lane per panel, because a room may
+#: feed at most one display, so each panel needs its own relay room — see
+#: ``lm1/isa.py``'s ``DSP2`` and ``tests/test_mnist_display.py``'s R1.
+_PANEL_OP = ("DSP", "DSP2")
+
+
+def _dsp(g: _Gen, panel: int, port: int, note: str = "") -> None:
+    g.op(f"{_PANEL_OP[panel]} {port}", note)
+
+
+def _axes(g: _Gen) -> None:
+    """Paint both panels' axes once, at boot.
+
+    The panels are persistent framebuffers (every commit is ``SWAP 1``), so the
+    axes are drawn once and every later epoch adds four pixels to what is already
+    there. With ``SWAP 0`` the machine would have to repaint 158 axis cells and
+    every earlier epoch's points on every commit.
+    """
+    g.blank()
+    g.say(f"axes, painted once: colour {AXIS_COLOUR} down columns 0-1 and along row 30")
+    for panel in (LOSS_PANEL, ACC_PANEL):
+        for row in range(PLOT_ROWS):
+            g.ldi(row * PANEL[0])
+            _dsp(g, panel, PORT_ADDR)
+            g.ldi(AXIS_COLOUR)
+            for _ in range(Y_AXIS_COLS):
+                _dsp(g, panel, PORT_DATA)
+        g.ldi(AXIS_ROW * PANEL[0])
+        _dsp(g, panel, PORT_ADDR)
+        g.ldi(AXIS_COLOUR)
+        for _ in range(PANEL[0]):
+            _dsp(g, panel, PORT_DATA)
+        g.ldi(1)
+        _dsp(g, panel, PORT_SWAP, "commit, keeping the framebuffer")
+
+
+def _plot_point(g: _Gen, panel: int, colour: int) -> None:
+    """ACC holds the plot row; paint one pixel of ``colour`` in this epoch's column."""
+    g.op(f"MULI {PANEL[0]}")
+    g.op(f"ADD {S.PCOL}", "ADDR = row * 64 + this epoch's column")
+    _dsp(g, panel, PORT_ADDR)
+    g.ldi(colour)
+    _dsp(g, panel, PORT_DATA)
+
+
+def _plot_loss(g: _Gen, addr: int, colour: int, tag: str) -> None:
+    """One point on the loss panel, from the mean Q12 loss in ``store[addr]``.
+
+    The arithmetic is :func:`loss_row`'s, including both clamps: a loss below the
+    scale pins to the bottom row and one at or above the top pins to row 0. Without
+    the clamps an out-of-range epoch would compute an ADDR outside the panel, which
+    the panel model rejects and the hardware would silently wrap.
+    """
+    below, inside, done = g.sym(f"{tag}_lo"), g.sym(f"{tag}_in"), g.sym(f"{tag}_at")
+    g.ld(addr)
+    g.op(f"SUBI {LOSS_LO}")
+    g.op(f"BRN {below}")
+    g.op(f"DIVI {LOSS_PER_ROW}")
+    g.op(f"SUBI {PLOT_ROWS - 1}")
+    g.op(f"BRN {inside}")
+    g.ldi(0, "at or above the top of the scale")
+    g.op(f"JMP {done}")
+    g.label(below)
+    g.ldi(PLOT_ROWS - 1, "below the bottom of the scale")
+    g.op(f"JMP {done}")
+    g.label(inside)
+    g.op("NEG", f"row = {PLOT_ROWS - 1} - q")
+    g.label(done)
+    _plot_point(g, LOSS_PANEL, colour)
+
+
+def _plot_acc(g: _Gen, addr: int, n: int, colour: int) -> None:
+    """One point on the accuracy panel, from the correct count in ``store[addr]``.
+
+    Two floors, in :func:`acc_row`'s order: the percentage first (as ``OUT`` reports
+    it) and then the row, so the pixel is always on the row the reported number
+    means. No clamp is needed — 0% is row 29 and 100% is row 0 exactly.
+    """
+    g.ld(addr)
+    g.op("MULI 100")
+    g.op(f"DIVI {n}", "the percentage the epoch report would print")
+    g.op(f"MULI {PLOT_ROWS - 1}")
+    g.op("DIVI 100")
+    g.op(f"SUBI {PLOT_ROWS - 1}")
+    g.op("NEG", f"row = {PLOT_ROWS - 1} - acc * 29 / 100")
+    _plot_point(g, ACC_PANEL, colour)
+
+
+def _plot(g: _Gen, *, train_n: int, val_n: int) -> None:
+    """Four points an epoch: two on the loss panel, two on the accuracy panel.
+
+    ``SWAP 1`` on each panel, not ``SWAP 0``: the frame the engine commits is the
+    whole curve so far, and clearing would erase it.
+    """
+    g.blank()
+    g.say("the epoch's four points: train/val loss, then train/val accuracy")
+    g.ld(S.LOSS)
+    g.op(f"DIVI {train_n}")
+    g.st(S.TMP)
+    _plot_loss(g, S.TMP, TRAIN_COLOUR, "ptl")
+    g.ld(S.VLOSS)
+    g.op(f"DIVI {val_n}")
+    g.st(S.TMP)
+    _plot_loss(g, S.TMP, VAL_COLOUR, "pvl")
+    g.ldi(1)
+    _dsp(g, LOSS_PANEL, PORT_SWAP, "commit the loss panel, keeping it")
+
+    _plot_acc(g, S.CORRECT, train_n, TRAIN_COLOUR)
+    _plot_acc(g, S.VCORRECT, val_n, VAL_COLOUR)
+    g.ldi(1)
+    _dsp(g, ACC_PANEL, PORT_SWAP, "commit the accuracy panel, keeping it")
+
+    g.say("advance the epoch column, pinned at the last one so ADDR stays in range")
+    g.ld(S.PCOL)
+    g.op("ADDI 1")
+    g.st(S.PCOL)
+    g.op(f"SUBI {PANEL[0] - 1}")
+    g.op(f"BRN {g.sym('plot_col_ok')}")
+    g.ldi(PANEL[0] - 1)
+    g.st(S.PCOL)
+    g.label(g.sym("plot_col_ok"))
+
+
 def emit_source(
     *,
     epochs_from_input: bool = True,
@@ -1020,22 +1201,37 @@ def emit_source(
     train_samples: int | None = None,
     val_samples: int | None = None,
     single_step: bool = False,
+    panels: bool = False,
 ) -> str:
     """The whole ``.asm`` text: boot, an unrolled train body, an unrolled val body.
 
     ``single_step`` emits one training sample and halts, with no epoch
     bookkeeping — what the one-step equality test runs.
+
+    ``panels`` chooses how an epoch reports itself, and the two are **variants of one
+    program** rather than a flag on a feature: ``machine.build`` refuses a machine
+    that has both a display and an ``O`` room (``SPEC.md`` — a display-judged machine
+    must emit nothing), so a build cannot have both. ``False`` keeps the four ``OUT``
+    words an epoch, which is what every equality test against the reference model
+    reads; ``True`` paints the same four numbers as four pixels on two LM-75s and
+    emits nothing at all, which is what the grid does.
     """
     if dropout:
         raise NotImplementedError(
             "dropout is off by design: 18 features at batch 1 cannot spare any (spec §4.1)"
         )
+    if panels and single_step:
+        raise ValueError("single_step has no epoch to plot: the panels build needs the epoch loop")
     train_n = md.N_TRAIN if train_samples is None else train_samples
     val_n = md.N_VAL if val_samples is None else val_samples
 
     g = _Gen(lr_shift=lr_shift)
     _header(g, lr_shift=lr_shift, train_n=train_n, val_n=val_n)
     _boot(g, epochs_from_input=epochs_from_input and not single_step, epochs=epochs)
+    if panels:
+        _axes(g)
+        g.ldi(COL0, "the first epoch's plot column")
+        g.st(S.PCOL)
 
     if single_step:
         g.blank()
@@ -1100,7 +1296,11 @@ def emit_source(
 
     g.blank()
     g.label("epoch_end")
-    _epoch_report(g, train_n=train_n, val_n=val_n)
+    g.scope = "ep_"
+    if panels:
+        _plot(g, train_n=train_n, val_n=val_n)
+    else:
+        _epoch_report(g, train_n=train_n, val_n=val_n)
     g.ld(S.EPOCHS)
     g.op("SUBI 1")
     g.st(S.EPOCHS)
@@ -1221,6 +1421,11 @@ class RunReport:
     ticks: int
     program_words: int
     ring_high: tuple[int, int, int]
+    #: One committed-frame list per panel, in panel order — empty unless the run was
+    #: asked for ``frames=True``, which needs the ``panels=True`` build (the ``OUT``
+    #: build paints nothing). This is the emulator side of Task 8's differential
+    #: test: the same frames the engine's own ``frames_per_display()`` reports.
+    frames: list[list[list[str]]] = field(default_factory=list)
 
 
 def _extract_params(store: DictStore, unit: StreamUnit) -> mm.Params:
@@ -1259,9 +1464,18 @@ def run_emulator(
     samples: int | None = None,
     return_params: bool = False,
     report: bool = False,
+    frames: bool = False,
 ) -> list[mm.EpochStat] | mm.Params | RunReport:
-    """Assemble and run the program. ``epochs=0`` means one training step."""
+    """Assemble and run the program. ``epochs=0`` means one training step.
+
+    ``frames=True`` runs the ``panels=True`` build instead and returns the committed
+    frames of both panels in :attr:`RunReport.frames`. It emits no output words, so
+    there are no ``stats`` to report — the curve is *in* the frames, which is exactly
+    the claim Task 8's differential test checks against the engine.
+    """
     single = epochs == 0
+    if frames and single:
+        raise ValueError("frames=True needs at least one epoch: a single step plots nothing")
     train_n = samples if samples is not None else md.N_TRAIN
     val_n = samples if samples is not None else md.N_VAL
     src = emit_source(
@@ -1270,6 +1484,7 @@ def run_emulator(
         train_samples=train_n,
         val_samples=0 if single else val_n,
         single_step=single,
+        panels=frames,
     )
     program = asm.assemble(src, name="mnist", isa=isa.LM1_EXT)
     # The store is *sized*: an address the map does not name is a fault, not a
@@ -1301,7 +1516,7 @@ def run_emulator(
         )
         for k in range(0, len(out), 4)
     ]
-    if report:
+    if report or frames:
         return RunReport(
             stats=stats,
             params=params,
@@ -1309,8 +1524,83 @@ def run_emulator(
             ticks=result.ticks,
             program_words=program.P,
             ring_high=(unit.high_a, unit.high_b, unit.high_c),
+            frames=result.panel_frames(PANELS) if frames else [],
         )
     return params if return_params else stats
+
+
+# ── the machine ──────────────────────────────────────────────────────────────
+#: How the machine is placed. Every one of these is a *pinned search result*, not a
+#: preference: ``build`` sweeps ``mem_pad`` and ``stream_pad`` itself, and on a
+#: 19,840-word ROM one attempt costs seconds, so the 800-attempt sweep is minutes.
+#: Pinning them keeps ``build_machine()`` a fast function and makes the placement
+#: reviewable. The `.man` test regenerates the grid, so a value that stops working
+#: fails loudly rather than silently picking another.
+#:
+#: ``STREAM_PAD`` is the smallest value that puts the block's response lane east of
+#: its command pipe's descent (``_stream`` refuses otherwise), and ``DSP_PAD`` the
+#: smallest that puts both display lanes east of *that* response lane — which is
+#: what gives each panel's command pipe a clear corridor row under the CPU
+#: (``machine._display_stack``).
+MEM_PAD = 54
+STREAM_PAD = 48
+DSP_PAD = 55
+
+#: How far below the CPU's fetch row the ROM corridor attaches. Not a preference
+#: either: the jump slabs' discard ``r`` sits five rows above the south wall and must
+#: stay nearer the ROM pipe on the *west* wall than the STREAM block's response pipe
+#: on the *south* (§7.1 is nearest, not nearest-useful). ``machine._stream`` records
+#: that on ``snake`` all 4,800 (fold, mem_pad, stream_pad) combinations failed on
+#: exactly this binding, and that ``matmul`` only escapes it by having no ``JMPF``.
+#: This program has jumps and a response pipe, so it needs the third knob: dropping
+#: the ROM's attachment point *into* the slab band takes the slab ``r``'s distance to
+#: the ROM from 69 cells to 33, which is inside the response pipe's 42.
+ROM_TOUCH_DROP = 32
+
+#: The ROM fold. The ROM is 19,840 words and the packed builder trades width for
+#: height, so this is the one real dimension knob on the machine; the value is swept
+#: for the smallest bounding box rather than argued (see the task-7 report).
+ROM_ROWS = 220
+
+#: The epoch count is **baked**, not read from input, and that is forced rather than
+#: chosen: ``SPEC.md`` § Input and output makes *a second I/O room a load error*, and
+#: the machine already has one — the STREAM block's, which is where every dataset
+#: word arrives (``RDIN``) and where the boot ``FILLB`` reads ring B from. A CPU
+#: ``IN`` lane would draw a second ``I`` and the grid would not load at all. 30 is
+#: the run the loss scale was measured over, and the panels hold 62 columns.
+MACHINE_EPOCHS = 30
+
+
+def build_machine(*, epochs: int = MACHINE_EPOCHS):  # -> machine.Machine
+    """The two-panel grid: CPU, ROM, tape STORE, STREAM block, two relay-fed LM-75s.
+
+    ``store="tape"`` and not ``"grid"``: the man-memory grid is 36x1,065 at 352
+    slots, which reaches hundreds of rows below the CPU and straight through the
+    STREAM block's own 112 columns. The tape is 33x46 and fits beside the CPU, above
+    the block. It is the slower tier per access and that is accepted — this machine
+    is a demo, not a scored submission, and no tick target applies to it.
+    """
+    from randomfun2026solvers.lm1 import machine
+
+    if not 1 <= epochs <= MAX_EPOCH_COLS:
+        raise ValueError(f"the panels hold {MAX_EPOCH_COLS} epoch columns, not {epochs}")
+    program = asm.assemble(
+        emit_source(lr_shift=6, panels=True, epochs_from_input=False, epochs=epochs),
+        name="mnist-cnn",
+        isa=isa.LM1_EXT,
+    )
+    return machine.build(
+        program,
+        tape_n=STORE_WORDS,
+        rom_rows=ROM_ROWS,
+        mem_pad=MEM_PAD,
+        stream_pad=STREAM_PAD,
+        dsp_pad=DSP_PAD,
+        rom_touch_drop=ROM_TOUCH_DROP,
+        stream=RING_SIZES,
+        display=PANELS,
+        store="tape",
+    )
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

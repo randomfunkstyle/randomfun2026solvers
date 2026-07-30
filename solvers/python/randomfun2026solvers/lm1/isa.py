@@ -142,6 +142,12 @@ class Sem(StrEnum):
     BR_ZERO_SEEK = "br-zero-seek"
     BR_NEG_SEEK = "br-neg-seek"
     DISPLAY = "display"
+    #: The *second* panel's fan-out relay. A machine with two LM-75s needs one
+    #: relay room per panel, because a room may feed at most one display (the rule
+    #: ``tests/test_mnist_display.py`` pins as R1) — and which room a lane's ``s``
+    #: reaches is decided by where the glyph sits, so the panel cannot be an
+    #: operand either. One lane band per panel is what falls out of both.
+    DISPLAY_2 = "display-2"
     DISPLAY_ADDR = "display-addr"
     DISPLAY_DATA = "display-data"
     DISPLAY_SWAP = "display-swap"
@@ -615,6 +621,22 @@ _EXT_OPS: tuple[Op, ...] = (
         description="send ACC to the display's SWAP port (bottom): 0 commits and clears",
         micro=(Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
         sem=Sem.DISPLAY_SWAP,
+        ext=True,
+    ),
+    Op(
+        code=39,
+        mnemonic="DSP2",
+        operands=1,
+        description="send ACC to the SECOND LM-75's port p, via that panel's own relay",
+        # `DSP p`'s lane, verbatim, on a second band — because a two-panel machine
+        # needs a *room* per panel, not a port per panel: a room may feed at most
+        # one display (R1, `tests/test_mnist_display.py`), so the CPU cannot reach
+        # both panels however many opcodes it spends. What a new opcode buys is a
+        # second lane, hence a second pipe, hence a second relay room; the choice of
+        # *port* still happens behind the seam where the `s` glyphs sit statically
+        # beside their own outlets (`dsprelay.py`).
+        micro=(Micro.RING_READ, Micro.SEND_DSP, Micro.SWAP, Micro.SEND_DSP, Micro.SWAP),
+        sem=Sem.DISPLAY_2,
         ext=True,
     ),
     # ── the STREAM block (stream.py): rings, and a fused multiply-accumulate ──

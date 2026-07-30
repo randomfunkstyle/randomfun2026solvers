@@ -120,10 +120,33 @@ class RunResult(BaseModel):
     store_cells: dict[int, int] = Field(default_factory=dict)
     spill_high_water: int = 0
     display_writes: tuple[tuple[int, int], ...] = ()
+    #: ``(panel, port, value)`` — the same writes, tagged with the panel they went
+    #: to. A machine with two LM-75s needs one relay room per panel (R1: a room may
+    #: feed at most one display), so a write has to say which panel it lands on.
+    #: ``display_writes`` above is deliberately *not* widened: ``plotter``,
+    #: ``palette``, ``snake`` and ``deadman-3d`` all read it as ``(port, value)``,
+    #: and panel 0's writes appear in both lists.
+    panel_writes: tuple[tuple[int, int, int], ...] = ()
     #: ``(tile, port, value)`` for a tiled wall (``.unit doom4``): one 128x96
     #: framebuffer is four panels, so a write has to say *which* one.  Empty on
     #: every single-panel machine, which keeps ``display_writes`` what it was.
     wall_writes: tuple[tuple[int, int, int], ...] = ()
+
+    def panel_frames(self, panels: Sequence[tuple[int, int]]) -> list[list[list[str]]]:
+        """Replay :attr:`panel_writes` panel by panel: one frame list per panel.
+
+        ``panels`` is the interior ``(width, height)`` of each panel in the order
+        the grid presents them, which is also the order the engine reports its
+        displays in — so index *i* here is the engine's display *i*, and the two
+        can be compared frame for frame (Task 8's differential test).
+        """
+        from .display import frames_from_writes
+
+        out: list[list[list[str]]] = []
+        for i, (width, height) in enumerate(panels):
+            writes = [(port, value) for panel, port, value in self.panel_writes if panel == i]
+            out.append(frames_from_writes(writes, width=width, height=height))
+        return out
 
     @property
     def over_tick_cap(self) -> bool:
@@ -179,6 +202,7 @@ class Emulator:
         self.words_skipped = 0
         self.output: list[int] = []
         self.display_writes: list[tuple[int, int]] = []
+        self.panel_writes: list[tuple[int, int, int]] = []
         self.wall_writes: list[tuple[int, int, int]] = []
 
         self._rounds: tuple[Round, ...] = ()
@@ -302,6 +326,7 @@ class Emulator:
             store_cells=cells,
             spill_high_water=self.spill.high_water,
             display_writes=tuple(self.display_writes),
+            panel_writes=tuple(self.panel_writes),
             wall_writes=tuple(self.wall_writes),
         )
 
@@ -574,24 +599,37 @@ def _store_acc_mem(em: Emulator, src: int | None) -> None:
     em.b = em.a  # `M`
 
 
+def _paint(em: Emulator, panel: int, port: int, value: int) -> None:
+    """Record one port write on both channels.
+
+    ``display_writes`` is panel 0's and stays ``(port, value)``: ``plotter``,
+    ``palette``, ``snake`` and ``deadman-3d`` all read it and none of them has a
+    second panel. ``panel_writes`` is the panel-aware channel every panel writes to,
+    so a two-panel run can be replayed panel by panel (:meth:`RunResult.panel_frames`).
+    """
+    if panel == 0:
+        em.display_writes.append((port, value))
+    em.panel_writes.append((panel, port, value))
+
+
 @_handler(Sem.DISPLAY_ADDR)
 def _display_addr(em: Emulator, _: int | None) -> None:
     em.a, em.b = em.b, em.a  # `W`
-    em.display_writes.append((0, em.a))
+    _paint(em, 0, 0, em.a)
     em.a, em.b = em.b, em.a  # `W` — ACC preserved
 
 
 @_handler(Sem.DISPLAY_DATA)
 def _display_data(em: Emulator, _: int | None) -> None:
     em.a, em.b = em.b, em.a
-    em.display_writes.append((1, em.a))
+    _paint(em, 0, 1, em.a)
     em.a, em.b = em.b, em.a
 
 
 @_handler(Sem.DISPLAY_SWAP)
 def _display_swap(em: Emulator, _: int | None) -> None:
     em.a, em.b = em.b, em.a
-    em.display_writes.append((2, em.a))
+    _paint(em, 0, 2, em.a)
     em.a, em.b = em.b, em.a
 
 
@@ -649,7 +687,14 @@ def _br_neg(em: Emulator, n: int | None) -> None:
 @_handler(Sem.DISPLAY)
 def _display(em: Emulator, port: int | None) -> None:
     assert port is not None
-    em.display_writes.append((port, em.b))
+    _paint(em, 0, port, em.b)
+
+
+@_handler(Sem.DISPLAY_2)
+def _display_2(em: Emulator, port: int | None) -> None:
+    """`DSP2 p`: the same two-word hand-off, to the *second* panel's relay room."""
+    assert port is not None
+    _paint(em, 1, port, em.b)
 
 
 @_handler(Sem.HALT)

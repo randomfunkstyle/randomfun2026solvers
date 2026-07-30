@@ -77,6 +77,9 @@ def test_v1_has_no_ext_rows_and_ext_extends_it() -> None:
         "DSPA",
         "DSPD",
         "DSPS",
+        # the second panel's fan-out relay: a room may feed at most one display, so a
+        # second panel needs a second lane feeding a second relay room (dsprelay.py)
+        "DSP2",
         "NEG",
         "PUSH",
         "POP",

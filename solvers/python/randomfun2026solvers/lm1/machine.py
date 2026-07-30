@@ -115,6 +115,7 @@ __all__ = [
     "DISPLAY_OVERRIDE",
     "DSP_BANDS",
     "DSP_LANE_BANDS",
+    "DSP_PANEL_BANDS",
     "DSP_SEM_BAND",
     "MEM_PAD",
     "MEMORY_SEMS",
@@ -148,6 +149,12 @@ class Band:
     # instead of three is what takes a 19-opcode program to 16, `k` from 5 to 4, and
     # the lane band from 63 rows to 31.
     DSP = "dsp"
+    # The *second* panel's relay pipe. A room may feed at most one display (R1, see
+    # ``tests/test_mnist_display.py``), so a second panel needs a second relay room,
+    # which needs a second lane — the panel is no more selectable from an operand
+    # than the port is. Only the lane doubles: each relay still fans its one pipe
+    # out to its own panel's three ports.
+    DSP2 = "dsp2"
     # CPU south wall: the STREAM block's command and response pipes (stream.py).
     # South rather than east because the memory lanes own the east wall, and a
     # southern pipe is ~15 rows below the lane band — far enough that a memory `r`
@@ -167,7 +174,14 @@ DSP_BANDS: tuple[str, ...] = (Band.DSP_DATA, Band.DSP_ADDR, Band.DSP_SWAP)
 #: single lane feeds `dsprelay`'s room and the ports hang off *its* wall instead.
 #: Kept apart from ``DSP_BANDS`` because that tuple means the panel's three sides
 #: and their west-to-east routing order, which the relay does not change.
-DSP_LANE_BANDS: tuple[str, ...] = (*DSP_BANDS, Band.DSP)
+DSP_LANE_BANDS: tuple[str, ...] = (*DSP_BANDS, Band.DSP, Band.DSP2)
+
+#: One relay lane per panel, in panel order — panel *i* is fed by
+#: ``DSP_PANEL_BANDS[i]``'s single pipe, and the panels are placed in that order, so
+#: the index is also the engine's own display index (displays are numbered in
+#: reading order). Extending this list plus one ISA opcode is what a third panel
+#: would take; nothing else in :func:`_display_stack` is arity-specific.
+DSP_PANEL_BANDS: tuple[str, ...] = (Band.DSP, Band.DSP2)
 
 #: Columns between one display lane's ``s`` and the next. It must exceed the row
 #: gap between neighbouring lanes (2), or an ``s`` binds its neighbour's pipe:
@@ -322,6 +336,13 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("s", Band.DSP),
         ("W", None),
     ),
+    # `DSP2 p`: the identical lane on the second panel's band.
+    Sem.DISPLAY_2: (
+        ("s", Band.DSP2),
+        ("W", None),
+        ("s", Band.DSP2),
+        ("W", None),
+    ),
     Sem.HALT: (("H", None),),
 }
 
@@ -331,6 +352,7 @@ DSP_SEM_BAND: dict[Sem, str] = {
     Sem.DISPLAY_DATA: Band.DSP_DATA,
     Sem.DISPLAY_SWAP: Band.DSP_SWAP,
     Sem.DISPLAY: Band.DSP,
+    Sem.DISPLAY_2: Band.DSP2,
 }
 
 #: Tags that talk to the STREAM block, keyed to the pipe each needs.
@@ -1152,6 +1174,7 @@ def build_cpu(
     *,
     mem_pad: int = 0,
     stream_pad: int = 0,
+    dsp_pad: int = 0,
     short_return: bool = True,
     drain_unit_bits: int = 0,
     trim_dead: bool = False,
@@ -1292,8 +1315,16 @@ def build_cpu(
 
     # Display lanes: one `s` per port, spread ``_DSP_PITCH`` columns apart so each
     # binds the pipe that leaves the south wall directly beneath it.
+    #
+    # ``dsp_pad`` walks them east, for the same kind of reason ``stream_pad`` walks
+    # the STREAM pair — a *column order* the routing below depends on rather than a
+    # binding. On a machine that has both a STREAM block and its own panels, the
+    # block's command and response pipes descend from this same wall and then run
+    # east, which leaves exactly one clear corridor row between the CPU and the
+    # block; a display pipe starting **east of the response column** instead has the
+    # whole gap to turn in, one row per panel. See :func:`_display_stack`.
     dsp_used = [b for b in DSP_LANE_BANDS if any(b == bb for mc in flat.values() for _, bb in mc)]
-    dsp_cols = {b: lane_x0 + 1 + i * _DSP_PITCH for i, b in enumerate(dsp_used)}
+    dsp_cols = {b: lane_x0 + 1 + dsp_pad + i * _DSP_PITCH for i, b in enumerate(dsp_used)}
     band_x.update(dsp_cols)
 
     # STREAM lanes: same idea, one column per pipe. The pitch only has to exceed
@@ -2939,10 +2970,25 @@ class Machine:
     tape_skip_batch: int = 1
     tape_relay_size: tuple[int, int] | None = None
     stream_pad: int = 0
+    #: The *first* panel's interior ``(width, height)``, or ``None`` — what it has
+    #: always been, because every judged machine has exactly one panel and every
+    #: caller reading this field means that one.
     display: tuple[int, int] | None = None
+    #: Every panel's interior size, in the order they appear on the grid — which is
+    #: the order the engine numbers its displays in, so index *i* here is the
+    #: engine's display *i*. Empty on a machine with no LM-75; one entry long
+    #: whenever :attr:`display` is set and the machine has a single panel.
+    panels: tuple[tuple[int, int], ...] = ()
     #: Where each display band's ``s`` glyph ended up, in *grid* coordinates — the
     #: cells ``lm.mjs route`` has to answer with that band's own pipe.
     dsp_glyphs: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: Per panel, in panel order: the ``s`` glyph that must reach each side of *that*
+    #: panel, in grid coordinates. On a relayed machine those glyphs live in the relay
+    #: rooms, not in the CPU, which is why :attr:`dsp_glyphs` cannot answer for them —
+    #: and answering it by position is the only check that catches a mis-bound port,
+    #: since the machine otherwise runs to completion painting the wrong thing
+    #: (``ARCH.md`` §4.4).
+    panel_ports: tuple[dict[str, tuple[int, int]], ...] = ()
     #: The placed STREAM block, when the program uses one (see ``stream.py``).
     stream: object | None = None
     #: Cells in the ROM -> CPU corridor, which by ``SPEC.md`` is also its capacity in
@@ -3046,7 +3092,7 @@ class Machine:
         return max(self.width, self.height) ** 2
 
     def report(self) -> str:
-        panel = f", LM-75 {self.display[0]}x{self.display[1]}" if self.display else ""
+        panel = ", " + " + ".join(f"LM-75 {w}x{h}" for w, h in self.panels) if self.panels else ""
         stream = f", stream_pad={self.stream_pad}" if self.stream else ""
         placement = f", compact store_dy={self.store_offset[1]}" if self.compact else ""
         routes = (
@@ -3066,6 +3112,36 @@ class Machine:
         )
 
 
+def _panel_sizes(
+    display: tuple[int, int] | Sequence[tuple[int, int]] | None,
+) -> tuple[tuple[int, int], ...]:
+    """Normalise ``build``'s ``display=`` to one ``(width, height)`` per panel.
+
+    ``(w, h)`` and ``[(w, h)]`` mean the same single panel, and the bare pair stays
+    accepted because it is what every judged slug passes (``display_for`` reads it
+    straight out of the problem JSON's ``io.display``). The two are told apart by
+    the element type rather than by length: ``(64, 32)`` is a sequence of two *ints*
+    and ``[(64, 32), (64, 32)]`` a sequence of two *pairs*, so a length test would
+    read the first as two panels of nonsense.
+    """
+    if display is None:
+        return ()
+    items = list(display)
+    if items and all(isinstance(v, int) for v in items):
+        if len(items) != 2:
+            raise MachineError(f"display={display!r} is not a (width, height) pair")
+        return ((items[0], items[1]),)
+    out: list[tuple[int, int]] = []
+    for entry in items:
+        pair = tuple(entry)
+        if len(pair) != 2 or not all(isinstance(v, int) for v in pair):
+            raise MachineError(f"display entry {entry!r} is not a (width, height) pair")
+        out.append((pair[0], pair[1]))
+    if not out:
+        raise MachineError("display=[] asks for a panel-less display; pass None instead")
+    return tuple(out)
+
+
 def _highest_address(program: Program) -> int:
     return max(
         (i.operand for i in program.instrs if i.sem in MEMORY_SEMS and i.operand is not None),
@@ -3079,9 +3155,11 @@ def build(
     tape_n: int | None = None,
     rom_rows: int | None = None,
     mem_pad: int | None = None,
-    display: tuple[int, int] | None = None,
+    display: tuple[int, int] | Sequence[tuple[int, int]] | None = None,
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
+    stream_pad: int | None = None,
+    dsp_pad: int = 0,
     packed_rom: bool = True,
     short_return: bool | None = None,
     store: str = "tape",
@@ -3270,14 +3348,17 @@ def build(
             f"reaches {tape_n - 1}; a read past the end stalls the machine silently, "
             "so raise TAPE_SIZE to at least the top address plus one"
         )
-    if display is None and any(s in DSP_SEM_BAND for s in p.sem.values()):
+    panels = _panel_sizes(display)
+    if not panels and any(s in DSP_SEM_BAND for s in p.sem.values()):
         raise MachineError(
             "the program drives the LM-75 but no display resolution was given; "
             "pass display=(width, height) from the problem's `io.display`"
         )
 
     pads = [mem_pad] if mem_pad is not None else range(0, 40)
-    spads = range(0, 40, 2) if stream else [0]
+    spads = (
+        [stream_pad] if stream_pad is not None else range(0, 40, 2) if stream else [0]
+    )
     last: MachineError | None = None
     best: Machine | None = None
     for spad in spads:
@@ -3290,10 +3371,11 @@ def build(
                     tape_n,
                     rom_rows,
                     pad,
-                    display,
+                    panels,
                     stream,
                     resp_pad,
                     spad,
+                    dsp_pad,
                     packed_rom,
                     short_return,
                     store,
@@ -3365,10 +3447,11 @@ def build(
                     tape_n,
                     rom_rows,
                     best.mem_pad,
-                    display,
+                    panels,
                     stream,
                     resp_pad,
                     best.stream_pad,
+                    dsp_pad,
                     packed_rom,
                     short_return,
                     store,
@@ -3462,10 +3545,11 @@ def _assemble(
     tape_n: int,
     rom_rows: int | None,
     mem_pad: int,
-    display: tuple[int, int] | None = None,
+    display: tuple[tuple[int, int], ...] = (),
     stream: tuple[int, int, int] | None = None,
     resp_pad: int = 0,
     stream_pad: int = 0,
+    dsp_pad: int = 0,
     packed_rom: bool = True,
     short_return: bool = True,
     store: str = "tape",
@@ -3515,6 +3599,7 @@ def _assemble(
         p,
         mem_pad=mem_pad,
         stream_pad=stream_pad,
+        dsp_pad=dsp_pad,
         short_return=short_return,
         drain_unit_bits=0 if seek else DRAIN_UNIT_BITS.get(program.name, 0),
         tight_drops=not seek and program.name in TIGHT_STRUCT_DROPS,
@@ -4143,20 +4228,6 @@ def _assemble(
                 ]
             )
 
-    # ── the LM-75, below the CPU ─────────────────────────────────────────────
-    # With `DSP p` the CPU owns one display pipe instead of three, so the fan-out
-    # room goes in first and the panel hangs off *its* south wall. `_display` is
-    # unchanged: the relay hands it the same three columns the CPU used to.
-    dsp_touches: dict[str, tuple[int, int]] = {}
-    relay_cols: dict[str, int] | None = None
-    relay_wall = CY + H + 1
-    if display and cpu.dsp_cols:
-        if Band.DSP in cpu.dsp_cols:
-            in_col = CX + cpu.dsp_cols[Band.DSP]
-            relay_cols, relay_wall = _dsp_relay(g, CX, CY + H + 1, in_col)
-            dsp_touches[Band.DSP] = (in_col, CY + H + 2)
-        dsp_touches |= _display(g, cpu, CX, relay_wall, AX, display, cols=relay_cols)
-
     # ── the STREAM block, below the CPU ──────────────────────────────────────
     stream_touches: dict[str, tuple[int, int]] = {}
     blk = None
@@ -4187,6 +4258,25 @@ def _assemble(
             doom_cluster_lift=doom_cluster_lift,
             doom_north_up=doom_north_up,
             doom_north_west=doom_north_west,
+        )
+
+    # ── the LM-75s, below everything ─────────────────────────────────────────
+    # Drawn *after* the STREAM block, not before: on a machine that has both, the
+    # block is 112 columns wide and starts at column 1, so there is nowhere beside
+    # it for a panel — the stack goes below it, and where "below" is is not known
+    # until the block is placed. On every machine that has one and not the other
+    # this is the same drawing it always was (see :func:`_display_stack`).
+    dsp_touches: dict[str, tuple[int, int]] = {}
+    panel_ports: tuple[dict[str, tuple[int, int]], ...] = ()
+    if display and cpu.dsp_cols:
+        dsp_touches, panel_ports = _display_stack(
+            g,
+            cpu,
+            CX,
+            CY + H + 1,
+            display,
+            east_limit=AX,
+            floor=(max(y for _x, y in g.c) + 2) if blk is not None else None,
         )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
@@ -4326,7 +4416,9 @@ def _assemble(
         tape_skip_batch=tape_skip_batch,
         tape_relay_size=_resolve_tape_relay(tape_skip_batch, tape_relay_size)[1],
         stream_pad=stream_pad,
-        display=display if dsp_touches else None,
+        display=display[0] if dsp_touches else None,
+        panels=display if dsp_touches else (),
+        panel_ports=panel_ports,
         dsp_glyphs={
             band: (CX + x, CY + y) for x, y, _glyph, band in cpu.pipe_glyphs if band in DSP_BANDS
         },
@@ -5077,8 +5169,140 @@ _RELAY_PITCH = 12
 _RELAY_W, _RELAY_H = 14 + 2 * _RELAY_PITCH, 13
 
 
-def _dsp_relay(g: _Grid, cx: int, wall_y: int, in_col: int) -> tuple[dict[str, int], int]:
-    """Place `DSP p`'s fan-out room. Returns its three outlet columns and south wall.
+#: Rows between one panel's stack and the next: the previous panel's SWAP leg runs
+#: under it on ``bottom + 2``, so the next relay's westward approach lane is
+#: ``bottom + 3`` and its north wall ``bottom + 4``. One row of slack on top of that.
+_STACK_GAP = 5
+
+
+def _display_stack(
+    g: _Grid,
+    cpu: _Cpu,
+    cx: int,
+    wall_y: int,
+    panels: tuple[tuple[int, int], ...],
+    *,
+    east_limit: int,
+    floor: int | None = None,
+) -> tuple[dict[str, tuple[int, int]], tuple[dict[str, tuple[int, int]], ...]]:
+    """Place one relay room + panel per entry, and wire every pipe.
+
+    Returns ``(touches, port_glyphs)`` — the pipe attachment points the binding
+    checker needs, and one ``band -> cell`` map per panel naming the exact ``s``
+    glyph that must reach each side of *that* panel.
+
+    **Why one room per panel.** A room may feed at most one display — the rule
+    ``tests/test_mnist_display.py`` pins as R1, found by bisection against the
+    engine — so the CPU, being one room, cannot drive two panels however many
+    opcodes it spends on them. Each panel therefore gets its own
+    :func:`_dsp_relay` room, reached by its own lane (:data:`DSP_PANEL_BANDS`), and
+    fanning out to its own panel's three ports. The three-opcode form (one lane per
+    *port*, no relay) is the other arrangement and is single-panel by construction:
+    those three pipes go straight from the CPU into the panel.
+
+    ``floor`` is the first free row below everything already drawn, and is ``None``
+    when the panels may hang directly off the CPU's south wall — which is every
+    machine without a STREAM block, i.e. every machine whose grid is checked in
+    today. With a block in the way the stack goes below it and each command pipe
+    takes a **detour**: east along its own corridor row in the gap under the CPU,
+    south past the block's east edge, then west and down into its relay's north
+    wall. Those corridor rows are why ``build_cpu``'s ``dsp_pad`` exists: the
+    block's own command and response pipes leave this same wall and turn east, so a
+    display pipe has a clear row to turn in only if it starts east of them.
+
+    The returned touch keys are the *bands* in the direct form — a CPU ``s`` glyph
+    binds them by name — and ``band@panel`` for a relay's outlets, which no CPU
+    glyph wants but every one of which is still a pipe to be counted.
+    """
+    if not panels:
+        return {}, ()
+    relays = [b for b in DSP_PANEL_BANDS if b in cpu.dsp_cols]
+    if not relays:
+        # The three-opcode form: the CPU's own port lanes *are* the panel's ports,
+        # so there is no room between them and nothing to choose. One panel only.
+        if len(panels) != 1:
+            raise MachineError(
+                f"{len(panels)} panels but the program uses the three-port opcodes, which "
+                "wire the CPU straight to one display; a second panel needs its own relay "
+                f"lane (one of {', '.join(DSP_PANEL_BANDS)})"
+            )
+        cy = wall_y - cpu.height - 1  # `_assemble` draws the room as CY .. CY + H + 1
+        return (
+            _display(g, cpu, cx, wall_y, east_limit, panels[0]),
+            ({b: (cx + x, cy + y) for x, y, _gl, b in cpu.pipe_glyphs if b in DSP_BANDS},),
+        )
+    if len(relays) != len(panels):
+        raise MachineError(
+            f"{len(panels)} panels but {len(relays)} relay lanes ({', '.join(relays)}): "
+            "each panel is fed by its own lane, in order, so the two must agree"
+        )
+
+    touches: dict[str, tuple[int, int]] = {}
+    port_glyphs: list[dict[str, tuple[int, int]]] = []
+    top = wall_y if floor is None else floor
+    # East of everything drawn so far, so a detour's descent clears the block. Taken
+    # once, before the first panel widens the grid with its own descent.
+    east_of_all = (max(x for x, _ in g.c) + 2) if floor is not None else 0
+    for i, (band, size) in enumerate(zip(relays, panels, strict=True)):
+        in_col = cx + cpu.dsp_cols[band]
+        y0 = top + 4  # three corridor rows, exactly as the panel takes below the CPU
+        route = None
+        if floor is not None:
+            # East along this panel's own corridor row, south past the block, then
+            # west to the entry column and one step down into the north wall.
+            #
+            # **The rows go the other way from the columns**, and they have to: every
+            # panel's pipe leaves the same wall, and an eastward leg on row *r* runs
+            # over every lane column east of its own. So the easternmost lane turns
+            # on the highest row — otherwise panel 0's leg crosses the cell panel 1's
+            # pipe leaves the wall on, which is a collision that ``_Grid.put`` would
+            # only catch because the two glyphs happen to differ.
+            lane = wall_y + 1 + (len(panels) - 1 - i)
+            descent = east_of_all + 2 * i
+            # The pipe comes back to a column *inside the relay's own span* rather
+            # than to the lane column it started from: with ``dsp_pad`` pushing the
+            # lanes east, that column is far east of the room and a pipe ending over
+            # empty grid is a load error ("pipe ends without reaching another room").
+            # Which column does not matter — the room has one incoming pipe, so its
+            # single `r` binds it wherever it attaches (§7.1 has nothing to choose) —
+            # only that it is strictly between the north wall's two corners, which
+            # :func:`_dsp_relay` checks.
+            entry = cx + 3
+            route = [
+                (in_col, wall_y + 1),
+                (in_col, lane),
+                (descent, lane),
+                (descent, y0 - 2),
+                (entry, y0 - 2),
+                (entry, y0 - 1),
+            ]
+        cols, relay_wall, glyphs = _dsp_relay(g, cx, wall_y, in_col, y0=y0, route=route)
+        touches[band] = (in_col, wall_y + 1)
+        ports = _display(
+            g, cpu, cx, relay_wall, None if floor is not None else east_limit, size, cols=cols
+        )
+        touches |= {f"{b}@{i}": t for b, t in ports.items()}
+        port_glyphs.append(glyphs)
+        top = relay_wall + 4 + size[1] + 1 + _STACK_GAP
+    return touches, tuple(port_glyphs)
+
+
+def _dsp_relay(
+    g: _Grid,
+    cx: int,
+    wall_y: int,
+    in_col: int,
+    *,
+    y0: int | None = None,
+    route: list[tuple[int, int]] | None = None,
+) -> tuple[dict[str, int], int, dict[str, tuple[int, int]]]:
+    """Place `DSP p`'s fan-out room.
+
+    Returns its three outlet columns, its south wall, and the grid cell of each
+    arm's ``s`` glyph — the last so a test can ask the engine's own ``route`` which
+    pipe that exact cell binds, which is the only check that catches a mis-bound
+    port (``ARCH.md`` §4.4: the machine then runs to completion painting the wrong
+    thing, with no error anywhere).
 
     The lane sends two words down one pipe — the selector, then ACC. This room reads
     the selector, subtracts one so the three cases are -1/0/+1 (ROM words are
@@ -5106,9 +5330,25 @@ def _dsp_relay(g: _Grid, cx: int, wall_y: int, in_col: int) -> tuple[dict[str, i
     SWAP east and under, and a westward leg must never cross a column belonging to a
     port further west.
     """
-    x0, y0 = cx, wall_y + 4  # three corridor rows, as the panel takes below the CPU
+    x0 = cx
+    if y0 is None:
+        y0 = wall_y + 4  # three corridor rows, as the panel takes below the CPU
     g.room(x0, y0, x0 + _RELAY_W + 1, y0 + _RELAY_H + 1)
-    g.draw_pipe([(in_col, wall_y + 1), (in_col, y0 - 1)])
+    # Straight down from the CPU's south wall unless the caller had to route round
+    # something (:func:`_display_stack`); either way the pipe ends one cell above the
+    # north wall, which is where the room's single `r` reads it.
+    route = route if route is not None else [(in_col, wall_y + 1), (in_col, y0 - 1)]
+    # Checked rather than assumed: a pipe that ends anywhere else is a *load* error
+    # ("pipe ends without reaching another room"), and one that ends over a corner is
+    # a geometric ambiguity. Both are invisible in the generator's own output.
+    ex, ey = route[-1]
+    if ey != y0 - 1 or not x0 < ex < x0 + _RELAY_W + 1:
+        raise MachineError(
+            f"the relay's command pipe ends at {(ex, ey)}, which is not strictly "
+            f"between the corners of its north wall (y={y0}, x in "
+            f"{x0 + 1}..{x0 + _RELAY_W})"
+        )
+    g.draw_pipe(route)
 
     ix = x0 + 1
     main, addr_row, swap_row, ret = y0 + 6, y0 + 3, y0 + 9, y0 + 11
@@ -5145,7 +5385,11 @@ def _dsp_relay(g: _Grid, cx: int, wall_y: int, in_col: int) -> tuple[dict[str, i
     for y in range(main + 1, ret):
         g.put(ix + 1, y, "^")
 
-    return {b: c for b, (_r, c) in ports.items()}, y0 + _RELAY_H + 1
+    return (
+        {b: c for b, (_r, c) in ports.items()},
+        y0 + _RELAY_H + 1,
+        {b: (c, r) for b, (r, c) in ports.items()},
+    )
 
 
 def _display(
@@ -5153,7 +5397,7 @@ def _display(
     cpu: _Cpu,
     cx: int,
     wall_y: int,
-    east_limit: int,
+    east_limit: int | None,
     size: tuple[int, int],
     cols: dict[str, int] | None = None,
 ) -> dict[str, tuple[int, int]]:
@@ -5199,8 +5443,25 @@ def _display(
     up_col = min(max(swap, dx + 2), right - 2)
     # ``east`` is east of both the panel and every lane column, so this one check also
     # covers the panel itself running into the adapter.
-    if east >= east_limit - 1:
+    if east_limit is not None and east >= east_limit - 1:
         raise MachineError(f"SWAP's east corridor at column {east} collides with the adapter")
+    if east_limit is None:
+        # A panel below the whole machine has no adapter beside it, so the column
+        # comparison above says nothing. Check the thing it was a proxy for instead:
+        # that every cell this panel is about to use is still empty. Worth doing
+        # rather than trusting ``_Grid.put`` — ``put`` only raises when the two
+        # glyphs *differ*, so a leg crossing another leg's `-` is silent.
+        taken = [
+            (x, y)
+            for y in range(wall_y + 1, bottom + 3)
+            for x in range(dx - 2, east + 1)
+            if (x, y) in g.c
+        ]
+        if taken:
+            raise MachineError(
+                f"a {dw}x{dh} panel at {(dx, dy)} would overdraw {len(taken)} cells, "
+                f"first at {taken[0]}"
+            )
 
     g.room(dx, dy, right, bottom, h="=", v=":")
 
