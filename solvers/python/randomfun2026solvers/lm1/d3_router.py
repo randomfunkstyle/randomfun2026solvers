@@ -679,7 +679,9 @@ def _plen(points: list[tuple[int, int]]) -> int:
 
 
 def build_packed_wall(
-    loop_row: int | None = None, leaf_cols: tuple[int, ...] | None = None
+    loop_row: int | None = None,
+    leaf_cols: tuple[int, ...] | None = None,
+    lift: int = 0,
 ) -> Wall:
     """The router, four **panel-less** DOOM blocks, and one 2x2 panel cluster.
 
@@ -796,12 +798,12 @@ def build_packed_wall(
     wx = RX + BLOCK_X0  # the west logic column
     c1, c2, c3 = (wx + lw + i for i in range(3))  # the west channel's descents
     cx = wx + lw + PACK_CH_W  # the cluster's north-west wall corner
-    cl = cluster_at(cx, PACK_CLUSTER_Y)
+    cl = cluster_at(cx, (PACK_CLUSTER_Y - lift))
     ex = cx + cl.width + PACK_CH_E  # the east logic column
     m1, m2, m3 = (ex + lw + 1 + i for i in range(PACK_MARGIN_E))  # the east margin
 
     anchors = {0: (wx, PACK_ROW_N), 1: (ex, PACK_ROW_N),
-               2: (wx, PACK_ROW_S), 3: (ex, PACK_ROW_S)}
+               2: (wx, (PACK_ROW_S - lift)), 3: (ex, (PACK_ROW_S - lift))}
     for tile, (bx, by) in anchors.items():
         g.blit(bx, by, logic[tile].cells)
     for cnr in cl.corners:
@@ -903,10 +905,10 @@ def build_packed_wall(
     #    below the wall.  ADDR takes the tunnel from the south, mirroring NE's
     #    SWAP from the north ─────────────────────────────────────────────────
     a3, d3, s3 = (port(3, b) for b in ("addr", "data", "swap"))
-    p1, p2, p3 = (PACK_ROW_S + lg.height + i for i in range(3))  # under the block
+    p1, p2, p3 = ((PACK_ROW_S - lift) + lg.height + i for i in range(3))  # under the block
     # Where the two padded pipes double back: four rows inside the bottom block
     # row's own band, which is empty everywhere between the two logic columns.
-    e1, e2, e3, e4 = (PACK_ROW_S + 3 + 10 * i for i in range(4))
+    e1, e2, e3, e4 = ((PACK_ROW_S - lift) + 3 + 10 * i for i in range(4))
     # ADDR is the longest of the three by construction — it alone crosses the
     # whole cluster to the band's last row, and its margin column and its
     # westward row are both forced outermost by the other two — so on this tile
@@ -940,7 +942,7 @@ def build_packed_wall(
     #: own: within a block row the leg that reaches further east turns two rows
     #: above the one it crosses.  T3's is the exception and it is the reason the
     #: gutter is three rows rather than two — see below.
-    lanes = {0: PACK_ROW_N - 2, 1: PACK_ROW_N - 3, 2: PACK_ROW_S - 2, 3: cl.lane}
+    lanes = {0: PACK_ROW_N - 2, 1: PACK_ROW_N - 3, 2: (PACK_ROW_S - lift) - 2, 3: cl.lane}
     legs: list[int] = []
     for tile, (bx, by) in anchors.items():
         ox = RX + outlets[tile]

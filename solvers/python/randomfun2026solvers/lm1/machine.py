@@ -3025,6 +3025,7 @@ def build(
     in_west: int = 0,
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
+    doom_cluster_lift: int = 0,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
@@ -3228,6 +3229,7 @@ def build(
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
+                    doom_cluster_lift=doom_cluster_lift,
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
@@ -3297,6 +3299,7 @@ def build(
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
+                    doom_cluster_lift=doom_cluster_lift,
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
@@ -3388,6 +3391,7 @@ def _assemble(
     in_west: int = 0,
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
+    doom_cluster_lift: int = 0,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
@@ -4013,6 +4017,7 @@ def _assemble(
         blk, stream_touches, (SX, SY) = _stream(
             g, cpu, CX, CY + H + 1, stream, unit=program.unit,
             doom_loop_row=doom_loop_row, doom_leaf_cols=doom_leaf_cols,
+            doom_cluster_lift=doom_cluster_lift,
         )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
@@ -4771,6 +4776,7 @@ def _stream(
     unit: str = "stream",
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
+    doom_cluster_lift: int = 0,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -4826,7 +4832,9 @@ def _stream(
         # contiguous 128x96 screen rather than four monitors 177 columns apart.
         # ``build_wall``'s scattered arrangement stays for the probe and the
         # tests that pin the router's own geometry.
-        blk = d3_router.build_packed_wall(loop_row=doom_loop_row, leaf_cols=doom_leaf_cols)
+        blk = d3_router.build_packed_wall(
+            loop_row=doom_loop_row, leaf_cols=doom_leaf_cols, lift=doom_cluster_lift
+        )
     else:
         from . import stream as streammod
 
@@ -7004,6 +7012,41 @@ DOOM_LOOP_ROW: dict[tuple[str, str], int] = {
 #: Spelled out rather than imported — ``d3_unit`` reaches back into this module
 #: for ``_Grid``, so the import only ever goes one way — and pinned against
 #: :data:`d3_unit.COMPACT_LEAF_COLS` in ``tests/test_deadman3d.py``.
+#: Rows the packed wall's panel cluster — and the south blocks hanging off it —
+#: are lifted toward the north blocks, per ``(slug, tier)``. Absent (0) keeps the
+#: geometry :data:`d3_router.PACK_CLUSTER_Y` and :data:`d3_router.PACK_ROW_S`
+#: state outright, which is what the default (uncompacted) unit needs.
+#:
+#: The north blocks end around wall row 85 and the cluster began at 110, so
+#: twenty-five rows sat between them unclaimed. The constraint on
+#: ``PACK_CLUSTER_Y`` says where the cluster may sit *relative to* the two block
+#: rows; nothing pinned the pair's absolute position, so the whole group can slide
+#: north. Swept on the real build, 21-round tour, ticks to frame 20:
+#:
+#: | lift | box | ticks | Δ |
+#: |---|---|---|---|
+#: | 0 | 649x492 | 189,164,256 | — |
+#: | **21** | **649x471** | **189,163,815** | **-441** |
+#: | 22 | — | — | ``collision at (352, 85)``: T1's south wall |
+#:
+#: **Twenty-one rows off the machine, and 441 ticks faster** — free in both
+#: directions. The tick delta is exactly -3 a row at every lift from 4 to 21, so
+#: it is mechanism and not noise: the router's legs down to T2/T3 shorten one cell
+#: per row. It is small because those legs are a *pipeline* — the CPU sends a
+#: command word and walks on, so their length is latency the units absorb rather
+#: than throughput the CPU pays. Which is why nobody had looked: there is no tick
+#: pressure here at all, only height, and height is free for this family.
+#:
+#: **Why this is a registry and not just smaller constants.** The lift is only
+#: legal with the *compacted* unit (:data:`DOOM_LOOP_ROW` / :data:`DOOM_LEAF_COLS`).
+#: Lowering the constants outright collides at ``(488, 88)`` for callers that take
+#: ``build_packed_wall``'s defaults — which two tests in
+#: ``tests/test_deadman3d_hires.py`` do, and they caught it. Keyed per
+#: ``(slug, tier)``, the default path stays byte-identical.
+DOOM_CLUSTER_LIFT: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "taped"): 21,
+}
+
 DOOM_LEAF_COLS: dict[tuple[str, str], tuple[int, ...]] = {
     ("deadman-3d", "taped"): (3, 7, 27, 33, 37, 41, 73, 79),
     ("deadman-3d_hires", "taped"): (3, 7, 27, 33, 37, 41, 73, 79),
@@ -7563,6 +7606,7 @@ def build_for(
         store_shape=STORE_SHAPE.get(slug),
         doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
         doom_leaf_cols=DOOM_LEAF_COLS.get((slug, store)),
+        doom_cluster_lift=DOOM_CLUSTER_LIFT.get((slug, store), 0),
         rom_touch_drop=(
             ROM_TOUCH_DROP.get((slug, store), 0)
             if rom_touch_drop is None
