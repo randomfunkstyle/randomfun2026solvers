@@ -27,6 +27,7 @@ Two things live here:
 |---|---|
 | [`littleman/`](littleman/) | headless `.man` runner (`lm.mjs` over the bundled wasm engine), the reconstructed [`SPEC.md`](littleman/SPEC.md), every design doc, and `tools/` |
 | [`littleman/DEADMAN-3D.md`](littleman/DEADMAN-3D.md) | **DOOM on the CPU** — a first-person raycaster with real level geometry, monsters and a live HUD; how to run it, play it, and build it from your own WAD |
+| [`littleman/MNIST.md`](littleman/MNIST.md) | **a machine that learns** — a CNN trained on MNIST, plotting its own loss and accuracy curves on two LM-75 panels; 80–82% validation, ~4 min an epoch |
 | [`solvers/python/randomfun2026solvers/lm1/`](solvers/python/randomfun2026solvers/lm1/) | the LM-1 compiler: ISA, assembler, emulator, ROM, stores, router, layout |
 | [`solvers/python/randomfun2026solvers/`](solvers/python/randomfun2026solvers/) | per-problem generators (`llm_lm1.py`, `lllm_ring.py`, `brackets_*.py`, …), the fast verifier and the submit tool |
 | [`tasks/problems/`](tasks/problems/) | problem statements and public test data, as served by the contest API |
