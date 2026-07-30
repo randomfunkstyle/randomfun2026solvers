@@ -642,12 +642,45 @@ PACK_MARGIN_E = 3  # the east margin's turn-round columns
 #: above a block's north wall.  Both blocks in a row share one, exactly as
 #: :func:`build_wall` has them, and that is not cosmetic: the leg fan is only
 #: planar when the two legs of a row can take two lanes of the same corridor.
+#:
+#: ``build_packed_wall``'s ``north_up`` raises the north row off this (see
+#: :data:`machine.DOOM_PACK_NORTH_UP`); the two legs stay on one shared command
+#: row as they must, and what stops the rise is that same corridor running out —
+#: its two lanes are ``row_n - 2`` and ``row_n - 3`` and the router's outlets are
+#: on row 11.
 PACK_ROW_N = 18
 PACK_ROW_S = 217
 
 #: The cluster's north-west wall corner row.  It has to sit between the two
 #: block rows with its band straddling the one row the T3 leg crosses on
 #: (:attr:`Cluster.lane`); see :func:`build_packed_wall`.
+#:
+#: *Between* is forced, and it is worth writing down because the obvious way to
+#: raise the screens is to stop stacking the blocks above them.  The blocks and
+#: the cluster are column-disjoint — 17..118 and 259..360 against 123..256 — so
+#: nothing about the *bodies* stops the cluster rising beside the north row.  What
+#: stops it is the east block's six-cell detour.  T1's ports face away from the
+#: cluster, so its pipes leave the east wall, run to the margin and come back west
+#: **underneath their own block**, into the strip between the block's south edge
+#: and the cluster's north face; north of the block is the router's command lane,
+#: and the two fans cross there unconditionally.  Raise the cluster into the
+#: block's rows and that strip is gone, so the pipes would have to return over the
+#: top — where T1's leg already is.
+#:
+#: The crossing is topological rather than a matter of choosing lanes.  T1's leg
+#: runs east to ``cmd_x`` (inside the block's own column span, ``cmd_cell`` is
+#: ``(16, 0)``) and then descends to the block; that L separates the quadrant, and
+#: ADDR has to get from east of ``cmd_x`` and below the leg's foot to west of it
+#: and above, because its terminal is :attr:`Cluster.north`.  Every route does.
+#: The same argument run the other way pins the south row below the cluster, so
+#: the sandwich is the only arrangement: a block feeding a *north* panel must be
+#: north of the cluster, one feeding a *south* panel south of it.
+#:
+#: A west block has no such constraint — its command column is west of its ports,
+#: so leg and pipes never share territory — which is why the one arrangement that
+#: would free the rows is **both north blocks in west columns**, side by side, at
+#: the cluster's own rows.  That needs a third logic column and two widened
+#: channels; it is not built.
 PACK_CLUSTER_Y = 110
 
 #: How many cells SWAP must lead DATA by.  ``build_doom`` only refuses a tie
@@ -659,6 +692,89 @@ PACK_CLUSTER_Y = 110
 #: paint sooner than a trie walk plus a collector walk after a COMMIT, so 20 is
 #: kept as the floor rather than re-derived.
 SWAP_LEAD = 20
+
+
+# ── the north-west arrangement: both north blocks beside the cluster ─────────
+#: The column and row map of :func:`_packed_wall_north_west`, which takes the
+#: north block row *out of* the wall's height by standing both north blocks
+#: **west** of the cluster, side by side, on the cluster's own rows::
+#:
+#:     router
+#:     [ T1 logic ] | [ T0 logic ] | [ cluster ] |  ..  |
+#:                              [ T2 logic ]      [ T3 logic ]
+#:
+#: :data:`PACK_CLUSTER_Y`'s note says why a *west* block is free where the east
+#: one is not: its command column (``cmd_cell`` ``(16, 0)``) sits west of its
+#: ports (column 94), so its router leg and its three port pipes never share
+#: territory and no L separates the quadrant.
+#:
+#: What the sandwich actually cost was the block row's own 68 rows plus its fan,
+#: and taking it out is worth **seventy-three rows of screen** — the cluster's
+#: north-west corner goes from wall row 86 to 13.
+#:
+#: **Thirteen is the floor, and one leg sets it.**  Not the fan: T1's three lanes
+#: run east from column 119, ninety-six columns clear of a router room 23 wide,
+#: so they may sit on rows level with the router's own interior and at 13 they do
+#: (rows 9, 10 and 11).  What cannot is T1's *leg*, which turns east under the
+#: router itself, from column 10 to 33.  It leaves the south wall on row
+#: ``south_wall + 1``, it may not turn there — a run on that row lies along the
+#: router's own south wall and every cell of it is a §7.1 rival to the four leaf
+#: ``s`` glyphs six rows above — and it must then descend at least one row into
+#: its command port on row ``cy``.  So ``cy >= south_wall + 3``, which is 13.
+#:
+#: That middle step is **measured, not argued**.  With the leg left on
+#: ``south_wall + 1`` the wall builds at ``cy = 13``, every pipe binds,
+#: ``build_for`` returns a 649x388 grid — and the frame gate fails, ``wrong-frame``
+#: at tick 3,083,326.  Nothing short of comparing frames catches it, which is
+#: :data:`machine.DOOM_PACK_NORTH_UP`'s lesson repeating exactly.  Below 13
+#: :func:`_packed_wall_north_west` refuses outright rather than drawing a leg
+#: that ends beside its port instead of above it.
+#:
+#: Both legs ride rows that already carry something — T1's shares
+#: :attr:`Cluster.north` with T0's leg, two ADDR terminals and both command
+#: cells — which is safe because pipes are traced along their arrow glyphs and
+#: never sideways, so parallel runs stay separate.  Overlap would not be safe and
+#: is only half-caught (two runs meeting on a row both write ``-``, and the
+#: second write is a silent no-op), so :func:`_check_leg_routes` checks all four
+#: routes against the grid rather than trusting them to collide.
+#:
+#: **The order of the two west blocks is forced, and it is the whole design.**
+#: T0 feeds the *north-west* panel, whose three terminals (:attr:`Cluster.north`
+#: at ``px0 + 3``, :attr:`Cluster.west_data`, the band's first row entered from
+#: its west end) all live in the channel between the blocks and the cluster.  T1
+#: feeds the north-*east* panel, whose three (``px3 + K`` on the north face, the
+#: corridor, the tunnel) are all reachable **from above** without entering that
+#: channel at all.  So T1 is the far block: its pipes climb the narrow channel
+#: between the two, run east over T0's roof and over the cluster, and come down
+#: the gutter.  Put T1 next to the cluster instead and the far block's DATA has
+#: to descend into the same channel T1's three climb out of, and the six cross.
+#:
+#: The one crossing left is T0's **router leg**, which has to reach a command
+#: port at ``wx + 16`` — east of T1's whole block — while T1's three pipes cross
+#: the same vertical line going the other way.  Above T1's lanes the leg's
+#: descent cuts them; below them its westward run cuts their climbs.  So the leg
+#: goes *under*: down the wall's west margin, east through the empty strip below
+#: the two blocks (they are 68 rows tall against the cluster's 103), up the
+#: channel's own last column and east on :attr:`Cluster.north` — under T1's three
+#: lanes and over T0's roof.  :data:`PACK_NW_DROP` is that strip's row.
+PACK_NW_CH_A = 4  # T1's three climbs plus the column T0's leg comes up
+PACK_NW_CH_W = 8  # T0's three, T2's three, T3's leg, and DATA's arrival column
+PACK_NW_CLUSTER_Y = 13
+
+#: Rows below the cluster's north-west corner that T0's and T3's legs cross the
+#: wall on.  Both are in the 35-row strip between the north blocks' south edge
+#: (``cy + 67``) and the cluster's (``cy + 102``), which nothing else wants.
+PACK_NW_DROP = (80, 82)
+
+#: T1's ADDR terminal, columns east of the north-east panel's own corner.  It is
+#: the free variable :func:`solve` would otherwise have no use for on this tile:
+#: T1's DATA is the longer route by construction (its port is ten rows below
+#: ADDR's and it descends the corridor rather than stopping on the north face),
+#: so ``len(addr) == len(data)`` is met by walking ADDR's terminal **east** along
+#: the panel's top wall rather than by moving DATA's row.  ``rr = K + 10`` here,
+#: so 30 puts DATA's arrival row in the middle of the panel rather than at its
+#: edge; anything in 9..56 closes.
+PACK_NW_ADDR_COL = 30
 
 
 def _excursion(x: int, y: int, w: int) -> list[tuple[int, int]]:
@@ -678,10 +794,31 @@ def _plen(points: list[tuple[int, int]]) -> int:
                    for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False))
 
 
+def _solve(route: Callable[[int], list[tuple[int, int]]], span: range,
+           want: Callable[[int], bool], what: str) -> list[tuple[int, int]]:
+    """The one free coordinate of a route, solved rather than chosen.
+
+    Every route here is monotone in its own free terminal, so its length is
+    affine in it and a scan of the legal span is both exact and honest about
+    failing: if no value in the panel's own column or row range gives the
+    length the invariant wants, the geometry is wrong and saying so beats
+    shipping a pipe that paints at the wrong cursor.
+    """
+    for v in span:
+        if want(_plen(route(v))):
+            return route(v)
+    raise RouterError(
+        f"no {what} in {span.start}..{span.stop - 1} gives the pipe length the "
+        "ADDR/DATA/SWAP invariants need; the cluster or a block has moved"
+    )
+
+
 def build_packed_wall(
     loop_row: int | None = None,
     leaf_cols: tuple[int, ...] | None = None,
     lift: int = 0,
+    north_up: int = 0,
+    north_west: bool = False,
 ) -> Wall:
     """The router, four **panel-less** DOOM blocks, and one 2x2 panel cluster.
 
@@ -769,7 +906,17 @@ def build_packed_wall(
     whole cluster to the band's last row while its SWAP stops at the nearest
     edge, and a monotone route's length is its Manhattan distance, so DATA and
     SWAP are padded up to it with :func:`_excursion` instead.
+
+    ``north_west`` swaps the whole arrangement for the one
+    :data:`PACK_CLUSTER_Y` names and does not build — both north blocks west of
+    the cluster, on its own rows, so the north block row comes off the wall's
+    height entirely.  It ignores ``lift``/``north_up``, which are that row's own
+    levers, and it is a *separate* placement rather than a parameter of this one
+    (see :func:`_packed_wall_north_west`); everything below is untouched by it.
         """
+    if north_west:
+        return _packed_wall_north_west(loop_row, leaf_cols)
+
     from . import d3_unit
     from .machine import _Grid
 
@@ -802,7 +949,8 @@ def build_packed_wall(
     ex = cx + cl.width + PACK_CH_E  # the east logic column
     m1, m2, m3 = (ex + lw + 1 + i for i in range(PACK_MARGIN_E))  # the east margin
 
-    anchors = {0: (wx, PACK_ROW_N), 1: (ex, PACK_ROW_N),
+    row_n = PACK_ROW_N - north_up
+    anchors = {0: (wx, row_n), 1: (ex, row_n),
                2: (wx, (PACK_ROW_S - lift)), 3: (ex, (PACK_ROW_S - lift))}
     for tile, (bx, by) in anchors.items():
         g.blit(bx, by, logic[tile].cells)
@@ -826,23 +974,7 @@ def build_packed_wall(
         if end:
             g.c[points[-1]] = end
 
-    def solve(route: Callable[[int], list[tuple[int, int]]], span: range,
-              want: Callable[[int], bool], what: str) -> list[tuple[int, int]]:
-        """The one free coordinate of a route, solved rather than chosen.
-
-        Every route here is monotone in its own free terminal, so its length is
-        affine in it and a scan of the legal span is both exact and honest about
-        failing: if no value in the panel's own column or row range gives the
-        length the invariant wants, the geometry is wrong and saying so beats
-        shipping a pipe that paints at the wrong cursor.
-        """
-        for v in span:
-            if want(_plen(route(v))):
-                return route(v)
-        raise RouterError(
-            f"no {what} in {span.start}..{span.stop - 1} gives the pipe length the "
-            "ADDR/DATA/SWAP invariants need; the cluster or a block has moved"
-        )
+    solve = _solve
 
     px0, py0 = cl.corners[0]
     px3, py3 = cl.corners[3]
@@ -942,7 +1074,7 @@ def build_packed_wall(
     #: own: within a block row the leg that reaches further east turns two rows
     #: above the one it crosses.  T3's is the exception and it is the reason the
     #: gutter is three rows rather than two — see below.
-    lanes = {0: PACK_ROW_N - 2, 1: PACK_ROW_N - 3, 2: (PACK_ROW_S - lift) - 2, 3: cl.lane}
+    lanes = {0: row_n - 2, 1: row_n - 3, 2: (PACK_ROW_S - lift) - 2, 3: cl.lane}
     legs: list[int] = []
     for tile, (bx, by) in anchors.items():
         ox = RX + outlets[tile]
@@ -963,6 +1095,318 @@ def build_packed_wall(
         px, py = cl.corners[tile]
         regions[f"t{tile}:panel"] = (px, py, d3_unit.PANEL_W + 2, d3_unit.PANEL_H + 2)
     regions["cluster"] = (cx, cl.corners[0][1], cl.width, cl.height)
+
+    return Wall(
+        cells=g.c,
+        width=max(len(row) for row in rows),
+        height=len(rows),
+        cmd_cell=(RX + CMD_COL, RY - 1),
+        pipes=4 + 4 * lg.pipes + 12,
+        panels=list(cl.corners),
+        legs=legs,
+        floor_rows=TILE_FLOOR_ROW,
+        sel=r.sel,
+        codes=lg.codes,
+        regions=regions,
+    )
+
+
+def _check_leg_routes(g, routes: dict[int, list[tuple[int, int]]]) -> None:
+    """Every cell the four legs are about to use must still be empty.
+
+    The legs are drawn last, across a wall the twelve port pipes have already
+    crossed, and several of them ride rows that something else is on — the fan
+    is only four rows deep and :attr:`Cluster.north` carries two ADDR terminals
+    and both north command cells besides.  Running *beside* another pipe is
+    safe, and the wall does it everywhere: the engine traces a pipe by following
+    its arrow glyphs from a room-attached arrowhead, never sideways, so parallel
+    runs in adjacent columns stay two pipes.  Landing *on* one is not, and only
+    half of that is caught — :meth:`~.machine._Grid.put` refuses an overwrite
+    that changes the glyph, but two eastbound runs meeting on one row both write
+    ``-`` and the second write is a silent no-op, leaving one pipe with two
+    mouths.  So the routes are checked against the grid as it stands rather than
+    trusted to collide.
+    """
+    for tile, pts in routes.items():
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
+            sx, sy = (x1 > x0) - (x1 < x0), (y1 > y0) - (y1 < y0)
+            x, y = x0, y0
+            while True:
+                if (x, y) in g.c:
+                    raise RouterError(
+                        f"tile {tile}'s leg wants ({x}, {y}) on its way from "
+                        f"{(x0, y0)} to {(x1, y1)}, and the cell is taken: two runs "
+                        "sharing a row or column write the same body glyph, so this "
+                        "would merge the two pipes rather than collide"
+                    )
+                if (x, y) == (x1, y1):
+                    break
+                x, y = x + sx, y + sy
+
+
+def _packed_wall_north_west(
+    loop_row: int | None = None,
+    leaf_cols: tuple[int, ...] | None = None,
+) -> Wall:
+    """The packed wall with **both north blocks west of the cluster**.
+
+    :func:`build_packed_wall` sandwiches the cluster between two block rows, and
+    :data:`PACK_CLUSTER_Y` proves that sandwich forced *for that arrangement*:
+    T1's ports face away from the cluster, so its pipes come back west
+    underneath their own block, into the strip a risen cluster wants, and
+    returning over the top crosses T1's own leg — an L that separates the
+    quadrant ADDR has to cross.  The escape it names is this one: a **west**
+    block's command column sits west of its ports, so leg and pipes never share
+    territory, and two of them stand side by side on the cluster's own rows::
+
+        router
+        [ T1 logic ] |ch| [ T0 logic ] |chan| [ cluster ] |  | ....
+                                  [ T2 logic ]              [ T3 logic ]
+
+    The north block row is then not above the cluster at all, and the wall's
+    height loses it: the cluster's corner goes from row 86 to
+    :data:`PACK_NW_CLUSTER_Y`.
+
+    What the rows above the cluster carry
+    -------------------------------------
+
+    Four, at ``cy = 13``, and they overlap rather than stack — a row is free for
+    a second run wherever the first one's columns do not reach.  Reading down
+    from the router's south wall on row 10:
+
+    ==========  ======================================================
+    ``cy - 4``  T1's ADDR, east to ``px3 + K`` over the north-east panel
+    ``cy - 3``  T1's DATA, east to the corridor
+    ``cy - 2``  T1's SWAP, east to the tunnel
+    ``cy - 1``  :attr:`Cluster.north`: two ADDR arrowheads, both command cells,
+                and the eastward runs of *both* north legs
+    ==========  ======================================================
+
+    T1's three are ordered by where they turn south (``px3 + K`` > corridor >
+    tunnel): a run reaching further east must turn on a shallower row than the
+    descent it crosses, the same rule :data:`DEST_LEAF` states for the legs.
+    They all start at column 119, so they clear the router's own 23 columns
+    entirely and none of them needs a row of its own below it.
+
+    Both legs are *below* all three, on :attr:`Cluster.north`, because a descent
+    at ``fx + 16`` or ``wx + 16`` from any higher row would cut every lane it
+    passed.  T0's can be there only because it arrives from the east end of the
+    channel between the two blocks rather than across it — see
+    :data:`PACK_NW_DROP` — and T1's only because it comes straight down the
+    margin, west of everything.  On that one row they occupy columns 10..33 and
+    122..139 against terminals at 225..236 and 331: four runs, no two touching.
+
+    Why the gutter is still three rows
+    ----------------------------------
+
+    The same reason, and it is worth checking rather than assuming, because the
+    pipe that needed :attr:`Cluster.lane` has moved.  T3's leg still has to cross
+    the whole wall to the *east* block of the bottom row, and every other row is
+    still taken: above the cluster is the six-row fan, the west channel is full
+    of T0's three descending and T2's three climbing, and the band's first and
+    last rows carry the four arrowheads.  It reaches the lane by climbing the
+    channel's own spare column instead of running in from the margin, and the
+    row between the arrowheads is free the whole way across exactly as before.
+    """
+    from . import d3_unit
+    from .machine import _Grid
+
+    if loop_row is None:
+        loop_row = d3_unit.R_LOOP
+    if leaf_cols is None:
+        leaf_cols = d3_unit.LEAF_COLS
+    logic = [d3_unit.build_logic(row, loop_row, leaf_cols) for row in TILE_FLOOR_ROW]
+    lg = logic[0]
+    if {(b.width, b.height, b.cmd_cell, tuple(sorted(b.ports.items()))) for b in logic} != {
+        (lg.width, lg.height, lg.cmd_cell, tuple(sorted(lg.ports.items())))
+    }:
+        raise RouterError(
+            "the four tile variants do not share a footprint: floor_row was supposed "
+            "to move nothing but one two-digit literal"
+        )
+    r = router_interior()
+    g = _Grid()
+
+    g.room(RX, RY, RX + IW + 1, RY + IH + 1)
+    g.blit(RX, RY, r.cells)
+    south_wall = RY + IH + 1
+
+    # ── the column map ──────────────────────────────────────────────────────
+    lw = lg.width
+    fx = RX + BLOCK_X0  # T1's logic: the far-west column
+    f1, f2, f3 = (fx + lw + i for i in range(3))  # its three climbs
+    up0 = fx + lw + PACK_NW_CH_A - 1  # T0's leg comes back up here
+    wx = fx + lw + PACK_NW_CH_A  # T0's logic, and T2's below it
+    # The wide channel, west to east.  T0's SWAP has to be west of T2's ADDR and
+    # DATA: its own east-wall run leaves on the band's *lowest* row (`cy + 64`),
+    # which is below the rows those two climb through, so anything it crosses
+    # going east it crosses in their middle.  T0's ADDR and DATA are above every
+    # T2 target and free of them.  T3's leg wants a column east of T0's SWAP (it
+    # crosses `cy + 64`) and west of T2's ADDR (whose own arrival row it would
+    # otherwise cut), which leaves exactly the one slot.
+    cs0, ca0, cd0, k3, w2a, w2d, w2s = (wx + lw + i for i in range(7))
+    cx = wx + lw + PACK_NW_CH_W  # the cluster's north-west wall corner
+    cy = PACK_NW_CLUSTER_Y
+    cl = cluster_at(cx, cy)
+    ex = cx + cl.width + PACK_CH_E  # the east logic column: T3 only
+    m1, m2, m3 = (ex + lw + 1 + i for i in range(PACK_MARGIN_E))
+    row_s = cy + (PACK_ROW_S - PACK_CLUSTER_Y)  # the bottom block row, as before
+
+    anchors = {0: (wx, cy), 1: (fx, cy), 2: (wx, row_s), 3: (ex, row_s)}
+    for tile, (bx, by) in anchors.items():
+        g.blit(bx, by, logic[tile].cells)
+    for cnr in cl.corners:
+        g.room(cnr[0], cnr[1], cnr[0] + d3_unit.PANEL_W + 1, cnr[1] + d3_unit.PANEL_H + 1,
+               h="=", v=":")
+
+    def port(tile: int, band: str) -> tuple[int, int]:
+        bx, by = anchors[tile]
+        px, py = logic[tile].ports[band]
+        return bx + px, by + py
+
+    lengths: dict[tuple[int, str], int] = {}
+
+    def pipe(tile: int, band: str, points: list[tuple[int, int]], end: str = "") -> None:
+        lengths[tile, band] = g.draw_pipe(points)
+        if end:
+            g.c[points[-1]] = end
+
+    px0, py0 = cl.corners[0]
+    px3, py3 = cl.corners[3]
+    cols_w = range(px0 + 1, px0 + d3_unit.PANEL_W + 1)
+    cols_e = range(px3 + 1, px3 + d3_unit.PANEL_W + 1)
+    rows_n = range(py0 + 1, py0 + d3_unit.PANEL_H + 1)
+    rows_s = range(py3 + 1, py3 + d3_unit.PANEL_H + 1)
+
+    # ── T1, the far block, feeding the north-*east* panel.  Its three terminals
+    #    are the only three reachable from above without entering the channel —
+    #    the north face, the corridor and the tunnel — which is why it is the
+    #    far one.  All three climb the narrow channel, run east over T0's roof
+    #    and the cluster's, and come down the gutter ───────────────────────────
+    a1, d1, s1 = (port(1, b) for b in ("addr", "data", "swap"))
+    lane_a, lane_d, lane_s = cy - 4, cy - 3, cy - 2
+    pipe(1, "addr", [a1, (f1, a1[1]), (f1, lane_a),
+                     (px3 + PACK_NW_ADDR_COL, lane_a),
+                     (px3 + PACK_NW_ADDR_COL, cl.north)], end="v")
+    la = lengths[1, "addr"]
+    pipe(1, "data", _solve(
+        lambda rr: [d1, (f2, d1[1]), (f2, lane_d), (cl.corridor, lane_d),
+                    (cl.corridor, rr)],
+        rows_n, lambda n: n == la, "DATA row"), end=">")
+    pipe(1, "swap", _solve(
+        lambda c: [s1, (f3, s1[1]), (f3, lane_s), (cl.tunnel, lane_s),
+                   (cl.tunnel, cl.band[0]), (c, cl.band[0])],
+        cols_e, lambda n: n >= la + SWAP_LEAD, "SWAP column"), end="^")
+
+    # ── T0, the block against the cluster, feeding the north-west panel.  Its
+    #    three targets are all in the channel or just inside it, and all three
+    #    are at or above the band's first row — which is what keeps them clear
+    #    of T2's three climbing the same channel from below ────────────────────
+    a0, d0, s0 = (port(0, b) for b in ("addr", "data", "swap"))
+    pipe(0, "addr", [a0, (ca0, a0[1]), (ca0, cl.north), (px0 + 3, cl.north)], end="v")
+    la = lengths[0, "addr"]
+    pipe(0, "data", _solve(lambda rr: [d0, (cd0, d0[1]), (cd0, rr), (cl.west_data, rr)],
+                           rows_n, lambda n: n == la, "DATA row"))
+    pipe(0, "swap", _solve(
+        lambda c: [s0, (cs0, s0[1]), (cs0, cl.band[0]), (c, cl.band[0])],
+        cols_w, lambda n: n >= la + SWAP_LEAD, "SWAP column"), end="^")
+
+    # ── T2, the south-west panel: due west and a whole block row below, exactly
+    #    as in the sandwich — the same three climbs, on their own columns ──────
+    a2, d2, s2 = (port(2, b) for b in ("addr", "data", "swap"))
+    pipe(2, "addr", [a2, (w2a, a2[1]), (w2a, cl.band[1]), (px0 + 1, cl.band[1])], end="v")
+    la = lengths[2, "addr"]
+    pipe(2, "data", _solve(lambda rr: [d2, (w2d, d2[1]), (w2d, rr), (cl.west_data, rr)],
+                           rows_s, lambda n: n == la, "DATA row"))
+    pipe(2, "swap", _solve(
+        lambda c: [s2, (w2s, s2[1]), (w2s, cl.south + 1), (c, cl.south + 1), (c, cl.south)],
+        cols_w, lambda n: n >= la + SWAP_LEAD, "SWAP column"))
+
+    # ── T3, the south-east panel: unchanged.  It is the one block still east of
+    #    the cluster, so it keeps the detour of :func:`build_packed_wall` — out
+    #    to the margin, south past its own block and back west underneath it ───
+    a3, d3, s3 = (port(3, b) for b in ("addr", "data", "swap"))
+    p1, p2, p3 = (row_s + lg.height + i for i in range(3))
+    e1, e2, e3, e4 = (row_s + 3 + 10 * i for i in range(4))
+    pipe(3, "addr", [a3, (m3, a3[1]), (m3, p3), (cl.tunnel, p3),
+                     (cl.tunnel, cl.band[1]), (px3 + 1, cl.band[1])], end="v")
+    la = lengths[3, "addr"]
+    sx = px3 + 25
+    pipe(3, "data", _solve(
+        lambda w: [d3, (m2, d3[1]), (m2, p2), (cl.corridor, p2),
+                   *_excursion(cl.corridor, e4, w), (cl.corridor, rows_s.start)],
+        range(1, sx - cl.corridor - 1), lambda n: n == la, "DATA excursion"), end=">")
+    pipe(3, "swap", _solve(
+        lambda w: [s3, (m1, s3[1]), (m1, p1), (sx, p1),
+                   *_excursion(sx, e3, w), *_excursion(sx, e2, w),
+                   *_excursion(sx, e1, w), (sx, cl.south)],
+        range(1, cols_e.stop - sx), lambda n: n >= la + SWAP_LEAD, "SWAP excursion"))
+
+    _check_lengths(lengths)
+
+    # ── the four legs.  T1's and T2's are the fan's own shape — down the margin,
+    #    east on a lane two rows above the block.  T0's and T3's are not: both
+    #    have to get past a block row that now stands *beside* the cluster
+    #    rather than above it, and both do it through the strip below the two
+    #    north blocks (:data:`PACK_NW_DROP`), which the cluster's extra 35 rows
+    #    of height leave empty.  T0 comes back up the channel's spare column and
+    #    runs east on :attr:`Cluster.north` itself; T3 climbs the wide channel's
+    #    own spare column to :attr:`Cluster.lane` and crosses the cluster there.
+    #
+    #    Both of those rows already carry something, and that is deliberate: the
+    #    fan is four rows deep and every one of them is needed (row 11 has to
+    #    stay clear of horizontals, or a run along it touches the router's south
+    #    wall and outbids a leaf's own outlet under §7.1).  Two pipes may share a
+    #    row only if their column spans do not meet — touching spans would merge
+    #    into one pipe rather than collide, which nothing would report — so the
+    #    two gaps are checked below instead of being read off the map ──────────
+    drop0, drop3 = (cy + d for d in PACK_NW_DROP)
+    outlets = outlet_cols()
+    routes: dict[int, list[tuple[int, int]]] = {}
+    for tile, (bx, by) in anchors.items():
+        ox = RX + outlets[tile]
+        cmd_x, cmd_y = bx + lg.cmd_cell[0], by + lg.cmd_cell[1]
+        if ox >= cmd_x:
+            raise RouterError(
+                f"tile {tile}'s outlet at column {ox} is not west of its command "
+                f"port at {cmd_x}: the leg would run west and cross its neighbours"
+            )
+        head = (ox, south_wall + 1)
+        if tile == 0:
+            routes[tile] = [head, (ox, drop0), (up0, drop0), (up0, cl.north),
+                            (cmd_x, cl.north), (cmd_x, cmd_y)]
+        elif tile == 1:
+            # T1's is the one leg that turns east *under the router itself*
+            # (columns 10..33 against a room 23 wide), so its lane may not be
+            # ``south_wall + 1``: a run there lies along the router's own south
+            # wall and every touch of it is a §7.1 rival for the four leaf `s`
+            # glyphs six rows above.  It rides T1's SWAP lane when that is clear
+            # of the wall and drops to the first row that is when it is not.
+            lane = max(lane_s, south_wall + 2)
+            if lane >= cmd_y:
+                raise RouterError(
+                    f"T1's leg has no lane: it must turn east on row {lane} or lower "
+                    f"to keep off the router's south wall, and its command port is "
+                    f"already on row {cmd_y}. PACK_NW_CLUSTER_Y cannot go below "
+                    f"{south_wall + 3}"
+                )
+            routes[tile] = [head, (ox, lane), (cmd_x, lane), (cmd_x, cmd_y)]
+        elif tile == 2:
+            routes[tile] = [head, (ox, row_s - 2), (cmd_x, row_s - 2), (cmd_x, cmd_y)]
+        else:
+            routes[tile] = [head, (ox, drop3), (k3, drop3), (k3, cl.lane),
+                            (cmd_x, cl.lane), (cmd_x, cmd_y)]
+    _check_leg_routes(g, routes)
+    legs = [g.draw_pipe(routes[tile]) for tile in range(4)]
+
+    rows = g.rows()
+    regions: dict[str, tuple[int, int, int, int]] = {"router": (RX, RY, IW + 2, IH + 2)}
+    for tile, (bx, by) in anchors.items():
+        for name, (x, y, w, h) in logic[tile].regions.items():
+            regions[f"t{tile}:{name}"] = (bx + x, by + y, w, h)
+        px, py = cl.corners[tile]
+        regions[f"t{tile}:panel"] = (px, py, d3_unit.PANEL_W + 2, d3_unit.PANEL_H + 2)
+    regions["cluster"] = (cx, cy, cl.width, cl.height)
 
     return Wall(
         cells=g.c,

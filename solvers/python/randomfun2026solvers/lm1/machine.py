@@ -3026,6 +3026,8 @@ def build(
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
     doom_cluster_lift: int = 0,
+    doom_north_up: int = 0,
+    doom_north_west: bool = False,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
@@ -3230,6 +3232,8 @@ def build(
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
                     doom_cluster_lift=doom_cluster_lift,
+                    doom_north_up=doom_north_up,
+                    doom_north_west=doom_north_west,
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
@@ -3300,6 +3304,8 @@ def build(
                     doom_loop_row=doom_loop_row,
                     doom_leaf_cols=doom_leaf_cols,
                     doom_cluster_lift=doom_cluster_lift,
+                    doom_north_up=doom_north_up,
+                    doom_north_west=doom_north_west,
                     lane_pitch=lane_pitch,
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
@@ -3392,6 +3398,8 @@ def _assemble(
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
     doom_cluster_lift: int = 0,
+    doom_north_up: int = 0,
+    doom_north_west: bool = False,
     lane_pitch: int = 2,
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
@@ -4018,6 +4026,8 @@ def _assemble(
             g, cpu, CX, CY + H + 1, stream, unit=program.unit,
             doom_loop_row=doom_loop_row, doom_leaf_cols=doom_leaf_cols,
             doom_cluster_lift=doom_cluster_lift,
+            doom_north_up=doom_north_up,
+            doom_north_west=doom_north_west,
         )
 
     # ── seek: the jump-request pipe, CPU east wall -> around -> ROM east wall ─
@@ -4777,6 +4787,8 @@ def _stream(
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
     doom_cluster_lift: int = 0,
+    doom_north_up: int = 0,
+    doom_north_west: bool = False,
 ) -> tuple[object, dict[str, tuple[int, int]], tuple[int, int]]:
     """Place the coprocessor below the CPU and wire its pipes. Returns touches.
 
@@ -4833,7 +4845,9 @@ def _stream(
         # ``build_wall``'s scattered arrangement stays for the probe and the
         # tests that pin the router's own geometry.
         blk = d3_router.build_packed_wall(
-            loop_row=doom_loop_row, leaf_cols=doom_leaf_cols, lift=doom_cluster_lift
+            loop_row=doom_loop_row, leaf_cols=doom_leaf_cols,
+            lift=doom_cluster_lift, north_up=doom_north_up,
+            north_west=doom_north_west,
         )
     else:
         from . import stream as streammod
@@ -7066,7 +7080,86 @@ DOOM_LOOP_ROW: dict[tuple[str, str], int] = {
 #: ``tests/test_deadman3d_hires.py`` do, and they caught it. Keyed per
 #: ``(slug, tier)``, the default path stays byte-identical.
 DOOM_CLUSTER_LIFT: dict[tuple[str, str], int] = {
-    ("deadman-3d_hires", "taped"): 21,
+    ("deadman-3d_hires", "taped"): 24,
+}
+
+#: Rows the **north** block row rises by, off :data:`d3_router.PACK_ROW_N`.  The
+#: lift above moves the cluster and the south blocks together and tops out at 21,
+#: where the cluster's north wall meets T1's south wall (``collision at (352,
+#: 85)``); raising this by the same amount first buys the lift that much more
+#: room, one row of screen per row of block.
+#:
+#: It buys **three**, and the router's own fan is what ends it.  The four legs
+#: leave the router's south wall at row 11, and the north row's two legs turn east
+#: at ``row_n - 2`` and ``row_n - 3``.  At ``north_up = 3`` those lanes are rows 13
+#: and 12, the last pair clear of the outlet row; at 4 the outer lane *is* row 11.
+#:
+#: **And four builds.**  Every pipe binds, ``build_for`` returns a 649x460 grid,
+#: and the frame gate then fails — ``fatal='wrong-frame'``, ``passed=False``, at
+#: tick 3,083,064.  Nothing short of comparing frames catches it, so every value
+#: here is gated over the tour rather than trusted because it built.  Measured,
+#: 3 rounds, ticks to the last frame:
+#:
+#: | ``north_up`` / lift | box | screens | ticks | |
+#: | --- | --- | --- | --- | --- |
+#: | 0 / 21 | 649x464 | y286 | 21,659,879 | shipped before |
+#: | 1 / 22 | 649x463 | y285 | 21,659,876 | |
+#: | 2 / 23 | 649x462 | y284 | 21,659,873 | |
+#: | **3 / 24** | **649x461** | **y283** | **21,659,870** | 21 rounds: 191,599,652 |
+#: | 4 / 25 | 649x460 | y282 | — | ``wrong-frame`` |
+#:
+#: The ticks are flat to within 3 a row — the legs shorten one cell per row and
+#: they are a pipeline, so this is height, not speed.  See
+#: ``scratch/deadman3d-opt/hires_screenlift.py``.
+DOOM_PACK_NORTH_UP: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "taped"): 3,
+}
+
+#: Whether the packed wall stands **both north blocks west of the cluster**
+#: instead of above it, per ``(slug, tier)``.  Absent (``False``) keeps the
+#: sandwich and the two levers above; ``True`` takes a different placement
+#: entirely (:func:`d3_router._packed_wall_north_west`) and ignores them, which
+#: is why it is a flag rather than another row count.
+#:
+#: :data:`DOOM_PACK_NORTH_UP` is the end of the sandwich: the cluster can rise
+#: only until the router's fan runs out of lanes, and that is three rows.  What
+#: it could not do is stop stacking a block row *above* the screens at all,
+#: because the east block's pipes come back west underneath their own block —
+#: into the strip a risen cluster wants — and returning over the top crosses
+#: that block's own leg, an L that separates the quadrant its ADDR has to cross.
+#: A **west** block has no such L: its command column is west of its ports.  So
+#: both north blocks go west, side by side, on the cluster's own rows, and the
+#: block row comes off the wall's height outright.
+#:
+#: **Seventy-three rows of screen**, measured on the real build, ticks to the
+#: last frame over the tour:
+#:
+#: | arrangement | box | wall | screens | 3 rounds | 21 rounds |
+#: | --- | --- | --- | --- | --- | --- |
+#: | sandwich, ``north_up=3`` | 649x461 | 365x264 | y283 | 21,659,870 | 191,599,652 |
+#: | **north-west** | **649x388** | **475x191** | **y210** | **21,660,329** | **191,601,893** |
+#:
+#: Seventy-three rows off the machine for +459 ticks at 3 rounds and +2,241 at
+#: 21 — **+0.001%**, which is flat.  It is not quite nothing and it is not noise
+#: either: the twelve port pipes get longer (T1's now cross the whole wall) and a
+#: pipe's length is its latency, so each frame's paint arrives a little later.
+#: That is a per-frame constant, which is why the 21-round delta is seven times
+#: the 3-round one on seven times the frames.  This is a height lever, as the two
+#: above it were; there is no tick pressure on this family at all.
+#:
+#: The wall goes 365 to 475 columns wide, which the machine does not feel: the
+#: grid STORE sets the box at 649 and the wall had ~284 spare columns.  Height is
+#: the objective (``AGENTS.md`` § deadman-3d is out of contest scope).
+#:
+#: The floor is ``d3_router.PACK_NW_CLUSTER_Y`` = 13 and it is one leg's, not the
+#: fan's — see there, including the ``wrong-frame`` a row lower that only the
+#: gate catches.
+#:
+#: Keyed, like both levers above, because ``build_packed_wall``'s default path
+#: has to stay byte-identical for the two tests in
+#: ``tests/test_deadman3d_hires.py`` that call it bare.
+DOOM_PACK_NORTH_WEST: dict[tuple[str, str], bool] = {
+    ("deadman-3d_hires", "taped"): True,
 }
 
 DOOM_LEAF_COLS: dict[tuple[str, str], tuple[int, ...]] = {
@@ -7629,6 +7722,8 @@ def build_for(
         doom_loop_row=DOOM_LOOP_ROW.get((slug, store)),
         doom_leaf_cols=DOOM_LEAF_COLS.get((slug, store)),
         doom_cluster_lift=DOOM_CLUSTER_LIFT.get((slug, store), 0),
+        doom_north_up=DOOM_PACK_NORTH_UP.get((slug, store), 0),
+        doom_north_west=DOOM_PACK_NORTH_WEST.get((slug, store), False),
         rom_touch_drop=(
             ROM_TOUCH_DROP.get((slug, store), 0)
             if rom_touch_drop is None
