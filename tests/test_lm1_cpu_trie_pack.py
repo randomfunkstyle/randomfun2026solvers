@@ -269,3 +269,96 @@ def test_a_d_only_ever_stands_on_a_lane_row() -> None:
 def test_the_registry_names_only_the_tier_that_measured_it() -> None:
     """``STRAIGHT_TRIE`` is opt-in, so every other machine stays byte-identical."""
     assert machine.STRAIGHT_TRIE == {("deadman-3d_hires", "men-v3")}
+
+
+# ── HIGH_COLLECTOR / TIGHT_TRIE_COLS: the corridor row, and per-node columns ──
+#
+# Both re-shape the decode, and re-shaping the decode is the change that binds
+# every pipe, renders, and routes an opcode into the wrong lane. So both are
+# pinned the only way that catches it: replay every opcode number through the
+# cells the generator actually emits and check where it lands.
+
+
+def _corridor_rows(slug, slots):
+    """Pitch-1 slot rows with one blank opened above the root's lane.
+
+    That is what ``build_cpu`` does under :data:`machine.HIGH_COLLECTOR`: the root
+    splits at ``1 << (k-1)`` and its ``x`` lands on the last up-half lane's row, so
+    the corridor goes between the two ranks below it.
+    """
+    _, p = _seek_plan(slug, slots)
+    used = sorted((p.row[m] - 1) // 2 for m in p.number)
+    rank = {s: i for i, s in enumerate(used)}
+    gaps = machine._uneven_gaps(p.k, used, True)
+    at = [1]
+    for i in range(len(used) - 1):
+        at.append(at[-1] + (2 if i in gaps else 1))
+    n_up = sum(1 for s in used if s < (1 << (p.k - 1)))
+    at = [r + (1 if i >= n_up - 1 else 0) for i, r in enumerate(at)]
+    return p, {s: at[rank[s]] for s in used}, at[n_up - 1] - 1
+
+
+def _tight_lane_x0(k, slot_rows, tight):
+    """``build_cpu``'s rule: the band starts one column east of the deepest node."""
+    if not tight:
+        return 4 + 2 * k
+    _e, elevel, tree, root = machine._trie_shape(k, slot_rows, True, True)
+    return max(machine._trie_columns(tree, root, elevel, True).values(), default=4) + 1
+
+
+@pytest.mark.parametrize("tight", [False, True])
+def test_the_corridor_row_carries_nothing_that_turns(tight) -> None:
+    """What makes the second collector legal, checked on the emitted cells.
+
+    The corridor sweeps west across the trie's own columns. A ``.`` there is fine —
+    a westbound man keeps his heading — and so is a ``]``, which does not turn and
+    whose BP the fetch's ``b`` overwrites before anything reads it. An ``x``, a
+    ``d`` or a ``>`` would steer the returning man out of the corridor, silently.
+    """
+    slug, _tier = STRAIGHT_KEY
+    p, slot_rows, corridor = _corridor_rows(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
+    lane_x0 = _tight_lane_x0(p.k, slot_rows, tight)
+    _entry, cells = machine._uneven_trie(
+        p.k, slot_rows, lane_x0, True, inline_far=True, tight_cols=tight
+    )
+    assert corridor not in set(slot_rows.values()), "vacuous: no row was opened"
+    on_row = sorted((x, g) for (x, y), g in cells.items() if y == corridor)
+    assert on_row, "vacuous: the trie does not cross the corridor at all"
+    assert all(g in (PASS_THROUGH, "]") for _x, g in on_row), on_row
+
+
+@pytest.mark.parametrize("tight", [False, True])
+@pytest.mark.parametrize("corridor", [False, True])
+def test_every_opcode_still_decodes_to_its_own_lane(corridor, tight) -> None:
+    """The one failure this pair can cause that nothing else would report."""
+    slug, _tier = STRAIGHT_KEY
+    slots = machine.OPCODE_SLOTS[STRAIGHT_KEY]
+    if corridor:
+        p, slot_rows, _c = _corridor_rows(slug, slots)
+    else:
+        p, slot_rows, _x0, _e, _cells = _trie_of(slug, slots, pitch=1, straight=True)
+    lane_x0 = _tight_lane_x0(p.k, slot_rows, tight)
+    entry, cells = machine._uneven_trie(
+        p.k, slot_rows, lane_x0, True, inline_far=corridor, tight_cols=tight
+    )
+    for m, number in p.number.items():
+        landed = _walk_trie(cells, number, entry, lane_x0)
+        assert landed == slot_rows[(p.row[m] - 1) // 2], m
+
+
+def test_per_node_columns_are_narrower_and_can_never_be_wider() -> None:
+    """``TIGHT_TRIE_COLS`` is only worth having if it moves ``lane_x0`` west.
+
+    It also may never move it *east*: the per-node rule spends ``1 + max(0, shifts
+    - leg slack)`` on an edge, which is at most the ``2 * d`` the level rule
+    spends, so the inequality is structural rather than lucky. Assert the
+    direction, not the number — the number is a property of this program's tree.
+    """
+    slug, _tier = STRAIGHT_KEY
+    p, slot_rows, _c = _corridor_rows(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
+    assert _tight_lane_x0(p.k, slot_rows, True) < _tight_lane_x0(p.k, slot_rows, False)
+
+
+def test_the_two_new_registries_name_only_the_tier_that_measured_them() -> None:
+    assert machine.HIGH_COLLECTOR == {("deadman-3d_hires", "men-v3")}
+    assert machine.TIGHT_TRIE_COLS == {("deadman-3d_hires", "men-v3")}

@@ -1139,8 +1139,132 @@ def _uneven_gaps(k: int, slots: Sequence[int], straight: bool = False) -> set[in
     return gaps
 
 
+def _trie_shape(
+    k: int, slot_rows: dict[int, int], straight: bool = False, inline_far: bool = False
+) -> tuple[int, int | None, list[dict], int | None]:
+    """The pruned, contracted decode tree — rows and levels, no columns yet.
+
+    Split out of :func:`_uneven_trie` because the columns are no longer a function
+    of the level alone (:func:`_trie_columns`), and a column cannot be chosen until
+    the whole subtree below it is known. Returns ``(entry row, entry level, nodes,
+    root index)``; ``entry level`` and ``root`` are ``None`` for a one-lane trie.
+    Each node is ``{level, row, inline, kids}`` and each kid is
+    ``(sign, child row, child level or None, child index or None)``.
+    """
+    used = sorted(slot_rows)
+    tree: list[dict] = []
+
+    def node(level: int, lo: int, hi: int) -> tuple[int, int | None, int | None]:
+        sl = [s for s in used if lo <= s < hi]
+        mid = lo
+        up: list[int] = []
+        down: list[int] = []
+        while len(sl) > 1:
+            mid = (lo + hi) // 2
+            up = [s for s in sl if s < mid]
+            down = [s for s in sl if s >= mid]
+            if up and down:
+                break
+            # Single-child level: contract it — the edge below carries its `]`.
+            lo, hi = (lo, mid) if up else (mid, hi)
+            level += 1
+        if len(sl) == 1:
+            return slot_rows[sl[0]], None, None
+        # The one node shape that may go straight instead of turning: a single-lane
+        # up half sitting at the interval's base (so ``BP == 0`` picks it exactly).
+        # See :func:`_uneven_gaps` for why the two glyphs agree exactly there.
+        gap = slot_rows[min(down)] - 1  # the gap row above the down half
+        # An ``x`` has to stand on ``gap``, because it always turns. A ``d`` does
+        # not: it goes **straight** on ``BP == 0``, so it stands on its up child's
+        # own row and *is* that lane's entry, however far above the down half that
+        # row is — the man it sends south simply walks further, over ``.`` cells
+        # that belong to nobody (the rows between a single-lane up half and the down
+        # half hold no lane, by construction). Anchoring the ``d`` to the child
+        # rather than to the gap is what lets :data:`HIGH_COLLECTOR` open a blank
+        # row here without landing a turn glyph in the corridor; without
+        # ``inline_far`` the two anchors have to coincide, which is the shipped rule.
+        inline = (
+            straight
+            and len(up) == 1
+            and up[0] == lo
+            and (inline_far or slot_rows[up[0]] == gap)
+        )
+        me = len(tree)
+        tree.append(
+            {"level": level, "row": slot_rows[up[0]] if inline else gap,
+             "inline": inline, "kids": []}
+        )
+        for half, sign in (((lo, mid), -1), ((mid, hi), +1)):
+            crow, clevel, ci = node(level + 1, *half)
+            tree[me]["kids"].append((sign, crow, clevel, ci))
+        return tree[me]["row"], level, me
+
+    entry, elevel, root = node(1, 0, 1 << k)
+    return entry, elevel, tree, root
+
+
+def _trie_columns(
+    tree: list[dict], root: int | None, elevel: int | None, tight: bool
+) -> dict[int, int]:
+    """Which column each decode node stands in.
+
+    The shipped rule is ``3 + 2 * level``: **two** columns a level, so that an edge
+    contracting ``d`` levels has ``2d - 1 >= d`` cells for its ``]``s. It is a
+    sufficient condition and a wasteful one — the trie's horizontal traverse is
+    ``lane_x0 - 5`` on *every* instruction, and ``lane_x0`` is the deepest node's
+    column plus one, so every column here is also a column on every drop and every
+    metre of the walk back west. On ``deadman-3d_hires`` that is ``4 + 2k = 14``.
+
+    ``tight`` prices it per **node** instead, off two observations:
+
+    * most edges owe **one** shift, not ``d`` — a contraction is the exception; and
+    * the run east along the child's row is not the only place a ``]`` can stand.
+      The edge's *vertical* leg is ``.`` today, the man keeps his heading over a
+      ``]``, and the leg's cells are in the parent's column, which is strictly west
+      of every lane in the subtree. So a leg with any slack in it hosts the shift
+      for free and the child needs only ``parent + 1``.
+
+    A child therefore sits at ``parent + 1 + max(0, shifts - leg slack)``, which on
+    this machine gives ``5,6,7,8,10`` down one side and ``5,6,8,9,11`` down the
+    other: **``lane_x0`` 14 -> 12**, and the two columns come off the trie walk and
+    off the return walk at once. Levels 1..4 pay one column each; only the deepest
+    pair, whose rows are adjacent so the leg has no slack, still pays two.
+
+    One column a level flat is *not* feasible and the reason is worth keeping: it
+    leaves ``d - 1`` cells for ``d`` shifts on every edge, including the
+    uncontracted ``d = 1`` ones, which get none at all.
+    """
+    cols: dict[int, int] = {}
+    if root is None:
+        return cols
+
+    def place(i: int, col: int) -> None:
+        cols[i] = col
+        nd = tree[i]
+        for sign, crow, clevel, ci in nd["kids"]:
+            if ci is None:
+                continue
+            if not tight:
+                place(ci, 3 + 2 * clevel)
+                continue
+            slack = (
+                0
+                if (nd["inline"] and sign < 0)
+                else max(0, abs(crow - nd["row"]) - 1)
+            )
+            place(ci, col + 1 + max(0, (clevel - nd["level"]) - slack))
+
+    place(root, max(5, 4 + elevel) if tight else 3 + 2 * elevel)
+    return cols
+
+
 def _uneven_trie(
-    k: int, slot_rows: dict[int, int], lane_x0: int, straight: bool = False
+    k: int,
+    slot_rows: dict[int, int],
+    lane_x0: int,
+    straight: bool = False,
+    inline_far: bool = False,
+    tight_cols: bool = False,
 ) -> tuple[int, dict[tuple[int, int], str]]:
     """Lay a depth-``k`` decode trie pruned to the *used* leaf slots.
 
@@ -1169,60 +1293,54 @@ def _uneven_trie(
     function additionally requires the two rows to have actually been packed
     together — a ``d`` on a blank row would send the man east along nothing.
 
+    ``inline_far`` (:data:`HIGH_COLLECTOR`) lifts that last requirement, which is
+    the *placement* half of the rule and not the correctness half. A ``d`` going
+    straight is its up child's entry wherever that child sits, so anchoring it to
+    ``slot_rows[up[0]]`` instead of to the gap above the down half works at any
+    separation: the man it turns south simply walks further, over rows that hold no
+    lane (a single-lane up half has nothing under it). It is off by default because
+    at ``lane_pitch = 2`` it would fire on **every** such node and move a geometry
+    two tests pin as inert; ``high_collector`` needs it because the row it opens
+    above the fetch is exactly such a separation, and an ``x`` would land in it.
+    See ``test_the_substitution_is_inert_at_a_pitch_of_two``.
+
     Returns the root entry row — the fetch row — and the cells. Opcode numbers are
     untouched: the ROM image is byte-identical to the uniform trie's.
     """
     cells: dict[tuple[int, int], str] = {}
     nodes: dict[tuple[int, int], int] = {}  # branch cells, checked below
-    used = sorted(slot_rows)
+    entry, elevel, tree, root = _trie_shape(k, slot_rows, straight, inline_far)
+    col_of = _trie_columns(tree, root, elevel, tight_cols)
 
-    def node(level: int, lo: int, hi: int) -> tuple[int, int | None]:
-        """Entry (row, level) of the subtree over slots [lo, hi); level None = lane."""
-        sl = [s for s in used if lo <= s < hi]
-        mid = lo
-        up: list[int] = []
-        down: list[int] = []
-        while len(sl) > 1:
-            mid = (lo + hi) // 2
-            up = [s for s in sl if s < mid]
-            down = [s for s in sl if s >= mid]
-            if up and down:
-                break
-            # Single-child level: contract it — the edge below carries its `]`.
-            lo, hi = (lo, mid) if up else (mid, hi)
-            level += 1
-        if len(sl) == 1:
-            return slot_rows[sl[0]], None
-        col = 3 + 2 * level
-        xrow = slot_rows[min(down)] - 1  # the gap row above the down half
-        # The one node shape that may go straight instead of turning: a single-lane
-        # up half sitting at the interval's base (so ``BP == 0`` picks it exactly),
-        # already packed onto the row this node wants. See :func:`_uneven_gaps`.
-        inline = (
-            straight
-            and len(up) == 1
-            and up[0] == lo
-            and slot_rows[up[0]] == xrow
-        )
-        cells[(col, xrow)] = "d" if inline else "x"
+    for i, nd in enumerate(tree):
+        col, xrow, level = col_of[i], nd["row"], nd["level"]
+        cells[(col, xrow)] = "d" if nd["inline"] else "x"
         nodes[(col, xrow)] = level
-        for half, sign in (((lo, mid), -1), ((mid, hi), +1)):
-            crow, clevel = node(level + 1, *half)
-            if not (inline and sign < 0):
-                for yy in range(xrow + sign, crow, sign):
-                    cells[(col, yy)] = "."
-                cells[(col, crow)] = ">"  # the inline child's entry *is* the ``d``
+        for sign, crow, clevel, ci in nd["kids"]:
             shifts = 0 if clevel is None else clevel - level
-            end = (2 + 2 * clevel) if clevel is not None else (lane_x0 - 1)
-            for i, cx in enumerate(range(col + 1, end + 1)):
-                cells[(cx, crow)] = "]" if i < shifts else "."
-        return xrow, level
+            child_col = col_of[ci] if ci is not None else lane_x0
+            room = child_col - col - 1  # the run east along the child's row
+            if nd["inline"] and sign < 0:
+                # The inline child's entry *is* the ``d``: no leg, no ``>``.
+                down_shifts = 0
+            else:
+                # A ``]`` may stand on the leg as happily as on the run: the man
+                # keeps his heading over it, and a node's column is strictly west of
+                # every lane in its subtree, so nobody else ever walks these cells.
+                # Only the overflow goes here, so a leg with slack stays all ``.``
+                # and the two-columns-a-level layout is reproduced exactly.
+                leg = list(range(xrow + sign, crow, sign))
+                down_shifts = max(0, shifts - room)
+                for j, yy in enumerate(leg):
+                    cells[(col, yy)] = "]" if j < down_shifts else "."
+                cells[(col, crow)] = ">"
+            for j, cx in enumerate(range(col + 1, child_col)):
+                cells[(cx, crow)] = "]" if j < shifts - down_shifts else "."
 
-    entry, elevel = node(1, 0, 1 << k)
     # The approach from the fetch cell: `>rbr` ends at column 4, the first `x` (or
     # the lone lane) starts east of it, and a contracted root still owes its shifts.
     shifts = 0 if elevel is None else elevel - 1
-    end = (2 + 2 * elevel) if elevel is not None else (lane_x0 - 1)
+    end = (col_of[root] - 1) if root is not None else (lane_x0 - 1)
     for i, cx in enumerate(range(5, end + 1)):
         cells[(cx, entry)] = "]" if i < shifts else "."
 
@@ -1333,6 +1451,8 @@ def build_cpu(
     lane_pitch: int = 2,
     squash_band: bool | int = False,
     straight_trie: bool = False,
+    high_collector: bool = False,
+    tight_trie_cols: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -1353,6 +1473,10 @@ def build_cpu(
     :data:`TUCKED_DROPS` / :data:`FOLDED_LANES` / :data:`SLAB_PITCH` — the last two
     of those reading :data:`SEEK_TIGHT_STRUCT_DROPS` / :data:`SEEK_SLAB_PITCH`
     instead while the drum is on.
+
+    ``high_collector`` opens one blank row directly above the fetch row and runs a
+    **second** collector along it, so a lane above the trie root stops there
+    instead of falling past it to the collector under the band (:data:`HIGH_COLLECTOR`).
     """
     if (trim_dead or top_bus) and not short_return:
         raise MachineError("trim_dead/top_bus require the short-return drop rule")
@@ -1397,6 +1521,15 @@ def build_cpu(
         # sign flipped. The two knobs are one knob: see
         # :data:`SEEK_TIGHT_STRUCT_DROPS`.
         raise MachineError("tight_drops under the seek drum requires seek_taken_drop_east")
+    if high_collector:
+        if not trim_dead or lane_pitch != 1:
+            # The corridor is paid for out of the stagger's slack and is placed by
+            # rank, both of which only exist under the pruned, pitch-1 band.
+            raise MachineError("high_collector requires trim_dead and lane_pitch 1")
+        if top_bus:
+            # Both want column 1 above the fetch row: the bus to descend into it,
+            # the corridor to drop into it. Two headings, one cell.
+            raise MachineError("high_collector and top_bus both own column 1 above the fetch")
     k, lanes = p.k, p.lanes
     used = list(p.number)
     bus_row = 1
@@ -1415,6 +1548,30 @@ def build_cpu(
             at = [y0]
             for i in range(n_rows - 1):
                 at.append(at[-1] + (2 if i in gaps else 1))
+            if high_collector:
+                # One blank row, opened where the *second* return corridor wants to
+                # run: directly above the lane the root's ``x`` shares a row with.
+                #
+                # The root splits at ``1 << (k - 1)``, and its ``x`` stands on the
+                # row above the down half's first lane — which, at pitch 1, is the
+                # last **up**-half lane's row. So rank ``n_up - 1`` is the fetch row
+                # and ranks ``0 .. n_up - 2`` are strictly above it: exactly the
+                # lanes that today fall past the fetch to the collector under the
+                # band and then climb back up. Opening the row between ranks
+                # ``n_up - 2`` and ``n_up - 1`` puts the corridor one row above the
+                # fetch and serves every one of them.
+                #
+                # It is taken out of the **stagger's slack**, not out of the room:
+                # ``slack`` below shrinks by one and the band starts one row higher,
+                # so the collector, the structures band and the room's height do not
+                # move, and neither does anything anchored to them.
+                n_up = sum(1 for s in slots if s < (1 << (k - 1)))
+                if not 2 <= n_up < n_rows:
+                    raise MachineError(
+                        f"high_collector needs lanes on both sides of the root split "
+                        f"and at least two above it; {n_up} of {n_rows} are above"
+                    )
+                at = [r + (1 if i >= n_up - 1 else 0) for i, r in enumerate(at)]
             # **Bottom-align it.** The rows the stagger saves are left blank above
             # the band instead of being taken out of the room, so the collector,
             # the whole structures band below it and the room's own height all
@@ -1461,11 +1618,35 @@ def build_cpu(
     by_row = {row_of[m]: m for m in used}
     all_rows = list(at)
     if trim_dead:
+        slot_rows = {(p.row[m] - 1) // 2: row_of[m] for m in used}
+        if tight_trie_cols:
+            # ``lane_x0`` is the deepest node's column plus one, and with per-node
+            # columns that is no longer ``4 + 2k`` — so the trie has to be *shaped*
+            # before the band's origin is known. Nothing above reads ``lane_x0``.
+            _e, _el, _tree, _root = _trie_shape(k, slot_rows, straight_trie, high_collector)
+            _cols = _trie_columns(_tree, _root, _el, True)
+            lane_x0 = max(_cols.values(), default=4) + 1
         centre, trie_cells = _uneven_trie(
-            k, {(p.row[m] - 1) // 2: row_of[m] for m in used}, lane_x0, straight_trie
+            k,
+            slot_rows,
+            lane_x0,
+            straight_trie,
+            inline_far=high_collector,
+            tight_cols=tight_trie_cols,
         )
     else:
         centre, trie_cells = (1 << k) + (y0 - 1), None
+
+    #: The high corridor's row, or ``None``. It is the blank row opened above the
+    #: fetch, so every lane strictly above it returns there instead of at the
+    #: collector: ``(hi_row - r) + (centre - hi_row)`` is ``centre - r``, the
+    #: Manhattan distance, against ``(collector - r) + (collector - centre)``.
+    hi_row = centre - 1 if high_collector else None
+    if hi_row is not None and (hi_row in set(all_rows) or hi_row <= y0):
+        raise MachineError(
+            f"high_collector: row {hi_row} above the fetch is not blank — the row "
+            "the corridor was opened for is not the row the trie root chose"
+        )
 
     flat = {m: hw_micro(p.sem[m]) for m in used if p.sem[m] in _HW}
     structured = [m for m in used if p.sem[m] in _JUMP_SEMS | _BRANCH_SEMS]
@@ -1630,6 +1811,14 @@ def build_cpu(
 
     lane_rows = set(all_rows)
 
+    def _stop(r: int, m: str | None) -> int:
+        """The row a lane's drop ends on: its slab, the high corridor, or the collector."""
+        if m is not None and m in slab_rows:
+            return collector  # a slab lane falls past both corridors; see ``slab_at``
+        if hi_row is not None and r < hi_row:
+            return hi_row
+        return collector
+
     def _bump(c: int, struct_cols: set[int], blocked: set[int], assigned: set[int]) -> int:
         """The first column at or east of ``c`` the drop discipline still allows."""
         while (
@@ -1647,7 +1836,8 @@ def build_cpu(
         test is not "is the cell empty" but "does any other man ever step here".
         Three ways he could, and all three are refused:
 
-        * the tail must stop above the collector, which every man walks;
+        * the tail must stop above the row this lane's own drop ends on — the
+          collector, or the high corridor when there is one — which every man walks;
         * the cell must not already carry an operation — another lane's glyph, or
           another lane's fold. Free under the default rule, where ``c`` is a suffix
           maximum of ``lane_end``, and not free under ``tuck_drops``, where it is
@@ -1658,7 +1848,7 @@ def build_cpu(
           a lane with no drop at all (halting, top bus) is refused outright rather
           than reasoned about. Rows with no lane on them are nobody's walk.
         """
-        if r + down >= collector:
+        if r + down >= _stop(r, by_row.get(r)):
             return False
         for yy in range(r + 1, r + 1 + down):
             if c in lane_ops.get(yy, ()):
@@ -1957,7 +2147,7 @@ def build_cpu(
             if r in halting or r in top_lanes:
                 continue
             m = by_row.get(r)
-            stop = slab_at[m] if (m is not None and m in slab_at) else collector
+            stop = slab_at[m] if (m is not None and m in slab_at) else _stop(r, m)
             for yy in range(r + 1, stop):
                 g.soft(drop_x[r], yy, ".")  # crosses the collector row for a slab lane
 
@@ -2176,6 +2366,50 @@ def build_cpu(
     with g.part("return:collector"):
         g.put(2, collector, "@")
 
+    # ── the high corridor: the collector's mirror, one row above the fetch ────
+    # A lane above the trie root walks *past* the fetch row on its way down, and
+    # then climbs back up to it — ``2 * (collector - centre)`` ticks of pure
+    # overshoot, on every one of those instructions, forever. The corridor catches
+    # the drop the row before the fetch instead: west along ``hi_row``, one step
+    # south at column 1, and he is standing on the fetch's own ``>``.
+    #
+    # Three things make it legal, and all three are geometry rather than luck:
+    #
+    # * the row is **blank** — it was opened for this out of the stagger's slack
+    #   (see ``high_collector`` in the band layout), and the assertion below is
+    #   what proves the trie did not put a turn glyph back into it. What the trie
+    #   *does* leave there is the odd ``.`` where an ancestor's vertical leg
+    #   crosses, and a westbound man keeps his heading over a ``.``;
+    # * column 1 above the fetch row is unused in every layout without a top bus,
+    #   which ``high_collector`` refuses to coexist with for exactly this reason;
+    # * the drops that stop here are simple lanes only. A slab lane keeps falling
+    #   to its own entry row far below, so nothing that needs the collector is
+    #   diverted (:func:`_stop`).
+    if hi_row is not None:
+        hi_drops = [drop_x[r] for r in all_rows if r in drop_x and _stop(r, by_row.get(r)) == hi_row]
+        if hi_drops:
+            # A ``]`` is as safe here as a ``.``, and :data:`TIGHT_TRIE_COLS` puts one
+            # here: it does not turn, and the BP it shifts is dead on this path — the
+            # returning man's next act is the fetch's ``r`` and ``b``, which loads BP
+            # from the opcode word before anything reads it. Anything that *turns*
+            # is fatal, so the test is a whitelist, not a blacklist.
+            bad = {
+                (x, ch)
+                for (x, yy), ch in (trie_cells or {}).items()
+                if yy == hi_row and ch not in (".", "]")
+            }
+            if bad:
+                raise MachineError(
+                    f"high_collector: the trie put {sorted(bad)} on the corridor row "
+                    f"{hi_row}; a westbound man would be turned out of it"
+                )
+            with g.part("return:high"):
+                for x in range(2, max(hi_drops) + 1):
+                    g.soft(x, hi_row, "<")
+                g.put(1, hi_row, "v")
+                for yy in range(hi_row + 1, centre):
+                    g.soft(1, yy, ".")
+
     # A simple drop *stops* at the collector, and the collector sits above the slabs,
     # so being west of ``struct_east`` is harmless — that used to be forbidden back
     # when the collector was below the slab band and a drop really did cross one.
@@ -2183,8 +2417,16 @@ def build_cpu(
     # *through* the collector on their way to a slab: those leave `.` on the collector
     # row, so a simple man sharing the column would sail past his turn west and be
     # swallowed by that slab.
+    # A lane the high corridor catches never reaches the collector row, so it cannot
+    # be swallowed by a slab there and is not asked about.
     through = {drop_x[row_of[m]] for m in order}
-    clash = {r: c for r, c in drop_x.items() if c in through and by_row.get(r) not in order}
+    clash = {
+        r: c
+        for r, c in drop_x.items()
+        if c in through
+        and by_row.get(r) not in order
+        and _stop(r, by_row.get(r)) == collector
+    }
     if clash:
         raise MachineError(
             f"simple lane drop column(s) {sorted(set(clash.values()))} collide with a "
@@ -2453,9 +2695,19 @@ DRAIN_UNIT_BITS: dict[str, int] = {
 #: (``collision at (17, 41)``). :data:`SEEK_SLAB_PITCH` is already at
 #: :data:`_SLAB_PITCH_FLOOR`, so that would need the drops re-solved, not a wider
 #: band.
-SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {
-    ("deadman-3d_hires", "men-v3"): 2,
-}
+#: **Withdrawn on hires/men-v3, and it is a slack conflict, not a defect.** The
+#: ladder was worth -0.391% and it adds six rows to the band; :data:`HIGH_COLLECTOR`
+#: needs one row of the same ``LANE_PITCH`` stagger slack and is worth **-6.32%**.
+#: They are mutually exclusive, and not marginally: with the drain on, *nothing*
+#: binds — swept over ``squash_band`` 4..8 x ``rom_touch_drop`` k..k+1, every pair
+#: dies on ``collision at (15, 41): '.' vs ']'``. With it off, ``squash_band`` 6
+#: binds and is again the only value that does.
+#:
+#: Kept as a mechanism with an empty registry rather than reverted: the ladder is
+#: correct, it is measured, and it becomes available again the moment the band
+#: gains a row from anywhere else. The ``BRN``-sits-easternmost note below is still
+#: the open question, and reordering the band would pay for both at once.
+SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {}
 
 #: Which classic mnemonics :data:`SEEK_CLASSIC_DRAIN` actually applies to.
 #: ``None``/absent means all of them.
@@ -3782,6 +4034,8 @@ def build(
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
     straight_trie: bool = False,
+    high_collector: bool = False,
+    tight_trie_cols: bool = False,
     tuck_drops: bool = False,
     fold_lanes: bool = False,
 ) -> Machine:
@@ -3994,6 +4248,8 @@ def build(
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
                     straight_trie=straight_trie,
+                    high_collector=high_collector,
+                    tight_trie_cols=tight_trie_cols,
                     tuck_drops=tuck_drops,
                     fold_lanes=fold_lanes,
                 )
@@ -4072,6 +4328,8 @@ def build(
                     rom_touch_drop=rom_touch_drop,
                     squash_band=squash_band,
                     straight_trie=straight_trie,
+                    high_collector=high_collector,
+                    tight_trie_cols=tight_trie_cols,
                     tuck_drops=tuck_drops,
                     fold_lanes=fold_lanes,
                 )
@@ -4172,6 +4430,8 @@ def _assemble(
     rom_touch_drop: int = 0,
     squash_band: bool | int = False,
     straight_trie: bool = False,
+    high_collector: bool = False,
+    tight_trie_cols: bool = False,
     tuck_drops: bool = False,
     fold_lanes: bool = False,
 ) -> Machine:
@@ -4205,6 +4465,8 @@ def _assemble(
         lane_pitch=lane_pitch,
         squash_band=squash_band,
         straight_trie=straight_trie,
+        high_collector=high_collector,
+        tight_trie_cols=tight_trie_cols,
         tuck_drops=tuck_drops,
         fold_lanes=fold_lanes,
     )
@@ -6945,9 +7207,18 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: The tick model is *indifferent* to ``take`` — band and collector move together,
 #: so every ``collector - row`` is unchanged — which is why this can be spent
 #: entirely on binding without costing the decode anything.
+#:
+#: **The men tier is 6, not 7, because :data:`HIGH_COLLECTOR` spends a row here.**
+#: The corridor is taken out of this same slack, so the slack is 20 instead of 21
+#: and the knife edge moves with it: ``mem_out_row`` is back on 20 at ``take = 6``,
+#: and the band grows one row *downward* instead of the memory lanes rising one row
+#: — which is what keeps ``store_offset`` at its measured ``(0, 10)``. Re-swept
+#: build-only over ``take`` 5..9 x dy 8..12, and 6/10 is again the only pair that
+#: binds with the store where it is (7/9 and 8/8 also build, and both move the
+#: store). The box is unchanged at 594x630 either way.
 SQUASH_BAND: dict[tuple[str, str], int] = {
     ("deadman-3d_hires", "taped"): 12,
-    ("deadman-3d_hires", "men-v3"): 7,
+    ("deadman-3d_hires", "men-v3"): 6,
 }
 
 ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
@@ -7082,6 +7353,79 @@ LANE_PITCH: dict[tuple[str, str], int] = {
 #: rows are two apart there and the ``d`` never fires — so the pair is
 #: :data:`LANE_PITCH` **and** this, never this alone.
 STRAIGHT_TRIE: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
+
+#: ``(slug, tier)`` pairs that run a **second collector one row above the fetch**,
+#: so a lane above the trie root stops there instead of falling past the fetch row
+#: to the collector under the band and climbing back up to it.
+#:
+#: ## The overshoot, and why it is exactly ``2 * (collector - centre)``
+#:
+#: An instruction's return walk is a rectangle: east to the drop column, south to
+#: the collector, west to column 1, north up the riser to the fetch row. Its
+#: vertical half is
+#:
+#:     (collector - centre) + |centre - row| + (collector - row)
+#:
+#: — riser, trie descent, drop. For a lane **below** the root that collapses to
+#: ``2 * collector - 2 * centre``, a constant, and there is nothing to win. For a
+#: lane **above** it, it collapses to ``2 * collector - 2 * row``, against a
+#: Manhattan distance of ``centre - row``: the man walks past the cell he is trying
+#: to reach, continues to the bottom of the band, and then climbs back through the
+#: rows he just fell through. The waste is ``2 * (collector - centre)`` — **14
+#: ticks on ``deadman-3d_hires`` men-v3**, paid by every instruction above the
+#: root, forever, and invisible in any per-region reading because the three legs
+#: are three different boxes.
+#:
+#: A corridor anywhere strictly between the lane and the fetch row removes all of
+#: it at once: ``(hi - row) + (centre - hi)`` telescopes to ``centre - row`` **for
+#: any ``hi``**. So one corridor is as good as one per lane, and the only question
+#: is where to put it — as low as possible, to catch the most lanes. That is the
+#: row directly above the fetch, and the fetch row is the last lane of the root's
+#: up half, so the corridor serves *every* lane the root sends north.
+#:
+#: ## What it costs
+#:
+#: One band row, taken out of :data:`LANE_PITCH`'s stagger slack rather than out of
+#: the room — the band simply starts a row higher, so the collector, the structures
+#: band, the seek tail and the room's own height do not move. What it does move is
+#: the trie: the root's up leg now spans one more row, which is ``+1`` on every
+#: lane in the up half. The net is ``13 * P(above the root) - 1 * P(up half)``.
+#:
+#: ## Measured, and measured twice
+#:
+#: ``scratch/deadman3d-opt/menprobe/dispatch_bench.py`` builds this loop and
+#: nothing else — the real :func:`_uneven_trie`, the shipped lane lengths and drop
+#: columns, a synthetic ROM streaming the measured opcode mix — and runs in under a
+#: second:
+#:
+#:   | corridor rows | t/instr | delta |
+#:   |---|---|---|
+#:   | 0 (shipped) | 78.976 | — |
+#:   | **1** | **70.739** | **-8.238** |
+#:   | 2 | 72.231 | -6.746 |
+#:
+#: Two rows is what this needs if :func:`_uneven_trie` insists on standing an
+#: inline ``d`` at ``slot_rows[min(down)] - 1``; anchoring it to its up child's row
+#: instead (which is what ``d`` going *straight* means) brings it back to one, and
+#: the second row is worth 1.5 ticks. The arithmetic above predicts ``-9.043``
+#: before the trie tax and the bench lands 0.8 under it, which is that tax.
+#:
+#: Off by default and keyed by ``(slug, tier)``, so every other machine's grid is
+#: byte-identical. It requires ``trim_dead`` and ``lane_pitch = 1`` (the corridor is
+#: paid for out of the stagger) and refuses :data:`TOP_RETURN_BUS`, which wants the
+#: same column 1 above the fetch for the opposite heading.
+HIGH_COLLECTOR: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
+
+#: ``(slug, tier)`` pairs whose decode trie prices its columns **per node** instead
+#: of two per level. See :func:`_trie_columns` for the rule and why one column a
+#: level flat is infeasible.
+#:
+#: What it buys is not the trie: it is ``lane_x0``. The band's origin is the deepest
+#: node's column plus one, so every column the trie saves is a column off the trie
+#: walk (paid once an instruction), off ``mem_x`` and every lane's length, off every
+#: drop column, and off the walk back west (paid again). ``deadman-3d_hires``
+#: men-v3 goes ``lane_x0`` **14 -> 12**.
+TIGHT_TRIE_COLS: set[tuple[str, str]] = {("deadman-3d_hires", "men-v3")}
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
@@ -8826,6 +9170,8 @@ def build_for(
     rom_touch_drop: int | None = None,
     squash_band: bool | int | None = None,
     straight_trie: bool | None = None,
+    high_collector: bool | None = None,
+    tight_trie_cols: bool | None = None,
     tuck_drops: bool | None = None,
     fold_lanes: bool | None = None,
     program=None,
@@ -8944,6 +9290,12 @@ def build_for(
         ),
         straight_trie=(
             (slug, store) in STRAIGHT_TRIE if straight_trie is None else straight_trie
+        ),
+        high_collector=(
+            (slug, store) in HIGH_COLLECTOR if high_collector is None else high_collector
+        ),
+        tight_trie_cols=(
+            (slug, store) in TIGHT_TRIE_COLS if tight_trie_cols is None else tight_trie_cols
         ),
     )
 
