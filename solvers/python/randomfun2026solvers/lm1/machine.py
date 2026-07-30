@@ -3102,6 +3102,8 @@ def build(
     store_chain_reach: bool = False,
     store_chain_pad: int = 0,
     store_feed_teleport: bool = False,
+    store_bank_lift: int = 0,
+    store_feed_tuck: int = 0,
     store_request_reach: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
@@ -3311,6 +3313,8 @@ def build(
                     store_chain_reach=store_chain_reach,
                     store_chain_pad=store_chain_pad,
                     store_feed_teleport=store_feed_teleport,
+                    store_bank_lift=store_bank_lift,
+                    store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
@@ -3384,6 +3388,8 @@ def build(
                     store_chain_reach=store_chain_reach,
                     store_chain_pad=store_chain_pad,
                     store_feed_teleport=store_feed_teleport,
+                    store_bank_lift=store_bank_lift,
+                    store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
@@ -3479,6 +3485,8 @@ def _assemble(
     store_chain_reach: bool = False,
     store_chain_pad: int = 0,
     store_feed_teleport: bool = False,
+    store_bank_lift: int = 0,
+    store_feed_tuck: int = 0,
     store_request_reach: bool = False,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
@@ -3814,6 +3822,8 @@ def _assemble(
                 chain_reach=store_chain_reach,
                 chain_pad=store_chain_pad,
                 feed_teleport=store_feed_teleport,
+                bank_lift=store_bank_lift,
+                feed_tuck=store_feed_tuck,
                 # Land the first gate's roof one row under the adapter's floor,
                 # so its west wall stands beside the adapter and the request is
                 # a drop, not a corridor. Same trick as ``answer_west``: the
@@ -6787,8 +6797,24 @@ STORE_ANSWER_WEST: set[tuple[str, str]] = {
 #: serialised ~70-seeks-a-frame path simply became a much larger share of a much
 #: faster run, which is the same lesson as ``AGENTS.md`` §"the measurement is not
 #: separable" and the sharpest example of it in the tree.
+#:
+#: **``deadman-3d_hires`` can have it back, and :data:`TAPED_BANK_LIFT` is why.**
+#: The 0.6% was lost to a *space* argument, not a tick one — ``SQUASH_BAND`` k=12
+#: leaves room H no band, and the refusal is ``seek teleport: no clear band below
+#: the store for room H``. ``TAPED_BANK_LIFT`` frees five rows under the store
+#: without touching the band, and the pair binds again: **-1.069%** on the
+#: 21-round tour (185,004,449 -> 183,026,898 at 643x386, ``store->cpu`` 2,
+#: ``passed``), i.e. -1.941% against ``70684d9`` once the lift is counted.
+#:
+#: **Taken, and it concedes the squash nothing.** The refusal was a *space*
+#: argument and the space now exists, so the trade the note above anticipated
+#: never has to be made: re-measured with ``squash_band`` left at its shipped 12,
+#: the grid is **643x386 either way**, ``store->cpu`` is 2 either way, and both
+#: gate ``passed``. The k<=8 rule recorded below was derived on the *unlifted*
+#: geometry and no longer binds.
 SEEK_TELEPORT: set[tuple[str, str]] = {
     ("deadman-3d", "taped"),
+    ("deadman-3d_hires", "taped"),
 }
 
 #: Slugs whose **seek jump** turns south at the east end of its entry row instead of
@@ -7072,6 +7098,78 @@ TAPED_FEED_TELEPORT: set[tuple[str, str]] = {
     ("deadman-3d", "taped"),
     ("deadman-3d_hires", "taped"),
 }
+
+#: How many rows the taped STORE's bank row is raised toward its answer collector
+#: (``memory_taped.taped_store_block``'s ``bank_lift``). Absent pairs keep the
+#: shipped bank row, so their grids stay byte-identical.
+#:
+#: The riser is what is between them. Every bank's answer climbs from the tape's
+#: own ``^`` stub to the collector's south wall, seven cells on the shipped grid,
+#: and the CPU blocks on every read — the profile has it **~48% blocked on
+#: ``store:collector->cpu``** — so those cells are on the critical path of all
+#: ~87k reads a frame. Five is the whole riser bar the tape's own two-cell stub,
+#: which is the ceiling: past that the stub itself would have to overlap the
+#: collector's floor.
+#:
+#: **-0.882%** on the 21-round hi-res tour (186,649,885 -> 185,004,449), and the
+#: block loses five rows with it (60 -> 55), which takes the machine 643x387 ->
+#: 643x386. Dead linear in the lift at **-325,873 ticks a row** (1: -0.183%, 2:
+#: -0.358%, 3: -0.532%, 4: -0.707%, 5: -0.882%), which is the signature of a leg
+#: every access walks in full and nothing else moving; the 3-round tour gives the
+#: same slope to three digits, so this one is safe to triage cheaply.
+#:
+#: Only the first of the five rows shortens the grid, because the machine's
+#: height is the stream stack's below 386 and the store's only above it.
+#:
+#: **The five rows are worth more than the five cells.** They fall between the
+#: store and the seek band, which is the space :data:`SEEK_TELEPORT`'s room H was
+#: refused for — ``revalidate.py`` goes from ``BUILD FAILED`` to ``<<< NOW A WIN``
+#: on that lever the moment this lands, a further **-1.069%**. See
+#: :data:`SEEK_TELEPORT`; it is not taken here.
+#:
+#: Not to be confused with :data:`TIER_LAYOUT`'s ``store_offset`` dy, which moves
+#: the block **and** its collector and therefore breaks the geometric test
+#: ``build`` selects ``answer_exit_west`` on: ``store_offset=(-20, -6)`` builds a
+#: correct grid one row shorter and silently takes ``store->cpu`` from 2 back to
+#: 6. This knob moves the banks *inside* the block and leaves ``COLLECTOR_ROW``
+#: exactly where it was, which is why it composes.
+TAPED_BANK_LIFT: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "taped"): 5,
+}
+
+#: How many columns the taped STORE's banks are tucked west of where the pitch
+#: would put them, so the feed forwarder's east wall stands inside the bank's own
+#: west margin and the ``reqK->bankK`` stub shortens by that much
+#: (``memory_taped.taped_store_block``'s ``feed_tuck``). **Empty, and it is a
+#: measured impossibility rather than an unswept knob.**
+#:
+#: The prize would have been real: four cells off the ``req0->bank0`` arm ~91% of
+#: hires accesses walk (the same leg :data:`TAPED_FEED_TELEPORT` bought -0.286%
+#: on), and four columns of pitch off each of eleven banks — the block's own width
+#: 580 -> 536. Whether the *machine* narrows with it is unmeasured, because the
+#: block does not build: the east edge at ``x = 642`` is the drum return wrapping
+#: the store rather than the store itself.
+#:
+#: What forbids it is the tape block's own art. Only its **first** column is
+#: empty; ``lm1.machine.tape_block`` stamps the ring's relay room at ``x = 1``,
+#: six columns wide and five rows tall (``+----+`` over ``|>@rv|``), and the feed
+#: room has to span the corridor from the bank's stub row down to the gate strip,
+#: which contains those five rows at every bank size. So the forwarder's east
+#: wall — a solid ``|`` — crosses the relay room at any tuck at all. On hires it
+#: is the same cell every time, bank 0's relay roof at block ``(35, 38)`` (grid
+#: ``(96, 172)``): ``taped block collision at (35, 38): '+' vs '|'`` at
+#: ``feed_tuck=1``, then ``'-' vs '|'`` at 2, 3 and 4 as the wall walks along that
+#: roof. The tuck cannot step over the room, because it is contiguous from
+#: ``x = 1`` to ``x = 6`` and only ``x = 0`` is clear — which the shipped
+#: forwarder's east wall already stands in.
+#:
+#: Raising the forwarder's floor above the relay instead is arithmetic, not
+#: judgement: the relay tops out 13 rows above the gate strip, so the climb pipe
+#: the room replaces grows from 2 cells to 15 to buy back 4. Moving the relay is
+#: ``tape_block``'s business and it is wired to its ring — ``adj`` is the relay's
+#: own wall column and both ring legs attach to it, so the fold and the ring's
+#: capacity move with it.
+TAPED_FEED_TUCK: dict[tuple[str, str], int] = {}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
@@ -7890,6 +7988,8 @@ def build_for(
         store_chain_reach=(slug, store) in TAPED_CHAIN_REACH,
         store_chain_pad=store_chain_pad,
         store_feed_teleport=(slug, store) in TAPED_FEED_TELEPORT,
+        store_bank_lift=TAPED_BANK_LIFT.get((slug, store), 0),
+        store_feed_tuck=TAPED_FEED_TUCK.get((slug, store), 0),
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),

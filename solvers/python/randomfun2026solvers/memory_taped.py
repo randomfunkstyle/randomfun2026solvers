@@ -355,6 +355,8 @@ def taped_store_block(
     chain_pad: int = 0,
     request_roof: int | None = None,
     feed_teleport: bool = False,
+    bank_lift: int = 0,
+    feed_tuck: int = 0,
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
 
@@ -441,6 +443,31 @@ def taped_store_block(
     pitch leaves four. Everything else is where it was — the room hangs entirely
     between bank ``k-1``'s east edge and bank ``k``'s empty first column, above
     the gate strip and below the bank's own request stub row.
+
+    ``bank_lift`` raises the whole bank row (and, with it, the gate strip and the
+    block's own height) that many rows toward the answer collector, which is the
+    one thing between them: every bank's answer climbs a riser from its own ``^``
+    stub to the collector's south wall, and the riser is pure transit that ~87k
+    reads a frame each pay in full. Five is the ceiling and it is exact — a tape
+    block carries a two-cell ``^`` stub above its own roof, so at ``bank_lift=5``
+    that stub *is* the riser, standing directly on the collector's floor, and the
+    connecting pipe draws nothing at all. Nothing else in the block is measured
+    from the bank row — ``COLLECTOR_ROW`` is a constant and the request port comes
+    off ``request_roof`` — so the geometry ``lm1.machine`` selects
+    ``answer_exit_west`` on does not move, which a ``store_offset`` dy would.
+
+    ``feed_tuck`` slides every bank that many columns west of where the pitch
+    would put it, so the feed room's east wall stands *inside* the bank's own
+    west margin and the ``reqK->bankK`` stub shortens by the same amount — and
+    because the pitch shrinks with it, the block loses ``feed_tuck`` columns per
+    bank. It is 0 on this machine and the reason is exact rather than cautious:
+    a tape block's west margin is only empty in its **first** column. Columns
+    1..6 carry the ring's relay room (``lm1.machine.tape_block`` stamps it at
+    ``x = 1``), five rows of it, and those rows fall inside the corridor the feed
+    room has to span, so the room's east wall crosses the relay's own walls at
+    any tuck at all. See :data:`~.lm1.machine.TAPED_FEED_TUCK` for the collision
+    cell and for why raising the room's floor above the relay instead trades four
+    cells for thirteen.
     """
     from .lm1.machine import tape_block
 
@@ -462,12 +489,28 @@ def taped_store_block(
     # tape block's own first column is empty). Three spare is what the riser
     # needed; a forwarder room wants six.
     nb_gap = 5 if feed_teleport else 3
-    pitch = max(bank_w + nb_gap, gate_w + 8)
+    if feed_tuck and not feed_teleport:
+        raise ValueError("feed_tuck tucks the feed room into the bank; feed_teleport is off")
+    if not 0 <= feed_tuck <= nb_gap - 1:
+        raise ValueError(
+            f"feed_tuck {feed_tuck} is not in 0..{nb_gap - 1}: the feed room is six "
+            f"columns and its west wall already shares the gate's east one"
+        )
+    pitch = max(bank_w + nb_gap - feed_tuck, gate_w + 8)
     coll_y = COLLECTOR_ROW  # collector interior rows 6..7, walls 5 and 8
-    bank_y = 9
+    # The banks' own row, and how close to the collector it may come: the riser
+    # runs from the tape's `^` stub down to the collector's south wall, so the
+    # lift is spent when the stub lands on that wall and the pipe is all stub.
+    lift_max = 9 - (coll_y + 4 - min(t.out_cell[1] for t in tapes))
+    if not 0 <= bank_lift <= lift_max:
+        raise ValueError(
+            f"bank_lift {bank_lift} is not in 0..{lift_max}: at {lift_max} the "
+            f"bank's own answer stub already ends on the collector's south wall"
+        )
+    bank_y = 9 - bank_lift
     gate_y = bank_y + bank_h + 2  # one clear row under the banks
     gx = [4 + k * pitch for k in range(nb - 1)]
-    bx = [4 + gate_w + 4 + k * pitch for k in range(nb)]
+    bx = [4 + gate_w + 4 - feed_tuck + k * pitch for k in range(nb)]
 
     # ── how far each gate room reaches back toward its caller ────────────────
     # West wall of gate k lands one column east of bank k-1's own feed riser
@@ -484,7 +527,7 @@ def taped_store_block(
         for k in range(1, nb - 1):
             # ... one column east of whatever the previous bank's feed put in the
             # corridor: the riser itself, or the forwarder's own entry stub.
-            corridor = bx[k - 1] - (3 if feed_teleport else 2)
+            corridor = bx[k - 1] - (3 - feed_tuck if feed_teleport else 2)
             west_grow[k] = gx[k] - (corridor + 1) - chain_pad
             if west_grow[k] < 0:
                 raise ValueError(
@@ -559,14 +602,14 @@ def taped_store_block(
         # takes from any incoming pipe with no distance term, and with one pipe
         # each way neither it nor ``s`` has anything to choose between. What is
         # left is the stub off the gate and the stub into the bank.
-        rx0, ry0, ry1 = bx[k] - 5, tin[1] - 1, gate_y - 1
+        rx0, ry0, ry1 = bx[k] - 5 + feed_tuck, tin[1] - 1, gate_y - 1
         _room(_Grid(), rx0 + 1, ry0 + 1, teleport_v(ry1 - ry0 - 1)[0])
         # The climb uses the room's *second* interior column, not its first: a
         # pipe must leave the gate heading east (SPEC.md — the first arrowhead's
         # backward cell is the source room's border), and the widest gate's own
         # east wall already sits against the first one.
         pipe([source, (rx0 + 2, source[1]), (rx0 + 2, ry1)])
-        pipe([(bx[k] + 1, tin[1]), tin])
+        pipe([(bx[k] + feed_tuck + 1, tin[1]), tin])
 
     # ── feeds: gate k's local arm into bank k, its downstream into gate k+1 ──
     for k in range(nb - 1):

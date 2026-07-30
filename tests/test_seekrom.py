@@ -133,14 +133,18 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert machine.MEM_PAD_FOR[key] == 15
     assert machine.INPUT_NORTH_WEST[key] == 13
     assert key in machine.SEEK_TAKEN_DROP_EAST
-    # Four of the five. `SEEK_TELEPORT` is given up to `SQUASH_BAND`: the two do
-    # coexist for k <= 8 (room H is bottom-anchored, its height is `12 - k`), but
-    # a fully packed band is k = 12, and past 8 room H has nowhere to stand.
-    # Deliberate — the packing is banked now and the ticks are to be recovered by
-    # routing, which is the tractable half. +0.6% is the price, and
-    # `revalidate.py`'s `seek_teleport` row is what watches for it coming back.
+    # All five now. `SEEK_TELEPORT` used to be given up to `SQUASH_BAND` — the two
+    # coexist for k <= 8 (room H is bottom-anchored, its height is `12 - k`), and a
+    # fully packed band is k = 12, past which room H had nowhere to stand. The bet
+    # this pin recorded was that the ticks would come back through routing; they
+    # did. `TAPED_BANK_LIFT` frees five rows *under* the store without touching the
+    # band, so room H stands again at k = 12 and nothing is conceded: 643x386 and
+    # `store->cpu` 2 with or without it, both gating `passed`, and -1.069% on the
+    # 21-round tour (185,004,449 -> 183,026,898). So the squash keeps its 12 and
+    # the teleport comes back — the k <= 8 arithmetic above describes the unlifted
+    # geometry and is kept only to explain why it ever had to be a choice.
     assert machine.SQUASH_BAND[key] == 12
-    assert key not in machine.SEEK_TELEPORT
+    assert key in machine.SEEK_TELEPORT
     assert ("deadman-3d", "taped") in machine.SEEK_TELEPORT  # unaffected
     # At full squash §7.1 floors the drop at 5: a squash of k is a negative drop
     # of k, so the effective corridor is already below what the BRN slab's discard
