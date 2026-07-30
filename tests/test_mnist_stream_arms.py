@@ -1051,29 +1051,38 @@ def test_no_two_legs_of_the_placed_block_share_a_cell(trie_bits: int):
     """``_Grid.put`` only catches a collision when the two glyphs *differ*.
 
     So one horizontal leg crossing another — both ``-`` — is silent, and the values go
-    to the wrong room with no error anywhere. Count the cells each pipe laid against
-    the distinct cells that exist.
+    to the wrong room with no error anywhere. This records the exact cell set each leg
+    laid and asserts the sets are pairwise disjoint, which is the property; ``_place4``
+    asserts the same thing by count while it draws, and this covers depth 3 too, where
+    it is not asserted at all.
     """
     from randomfun2026solvers.lm1 import machine
 
-    laid: list[int] = []
+    blk = stream.build_stream(a_slots=16, b_slots=200, c_slots=16, trie_bits=trie_bits)
+    legs: list[set[tuple[int, int]]] = []
     original = machine._Grid.draw_pipe
 
-    def counting(self, points):
+    def recording(self, points):
+        before = set(self.drawn)
         n = original(self, points)
-        laid.append(n)
+        legs.append(set(self.drawn) - before)
         return n
 
-    machine._Grid.draw_pipe = counting
+    place = stream._place if trie_bits == 3 else stream._place4
+    machine._Grid.draw_pipe = recording
     try:
-        blk = stream.build_stream(a_slots=16, b_slots=200, c_slots=16, trie_bits=trie_bits)
+        # the exact serpentine the search settled on, so only one placement is recorded
+        place(16, 200, 16, blk.rows_a, blk.rows_b)
     finally:
         machine._Grid.draw_pipe = original
-    # the search may try several serpentine sizes; only the last build's legs survive
-    body = {(x, y) for (x, y), ch in blk.cells.items() if ch in "-|<>^v"}
-    assert sum(laid[-blk.pipes :]) <= len(body), (
-        f"{sum(laid[-blk.pipes:])} pipe cells drawn into {len(body)} body cells"
-    )
+
+    assert len(legs) == blk.pipes, (len(legs), blk.pipes)
+    for i, a in enumerate(legs):
+        for b in legs[i + 1 :]:
+            assert not (a & b), f"legs {i} and {legs.index(b)} share {sorted(a & b)[:4]}"
+    # and every leg laid every cell it thought it did — a leg overlapping *itself*
+    # would shorten the pipe, which is a capacity bug rather than a routing one
+    assert sum(len(leg) for leg in legs) == len(set().union(*legs))
 
 
 @pytest.mark.parametrize("trie_bits", [3, 4])
