@@ -72,6 +72,7 @@ __all__ = [
     "acc_row",
     "build_machine",
     "loss_row",
+    "machine_input",
     "EXP_TABLE",
     "LN_MANT_TABLE",
     "LN2",
@@ -1587,9 +1588,26 @@ MACHINE_EPOCHS = 30
 
 
 def build_machine(  # -> machine.Machine
-    *, epochs: int = MACHINE_EPOCHS, lr_shift: int = 6
+    *,
+    epochs: int = MACHINE_EPOCHS,
+    lr_shift: int = 6,
+    samples: int | None = None,
+    train_samples: int | None = None,
+    val_samples: int | None = None,
 ):
     """The two-panel grid: CPU, ROM, tape STORE, STREAM block, two relay-fed LM-75s.
+
+    ``samples`` caps the images an epoch, exactly as :func:`run_emulator`'s does — the
+    first ``samples`` train images and the first ``samples`` validation ones. ``None``
+    is the whole dataset. It exists because the *grid's* cost can only be measured, not
+    derived: the emulator models no pipe latency, so nothing computed from instruction
+    counts predicts a tick count on the engine. A small-sample build is how the linear
+    per-sample cost separates from the fixed boot cost, and it is what a differential
+    test against the engine can afford to run.
+
+    ``train_samples``/``val_samples`` override it per body, which is how the *two*
+    per-sample costs are separated: a validation sample runs the forward pass only, so
+    it is not the same number as a training sample's. Both default to ``samples``.
 
     ``store="tape"`` and not ``"grid"``: the man-memory grid is 36x1,065 at this
     program's ``STORE_WORDS`` slots, which reaches hundreds of rows below the CPU and
@@ -1603,7 +1621,14 @@ def build_machine(  # -> machine.Machine
     if not 1 <= epochs <= MAX_EPOCH_COLS:
         raise ValueError(f"the panels hold {MAX_EPOCH_COLS} epoch columns, not {epochs}")
     program = asm.assemble(
-        emit_source(lr_shift=lr_shift, panels=True, epochs_from_input=False, epochs=epochs),
+        emit_source(
+            lr_shift=lr_shift,
+            panels=True,
+            epochs_from_input=False,
+            epochs=epochs,
+            train_samples=samples if train_samples is None else train_samples,
+            val_samples=samples if val_samples is None else val_samples,
+        ),
         name="mnist-cnn",
         isa=isa.LM1_EXT,
     )
@@ -1618,6 +1643,32 @@ def build_machine(  # -> machine.Machine
         stream=RING_SIZES,
         display=PANELS,
         store="tape",
+    )
+
+
+def machine_input(
+    *,
+    epochs: int = MACHINE_EPOCHS,
+    samples: int | None = None,
+    train_samples: int | None = None,
+    val_samples: int | None = None,
+) -> list[int]:
+    """The input words the grid built by :func:`build_machine` reads, in order.
+
+    Ring B's initial contents (the boot ``FILLB``) followed by one lap of train then
+    validation words an epoch. **No leading epoch count**: the grid bakes its epoch
+    count, because the STREAM block already owns the machine's one legal ``I`` room and
+    ``SPEC.md`` makes a second one a load error.
+
+    The arguments must match the ones ``build_machine`` was called with — the grid reads
+    exactly as many words as its unrolled body asks for.
+    """
+    train_n = samples if train_samples is None else train_samples
+    val_n = samples if val_samples is None else val_samples
+    return _boot_stream() + _dataset_stream(
+        epochs=epochs,
+        train_n=md.N_TRAIN if train_n is None else train_n,
+        val_n=md.N_VAL if val_n is None else val_n,
     )
 
 

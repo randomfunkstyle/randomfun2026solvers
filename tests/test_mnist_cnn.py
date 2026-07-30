@@ -770,6 +770,37 @@ def test_frames_and_single_step_are_refused_together():
 
 
 @needs_engine
+def test_a_small_sample_grid_runs_the_same_program_over_fewer_images():
+    """``samples=`` exists because the grid's cost can only be *measured*.
+
+    The emulator models no pipe latency, so nothing derived from instruction counts
+    predicts a tick count on the engine — and a full epoch is 2,000 train plus 1,000
+    validation images. A capped build is what makes both a differential test and a
+    per-sample measurement affordable, and it must be the *same program*: same panels,
+    same relay rooms, same unrolled sample body, only the loop counts and the input
+    length differ.
+    """
+    small = mnist_cnn.build_machine(epochs=1, samples=8)
+    assert small.panels == (mnist_cnn.PANEL, mnist_cnn.PANEL)
+    assert len(small.panel_ports) == 2 and len(small.panel_lanes) == 2
+    # The sample loop is a real loop, so capping it does not change the body's size.
+    assert small.program.P == mnist_cnn.build_machine(epochs=1).program.P
+
+    # ...and the input is exactly what that build asks for: ring B, then one lap.
+    per = mnist_data.WORDS_PER_IMAGE
+    assert len(mnist_cnn.machine_input(epochs=1, samples=8)) == mnist_cnn.RING_B + 16 * per
+    assert len(mnist_cnn.machine_input(epochs=3, samples=8)) == mnist_cnn.RING_B + 3 * 16 * per
+    # No leading epoch count: the grid bakes it, because a second `I` room cannot exist.
+    assert mnist_cnn.machine_input(epochs=1, samples=8)[: mnist_cnn.RING_B] == (
+        mnist_cnn._boot_stream()
+    )
+    # The two bodies can be capped separately, which is how their two costs separate.
+    assert len(mnist_cnn.machine_input(epochs=1, train_samples=5, val_samples=1)) == (
+        mnist_cnn.RING_B + 6 * per
+    )
+
+
+@needs_engine
 def test_the_lr_shift_reaches_the_built_grid():
     """A grid built at the default while the listing reports another shift would train
     by the wrong amount and say so nowhere — the divergence ``.equ STREAM_LR_SHIFT``
