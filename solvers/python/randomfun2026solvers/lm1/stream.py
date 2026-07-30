@@ -1328,6 +1328,21 @@ def _serpentine(y0: int, rows: int, climb: int) -> list[tuple[int, int]]:
 #   crossing instead. The asymmetry is forced rather than incidental: ``UPDB`` reads
 #   ring A *before* the accumulator and ring B *after* it, so ring A's two ports end
 #   up outside ring B's on the perimeter.
+# * **"Each southbound pipe drops down a western column of its own, drop columns
+#   rising with the corridor row" is REFUTED — it was never this block's geometry.**
+#   This module invented that discipline in round 4 to explain a real collision, it did
+#   explain it, and three rounds of prose then treated it as forced. Rendering the
+#   *depth-3* block (``manview``) falsified it: depth 3 uses **no western drop columns
+#   at all**. Everything that has to cross from the east wall to the west side goes
+#   *around the outside* — east to an outer turn column, south to a serpentine band,
+#   west along the band, north up a far-west column, into its relay — which is why the
+#   ring relays sit beside the unit at its own rows and the returns are short
+#   horizontal runs. Only rooms in the *strip* between the unit and the bands (the
+#   ADDER, the O room) are reached by a middling turn column descending part-way.
+#   The invented rule is what produced the round-7 BLOCKED claim, and that claim is
+#   withdrawn. ``prod`` should be routed like a ring *forward* pipe, because that is
+#   exactly its job: east wall to a west-side relay. Rules 1 and 3 survive; this one
+#   is recorded so it is not re-derived a second time.
 
 
 
