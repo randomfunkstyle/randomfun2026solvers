@@ -14,14 +14,27 @@ piece of ``mnist_model``, so a regression names its own section.
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import pytest
 from randomfun2026solvers import mnist_cnn, mnist_data, mnist_model
-from randomfun2026solvers.lm1 import asm, isa, stream
+from randomfun2026solvers.lm1 import asm, isa, machine, stream
 from randomfun2026solvers.lm1.emulator import Emulator
 from randomfun2026solvers.lm1.store import DictStore, StoreError
 from randomfun2026solvers.lm1.stream import StreamError
 
 S = mnist_cnn.S
+REPO = Path(__file__).resolve().parents[1]
+
+#: Building the machine runs the engine's structural analysis (``_check_pipe_count``
+#: is inside ``build``), so every test below that touches the grid needs the bundled
+#: Node CLI. They are *not* marked slow: the whole file is under 8s serial, and the
+#: binding checks are exactly what has to keep running on every loop.
+needs_engine = pytest.mark.skipif(
+    shutil.which("node") is None or not (REPO / "littleman" / "lm.mjs").exists(),
+    reason="needs node and the bundled littleman engine",
+)
 
 
 @pytest.fixture(scope="module")
@@ -349,3 +362,323 @@ def _reference_epochs(params, *, epochs: int, samples: int, lr_shift: int):
             )
         )
     return stats
+
+
+# ── the panels, and the machine ──────────────────────────────────────────────
+# Everything below is about the *two-panel build*, which is a different program from
+# the one above: `panels=True` paints four pixels an epoch instead of emitting four
+# words, because a machine cannot have both a display and an `O` room's output on a
+# display-judged wall (and, here, because the STREAM block already owns the machine's
+# one legal `I`/`O` pair — SPEC.md makes a second I/O room a load error).
+@needs_engine
+def test_the_two_panels_are_the_engines_two_displays_in_reading_order():
+    m = mnist_cnn.build_machine()
+    assert m.panels == (mnist_cnn.PANEL, mnist_cnn.PANEL)
+    # Two boxes, four `+=` corners (each box has a north-west and a south-west one).
+    corners = sorted(
+        y
+        for y, row in enumerate(m.rows)
+        for x, ch in enumerate(row)
+        if ch == "+" and row[x + 1 : x + 2] == "="
+    )
+    assert len(corners) == 4, f"two panel boxes, two `+=` corners each; got {corners}"
+    tops = corners[0], corners[2]
+    assert [b - t - 1 for t, b in zip(tops, (corners[1], corners[3]), strict=True)] == [
+        mnist_cnn.PANEL[1]
+    ] * 2, "each box's interior is the declared height"
+    assert tops[0] < tops[1], "panel 0 must precede panel 1 in reading order (R2)"
+    # `display` stays the *first* panel's size, which is what every judged caller means.
+    assert m.display == mnist_cnn.PANEL
+
+
+@needs_engine
+def test_each_panel_is_fed_by_its_own_room_and_no_room_feeds_two():
+    """R1, which is the whole reason this machine has the shape it has.
+
+    One room may feed at most one display (``tests/test_mnist_display.py`` pins the
+    engine's refusal), so the CPU cannot drive both panels however many opcodes it
+    spends — each panel needs a relay room of its own, reached by a lane of its own.
+    """
+    m = mnist_cnn.build_machine()
+    assert len(m.panel_ports) == 2
+    # Three ports a panel, and no port cell is shared between the two panels.
+    assert [sorted(p) for p in m.panel_ports] == [sorted(machine.DSP_BANDS)] * 2
+    cells = [cell for ports in m.panel_ports for cell in ports.values()]
+    assert len(set(cells)) == 6
+    for x, y in cells:
+        assert m.rows[y][x] == "s"
+
+
+@needs_engine
+def test_the_engine_finds_exactly_the_pipes_the_generator_drew():
+    """The acceptance criterion, and on its own it is *not* sufficient.
+
+    ``machine._check_pipe_count`` already runs inside ``build``, so reaching this
+    assertion at all means the counts agreed. It is restated here because the count is
+    the one cheap check that catches a leg running alongside a room's corner — and it
+    is followed immediately by the mis-bind tests below, because a count cannot
+    notice a pipe that is drawn correctly and *bound* to the wrong thing
+    (``ARCH.md`` §4.4), and this branch has shipped that mistake five times.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    m = mnist_cnn.build_machine()
+    info = Littleman().analyze(m.text())
+    assert len(info.displays) == 2
+    assert len(info.pipes) == 26
+
+
+def _panel_side(info, panel: int, end: tuple[int, int]) -> str | None:
+    (x0, y0), (x1, y1) = info.displays[panel]["min"], info.displays[panel]["max"]
+    x, y = end
+    if y == y0 - 1 and x0 < x < x1:
+        return "top"
+    if x == x0 - 1 and y0 < y < y1:
+        return "left"
+    if y == y1 + 1 and x0 < x < x1:
+        return "bottom"
+    return None
+
+
+#: Which side of the panel each port must land on. Which side a pipe lands on is
+#: what *makes* it that port (``SPEC.md``), so this mapping is the whole claim.
+WANT_SIDE = {
+    machine.Band.DSP_ADDR: "top",
+    machine.Band.DSP_DATA: "left",
+    machine.Band.DSP_SWAP: "bottom",
+}
+
+
+def _port_sides(text: str, panel: int, ports: dict[str, tuple[int, int]]) -> dict[str, str | None]:
+    """Ask the engine's own ``route`` which side of ``panel`` each ``s`` glyph reaches.
+
+    The one check that can catch a mis-bound port, and shared verbatim by the test
+    that asserts the machine is right and the meta-test that asserts the check
+    notices when it is not — so the two cannot drift apart.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    lm = Littleman()
+    info = lm.analyze(text)
+    out: dict[str, str | None] = {}
+    for band, (x, y) in ports.items():
+        cells = lm.route(text, x, y)
+        assert cells, f"panel {panel}'s {band} `s` at {(x, y)} binds no pipe at all"
+        out[band] = _panel_side(info, panel, cells[-1].as_tuple())
+    return out
+
+
+@needs_engine
+def test_every_port_routes_to_its_own_panels_own_side():
+    """The nearest-pipe oracle (``ARCH.md`` §7.1) on the real grid, panel by panel.
+
+    Six ``s`` glyphs in two relay rooms, and each has five rivals it must lose to.
+    ADDR is the top wall, DATA the left, SWAP the bottom, so a swapped pair paints
+    where it meant to address and nothing anywhere reports it.
+    """
+    m = mnist_cnn.build_machine()
+    text = m.text()
+    for panel, ports in enumerate(m.panel_ports):
+        assert _port_sides(text, panel, ports) == WANT_SIDE, f"panel {panel}"
+
+
+@needs_engine
+def test_a_deliberately_mis_bound_port_is_caught_by_the_route_check():
+    """The meta-test: a check that cannot fail is worth nothing.
+
+    Two of the relay's outlet columns are swapped on the grid, which is exactly the
+    silent failure ``ARCH.md`` §4.4 describes — the pipes are all still there, the
+    counts are all still right, the machine still loads and still runs to completion,
+    and it paints where it meant to address. The route check above has to notice, and
+    the pipe count has to *not* notice, or it is being credited with work it does not
+    do.
+    """
+    from randomfun2026solvers.littleman import Littleman
+
+    m = mnist_cnn.build_machine()
+    rows = list(m.rows)
+    # Swap panel 0's ADDR and SWAP `s` glyphs for the two `.` cells at each other's
+    # columns: the arms now send to each other's ports. Nothing else moves.
+    addr = m.panel_ports[0][machine.Band.DSP_ADDR]
+    swap = m.panel_ports[0][machine.Band.DSP_SWAP]
+
+    def move(cell: tuple[int, int], to_col: int) -> None:
+        x, y = cell
+        row = list(rows[y])
+        assert row[x] == "s", f"{cell} is {row[x]!r}, not the arm's `s`"
+        assert row[to_col] in " .", f"({to_col}, {y}) is {row[to_col]!r}, not free interior"
+        row[x], row[to_col] = " ", "s"
+        rows[y] = "".join(row)
+
+    move(addr, swap[0])
+    move(swap, addr[0])
+    text = "\n".join(rows) + "\n"
+
+    info = Littleman().analyze(text)
+    assert len(info.pipes) == 26, "the count is unchanged: this is why it is insufficient"
+    assert len(info.displays) == 2, "and so is the display count"
+
+    moved = dict(m.panel_ports[0])
+    moved[machine.Band.DSP_ADDR] = (swap[0], addr[1])
+    moved[machine.Band.DSP_SWAP] = (addr[0], swap[1])
+    sides = _port_sides(text, 0, moved)
+    # The *same* check the test above passes with must now complain, and say how.
+    assert sides != WANT_SIDE
+    assert sides[machine.Band.DSP_ADDR] == "bottom", "ADDR now reaches SWAP's wall"
+    assert sides[machine.Band.DSP_SWAP] == "top", "SWAP now reaches ADDR's wall"
+    assert sides[machine.Band.DSP_DATA] == "left", "and DATA is untouched"
+
+
+@needs_engine
+def test_the_checked_in_machine_matches_its_generator():
+    """AGENTS.md: the artifact-matches-generator assertion is what makes every shape
+    change visible as a regenerated ``.man`` diff, which is why nothing here pins a
+    dimension or a tick count.
+    """
+    want = (REPO / "tasks" / "solutions" / "mnist-cnn.man").read_text(encoding="utf-8")
+    assert mnist_cnn.build_machine().text() == want, (
+        "mnist-cnn.man is stale; regenerate with `python -m randomfun2026solvers.mnist_cnn "
+        "--man ../../tasks/solutions/mnist-cnn.man --html /tmp/mnist.html --json /tmp/mnist.json`"
+    )
+
+
+# ── the plotting arithmetic ──────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "loss",
+    [0, 1, 1999, 2000, 2001, 2199, 2200, 4000, 7999, 8000, 8001, 99999],
+)
+def test_the_emitted_loss_row_is_the_reference_mapping_including_both_clamps(loss):
+    """``loss_row`` is the oracle; the asm emits the same arithmetic.
+
+    Both clamps are load-bearing rather than defensive: an ADDR outside the panel is
+    a run-time error in the panel model and a silent wrap in hardware, so an epoch
+    off the scale must pin to a row rather than address one that is not there.
+    """
+    row = mnist_cnn.loss_row(loss)
+    assert 0 <= row < mnist_cnn.PLOT_ROWS
+    q = max(0, min((loss - mnist_cnn.LOSS_LO) // mnist_cnn.LOSS_PER_ROW, mnist_cnn.PLOT_ROWS - 1))
+    assert row == mnist_cnn.PLOT_ROWS - 1 - (q if loss >= mnist_cnn.LOSS_LO else 0)
+    assert mnist_cnn.loss_row(mnist_cnn.LOSS_LO) == mnist_cnn.PLOT_ROWS - 1
+    assert mnist_cnn.loss_row(mnist_cnn.LOSS_HI) == 0
+
+
+def test_accuracy_maps_the_whole_axis_with_no_clamp():
+    assert mnist_cnn.acc_row(0) == mnist_cnn.PLOT_ROWS - 1
+    assert mnist_cnn.acc_row(100) == 0
+    rows = [mnist_cnn.acc_row(a) for a in range(101)]
+    assert rows == sorted(rows, reverse=True), "more accuracy is never a lower pixel"
+    assert set(rows) <= set(range(mnist_cnn.PLOT_ROWS))
+
+
+def test_the_machine_plots_exactly_where_the_reference_mapping_says():
+    """The emitted asm against ``loss_row``/``acc_row``, through the emulator.
+
+    This is the test that would fail if the branchy clamp were emitted wrong: it
+    compares the *painted pixel* of every epoch against the row the pure function
+    gives for the number the ``OUT`` build reports for that same epoch.
+    """
+    run = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8, frames=True)
+    stats = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8)
+    assert [len(f) for f in run.frames] == [3, 3], "the axes frame plus one an epoch"
+    train, val = f"{mnist_cnn.TRAIN_COLOUR:x}", f"{mnist_cnn.VAL_COLOUR:x}"
+
+    def check(frame, col, train_row, val_row):
+        # Validation is painted second, so when the two land on the same row the cell
+        # carries the validation colour. Asserting otherwise would pin an accident of
+        # the two curves being apart.
+        assert frame[val_row][col] == val
+        assert frame[train_row][col] == (val if train_row == val_row else train)
+
+    for e, stat in enumerate(stats):
+        col = mnist_cnn.COL0 + e
+        check(
+            run.frames[mnist_cnn.LOSS_PANEL][e + 1],
+            col,
+            mnist_cnn.loss_row(stat.train_loss),
+            mnist_cnn.loss_row(stat.val_loss),
+        )
+        check(
+            run.frames[mnist_cnn.ACC_PANEL][e + 1],
+            col,
+            mnist_cnn.acc_row(stat.train_acc),
+            mnist_cnn.acc_row(stat.val_acc),
+        )
+
+
+def test_the_panels_stay_a_persistent_framebuffer():
+    """Every commit is ``SWAP 1``, so epoch *n*'s frame still holds epochs 1..n-1.
+
+    With ``SWAP 0`` the machine would have to repaint 158 axis cells and every earlier
+    point on every commit, and the curve is the point of the machine.
+    """
+    run = mnist_cnn.run_emulator(epochs=3, lr_shift=6, samples=4, frames=True)
+    swaps = [v for _panel, port, v in _panel_writes() if port == 2]
+    assert swaps and set(swaps) == {1}
+    for frames in run.frames:
+        drawn = [sum(ch != "0" for row in f for ch in row) for f in frames]
+        assert drawn == sorted(drawn), "a frame never loses pixels the last one had"
+        assert drawn[-1] > drawn[0], "and the epochs do add some"
+
+
+def _panel_writes():
+    """The port writes of the run that produced ``run.frames``, re-derived.
+
+    ``RunReport`` deliberately keeps frames rather than writes — frames are what the
+    engine can be compared against — so a test about the *writes* re-runs them.
+    """
+    src = mnist_cnn.emit_source(lr_shift=6, epochs=3, train_samples=4, val_samples=4, panels=True)
+    program = asm.assemble(src, name="mnist", isa=isa.LM1_EXT)
+    store = DictStore(size=mnist_cnn.STORE_WORDS)
+    em = Emulator(program, store=store)
+    stream_in = mnist_cnn._boot_stream() + mnist_cnn._dataset_stream(
+        epochs=3, train_n=4, val_n=4
+    )
+    return em.run(input=[3, *stream_in], max_instructions=10**12).panel_writes
+
+
+def test_panel_zeros_writes_still_reach_display_writes_unchanged():
+    """The compatibility claim, stated as a test.
+
+    ``plotter``, ``palette``, ``snake`` and ``deadman-3d`` all read
+    ``display_writes`` as ``(port, value)``. Panel 0's writes must appear there
+    exactly as before *and* in the panel-aware channel; panel 1's must appear only in
+    the panel-aware one, or a single-panel consumer would silently see a second
+    panel's pixels.
+    """
+    writes = _panel_writes()
+    assert any(p == 1 for p, _port, _v in writes), "the second panel is used at all"
+    src = mnist_cnn.emit_source(lr_shift=6, epochs=3, train_samples=4, val_samples=4, panels=True)
+    program = asm.assemble(src, name="mnist", isa=isa.LM1_EXT)
+    em = Emulator(program, store=DictStore(size=mnist_cnn.STORE_WORDS))
+    stream_in = mnist_cnn._boot_stream() + mnist_cnn._dataset_stream(epochs=3, train_n=4, val_n=4)
+    result = em.run(input=[3, *stream_in], max_instructions=10**12)
+    assert list(result.display_writes) == [
+        (port, v) for panel, port, v in result.panel_writes if panel == 0
+    ]
+
+
+def test_the_out_build_and_the_panel_build_report_the_same_numbers():
+    """The two variants of one program have to agree, or the panels are a fiction.
+
+    The ``OUT`` build is what every equality test against the reference model reads,
+    and the panel build is what the grid runs; nothing else ties them together.
+    """
+    stats = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8)
+    run = mnist_cnn.run_emulator(epochs=2, lr_shift=6, samples=8, frames=True)
+    assert run.params == mnist_cnn.run_emulator(
+        epochs=2, lr_shift=6, samples=8, report=True
+    ).params
+    assert len(stats) == 2
+
+
+def test_frames_and_single_step_are_refused_together():
+    with pytest.raises(ValueError, match="single step"):
+        mnist_cnn.run_emulator(epochs=0, frames=True)
+    with pytest.raises(ValueError, match="single_step"):
+        mnist_cnn.emit_source(lr_shift=6, panels=True, single_step=True)
+
+
+@needs_engine
+def test_more_epochs_than_the_panels_have_columns_is_refused():
+    with pytest.raises(ValueError, match="epoch columns"):
+        mnist_cnn.build_machine(epochs=mnist_cnn.MAX_EPOCH_COLS + 1)
