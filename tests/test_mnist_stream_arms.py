@@ -1051,38 +1051,99 @@ def test_no_two_legs_of_the_placed_block_share_a_cell(trie_bits: int):
     """``_Grid.put`` only catches a collision when the two glyphs *differ*.
 
     So one horizontal leg crossing another — both ``-`` — is silent, and the values go
-    to the wrong room with no error anywhere. This records the exact cell set each leg
-    laid and asserts the sets are pairwise disjoint, which is the property; ``_place4``
-    asserts the same thing by count while it draws, and this covers depth 3 too, where
-    it is not asserted at all.
+    to the wrong room with no error anywhere.
+
+    **How this is measured matters, and the first version of this test got it wrong.**
+    It took each leg's cells as a set-difference of ``_Grid.drawn`` before and after the
+    call. ``drawn`` only grows, so consecutive differences are disjoint *by
+    construction*: two pipes laid over identical cells produce a full set and then an
+    empty one, and the assertion passes. ``_test_the_overlap_guard_would_catch_an_overlap``
+    below is the meta-test that keeps this honest — it feeds two deliberately
+    overlapping legs through the same measurement and requires it to complain.
+
+    So the cells are recomputed here from each call's own ``points``, by
+    :func:`_polyline_cells`, which never consults the grid.
     """
+    blk = stream.build_stream(a_slots=16, b_slots=200, c_slots=16, trie_bits=trie_bits)
+    legs = _record_legs(trie_bits, blk)
+    assert len(legs) == blk.pipes, (len(legs), blk.pipes)
+    _assert_legs_disjoint(legs)
+
+
+def _polyline_cells(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Every cell a rectilinear polyline covers, in flow order, grid-independently.
+
+    Deliberately a second implementation of ``_Grid.draw_pipe``'s own walk: if the two
+    ever disagree the test fails, which is the right outcome for a check whose whole job
+    is to not trust the thing it is checking.
+    """
+    cells = [points[0]]
+    for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False):
+        assert x0 == x1 or y0 == y1, f"leg {(x0, y0)}->{(x1, y1)} is not rectilinear"
+        sx, sy = (x1 > x0) - (x1 < x0), (y1 > y0) - (y1 < y0)
+        x, y = x0, y0
+        while (x, y) != (x1, y1):
+            x, y = x + sx, y + sy
+            cells.append((x, y))
+    return cells
+
+
+def _record_legs(trie_bits: int, blk: stream.StreamBlock) -> list[list[tuple[int, int]]]:
+    """Replay the placement the search settled on, capturing each leg's own cells."""
     from randomfun2026solvers.lm1 import machine
 
-    blk = stream.build_stream(a_slots=16, b_slots=200, c_slots=16, trie_bits=trie_bits)
-    legs: list[set[tuple[int, int]]] = []
+    legs: list[list[tuple[int, int]]] = []
     original = machine._Grid.draw_pipe
 
     def recording(self, points):
-        before = set(self.drawn)
-        n = original(self, points)
-        legs.append(set(self.drawn) - before)
-        return n
+        legs.append(_polyline_cells(points))
+        return original(self, points)
 
     place = stream._place if trie_bits == 3 else stream._place4
     machine._Grid.draw_pipe = recording
     try:
-        # the exact serpentine the search settled on, so only one placement is recorded
         place(16, 200, 16, blk.rows_a, blk.rows_b)
     finally:
         machine._Grid.draw_pipe = original
+    return legs
 
-    assert len(legs) == blk.pipes, (len(legs), blk.pipes)
-    for i, a in enumerate(legs):
-        for b in legs[i + 1 :]:
-            assert not (a & b), f"legs {i} and {legs.index(b)} share {sorted(a & b)[:4]}"
-    # and every leg laid every cell it thought it did — a leg overlapping *itself*
-    # would shorten the pipe, which is a capacity bug rather than a routing one
-    assert sum(len(leg) for leg in legs) == len(set().union(*legs))
+
+def _assert_legs_disjoint(legs: list[list[tuple[int, int]]]) -> None:
+    """No cell used twice, within a leg or across two — the property under test."""
+    seen: dict[tuple[int, int], int] = {}
+    for i, leg in enumerate(legs):
+        for cell in leg:
+            if cell in seen:
+                raise AssertionError(f"legs {seen[cell]} and {i} share {cell}")
+            seen[cell] = i
+    assert len(seen) == sum(len(leg) for leg in legs)
+
+
+def test_the_overlap_guard_would_catch_an_overlap():
+    """The meta-test: the measurement above must fail on legs that really do overlap.
+
+    A disjointness check that reads a monotonically growing accumulator passes
+    vacuously, which is what the first version of the test above did. This is the
+    cheapest way to keep that from coming back — it asserts the *checker* discriminates,
+    not that the block is correct.
+    """
+    straight = [(0, 0), (5, 0)]
+    assert _polyline_cells(straight) == [(x, 0) for x in range(6)]
+
+    # two legs over the same cells, and one leg doubling back over itself
+    with pytest.raises(AssertionError, match="share"):
+        _assert_legs_disjoint([_polyline_cells(straight), _polyline_cells(straight)])
+    with pytest.raises(AssertionError, match="share"):
+        _assert_legs_disjoint([_polyline_cells([(0, 0), (3, 0), (1, 0)])])
+    # a partial crossing, which is the realistic failure: one `-` leg over another
+    with pytest.raises(AssertionError, match="share"):
+        _assert_legs_disjoint(
+            [_polyline_cells([(0, 5), (9, 5)]), _polyline_cells([(4, 0), (4, 9)])]
+        )
+    # and it accepts genuinely disjoint legs
+    _assert_legs_disjoint(
+        [_polyline_cells([(0, 0), (9, 0)]), _polyline_cells([(0, 1), (9, 1)])]
+    )
 
 
 @pytest.mark.parametrize("trie_bits", [3, 4])
