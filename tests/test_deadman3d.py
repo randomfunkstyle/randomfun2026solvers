@@ -1483,12 +1483,15 @@ def test_taped_registry_pins() -> None:
     # one — four banks is what puts the taped machine's width floor under the
     # ROM's. Property, not the split.
     assert len(machine.TAPED_BANKS["deadman-3d"]) == 4
-    # TIER_LAYOUT is opt-in per (slug, tier): only the two DOOM taped variants
-    # deviate from the shared registry, so every other machine — and the
-    # canonical men-v3 build — stays byte-identical.
+    # TIER_LAYOUT is opt-in per (slug, tier), which is what keeps every other
+    # machine byte-identical. ``("deadman-3d", "men-v3")`` is deliberately absent
+    # and must stay absent: that is the canonical hash-pinned build, and an entry
+    # here would move it. hires' men-v3 key is a different machine with no pin.
     assert set(machine.TIER_LAYOUT) == {
         ("deadman-3d", "taped"), ("deadman-3d_hires", "taped"),
+        ("deadman-3d_hires", "men-v3"),
     }
+    assert ("deadman-3d", "men-v3") not in machine.TIER_LAYOUT
     for tier in machine.TIER_LAYOUT.values():
         assert set(tier) <= {"rom_rows", "mem_offset", "store_offset"}
     tier = machine.TIER_LAYOUT[("deadman-3d", "taped")]

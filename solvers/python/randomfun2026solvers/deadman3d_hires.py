@@ -317,7 +317,8 @@ STORE_TIER = "taped"
 
 def build_local(wad: Path, out_dir: Path | None = None,
                 cmds: Sequence[int] | None = None,
-                *, pngs: bool = True, store: str = STORE_TIER) -> dict:
+                *, pngs: bool = True, store: str = STORE_TIER,
+                stem: str | None = None) -> dict:
     """The whole local artifact set for the IWAD-only hi-res family.
 
     Writes the assembly, the machine, its debug sidecars, the round-gated cases
@@ -328,31 +329,39 @@ def build_local(wad: Path, out_dir: Path | None = None,
     The tape size is a property of *this* level rather than a registry constant
     (id's E1M1 and Freedoom's do not hold the same number of monsters), so it is
     computed here and written into the registry for the build.
+
+    ``stem`` names the files. It defaults to the slug, so the shipped ``taped``
+    build keeps its filenames; a non-default ``store`` gets its own stem so the
+    two tiers' artifacts can sit side by side in the same directory instead of
+    overwriting each other. The *slug* never changes — every registry in
+    ``lm1.machine`` is keyed on it — so this affects filenames only.
     """
     from randomfun2026solvers.lm1 import machine
     from randomfun2026solvers.lm1.asm import assemble
 
     out_dir = out_dir or LOCAL_DIR
     cmds = list(WALK if cmds is None else cmds)
+    stem = stem or ("deadman-3d_hires" if store == STORE_TIER
+                    else f"deadman-3d_hires_{store.replace('-', '_')}")
     install_wad(wad)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     src = hires_source()
-    (out_dir / "deadman-3d_hires.asm").write_text(src, encoding="utf-8")
+    (out_dir / f"{stem}.asm").write_text(src, encoding="utf-8")
     prog = assemble(src, name="deadman-3d_hires")
     machine.TAPE_SIZE["deadman-3d_hires"] = max(d3.tape_slots(GEOM).values()) + 1
     m = machine.build_for("deadman-3d_hires", program=prog, store=store)
-    (out_dir / "deadman-3d_hires.man").write_text("\n".join(m.rows) + "\n", encoding="utf-8")
-    m.debug_map().write_html(m.rows, out_dir / "deadman-3d_hires.debug.html")
-    m.debug_map().write_json(out_dir / "deadman-3d_hires.debug.json")
-    (out_dir / "deadman-3d_hires.input.txt").write_text(
+    (out_dir / f"{stem}.man").write_text("\n".join(m.rows) + "\n", encoding="utf-8")
+    m.debug_map().write_html(m.rows, out_dir / f"{stem}.debug.html")
+    m.debug_map().write_json(out_dir / f"{stem}.debug.json")
+    (out_dir / f"{stem}.input.txt").write_text(
         " ".join(str(w) for w in input_words(cmds)) + "\n", encoding="utf-8")
-    (out_dir / "deadman-3d_hires.cases.json").write_text(
+    (out_dir / f"{stem}.cases.json").write_text(
         json.dumps(cases_json(cmds)) + "\n", encoding="utf-8")
     frames = [title_frame()] + frames_for_commands(cmds)
     if pngs:
-        d3._write_pngs(frames, out_dir / "hires-frames", scale=6)
-    print(f"wrote {out_dir}/deadman-3d_hires.* ({m.width}x{m.height}, "
+        d3._write_pngs(frames, out_dir / f"{stem}-frames", scale=6)
+    print(f"wrote {out_dir}/{stem}.* ({m.width}x{m.height}, "
           f"store={store}, P={prog.P}, "
           f"tape={machine.TAPE_SIZE['deadman-3d_hires']}) "
           f"and {len(frames)} frames")
@@ -371,11 +380,16 @@ def main(argv: list[str] | None = None) -> int:
                          "billboard arrives at frame 20, so a shorter run has no "
                          "monster in it)")
     ap.add_argument("--no-pngs", action="store_true")
+    ap.add_argument("--store", default=STORE_TIER,
+                    help=f"STORE tier to build against (default {STORE_TIER!r}); "
+                         "a non-default tier writes to its own filename stem")
+    ap.add_argument("--stem", help="override the output filename stem")
     args = ap.parse_args(argv)
 
     cmds = list(WALK[: args.frames])
     if args.build:
-        build_local(args.wad, args.out, cmds, pngs=not args.no_pngs)
+        build_local(args.wad, args.out, cmds, pngs=not args.no_pngs,
+                    store=args.store, stem=args.stem)
         return 0
     install_wad(args.wad)
     print(f"{GEOM.width}x{GEOM.height}, viewport {GEOM.h3d}, tiles {GEOM.tiles}")

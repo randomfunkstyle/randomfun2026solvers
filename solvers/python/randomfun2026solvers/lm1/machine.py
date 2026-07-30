@@ -5817,6 +5817,14 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     # **first interior row** instead of its north wall — the difference between
     # an exit that can attach beside the CPU and one that cannot attach at all.
     ("deadman-3d_hires", "taped"): {"store_offset": (-20, -1)},
+    # The men tier's own offset. Here dy is a *tick* knob, not a packing one: it
+    # shortens the request leg, the only length-sensitive term left once the answer
+    # path is distance-free (the collector's ``R`` and the ``teleport_v`` riser both
+    # have no distance term). ~-0.16%/row: dy 5 is -1.03%, dy 10 is -1.62%. dy 12,
+    # dy 20 and dx -10 all fail on ``collision at (93, 146): '+' vs '-'`` — a pipe
+    # collision, not a wall, so the remaining ~1.6% is recoverable by re-routing
+    # rather than blocked by geometry.
+    ("deadman-3d_hires", "men-v3"): {"store_offset": (0, 10)},
 }
 
 
@@ -6253,6 +6261,13 @@ LANE_PITCH: dict[tuple[str, str], int] = {
     # the pad stays at 15, and the pair measures **-7.326%** (204,117,437 ->
     # 189,164,256, box unchanged at 649x495).
     ("deadman-3d_hires", "taped"): 1,
+    # The men tier needs its own key, and this is the trap in porting a machine
+    # between stores: every hires lever in this file is keyed on ``"taped"``, so a
+    # men build silently forfeits all of them. Pitch 1 alone is **-10.55%** there
+    # (153,217,464 -> 137,064,987), so the men store's advantage over the drum was
+    # measured against a CPU handicapped by a tenth — 17.9% before this key, 26.6%
+    # after. Nothing about the pitch is tier-specific; only the registry was.
+    ("deadman-3d_hires", "men-v3"): 1,
 }
 
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
@@ -6487,6 +6502,11 @@ SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
     ("deadman-3d", "taped"): {"rom_rows": 84},
     ("deadman-3d_hires", "taped"): {"rom_rows": 119},
+    # Without this key the men path fell through to ``ROM_ROWS`` 88 and died with
+    # ``row 0 holds 158 words >= K=128`` — which reads exactly like the tier being
+    # broken for hires, and is the likeliest reason nobody re-tried it for a month.
+    # 119 is the floor that builds (88 and 100 fail the fold); 130 is +0.92%.
+    ("deadman-3d_hires", "men-v3"): {"rom_rows": 119},
 }
 
 
@@ -7591,11 +7611,20 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
                                            # (240 packed sprite words against 60) and
                                            # the frame grew a 128-slot ZBUF; 12x60 =
                                            # 720 no longer covers it, 14x60 = 840
-                                           # does, at the same 60-row fold. This tier
-                                           # is the fallback here — `deadman3d_hires`
-                                           # builds on the **taped** store, whose
-                                           # banks size themselves from TAPE_SIZE.
-                                           "deadman-3d_hires": (14, 60)}
+                                           # does, at the same 60-row fold.
+                                           #
+                                           # 840 stopped covering it: the level's own
+                                           # monster count sets TAPE_SIZE and id's E1M1
+                                           # wants **902**. 18x51 = 918 does, and the
+                                           # shape is chosen on `max(w, h)` rather than
+                                           # slots — the grid store is address-flat, so
+                                           # depth is nearly free (51 -> 76 moves the
+                                           # tour 0.56%) while every extra *column*
+                                           # costs ~0.42 t/access. Shallow-and-wide is
+                                           # therefore the wrong trade; 18 columns is
+                                           # the fewest that reach 902 at a depth the
+                                           # fold still takes.
+                                           "deadman-3d_hires": (18, 51)}
 
 #: Bank plan for the **taped** tier (``memory_taped.taped_store_block``): the
 #: 600 slots as banked pipe tapes behind a gate chain. This tier exists for the
