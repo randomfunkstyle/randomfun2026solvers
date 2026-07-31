@@ -1,3 +1,10 @@
+"""Sweep men-v3 STORE shapes.
+
+**Not a baseline.** It forces ``STORE_SHAPE`` (15, 61) and ``SEEK_TIER_LAYOUT``
+``rom_rows`` 119, which build 496x662 — a different machine from the shipped
+496x674, and ~1.7% off it. Use ``gate21.py`` for anything that is compared
+against a registry-default number.
+"""
 import sys, time
 sys.path.insert(0, "/tmp/menprobe")
 from common import setup, tour, run, SLUG

@@ -2,9 +2,9 @@
 """CPU debug view with **read/write binding zones** — where an `r`/`s` may move to.
 
 §7.1 binds an ``r`` to the Manhattan-nearest *incoming* pipe touch and an ``s`` to
-the nearest *outgoing* one, **and ties fail**. So "can I move this glyph?" is
-exactly "does it stay inside its pipe's zone?", and the zones are Manhattan
-Voronoi cells over the CPU box.
+the nearest *outgoing* one, **ties broken by reading order** (``SPEC.md:183``).
+So "can I move this glyph?" is exactly "does it stay inside its pipe's zone?",
+and the zones are Manhattan Voronoi cells over the CPU box.
 
 That question has driven most of this machine's geometry work: `mem_pad` is a
 §7.1 floor, `ROM_TOUCH_DROP` moves the ROM touch to buy binding room, and three
@@ -18,9 +18,12 @@ Two overlays, each toggled by a checkbox:
 * **WRITE zones** — one per outgoing pipe (`mem_req`, `out`, `cmd`, display and
   stream bands). An ``s`` anywhere in a zone binds that pipe.
 
-**Tie cells are hatched red.** A glyph there binds nothing and the build refuses,
-so they are the walls of each zone — and the cheapest thing on the picture to
-read, because a tie is what every one of today's pad floors actually was.
+**Tie cells are hatched** — a tie is *decidable*, not fatal, and an amber cell is
+one the intended pipe wins on reading order. ``check_bindings`` used to refuse
+these outright, which made the builder strictly stronger than the machine and
+cost men-v3 a whole ``mem_pad`` column; it now applies the engines' own key.
+Hatching still marks a **one-cell margin**: any geometry move can flip which
+attach reads first, and the failure mode is a wrong frame, not an exception.
 
     uv run python scratch/deadman3d-opt/cpu_zones.py [out_dir]
 """
@@ -47,9 +50,11 @@ PALETTE = [
 def capture(store: str):
     """Build, and grab the touches from the `check_bindings` call that survived.
 
-    `build_for` sweeps `mem_pad` and retries, so every failing trial calls the
-    same hook. Only the last call belongs to the grid that shipped — taking any
-    other yields a table for a machine that does not exist.
+    `build_for` sweeps `mem_pad` over `range(0, 40)` and calls this hook once per
+    trial, keeping the smallest footprint — so the **first call that did not
+    raise** is the grid that shipped. `seen[-1]` is pad 39, a machine that was
+    never built; reading it reports margins that do not exist (it is where a
+    phantom "margin-1 `s` at (39,198)" came from).
     """
     from randomfun2026solvers import deadman3d as d3
     from randomfun2026solvers import deadman3d_hires as hires
@@ -64,8 +69,8 @@ def capture(store: str):
     real = M.check_bindings
 
     def spy(glyphs, touches):
+        real(glyphs, touches)  # raises on a doomed pad; only survivors get recorded
         seen.append((list(glyphs), dict(touches)))
-        return real(glyphs, touches)
 
     M.check_bindings = spy
     try:
@@ -73,8 +78,8 @@ def capture(store: str):
     finally:
         M.check_bindings = real
     if not seen:
-        raise SystemExit("check_bindings was never called")
-    glyphs, touches = seen[-1]
+        raise SystemExit("check_bindings never bound")
+    glyphs, touches = seen[0]
     return m, glyphs, touches, M
 
 
@@ -83,15 +88,18 @@ def zones(touches: dict, names: list[str], x0, x1, y0, y1):
     out = {}
     for y in range(y0, y1 + 1):
         for x in range(x0, x1 + 1):
-            best, bd, tie = None, 1 << 30, False
-            for n in names:
-                tx, ty = touches[n]
-                d = abs(tx - x) + abs(ty - y)
-                if d < bd:
-                    best, bd, tie = n, d, False
-                elif d == bd:
-                    tie = True
-            out[(x, y)] = None if tie else best
+            # reading order: top to bottom, left to right (SPEC.md:183)
+            ranked = sorted(
+                names, key=lambda n: (abs(touches[n][0] - x) + abs(touches[n][1] - y),
+                                      touches[n][1], touches[n][0])
+            )
+            best = ranked[0]
+            bd = abs(touches[best][0] - x) + abs(touches[best][1] - y)
+            tie = sum(
+                1 for n in names
+                if abs(touches[n][0] - x) + abs(touches[n][1] - y) == bd
+            ) > 1
+            out[(x, y)] = (best, tie)
     return out
 
 
@@ -120,19 +128,16 @@ def render(m, glyphs, touches, M, store: str, path: Path) -> None:
         row = []
         for x in range(x0, x1 + 1):
             ch = m.rows[y][x] if y < len(m.rows) and x < len(m.rows[y]) else " "
-            r, w = rz[(x, y)], wz[(x, y)]
-            cls = ["c"]
-            if r is None:
+            (r, rt), (w, wt) = rz[(x, y)], wz[(x, y)]
+            cls = ["c", "r-" + str(r).replace(".", "_"), "w-" + str(w).replace(".", "_")]
+            if rt:
                 cls.append("rtie")
-            else:
-                cls.append("r-" + str(r).replace(".", "_"))
-            if w is None:
+            if wt:
                 cls.append("wtie")
-            else:
-                cls.append("w-" + str(w).replace(".", "_"))
             if (x, y) in rs:
                 cls.append("glyph")
-            title = f"({x},{y}) {ch!r}  read->{r or 'TIE'}  write->{w or 'TIE'}"
+            title = (f"({x},{y}) {ch!r}  read->{r}{' [TIE, won by reading order]' if rt else ''}"
+                     f"  write->{w}{' [TIE, won by reading order]' if wt else ''}")
             row.append(
                 f'<span class="{" ".join(cls)}" title="{html.escape(title)}">'
                 f"{html.escape(ch) if ch.strip() else '&nbsp;'}</span>"
@@ -164,7 +169,7 @@ def render(m, glyphs, touches, M, store: str, path: Path) -> None:
  .c {{ display:inline-block; width: 1ch }}
  .glyph {{ outline: 1px solid #1c1917; font-weight: 700 }}
  .zr .rtie, .zw .wtie {{
-   background: repeating-linear-gradient(45deg, #ef444455 0 3px, transparent 3px 6px) }}
+   background-image: repeating-linear-gradient(45deg, #f59e0b88 0 3px, transparent 3px 6px) }}
  {css_r}
  {css_w}
  .keys {{ margin: 8px 0 }}
@@ -175,9 +180,10 @@ def render(m, glyphs, touches, M, store: str, path: Path) -> None:
 </style>
 <h1>{SLUG} — {store} — {m.width}×{m.height}, CPU x={x0}..{x1} y={y0}..{y1}</h1>
 <div class="sub">§7.1 binds an <tt>r</tt> to the Manhattan-nearest <b>incoming</b>
-pipe and an <tt>s</tt> to the nearest <b>outgoing</b> one, <b>and ties fail</b>.
-A glyph may move freely inside its own zone; crossing a boundary rebinds it, and
-landing on a hatched tie refuses the build. Boxed glyphs are the actual
+pipe and an <tt>s</tt> to the nearest <b>outgoing</b> one, <b>ties by reading
+order</b> (top to bottom, left to right). A glyph may move freely inside its own
+zone; crossing a boundary rebinds it. Hatched cells are ties — legal, but a
+one-cell margin, so a glyph parked there rebinds if any geometry shifts. Boxed glyphs are the actual
 <tt>r</tt>/<tt>s</tt> cells. Hover any cell for its bindings.</div>
 <div>
  <label><input type="checkbox" id="cr" checked> Show READ zones</label>
@@ -198,12 +204,13 @@ landing on a hatched tie refuses the build. Boxed glyphs are the actual
 """
     path.write_text(doc, encoding="utf-8")
 
-    nr = sum(1 for v in rz.values() if v is None)
-    nw = sum(1 for v in wz.values() if v is None)
+    nr = sum(1 for _n, t in rz.values() if t)
+    nw = sum(1 for _n, t in wz.values() if t)
     tot = (x1 - x0 + 1) * (y1 - y0 + 1)
     print(f"{store:>7}: {path}  ({path.stat().st_size:,} bytes)")
     print(f"          {len(reads)} read zones, {len(writes)} write zones; "
-          f"tie cells {nr}/{tot} read, {nw}/{tot} write")
+          f"tie cells {nr}/{tot} read, {nw}/{tot} write "
+          f"(decided by reading order; legal, but a one-cell margin)")
 
 
 def main(argv: list[str]) -> int:

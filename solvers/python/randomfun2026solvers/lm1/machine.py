@@ -5063,13 +5063,45 @@ def _serpentine_tape(
 def check_bindings(
     glyphs: list[tuple[int, int, str, str]], touches: dict[str, tuple[int, int]]
 ) -> None:
-    """Assert every ``r``/``s`` is strictly nearest the pipe it is meant to use.
+    """Assert every ``r``/``s`` binds the pipe it is meant to use.
 
     ``s`` targets the nearest *outgoing* pipe and ``r`` the nearest *incoming* one,
     Manhattan, ties by reading order — and *nearest*, not nearest-that-can-proceed
     (``ARCH.md`` §7.1). Getting this wrong is invisible until a program silently
     reads the wrong pipe, so it is checked here and again with
     ``tools/route-check.mjs`` on the real grid.
+
+    **This used to refuse a tie outright — even one the intended pipe wins — and
+    that was a floor of our own making.** The old second clause was::
+
+        if rivals[want] != best or sum(1 for d in rivals.values() if d == best) > 1:
+
+    ``SPEC.md:183`` is explicit that "ties break by **reading order** (top to
+    bottom, left to right)", and both engines implement exactly that:
+    :meth:`fast_littleman._Program._bind_pipe_ops` picks
+    ``min(candidates, key=(distance, attach_y, attach_x))``, and the reference
+    WASM ``route()`` agrees cell for cell. So a tie is a *decidable* binding, not
+    an ambiguous one, and refusing it made the builder strictly stronger than the
+    machine it builds for. The rule below is the engines' key, verbatim.
+
+    Note it is the **attachment point** that is compared, not the pipe's far end
+    (that distinction already cost a re-derivation once — see
+    :data:`ROM_TOUCH_DROP`).
+
+    What it bought, measured rather than argued: ``deadman-3d_hires`` men-v3's
+    ``mem_pad`` floor was 3 because ``'r' at (22,163)`` sat at an exact 30-30 tie
+    against ``rom``. ``mem_resp``'s attach reads first, so pad 2 is legal, and
+    every one of the 54.16% of instructions that carry a MEM band gets a column
+    off its lane and off its walk back west: 81,042,708 -> 80,342,861 at 21
+    rounds, **-0.864%**, ``passed=True`` and the grid the same 496x674. Three
+    other recorded floors were also exactly ties and are worth re-deriving
+    against this: :data:`TRIE_SLACK_ROWS` (+1.97%), ``SEEK_CLASSIC_DRAIN``
+    excluding BRN (``rom`` and ``mem_resp`` both 47 away) and
+    :data:`SLAB_TIGHT_RISERS` (+8.437%).
+
+    A tie is still a **one-cell margin**: any geometry move can flip which attach
+    reads first, and the failure mode is a wrong frame rather than an exception.
+    That is what the 21-round frame gate is for; a 3-round screen will not see it.
     """
     incoming = {"rom", "in", "mem_resp", Band.STREAM_RESP}
     for x, y, glyph, band in glyphs:
@@ -5084,8 +5116,9 @@ def check_bindings(
         }
         if want not in rivals:
             raise MachineError(f"{glyph!r} at {(x, y)} wants pipe {want!r}, which is absent")
-        best = min(rivals.values())
-        if rivals[want] != best or sum(1 for d in rivals.values() if d == best) > 1:
+        # the engines' key: distance, then the attachment cell in reading order.
+        winner = min(rivals, key=lambda n: (rivals[n], touches[n][1], touches[n][0]))
+        if winner != want:
             order = sorted(rivals.items(), key=lambda kv: kv[1])
             raise MachineError(
                 f"{glyph!r} at {(x, y)} must bind {want!r} but distances are {order}"
@@ -8902,6 +8935,26 @@ HIGH_COLLECTOR: set[tuple[str, str]] = {
 #: is geometry-independent and stays here ready: it is the only lever that can
 #: open a zero-slack decode edge, because a non-inline node is pinned to the
 #: lanes and :data:`LEAN_TRIE` can only ever shorten an edge.
+#:
+#: **That revisit condition was met, and it still loses — the condition was the
+#: wrong one.** Once :func:`check_bindings` stopped refusing decidable ties and
+#: :data:`INPUT_NORTH_WEST` was keyed for men-v3, the floor fell to 2 without the
+#: row and to **3 with it** — exactly the "binds at ``mem_pad`` 3" this asked for.
+#: Re-gated at 21 rounds (``ranks=(20,)``, ``INPUT_NORTH_WEST`` 8 — it is a
+#: distance *west of* ``lane_x0`` and has to give back the same column — and
+#: ``store_offset`` dy 10 -> 9, the unique value in 7..13 that keeps the adapter's
+#: request leg level): 496x673, ``lane_x0`` 9, ``passed=True``, **81,711,788
+#: against 80,342,861 — +1.704%**.
+#:
+#: The reason it survives its own revisit condition is that the condition counted
+#: pad *columns* instead of ``mem_x``. What every MEM lane walks is
+#: ``mem_x = lane_x0 + max(prefixes) + mem_pad``, and that is **21 either way**
+#: (18+1+2 shipped, 17+1+3 with the row): the trie hands the column straight to
+#: the pad, so the 54.16% of instructions that carry a MEM band gain *nothing* and
+#: only the other 45.8% gain a column — about 0.92 cells/instr — against a whole
+#: extra band row. Restate the condition on the quantity that moves:
+#: **this pays when a ``ranks=(20,)`` build's ``mem_x`` comes out below 21**, not
+#: when its pad does.
 TRIE_SLACK_ROWS: dict[tuple[str, str], tuple[int, ...]] = {}
 
 #: ``(slug, tier)`` pairs whose decode trie prices its columns **per node** instead
@@ -9917,9 +9970,26 @@ SEEK_TWIN_STATION: set[tuple[str, str]] = {
 #: to be at ``CX + 1``, and each column the trie gives back is a column this must
 #: give back too or the room walks off the wall (`in_west 11 puts the input pipe
 #: off the CPU north wall`). The room does not move; only the number does.
+#: **men-v3 takes the same 9, and only becomes worth taking once
+#: :func:`check_bindings` stops refusing ties.** With the I room on the IN lane's
+#: own ``r`` the men-v3 pad floor is 3, and the thing holding it there is ``in``:
+#: at pad 2, ``'r' at (22,154)`` sees ``mem_resp`` 21 and ``in`` 21, and ``in``'s
+#: attach ``(18,137)`` reads before ``mem_resp``'s ``(43,154)`` — so that tie is
+#: genuinely **lost** and moving the room is the only way out of it. Moved to
+#: ``CX + 1`` the rival becomes ``rom`` instead, at another exact tie (30-30 on
+#: ``'r' at (22,163)``) — but this one ``mem_resp`` *wins* on reading order, so it
+#: only binds under the relaxed clause. The two changes are worth nothing apart
+#: and **-0.864%** together (81,042,708 -> 80,342,861 at 21 rounds, ``passed``,
+#: 496x674 unchanged), all of it the one column of memory band that 54.16% of
+#: instructions walk twice.
+#:
+#: Any value 1..9 reaches pad 2; 9 is ``CX + 1``, the westernmost legal column,
+#: which leaves ``in`` 39 cells away instead of 31 and so the largest margin
+#: before the rival changes back. 10 walks the room off the north wall.
 INPUT_NORTH_WEST: dict[tuple[str, str], int] = {
     ("deadman-3d", "taped"): 13,
     ("deadman-3d_hires", "taped"): 9,
+    ("deadman-3d_hires", "men-v3"): 9,
 }
 
 #: Per-``(slug, tier)`` ``mem_pad``, overriding :data:`MEM_PAD` /
