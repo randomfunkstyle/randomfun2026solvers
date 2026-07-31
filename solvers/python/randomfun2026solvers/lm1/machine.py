@@ -1004,6 +1004,7 @@ def _slab_east_span(
     seek_jump_gap: int = 0,
     tight_arms: bool = False,
     tight_risers: bool = False,
+    tuck_drain: bool = False,
 ) -> int:
     """How many columns **east of ``base``** slab ``m``'s own glyphs reach.
 
@@ -1054,8 +1055,12 @@ def _slab_east_span(
         from .drain import build_drain
 
         # The block is pinned at ``base - 1`` (:func:`_drain_block`), so its east
-        # edge is ``base + width - 2``.
+        # edge is ``base + width - 2``. A *branch* under :data:`SLAB_TUCKED_DRAIN`
+        # is pinned one column further east, onto the taken arm's own column, so
+        # its east edge is ``base + width - 1``.
         drained = build_drain(0, unit_bits=drain_unit_bits, even=True).width - 2
+        if tuck_drain and sem not in _JUMP_SEMS:
+            drained += 1
     if sem in _JUMP_SEMS:
         return max(1, drained)
     # A drained branch keeps its ``X`` fan-out as well; whichever reaches further.
@@ -1079,6 +1084,7 @@ def _slab_bases(
     seek_jump_gap: int = 0,
     tight_arms: bool = False,
     tight_risers: bool = False,
+    tuck_drain: bool = False,
 ) -> tuple[dict[str, int], int]:
     """``(base per slab, struct_east)`` for the staircase.
 
@@ -1101,7 +1107,7 @@ def _slab_bases(
         bases[m] = b
         span = _slab_east_span(
             p, m, drain_unit_bits, drain_ops, jump_east, seek_jump_gap, tight_arms,
-            tight_risers,
+            tight_risers, tuck_drain,
         )
         east = b + span
         b += span + 2
@@ -1730,6 +1736,7 @@ def build_cpu(
     tuck_drops: bool = False,
     fold_lanes: bool = False,
     slab_pitch: int = _SLAB_PITCH,
+    tuck_drain: bool = False,
     lane_pitch: int = 2,
     squash_band: bool | int = False,
     straight_trie: bool = False,
@@ -2079,7 +2086,9 @@ def build_cpu(
             if p.sem[m] in _SEEK_SEMS:
                 slab_rows[m] = 2 if p.sem[m] in _JUMP_SEMS else 5
             elif _drained(m, drain_unit_bits, drain_ops):
-                slab_rows[m] = (1 if p.sem[m] in _JUMP_SEMS else 5) + _drain_h
+                slab_rows[m] = (
+                    1 if p.sem[m] in _JUMP_SEMS else (3 if tuck_drain else 5)
+                ) + _drain_h
             else:
                 slab_rows[m] = (
                     _JUMP_SLAB_ROWS if p.sem[m] in _JUMP_SEMS else _BRANCH_SLAB_ROWS
@@ -2091,7 +2100,10 @@ def build_cpu(
         from .drain import build_drain
 
         _drain_h = build_drain(0, unit_bits=drain_unit_bits, even=True).height
-        slab_rows = {m: (1 if p.sem[m] in _JUMP_SEMS else 5) + _drain_h for m in structured}
+        slab_rows = {
+            m: (1 if p.sem[m] in _JUMP_SEMS else (3 if tuck_drain else 5)) + _drain_h
+            for m in structured
+        }
         struct_x0 = _STRUCT_X0
     else:
         slab_rows = {
@@ -2116,6 +2128,7 @@ def build_cpu(
         seek_jump_gap=seek_jump_gap,
         tight_arms=tight_arms,
         tight_risers=tight_risers,
+        tuck_drain=tuck_drain,
     )
 
     # ── lane extents ─────────────────────────────────────────────────────────
@@ -2671,6 +2684,7 @@ def build_cpu(
                         g, m, p, s0, base, collector, pipe_glyphs,
                         drain_unit_bits if _drained(m, drain_unit_bits, drain_ops) else 0,
                         tight_arms=tight_arms, tight_risers=tight_risers,
+                        tuck_drain=tuck_drain,
                     )
             elif p.sem[m] in _JUMP_SEMS:
                 # never west of ``base`` (that is the shipped column and the floor),
@@ -2862,6 +2876,7 @@ def build_cpu(
                 struct_drops |= _slab(
                     g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs,
                     drain_unit_bits, tight_arms=tight_arms, tight_risers=tight_risers,
+                    tuck_drain=tuck_drain,
                 )
 
         # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place
@@ -3208,6 +3223,7 @@ def _slab(
     drain_unit_bits: int = 0,
     tight_arms: bool = False,
     tight_risers: bool = False,
+    tuck_drain: bool = False,
 ) -> set[int]:
     """Draw one structures-band slab below its entry row. Returns its drop columns.
 
@@ -3317,7 +3333,15 @@ def _slab(
         cols[risers[1]] = base + south
     drops: set[int] = set()
 
-    turn_row = s0 + 4
+    # :data:`SLAB_TUCKED_DRAIN`: the taken arm falls straight down the block's
+    # spine and onto the ladder's own ``]``, so there is no ``turn_row`` and no
+    # separate row for that ``]``. The arm's drop stops on the *last* arm row —
+    # the ladder's first fold spans ``base + 2 .. base + 5`` and must clear every
+    # arm's ``W`` and riser, so it cannot start higher than ``s0 + 4``, and the
+    # ``]`` above it is a single spine cell that fits on ``s0 + 3`` whichever arm
+    # is taken.
+    tucked = tuck_drain and drain_unit_bits
+    turn_row = s0 + 3 if tucked else s0 + 4
     for arm, row in rows.items():
         x = base + 2
         g.put(x, row, "W")
@@ -3345,15 +3369,31 @@ def _slab(
     # arm drops it, it ties with the tape's response pipe on the east wall — a tie
     # the engine breaks by reading order, so the jump silently blocks on an empty
     # pipe forever (§7.1: nearest, not nearest-that-can-proceed).
-    g.put(cols[taken], turn_row, "<")
-    for c in range(base + 2, cols[taken]):
-        g.soft(c, turn_row, ".")
-    with g.part(f"discard:{mnemonic}"):
-        if drain_unit_bits:
-            end_row = _drain_block(g, base, turn_row, pipe_glyphs, drain_unit_bits)
-        else:
-            _discard_loop(g, base, turn_row, pipe_glyphs)
-            end_row = turn_row
+    if tucked:
+        # The arm is already on the spine and already heading south; the block's
+        # ``]`` on ``turn_row`` is the whole of the entry. Nothing walks west here.
+        from .drain import build_drain
+
+        _spine = build_drain(0, unit_bits=drain_unit_bits, even=True).spine
+        if cols[taken] != base + _spine:
+            raise MachineError(
+                f"tucked drain wants the taken arm on base + {_spine}, not "
+                f"base + {cols[taken] - base} (SLAB_TIGHT_ARMS off?)"
+            )
+        with g.part(f"discard:{mnemonic}"):
+            end_row = _drain_block(
+                g, base, turn_row, pipe_glyphs, drain_unit_bits, tuck=True
+            )
+    else:
+        g.put(cols[taken], turn_row, "<")
+        for c in range(base + 2, cols[taken]):
+            g.soft(c, turn_row, ".")
+        with g.part(f"discard:{mnemonic}"):
+            if drain_unit_bits:
+                end_row = _drain_block(g, base, turn_row, pipe_glyphs, drain_unit_bits)
+            else:
+                _discard_loop(g, base, turn_row, pipe_glyphs)
+                end_row = turn_row
     with g.part(f"riser:{mnemonic}", exclusive=True):
         g.put(exit_x, end_row, "^")
         for y in range(collector + 1, end_row):
@@ -3927,6 +3967,64 @@ SLAB_TIGHT_ARMS: set[tuple[str, str]] = {
 #: at 0 on both tiers, and :func:`_slab_east_span`'s **+5.76%** note).
 SLAB_TIGHT_RISERS: set[tuple[str, str]] = set()
 
+#: Hang a drained **branch**'s ladder off the taken arm itself, instead of off a
+#: ``turn_row`` below the arms. Keyed on ``(slug, tier)``; empty by default, so
+#: every machine that does not name itself here is byte-identical.
+#:
+#: Two rows, and **neither of them is ladder** — which is the point, because the
+#: ladder is what does the work. On ``deadman-3d_hires`` men-v3 the ``BRZ`` slab
+#: (``base`` 15, ``s0`` 179) is drawn as::
+#:
+#:     180  neg arm      W . . . . . ^          (riser at base + 9)
+#:     181  taken arm    W b v                  (`v` at base + 4)
+#:     182  pos arm    > W ^ .                  (riser at base + 3)
+#:     183  turn_row       . . <                (walks back west to base + 3)
+#:     184..197           the 14-row block, its `]` on 184
+#:
+#: The taken arm drops onto ``base + 4`` and then walks *back west* to the block's
+#: spine, which is one column west of it. Give the block the arm's own column and
+#: the walk is nobody's: the man keeps falling, ``turn_row`` stops existing, and
+#: the ladder's ``even`` ``]`` — a bare pass-through on the spine, one cell wide —
+#: lands on ``s0 + 3`` beside the ``pos`` arm's riser rather than on a row of its
+#: own. The block ends on 195 instead of 197, and the taken arm reaches the first
+#: fold in 2 cells instead of 5.
+#:
+#: **The price is a one-column east shift, and this is the direction that is
+#: free.** Moving the CPU's east wall *west* has cost twice — :data:`SLAB_TIGHT_RISERS`
+#: at +8.437%, ``TRIE_SLACK_ROWS``' ``lane_x0`` at +1.97% — both because
+#: ``struct_east`` is the wall and the §7.1 tie that fixes ``mem_pad`` moves with
+#: it. Here the block grows east *inside* a slab that already reaches ``base + 9``
+#: for its ``neg`` arm, so :func:`_slab_east_span` returns the same 9 it did
+#: before and the staircase, ``struct_east``, the pad and the drop solver all see
+#: an unchanged band. Verified rather than assumed: the built box is unchanged in
+#: width.
+#:
+#: Requires :data:`SLAB_TIGHT_ARMS` — the taken arm has to already be on
+#: ``base + spine``, which is what ``tight_arms`` puts it at — and applies only to
+#: branches. A drained *jump* arrives heading west along its entry row with no arm
+#: to fall off, so it keeps the ``turn``-and-hang entry and its own column.
+#:
+#: 21 rounds, ``frame_tiles=(2, 2)``, ``passed=True``, ``fatal=None`` on both:
+#:
+#: | tier | box | ticks | Δ |
+#: |---|---|---|---|
+#: | men-v3 before | 496x674 | 81,309,610 | — |
+#: | **men-v3 after** | **496x674** | **81,042,708** | **-0.328%** |
+#: | taped before | 625x400 | 140,656,599 | — |
+#: | **taped after** | **625x398** | **140,379,566** | **-0.197%** |
+#:
+#: Note *where* the two tiers take it. men-v3's box does not move at all — its
+#: height is the display's and its width the ROM's — so every tick is walk: three
+#: off each taken branch, and two off the exit riser of every slab and of the seek
+#: tail, whose ``taken_row`` is ``bottom + 1`` and rises with the band. taped's
+#: box loses the two rows outright, because nothing below the band was holding
+#: them. Both are the third category the ``FETCH_TUCK`` round opened: a shorter
+#: walk over cells already drawn, moving no wall and owing no pad.
+SLAB_TUCKED_DRAIN: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "men-v3"),
+    ("deadman-3d_hires", "taped"),
+}
+
 #: Per-``(slug, tier)`` opt-in for **drop columns floored by operations rather than
 #: by cells** — the simple lanes' half of what :data:`TIGHT_STRUCT_DROPS` does for
 #: the structured ones.
@@ -4264,6 +4362,7 @@ def _drain_block(
     y: int,
     pipe_glyphs: list[tuple[int, int, str, str]],
     unit_bits: int,
+    tuck: bool = False,
 ) -> int:
     """Place a :mod:`.drain` ladder+loop in a slab. Returns the row it leaves on.
 
@@ -4271,26 +4370,52 @@ def _drain_block(
     ``y`` and leaves heading **west** with ``BP == 0``, on the caller's riser
     column ``base - 1``. He just leaves further down, because the block hangs
     below the entry row instead of beside it.
+
+    ``tuck`` is the *branch* entry instead, and it arrives heading **south**. The
+    ladder's first cell under ``even`` is a bare ``]`` on the spine, which is a
+    pass-through for a southbound man — so a taken arm that drops down the spine
+    column walks onto it without a turn, and the block starts on row ``y`` rather
+    than on ``y + 1`` below a ``turn_row`` that no longer exists. Two rows, and
+    neither of them is ladder: see :data:`SLAB_TUCKED_DRAIN`.
+
+    The price is a **one-column east shift**. The spine has to be the column the
+    arm is already falling down (``base + 4`` under :data:`SLAB_TIGHT_ARMS`), and
+    the spine is at local ``4``, so local ``0`` lands on ``base`` and the block
+    leaves one column east of the riser. The exit row's westward run is extended
+    by that one cell — the block leaves local ``0`` empty for exactly this — and
+    the caller's ``^`` stays at ``base - 1``, so nothing outside the slab has to
+    know. A branch already reaches ``base + 9`` for its ``neg`` arm, so the wider
+    block is still nowhere near the slab's east edge and :func:`_slab_east_span`
+    is unchanged in practice (it is corrected anyway, so the staircase does not
+    depend on that happening to be true).
     """
     from .drain import build_drain
 
     block = build_drain(0, unit_bits=unit_bits, even=True)
-    ox, oy = base - 1, y + 1  # local column 0 is the reserved exit column
+    if tuck:
+        # Local column 0 is one east of the riser; the man walks the extra cell.
+        ox, oy = base, y
+        exit_row = oy + block.exit[1]
+        g.soft(ox, exit_row, ".")
+    else:
+        ox, oy = base - 1, y + 1  # local column 0 is the reserved exit column
 
-    # Turn the westbound man south into the block. On a branch's ``turn_row`` the
-    # arm's westward run is already drawn, and on a jump's entry row it is drawn
-    # afterwards — so this cell is `.` or `<` or empty, all three meaning "the man
-    # is walking west here", which is precisely who we want to divert. Anything
-    # else is a real collision and must not be papered over.
-    turn = (ox + block.spine, y)
-    if g.c.get(turn) not in (None, ".", "<"):
-        raise MachineError(f"drain entry at {turn} would overwrite {g.c[turn]!r}")
-    g.c[turn] = "v"
+        # Turn the westbound man south into the block. On a branch's ``turn_row``
+        # the arm's westward run is already drawn, and on a jump's entry row it is
+        # drawn afterwards — so this cell is `.` or `<` or empty, all three meaning
+        # "the man is walking west here", which is precisely who we want to divert.
+        # Anything else is a real collision and must not be papered over.
+        turn = (ox + block.spine, y)
+        if g.c.get(turn) not in (None, ".", "<"):
+            raise MachineError(f"drain entry at {turn} would overwrite {g.c[turn]!r}")
+        g.c[turn] = "v"
     for (bx, by), ch in block.cells.items():
         g.put(ox + bx, oy + by, ch)
         if ch == "r":
             pipe_glyphs.append((ox + bx, oy + by, "r", "rom"))
-    assert ox + block.exit[0] == base - 1, "the block must leave on the riser column"
+    assert ox + block.exit[0] == base - (0 if tuck else 1), (
+        "the block must leave on the riser column"
+    )
     return oy + block.exit[1]
 
 
@@ -5660,6 +5785,7 @@ def _assemble(
         seek_jump_east=seek and (program.name, store) in SEEK_JUMP_EAST,
         tight_arms=(program.name, store) in SLAB_TIGHT_ARMS,
         tight_risers=(program.name, store) in SLAB_TIGHT_RISERS,
+        tuck_drain=(program.name, store) in SLAB_TUCKED_DRAIN,
         sparse_collector=(program.name, store) in SPARSE_COLLECTOR,
         trim_dead=trim_dead,
         top_bus=top_bus,
