@@ -816,6 +816,33 @@ def _target_index(program: Program, instrs: Sequence, index_of_word: dict, k: in
 #: 256 buys 0.2 points of bill while paying a flat ~1,140-tick seek for jumps
 #: whose discard was under ~1,150 — i.e. nothing, at real risk. Above 384 the
 #: cliff starts.
+#: **Re-swept on hires/men-v3 after :data:`SEEK_TWIN_STATION` and ``FETCH_FOLD``,
+#: both of which changed what a seek costs. 256 still wins, and the curve around it
+#: is not a curve.** 21 rounds, ``passed=True``, ``fatal=None``, against
+#: 82,530,131:
+#:
+#: | thr | ticks | Δ |
+#: |---|---|---|
+#: | 64 | builds, **will not load** | ``numeric literal does not fit signed 64 bits`` |
+#: | 128 | 82,647,440 | +0.142% |
+#: | 192 | 82,761,338 | +0.280% |
+#: | **256** | **82,530,131** | **—** |
+#: | 384 | 83,672,251 | +1.384% |
+#: | 512 | 82,773,838 | +0.295% |
+#:
+#: Non-monotone in both directions and 384 is a spike, so this is not a smooth
+#: break-even being crossed: what the threshold moves is *which* jumps become
+#: ``JMPS``, and that changes the ROM image and the literals in it, not just a
+#: count. **Sweeping the threshold alone cannot pay.** The leverage the split
+#: promises is on the 27,893 counted-discard ``JMPF``s carrying 341,177 words, and
+#: reaching them needs the *reposition* to get cheaper first — the threshold then
+#: follows. Note also that 49 of the 83 flush words per seek exist only because
+#: ``rom_capacity`` is 49: a corridor is a FIFO whose length is its capacity, and a
+#: seek must drain everything in flight, which no cheaper notice path touches.
+#:
+#: The load rung is not optional when sweeping this: a build that refuses is
+#: obvious, but a build that assembles and then dies in
+#: :class:`~randomfun2026solvers.fast_littleman.FastLittleman` is not.
 SEEK_THRESHOLD = 256
 
 
@@ -960,6 +987,14 @@ _JUMP_SLAB_ROWS = 4
 _BRANCH_SLAB_ROWS = 8
 
 
+#: ``(north, south)`` offsets from ``base`` for the two **rising** arms under
+#: :data:`SLAB_TIGHT_RISERS`, and the number :func:`_slab_east_span` reports as the
+#: branch span. Swept rather than derived: the drain block below the arms hard-puts
+#: its ``<`` at ``base + 3`` and ``base + 4``, so how far west a riser may go is a
+#: question about the *discard* block's width, not about the arms.
+_SLAB_RISER_SLOTS = (5, 3)
+
+
 def _slab_east_span(
     p: _Plan,
     m: str,
@@ -968,6 +1003,7 @@ def _slab_east_span(
     jump_east: bool,
     seek_jump_gap: int = 0,
     tight_arms: bool = False,
+    tight_risers: bool = False,
 ) -> int:
     """How many columns **east of ``base``** slab ``m``'s own glyphs reach.
 
@@ -1023,7 +1059,11 @@ def _slab_east_span(
     if sem in _JUMP_SEMS:
         return max(1, drained)
     # A drained branch keeps its ``X`` fan-out as well; whichever reaches further.
-    return max(9, drained)
+    # :data:`SLAB_TIGHT_RISERS` moves the two *rising* arms onto ``base + 3`` and
+    # ``base + 5``, so the branch's easternmost glyph is the northern riser at
+    # ``+5`` rather than ``neg``'s slot at ``+9``. The span has to follow, or the
+    # staircase keeps reserving columns nobody draws on.
+    return max(_SLAB_RISER_SLOTS[0] if tight_risers else 9, drained)
 
 
 def _slab_bases(
@@ -1038,6 +1078,7 @@ def _slab_bases(
     jump_east: bool = False,
     seek_jump_gap: int = 0,
     tight_arms: bool = False,
+    tight_risers: bool = False,
 ) -> tuple[dict[str, int], int]:
     """``(base per slab, struct_east)`` for the staircase.
 
@@ -1059,7 +1100,8 @@ def _slab_bases(
     for m in order:
         bases[m] = b
         span = _slab_east_span(
-            p, m, drain_unit_bits, drain_ops, jump_east, seek_jump_gap, tight_arms
+            p, m, drain_unit_bits, drain_ops, jump_east, seek_jump_gap, tight_arms,
+            tight_risers,
         )
         east = b + span
         b += span + 2
@@ -1668,6 +1710,7 @@ def build_cpu(
     seek_jump_gap: int = 0,
     seek_jump_east: bool = False,
     tight_arms: bool = False,
+    tight_risers: bool = False,
     sparse_collector: bool = False,
     fetch_fold: bool = False,
 ) -> _Cpu:
@@ -2025,6 +2068,7 @@ def build_cpu(
         jump_east=seek_taken_drop_east,
         seek_jump_gap=seek_jump_gap,
         tight_arms=tight_arms,
+        tight_risers=tight_risers,
     )
 
     # ── lane extents ─────────────────────────────────────────────────────────
@@ -2572,7 +2616,7 @@ def build_cpu(
                     struct_drops |= _slab(
                         g, m, p, s0, base, collector, pipe_glyphs,
                         drain_unit_bits if _drained(m, drain_unit_bits, drain_ops) else 0,
-                        tight_arms=tight_arms,
+                        tight_arms=tight_arms, tight_risers=tight_risers,
                     )
             elif p.sem[m] in _JUMP_SEMS:
                 # never west of ``base`` (that is the shipped column and the floor),
@@ -2618,6 +2662,7 @@ def build_cpu(
                                     seek_taken_drop_east,
                                     seek_jump_gap,
                                     tight_arms,
+                                    tight_risers,
                                 ),
                             )
                         )
@@ -2762,7 +2807,7 @@ def build_cpu(
             with g.part(f"slab:{m}"):
                 struct_drops |= _slab(
                     g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs,
-                    drain_unit_bits, tight_arms=tight_arms,
+                    drain_unit_bits, tight_arms=tight_arms, tight_risers=tight_risers,
                 )
 
         # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place
@@ -3037,6 +3082,7 @@ def _slab(
     pipe_glyphs: list[tuple[int, int, str, str]],
     drain_unit_bits: int = 0,
     tight_arms: bool = False,
+    tight_risers: bool = False,
 ) -> set[int]:
     """Draw one structures-band slab below its entry row. Returns its drop columns.
 
@@ -3123,6 +3169,27 @@ def _slab(
         # carry only ``.`` there — the arms below reach east as far as their own
         # riser, and a ``.`` is shared by an eastbound and a southbound man alike.
         cols[taken] = base + 4
+    if tight_risers:
+        # :data:`SLAB_TIGHT_RISERS`. The 3-apart spacing in the slot table above
+        # exists for **the taken arm**: its ``v``, the two-wide loop it drops into
+        # and its exit column must not land on another arm's drop. With
+        # ``tight_arms`` the taken arm is at ``base + 4`` and that reason is spent,
+        # yet the two *rising* arms still sit on the slots the table gave them —
+        # ``neg`` six cells east of its ``W``, ``zero`` three.
+        #
+        # A riser needs three things and none of them is spacing: a column of its
+        # own, a column that is not the taken arm's, and every cell between its arm
+        # row and the collector to be one it may cross. The cells above are the
+        # other arms' eastward runs, which are ``.``, and the riser's own ``soft``
+        # fills whatever is still blank. So the westernmost pair that satisfies the
+        # first two conditions is ``base + 3`` and ``base + 5``.
+        #
+        # The one invariant kept from the table is **higher arm -> further east**,
+        # so a riser never climbs across a shallower arm's ``^``.
+        risers = sorted((a for a in rows if a != taken), key=lambda a: rows[a])
+        north, south = _SLAB_RISER_SLOTS
+        cols[risers[0]] = base + north  # the northern one
+        cols[risers[1]] = base + south
     drops: set[int] = set()
 
     turn_row = s0 + 4
@@ -3670,6 +3737,70 @@ SLAB_TIGHT_ARMS: set[tuple[str, str]] = {
     ("deadman-3d_hires", "men-v3"),
     ("deadman-3d_hires", "taped"),
 }
+
+#: Per-``(slug, tier)`` opt-in for moving the two **rising** arms of a branch slab
+#: onto ``base + 3`` / ``base + 5``. Requires :data:`SLAB_TIGHT_ARMS`; empty by
+#: default, so every machine that does not name itself here is byte-identical.
+#:
+#: :data:`SLAB_TIGHT_ARMS` narrowed the *taken* arm and left the risers on the slot
+#: table, on the stated grounds that "a riser owns its column down to the
+#: collector". That is a claim about a riser needing *a* column, not about needing
+#: a column three east of the last one, and the grid says the slots are padding:
+#: ``BRZ``'s ``neg`` riser stands six cells east of its ``W`` with nothing between,
+#: ``BRN``'s ``zero`` riser three. See :func:`_slab` for what a riser actually
+#: constrains.
+#:
+#: It is the **span**, not the walk, that this is for. Every column of arm width is
+#: walked out and back, so the walk pays too, but the arms are only ~11 cells; what
+#: moves is :func:`_slab_east_span` 9 -> 6, which walks the whole staircase east of
+#: ``BRZ`` west and takes ``struct_east`` with it.
+#:
+#: **Measured and negative. Kept because the reasoning it replaces was wrong even
+#: though the answer was right, and because the price is now a number.**
+#:
+#: The riser slots are not padding — :func:`_slab_east_span`'s note is what floors
+#: them, not the arms. Sweeping ``_SLAB_RISER_SLOTS`` on hires/men-v3:
+#:
+#: | slots | build | cpu east wall |
+#: |---|---|---|
+#: | +9/+3 (shipped) | 496x674 | 40 |
+#: | +8/+3, +7/+3 | refuses | — |
+#: | **+6/+3** | **496x674** | **37** |
+#: | +5/+3, +6/+5, +6/+4 | refuses | — |
+#:
+#: ``+5`` dies on ``collision at (19, 42): '.' vs '<'`` — the *drain block* below
+#: the arms, which is five columns wide and hard-puts its ``<`` at ``base + 3`` and
+#: ``base + 4``. So how far west a riser may go is a question about the discard
+#: block's width, and the answer is ``base + 6``, three west of the slot table's
+#: ``+9``. Nothing about "a riser owns its column down to the collector" is doing
+#: any work: the two rising arms are genuinely over-spaced, and it still does not
+#: pay.
+#:
+#: Because ``struct_east`` is the CPU's **east wall**, and the §7.1 tie that fixes
+#: the pad moves with it. 21 rounds, ``passed=True``, ``fatal=None``:
+#:
+#: | tier | wall | ``mem_pad`` floor | ticks | Δ |
+#: |---|---|---|---|---|
+#: | men-v3 shipped | 40 | 3 | 82,530,131 | — |
+#: | men-v3 tight | **37** | **10** | 89,493,571 | **+8.437%** |
+#: | taped shipped | 40 | 2 | 141,458,930 | — |
+#: | taped tight | 37 | **refuses at every pad 0..23** | — | — |
+#:
+#: **Three columns off the east wall cost seven columns of pad — about 1.2% each.**
+#: The pad is monotone above its floor and every binding pad here gives the same
+#: 496x674, so 10 is both the floor and the best available: +8.437% *is* the
+#: tightened machine's best result, not an unlucky pad. taped will not bind at all
+#: (``'s' at (19, 169) must bind 'stream_cmd'``), which is the same wall moving,
+#: harder.
+#:
+#: **Revisit when, and only when, the pad stops being a function of this wall** —
+#: if ``mem_x`` is ever pinned by something other than ``lane_x0 + prefixes +
+#: pad``, or if the memory block moves off the CPU's east side entirely. Until
+#: then the arithmetic is settled: the eastern columns of the CPU are not air, they
+#: are bought pad floor, and the same holds for every scheme that pulls
+#: ``struct_east`` west (see :data:`PACKED_SLAB_BAND`'s ``seek_jump_gap``, already
+#: at 0 on both tiers, and :func:`_slab_east_span`'s **+5.76%** note).
+SLAB_TIGHT_RISERS: set[tuple[str, str]] = set()
 
 #: Per-``(slug, tier)`` opt-in for **drop columns floored by operations rather than
 #: by cells** — the simple lanes' half of what :data:`TIGHT_STRUCT_DROPS` does for
@@ -5399,6 +5530,7 @@ def _assemble(
         seek_jump_gap=PACKED_SLAB_BAND.get((program.name, store), 0),
         seek_jump_east=seek and (program.name, store) in SEEK_JUMP_EAST,
         tight_arms=(program.name, store) in SLAB_TIGHT_ARMS,
+        tight_risers=(program.name, store) in SLAB_TIGHT_RISERS,
         sparse_collector=(program.name, store) in SPARSE_COLLECTOR,
         trim_dead=trim_dead,
         top_bus=top_bus,
