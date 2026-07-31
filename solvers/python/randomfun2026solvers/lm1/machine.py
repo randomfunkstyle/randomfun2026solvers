@@ -1395,7 +1395,7 @@ def _trie_shape(
 
 
 def _trie_columns(
-    tree: list[dict], root: int | None, elevel: int | None, tight: bool
+    tree: list[dict], root: int | None, elevel: int | None, tight: bool, fetch_w: int = 4
 ) -> dict[int, int]:
     """Which column each decode node stands in.
 
@@ -1424,6 +1424,11 @@ def _trie_columns(
     One column a level flat is *not* feasible and the reason is worth keeping: it
     leaves ``d - 1`` cells for ``d`` shifts on every edge, including the
     uncontracted ``d = 1`` ones, which get none at all.
+
+    ``fetch_w`` is the **prologue's width** — how many columns the fetch row spends
+    before the trie may start. It is 4 for ``>rbr`` and 2 for the folded ``>r``
+    (:data:`FETCH_FOLD`), and it translates the *whole* tree, because ``place`` is
+    recursive from the root: every column here is the root's plus a fixed offset.
     """
     cols: dict[int, int] = {}
     if root is None:
@@ -1445,7 +1450,10 @@ def _trie_columns(
             )
             place(ci, col + 1 + max(0, (clevel - nd["level"]) - slack))
 
-    place(root, max(5, 4 + elevel) if tight else 3 + 2 * elevel)
+    place(
+        root,
+        max(fetch_w + 1, fetch_w + elevel) if tight else (fetch_w - 1) + 2 * elevel,
+    )
     return cols
 
 
@@ -1457,6 +1465,7 @@ def _uneven_trie(
     inline_far: bool = False,
     tight_cols: bool = False,
     lean: bool | str | frozenset[int] = False,
+    fetch_w: int = 4,
 ) -> tuple[int, dict[tuple[int, int], str]]:
     """Lay a depth-``k`` decode trie pruned to the *used* leaf slots.
 
@@ -1502,7 +1511,7 @@ def _uneven_trie(
     cells: dict[tuple[int, int], str] = {}
     nodes: dict[tuple[int, int], int] = {}  # branch cells, checked below
     entry, elevel, tree, root = _trie_shape(k, slot_rows, straight, inline_far, lean)
-    col_of = _trie_columns(tree, root, elevel, tight_cols)
+    col_of = _trie_columns(tree, root, elevel, tight_cols, fetch_w)
 
     for i, nd in enumerate(tree):
         col, xrow, level = col_of[i], nd["row"], nd["level"]
@@ -1529,11 +1538,12 @@ def _uneven_trie(
             for j, cx in enumerate(range(col + 1, child_col)):
                 cells[(cx, crow)] = "]" if j < shifts - down_shifts else "."
 
-    # The approach from the fetch cell: `>rbr` ends at column 4, the first `x` (or
-    # the lone lane) starts east of it, and a contracted root still owes its shifts.
+    # The approach from the fetch cell: the prologue ends at column ``fetch_w`` (4
+    # for `>rbr`, 2 for the folded `>r`), the first `x` (or the lone lane) starts
+    # east of it, and a contracted root still owes its shifts.
     shifts = 0 if elevel is None else elevel - 1
     end = (col_of[root] - 1) if root is not None else (lane_x0 - 1)
-    for i, cx in enumerate(range(5, end + 1)):
+    for i, cx in enumerate(range(fetch_w + 1, end + 1)):
         cells[(cx, entry)] = "]" if i < shifts else "."
 
     # Every branch cell must still be an `x`. This is not paranoia about the code:
@@ -1658,6 +1668,7 @@ def build_cpu(
     seek_jump_east: bool = False,
     tight_arms: bool = False,
     sparse_collector: bool = False,
+    fetch_fold: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
 
@@ -1682,6 +1693,9 @@ def build_cpu(
     ``high_collector`` opens one blank row directly above the fetch row and runs a
     **second** collector along it, so a lane above the trie root stops there
     instead of falling past it to the collector under the band (:data:`HIGH_COLLECTOR`).
+
+    ``fetch_fold`` moves the opcode ``r`` and the ``b`` off the fetch row and onto
+    the cells the returning man already walks, leaving ``>r`` (:data:`FETCH_FOLD`).
     """
     if (trim_dead or top_bus) and not short_return:
         raise MachineError("trim_dead/top_bus require the short-return drop rule")
@@ -1735,6 +1749,20 @@ def build_cpu(
             # Both want column 1 above the fetch row: the bus to descend into it,
             # the corridor to drop into it. Two headings, one cell.
             raise MachineError("high_collector and top_bus both own column 1 above the fetch")
+    if fetch_fold:
+        if not trim_dead or not tight_trie_cols:
+            # The fold's whole payoff is the two columns it takes off ``lane_x0``,
+            # and ``lane_x0`` is only a function of the root's column under the
+            # pruned trie's per-node rule. Under the uniform ``3 + 2 * level`` rule
+            # the tree is anchored to the level, not to the prologue.
+            raise MachineError("fetch_fold requires trim_dead and tight_trie_cols")
+        if top_bus:
+            # The fold's riser copy owns column 1 *below* the fetch and the corridor
+            # copy owns the corridor row; a top bus re-routes the return past both.
+            raise MachineError("fetch_fold and top_bus disagree about the return path")
+    #: The prologue's width: how many columns the fetch row spends before the trie
+    #: may begin. ``>rbr`` is 4; the fold leaves ``>r`` and is 2.
+    fetch_w = 2 if fetch_fold else 4
     k, lanes = p.k, p.lanes
     used = list(p.number)
     bus_row = 1
@@ -1814,11 +1842,11 @@ def build_cpu(
         else:
             at = [y0 + 2 * i for i in range(n_rows)]
         row_of = {m: at[rank[(p.row[m] - 1) // 2]] for m in used}
-        lane_x0 = 4 + 2 * k  # two columns per trie level (see _uneven_trie)
+        lane_x0 = fetch_w + 2 * k  # two columns per trie level (see _uneven_trie)
     else:
         row_of = {m: p.row[m] + (y0 - 1) for m in used}
         n_rows = lanes
-        lane_x0 = 5 + k
+        lane_x0 = fetch_w + 1 + k
         at = [y0 + 2 * i for i in range(n_rows)]
     by_row = {row_of[m]: m for m in used}
     all_rows = list(at)
@@ -1838,8 +1866,8 @@ def build_cpu(
                 _e, _el, _tree, _root = _trie_shape(
                     k, slot_rows, straight_trie, high_collector, mode
                 )
-                cols = _trie_columns(_tree, _root, _el, True)
-                return max(cols.values(), default=4) + 1, len(_tree)
+                cols = _trie_columns(_tree, _root, _el, True, fetch_w)
+                return max(cols.values(), default=fetch_w) + 1, len(_tree)
 
             lane_x0, n_nodes = _shape(bool(lean_trie))
             if lean_trie == "greedy":
@@ -1863,6 +1891,7 @@ def build_cpu(
             inline_far=high_collector,
             tight_cols=tight_trie_cols,
             lean=lean_mode,
+            fetch_w=fetch_w,
         )
     else:
         centre, trie_cells = (1 << k) + (y0 - 1), None
@@ -2397,9 +2426,20 @@ def build_cpu(
             pipe_glyphs.append((x, yy, glyph, band))
 
     # ── fetch: opcode -> BP, then the operand word -> A (fixed width, §5.2) ──
+    #
+    # ``fetch_fold`` keeps the ``r b r`` order and keeps both reads; it only moves
+    # the first two glyphs *earlier along the same walk*, onto the approach the man
+    # was making anyway. What is left on the fetch row is ``>r`` — the arrival turn
+    # and the operand — so the trie root starts at column 3 instead of column 5.
+    # See :data:`FETCH_FOLD`; the two copies of the prologue are drawn with the
+    # return paths below, because that is where the cells they stand on are.
     with g.part("fetch"):
-        g.text(1, centre, ">rbr")
-    pipe_glyphs += [(2, centre, "r", "rom"), (4, centre, "r", "rom")]
+        g.text(1, centre, ">r" if fetch_fold else ">rbr")
+    pipe_glyphs += (
+        [(2, centre, "r", "rom")]
+        if fetch_fold
+        else [(2, centre, "r", "rom"), (4, centre, "r", "rom")]
+    )
 
     # ── decode trie: one `x` per level, `]` shifting BP on each branch ────────
     def trie(level: int, row: int) -> None:
@@ -2753,6 +2793,20 @@ def build_cpu(
             g.soft(x, collector, "<" if (x in arrivals or not sparse_collector) else ".")
     with g.part("return:riser"):
         g.put(1, collector, "^")
+        if fetch_fold:
+            # The riser's copy of the folded prologue. The man climbs column 1
+            # northbound, so he meets ``centre + 2`` before ``centre + 1``: the
+            # opcode ``r`` goes on the lower cell and the ``b`` on the upper one,
+            # which is the ``r`` then ``b`` order the fetch row used to have. Both
+            # cells were ``.`` he already walked, so the copy is free.
+            if collector - centre < 3:
+                raise MachineError(
+                    f"fetch_fold: the riser is {collector - centre - 1} cell(s) long "
+                    "between the fetch and the collector; it needs two for `r` and `b`"
+                )
+            g.put(1, centre + 2, "r")
+            g.put(1, centre + 1, "b")
+            pipe_glyphs.append((1, centre + 2, "r", "rom"))
         for yy in range(centre + 1, collector):
             g.soft(1, yy, ".")
     # The man spawns *on* the collector row: he starts facing east, the `<` beside
@@ -2789,6 +2843,14 @@ def build_cpu(
             # returning man's next act is the fetch's ``r`` and ``b``, which loads BP
             # from the opcode word before anything reads it. Anything that *turns*
             # is fatal, so the test is a whitelist, not a blacklist.
+            #
+            # Under :data:`FETCH_FOLD` that ``r`` and ``b`` move *onto this row*,
+            # and the argument survives verbatim because the fold keeps them in the
+            # same order relative to the ``]``: westbound the man meets the opcode
+            # ``r`` first, then any trie ``]`` west of it, then the ``b`` at column
+            # 2. The ``]``s shift a BP that ``b`` is about to overwrite, exactly as
+            # they did when ``b`` stood on the fetch row. What the whitelist has to
+            # keep out is unchanged: a glyph that *turns*.
             bad = {
                 (x, ch)
                 for (x, yy), ch in (trie_cells or {}).items()
@@ -2800,6 +2862,36 @@ def build_cpu(
                     f"{hi_row}; a westbound man would be turned out of it"
                 )
             with g.part("return:high"):
+                if fetch_fold:
+                    # The corridor's copy of the folded prologue, drawn *before* the
+                    # ``<`` run so the run's ``soft`` leaves it alone.
+                    #
+                    # ``b`` goes at column 2, which no trie node can ever reach: the
+                    # root is at ``max(3, 2 + elevel)`` and ``place`` only moves
+                    # east, so columns 1 and 2 are the prologue's alone.
+                    #
+                    # The opcode ``r`` goes on the westmost cell of this row that no
+                    # trie leg occupies — a blank cell nobody but this corridor
+                    # walks. Column 3 is the root's own up-leg (the root stands at
+                    # ``(3, centre)`` and ``hi_row`` is ``centre - 1``), so the
+                    # search starts there and normally lands on 4.
+                    if (2, hi_row) in g.c:
+                        raise MachineError(
+                            f"fetch_fold: {g.c[(2, hi_row)]!r} already stands at "
+                            f"(2, {hi_row}), where the corridor's `b` has to go"
+                        )
+                    opcode_x = next(
+                        (x for x in range(3, max(hi_drops) + 1) if (x, hi_row) not in g.c),
+                        None,
+                    )
+                    if opcode_x is None:
+                        raise MachineError(
+                            f"fetch_fold: the trie fills corridor row {hi_row} solid "
+                            "from column 3; the opcode `r` has nowhere to stand"
+                        )
+                    g.put(opcode_x, hi_row, "r")
+                    g.put(2, hi_row, "b")
+                    pipe_glyphs.append((opcode_x, hi_row, "r", "rom"))
                 for x in range(2, max(hi_drops) + 1):
                     g.soft(x, hi_row, "<")
                 g.put(1, hi_row, "v")
@@ -4671,10 +4763,17 @@ class Machine:
             ),
             "stream": "STREAM block: rotate-only rings, an adding relay, a fused MAC (~9.5 ticks)",
             "display": "LM-75: top=ADDR, left=DATA, bottom=SWAP",
-            "cpu:fetch": ">rbr — opcode into BP, then the operand into A (fixed-width 2 words)",
+            "cpu:fetch": "opcode into BP, then the operand into A (fixed-width 2 words)",
             "cpu:trie": f"depth-{self.plan.k} backpack trie; leaves are bit-reversed",
             "cpu:return:collector": "every lane funnels west along here",
-            "cpu:return:riser": "up to the fetch row — paid once per instruction",
+            "cpu:return:riser": (
+                "up to the fetch row — paid once per instruction; under "
+                "FETCH_FOLD it also carries this path's `r`/`b` prologue"
+            ),
+            "cpu:return:high": (
+                "the second collector, one row above the fetch; under FETCH_FOLD it "
+                "also carries this path's `r`/`b` prologue"
+            ),
             "cpu:drops": (
                 "the drop-column band: every lane's descent from its row to the "
                 "collector or to its slab. One band, not a box per column — a drop "
@@ -4837,6 +4936,7 @@ def build(
     high_drops_free: bool = False,
     tuck_drops: bool = False,
     fold_lanes: bool = False,
+    fetch_fold: bool = False,
 ) -> Machine:
     """Assemble the whole machine for ``program``.
 
@@ -5055,6 +5155,7 @@ def build(
                     high_drops_free=high_drops_free,
                     tuck_drops=tuck_drops,
                     fold_lanes=fold_lanes,
+                    fetch_fold=fetch_fold,
                 )
             except MachineError as exc:
                 last = exc
@@ -5137,6 +5238,7 @@ def build(
                     high_drops_free=high_drops_free,
                     tuck_drops=tuck_drops,
                     fold_lanes=fold_lanes,
+                    fetch_fold=fetch_fold,
                 )
             except MachineError:
                 continue
@@ -5241,6 +5343,7 @@ def _assemble(
     high_drops_free: bool = False,
     tuck_drops: bool = False,
     fold_lanes: bool = False,
+    fetch_fold: bool = False,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -5283,6 +5386,7 @@ def _assemble(
         high_drops_free=high_drops_free,
         tuck_drops=tuck_drops,
         fold_lanes=fold_lanes,
+        fetch_fold=fetch_fold,
     )
     W, H = cpu.width, cpu.height
 
@@ -8084,7 +8188,18 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # 0 is sharp in both directions (swept squash 8..16 x drop 5..20). So the pin
     # in ``tests/test_seekrom.py`` asserts the *difference*, which is the invariant,
     # rather than either number, which is not.
-    ("deadman-3d_hires", "taped"): 12,
+    # **16, not 12, because :data:`FETCH_FOLD` moved every glyph this was measured
+    # against two columns west.** The drop is not free to re-pick: at 12 the
+    # folded machine's ``mem_pad`` floors at 3, and the column that buys it back
+    # only exists at 13 and above. The window under the fold is **13..17** —
+    # narrower than the ten rows this registry was written about, because the
+    # fold's corridor copy of the opcode ``r`` sits one row *north* of the fetch
+    # and is the first glyph to lose the ROM as the touch walks south (18 fails
+    # with `'r' at (12, 155) must bind 'rom'`). Swept at 21 rounds, ``mem_pad`` 2
+    # throughout: 13 -> 143,631,709, 14 -> 143,590,497, **16 -> 143,513,651**,
+    # 17 -> 143,634,141. The drop is worth -0.109% on the *unfolded* machine
+    # (145,970,818 -> 145,811,785 at pad 1), so it is not carrying the fold.
+    ("deadman-3d_hires", "taped"): 16,
     # **The men tier's 7 is that same identity, and it is the difference between
     # :data:`STRAIGHT_TRIE` being a 9.7% win and a 4.2% loss.** ``SQUASH_BAND`` 7
     # pulls ``cpu.centre`` seven rows north, so without this the corridor between
@@ -8104,7 +8219,15 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # the smallest feasible footprint, and a shorter corridor makes the narrow
     # pads infeasible. At the identity value the box returns to the shipped
     # 595x630 exactly, which is the tell that nothing outside the band has moved.
-    ("deadman-3d_hires", "men-v3"): 7,
+    # **9, not 7, for the same reason the taped tier moved: :data:`FETCH_FOLD`.**
+    # The identity argument above still holds — 7 is what makes the ROM corridor
+    # the length the shipped machine measured — but the fold re-prices what that
+    # corridor is competing with. At 7 the folded machine's ``mem_pad`` floors at
+    # 4; at 9 it floors at 3, and the column is worth more than the two rows of
+    # corridor. 21 rounds: drop 7/pad 4 = 84,937,580, **drop 9/pad 3 =
+    # 83,979,347**, drop 12/pad 3 = 84,007,933. Both 9 and 12 clear the floor, so
+    # this is a plateau rather than an edge, and 9 is the near end of it.
+    ("deadman-3d_hires", "men-v3"): 9,
 }
 
 LANE_PITCH: dict[tuple[str, str], int] = {
@@ -8332,6 +8455,85 @@ HIGH_COLLECTOR: set[tuple[str, str]] = {
 #:   maps exist and are 2.7% *worse*, because they cost the whole of
 #:   ``SEEK_TIGHT_STRUCT_DROPS``.
 TIGHT_TRIE_COLS: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+    ("deadman-3d_hires", "men-v3"),
+}
+
+#: ``(slug, tier)`` pairs that **fold the fetch prologue onto the return path**.
+#:
+#: The fetch row is ``>rbr``: arrive, read the opcode, park it in BP, read the
+#: operand. Four columns, and :func:`_trie_columns` starts the trie east of them —
+#: so the prologue's width is a term in ``lane_x0``, and ``lane_x0`` is the
+#: anchor of one rigid body (fetch, trie, lanes, drops, corridor and riser all
+#: translate with it). A column off ``lane_x0`` measured **2.436 t/instr** on
+#: ``deadman-3d_hires`` men-v3.
+#:
+#: The ``r b r`` order is a data dependency and cannot be reordered, but nothing
+#: says the three glyphs have to share a row. The man arrives at the fetch along
+#: cells he is walking anyway, so ``r`` and ``b`` can stand **on the approach**
+#: and the fetch row keeps only ``>r`` — the arrival turn and the operand. Root
+#: column 5 -> 3, ``lane_x0`` 12 -> 10.
+#:
+#: The approach is not one path, and that is the whole difficulty. After
+#: :data:`HIGH_COLLECTOR` about 70% of instructions come west along the corridor
+#: and 30% climb the riser, the two converge **only** at the fetch's own ``>``,
+#: and the prologue has to run on every instruction. So it is drawn **twice**:
+#:
+#: * the corridor copy, on ``hi_row`` — ``b`` at column 2 (no trie node can reach
+#:   it: the root is the westmost at column 3 and ``place`` only moves east) and
+#:   the opcode ``r`` on the westmost cell of that row the trie left blank,
+#:   normally column 4;
+#: * the riser copy, in column 1 at ``centre + 2`` and ``centre + 1`` — cells that
+#:   were ``.`` on a path the man already walks.
+#:
+#: **Duplication is free here.** Neither copy adds a walked cell to either path,
+#: and neither man ever crosses the other's copy: the corridor turns south at
+#: ``(1, hi_row)`` and stops at the fetch, the riser climbs column 1 from below
+#: and stops at the fetch. So exactly one opcode ``r`` fires per instruction —
+#: the failure mode that would matter (two fetches, or a stale opcode) is ruled
+#: out by the geometry rather than by a count.
+#:
+#: Three ``r``\ s now want the ROM pipe instead of two, and §7.1 is *nearest*, ties
+#: fail. Both new ones are hard against the west wall the ROM touches, which is
+#: the best possible place for them: the riser copy is **nearer** the touch than
+#: either old fetch ``r``, and the corridor copy ties the old operand ``r``'s
+#: distance rather than beating it.
+#:
+#: ## Measured, 21-round tour, ``res.frame_ticks[-1]``
+#:
+#: | tier | | ``rom_touch_drop`` | ``mem_pad`` | box | ticks | Δ |
+#: |---|---|---|---|---|---|---|
+#: | men-v3 | baseline | 7 | 2 | 496x672 | 86,981,643 | — |
+#: | men-v3 | fold | 7 | 4 | 496x672 | 84,937,580 | -2.350% |
+#: | **men-v3** | **fold** | **9** | **3** | **496x672** | **83,979,347** | **-3.452%** |
+#: | taped | baseline | 12 | 1 | 625x396 | 145,970,818 | — |
+#: | taped | fold | 12 | 3 | 625x396 | 144,189,717 | -1.220% |
+#: | **taped** | **fold** | **16** | **2** | **625x396** | **143,513,651** | **-1.683%** |
+#:
+#: ``lane_x0`` **12 -> 10** on both tiers; neither box moves. men-v3 is 98.805 ->
+#: 95.395 t/instr over 880,332 instructions, i.e. **-3.41 t/instr**, against the
+#: 2.436 a single ``lane_x0`` column was measured at — so the two columns arrive
+#: at about 70% of face value and the rest is the pad, below.
+#:
+#: **Two columns off the trie is not two columns off the machine, and the
+#: difference is ``mem_pad``.** The fold walks the CPU's whole rigid body west,
+#: which drags the memory band toward the pipes that were measured against its old
+#: position, and the pad's floor rises: men-v3 2 -> 4 and taped 1 -> 3 at the
+#: shipped :data:`ROM_TOUCH_DROP`. That tax is about a third of the gross win, and
+#: most of it comes back by re-sweeping the drop, which is what that registry's
+#: "ten rows of freedom" is for — the rows are still there, the fold just moved
+#: which of them work. Both new drops were checked against a **baseline** at the
+#: same drop, so none of the win above is the drop's: taped's baseline at drop 16
+#: is 145,811,785, i.e. the drop is worth -0.109% on its own and the fold is
+#: -1.576% marginal to it.
+#:
+#: The fold also *narrows* the drop's window from above, and for a reason worth
+#: knowing: the corridor's copy of the opcode ``r`` sits at ``(4, hi_row)``, one
+#: row **north** of the fetch, so it is the first ``r`` to lose the ROM as the
+#: touch point walks south. On taped the window is 13..17 and 18 fails with
+#: ``'r' at (12, 155) must bind 'rom'`` — which is this glyph. Re-sweep the drop
+#: and the pad together after anything that moves either.
+FETCH_FOLD: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
     ("deadman-3d_hires", "men-v3"),
 }
@@ -9174,9 +9376,14 @@ SEEK_TWIN_STATION: set[tuple[str, str]] = {
 #: wall`). 11 is the same room in the same place — ``CX + 1``, the westernmost
 #: legal column, which is what the 13 was always naming — and ``mem_pad`` still
 #: floors at 15, so nothing this registry exists to buy has changed.
+#: **and 9, not 11, once :data:`FETCH_FOLD` takes ``lane_x0`` 12 -> 10.** Same
+#: identity a second time: this is a distance west of ``lane_x0``, the room wants
+#: to be at ``CX + 1``, and each column the trie gives back is a column this must
+#: give back too or the room walks off the wall (`in_west 11 puts the input pipe
+#: off the CPU north wall`). The room does not move; only the number does.
 INPUT_NORTH_WEST: dict[tuple[str, str], int] = {
     ("deadman-3d", "taped"): 13,
-    ("deadman-3d_hires", "taped"): 11,
+    ("deadman-3d_hires", "taped"): 9,
 }
 
 #: Per-``(slug, tier)`` ``mem_pad``, overriding :data:`MEM_PAD` /
@@ -9249,7 +9456,17 @@ MEM_PAD_FOR: dict[tuple[str, str], int] = {
     # The pad is a *consequence* of where the CPU's east wall lands against
     # `mem_resp`, so it moves whenever anything moves that wall. Re-sweep it after
     # any band, drop or trie-width change rather than trusting this literal.
-    ("deadman-3d_hires", "taped"): 1,
+    #
+    # **And it moved: 1 -> 2 under :data:`FETCH_FOLD`**, which is the trie-width
+    # change that note was written against. The fold walks the CPU's rigid body
+    # two columns west while the pipes it is measured against stay put, so 0 and 1
+    # now lose the memory response — 0 to the `in` room (`('in', 21),
+    # ('mem_resp', 23)`) and 1 to a **tie** with it at 22, which
+    # :func:`check_bindings` fails as hard as a loss. Neither is recoverable by
+    # moving the `in` room: :data:`INPUT_NORTH_WEST` already has it at ``CX + 1``,
+    # the westernmost legal column, so there is nowhere further to put it. 2 is
+    # the floor, and it needed :data:`ROM_TOUCH_DROP` 16 to reach — see there.
+    ("deadman-3d_hires", "taped"): 2,
 }
 #: ``(slug, tier)`` pairs whose **request** leg crosses a room instead of a pipe
 #: — the mirror image of :data:`STORE_ANSWER_WEST`, on the leg that was left.
@@ -10322,6 +10539,7 @@ def build_for(
     straight_trie: bool | None = None,
     high_collector: bool | None = None,
     tight_trie_cols: bool | None = None,
+    fetch_fold: bool | None = None,
     lean_trie: bool | str | None = None,
     high_drops_free: bool | None = None,
     tuck_drops: bool | None = None,
@@ -10450,6 +10668,7 @@ def build_for(
         tight_trie_cols=(
             (slug, store) in TIGHT_TRIE_COLS if tight_trie_cols is None else tight_trie_cols
         ),
+        fetch_fold=((slug, store) in FETCH_FOLD if fetch_fold is None else fetch_fold),
         lean_trie=(
             LEAN_TRIE.get((slug, store), False) if lean_trie is None else lean_trie
         ),

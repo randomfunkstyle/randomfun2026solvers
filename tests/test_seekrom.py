@@ -130,7 +130,11 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     assert "deadman-3d_hires" in machine.SEEK_DRUM
     assert machine.SEEK_TIER_LAYOUT[key] == {"rom_rows": 119}
     assert machine.SEEK_SLAB_PITCH["deadman-3d_hires"] == 11
-    assert machine.MEM_PAD_FOR[key] == 1  # re-swept floor; see MEM_PAD_FOR
+    # 2, re-swept under :data:`machine.FETCH_FOLD`, which walks the CPU's whole
+    # rigid body two columns west while the pipes it is measured against stay put.
+    # 0 loses the memory response to the ``in`` room outright and 1 **ties** it at
+    # 22, which ``check_bindings`` fails as hard as a loss. See MEM_PAD_FOR.
+    assert machine.MEM_PAD_FOR[key] == 2
     # 11, not the 13 this used to pin, and the number was never the claim. This is
     # a distance *west of* ``lane_x0``, and both values name the same column —
     # ``CX + 1``, the westernmost the room may legally take, which is the placement
@@ -144,8 +148,16 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     # the tighter trie saved. ``lane_x0`` itself cannot be computed here because the
     # hires program is assembled from a locally owned IWAD (see ``_WAD_ONLY`` in
     # ``tests/test_lm1_opcode_slots.py``).
+    #
+    # **Four now, not two, because :data:`machine.FETCH_FOLD` took another two.**
+    # The fold moves the opcode ``r`` and the ``b`` off the fetch row onto the
+    # cells the returning man already walks, so the prologue is ``>r`` and the trie
+    # root starts at column 3 instead of 5: ``lane_x0`` 12 -> 10. Same identity,
+    # applied a second time — the room has not moved, it is still at ``CX + 1``,
+    # and the number is still just the distance from a wall that keeps sliding
+    # toward it.
     assert machine.INPUT_NORTH_WEST[("deadman-3d", "taped")] == 13
-    assert machine.INPUT_NORTH_WEST[key] == 13 - 2
+    assert machine.INPUT_NORTH_WEST[key] == 13 - 4
     assert key in machine.SEEK_TAKEN_DROP_EAST
     # All five now. `SEEK_TELEPORT` used to be given up to `SQUASH_BAND` — the two
     # coexist for k <= 8 (room H is bottom-anchored, its height is `12 - k`), and a
@@ -177,10 +189,29 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     # at all ('r' at (43, 176) must bind 'rom' but 'mem_resp' is nearer).
     #
     # Once the drop is free to move, the pair collapses to this one number, and it
-    # is a cliff rather than a slope: swept squash 8..16 x drop 5..20 on the
-    # 21-round tour, every pair with effective corridor <= -1 lands on the same
-    # curve, -1 is its minimum, and 0 is +2.8% instantly. Pin the -1.
-    assert machine.ROM_TOUCH_DROP[key] - machine.SQUASH_BAND[key] == -1
+    # used to be a cliff rather than a slope: swept squash 8..16 x drop 5..20 on
+    # the 21-round tour, every pair with effective corridor <= -1 landed on the
+    # same curve, -1 was its minimum, and 0 was +2.8% instantly.
+    #
+    # **The cliff is gone, and it went before :data:`machine.FETCH_FOLD` touched
+    # it.** Re-measured on the *unfolded* machine at ``mem_pad`` 1, effective 0 is
+    # not +2.8% and not a cliff at all: drop 16 runs 145,811,785 against drop 12's
+    # 145,970,818, i.e. **-0.109%** the wrong way for the pin. Something between
+    # that sweep and now moved what the ROM corridor competes with, so the -1 was
+    # pinning a coincidence.
+    #
+    # What the fold then adds is a *reason* to leave it: at effective -1 the folded
+    # machine's ``mem_pad`` floors at 3, and the column that buys it back only
+    # exists at effective 0 and above. Swept at 21 rounds with the fold on, each
+    # drop at its own pad floor: 12 -> 144,189,717 (pad 3), 13 -> 143,631,709,
+    # 14 -> 143,590,497, **16 -> 143,513,651**, 17 -> 143,634,141 (all pad 2), and
+    # 18 refuses to bind — the fold's corridor copy of the opcode ``r`` sits one
+    # row north of the fetch and is the first glyph to lose the ROM as the touch
+    # walks south.
+    #
+    # So pin the **window**, which is what the sweep actually establishes, rather
+    # than a point inside a 0.08% plateau.
+    assert 0 <= machine.ROM_TOUCH_DROP[key] - machine.SQUASH_BAND[key] <= 4
 
     # Nothing was written on the bare slug where a `(slug, tier)` key was meant,
     # which is the mistake that would silently move the canonical hires build.

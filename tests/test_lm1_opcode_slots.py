@@ -178,9 +178,14 @@ def _trie_of(slug: str, slots: dict[str, int], *, pitch: int = 2, straight: bool
     return p, slot_rows, lane_x0, entry, cells
 
 
-def _walk_trie(cells, bp: int, entry_row: int, lane_x0: int) -> int:
-    """Replay a decode from the fetch cell; returns the row it enters a lane on."""
-    x, y, d = 5, entry_row, "E"
+def _walk_trie(cells, bp: int, entry_row: int, lane_x0: int, fetch_w: int = 4) -> int:
+    """Replay a decode from the fetch cell; returns the row it enters a lane on.
+
+    ``fetch_w`` is the prologue's width, so the walk starts on the first cell the
+    trie may own: 5 behind ``>rbr``, 3 behind the folded ``>r``
+    (:data:`machine.FETCH_FOLD`).
+    """
+    x, y, d = fetch_w + 1, entry_row, "E"
     for _ in range(400):
         g = cells.get((x, y), " ")
         if g == "x":

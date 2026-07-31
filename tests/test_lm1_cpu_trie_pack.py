@@ -326,6 +326,18 @@ def test_the_corridor_row_carries_nothing_that_turns(tight) -> None:
     a westbound man keeps his heading — and so is a ``]``, which does not turn and
     whose BP the fetch's ``b`` overwrites before anything reads it. An ``x``, a
     ``d`` or a ``>`` would steer the returning man out of the corridor, silently.
+
+    The whitelist is about the **trie's** cells, which is why it is still exactly
+    two glyphs wide after :data:`machine.FETCH_FOLD` put an ``r`` and a ``b`` on
+    this row. Those two are drawn by ``return:high``, not by the trie, and they
+    are placed on cells the trie left empty (the ``b`` at column 2, which no node
+    can reach because the root is the westmost at column 3 and ``_trie_columns``
+    only moves east). Widening *this* list to admit them would be the wrong fix
+    twice over: it would stop the assertion catching a trie node that wandered
+    into the corridor, and it would say nothing about the glyphs it was widened
+    for. What the fold actually needs proving is that the two approaches still run
+    ``r``, ``b``, ``r`` in order and once each — see
+    ``test_both_approaches_to_the_fetch_run_the_prologue_exactly_once``.
     """
     slug, _tier = STRAIGHT_KEY
     p, slot_rows, corridor = _corridor_rows(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
@@ -383,3 +395,198 @@ def test_the_two_new_registries_name_only_the_slug_that_measured_them() -> None:
     """
     for reg in (machine.HIGH_COLLECTOR, machine.TIGHT_TRIE_COLS):
         assert {slug for slug, _tier in reg} == {"deadman-3d_hires"}
+
+
+# ── FETCH_FOLD: the prologue on the approach, not on the fetch row ────────────
+#
+# The fold is two claims and they fail in different ways, so they are two cases.
+#
+# 1. The trie **translates** by the two columns the prologue hands back and is
+#    otherwise the same tree. That is a statement about :func:`_trie_columns`,
+#    and it is the whole of the payoff: ``lane_x0`` anchors the fetch, the trie,
+#    every lane, every drop, the corridor and the riser at once.
+# 2. Both approaches to the fetch still perform ``r``, ``b``, ``r`` — in that
+#    order, once each. That is a statement about the emitted grid, and it is the
+#    whole of the risk: a man who crosses both copies fetches twice and a man who
+#    crosses neither decodes a stale opcode, and both diverge silently, deep in
+#    the tour, with no binding error and no collision.
+
+#: The lever stack the fold needs. It is registered on ``deadman-3d_hires``,
+#: whose program is IWAD-derived and so unreachable from a test; ``deadman-3d``'s
+#: checked-in seek program takes the same stack and draws the same shapes, and
+#: passing the levers here changes no shipped grid.
+FOLD_LEVERS = dict(
+    trim_dead=True,
+    lane_pitch=1,
+    straight_trie=True,
+    high_collector=True,
+    tight_trie_cols=True,
+)
+
+_DIRS = {"E": (1, 0), "W": (-1, 0), "N": (0, -1), "S": (0, 1)}
+
+
+def _lane_x0_at(k, slot_rows, fetch_w):
+    """``build_cpu``'s rule, at a given prologue width."""
+    _e, elevel, tree, root = machine._trie_shape(k, slot_rows, True, True)
+    cols = machine._trie_columns(tree, root, elevel, True, fetch_w)
+    return max(cols.values(), default=fetch_w) + 1
+
+
+def _fold_cpu(fold: bool):
+    """``deadman-3d``'s seek CPU under the fold's lever stack. Pure, milliseconds."""
+    from randomfun2026solvers.lm1 import programs
+
+    program = machine.seek_split(
+        programs.load("deadman-3d"), threshold=machine.SEEK_THRESHOLD, ops=machine.SEEK_OPS
+    )
+    order = list(machine.LANE_ORDER["deadman-3d"])
+    used = {op.mnemonic for op in program.ops_used}
+    at = min((order.index(c) for c in ("JMPF", "BRZ", "BRN") if c in order), default=len(order))
+    for new in ("JMPS", "BRZS", "BRNS"):
+        if new in used and new not in order:
+            order.insert(at, new)
+            at += 1
+    p = machine.plan(program, middle_order=order)
+    return machine.build_cpu(
+        program,
+        p,
+        mem_pad=22,
+        seek=True,
+        drain_unit_bits=machine.DRAIN_UNIT_BITS.get("deadman-3d", 0),
+        fetch_fold=fold,
+        **FOLD_LEVERS,
+    )
+
+
+def _approach(cells, x, y, d, limit=2000):
+    """Walk to the decode's first branch; return the operations the man performed.
+
+    Only the glyphs that *do* something are recorded — ``r``, ``b`` and ``]`` —
+    with a final ``"x"`` for the branch that ends the approach. Turns steer and
+    ``.`` does nothing, so neither belongs in the answer; anything else is a man
+    walking somewhere the fold did not intend and is an outright failure.
+    """
+    ops: list[str] = []
+    for _ in range(limit):
+        g = cells.get((x, y), " ")
+        if g in ("x", "d"):
+            return [*ops, "x"]
+        if g in "rb]":
+            ops.append(g)
+        elif g == ">":
+            d = "E"
+        elif g == "<":
+            d = "W"
+        elif g == "^":
+            d = "N"
+        elif g in "vV":
+            d = "S"
+        elif g not in ". ":
+            raise AssertionError(f"the approach ran onto {g!r} at {(x, y)}")
+        dx, dy = _DIRS[d]
+        x, y = x + dx, y + dy
+    raise AssertionError("the approach never reached the decode")
+
+
+def test_the_fold_translates_the_trie_west_and_reshapes_nothing() -> None:
+    """Two columns, and the *same* tree — which is why the saving is real.
+
+    The prologue's width is an additive term in the root's column and
+    ``_trie_columns`` places every other node relative to the root, so dropping
+    ``>rbr`` to ``>r`` moves the whole decode two columns west without changing
+    one edge, one shift or one row. Assert exactly that: the cell maps agree
+    under a two-column shift, and ``lane_x0`` — the number the fold is actually
+    buying — comes down by the same two.
+    """
+    slug, _tier = STRAIGHT_KEY
+    p, slot_rows, _c = _corridor_rows(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
+    wide, tight = _lane_x0_at(p.k, slot_rows, 4), _lane_x0_at(p.k, slot_rows, 2)
+    assert wide - tight == 2, (wide, tight)
+    kw = dict(inline_far=True, tight_cols=True)
+    entry4, cells4 = machine._uneven_trie(p.k, slot_rows, wide, True, fetch_w=4, **kw)
+    entry2, cells2 = machine._uneven_trie(p.k, slot_rows, tight, True, fetch_w=2, **kw)
+    assert entry4 == entry2, "the fetch row is set by the band, not by the prologue"
+    assert {(x - 2, y): g for (x, y), g in cells4.items()} == cells2
+
+
+def test_the_fold_still_decodes_every_opcode_to_its_own_lane() -> None:
+    """The mis-decode is silent, so the decoder is walked rather than trusted."""
+    slug, _tier = STRAIGHT_KEY
+    p, slot_rows, _c = _corridor_rows(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
+    lane_x0 = _lane_x0_at(p.k, slot_rows, 2)
+    entry, cells = machine._uneven_trie(
+        p.k, slot_rows, lane_x0, True, inline_far=True, tight_cols=True, fetch_w=2
+    )
+    for m, number in p.number.items():
+        landed = _walk_trie(cells, number, entry, lane_x0, fetch_w=2)
+        assert landed == slot_rows[(p.row[m] - 1) // 2], m
+
+
+def test_both_approaches_to_the_fetch_run_the_prologue_exactly_once() -> None:
+    """The risk the fold is built on, checked on the cells the generator emits.
+
+    ``HIGH_COLLECTOR`` splits the return in two — west along the corridor, or up
+    the riser — and they share **no** cell before the fetch's own ``>``. So the
+    prologue is drawn twice, and the thing that has to be true is that each man
+    meets exactly one copy: one opcode ``r``, one ``b``, then the operand ``r``,
+    then the branch. Two copies on one path would fetch twice; none would decode
+    the previous instruction's opcode.
+
+    The ``]``s are filtered out of the comparison and checked separately, because
+    they are the one glyph that is allowed to differ between the two approaches:
+    the corridor crosses the trie's own legs and the riser does not. They are
+    harmless exactly while they fall **before** the ``b``, which overwrites the BP
+    they shifted — the same argument ``build_cpu``'s corridor whitelist makes, and
+    the reason it does not have to know they are there.
+    """
+    cpu = _fold_cpu(True)
+    cells, centre = cpu.cells, cpu.centre
+    hi_row = centre - 1
+    assert [cells.get((x, centre)) for x in (1, 2)] == [">", "r"]
+    assert cells.get((3, centre)) in ("x", "d"), "the root did not take the freed column"
+
+    collector = max(y for (x, y), g in cells.items() if x == 1 and g == "^")
+    east = max(x for (x, y), g in cells.items() if y == hi_row and g == "<")
+    riser = _approach(cells, 1, collector, "N")
+    corridor = _approach(cells, east, hi_row, "W")
+
+    for name, ops in (("riser", riser), ("corridor", corridor)):
+        assert [o for o in ops if o != "]"] == ["r", "b", "r", "x"], (name, ops)
+        after = ops[ops.index("b") :]
+        assert "]" not in after, (name, ops)
+    assert "]" in corridor, "vacuous: the corridor crosses no trie leg at all"
+
+
+def test_the_fold_is_inert_when_it_is_off() -> None:
+    """The lever has to leave the ``>rbr`` machine alone glyph for glyph."""
+    plain = _fold_cpu(False)
+    assert [plain.cells.get((x, plain.centre)) for x in range(1, 6)] == [
+        ">", "r", "b", "r", "x",
+    ]
+    assert (2, plain.centre, "r", "rom") in plain.pipe_glyphs
+    assert (4, plain.centre, "r", "rom") in plain.pipe_glyphs
+
+
+def test_the_fold_refuses_the_geometries_it_cannot_translate() -> None:
+    """It buys ``lane_x0``, and only the per-node trie prices ``lane_x0`` off the
+    prologue. Under the uniform ``3 + 2 * level`` rule the tree is anchored to the
+    level instead, so the fold would move the fetch and pay for nothing."""
+    levers = dict(FOLD_LEVERS, tight_trie_cols=False)
+    with pytest.raises(machine.MachineError, match="tight_trie_cols"):
+        _fold_cpu_with(levers)
+
+
+def _fold_cpu_with(levers):
+    from randomfun2026solvers.lm1 import programs
+
+    program = machine.seek_split(
+        programs.load("deadman-3d"), threshold=machine.SEEK_THRESHOLD, ops=machine.SEEK_OPS
+    )
+    return machine.build_cpu(program, machine.plan(program), fetch_fold=True, **levers)
+
+
+def test_the_fold_names_only_the_slug_that_measured_it() -> None:
+    """Same rule as the two registries above: the key is the whole guarantee that
+    every other machine's grid is byte-identical."""
+    assert {slug for slug, _tier in machine.FETCH_FOLD} <= {"deadman-3d_hires"}
