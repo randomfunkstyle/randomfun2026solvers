@@ -121,6 +121,8 @@ __all__ = [
     "MEMORY_SEMS",
     "ROM_ROWS",
     "STORE_SHAPE",
+    "LEAN_TRIE",
+    "HIGH_DROPS_FREE",
     "STORE_TIER",
     "STREAM_SEM_BAND",
     "STREAM_SIZE",
@@ -1232,8 +1234,80 @@ def _uneven_gaps(k: int, slots: Sequence[int], straight: bool = False) -> set[in
     return gaps
 
 
+def _lean_row(nd: dict, gap: int, side: int, greedy: bool = False) -> int:
+    """Where a decode node should actually stand, given its two children's rows.
+
+    :func:`_trie_shape` puts every node on ``gap`` — the row above its down half's
+    first lane. That is *a* legal row, not the cheap one. The only hard rule is
+    ``x``'s: a node's row must lie strictly **between** its two children's rows.
+    Everywhere inside that open interval the node is free, and the interval is
+    wide wherever the two halves are unbalanced.
+
+    Which end of it is cheapest is settled by arithmetic rather than by a
+    frequency table, and that is what makes this safe to switch on blind. Write
+    ``p`` for the parent's row, ``u``/``d`` for the two children's, and ``W_u`` /
+    ``W_d`` for how many instructions descend into each half. Every instruction
+    that reaches this node came through the parent and leaves through one child,
+    so its share of the walk is
+
+        W(p, x) = (W_u + W_d)|p - x| + W_u|x - u| + W_d|x - d|
+
+    and the node's own traffic ``W_u + W_d`` is, by construction, **half the total
+    weight** — a weighted median of three points one of which holds half the mass
+    sits on that point. So the optimum is ``x = p``, and ``p`` lies outside
+    ``(u, d)`` (a node is the boundary of its parent's split, so the parent starts
+    above a down child's whole subtree and below an up child's), which makes the
+    best legal row simply **the end of the interval nearest the parent**.
+    Differentiating confirms it: for ``p > d`` the slope in ``x`` is ``-2 W_d``,
+    for ``p < u`` it is ``+2 W_u`` — monotone either way, no frequencies needed.
+
+    Note the direction, not the distance, is all this uses, which is what lets the
+    recursion place children before parents and still be right. It also means the
+    rule is not quite exact once leaning has moved the parents too: a parent that
+    has itself leaned can end up *inside* a grandchild's interval, and there the
+    grandchild's own optimum would have been that parent's row rather than the end
+    of the interval. The tree stays legal either way — a parent is placed after its
+    children and clamped strictly between them — so this costs a row somewhere, not
+    a routing.
+
+    Two guards keep this from paying for itself elsewhere:
+
+    * ``need`` leaves each child ``shifts`` cells of *vertical* slack, so
+      :func:`_trie_columns` can still hang that edge's ``]``s on the leg and give
+      the child ``parent + 1``. Without it the leaned edge goes to zero slack, the
+      child's column moves to ``parent + 2`` and ``lane_x0`` — which every lane,
+      every drop and the whole walk back west are measured from — grows by one,
+      which costs more than the lean saves. With it a leaned tree's columns are
+      **never wider** than the boundary tree's: the slack it leaves is exactly the
+      slack the tight rule asks for, and the other leg only ever gets longer.
+    * the row never moves *away* from ``gap``, so a node with no room to lean
+      keeps the shipped placement and the tree degrades to the old one node by
+      node rather than all at once.
+
+    ``greedy`` drops the first guard and leans the whole way — ``drow - 1`` or
+    ``urow + 1`` — which is worth another row on the nodes that have one to give.
+    It *may* widen a column, and whether it actually does is not a property of the
+    node: it depends on whether that node happens to sit on the branch that is
+    already the deepest, because ``lane_x0`` is a **maximum** over the whole tree.
+    So the caller decides it per node and by measurement rather than by rule — see
+    :func:`build_cpu`, which shapes the tree once per candidate and keeps only the
+    leans the band's origin does not notice.
+    """
+    (_su, urow, uclevel, uci), (_sd, drow, dclevel, dci) = nd["kids"]
+    level = nd["level"]
+    # ``shifts + 1`` rows of separation is ``shifts`` cells of leg slack.
+    need_u = 1 if greedy else ((uclevel - level + 1) if uci is not None else 1)
+    need_d = 1 if greedy else ((dclevel - level + 1) if dci is not None else 1)
+    row = max(gap, drow - need_d) if side < 0 else min(gap, urow + need_u)
+    return max(urow + 1, min(drow - 1, row))
+
+
 def _trie_shape(
-    k: int, slot_rows: dict[int, int], straight: bool = False, inline_far: bool = False
+    k: int,
+    slot_rows: dict[int, int],
+    straight: bool = False,
+    inline_far: bool = False,
+    lean: bool | str | frozenset[int] = False,
 ) -> tuple[int, int | None, list[dict], int | None]:
     """The pruned, contracted decode tree — rows and levels, no columns yet.
 
@@ -1243,11 +1317,14 @@ def _trie_shape(
     root index)``; ``entry level`` and ``root`` are ``None`` for a one-lane trie.
     Each node is ``{level, row, inline, kids}`` and each kid is
     ``(sign, child row, child level or None, child index or None)``.
+
+    ``lean`` (:data:`LEAN_TRIE`) moves each node **toward its own parent**, which
+    is free and is worth real ticks. See :func:`_lean_row` for the arithmetic.
     """
     used = sorted(slot_rows)
     tree: list[dict] = []
 
-    def node(level: int, lo: int, hi: int) -> tuple[int, int | None, int | None]:
+    def node(level: int, lo: int, hi: int, side: int = 0) -> tuple[int, int | None, int | None]:
         sl = [s for s in used if lo <= s < hi]
         mid = lo
         up: list[int] = []
@@ -1283,14 +1360,21 @@ def _trie_shape(
             and (inline_far or slot_rows[up[0]] == gap)
         )
         me = len(tree)
-        tree.append(
-            {"level": level, "row": slot_rows[up[0]] if inline else gap,
-             "inline": inline, "kids": []}
-        )
+        nd = {"level": level, "row": slot_rows[up[0]] if inline else gap,
+              "inline": inline, "kids": []}
+        tree.append(nd)
         for half, sign in (((lo, mid), -1), ((mid, hi), +1)):
-            crow, clevel, ci = node(level + 1, *half)
-            tree[me]["kids"].append((sign, crow, clevel, ci))
-        return tree[me]["row"], level, me
+            crow, clevel, ci = node(level + 1, *half, side=sign)
+            nd["kids"].append((sign, crow, clevel, ci))
+        # The children's rows are only known now, which is why this is not folded
+        # into the ``gap`` above: a node leans against its *children*, and the
+        # recursion has to have placed them first.
+        if lean is not False and side and not inline:
+            nd["row"] = _lean_row(
+                nd, gap, side,
+                lean == "greedy" or (isinstance(lean, frozenset) and me in lean),
+            )
+        return nd["row"], level, me
 
     entry, elevel, root = node(1, 0, 1 << k)
     return entry, elevel, tree, root
@@ -1358,6 +1442,7 @@ def _uneven_trie(
     straight: bool = False,
     inline_far: bool = False,
     tight_cols: bool = False,
+    lean: bool | str | frozenset[int] = False,
 ) -> tuple[int, dict[tuple[int, int], str]]:
     """Lay a depth-``k`` decode trie pruned to the *used* leaf slots.
 
@@ -1402,7 +1487,7 @@ def _uneven_trie(
     """
     cells: dict[tuple[int, int], str] = {}
     nodes: dict[tuple[int, int], int] = {}  # branch cells, checked below
-    entry, elevel, tree, root = _trie_shape(k, slot_rows, straight, inline_far)
+    entry, elevel, tree, root = _trie_shape(k, slot_rows, straight, inline_far, lean)
     col_of = _trie_columns(tree, root, elevel, tight_cols)
 
     for i, nd in enumerate(tree):
@@ -1455,6 +1540,11 @@ def _uneven_trie(
             "two adjacent lanes. The band cannot be compacted past that."
         )
     return entry, cells
+
+
+#: The empty reserved-column set, so the corridor case of the drop search reads
+#: as one substitution rather than as a branch (:data:`HIGH_DROPS_FREE`).
+_NO_COLS: frozenset[int] = frozenset()
 
 
 def _tight_struct_entry(
@@ -1547,6 +1637,8 @@ def build_cpu(
     straight_trie: bool = False,
     high_collector: bool = False,
     tight_trie_cols: bool = False,
+    lean_trie: bool | str = False,
+    high_drops_free: bool = False,
     packed_band: bool = False,
     seek_jump_gap: int = 0,
     sparse_collector: bool = False,
@@ -1716,13 +1808,37 @@ def build_cpu(
     all_rows = list(at)
     if trim_dead:
         slot_rows = {(p.row[m] - 1) // 2: row_of[m] for m in used}
+        lean_mode: bool | str | frozenset[int] = bool(lean_trie)
         if tight_trie_cols:
             # ``lane_x0`` is the deepest node's column plus one, and with per-node
             # columns that is no longer ``4 + 2k`` — so the trie has to be *shaped*
             # before the band's origin is known. Nothing above reads ``lane_x0``.
-            _e, _el, _tree, _root = _trie_shape(k, slot_rows, straight_trie, high_collector)
-            _cols = _trie_columns(_tree, _root, _el, True)
-            lane_x0 = max(_cols.values(), default=4) + 1
+            #
+            # It is also the only place that can price :data:`LEAN_TRIE`'s greedy
+            # form, which buys a row per node and sometimes spends a column doing
+            # it. ``lane_x0`` is the one number that decides whether that column is
+            # one anybody pays for, and this pre-pass is what computes it.
+            def _shape(mode: bool | str | frozenset[int]) -> tuple[int, int]:
+                _e, _el, _tree, _root = _trie_shape(
+                    k, slot_rows, straight_trie, high_collector, mode
+                )
+                cols = _trie_columns(_tree, _root, _el, True)
+                return max(cols.values(), default=4) + 1, len(_tree)
+
+            lane_x0, n_nodes = _shape(bool(lean_trie))
+            if lean_trie == "greedy":
+                # So ask node by node, and keep only the leans the band's origin
+                # does not notice. Accepting one lean never makes another worse —
+                # ``_lean_row`` reads only which *side* the parent is on, never
+                # where it ended up — so a single forward pass is a fixpoint, and
+                # it is twenty-odd shapes of a pure function, once per build.
+                picked: frozenset[int] = frozenset()
+                for i in range(n_nodes):
+                    trial = picked | {i}
+                    if _shape(trial)[0] <= lane_x0:
+                        picked = trial
+                if picked:
+                    lean_mode = picked
         centre, trie_cells = _uneven_trie(
             k,
             slot_rows,
@@ -1730,6 +1846,7 @@ def build_cpu(
             straight_trie,
             inline_far=high_collector,
             tight_cols=tight_trie_cols,
+            lean=lean_mode,
         )
     else:
         centre, trie_cells = (1 << k) + (y0 - 1), None
@@ -1923,6 +2040,16 @@ def build_cpu(
 
     lane_rows = set(all_rows)
 
+    #: Is every slab lane **below** the high corridor? :data:`HIGH_DROPS_FREE`
+    #: needs it: it lets a corridor-bound drop share a slab's entry column, and
+    #: the argument for that is that the two occupy *disjoint rows* of the column
+    #: (the simple drop stops at ``hi_row``, the slab's starts below it). A slab
+    #: lane above the corridor would break exactly that, so the knob turns itself
+    #: off rather than mis-wire.
+    hi_free = high_drops_free and hi_row is not None and all(
+        row_of[m] > hi_row for m in structured
+    )
+
     def _stop(r: int, m: str | None) -> int:
         """The row a lane's drop ends on: its slab, the high corridor, or the collector."""
         if m is not None and m in slab_rows:
@@ -2009,12 +2136,20 @@ def build_cpu(
         #: operation. ``floor`` is its coarse envelope — ``max(blocked) + 1`` — and
         #: the gap between them is what :data:`TUCKED_DROPS` recovers.
         blocked: set[int] = set()
+        #: ``blocked``, restarted at the high corridor. A drop that stops on
+        #: ``hi_row`` crosses only the rows between its lane and the corridor, so
+        #: the whole band *below* the corridor — which includes the longest lanes
+        #: and every slab — is not in its way and has no business setting its
+        #: column. See :data:`HIGH_DROPS_FREE`.
+        hi_blocked: set[int] = set()
         for r in sorted(all_rows, reverse=True):
             # Halting rows carry no drop but do carry glyphs, so they still raise the
             # floor for everything above them — as do top-bus lanes, whose return
             # leaves by the ascent column assigned after the drops.
             floor = max(floor, lane_end[r] + 1)
             blocked |= lane_ops[r]
+            if hi_free and r < hi_row:
+                hi_blocked |= lane_ops[r]
             if r in halting or r in top_lanes:
                 continue
             m = by_row.get(r)
@@ -2083,16 +2218,23 @@ def build_cpu(
                 tail = lane_tail.get(r, ())
                 plain_end = lane_end[r] + len(tail)
                 c_plain = plain_end + 1 if tuck_drops else max(floor, plain_end + 1)
+                # A lane the corridor catches is asked a strictly weaker question:
+                # no slab column is reserved against it and only the rows it
+                # actually crosses block it (:data:`HIGH_DROPS_FREE`).
+                catch = hi_free and r < hi_row
+                cols_, blk_ = (
+                    (_NO_COLS, hi_blocked) if catch else (struct_cols, blocked)
+                )
                 c = _bump(
-                    (lane_end[r] + 1) if tuck_drops else floor, struct_cols, blocked, assigned
+                    (lane_end[r] + 1) if tuck_drops else floor, cols_, blk_, assigned
                 )
                 while c < c_plain:
                     down = max(0, len(tail) - max(0, c - lane_end[r] - 1))
                     if _room(c, down, r):
                         break
-                    c = _bump(c + 1, struct_cols, blocked, assigned)
+                    c = _bump(c + 1, cols_, blk_, assigned)
                 if c >= c_plain:
-                    c = _bump(c_plain, struct_cols, blocked, assigned)
+                    c = _bump(c_plain, cols_, blk_, assigned)
                 if tail:
                     # The row holds whatever fits west of the turn; the rest goes
                     # down. Either the search above proved this exact column has the
@@ -2112,12 +2254,16 @@ def build_cpu(
                         lane_ops.setdefault(r + 1 + i, set()).add(c)
                     lane_end[r] += across
                     blocked |= lane_ops[r]
+                    if catch:
+                        hi_blocked |= lane_ops[r]
                     # The lane's own cells now run to ``lane_end``, and a vertical
                     # tail additionally owns ``c`` on every row it occupies.
                     floor = max(floor, lane_end[r] + 1)
                     if down:
                         floor = max(floor, c + 1)
                         blocked.add(c)
+                        if catch:
+                            hi_blocked.add(c)
             drop_x[r] = c
             assigned.add(c)
     else:
@@ -4387,6 +4533,8 @@ def build(
     straight_trie: bool = False,
     high_collector: bool = False,
     tight_trie_cols: bool = False,
+    lean_trie: bool | str = False,
+    high_drops_free: bool = False,
     tuck_drops: bool = False,
     fold_lanes: bool = False,
 ) -> Machine:
@@ -4601,6 +4749,8 @@ def build(
                     straight_trie=straight_trie,
                     high_collector=high_collector,
                     tight_trie_cols=tight_trie_cols,
+                    lean_trie=lean_trie,
+                    high_drops_free=high_drops_free,
                     tuck_drops=tuck_drops,
                     fold_lanes=fold_lanes,
                 )
@@ -4681,6 +4831,8 @@ def build(
                     straight_trie=straight_trie,
                     high_collector=high_collector,
                     tight_trie_cols=tight_trie_cols,
+                    lean_trie=lean_trie,
+                    high_drops_free=high_drops_free,
                     tuck_drops=tuck_drops,
                     fold_lanes=fold_lanes,
                 )
@@ -4783,6 +4935,8 @@ def _assemble(
     straight_trie: bool = False,
     high_collector: bool = False,
     tight_trie_cols: bool = False,
+    lean_trie: bool | str = False,
+    high_drops_free: bool = False,
     tuck_drops: bool = False,
     fold_lanes: bool = False,
 ) -> Machine:
@@ -4821,6 +4975,8 @@ def _assemble(
         straight_trie=straight_trie,
         high_collector=high_collector,
         tight_trie_cols=tight_trie_cols,
+        lean_trie=lean_trie,
+        high_drops_free=high_drops_free,
         tuck_drops=tuck_drops,
         fold_lanes=fold_lanes,
     )
@@ -7876,6 +8032,95 @@ TIGHT_TRIE_COLS: set[tuple[str, str]] = {
     ("deadman-3d_hires", "men-v3"),
 }
 
+#: ``(slug, tier)`` pairs whose decode nodes **lean toward their parent** instead
+#: of standing on the boundary row between their two halves. :func:`_lean_row`
+#: carries the proof that the boundary is never the cheap end, and that the cheap
+#: end needs no frequency table: a node's own traffic is exactly the sum of its
+#: two children's, so the weighted median of the three legs sits on the parent,
+#: and the parent always lies strictly outside the interval the node may move in.
+#:
+#: **It is not a re-run of frequency-shaping the trie.** Nothing here moves a
+#: lane, a slot or an opcode number: the leaves, the ROM image, the band, the
+#: drops, the collector and the room are all untouched, and only the ``x``/``d``
+#: cells inside the trie's own columns change row. That is also why it composes
+#: with :data:`TIGHT_TRIE_COLS` rather than fighting it: ``lane_x0`` is the one
+#: thing a lean could spoil, and no mode below is allowed to move it.
+#:
+#: It moves very few nodes and that is not a disappointment. The band is pitch-1
+#: packed and most of its nodes are inline ``d``s pinned to a lane's row, so
+#: nearly every node already stands on the only row it can. The ones that move are
+#: the interior ones with an unbalanced split, and they are exactly the ones the
+#: whole band descends through: on ``deadman-3d_hires`` men-v3 the root's up child
+#: carries about 68% of the executed instructions and stood **nine** rows above
+#: the fetch while its own down child was four rows below it.
+#:
+#: The value is a mode rather than a flag. ``"safe"`` leaves every leaned edge the
+#: vertical slack :func:`_trie_columns` needs to keep its child at ``parent + 1``,
+#: so it *provably* cannot widen the band. ``"greedy"`` leans the whole way and
+#: keeps a node only when :func:`build_cpu`'s pre-pass shows that node's extra
+#: column is one the deepest branch was going to spend anyway — a strictly larger
+#: set of moves, each of them a further reduction in the same weighted walk, and
+#: none of them able to move ``lane_x0`` either.
+#:
+#: **They split by tier, and the split is measured, not reasoned.** 21-round tour,
+#: both gated ``passed=True``, boxes unmoved at 496x672 / 625x391:
+#:
+#: | tier | before | ``"safe"`` | ``"greedy"`` |
+#: |---|---|---|---|
+#: | men-v3 | 91,671,374 | 89,443,340 | **88,217,704** |
+#: | taped | 150,075,022 | **147,213,896** | 147,704,008 |
+#:
+#: (Both columns also carry :data:`HIGH_DROPS_FREE`, which is on for both tiers.)
+#: Greedy is worth a further -1.37% on men-v3 and **+0.33% on taped**, which is
+#: the whole reason this is a mode and not a flag: the two tiers do not run the
+#: same trie — they have their own ``OPCODE_SLOTS`` and their own band — so the
+#: extra leans land on different nodes and the ``lane_x0`` guard clears a
+#: different set of them. The guard is about columns and says nothing about the
+#: seek drum the taped tier drives, so "does not widen the band" is necessary and
+#: not sufficient, and the tour is what settles it. Do **not** carry the men-v3
+#: mode across on the argument that the lever is geometric.
+LEAN_TRIE: dict[tuple[str, str], str] = {
+    ("deadman-3d_hires", "taped"): "safe",
+    ("deadman-3d_hires", "men-v3"): "greedy",
+}
+
+#: ``(slug, tier)`` pairs where a drop the **high corridor** catches is exempted
+#: from the slab columns, and from the band below the corridor.
+#:
+#: The drop discipline is a suffix walk from the bottom of the band: a column has
+#: to clear every lane below the one taking it, and it may not be a slab's entry
+#: column, because a slab entry leaves ``.`` on the collector row and a simple man
+#: sharing that column would sail past his turn west into the wrong slab.
+#:
+#: Both halves of that stop being true for a lane :data:`HIGH_COLLECTOR` catches.
+#: Such a drop is a few rows long and stops on ``hi_row``, which sits above the
+#: collector, above every slab and above most of the band — so it never crosses
+#: the lanes the suffix walk was protecting it from, and it never reaches the
+#: collector row where a slab's column would swallow it. The slab's own descent
+#: occupies that column on strictly **lower** rows, so the two share a column and
+#: never a cell. :func:`build_cpu` checks the one precondition (``hi_free``: every
+#: slab lane below the corridor) instead of assuming it.
+#:
+#: This is what the reserved columns were costing on ``deadman-3d_hires`` men-v3:
+#: ``BRN`` and ``BRZ`` sit on the two columns immediately east of the hot memory
+#: lanes' last glyph, so ``ST``, ``ADD``, ``SUB``, ``DIV`` and ``LDA`` were each
+#: pushed one or two columns east of what their own micro-program needed — and a
+#: drop column is paid **twice**, once walking out to it and once walking the
+#: corridor back west from it. Afterwards **every** corridor-bound drop on men-v3
+#: except three sits on ``lane_end + 1``, which is the floor, and the three that do
+#: not are held there by a neighbour's last glyph rather than by a reservation.
+#:
+#: 21-round tour, alone, both tiers gated ``passed=True`` with the boxes unmoved:
+#: men-v3 91,671,374 -> 90,851,744 (**-0.89%**), taped 150,075,022 -> 148,827,290
+#: (**-0.83%**). It composes additively with :data:`LEAN_TRIE` — men-v3's two
+#: levers are -2.87% and -0.89% alone against -3.77% together — which is what a
+#: pair that touches disjoint cells should do, and is the check that neither is
+#: quietly buying the other's win.
+HIGH_DROPS_FREE: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+    ("deadman-3d_hires", "men-v3"),
+}
+
 #: Per-slug opt-in for the seek-drum (``seekrom``): the ROM keeps its packed
 #: fold and its ~3.3 cells a word, but gains per-row ``q``/``d`` gadgets and two
 #: ladders, so a **long** taken jump seeks the target's row instead of
@@ -9689,6 +9934,8 @@ def build_for(
     straight_trie: bool | None = None,
     high_collector: bool | None = None,
     tight_trie_cols: bool | None = None,
+    lean_trie: bool | str | None = None,
+    high_drops_free: bool | None = None,
     tuck_drops: bool | None = None,
     fold_lanes: bool | None = None,
     program=None,
@@ -9813,6 +10060,12 @@ def build_for(
         ),
         tight_trie_cols=(
             (slug, store) in TIGHT_TRIE_COLS if tight_trie_cols is None else tight_trie_cols
+        ),
+        lean_trie=(
+            LEAN_TRIE.get((slug, store), False) if lean_trie is None else lean_trie
+        ),
+        high_drops_free=(
+            (slug, store) in HIGH_DROPS_FREE if high_drops_free is None else high_drops_free
         ),
     )
 
