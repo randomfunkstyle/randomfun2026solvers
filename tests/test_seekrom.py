@@ -134,7 +134,9 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     # rigid body two columns west while the pipes it is measured against stay put.
     # 0 loses the memory response to the ``in`` room outright and 1 **ties** it at
     # 22, which ``check_bindings`` fails as hard as a loss. See MEM_PAD_FOR.
-    assert machine.MEM_PAD_FOR[key] == 2
+    # -1 now: `squash_band` and `mem_pad` trade two squash rows for one pad column,
+    # and -1 is the ragged band's canonical spelling (-1..-4 capture identically).
+    assert machine.MEM_PAD_FOR[key] == -1
     # 11, not the 13 this used to pin, and the number was never the claim. This is
     # a distance *west of* ``lane_x0``, and both values name the same column —
     # ``CX + 1``, the westernmost the room may legally take, which is the placement
@@ -178,7 +180,9 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     # following ``12 - squash_band``. 13 is the one that costs no store movement,
     # because it is the value the shipped dy of -1 already levels. So what is
     # asserted is the coexistence this test was really written for.
-    assert machine.SQUASH_BAND[key] >= 8, "the band is still packed, not bottom-aligned"
+    # 7 now — the >= 8 came from the unlifted geometry, before the squash traded
+    # against the pad. Legal band is squash 5..16; below 5 nothing binds at any pad.
+    assert machine.SQUASH_BAND[key] >= 7, "the band is still packed, not bottom-aligned"
     assert key in machine.SEEK_TELEPORT
     assert ("deadman-3d", "taped") in machine.SEEK_TELEPORT  # unaffected
     # **The invariant is the difference, not either number.** A squash of k is a
@@ -211,7 +215,10 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     #
     # So pin the **window**, which is what the sweep actually establishes, rather
     # than a point inside a 0.08% plateau.
-    assert 0 <= machine.ROM_TOUCH_DROP[key] - machine.SQUASH_BAND[key] <= 4
+    # The window is 0..14 now: the squash buys pad columns rather than only moving
+    # the box, so `eff` 14 costs ROM corridor and wins anyway — 140,379,566 ->
+    # 137,498,719 (-2.05%) at 21 rounds. Re-derive if the pad/squash trade changes.
+    assert 0 <= machine.ROM_TOUCH_DROP[key] - machine.SQUASH_BAND[key] <= 14
 
     # Nothing was written on the bare slug where a `(slug, tier)` key was meant,
     # which is the mistake that would silently move the canonical hires build.

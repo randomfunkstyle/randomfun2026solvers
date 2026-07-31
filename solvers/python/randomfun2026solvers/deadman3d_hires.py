@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -72,6 +73,7 @@ __all__ = [
     "SCALE",
     "WALK",
     "WALK_CHORDS",
+    "acc_peephole",
     "build_local",
     "cases_json",
     "frames_for_commands",
@@ -239,6 +241,211 @@ def cases_json(cmds: Sequence[int]) -> dict:
     return d3.cases_json(list(cmds), GEOM, name="deadman-3d_hires")
 
 
+#: Memory opcodes whose two operands may be exchanged, so a value already in ACC
+#: can be the *operand* instead of the accumulator.  ``SUB``/``DIV`` are not here
+#: on purpose: swapping them changes the answer.
+_ACC_COMMUTE = frozenset({"ADD", "MUL", "AND", "OR"})
+
+#: Semantics that leave ACC exactly as they found it, so a provenance fact
+#: survives them.  ``BRZ``/``BRN`` are in the list for the same reason
+#: ``dda_diff`` relies on (``deadman3d.deadman3d_source``): the three-way branch
+#: never assigns B.
+_ACC_PRESERVE = frozenset({
+    "output", "display", "display-addr", "display-data", "display-swap",
+    "stream-send", "jump", "jump-seek", "br-zero", "br-zero-seek", "br-neg",
+    "br-neg-seek", "nop", "halt",
+})
+
+_ACC_TOP = "unreached"
+
+#: Offsets larger than this are dropped from the lattice rather than tracked.
+#: Nothing bounds an offset chain otherwise (``ADDI``/``SUBI`` around a loop),
+#: and an immediate this large is no use as a rewrite anyway.
+_ACC_OFFSET_LIMIT = 1 << 40
+
+
+def acc_peephole(src: str, *, name: str = "peephole",
+                 offsets: str = "narrow") -> tuple[str, tuple[int, int, int]]:
+    """Delete the loads this program's accumulator is already holding.
+
+    The M13 family — ``dda_acc_reload``, ``ray_acc_chain``, and ``deadman-3d``'s
+    own -4.37% — one level up: instead of naming one known-redundant ``LD`` in
+    the generator, this *proves* which loads are redundant, over the whole
+    program, and deletes them all.  It is a source-to-source pass and it runs
+    here rather than in :mod:`deadman3d` on purpose: the three committed 64x48
+    families are byte-frozen (``tests/test_deadman3d.py`` pins
+    ``f62d63fd…``/``1bc5e791…``) and this family commits nothing, so only this
+    one may take the win.
+
+    The analysis is a textbook forward *must*-dataflow over the assembled ring.
+    Its value is a set of ``(address, offset)`` facts, each asserting that the
+    accumulator holds ``store[address] + offset`` — mod 2**64, which is exactly
+    the arithmetic the CPU does, so the offset algebra is exact rather than
+    approximate::
+
+        LD a / MOVA a  ->  {(a, 0)}      ST a  ->  in without a's facts | {(a, 0)}
+        ADDI k         ->  in + k        SUBI k -> in - k
+        INCM a         ->  {(a, -1)}     DECM a -> {(a, +1)}
+        ACC-preserving ->  in            anything else -> {}
+
+    meeting at joins by intersection (unreached predecessors contribute
+    nothing), with the ring's own control flow for the edges: a ``BRZ``/``BRN``
+    forks to the next word and to ``pos + size + skip``, a ``JMPF`` only to the
+    latter.  ``LDA`` reads ``store[ACC]`` at an address that is not known until
+    run time, so it falls to the empty set — which is what makes the pass safe
+    rather than merely plausible.  ``INCM``/``DECM`` are *facts* rather than
+    kills for the same reason they are usually a hazard: they leave ACC holding
+    the word the store no longer contains, and by exactly one.
+
+    Three rewrites come out of it, and none of them adds an opcode, a
+    decode-trie slot or a lane row:
+
+    ``LD a`` where ``(a, 0)`` holds
+        The whole instruction goes.  Every path reaching it (fall-through *and*
+        every branch that targets its label) already has the word in ACC, which
+        is exactly what the meet proves; a label on the line stays behind.
+
+    ``LD a`` where ``(a, k)`` holds, ``k != 0``
+        Becomes ``SUBI k`` (or ``ADDI -k``): one instruction for one
+        instruction, two ROM words for two, and **no store read**.  This is the
+        ``LD X`` / ``SUBI k`` / ``BRN`` test-then-use idiom paying for itself;
+        ``stkeep``'s ``LD DEND`` after ``SUBI 47`` is the canonical one.
+
+    ``LD b`` / ``ADD|MUL|AND|OR a`` where ``(a, 0)`` holds
+        The pair becomes ``ADD|MUL|AND|OR b``: the value in ACC is one operand
+        of a commutative op, so it can stay there and ``b`` becomes the memory
+        operand.  Requires the arithmetic instruction to have the ``LD`` as its
+        only predecessor — otherwise a path that jumps straight to it would get
+        the rewritten operand with the wrong accumulator.
+
+    ``offsets`` gates the middle one, and the reason it has a gate at all is a
+    measured surprise: the ROM packs words as decimal literals and folds them
+    into rows by *width*, so swapping a three-digit tape address for a
+    five-digit immediate can push the fold over and cost more ticks than the
+    store read it saves.  ``"narrow"`` (the default) takes an offset rewrite
+    only when its literal is no wider than the operand it replaces;
+    ``"all"`` ignores width and ``"none"`` declines the rewrite.
+
+    Correctness is gated by the emulator: the complete ``wall_writes`` stream
+    over the 21-round tour is bit-identical before and after — every pixel of
+    every one of the 411,722 panel writes.
+    """
+    from randomfun2026solvers.lm1.asm import assemble
+
+    if offsets not in ("none", "narrow", "all"):
+        raise ValueError(f"offsets must be none/narrow/all, got {offsets!r}")
+    prog = assemble(src, name=name)
+    ins = {i.pos: i for i in prog.instrs}
+    order = sorted(ins)
+    step = {p: (2 if ins[p].operand is not None else 1) for p in order}
+    succ: dict[int, list[int]] = {}
+    for p in order:
+        after = (p + step[p]) % prog.P
+        sem = str(ins[p].sem)
+        if sem in ("jump", "jump-seek"):
+            succ[p] = [(after + ins[p].operand) % prog.P]
+        elif sem in ("br-zero", "br-zero-seek", "br-neg", "br-neg-seek"):
+            succ[p] = [after, (after + ins[p].operand) % prog.P]
+        elif sem == "halt":
+            succ[p] = []
+        else:
+            succ[p] = [after]
+    preds: dict[int, list[int]] = {p: [] for p in order}
+    for p in order:
+        for q in succ[p]:
+            if q not in preds:  # pragma: no cover - an assembler invariant
+                raise ValueError(f"control flow from {p} lands mid-instruction at {q}")
+            preds[q].append(p)
+
+    def out_of(p: int, val: frozenset[tuple[int, int]]) -> frozenset[tuple[int, int]]:
+        i = ins[p]
+        mnemonic, a = i.mnemonic, i.operand
+        if mnemonic in ("LD", "MOVA"):
+            return frozenset({(a, 0)})
+        if mnemonic == "ST":  # store[a] = ACC: a's old facts die, (a, 0) is born
+            return frozenset({f for f in val if f[0] != a}) | {(a, 0)}
+        if mnemonic == "INCM":  # ACC is the *old* word, the store holds old + 1
+            return frozenset({(a, -1)})
+        if mnemonic == "DECM":
+            return frozenset({(a, 1)})
+        if mnemonic in ("ADDI", "SUBI"):
+            d = a if mnemonic == "ADDI" else -a
+            return frozenset({(addr, k + d) for addr, k in val
+                              if abs(k + d) < _ACC_OFFSET_LIMIT})
+        if str(i.sem) in _ACC_PRESERVE:
+            return val
+        return frozenset()
+
+    entry = order[0]
+    state: dict[int, object] = {p: _ACC_TOP for p in order}
+    state[entry] = frozenset()
+    changed = True
+    while changed:
+        changed = False
+        for p in order:
+            new: object = frozenset() if p == entry else _ACC_TOP
+            for q in preds[p]:
+                if state[q] is _ACC_TOP:
+                    continue
+                got = out_of(q, state[q])  # type: ignore[arg-type]
+                new = got if new is _ACC_TOP else (new & got)  # type: ignore[operator]
+            if new != state[p]:
+                state[p], changed = new, True
+
+    nxt = {p: order[k + 1] for k, p in enumerate(order[:-1])}
+    drop: set[int] = set()
+    retarget: dict[int, str] = {}
+    offset: dict[int, tuple[str, int]] = {}
+    n_dropped = n_offset = n_fused = 0
+    for p in order:
+        i, val = ins[p], state[p]
+        if i.mnemonic != "LD" or val is _ACC_TOP or not val:
+            continue
+        known = {k for addr, k in val if addr == i.operand}  # type: ignore[union-attr]
+        if 0 in known:
+            drop.add(i.line - 1)
+            n_dropped += 1
+            continue
+        if known and offsets != "none":  # ACC is this word plus a constant
+            k = min(known, key=abs)
+            if offsets == "all" or len(str(abs(k))) <= len(str(i.operand)):
+                offset[i.line - 1] = ("SUBI", k) if k > 0 else ("ADDI", -k)
+                n_offset += 1
+                continue
+        q = nxt.get(p)
+        j = ins[q] if q is not None else None
+        if (j is not None and j.mnemonic in _ACC_COMMUTE
+                and (j.operand, 0) in val  # type: ignore[operator]
+                and preds[q] == [p] and (j.line - 1) not in drop):
+            drop.add(i.line - 1)
+            retarget[j.line - 1] = i.operand_token
+            n_fused += 1
+
+    out: list[str] = []
+    for k, line in enumerate(src.splitlines()):
+        if k in drop:
+            label = re.match(r"^\s*([A-Za-z_.][A-Za-z0-9_.\-]*:)", line)
+            if label:  # a label on the deleted line stays, and takes the next word
+                out.append(label.group(1))
+        elif k in offset or k in retarget:
+            shape = re.match(
+                r"^(\s*(?:[A-Za-z_.][A-Za-z0-9_.\-]*:)?\s*)([A-Za-z]+)(\s+)(\S+)(.*)$", line)
+            if shape is None:  # pragma: no cover - every instruction line matches
+                raise ValueError(f"cannot rewrite line {k + 1}: {line!r}")
+            head, mnemonic, gap, tail = (shape.group(1), shape.group(2),
+                                         shape.group(3), shape.group(5))
+            if k in offset:
+                mnemonic, token = offset[k][0], str(offset[k][1])
+            else:
+                token = retarget[k]
+            width = len(shape.group(2)) + len(gap) - 1  # keep the operand column
+            out.append(f"{head}{mnemonic:<{width}} {token}{tail}")
+        else:
+            out.append(line)
+    return ("\n".join(out) + ("\n" if src.endswith("\n") else ""),
+            (n_dropped, n_offset, n_fused))
+
+
 def hires_source() -> str:
     """The LM-1 assembly: :func:`deadman3d.deadman3d_source` at :data:`GEOM`,
     without the DDA x-arm's redundant ``LD WADDR``.
@@ -294,9 +501,17 @@ def hires_source() -> str:
     emission collides on ``dda0`` at hires' unroll factor); with ``dda_diff`` the
     labels are distinct and it builds, which is the combination ``deadman-3d``
     ships anyway.
+
+    ``ray_acc_chain`` is the fifth and it is measured below with the sixth:
+    :func:`acc_peephole`, which sweeps the *whole* emitted program for the rest
+    of the family each of those knobs names one instance of.  Together, on the
+    21-round tour: 880,332 -> 869,882 executed instructions (**-1.19%**) and
+    484,890 -> 471,099 store accesses (**-2.84%**), all of it reads.
     """
-    return d3.deadman3d_source(GEOM, dda_acc_reload=False, dda_diff=True,
-                               dda_stepy_split=True, lap_via_jump=True)
+    return acc_peephole(
+        d3.deadman3d_source(GEOM, dda_acc_reload=False, dda_diff=True,
+                            dda_stepy_split=True, lap_via_jump=True,
+                            ray_acc_chain=True))[0]
 
 
 def install_wad(wad: Path, *, brightness: float | None = None) -> dict:

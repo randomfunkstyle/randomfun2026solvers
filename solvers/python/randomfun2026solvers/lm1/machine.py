@@ -8181,7 +8181,7 @@ TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     # ``dy = -1`` lifts the block one row so ``resp_row`` lands on the collector's
     # **first interior row** instead of its north wall — the difference between
     # an exit that can attach beside the CPU and one that cannot attach at all.
-    ("deadman-3d_hires", "taped"): {"store_offset": (-20, -1)},
+    ("deadman-3d_hires", "taped"): {"store_offset": (-20, 9)},
     # The men tier's own offset. Here dy is a *tick* knob, not a packing one: it
     # shortens the request leg, the only length-sensitive term left once the answer
     # path is distance-free (the collector's ``R`` and the ``teleport_v`` riser both
@@ -8605,7 +8605,7 @@ TRIM_DEAD_LANES: set[str] = {"deadman-3d", "deadman-3d_hires"}  # band 63 -> 41 
 #: is ``store_dy = 12 - squash_band``, derived the same way men-v3's was, and 13 is
 #: the one row of it that costs no store movement at all.
 SQUASH_BAND: dict[tuple[str, str], int] = {
-    ("deadman-3d_hires", "taped"): 13,
+    ("deadman-3d_hires", "taped"): 7,
     ("deadman-3d_hires", "men-v3"): 6,
 }
 
@@ -8648,7 +8648,7 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # throughout: 13 -> 143,631,709, 14 -> 143,590,497, **16 -> 143,513,651**,
     # 17 -> 143,634,141. The drop is worth -0.109% on the *unfolded* machine
     # (145,970,818 -> 145,811,785 at pad 1), so it is not carrying the fold.
-    ("deadman-3d_hires", "taped"): 16,
+    ("deadman-3d_hires", "taped"): 21,
     # **The men tier's 7 is that same identity, and it is the difference between
     # :data:`STRAIGHT_TRIE` being a 9.7% win and a 4.2% loss.** ``SQUASH_BAND`` 7
     # pulls ``cpu.centre`` seven rows north, so without this the corridor between
@@ -10116,7 +10116,7 @@ MEM_PAD_FOR: dict[tuple[str, str], int] = {
     # it does nothing. The `in` room is the rival and :data:`INPUT_NORTH_WEST`
     # already has it at ``CX + 1``, the westernmost legal column. The conclusion
     # was right; the reason recorded for it was not.
-    ("deadman-3d_hires", "taped"): 2,
+    ("deadman-3d_hires", "taped"): -1,
     # 1, and the pad stopped being a floor at all: with ties decidable, §7.1 in Z3
     # says 0 is satisfiable too and only `rom` or `mem_resp` can unlock it. This is
     # what :data:`ROM_TOUCH_DROP` 11 buys — 21 rounds, `passed=True`, 496x674,

@@ -3025,6 +3025,7 @@ def deadman3d_source(
     dda_diff: bool = False,
     lap_via_jump: bool = False,
     dda_stepy_split: bool = False,
+    ray_acc_chain: bool = False,
 ) -> str:
     """The LM-1 assembly of the demo, lowered line for line from this model.
 
@@ -3099,6 +3100,14 @@ def deadman3d_source(
     ``perpWallDist`` (x)    ``LD SDX``/``SUB DDX``     ``LD SDD``/``ADD SDY``
                                                        /``SUB DDX``
     ======================  =========================  ======================
+
+    ``ray_acc_chain`` is the fourth, and it is the same lever aimed at the
+    *per-column* setup instead of the per-step loop: the canonical ``colset``
+    stores ``rayDirX`` and then loads it straight back to test it for zero, and
+    does it again for ``rayDirY``. Reordering the block around ``ST``'s
+    ACC-preservation deletes both loads and folds ``LD PLANEX`` into a
+    commuted ``MUL``. Bit-identical arithmetic, four fewer store reads a
+    column; the comment at the emission site has the whole rewrite.
 
     ``SDY`` is still carried absolutely, so the y-side tail is untouched and the
     x-side one reconstructs ``sideDistX = SDD + SDY``. Every value is a signed
@@ -3684,6 +3693,75 @@ prolog: LD  POSX
         ST  WADDR0          ; the packed quarter-column's tape slot
         LDI 0
         ST  XCOL
+""".splitlines()
+    # ── the per-column ray setup ────────────────────────────────────────────
+    # `ray_acc_chain` reorders this block — and reorders *only* this block —
+    # around one fact the canonical form spends four store reads a column
+    # ignoring: `ST` is ACC-preserving, so `ST RDX` leaves rayDirX in the
+    # accumulator and the very next thing the canonical form does with it is
+    # `LD RDX` / `BRZ`. Three edits, all of them deletions:
+    #
+    #   * `LD PLANEX` / `MUL CAMX` becomes `MUL PLANEX`. Multiplication
+    #     commutes and cameraX is already in ACC from its own `ST CAMX`, so the
+    #     accumulator can be the *other* operand.
+    #   * the deltaDistX zero test moves up against `ST RDX`, which deletes
+    #     `LD RDX`; the same move against `ST RDY` deletes `LD RDY`.
+    #   * `LD PLANEY` becomes `LD CAMX` (the RDY chain now starts from cameraX
+    #     rather than ending on it) and the PW/WADDR seed, which neither arm
+    #     reads or writes, moves below both of them to `rayseed`.
+    #
+    # Every expression keeps its operand order and its operation order, so the
+    # arithmetic is bit-identical; what moves is *where the accumulator is*.
+    # Worth 5,120 store reads and 5,120 instructions on the 21-round hi-res
+    # tour — two a column over 2,560 columns.
+    #
+    # `rayseed` falls through into the first seed block, which is `sidey` only
+    # when `dda_diff` swapped the two; without it the fall-through target is
+    # `sidex` and the seed has to jump.
+    _seed_tail = "" if dda_diff else f"        JMP {_first_side}\n"
+    lines += ((f"""\
+colset: LD  XCOL
+        MULI {geom.cam_step}
+        SUBI {UNITS}
+        ST  CAMX            ; cameraX = 2*x/w - 1 -> {geom.cam_step}*x - 1024, exact at w = {WIDTH}
+        MUL PLANEX          ; ACC is still cameraX, and `*` commutes
+        DIVI {UNITS}
+        ADD DIRX
+        ST  RDX             ; rayDirX = dirX + planeX*cameraX
+        ; deltaDistX = abs(1/rayDirX) -> |{inv} / rayDirX|; DIV by 0 is 0 on
+        ; this CPU, so a zero ray substitutes BIG = 2**30 (plan risk R2)
+        BRZ ddxinf          ; `ST` preserved it: rayDirX has not left ACC
+        LDI {inv}
+        DIV RDX
+        BRN ddxneg          ; the quotient's sign is rayDirX's
+        ST  DDX
+        JMP ddy
+ddxneg: NEG
+        ST  DDX
+        JMP ddy
+ddxinf: LDI {BIG}
+        ST  DDX
+ddy:    LD  CAMX
+        MUL PLANEY
+        DIVI {UNITS}
+        ADD DIRY
+        ST  RDY             ; rayDirY = dirY + planeY*cameraX
+        BRZ ddyinf          ; deltaDistY, the same three arms
+        LDI {inv}
+        DIV RDY
+        BRN ddyneg
+        ST  DDY
+        JMP rayseed
+ddyneg: NEG
+        ST  DDY
+        JMP rayseed
+ddyinf: LDI {BIG}
+        ST  DDY
+rayseed: LD  PW0
+        ST  PW              ; the ray starts in the player's cell
+        LD  WADDR0
+        ST  WADDR
+{_seed_tail}""" if ray_acc_chain else f"""\
 colset: LD  XCOL
         MULI {geom.cam_step}
         SUBI {UNITS}
@@ -3728,7 +3806,7 @@ ddyneg: NEG
         JMP {_first_side}
 ddyinf: LDI {BIG}
         ST  DDY
-""".splitlines()
+""").splitlines())
     # The seeds. `dda_diff` swaps the two arms' order so `sidey` runs first: the
     # x-arm then still has ACC = sideDistX when it is done (`ST` is the only
     # thing that would have consumed it) and folds the initial difference in

@@ -1504,7 +1504,9 @@ def test_taped_registry_pins() -> None:
     # a column for its west exit stub, and dy lifts the block one row so the
     # CPU's response row is the collector's first *interior* row rather than its
     # north wall — a wall has nothing to attach to.
-    assert hires["store_offset"] == (-20, -1)
+    # dy 9, not -1: it sets `route_lengths["store->cpu"]` (5 cells -> 2) by making
+    # the level test true, which switches to the `answer_exit_west` branch.
+    assert hires["store_offset"] == (-20, 9)
     # The taped store is a quarter of the men-v3 block's height, so its fold
     # goes far deeper than the canonical machine's height budget allows.
     assert tier["rom_rows"] > machine.ROM_ROWS["deadman-3d"]
