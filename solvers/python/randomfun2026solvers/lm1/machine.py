@@ -2287,6 +2287,30 @@ def build_cpu(
 
     # A deeper slab needs a larger entry column, because its drop passes through
     # every shallower slab's westbound entry row.
+    #
+    # **Reordering the band by frequency is not the lever it looks like, and the
+    # reason is that the entry cost is a function of the *drop*, not the base.**
+    # The three legs telescope (:data:`TIGHT_STRUCT_DROPS`) to
+    # ``2 * drop_x - lane_x0 - 2``: the slab's own column cancels, so where a slab
+    # sits in the staircase is free and only which column its drop got is not.
+    # Reordering is therefore a permutation of the *available* columns, and on
+    # hires/men-v3 there are exactly four of them — 24, 25, 28, 29 — with 26 and 27
+    # spoken for by ``BRZ``'s ``neg`` arm and ``BRN``'s exit riser whatever the
+    # order, and nothing below 24 reachable because ``floor`` (the lane band's east
+    # envelope at the deepest lane row) is 24. Best case, handing the two branches
+    # the two cheapest columns instead of the two dearest, is
+    # ``2 * (5 * 59,670 + 3 * 57,307 - 3 * 36,094)`` = 723,978 ticks, **0.82%** —
+    # and it needs the *lane* rows reordered, since ``struct_min`` below ties the
+    # drop order to the row order, which drags in the trie, ``OPCODE_SLOTS`` and
+    # every ROM word. Not attempted; recorded so the size is known before anyone
+    # spends the coupling on it.
+    #
+    # Note also that ``BRN`` sitting easternmost — flagged as the open question on
+    # :data:`SEEK_CLASSIC_DRAIN_OPS` back when the drops were floored at
+    # ``struct_east + 1`` — is now the *cheap* end, not the dear one. Under tight
+    # drops the easternmost slab's drop lands one column past its own base, so
+    # ``cpu:entry:BRN`` is 0.13 t/instr against ``cpu:entry:BRZ``'s 0.84. The
+    # question answered itself when the drops moved west.
     order = sorted(structured, key=lambda m: drop_x[row_of[m]])
     if (tight_drops or packed_band) and order != band_order:
         # ``tight_first`` priced each slab against the base this order gives it, so a
@@ -2876,6 +2900,21 @@ def _slab(
     # loop; the riser instead crosses only shallower *entry rows*, as `.` holes
     # in their soft `<` runs. For slab 0 (``base == _STRUCT_X0``) this is the
     # x=1 shared riser, exactly as before.
+    #
+    # **The riser is at its floor, and :data:`HIGH_COLLECTOR` cannot help it.** The
+    # question is worth answering once because the corridor is worth -6.32% to the
+    # *lanes* and it is tempting to reach for it here too. It does not apply: a
+    # lane above the trie root drops *past* the fetch row to the collector and
+    # climbs back, so it pays ``2 * (collector - centre)`` of pure overshoot and
+    # the corridor deletes all of it. A slab is already **below** the collector,
+    # so its return is monotone in both axes and has no overshoot to delete.
+    # Measured on hires/men-v3 (``collector`` 174, ``centre`` 167, ``hi_row`` 166,
+    # the fetch ``>`` at x=9): ``BRN``'s man leaves at (27, 191) and the drawn path
+    # is 17 up + 18 west + 7 up = 42, against a Manhattan bound of
+    # ``(27 - 9) + (191 - 167) = 42``. Exactly the bound, so nothing is spendable.
+    # Routing the same man through ``hi_row`` instead costs 25 + 18 + 1 = **44** —
+    # two ticks *worse*, because the corridor is on the wrong side of the fetch.
+    # The only thing that shortens a slab riser is a shallower band.
     exit_x = base - 1
 
     if sem in _JUMP_SEMS:
@@ -3071,9 +3110,103 @@ DRAIN_UNIT_BITS: dict[str, int] = {
 #: | drain off | 626x386 | 175,267,384 | — |
 #: | **bits 2, ``BRN`` alone** | **626x392** | **174,497,560** | **-0.439%** |
 #: | bits 2, any set containing ``JMPF`` or ``BRZ`` | — | does not bind | — |
+#:
+#: ── the swept answer, and why ``bits`` was the wrong knob to look at ──
+#:
+#: Both numbers above were *assumed*, not swept: ``bits`` 2 came from
+#: ``little-little-man``'s ROM and the ``BRN``-only restriction from a pad that has
+#: since moved twice. Swept at 21 rounds on the merged geometry, both tiers land
+#: on the **same** pair — ``bits`` 3 on ``BRN`` + ``BRZ``, and ``JMPF`` left on the
+#: counted loop.
+#:
+#: men-v3, against 88,217,704 at 496x672 (the pad is searched, not pinned, so it
+#: is reported rather than set):
+#:
+#: | variant | pad | ticks | Δ |
+#: |---|---|---|---|
+#: | shipped: bits 2, all three | 3 | 88,217,704 | — |
+#: | bits 3, all three | 3 | 88,196,073 | -0.025% |
+#: | bits 2, ``BRN`` alone | 2 | 88,254,115 | +0.041% |
+#: | bits 3, ``BRN`` alone | 2 | 87,985,685 | -0.263% |
+#: | bits 2, ``BRN`` + ``BRZ`` | 2 | 87,974,935 | -0.276% |
+#: | **bits 3, ``BRN`` + ``BRZ``** | **2** | **87,688,021** | **-0.600%** |
+#: | bits 3, ``BRN`` + ``BRZ``, pad forced to 3 | 3 | 88,384,619 | +0.189% |
+#: | bits 4/5, any set | 17/28 | — | the pad explodes |
+#:
+#: Read the winning row against the one below it: **the pad column is worth
+#: 696,598 ticks (0.79%), and the win is that column minus what buying it cost.**
+#: At the same pad 3 this exact drain set is *worse* than the shipped one by
+#: 166,915 ticks, because it gives up ``JMPF``'s 351,781 words for nothing. The
+#: net -529,683 is 696,598 - 166,915. Nothing here is a faster discard; it is a
+#: narrower machine paid for with a slower one.
+#:
+#: taped, against 147,213,896 at 625x391, at :data:`MEM_PAD_FOR` 1 (0 refuses on
+#: every set):
+#:
+#: | variant | box | ticks | Δ |
+#: |---|---|---|---|
+#: | drain off | 625x385 | 147,941,842 | +0.494% |
+#: | shipped: bits 2, ``BRN`` | 625x391 | 147,213,896 | — |
+#: | bits 3, ``BRN`` | 625x396 | 146,977,126 | -0.161% |
+#: | bits 2, ``BRN`` + ``BRZ`` | 625x391 | 146,931,368 | -0.192% |
+#: | **bits 3, ``BRN`` + ``BRZ``** | **625x396** | **146,672,958** | **-0.368%** |
+#: | bits 2, all three (needs pad 2) | 627x391 | 147,395,603 | +0.124% |
+#: | bits 3, all three (needs pad 2) | 628x396 | 147,408,608 | +0.132% |
+#: | bits 3, ``BRN`` + ``BRZ``, pad forced to 2 | 625x396 | 147,499,984 | +0.194% |
+#: | bits 3, ``BRZ`` alone | 625x395 | 147,801,034 | +0.399% |
+#:
+#: Three things in there are worth keeping, because each of them was believed the
+#: other way round:
+#:
+#: * **``BRZ`` binds on taped now.** The paragraph above says a set containing it
+#:   "does not bind, and no pad in the sweep separates them". That was true at the
+#:   pad-4 geometry it was measured on; :data:`SEEK_TIGHT_STRUCT_DROPS` walked the
+#:   structured drops west, the pad floor fell to 1, and ``BRN`` + ``BRZ`` binds at
+#:   the floor. The tie is a property of one machine's walls, exactly as the note
+#:   says — which cuts both ways.
+#: * **``JMPF`` is the one that costs a pad column, on both tiers.** Its block is
+#:   the westernmost, so it is not §7.1 on a slab ``r`` at all: the block is a
+#:   column wider than the ``a<`` it replaces, that column walks the whole band
+#:   east, and the lane ``r`` at (24, 152) loses ``mem_resp`` to ``in``. men-v3's
+#:   floor is 3 with ``JMPF`` drained and **2** without it, and that column is
+#:   worth more than ``JMPF``'s own 351,781 words.
+#: * **``bits`` 3 is what makes the restriction pay.** At ``bits`` 2, dropping
+#:   ``JMPF`` *loses* (+0.041%) — the pad column does not cover it. At ``bits`` 3 the
+#:   two remaining slabs give back enough to turn the same trade into -0.600%.
+#:
+#: The ladder's own model — ``n + 6*(n >> t) + 5*t``, :mod:`.drain` — prices the
+#: inside of the block and nothing else, and on this machine the outside is most
+#: of the bill. Measured region by region, men-v3 ``bits`` 2 -> 3 at a *fixed* pad
+#: of 3 (so the pad is not doing the work):
+#:
+#: | region | Δ t/instr |
+#: |---|---|
+#: | ``cpu:discard:BRN`` / ``:BRZ`` / ``cpu:slab:JMPF`` | **-0.631** |
+#: | ``cpu:riser:BRZ`` / ``:JMPF`` / ``:BRN`` | +0.270 |
+#: | ``cpu:return:collector`` | +0.128 |
+#: | ``cpu:lane:BRZ`` / ``:BRN`` / ``:JMPF`` | +0.157 |
+#: | ``cpu:slab:JMPS`` + ``cpu:seek:*`` (the tail moved down with the band) | +0.114 |
+#: | net | **-0.025** |
+#:
+#: So a deeper block converts *inside itself* almost perfectly — the discard pool
+#: is 0.01% blocked, it is not drum-bound, and it gives up its ticks tick for tick
+#: — and then hands back **96% of them** to the geometry it displaces: one tick of
+#: exit riser per row of extra depth on every taken discard, two ticks of entry
+#: walk plus one of collector per column of extra width on every execution. Price
+#: a drain by the box it moves, never by :func:`drain.cost`.
+#:
+#: The blunt version, and the reason to stop looking here: the whole slab band —
+#: every ``cpu:slab|discard|riser|entry:*`` box, ``_region_of``'s attribution —
+#: is **10.02 t/instr on men-v3 and 0.07% blocked** before this lever and
+#: **10.34 t/instr after it**. The band got *dearer* by 0.28M ticks and the
+#: machine got cheaper by 0.53M, because everything that moved is outside the
+#: band (``cpu:return:high`` 13.74 -> 13.36, ``cpu:return:collector`` 4.03 ->
+#: 3.77, ``cpu:lane:LD`` 10.66 -> 10.43). Taken with the riser's Manhattan floor
+#: (:func:`_slab`) and the drop permutation's ceiling (``order``, above), the band
+#: has no further tick in it that is not a *footprint* consequence somewhere else.
 SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {
-    ("deadman-3d_hires", "men-v3"): 2,
-    ("deadman-3d_hires", "taped"): 2,
+    ("deadman-3d_hires", "men-v3"): 3,
+    ("deadman-3d_hires", "taped"): 3,
 }
 
 #: Which classic mnemonics :data:`SEEK_CLASSIC_DRAIN` actually applies to.
@@ -3106,8 +3239,24 @@ SEEK_CLASSIC_DRAIN: dict[tuple[str, str], int] = {
 #: **It came back immediately, on the other tier and on the other slabs**: taped, at
 #: its re-derived pad of 4, binds the ladder on ``BRN`` and refuses it on ``JMPF``
 #: and ``BRZ``. Same mechanism, opposite restriction, same registry.
+#:
+#: **And it is now on both tiers, on ``JMPF`` alone, and it is a cost rather than a
+#: refusal.** Swept (the table on :data:`SEEK_CLASSIC_DRAIN`): every set builds on
+#: both tiers at some pad, so the entry is no longer protecting against a tie — it
+#: is buying a pad column. ``JMPF`` is the westernmost slab, its block is a column
+#: wider than the ``a<`` it replaces, and that column pushes the whole band east
+#: until a *lane*'s ``r`` at (24, 152) loses ``mem_resp`` to ``in``. men-v3's pad
+#: floor is 3 with ``JMPF`` drained and 2 without; taped's is 2 with and 1 without.
+#: The column is worth more than ``JMPF``'s 351,781 words, so both tiers drain the
+#: two eastern slabs and leave the western jump on the counted loop.
+#:
+#: Note the entry is doing the opposite job on the two tiers *at the same time*:
+#: on taped it also keeps ``BRZ``, which the note above records as unbindable and
+#: which now binds at the floor. Re-sweep this set whenever the band moves; the
+#: answer has reversed twice.
 SEEK_CLASSIC_DRAIN_OPS: dict[tuple[str, str], tuple[str, ...]] = {
-    ("deadman-3d_hires", "taped"): ("BRN",),
+    ("deadman-3d_hires", "men-v3"): ("BRN", "BRZ"),
+    ("deadman-3d_hires", "taped"): ("BRN", "BRZ"),
 }
 
 #: Per-program opt-in for **tight slab entry columns** — the walk *to* a jump or
