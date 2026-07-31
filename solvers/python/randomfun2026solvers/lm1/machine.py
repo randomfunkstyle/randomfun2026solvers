@@ -1660,6 +1660,7 @@ def build_cpu(
     squash_band: bool | int = False,
     straight_trie: bool = False,
     high_collector: bool = False,
+    trie_slack_rows: tuple[int, ...] = (),
     tight_trie_cols: bool = False,
     lean_trie: bool | str = False,
     high_drops_free: bool = False,
@@ -1805,6 +1806,28 @@ def build_cpu(
                         f"and at least two above it; {n_up} of {n_rows} are above"
                     )
                 at = [r + (1 if i >= n_up - 1 else 0) for i, r in enumerate(at)]
+            if trie_slack_rows:
+                # :data:`TRIE_SLACK_ROWS` — a blank row opened between two lanes
+                # purely to give a decode **edge** vertical slack.
+                #
+                # ``_trie_columns`` puts a child at ``parent + 1 + max(0, d -
+                # slack)`` with ``slack = |crow - prow| - 1``, so an edge whose two
+                # nodes sit on adjacent rows pays an extra column — and that column
+                # is on ``lane_x0``, hence on the trie walk, every drop and every
+                # metre of the walk back west. At pitch 1 the deepest nodes are
+                # pinned one row apart by construction (a non-inline node stands at
+                # ``slot_rows[min(down half)] - 1``), so no *lean* can open that
+                # edge: :data:`LEAN_TRIE` only moves a node toward its parent.
+                # Moving the **lanes** can, and this is the only lever that does.
+                #
+                # It is paid out of the same stagger slack :data:`HIGH_COLLECTOR`
+                # spends, and by the same mechanism: ``slack`` below shrinks by one
+                # per row opened, the band starts one row higher, and the collector,
+                # the structures band and the room's height do not move.
+                at = [
+                    r + sum(1 for j in trie_slack_rows if j < i)
+                    for i, r in enumerate(at)
+                ]
             # **Bottom-align it.** The rows the stagger saves are left blank above
             # the band instead of being taken out of the room, so the collector,
             # the whole structures band below it and the room's own height all
@@ -4931,6 +4954,7 @@ def build(
     squash_band: bool | int = False,
     straight_trie: bool = False,
     high_collector: bool = False,
+    trie_slack_rows: tuple[int, ...] = (),
     tight_trie_cols: bool = False,
     lean_trie: bool | str = False,
     high_drops_free: bool = False,
@@ -5150,6 +5174,7 @@ def build(
                     squash_band=squash_band,
                     straight_trie=straight_trie,
                     high_collector=high_collector,
+                    trie_slack_rows=trie_slack_rows,
                     tight_trie_cols=tight_trie_cols,
                     lean_trie=lean_trie,
                     high_drops_free=high_drops_free,
@@ -5233,6 +5258,7 @@ def build(
                     squash_band=squash_band,
                     straight_trie=straight_trie,
                     high_collector=high_collector,
+                    trie_slack_rows=trie_slack_rows,
                     tight_trie_cols=tight_trie_cols,
                     lean_trie=lean_trie,
                     high_drops_free=high_drops_free,
@@ -5338,6 +5364,7 @@ def _assemble(
     squash_band: bool | int = False,
     straight_trie: bool = False,
     high_collector: bool = False,
+    trie_slack_rows: tuple[int, ...] = (),
     tight_trie_cols: bool = False,
     lean_trie: bool | str = False,
     high_drops_free: bool = False,
@@ -5381,6 +5408,7 @@ def _assemble(
         squash_band=squash_band,
         straight_trie=straight_trie,
         high_collector=high_collector,
+        trie_slack_rows=trie_slack_rows,
         tight_trie_cols=tight_trie_cols,
         lean_trie=lean_trie,
         high_drops_free=high_drops_free,
@@ -8427,6 +8455,67 @@ HIGH_COLLECTOR: set[tuple[str, str]] = {
     ("deadman-3d_hires", "men-v3"),
 }
 
+#: ``(slug, tier)`` -> lane **ranks** after which the band opens one blank row,
+#: solely to give a decode edge the vertical slack :func:`_trie_columns` prices.
+#:
+#: **This is the answer to "the two zero-slack penalty columns", and the premise
+#: it was filed under was wrong.** The standing note said the columns exist
+#: because "an inline ``d`` is pinned to its lane's row, and its parent is pinned
+#: between two adjacent inline ``d``s". On the current geometry **no node in
+#: either tier's trie is ``inline``** (dumped from the live build: 21 nodes,
+#: men-v3, all ``inline=False``), so the ``inline and sign < 0`` branch of the
+#: slack rule never fires. The zero slack is the *other* branch — two nodes on
+#: adjacent rows, ``|crow - prow| - 1 == 0`` — and that is a property of the lane
+#: rows, not of inlining.
+#:
+#: That distinction is the whole lever. :data:`LEAN_TRIE` provably cannot open
+#: these edges (it moves a node toward its parent, so it can only shrink the
+#: distance), and that was read as "nothing can". But a non-inline node is pinned
+#: to ``slot_rows[min(down half)] - 1``, i.e. to the **lanes**, so moving a lane
+#: moves the node — and one blank row in the right place opens the edge.
+#:
+#: Searched exhaustively over the shaping pre-pass (the pure ``_trie_shape`` ->
+#: ``_trie_columns`` composition, greedy lean included, so it is what the build
+#: would compute), up to three added rows:
+#:
+#: | tier | rows | ranks | ``lane_x0`` |
+#: |---|---|---|---|
+#: | men-v3 | **1** | ``(20,)`` | 10 -> **9** |
+#: | taped | **2** | ``(8, 13)`` | 10 -> **9** |
+#:
+#: 9 is the floor for both: no assignment of three or fewer rows reaches 8, and
+#: men-v3's rank 20 is the *unique* single-row solution.
+#:
+#: **Empty because it measures a loss, and the loss is the pad.** men-v3,
+#: ``ranks=(20,)``, 21 rounds, gated ``passed=True fatal=None``:
+#:
+#: | build | box | ``lane_x0`` | ticks | Δ |
+#: |---|---|---|---|---|
+#: | shipped | 496x674 | 10 | 82,530,131 | — |
+#: | ``(20,)`` + ``store_offset`` dy -1 | 496x673 | **9** | 84,153,261 | **+1.97%** |
+#:
+#: The column is genuinely bought — ``lane_x0`` 9 is read off the live build, and
+#: the room even loses a row (674 -> 673). It still loses, for the reason
+#: :data:`MEM_PAD_FOR` is a standing trap: the row walks the CPU's east wall
+#: against ``mem_resp``, and men-v3's pad floor rises **3 -> 4** (pads 2 and 3
+#: both refuse with ``'r' at (22, 153) must bind 'mem_resp'``). A pad column costs
+#: more than a ``lane_x0`` column saves, so the trade is negative by about the
+#: difference. Price this against a pad re-sweep, never against columns saved.
+#:
+#: The added row also de-levels the store's request leg — it lands the adapter's
+#: request on 158 against the store's wall on 159 — and ``store_offset`` dy **-1**
+#: is the unique compensation (dy -3..+3 swept; every other value misses by the
+#: same amount it moves).
+#:
+#: **Revisit condition, arithmetically:** this pays the moment men-v3's pad floor
+#: stops rising with the row — i.e. when a build with ``ranks=(20,)`` binds at
+#: ``mem_pad`` 3. Any lever that moves the CPU's east wall *east* relative to
+#: ``mem_resp``, or that moves the ``in`` room, changes that. The mechanism itself
+#: is geometry-independent and stays here ready: it is the only lever that can
+#: open a zero-slack decode edge, because a non-inline node is pinned to the
+#: lanes and :data:`LEAN_TRIE` can only ever shorten an edge.
+TRIE_SLACK_ROWS: dict[tuple[str, str], tuple[int, ...]] = {}
+
 #: ``(slug, tier)`` pairs whose decode trie prices its columns **per node** instead
 #: of two per level. See :func:`_trie_columns` for the rule and why one column a
 #: level flat is infeasible.
@@ -10538,6 +10627,7 @@ def build_for(
     squash_band: bool | int | None = None,
     straight_trie: bool | None = None,
     high_collector: bool | None = None,
+    trie_slack_rows: tuple[int, ...] | None = None,
     tight_trie_cols: bool | None = None,
     fetch_fold: bool | None = None,
     lean_trie: bool | str | None = None,
@@ -10664,6 +10754,11 @@ def build_for(
         ),
         high_collector=(
             (slug, store) in HIGH_COLLECTOR if high_collector is None else high_collector
+        ),
+        trie_slack_rows=(
+            TRIE_SLACK_ROWS.get((slug, store), ())
+            if trie_slack_rows is None
+            else trie_slack_rows
         ),
         tight_trie_cols=(
             (slug, store) in TIGHT_TRIE_COLS if tight_trie_cols is None else tight_trie_cols
