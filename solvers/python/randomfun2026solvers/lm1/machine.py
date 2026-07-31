@@ -157,6 +157,17 @@ class Band:
     # a few columns away still wins on Manhattan distance (§7.1).
     STREAM_CMD = "stream_cmd"
     STREAM_RESP = "stream_resp"
+    # The SPILL block: `PUSH`/`POP` (opcodes 22/23), one word each way. One band
+    # for both glyphs, exactly as :data:`Band.MEM` does it — the `s` binds
+    # ``spill_req`` and the `r` binds ``spill_resp``, which is what lets a single
+    # ``band_x`` column carry both lanes' pipe glyph (see :data:`SPILL_LAYOUT`).
+    #
+    # ``isa.py`` has had these two opcodes since the ISA was written and this
+    # module refused to draw them, on a reason that is *narrower* than it reads:
+    # the comment at :data:`Sem.LOAD_IND` says the sign-biased STORE protocol
+    # means ``LDP``/``STP`` need no spill slot, which is true and has nothing to
+    # say about a program that wants one for its own scratch words.
+    SPILL = "spill"
 
 
 #: The display bands, west to east in the CPU's lane band — which is also the order
@@ -308,6 +319,14 @@ _HW: dict[Sem, tuple[tuple[str, str | None], ...]] = {
         ("M", None),
     ),
     Sem.NEGATE: (("W", None), ("N", None), ("M", None)),
+    # ── SPILL: the one block ``isa.py`` names and this module never drew ──────
+    # ``PUSH``: ACC is in B, so `W` brings it into A, `s` hands it to the block and
+    # the second `W` puts it back — the same sandwich ``OUT`` and the display ports
+    # use, and for the same reason (ACC has to survive).
+    Sem.SPILL_PUSH: (("W", None), ("s", Band.SPILL), ("W", None)),
+    # ``POP``: the block's answer lands in A and `M` makes it ACC. Nothing else is
+    # live, so there is no sandwich to pay for.
+    Sem.SPILL_POP: (("r", Band.SPILL), ("M", None)),
     # ── LM-75 ports: the `W`/`s`/`W` sandwich, so ACC survives (as with OUT) ───
     # ── STREAM: one command word out, one response word in ────────────────────
     Sem.STREAM_SEND: (("W", None), ("s", Band.STREAM_CMD), ("W", None)),
@@ -1748,6 +1767,10 @@ def build_cpu(
     packed_band: bool = False,
     seek_jump_gap: int = 0,
     seek_jump_east: bool = False,
+    seek_tail_west: int = 0,
+    seek_tail_wall: bool = False,
+    risers_west: bool = False,
+    spill_col: int = 0,
     tight_arms: bool = False,
     tight_risers: bool = False,
     sparse_collector: bool = False,
@@ -2038,6 +2061,16 @@ def build_cpu(
     ]
     mem_x = lane_x0 + (max(prefixes) if prefixes else 0) + mem_pad
     band_x = {Band.MEM: mem_x}
+
+    # SPILL: its own column, and the column is the whole design freedom the block
+    # has. Both spill glyphs are the *first* band glyph of their lane, so without
+    # this they would sit at ``lane_x0`` — hard against the west wall, where the
+    # ROM pipe and the input pipe both beat anything hanging off the east one.
+    # ``spill_col`` walks them east exactly as ``mem_pad`` walks the memory block,
+    # and the cells it walks over are `.` padding, so the cost is a couple of
+    # ticks of walking per PUSH/POP against a store round trip.
+    if any(b == Band.SPILL for mc in flat.values() for _, b in mc):
+        band_x[Band.SPILL] = lane_x0 + spill_col
 
     # Display lanes: one `s` per port, spread ``_DSP_PITCH`` columns apart so each
     # binds the pipe that leaves the south wall directly beneath it.
@@ -2669,7 +2702,13 @@ def build_cpu(
         # ``jump_x`` instead turns him at the last column that still lands west of
         # the ``s``. That column is east of ``struct_east``, hence east of every slab
         # body, so the drop passes through nobody's slab on the way down.
-        jump_x = struct_east + 1 if seek_taken_drop_east else None
+        # :data:`SEEK_TAIL_WEST` walks the whole tail — this turn, its drop, the
+        # taken row's ``> s v`` and the flush walk's ``<`` — the same number of
+        # columns west into the span ``_slab_east_span`` reserves but nobody draws
+        # on. Moving the turn alone is worth nothing (the man walks straight back
+        # east to a stationary ``s``), so ``e_s`` below carries the same offset.
+        tail_west = seek_tail_west if seek_taken_drop_east else 0
+        jump_x = struct_east + 1 - tail_west if seek_taken_drop_east else None
         for m in order:
             s0, base = slab_at[m], slab_base[m]
             if p.sem[m] not in _SEEK_SEMS:
@@ -2683,7 +2722,8 @@ def build_cpu(
                     struct_drops |= _slab(
                         g, m, p, s0, base, collector, pipe_glyphs,
                         drain_unit_bits if _drained(m, drain_unit_bits, drain_ops) else 0,
-                        tight_arms=tight_arms, tight_risers=tight_risers,
+                        tight_arms=tight_arms,
+                        tight_risers=tight_risers or risers_west,
                         tuck_drain=tuck_drain,
                     )
             elif p.sem[m] in _JUMP_SEMS:
@@ -2739,7 +2779,14 @@ def build_cpu(
                         # next column but one and the taken row's ``s`` owns it. If
                         # ``struct_east + 1`` is somebody's, say so rather than
                         # sliding into a column that silently belongs to a slab.
-                        if jx in busy:
+                        # ``busy`` is the *reserved* span, not the drawn one, and
+                        # :data:`SEEK_TAIL_WEST` exists precisely to spend the
+                        # difference. With the knob on, the guard is the per-cell
+                        # occupancy test below plus the collision a deeper slab's
+                        # own ``put`` raises when it lands on this drop's ``.`` —
+                        # the seek jump is drawn first, so every later slab that
+                        # really wants the column says so.
+                        if jx in busy and not tail_west:
                             raise MachineError(
                                 f"seek jump east column {jx} is inside another slab's span"
                             )
@@ -2823,7 +2870,7 @@ def build_cpu(
         # leaves. Program words are non-negative (ARCH §4.2) and the drum's
         # sentinel is -1, so the sign is the whole test and ACC is never touched.
         t = taken_row
-        e_s = struct_east + 2
+        e_s = struct_east + 2 - tail_west
         with g.part("seek:taken"):
             for col in taken_drops:
                 g.put(col, t, ">")
@@ -2875,7 +2922,8 @@ def build_cpu(
             with g.part(f"slab:{m}"):
                 struct_drops |= _slab(
                     g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs,
-                    drain_unit_bits, tight_arms=tight_arms, tight_risers=tight_risers,
+                    drain_unit_bits, tight_arms=tight_arms,
+                    tight_risers=tight_risers or risers_west,
                     tuck_drain=tuck_drain,
                 )
 
@@ -2901,7 +2949,12 @@ def build_cpu(
     # collector keeps its `.` and is not turned west by a `<`.
     ret_x = max([*drop_x.values(), *struct_drops, lane_x0])
     if seek:
-        ret_x = max(ret_x, struct_east + 3)  # the taken row's send site + its `v`
+        # The taken row's send site + its `v` — the floor that *is* the CPU's east
+        # wall on a drum machine. Offset by :data:`SEEK_TAIL_WEST` only under
+        # :data:`SEEK_TAIL_WALL`: without it the tail walks into space the return
+        # path keeps owning and the box does not move, which is what makes the
+        # tail move safe to land on its own.
+        ret_x = max(ret_x, struct_east + 3 - (tail_west if seek_tail_wall else 0))
     #: The columns a man ever *arrives* on this row, as opposed to merely walks. Two
     #: kinds, and they approach from opposite directions:
     #:
@@ -3855,6 +3908,173 @@ SEEK_TIGHT_STRUCT_DROPS: set[tuple[str, str]] = {
 #: does not move, so ``MEM_PAD_FOR`` is unaffected — checked, not assumed.
 SEEK_JUMP_EAST: set[tuple[str, str]] = {
     ("deadman-3d_hires", "men-v3"),
+    ("deadman-3d_hires", "taped"),
+}
+
+#: Per-``(slug, tier)`` **columns to walk the whole seek tail west**, on top of
+#: :data:`SEEK_JUMP_EAST`. Zero (absent) everywhere by default, so every machine
+#: that does not name itself here is byte-identical.
+#:
+#: The tail is four glyph runs that :data:`SEEK_JUMP_EAST` pinned to
+#: ``struct_east``, and they only make sense as a unit:
+#:
+#: * the entry row's turn ``v`` at ``struct_east + 1`` (``jump_x``);
+#: * the drop column below it, from the entry row down to the taken row;
+#: * the taken row's ``> s v`` — the eastbound landing, the request ``s`` at
+#:   ``e_s = struct_east + 2``, and the ``v`` that turns south off it;
+#: * the ``<`` on the next row down that starts the westbound flush walk.
+#:
+#: **Moving the drop alone is worth exactly nothing** — measured, identical to the
+#: tick. The man still has to walk back east to a stationary ``s``, so the entry
+#: row's shortened eastward run and the taken row's lengthened one cancel. Both
+#: endpoints move or neither does; the binding obligation is what the *old* path
+#: did that the new one skips.
+#:
+#: The floor is geometric, **not a §7.1 binding** — the build never reaches
+#: binding, it raises a collision while drawing. :func:`_slab_east_span`
+#: deliberately reserves nine columns for a ``BR_NEG`` even under
+#: :data:`SLAB_TIGHT_ARMS` (see that registry's NOTE — spending them measured
+#: +5.76%), and ``BRN``'s easternmost *drawn* glyph is its northern riser. On
+#: hires/taped ``struct_east`` is 29, so the reserved-but-undrawn columns are the
+#: tail's to take, and how many there are is a property of that riser:
+#:
+#: | riser slot | free columns | tail floor | first bad build |
+#: |---|---|---|---|
+#: | ``base + 6`` (slot table) | 25..29 | **5** | ``collision at (24, 43): '.' vs '^'`` |
+#: | ``base + 5`` (:data:`SLAB_RISERS_WEST`) | 24..29 | **6** | ``collision at (23, 43): '.' vs '^'`` |
+#:
+#: Both failures are the same cell in CPU coordinates: row 43 is ``BRN``'s
+#: ``zero`` arm row and the column is that arm's riser ``^``, which the drop
+#: column would overwrite. Because the span check in the seek-jump branch below is
+#: written against the *reserved* span rather than the drawn one, this registry
+#: turns that check off and leans on the collision instead: the drop is drawn
+#: before the deeper slabs, so any slab that really wants the column raises when
+#: its own ``put`` lands on the ``.``.
+#:
+#: It does **not** move the east wall. ``ret_x`` stays floored at ``struct_east +
+#: 3`` (below), so the box and :data:`MEM_PAD_FOR` are untouched — the tail is
+#: walking into space the return path already owns. Whether the wall may follow is
+#: a separate question; see :data:`SEEK_TAIL_WALL`, where the answer is that it
+#: may, by two columns, and that doing so is worth exactly nothing.
+#:
+#: Measured, hires/taped, 21 rounds, ``passed=True fatal=None``, box unchanged at
+#: 625x403 and ``mem_pad`` -1 throughout. Alone (risers on the slot table):
+#:
+#: | west | ticks | Δ |
+#: |---|---|---|
+#: | 0 | 132,920,972 | — |
+#: | 1 | 132,907,200 | -13,772 |
+#: | 2 | 132,901,576 | -19,396 |
+#: | 3 | 132,885,260 | -35,712 |
+#: | 4 | 132,868,944 | -52,028 |
+#: | **5** | **132,852,628** | **-68,344** (-0.0514%) |
+#: | 6 | — | collides |
+#:
+#: With :data:`SLAB_RISERS_WEST` the floor is 6 and the pair lands at
+#: **132,807,820** (-113,152, **-0.0851%**, 150.9896 -> 150.8611 t/instr).
+#: ~16,300 ticks a column: four columns of entry-row run and one of taken-row leg
+#: apiece, on every taken ``JMPS``.
+SEEK_TAIL_WEST: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "taped"): 6,
+}
+
+#: Per-``(slug, tier)`` opt-in for letting the **CPU east wall follow**
+#: :data:`SEEK_TAIL_WEST`. Empty by default, so every machine that does not name
+#: itself here is byte-identical.
+#:
+#: ``ret_x`` is floored at ``struct_east + 3`` whenever the drum is on, and that
+#: floor *is* the wall on this machine — every other candidate (the lane drops,
+#: the slab risers, ``lane_x0``) is further west. So once the tail has walked
+#: :data:`SEEK_TAIL_WEST` columns west, the floor it justified has walked with it
+#: and the wall is free to follow. This is the knob that spends that.
+#:
+#: It is worth asking because the tail move itself is small change and a narrower
+#: CPU is not: the wall is where ``mem_resp`` attaches, and :data:`MEM_PAD_FOR`'s
+#: floor is that attachment point against the rival pipes. Every column of pad is
+#: walked twice by every memory instruction, so on the recorded arithmetic
+#: (:data:`SLAB_TIGHT_RISERS`, +8.437%) the eastern columns of the CPU are "bought
+#: pad floor, not air" and a wall that moves west should be worth **columns of
+#: pad**, which is an order of magnitude more than the tail itself.
+#:
+#: **Re-derived on the current geometry, and the prize is gone.** Two independent
+#: measurements, hires/taped, everything else shipped:
+#:
+#: 1. **The wall may follow, but only by two columns.** At ``west`` 3 and beyond
+#:    the *input* lane's ``r`` at (18, 152) stops binding ``in``::
+#:
+#:      'r' at (18, 152) must bind 'in' but distances are
+#:      [('mem_resp', 21), ('in', 24), ('rom', 45)]
+#:
+#:    ``mem_resp`` rides the east wall, so every column the wall moves west is a
+#:    column it gains on that ``r``: 26 at ``west`` 0, a tie with ``in`` at 24 by
+#:    ``west`` 2, and a loss from 3 on. It is not recoverable through
+#:    :data:`MEM_PAD_FOR` — the pad moves the *memory* band, not the input lane's
+#:    ``r``, and the failure is identical at every pad in -8..1 — nor by moving
+#:    the rival: :data:`INPUT_NORTH_WEST` already has the ``I`` room at ``CX + 1``,
+#:    the westernmost legal column.
+#:
+#: 2. **The two columns it can take are worth nothing, because ``mem_pad`` is
+#:    saturated.** At the shipped wall, every pad from -12 to -1 builds the
+#:    **byte-identical** grid (sha ``20082384``; pad 0 differs), so the memory band
+#:    is already hard against ``lane_x0 + max(prefixes)`` and no amount of extra
+#:    room west of it moves a glyph. Letting the wall follow at ``west`` 1
+#:    (:data:`SLAB_RISERS_WEST` off, to isolate it) reproduces the fixed-wall tick
+#:    count *exactly* — 132,907,200 either way — at 624x403 instead of 625x403,
+#:    and pads -6..-2 there are likewise identical to the tick.
+#:
+#: So what is on offer is **two columns of box for zero ticks** (625x403 ->
+#: 623x403 at ``west`` 2). Left unclaimed because this tier is judged on ticks and
+#: the shipped tail is at 6, which the wall may not follow.
+#:
+#: So :data:`MEM_PAD_FOR`'s standing instruction — "revisit when, and only when,
+#: the pad stops being a function of this wall" — has come true, and the answer is
+#: the disappointing half of it: the pad stopped being a function of the wall by
+#: **bottoming out**, not by being freed. The eastern columns are no longer bought
+#: pad floor; they are genuinely air, and air is worth zero ticks. What would make
+#: this live again is anything that moves ``mem_x`` off ``lane_x0 + max(prefixes)``
+#: — a lane order or micro-program change that shortens the longest memory prefix
+#: — since only then does the band have somewhere west to go.
+SEEK_TAIL_WALL: set[tuple[str, str]] = set()
+
+#: Per-``(slug, tier)`` opt-in for :data:`SLAB_TIGHT_RISERS`' **walk** without its
+#: **span**. Empty by default, so every machine that does not name itself here is
+#: byte-identical.
+#:
+#: This is :data:`SEEK_TAIL_WEST`'s mechanism applied to the branch slabs, and it
+#: is the reason :data:`SLAB_TIGHT_RISERS` measured +8.437% while this does not:
+#: that registry moved the risers *and* narrowed :func:`_slab_east_span`, which
+#: walks ``struct_east`` and the CPU east wall west and re-prices
+#: :data:`MEM_PAD_FOR`. The two effects are separable. ``tight_risers`` here is
+#: passed to :func:`_slab` alone; :func:`_slab_east_span` keeps returning nine, so
+#: the staircase, ``struct_east``, the wall and the pad see an unchanged band and
+#: the risers simply stop walking columns they were only walking to reach a slot
+#: the table reserved.
+#:
+#: What it is worth is one arm each. Under :data:`SLAB_TIGHT_ARMS` the taken arm
+#: is at ``base + 4`` and the two rising arms are still on the slot table:
+#: ``BRZ``'s ``neg`` riser at ``base + 9`` moves to ``base + 5`` (four columns,
+#: walked out and back on every ``BRZ`` that falls negative) and ``BRN``'s
+#: ``zero`` riser at ``base + 6`` moves to ``base + 5`` (one column).
+#:
+#: ``_SLAB_RISER_SLOTS`` is the floor and was re-swept here rather than trusted,
+#: because the slots now share a band with :data:`SEEK_TAIL_WEST`'s drop column.
+#: 21 rounds, ``passed=True fatal=None``, everything else shipped, on top of the
+#: tail at 5:
+#:
+#: | slots | box | ticks |
+#: |---|---|---|
+#: | off (``+9``/``+6``) | 625x403 | 132,852,628 |
+#: | **(5, 3)** | **625x403** | **132,824,136** |
+#: | (6, 3) | 625x403 | 132,831,844 |
+#: | (7, 3) | — | ``collision at (25, 43): '.' vs '^'`` — ``BRN``'s northern riser on the seek tail's own drop column |
+#: | (8, 3) | — | ``collision at (15, 39): '.' vs '<'`` |
+#: | (5, 4) | — | ``collision at (11, 43): '^' vs ']'`` — the drain ladder |
+#:
+#: The ``(7, 3)`` row is the interesting one: with the tail at ``struct_east + 1
+#: - 5`` the two levers now compete for the same columns, and the riser is what
+#: gives. That is also why the tail's own floor is re-swept *after* this, not
+#: before.
+SLAB_RISERS_WEST: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
 }
 
@@ -5103,10 +5323,12 @@ def check_bindings(
     reads first, and the failure mode is a wrong frame rather than an exception.
     That is what the 21-round frame gate is for; a 3-round screen will not see it.
     """
-    incoming = {"rom", "in", "mem_resp", Band.STREAM_RESP}
+    incoming = {"rom", "in", "mem_resp", Band.STREAM_RESP, "spill_resp"}
     for x, y, glyph, band in glyphs:
         if band == Band.MEM:
             want = "mem_req" if glyph == "s" else "mem_resp"
+        elif band == Band.SPILL:
+            want = "spill_req" if glyph == "s" else "spill_resp"
         else:
             want = band  # "rom", Band.IN == "in", Band.OUT == "out"
         rivals = {
@@ -5334,6 +5556,7 @@ def build(
     compact: bool = False,
     hot: tuple[int, int] | None = None,
     mem_offset: tuple[int, int] = (0, 0),
+    spill: Mapping[str, int] | None = None,
     store_offset: tuple[int, int] = (0, 0),
     in_north: bool = False,
     store_teleport: bool = False,
@@ -5597,6 +5820,7 @@ def build(
                     fold_lanes=fold_lanes,
                     fetch_fold=fetch_fold,
                     fetch_tuck=fetch_tuck,
+                    spill=spill,
                 )
             except MachineError as exc:
                 last = exc
@@ -5682,6 +5906,7 @@ def build(
                     fold_lanes=fold_lanes,
                     fetch_fold=fetch_fold,
                     fetch_tuck=fetch_tuck,
+                    spill=spill,
                 )
             except MachineError:
                 continue
@@ -5789,6 +6014,7 @@ def _assemble(
     fold_lanes: bool = False,
     fetch_fold: bool = False,
     fetch_tuck: bool = False,
+    spill: Mapping[str, int] | None = None,
 ) -> Machine:
     seek = seek_layout is not None
     if seek and not short_return:
@@ -5816,6 +6042,13 @@ def _assemble(
         packed_band=(program.name, store) in PACKED_SLAB_BAND,
         seek_jump_gap=PACKED_SLAB_BAND.get((program.name, store), 0),
         seek_jump_east=seek and (program.name, store) in SEEK_JUMP_EAST,
+        seek_tail_west=(
+            SEEK_TAIL_WEST.get((program.name, store), 0)
+            if seek and (program.name, store) in SEEK_JUMP_EAST
+            else 0
+        ),
+        seek_tail_wall=seek and (program.name, store) in SEEK_TAIL_WALL,
+        risers_west=(program.name, store) in SLAB_RISERS_WEST,
         tight_arms=(program.name, store) in SLAB_TIGHT_ARMS,
         tight_risers=(program.name, store) in SLAB_TIGHT_RISERS,
         tuck_drain=(program.name, store) in SLAB_TUCKED_DRAIN,
@@ -5836,6 +6069,7 @@ def _assemble(
         fold_lanes=fold_lanes,
         fetch_fold=fetch_fold,
         fetch_tuck=fetch_tuck,
+        spill_col=spill["col"] if spill else 0,
     )
     W, H = cpu.width, cpu.height
 
@@ -6581,6 +6815,63 @@ def _assemble(
                 ]
             )
 
+    # ── the SPILL block, in the pocket east of the CPU ───────────────────────
+    # Two cells of interior width is all a one-word LIFO needs, because the man
+    # *is* the storage: ``R`` takes the pushed word and ``s`` parks it in the
+    # outgoing pipe, where it waits until the CPU's ``POP`` reads it. The pipe is
+    # the latch and the rendezvous both — ``r`` blocks until a word is ready and
+    # ``s`` blocks until there is room — so the discipline is enforced by the
+    # hardware rather than trusted from the program.
+    #
+    # ``R`` rather than ``r``: the room has exactly one incoming pipe, so "any
+    # ready pipe" and "the nearest pipe" are the same thing, and ``R`` says the
+    # binding does not depend on where the pipe was attached.
+    #
+    # Drawn last, so every cell it takes is a cell nothing else wanted: a
+    # collision here is :meth:`_Grid.put` raising, not a silent overlap.
+    spill_touches: dict[str, tuple[int, int]] = {}
+    spill_regions: dict[str, tuple[int, int, int, int]] = {}
+    if spill is not None:
+        sx0 = CX + W + 2  # the touch column: one east of the CPU's east wall
+        sy0, sh = spill["room_y"], spill["room_h"]
+        sy1 = sy0 + sh - 1
+        req_y, resp_y = spill["req_row"], spill["resp_row"]
+        if sh < 6:
+            raise MachineError("the SPILL loop needs 4 interior rows (room_h >= 6)")
+        if not resp_y + 2 <= sy0 <= sy1 <= req_y - 2:
+            raise MachineError(
+                f"SPILL rows must run resp {resp_y} < room {sy0}..{sy1} < req "
+                f"{req_y}, each clear by two: the two pipes climb opposite sides "
+                "of the block and a pipe is two cells or it is not a pipe"
+            )
+        # Two interior columns: the east one rises and *receives*, the west one
+        # descends and *sends*. Which way round matters, because a man spawns
+        # facing east (``SPEC.md``) and ``@`` is a nop once he is walking: putting
+        # the spawn on the descending column at a row whose eastern neighbour is
+        # a ``^`` sends him up the receiving side first, so the very first thing
+        # this block ever does is take a word — never park an empty ``A`` in the
+        # answer pipe, which the first ``POP`` would then read as a zero.
+        L, R = sx0 + 1, sx0 + 2
+        with g.part("spill"):
+            g.room(sx0, sy0, sx0 + 3, sy1)
+            g.put(L, sy0 + 1, "v")
+            g.put(L, sy0 + 2, "s")
+            g.put(R, sy0 + 1, "<")
+            g.put(R, sy0 + 2, "R")
+            for y in range(sy0 + 3, sy1 - 1):
+                g.put(L, y, "@" if y == sy0 + 3 else ".")
+                g.put(R, y, "^")
+            g.put(L, sy1 - 1, ">")
+            g.put(R, sy1 - 1, "^")
+            route_lengths["cpu->spill"] = g.draw_pipe(
+                [(sx0, req_y), (R, req_y), (R, sy1 + 1)]
+            )
+            route_lengths["spill->cpu"] = g.draw_pipe(
+                [(L, sy0 - 1), (L, resp_y), (sx0, resp_y)]
+            )
+        spill_touches = {"spill_req": (sx0, req_y), "spill_resp": (sx0, resp_y)}
+        spill_regions["spill"] = (sx0, sy0, 4, sh)
+
     rows = g.rows()
 
     # ── name every block in grid coordinates ─────────────────────────────────
@@ -6596,6 +6887,7 @@ def _assemble(
     else:
         regions.update(extra_regions)
     regions.update(seek_regions)
+    regions.update(spill_regions)
     # The fetch corridor, which is otherwise the one unnamed thing on the overlay — and
     # the only place the ROM-PLUS snake would show up at all. Its cell count *is* its
     # capacity in words (``SPEC.md``), so the note is the number that matters.
@@ -6629,6 +6921,7 @@ def _assemble(
         "mem_resp": (CX + W + 2, resp_row),
         **dsp_touches,
         **stream_touches,
+        **spill_touches,
     }
     if cpu.has_in:
         touches["in"] = (in_x, CY - 1) if in_north else (CX - 1, iy)
@@ -11179,6 +11472,20 @@ def _tier_program(slug: str, store: str):
     return prog
 
 
+#: The SPILL block: where its two pipes meet the CPU's east wall, where the block
+#: itself stands, and how far east ``PUSH``/``POP``'s pipe glyph is pushed inside
+#: its lane. Absent means no block and no ``PUSH``/``POP`` lanes — which is every
+#: entry in this registry except the one being measured, and is why adding it
+#: changes nothing anywhere else.
+#:
+#: ``col`` is the whole design freedom the block has, and it exists because §7.1
+#: gives a lane no other lever: both spill glyphs are their lane's *first* band
+#: glyph, so without a column they sit at ``lane_x0``, where the ROM pipe on the
+#: west wall beats anything hanging off the east one. Walking them east trades a
+#: couple of ticks of lane walking for the binding.
+SPILL_LAYOUT: dict[tuple[str, str], dict[str, int]] = {}
+
+
 def build_for(
     slug: str,
     *,
@@ -11204,6 +11511,9 @@ def build_for(
     high_drops_free: bool | None = None,
     tuck_drops: bool | None = None,
     fold_lanes: bool | None = None,
+    spill: Mapping[str, int] | None = None,
+    middle_order: Sequence[str] | None = None,
+    opcode_slots: Mapping[str, int] | None = None,
     program=None,
 ) -> Machine:
     """Generate the machine for a checked-in task program.
@@ -11269,8 +11579,8 @@ def build_for(
         tape_skip_batch=tape_skip_batch,
         tape_relay_size=tape_relay_size,
         tape_jump_threshold=tape_jump_threshold,
-        middle_order=LANE_ORDER.get(slug),
-        opcode_slots=OPCODE_SLOTS.get((slug, store)),
+        middle_order=middle_order if middle_order is not None else LANE_ORDER.get(slug),
+        opcode_slots=(OPCODE_SLOTS.get((slug, store)) if opcode_slots is None else opcode_slots),
         rom_buffer=ROM_BUFFER.get(slug),
         compact=compact,
         mem_offset=tier.get("mem_offset", mem_offset),
@@ -11341,6 +11651,7 @@ def build_for(
         high_drops_free=(
             (slug, store) in HIGH_DROPS_FREE if high_drops_free is None else high_drops_free
         ),
+        spill=SPILL_LAYOUT.get((slug, store)) if spill is None else spill,
     )
 
 
