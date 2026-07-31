@@ -966,6 +966,7 @@ def _slab_east_span(
     drain_ops: tuple[str, ...] | None,
     jump_east: bool,
     seek_jump_gap: int = 0,
+    tight_arms: bool = False,
 ) -> int:
     """How many columns **east of ``base``** slab ``m``'s own glyphs reach.
 
@@ -1002,6 +1003,15 @@ def _slab_east_span(
     sem = p.sem[m]
     if sem is Sem.JUMP_SEEK:
         return seek_jump_gap if jump_east else 9
+    # NOTE: :data:`SLAB_TIGHT_ARMS` deliberately does **not** narrow this span,
+    # even though a ``BR_NEG``'s easternmost riser falls to ``base + 6`` when its
+    # taken arm stops reaching ``base + 9``. Spending the three columns measured
+    # **+5.76%** on hires/men-v3: closing the band moves ``struct_east`` west, the
+    # request `s` with it, and the §7.1 tie that fixes ``mem_pad`` then needs a pad
+    # of 10 where 2 had done. Eight extra pad cells are walked by every one of
+    # ~87,000 store reads, and that costs an order of magnitude more than the arm
+    # compaction saves. The arms are narrowed for their **walk**; the band keeps
+    # its columns. See the registry's note.
     drained = 0
     if _drained(m, drain_unit_bits, drain_ops):
         from .drain import build_drain
@@ -1026,6 +1036,7 @@ def _slab_bases(
     drain_ops: tuple[str, ...] | None = None,
     jump_east: bool = False,
     seek_jump_gap: int = 0,
+    tight_arms: bool = False,
 ) -> tuple[dict[str, int], int]:
     """``(base per slab, struct_east)`` for the staircase.
 
@@ -1046,7 +1057,9 @@ def _slab_bases(
     east = uniform - 2
     for m in order:
         bases[m] = b
-        span = _slab_east_span(p, m, drain_unit_bits, drain_ops, jump_east, seek_jump_gap)
+        span = _slab_east_span(
+            p, m, drain_unit_bits, drain_ops, jump_east, seek_jump_gap, tight_arms
+        )
         east = b + span
         b += span + 2
     return bases, east + 2
@@ -1641,6 +1654,8 @@ def build_cpu(
     high_drops_free: bool = False,
     packed_band: bool = False,
     seek_jump_gap: int = 0,
+    seek_jump_east: bool = False,
+    tight_arms: bool = False,
     sparse_collector: bool = False,
 ) -> _Cpu:
     """Lay the CPU: fetch, decode trie, lanes, structures band, return path.
@@ -1956,6 +1971,7 @@ def build_cpu(
         drain_ops=drain_ops,
         jump_east=seek_taken_drop_east,
         seek_jump_gap=seek_jump_gap,
+        tight_arms=tight_arms,
     )
 
     # ── lane extents ─────────────────────────────────────────────────────────
@@ -2492,6 +2508,7 @@ def build_cpu(
                     struct_drops |= _slab(
                         g, m, p, s0, base, collector, pipe_glyphs,
                         drain_unit_bits if _drained(m, drain_unit_bits, drain_ops) else 0,
+                        tight_arms=tight_arms,
                     )
             elif p.sem[m] in _JUMP_SEMS:
                 # never west of ``base`` (that is the shipped column and the floor),
@@ -2508,7 +2525,16 @@ def build_cpu(
                 # every other slab's columns are forbidden and not only the deeper
                 # ones. Walk west to the first column that is nobody's; ``base`` is
                 # always one, because a seek jump draws nothing there.
-                jx = base if jump_x is None else max(base, min(jump_x, drop_x[row_of[m]] - 1))
+                # :data:`SEEK_JUMP_EAST` drops the ``drop_x - 1`` cap entirely and
+                # leaves the entry row heading east instead. The cap exists so the
+                # lane's own ``<`` keeps its cell, which only matters while the man
+                # is walking west past it; going east he turns *after* it, so the
+                # only real constraint is that the column belong to nobody, and
+                # ``struct_east + 1`` belongs to nobody by construction.
+                if seek_jump_east and jump_x is not None:
+                    jx = jump_x
+                else:
+                    jx = base if jump_x is None else max(base, min(jump_x, drop_x[row_of[m]] - 1))
                 if jx != base:
                     busy: set[int] = set()
                     for other in order:
@@ -2527,11 +2553,22 @@ def build_cpu(
                                     drain_ops,
                                     seek_taken_drop_east,
                                     seek_jump_gap,
+                                    tight_arms,
                                 ),
                             )
                         )
-                    while jx > base and jx in busy:
-                        jx -= 1
+                    if seek_jump_east:
+                        # Going east there is nowhere to retreat to — ``e_s`` is the
+                        # next column but one and the taken row's ``s`` owns it. If
+                        # ``struct_east + 1`` is somebody's, say so rather than
+                        # sliding into a column that silently belongs to a slab.
+                        if jx in busy:
+                            raise MachineError(
+                                f"seek jump east column {jx} is inside another slab's span"
+                            )
+                    else:
+                        while jx > base and jx in busy:
+                            jx -= 1
                 with g.part(f"slab:{m}"):
                     for yy in range(s0 + 1, taken_row):
                         if jx != base and (jx, yy) in g.c:
@@ -2573,13 +2610,22 @@ def build_cpu(
             s0, dx = slab_at[m], drop_x[row_of[m]]
             base = slab_base[m]
             with g.part(f"entry:{m}"):
-                g.put(dx, s0, "<")
+                turn = turn_x.get(m, base)
+                east = turn > dx
+                g.put(dx, s0, ">" if east else "<")
                 if p.sem[m] not in _SEEK_SEMS and p.sem[m] in _JUMP_SEMS:
                     # the classic discard loop owns `a<` at base..base+1
                     for x in range(base + 2, dx):
                         g.soft(x, s0, "<")
+                elif east:
+                    # :data:`SEEK_JUMP_EAST`: the man lands on the entry row at the
+                    # lane's drop column and continues **east** to a turn past every
+                    # slab, so the taken row's leg east to the request `s` is one
+                    # cell instead of the whole band's width.
+                    for x in range(dx + 1, turn):
+                        g.soft(x, s0, ">")
+                    g.put(turn, s0, "v")
                 else:
-                    turn = turn_x.get(m, base)
                     for x in range(turn + 1, dx):
                         g.soft(x, s0, "<")
                     g.put(turn, s0, "v")
@@ -2651,7 +2697,8 @@ def build_cpu(
         for m in order:
             with g.part(f"slab:{m}"):
                 struct_drops |= _slab(
-                    g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs, drain_unit_bits
+                    g, m, p, slab_at[m], slab_base[m], collector, pipe_glyphs,
+                    drain_unit_bits, tight_arms=tight_arms,
                 )
 
         # Entry rows, drawn last: `soft` leaves every crossing drop's `.` in place
@@ -2873,6 +2920,7 @@ def _slab(
     collector: int,
     pipe_glyphs: list[tuple[int, int, str, str]],
     drain_unit_bits: int = 0,
+    tight_arms: bool = False,
 ) -> set[int]:
     """Draw one structures-band slab below its entry row. Returns its drop columns.
 
@@ -2944,6 +2992,21 @@ def _slab(
     # crosses the eastward run of an arm below it.
     cols = {"neg": base + 9, "zero": base + 6, "pos": base + 3}
     taken = "zero" if sem is Sem.BR_ZERO else "neg"
+    if tight_arms:
+        # :data:`SLAB_TIGHT_ARMS`. The slot table above sizes every arm as if it
+        # were the ``neg`` one; three of the nine columns it reserves are what the
+        # *taken* arm walks out and back over, and it holds nothing there. The
+        # taken arm's column is a free choice in a way a riser's is not — a riser
+        # has to climb clear of every shallower slab, but the taken arm only has
+        # to drop three rows to ``turn_row`` and walk back west to ``base + 3``.
+        #
+        # So it wants the westernmost column that is (a) east of ``base + 3``,
+        # where the turn row's own ``v`` sits, and (b) not one of the two risers.
+        # The risers are always a subset of ``{+3, +6, +9}``, so ``base + 4`` is
+        # free whichever arm is taken, and the rows it crosses on the way down
+        # carry only ``.`` there — the arms below reach east as far as their own
+        # riser, and a ``.`` is shared by an eastbound and a southbound man alike.
+        cols[taken] = base + 4
     drops: set[int] = set()
 
     turn_row = s0 + 4
@@ -3404,6 +3467,92 @@ TIGHT_STRUCT_DROPS: set[str] = {"little-little-man"}
 SEEK_TIGHT_STRUCT_DROPS: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
     ("deadman-3d_hires", "men-v3"),
+}
+
+#: Per-``(slug, tier)`` opt-in for a seek jump that leaves its entry row heading
+#: **east**, to a turn column past every slab, instead of west to ``slab_base``.
+#:
+#: :data:`SEEK_TAKEN_DROP_EAST`'s cancellation identity is ``turn_x == drop_x - 1``:
+#: the entry row's westward leg and the taken row's eastward leg telescope, and the
+#: drop column falls out of the cost.  **That identity does not survive a packed
+#: band.**  ``jump_x`` is capped at ``drop_x - 1`` and then walked *west* out of
+#: every other slab's reserved span, and once the band closes up there is no gap
+#: left east of ``base`` — measured on hires/men-v3, ``cpu:slab:JMPS`` descends at
+#: x=10, which is ``base_JMPS`` exactly, against ``drop_x`` 26.  The man therefore
+#: walks 16 cells west along the entry row, drops 22, and walks 29 straight back
+#: east along the taken row to reach the request ``s`` at ``e_s`` 39: a U-turn of
+#: ``2 * (drop_x - base)`` = 32 ticks that holds nothing, on every taken jump.
+#:
+#: The fix is to stop capping at ``drop_x - 1``.  A seek jump has **no slab body** —
+#: it is one turn south and a bare drop — so its turn column is a free choice in a
+#: way a branch's is not, and ``struct_east + 1`` is east of every slab body by
+#: construction *and* one west of ``e_s - 1``.  Turning there makes the entry row
+#: run east ``struct_east + 1 - drop_x`` cells and the taken row's leg one cell,
+#: which is the same telescoping the identity wanted, reached from the other side.
+#:
+#: It cannot move the east wall: ``ret_x`` is already floored at ``struct_east + 3``
+#: whenever the drum is on (the taken row's send site plus its ``v``), so the new
+#: drop column at ``struct_east + 1`` is strictly inside a span the return path
+#: already owns.  ``MEM_PAD_FOR`` is therefore unaffected — verified by build, not
+#: assumed.
+#:
+#: **This is the CPU half of "issue the seek request early".**  Every tick removed
+#: here is a tick the drum starts its notice walk sooner, and the CPU is measured
+#: ~927 t/seek *blocked* on exactly that walk — so the saving lands on the critical
+#: path rather than in slack.
+#:
+#: Measured, 21 rounds, ``passed=True`` on both tiers: men-v3 87,688,021 ->
+#: 87,424,821 (**-0.300%**) at an unchanged 496x672 and ``mem_pad`` 2; taped
+#: 146,672,958 -> 146,411,582 (**-0.178%**) at an unchanged 625x396. The geometry
+#: does not move, so ``MEM_PAD_FOR`` is unaffected — checked, not assumed.
+SEEK_JUMP_EAST: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "men-v3"),
+    ("deadman-3d_hires", "taped"),
+}
+
+#: Per-``(slug, tier)`` opt-in for a branch slab whose **taken arm turns where it
+#: is, instead of at the arm slot the table reserves for it**.
+#:
+#: :func:`_slab` sizes all three arms from one table — ``neg`` at ``base + 9``,
+#: ``zero`` at ``+6``, ``pos`` at ``+3`` — spaced three apart so no arm's drop
+#: lands on another's. That spacing is necessary for the two arms that **rise**:
+#: a riser owns its column from the collector all the way down, so two of them may
+#: not share. It is not necessary for the one that is **taken**, which only drops
+#: three rows to ``turn_row`` and walks back west to ``base + 3``.
+#:
+#: The cost of pretending otherwise is visible in the band. On hires/men-v3 the
+#: two branches are the same hardware with the lanes relabelled (§6), and they are
+#: drawn eleven columns apart in width::
+#:
+#:     BRZ (zero taken)   >XWb..v      7 wide
+#:     BRN (neg  taken)   >Wb.....v   11 wide
+#:
+#: Five of ``BRN``'s dots are nothing at all — the taken man walks east over them
+#: and straight back west along ``turn_row``, ``2 * 5`` ticks that hold no state.
+#: ``BRZ`` is narrower only because ``zero``'s slot happens to sit further west,
+#: which is an accident of the table and not a property of the branch.
+#:
+#: So the taken arm turns at ``base + 4``: the westernmost column east of the turn
+#: row's own ``v`` that is not one of the two risers (they are always a subset of
+#: ``{+3, +6, +9}``). The rows it crosses on the way down hold only ``.`` there,
+#: and a ``.`` is shared by an eastbound and a southbound man alike — the same
+#: "operations ride cells the man already walks" that :data:`FOLDED_LANES` and
+#: :data:`TIGHT_TRIE_COLS` spend.
+#:
+#: It also narrows the slab's **reserved span**, but only for a ``BR_NEG``: with
+#: ``neg`` taken the easternmost riser is ``zero``'s at ``+6``, so the span falls
+#: 9 -> 6 and :data:`PACKED_SLAB_BAND` can close the band up by three columns. A
+#: ``BR_ZERO`` still has ``neg``'s riser at ``+9`` and spans nine as before.
+#: Because that moves ``struct_east``, it moves the east wall — **re-sweep**
+#: :data:`MEM_PAD_FOR` after turning this on, rather than assuming it held.
+#:
+#: Measured, 21 rounds, ``passed=True`` on both tiers, **on top of**
+#: :data:`SEEK_JUMP_EAST`: men-v3 87,424,821 -> 86,981,643 (**-0.506pp**, -0.806%
+#: against the base) and taped 146,411,582 -> 145,970,818 (**-0.301pp**, -0.479%).
+#: The two are additive to within a tenth of a point, and neither moves the box.
+SLAB_TIGHT_ARMS: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "men-v3"),
+    ("deadman-3d_hires", "taped"),
 }
 
 #: Per-``(slug, tier)`` opt-in for **drop columns floored by operations rather than
@@ -5114,6 +5263,8 @@ def _assemble(
         ),
         packed_band=(program.name, store) in PACKED_SLAB_BAND,
         seek_jump_gap=PACKED_SLAB_BAND.get((program.name, store), 0),
+        seek_jump_east=seek and (program.name, store) in SEEK_JUMP_EAST,
+        tight_arms=(program.name, store) in SLAB_TIGHT_ARMS,
         sparse_collector=(program.name, store) in SPARSE_COLLECTOR,
         trim_dead=trim_dead,
         top_bus=top_bus,
