@@ -4702,16 +4702,104 @@ _Y_ADAPTER = [
     ".>s0s......v",  # read: send addr, then op=0
     "^.........@<",
 ]
+#: The same protocol with the return leg *forked off* instead of walked: 4x8,
+#: and — the only thing that buys ticks — two cells shorter on the **forward**
+#: leg, the one the CPU is stopped on.
+#:
+#: The shipped block is a single man who receives, expands the request into two
+#: or three words, and then walks all the way home. Only the expansion is on the
+#: critical path; the walk home happens inside the next request's idle gap (the
+#: adapter man measures 89% blocked, mean 216 ticks between requests). So the
+#: fold that pays is not shortening the walk — a previous agent measured that at
+#: exactly zero — but deleting the ``M``/``W`` register shuffle that the *one*
+#: man needed to hold both the op and the address at once::
+#:
+#:     shipped read   U X > M 0 s W s      address into the pipe on the 8th tick
+#:     forked  read   U X Y v < s          ... on the 6th, and the op on the 5th
+#:
+#: ``Y`` gives two men who each carry their own copy of the request word, so one
+#: says ``0`` and sends it while the other sends the word unmodified. One of the
+#: two then walks home and the other ``H``alts, which is what keeps the
+#: population stationary: one man in at ``U``, one man out per lap.
+#:
+#: ``X`` is entered heading **east** exactly as it is in the shipped block —
+#: ``U`` turns away from the west wall's pipe — so ``sign(A)`` still puts the
+#: **read** arm (``A > 0``, clockwise, south) below the branch row and the
+#: **write** arm (``A < 0``, counter-clockwise, north) above it. Both arms land
+#: on a ``Y`` one cell off the branch, and the two children of each split divide
+#: the shipped man's job between them::
+#:
+#:     read   (south ``Y``, entered heading south)
+#:            west child, born first:  ``0`` ``s`` ``H``   — op 0 into the pipe, done
+#:            east child, born second: ``v`` ``<`` ``s``   — the word is already the
+#:                                                           address; send it and go home
+#:     write  (north ``Y``, entered heading north)
+#:            east child, born first:  ``1`` ``s`` ``H``   — op 1 into the pipe, done
+#:            west child, born second: ``N`` ``s`` ``r`` ``v`` ``>`` ``s``
+#:                                                         — negate to the address, send,
+#:                                                           take the value, pass it on
+#:
+#: **Send order comes out right on both arms for the same reason, and it is not
+#: a coincidence to be relied on twice.** SPEC: the order-preserving child is the
+#: one born to the *right* of the entry heading and it keeps the parent's
+#: creation-order slot, so it executes first within a tick; the other is the
+#: newest runner and acts after every existing one. Right-of-south is **west**
+#: and right-of-north is **east** — which on both arms is precisely the child
+#: holding the op. So when the two ``s`` glyphs fall on the same tick, the op
+#: wins the pipe's source cell and the address blocks one tick behind it, which
+#: is the order the tape's wire protocol wants.
+#:
+#: Man accounting is stationary by construction: one man enters at ``U``, ``Y``
+#: makes two, exactly one of the two walks into an ``H``, and exactly one comes
+#: back to ``U``. ``H`` halts *that little man* and not the program (SPEC
+#: §Control flow), and ``Y`` is the sanctioned way to have two men in one room —
+#: "at most one ``@`` per room" is a rule about the *glyph* at load time.
+#:
+#: Neither return leg passes back through ``X``, so nothing has to zero ``A`` to
+#: stop a returning man being deflected by the address or the value he carries:
+#: the read arm comes up column 3 and the write arm along row 1, both arriving at
+#: ``U`` from a side ``X`` is not on. The ``0`` at (3,2) is the read arm's *op*,
+#: which the returning man merely walks over.
+#:
+#: The height is unchanged at 4, so ``floor_y = AY + ADAPTER_H + 1`` does not
+#: move and the store's request drop below it is untouched, cell for cell.
+_ADAPTER_FORK = [
+    "vrsNY1sH",  # write arm: <- N s r v | Y | 1 s H ->
+    ">s@UX   ",  # spawn, receive, branch on sign; the write arm's value passes here
+    " Hs0Yv  ",  # read arm:  <- H s 0   | Y | v ->
+    "   ^s<  ",  # the read arm's send-and-return leg, back up column 3 into ``U``
+]
 ADAPTER_W = len(_ADAPTER[0])
 ADAPTER_H = len(_ADAPTER)
 ADAPTER_IN_ROW = 2  # west wall: the request pipe from the CPU
 ADAPTER_OUT_ROW = 2  # east wall: the expanded request out to the tape
 
+#: The adapter shapes :func:`adapter_rows` will hand out. ``wide`` is the shipped
+#: 12x4 block and stays the default; ``fork`` is :data:`_ADAPTER_FORK`.
+ADAPTER_FORMS = ("wide", "fork")
 
-def adapter_cells(*, address_first: bool = False) -> dict[tuple[int, int], str]:
+
+def adapter_rows(*, address_first: bool = False, form: str = "wide") -> list[str]:
+    """The adapter's interior, as text rows.
+
+    ``form`` selects the shape. ``fork`` has no ``address_first`` variant: only
+    ``men-y`` wants the address first and only ``taped`` forks.
+    """
+    if form not in ADAPTER_FORMS:
+        raise MachineError(f"unknown adapter form {form!r}; expected {ADAPTER_FORMS!r}")
+    if form == "fork":
+        if address_first:
+            raise MachineError("no address-first variant of the forked adapter")
+        return _ADAPTER_FORK
+    return _Y_ADAPTER if address_first else _ADAPTER
+
+
+def adapter_cells(
+    *, address_first: bool = False, form: str = "wide"
+) -> dict[tuple[int, int], str]:
     """The adapter's interior cells, local (1,1)-based."""
     out: dict[tuple[int, int], str] = {}
-    rows = _Y_ADAPTER if address_first else _ADAPTER
+    rows = adapter_rows(address_first=address_first, form=form)
     for y, row in enumerate(rows, start=1):
         for x, ch in enumerate(row, start=1):
             if ch != " ":
@@ -5571,12 +5659,15 @@ def build(
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
+    store_request_tuck: bool = False,
+    adapter_form: str = "wide",
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
     store_tight_gate: bool = False,
     store_gate_return_slack: int | None = None,
     store_gate_park_const: bool = False,
+    store_gate_south_reuse_b: bool = False,
     store_tape_park_const: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -5801,12 +5892,15 @@ def build(
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
+                    store_request_tuck=store_request_tuck,
+                    adapter_form=adapter_form,
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
                     store_tight_gate=store_tight_gate,
                     store_gate_return_slack=store_gate_return_slack,
                     store_gate_park_const=store_gate_park_const,
+                    store_gate_south_reuse_b=store_gate_south_reuse_b,
                     store_tape_park_const=store_tape_park_const,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -5893,12 +5987,15 @@ def build(
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
+                    store_request_tuck=store_request_tuck,
+                    adapter_form=adapter_form,
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
                     store_tight_gate=store_tight_gate,
                     store_gate_return_slack=store_gate_return_slack,
                     store_gate_park_const=store_gate_park_const,
+                    store_gate_south_reuse_b=store_gate_south_reuse_b,
                     store_tape_park_const=store_tape_park_const,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -6007,12 +6104,15 @@ def _assemble(
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
+    store_request_tuck: bool = False,
+    adapter_form: str = "wide",
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
     store_tight_gate: bool = False,
     store_gate_return_slack: int | None = None,
     store_gate_park_const: bool = False,
+    store_gate_south_reuse_b: bool = False,
     store_tape_park_const: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -6274,6 +6374,23 @@ def _assemble(
     else:
         extra_regions, tier = {}, None
         AX0 = AX
+        # The forked adapter is two columns narrower and one row shorter, and both
+        # dimensions are load-bearing downstream — the store's request column has
+        # to sit inside ``AX+1..AX+adapter_w`` and the request drop hangs off
+        # ``AY+adapter_h+1``. So the shape is read once, here, and every use below
+        # is of these locals rather than the module constants, which stay put for
+        # :mod:`~.ram_machine` and :mod:`~.ram_machine2`.
+        _arows = adapter_rows(address_first=store == "men-y", form=adapter_form)
+        adapter_w, adapter_h = len(_arows[0]), len(_arows)
+        # A narrower adapter hands its columns back to the **corridor**, not to the
+        # store: ``TX`` is ``AX + width + gap + dx`` and every constraint recorded
+        # against it — :data:`STORE_ANSWER_WEST`'s ``tx <= CX+W+2``, the request
+        # roof's window, :data:`TIER_LAYOUT`'s pinned ``store_offset`` — is a
+        # statement about ``TX`` itself, with ``dx`` merely the spelling. Widening
+        # the gap by exactly what the fold saved holds ``TX`` fixed, so nothing
+        # east of the adapter's east wall moves by a single cell and the tick
+        # measurement is of the adapter and nothing else.
+        adapter_gap = adapter_tape_gap(program.name, store) + (ADAPTER_W - adapter_w)
         # Aligned so the request pipe leaves the CPU beside the memory lanes, but never
         # so high that the response pipe's westward leg grazes the adapter's top corner.
         # A small machine (few lanes, no memory) is the case that needs the clamp.
@@ -6292,8 +6409,10 @@ def _assemble(
         AX, AY = AX0 + mem_dx, AY0 + mem_dy
         if AX < 1 or AY < 1:
             raise MachineError(f"the memory block leaves the grid: adapter at ({AX}, {AY})")
-        g.room(AX, AY, AX + ADAPTER_W + 1, AY + ADAPTER_H + 1)
-        g.blit(AX, AY, adapter_cells(address_first=store == "men-y"))
+        g.room(AX, AY, AX + adapter_w + 1, AY + adapter_h + 1)
+        g.blit(
+            AX, AY, adapter_cells(address_first=store == "men-y", form=adapter_form)
+        )
         cpu_out = (CX + W + 2, req_row)
         adapter_in = (AX - 1, AY + ADAPTER_IN_ROW)
         if mem_dx or mem_dy:
@@ -6365,7 +6484,7 @@ def _assemble(
             # The block's own placement does not depend on the block, so its
             # origin is known before it is built — which is what lets the answer
             # collector be widened to a column named in *machine* coordinates.
-            tx_pre = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
+            tx_pre = AX + adapter_w + adapter_gap + store_dx
             # ... and, for the same reason, which of the collector's own rows the
             # CPU's response row lands on. A caller *below* the widened collector
             # takes the answer out of its south wall and walks up; a caller level
@@ -6409,6 +6528,7 @@ def _assemble(
                 tight_gate=store_tight_gate,
                 gate_return_slack=store_gate_return_slack,
                 gate_park_const=store_gate_park_const,
+                gate_south_reuse_b=store_gate_south_reuse_b,
                 tape_park_const=store_tape_park_const,
                 order=store_bank_order,
                 chain_reach=store_chain_reach,
@@ -6421,10 +6541,11 @@ def _assemble(
                 # a drop, not a corridor. Same trick as ``answer_west``: the
                 # block's origin is known before the block is.
                 request_roof=(
-                    (AY + ADAPTER_H + 2) - (CY + mem_dy + store_dy)
+                    (AY + adapter_h + 2) - (CY + mem_dy + store_dy)
                     if store_request_reach
                     else None
                 ),
+                request_tuck=store_request_tuck,
             )
         elif store == "tape":
             tape = tape_block(
@@ -6436,7 +6557,7 @@ def _assemble(
             raise MachineError(
                 f"unknown store tier {store!r}; expected one of {STORE_TIERS!r}"
             )
-        TX = AX + ADAPTER_W + adapter_tape_gap(program.name, store) + store_dx
+        TX = AX + adapter_w + adapter_gap + store_dx
         TY = CY + mem_dy + store_dy
         if TY < 0 or TX < 0:
             raise MachineError(f"STORE placement leaves the grid: ({TX}, {TY})")
@@ -6444,7 +6565,7 @@ def _assemble(
 
         # adapter east wall -> the tape's request stub
         tin_x, tin_y = TX + tape.in_cell[0], TY + tape.in_cell[1]
-        ax_out = AX + ADAPTER_W + 2
+        ax_out = AX + adapter_w + 2
         mid = ax_out + 2
         adapter_out = (ax_out, AY + ADAPTER_OUT_ROW)
         store_in = (tin_x - 1, tin_y)
@@ -6456,6 +6577,11 @@ def _assemble(
                 "store_request_reach and store_request_teleport are two answers to "
                 "one question: the gate's own room reaching the adapter, or a "
                 "forwarder bridging the gap. Pick one."
+            )
+        if store_request_tuck and not store_request_reach:
+            raise MachineError(
+                "store_request_tuck moves the grown gate's entry one row north; "
+                "there is no grown gate without store_request_reach"
             )
         if (store_request_reach or store_chain_reach) and store != "taped":
             raise MachineError(
@@ -6528,22 +6654,36 @@ def _assemble(
             # adapter has exactly one incoming and one outgoing pipe (see
             # :data:`_ADAPTER`), so every ``r``/``s`` in it binds wherever they
             # attach.
-            floor_y = AY + ADAPTER_H + 1
-            if not AX + 1 <= tin_x <= AX + ADAPTER_W:
+            floor_y = AY + adapter_h + 1
+            if not AX + 1 <= tin_x <= AX + adapter_w:
                 raise MachineError(
                     f"the store's request column {tin_x} is not under the adapter's "
-                    f"floor ({AX + 1}..{AX + ADAPTER_W}); the drop has nowhere to start"
+                    f"floor ({AX + 1}..{AX + adapter_w}); the drop has nowhere to start"
                 )
-            if tin_y - 1 <= floor_y + 1:
+            if tin_y - 1 < floor_y + 1:
                 raise MachineError(
                     f"the store's request row {tin_y} leaves no drop below the "
                     f"adapter's floor at {floor_y}"
                 )
             # ... down to one cell short of the block's own ``>``, which is the
             # cell that turns the drop into the gate's west wall.
-            route_lengths["adapter->store"] = g.draw_pipe(
-                [(tin_x, floor_y + 1), (tin_x, tin_y - 1)]
-            )
+            #
+            # With ``store_request_tuck`` the block's ``>`` is on the gate roof's
+            # *first* interior row rather than its second, so this drop is the one
+            # cell the wall itself demands and ``draw_pipe`` has no leg to walk: a
+            # polyline whose ends coincide has no direction to take an arrowhead
+            # from. Draw the source cell directly. The result is still a pipe —
+            # two cells, ``v`` under the adapter's floor and the block's ``>``
+            # turning into the gate's west wall — which is the minimum the
+            # language allows (SPEC.md §Pipes).
+            if tin_y - 1 == floor_y + 1:
+                g.put(tin_x, floor_y + 1, "v")
+                g.drawn.add((tin_x, floor_y + 1))
+                route_lengths["adapter->store"] = 1
+            else:
+                route_lengths["adapter->store"] = g.draw_pipe(
+                    [(tin_x, floor_y + 1), (tin_x, tin_y - 1)]
+                )
         elif store_request_teleport:
             # The request crosses a **room** instead of a 58-cell pipe.
             #
@@ -6575,7 +6715,7 @@ def _assemble(
             # this adds exactly one room and leaves two stubs.
             from ..memory_men import teleport_v
 
-            floor_y = AY + ADAPTER_H + 1  # the adapter's south wall
+            floor_y = AY + adapter_h + 1  # the adapter's south wall
             rx0 = store_in[0] - 1  # west wall, one clear of the exit column
             rx1 = rx0 + _TELE_W + 1
             ry0, ry1 = floor_y + 3, tin_y - 4
@@ -6583,10 +6723,10 @@ def _assemble(
             # the room's north wall; the west end of the room is west of the
             # adapter, so the shared column is the east one.
             drop = max(rx0 + 1, AX + 1)
-            if drop > min(rx1 - 1, AX + ADAPTER_W):
+            if drop > min(rx1 - 1, AX + adapter_w):
                 raise MachineError(
                     "the store request teleport's roof does not reach the adapter's "
-                    f"floor: columns {rx0 + 1}..{rx1 - 1} miss {AX + 1}..{AX + ADAPTER_W}"
+                    f"floor: columns {rx0 + 1}..{rx1 - 1} miss {AX + 1}..{AX + adapter_w}"
                 )
             if ry1 - ry0 - 1 < _TELE_H:
                 raise MachineError(
@@ -6930,7 +7070,7 @@ def _assemble(
     }
     regions["rom"] = (RX, RY, romlay.width + 1, romlay.height + 2)
     if hot is None:
-        regions["adapter"] = (AX, AY, ADAPTER_W + 2, ADAPTER_H + 2)
+        regions["adapter"] = (AX, AY, adapter_w + 2, adapter_h + 2)
         regions["tape"] = (TX, TY, tape.width, tape.height)
         regions.update(tele_regions)
         regions.update(req_tele_regions)
@@ -10562,6 +10702,60 @@ STORE_REQUEST_REACH: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
 }
 
+#: ``(slug, tier)`` pairs whose grown gate takes the request on its **first**
+#: interior row rather than its second, which is what makes the drop below the
+#: adapter's floor two cells instead of three.
+#:
+#: :data:`STORE_REQUEST_REACH` pulls the gate's roof to one row under the
+#: adapter's floor and then attaches the block's own ``>`` at ``roof + 2``. The
+#: ``+ 2`` was never a constraint, only the row the ungrown block's entry
+#: happened to sit on: the stub stands *outside* the west wall, so it may take
+#: any interior row the wall has, and the gate's ``U`` receives from any incoming
+#: pipe with **no distance term** (``SPEC.md`` §Nearest) — the same permission
+#: slip that let the entry move 33 rows north of the man in the first place.
+#:
+#: What is left is the language's own floor: ``v`` under the adapter's south
+#: wall, then the block's ``>`` turning into the gate's west wall. Two cells is
+#: the minimum a pipe may be, so this leg cannot be shortened again.
+#:
+#: One cell off a leg every store access walks while the CPU is stopped on the
+#: answer. It is **not** the same row as :data:`ADAPTER_FORM`'s fork: that one
+#: raises ``floor_y`` and the gate roof under it *together*, so the drop
+#: translates a row north at unchanged length. Two independent rows.
+#:
+#: **Measured on the current tree**, 21-round hi-res tour, four endpoints in one
+#: process: 106,770,604 shipped, 106,465,874 with the tuck alone (**-0.2854%**),
+#: 106,446,235 with :data:`ADAPTER_FORM`'s fork alone (-0.3038%), and
+#: 106,141,505 with both (-0.5892%). -304,730 and -324,369 sum to -629,099,
+#: which is the pair's measured total **to the tick** — two pure length terms on
+#: the same serial leg, neither shadowing the other. (An earlier reading of
+#: -0.233% was taken against a tree with a different ``store_offset``; the
+#: absolute saving is what travels, not the percentage.)
+STORE_REQUEST_TUCK: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+}
+
+#: ``(slug, tier)`` pairs built with an adapter other than the shipped 12x4 one.
+#:
+#: Keyed rather than global because ``deadman-3d``'s artifacts are byte-pinned
+#: and :mod:`~.ram_machine`/:mod:`~.ram_machine2` read :data:`ADAPTER_W` and
+#: :data:`ADAPTER_H` as module constants. See :data:`_ADAPTER_FORK` for what the
+#: ``fork`` shape is and why it is two ticks shorter on a read.
+#:
+#: **Measured, 21-round hi-res tour, same process, same moment:** 106,770,604
+#: shipped against 106,446,235 forked — **-324,369 ticks, -0.3038%** —
+#: ``passed=True``, ``fatal=None``, box 620x403 either way and every
+#: ``route_lengths`` entry identical (``cpu->adapter`` 2, ``adapter->store`` 2,
+#: ``store->cpu`` 2). The saving is **one** tick of mean read latency, not the
+#: two the forward leg loses: 324,369 against the machine's measured 324,588
+#: ticks of run per tick of read latency is that constant to four digits. The
+#: address arrives two ticks early but the gate downstream can only take it one
+#: tick early, so the second tick is absorbed. Nothing else in the machine moves,
+#: which is what makes the attribution clean.
+ADAPTER_FORM: dict[tuple[str, str], str] = {
+    ("deadman-3d_hires", "taped"): "fork",
+}
+
 #: ``(slug, tier)`` pairs whose **men-v3** STORE is entered on its router strip's
 #: south-west **corner**, so the request is the straight leg between the adapter's
 #: east wall and the block — instead of climbing over the block's roof.
@@ -11029,6 +11223,43 @@ TAPED_GATE_RETURN_SLACK: dict[tuple[str, str], int] = {("deadman-3d_hires", "tap
 #: occupancy converts at about 0.2 latency ticks per tick
 #: (:data:`TAPED_GATE_RETURN_SLACK`), and its spine at about 1.0 per crossing.
 TAPED_GATE_PARK_CONST: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
+
+#: ``(slug, tier)`` pairs whose **high** gates drop the ``W``/``M`` pair from
+#: their two **south** (forwarding) arms.
+#:
+#: The shipped south arms are ``WM0sWs`` / ``WM1sWsrs``, and the comment beside
+#: them — "addr is already in B" — is the whole proof that the first two glyphs
+#: do nothing. On arrival A holds ``const - addr`` and B holds the raw ``addr``;
+#: the arm fetches it into A with ``W`` and immediately parks it back into B with
+#: ``M`` so the op digit can have A. Leaving it where it already is costs
+#: nothing::
+#:
+#:     WM0sWs   W: A=addr B=c-a | M: B=addr | 0: A=0 | s | W: A=addr | s
+#:       0sWs                   |           | 0: A=0 | s | W: A=addr | s
+#:
+#: Same two words, same order, same pipe. The sends only move **west along their
+#: own row**, which shifts their distance to *both* of the east wall's source
+#: cells by the same amount, so §7.1's nearest-pipe choice cannot flip
+#: (``test_every_gate_send_still_binds_to_the_pipe_it_means`` checks it anyway).
+#: B is left holding 0 instead of the address, which is what the shipped arms
+#: leave too, and the return floor rebuilds B from the literal every lap.
+#:
+#: **Two cells off the forward leg of every forwarded request**, which is the
+#: part a read's caller is stopped for. Measured on the 21-round hi-res tour,
+#: both endpoints in one process, on top of the fork adapter and the request
+#: tuck: 106,141,505 -> **105,152,308**, ``passed=True``, ``fatal=None``, box
+#: 620x403 unchanged — **-989,197 ticks, -0.9320%**, three times the adapter
+#: fork on its own.
+#:
+#: This is a **register-liveness** change, so it is exactly the class that builds
+#: green and hands a read to the wrong bank. It is pinned by a readback of all
+#: 901 hires addresses through both arm forms, not by the tour
+#: (``test_the_reused_b_south_arms_route_every_hires_address_the_same``).
+#:
+#: The north arms cannot have the same treatment: their outgoing address is the
+#: *rebased* ``addr - const``, which exists in neither register on arrival, so
+#: ``N`` computes it and something has to hold it across the op digit.
+TAPED_GATE_SOUTH_REUSE_B: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 
 #: ``(slug, tier)`` pairs whose **ring workers** keep the tape size in B between
 #: accesses (``memory_tape.worker_v2``/``worker_v2_jump``'s ``park_const``), the
@@ -11917,12 +12148,15 @@ def build_for(
         store_bank_lift=TAPED_BANK_LIFT.get((slug, store), 0),
         store_feed_tuck=TAPED_FEED_TUCK.get((slug, store), 0),
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
+        store_request_tuck=(slug, store) in STORE_REQUEST_TUCK,
+        adapter_form=ADAPTER_FORM.get((slug, store), "wide"),
         store_request_west=(slug, store) in STORE_REQUEST_WEST,
         store_riser_lift=STORE_RISER_LIFT.get((slug, store), 0),
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_tight_gate=(slug, store) in TAPED_TIGHT_GATE,
         store_gate_return_slack=TAPED_GATE_RETURN_SLACK.get((slug, store)),
         store_gate_park_const=(slug, store) in TAPED_GATE_PARK_CONST,
+        store_gate_south_reuse_b=(slug, store) in TAPED_GATE_SOUTH_REUSE_B,
         store_tape_park_const=(slug, store) in TAPED_TAPE_PARK_CONST,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,

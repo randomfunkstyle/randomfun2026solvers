@@ -60,6 +60,52 @@ def test_adapter_uses_u_to_free_its_old_rightmost_column() -> None:
     assert "s0s" in machine._Y_ADAPTER[2]
 
 
+def test_the_forked_adapter_gives_each_arms_op_to_the_child_that_moves_first() -> None:
+    """The one thing in the fork that cannot be read off the shipped block.
+
+    Both arms put two children on one outgoing pipe and the tape's protocol wants
+    the op word ahead of the address, so on the tick both ``s`` glyphs land the
+    op-carrier has to be the child that keeps the parent's creation-order slot.
+    SPEC: that is the child born to the **right of the entry heading** — west
+    entering south, east entering north — and on each arm that is exactly the
+    ``0``/``1`` side.  Transposing either arm silently swaps op and address.
+    """
+    rows = machine.adapter_rows(form="fork")
+    assert (len(rows[0]), len(rows)) == (8, 4)
+    # ``X`` is still entered heading east out of ``U``, so read stays clockwise
+    # (south) and write counter-clockwise (north), as in the shipped block.
+    assert rows[1][2:5] == "@UX"
+    assert rows[0][4] == rows[2][4] == "Y"  # both arms branch straight onto a Y
+    # write arm, entered heading north: order-preserving child is born east
+    assert rows[0][5:8] == "1sH"  # op 1, sent, halted
+    assert rows[0][:4] == "vrsN"  # ... and the address/value child runs west
+    # read arm, entered heading south: order-preserving child is born west
+    assert rows[2][1:4] == "Hs0"  # op 0, sent, halted (read right-to-left)
+    assert rows[2][5] == "v"  # ... and the address child runs east and down
+    # Exactly one ``H`` per arm against exactly one ``Y``: one man in at ``U``,
+    # two born, one halted, one home. Measured over a 3-round tour: 42,992
+    # splits against 42,992 halts, drift zero.
+    for arm in (rows[0], rows[2]):
+        assert arm.count("Y") == 1 and arm.count("H") == 1
+    assert "".join(rows).count("@") == 1  # the load-time rule is about the glyph
+    # The height is unchanged, so ``floor_y`` and the store's request drop below
+    # it do not move; only the width, and only into the corridor.
+    assert len(rows) == machine.ADAPTER_H and len(rows[0]) < machine.ADAPTER_W
+
+
+def test_the_forked_adapter_is_keyed_to_one_machine() -> None:
+    """``deadman-3d``'s artifacts are byte-pinned and ram_machine reads the constants."""
+    assert machine.ADAPTER_FORM == {("deadman-3d_hires", "taped"): "fork"}
+    assert ("deadman-3d", "taped") not in machine.ADAPTER_FORM
+    assert (machine.ADAPTER_W, machine.ADAPTER_H) == (12, 4)
+    with pytest.raises(machine.MachineError):
+        machine.adapter_rows(form="fork", address_first=True)
+    with pytest.raises(machine.MachineError):
+        machine.adapter_rows(form="nonesuch")
+    # the tuck moves the *grown* gate's entry; without the growth there is none
+    assert machine.STORE_REQUEST_TUCK <= machine.STORE_REQUEST_REACH
+
+
 # ── ROM encoding ─────────────────────────────────────────────────────────────
 def test_group_is_palindromic_in_its_backtick_offsets() -> None:
     """Reversal must map a group's backtick columns onto themselves.

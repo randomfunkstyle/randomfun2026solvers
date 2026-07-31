@@ -124,6 +124,7 @@ def bank_gate(
     tight_return: bool = False,
     return_slack: int | None = None,
     park_const: bool = False,
+    south_reuse_b: bool = False,
     west_grow: int = 0,
     north_grow: int = 0,
 ) -> tuple[dict[tuple[int, int], str], int]:
@@ -271,6 +272,22 @@ def bank_gate(
         spine = "UbrW-X"
         n_read_arm, n_write_arm = "NM0sWs", "NM1sWsrs"  # negate to addr - (high-m)
         s_read_arm, s_write_arm = "WM0sWs", "WM1sWsrs"  # addr is already in B
+        if south_reuse_b:
+            # The comment above is truer than the glyphs: the address really is
+            # already in B on arrival, so the arm's leading ``W`` (fetch it into
+            # A) and the ``M`` behind it (park it straight back into B, over the
+            # op digit) are a round trip to nowhere. Drop both and let the digit
+            # land on A while B is left holding the address::
+            #
+            #     WM0sWs   A=addr B=c-a | B=addr | A=0 | send | A=addr | send
+            #       0sWs                | A=0 B=addr    | send | A=addr | send
+            #
+            # Same two words in the same order out of the same pipe — moving an
+            # ``s`` **west** along its own row shifts its distance to *both*
+            # source cells by the same amount, so §7.1's nearest-pipe tie cannot
+            # flip (``test_every_gate_send_still_binds_to_the_pipe_it_means``).
+            # Two cells off the **forward** leg of both forwarding arms.
+            s_read_arm, s_write_arm = "0sWs", "1sWsrs"
     else:
         spine = f"UbrM`{high - m}`-X"
         n_read_arm, n_write_arm = "NM0sWs", "NM1sWsrs"  # negate to addr - (high-m)
@@ -454,11 +471,13 @@ def taped_store_block(
     tight_gate: bool = False,
     gate_return_slack: int | None = None,
     gate_park_const: bool = False,
+    gate_south_reuse_b: bool = False,
     tape_park_const: bool = False,
     order: tuple[int, ...] | None = None,
     chain_reach: bool = False,
     chain_pad: int = 0,
     request_roof: int | None = None,
+    request_tuck: bool = False,
     feed_teleport: bool = False,
     bank_lift: int = 0,
     feed_tuck: int = 0,
@@ -635,6 +654,7 @@ def taped_store_block(
             tight_return=tight_gate,
             return_slack=gate_return_slack,
             park_const=gate_park_const,
+            south_reuse_b=gate_south_reuse_b,
             high=top,
         )
         for k, top in chain[:-1]
@@ -714,6 +734,7 @@ def taped_store_block(
                 tight_return=tight_gate,
                 return_slack=gate_return_slack,
                 park_const=gate_park_const,
+                south_reuse_b=gate_south_reuse_b,
                 high=top,
                 west_grow=west_grow[j],
                 north_grow=north_grow[j],
@@ -849,7 +870,15 @@ def taped_store_block(
         # The roof came up to meet the caller, so the request arrives from above
         # and the last cell before the west wall is all the block owns. One cell,
         # because whatever hands it over has to descend to this row anyway.
-        in_y = request_roof + 2
+        #
+        # ``request_tuck`` takes the **first** interior row instead of the second.
+        # The stub stands outside the west wall, so any interior row will do, and
+        # the gate's ``U`` receives from any incoming pipe with no distance term —
+        # the same clause that lets the entry sit 33 rows north of the man who
+        # reads it. What it buys is one row off the caller's drop, which is then
+        # the two cells a pipe is required to be and cannot shorten again.
+        # ``False`` keeps every existing caller's grid byte-identical.
+        in_y = request_roof + (1 if request_tuck else 2)
         put(gx[0] - 1, in_y, ">")
         in_cell = (gx[0] - 1, in_y)
     if answer_west is None:

@@ -561,6 +561,68 @@ def test_the_parked_constant_gate_routes_every_hires_address_the_same() -> None:
     assert readback(True) == shipped
 
 
+def test_the_reused_b_south_arms_route_every_hires_address_the_same() -> None:
+    """``south_reuse_b`` is register liveness, so it has to be a readback too.
+
+    The high gate's south arms drop their leading ``W`` and the ``M`` behind it
+    on the argument that B already holds the address on arrival. If that is ever
+    untrue the arm sends whatever B happens to hold as the address, no build
+    fails, no send rebinds, and the bank answers a question nobody asked. So this
+    writes a distinct value into every one of hires' 900 addresses and compares
+    them address by address against the shipped arms, over the real plan, the
+    real hot-first chain and the real compact body — the same shape of proof
+    :func:`test_the_parked_constant_gate_routes_every_hires_address_the_same`
+    uses, and for the same reason.
+    """
+
+    def readback(reuse: bool) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(
+                HIRES_N,
+                HIRES_PLAN,
+                skip_batch=1,
+                compact_gate=True,
+                order=list(HIRES_ORDER),
+                gate_park_const=True,
+                gate_south_reuse_b=reuse,
+            )
+        )
+        writes = [x for a in range(1, HIRES_N) for x in (1, a, (a * 37 + 11) % 9973)]
+        bounds = [1]
+        for m in HIRES_PLAN:
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            reads = [x for a in range(lo, hi) for x in (0, a)]
+            want = [(a * 37 + 11) % 9973 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=400_000_000)
+            assert res.fatal is None, (reuse, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    shipped = readback(False)
+    assert shipped == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
+    assert readback(True) == shipped
+
+
+def test_the_reused_b_south_arms_are_opt_in_and_two_cells_shorter() -> None:
+    """Off is byte-identical; on, only the two south arms move, and only west."""
+    base, w0 = bank_gate(5, compact=True, high=12, park_const=True)
+    same, _ = bank_gate(5, compact=True, high=12, park_const=True, south_reuse_b=False)
+    assert same == base
+    tight, w1 = bank_gate(5, compact=True, high=12, park_const=True, south_reuse_b=True)
+    assert w1 == w0  # the room does not move; the return column has slack to spare
+    _h, in_row, _local, _down = gate_rows(True)
+    # every changed cell is strictly south of the spine
+    assert all(y > in_row for (_x, y) in set(base) ^ set(tight)
+               | {c for c in set(base) & set(tight) if base[c] != tight[c]})
+    # the low gate has no south-arm B to reuse and is untouched
+    assert bank_gate(5, compact=True, park_const=True, south_reuse_b=True) == bank_gate(
+        5, compact=True, park_const=True
+    )
+
+
 def test_the_parked_constant_gate_is_opt_in_and_shorter_on_both_forms() -> None:
     """Off is byte-identical; on, the spine loses the literal and the room the
     columns that literal was holding — which is the whole point, because the
