@@ -8699,7 +8699,19 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # row 157, and a straight leg needs them level. It needs `store_offset` dy
     # moved with it — men-v3 has its own level equation, the way taped's is
     # `store_dy = 12 - squash_band`. Untested, and the pad is already at 1.
-    ("deadman-3d_hires", "men-v3"): 11,
+    #
+    # **13, and the rate is exact: two drop rows buy one pad column.** A pad column
+    # moves the band's westmost `r` one cell nearer `rom` and one further from
+    # `mem_resp`, so the drop gives back two rows to restore the margin — which makes
+    # the frontier a line rather than a cliff, and the solver reads it off directly.
+    # Pad 0 needs drop >= 13. 21 rounds, `passed=True`, 496x674: drop 11/pad 1 =
+    # 79,341,770, **drop 13/pad 0 = 78,674,318 (-0.841%)**, 90.13 -> 89.37 t/instr.
+    # The column is worth 2.436 and the two corridor rows cost 0.649 each, so the
+    # margin is thin, and the next click is not a click at all: `_flat_lane` advances
+    # with ``while x < target``, so a `mem_x` below a lane's natural column is
+    # silently ignored *for that lane*. Pad -1 moves six of nine MEM lanes and pad -2
+    # is byte-identical to it; pads -2..-4 all "build" and are no-ops.
+    ("deadman-3d_hires", "men-v3"): 13,
 }
 
 LANE_PITCH: dict[tuple[str, str], int] = {
@@ -10112,7 +10124,7 @@ MEM_PAD_FOR: dict[tuple[str, str], int] = {
     # would find it anyway (0 refuses, 1 binds, and every binding pad ties on
     # footprint here so the first wins), but the pin skips a doomed `_assemble`
     # pass, which on a P=9,237 program is most of the build.
-    ("deadman-3d_hires", "men-v3"): 1,
+    ("deadman-3d_hires", "men-v3"): 0,
 }
 #: ``(slug, tier)`` pairs whose **request** leg crosses a room instead of a pipe
 #: — the mirror image of :data:`STORE_ANSWER_WEST`, on the leg that was left.
