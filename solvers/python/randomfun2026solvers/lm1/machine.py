@@ -4959,6 +4959,7 @@ def _tape_shell(
     n: int,
     *,
     skip_batch: int = 1,
+    park_const: bool = False,
 ) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
     """The worker room and the two CPU-facing pipe stubs — the part no ring changes.
 
@@ -4983,7 +4984,7 @@ def _tape_shell(
     ) = _tape_worker_spec(skip_batch)
 
     g = Circuit(400, 200)
-    wk = worker(n)
+    wk = worker(n, park_const=True) if park_const else worker(n)
     WX, WY = _TAPE_WX, _TAPE_WY
     for (x, y), ch in wk.cell.items():
         g.set(WX + x, WY + y, ch)
@@ -5062,6 +5063,7 @@ def tape_block(
     skip_batch: int | None = 1,
     jump_threshold: int = 128,
     relay_size: tuple[int, int] | None = None,
+    park_const: bool = False,
 ) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
 
@@ -5118,7 +5120,7 @@ def tape_block(
 
     WX, WY = _TAPE_WX, _TAPE_WY
     for fold in (0, 2, 4, 6, 8, 10, 12):
-        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch)
+        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch, park_const=park_const)
 
         bottom_y = WY + worker_height
         fy = WY + forward_row
@@ -5159,7 +5161,7 @@ def tape_block(
         if n_fwd + n_ret < n + 1:
             continue
         return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
-    return _serpentine_tape(n, skip_batch=skip_batch, relay_art=relay_art)
+    return _serpentine_tape(n, skip_batch=skip_batch, relay_art=relay_art, park_const=park_const)
 
 
 #: Columns the big ring reserves under the worker, in block coordinates.
@@ -5181,6 +5183,7 @@ def _serpentine_tape(
     *,
     skip_batch: int = 1,
     relay_art: list[str] | None = None,
+    park_const: bool = False,
 ) -> _Tape:
     """The same ring, with the forward pipe snaked so capacity scales with area.
 
@@ -5239,7 +5242,7 @@ def _serpentine_tape(
     # Seventeen rows carry the ~420 slots a little-little-man interpreter wants; the
     # last tier here holds 1976 values, at which point the block is 112 rows tall.
     for rows in range(5, 82, 2):
-        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch)
+        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch, park_const=park_const)
         last = top + rows - 1  # the final, relay-bound westbound leg
         relay_y = last - relay_h  # so `last` is the relay's bottom interior row
         for i, row in enumerate(relay_art):
@@ -5572,6 +5575,9 @@ def build(
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
     store_tight_gate: bool = False,
+    store_gate_return_slack: int | None = None,
+    store_gate_park_const: bool = False,
+    store_tape_park_const: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
@@ -5799,6 +5805,9 @@ def build(
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
                     store_tight_gate=store_tight_gate,
+                    store_gate_return_slack=store_gate_return_slack,
+                    store_gate_park_const=store_gate_park_const,
+                    store_tape_park_const=store_tape_park_const,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
@@ -5888,6 +5897,9 @@ def build(
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
                     store_tight_gate=store_tight_gate,
+                    store_gate_return_slack=store_gate_return_slack,
+                    store_gate_park_const=store_gate_park_const,
+                    store_tape_park_const=store_tape_park_const,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
@@ -5999,6 +6011,9 @@ def _assemble(
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
     store_tight_gate: bool = False,
+    store_gate_return_slack: int | None = None,
+    store_gate_park_const: bool = False,
+    store_tape_park_const: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
@@ -6392,6 +6407,9 @@ def _assemble(
                 answer_exit_west=answer_exit_west,
                 compact_gate=store_compact_gate,
                 tight_gate=store_tight_gate,
+                gate_return_slack=store_gate_return_slack,
+                gate_park_const=store_gate_park_const,
+                tape_park_const=store_tape_park_const,
                 order=store_bank_order,
                 chain_reach=store_chain_reach,
                 chain_pad=store_chain_pad,
@@ -10918,6 +10936,129 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {
 #: the return column enters all ten distances as a common term and cancels.
 TAPED_TIGHT_GATE: set[tuple[str, str]] = set()
 
+#: ``(slug, tier)`` -> how many columns east of its longest arm each bank gate's
+#: **return column** stands, with the east wall held where it shipped
+#: (:func:`memory_taped.bank_gate`'s ``return_slack``). Absent means the shipped
+#: flat ``cx + 13``, which for the high form is three columns of air.
+#:
+#: This is :data:`TAPED_TIGHT_GATE`'s mechanism with its side effect removed, and
+#: the side effect is the entire reason that entry ships empty. ``tight_return``
+#: moves the east **wall** in with the column, ``gate_w`` is a max over the gates,
+#: and ``bx`` comes off ``gate_w`` — so pulling the narrower high gates in three
+#: columns moved the bank row only one and grew every high gate's feed pipe by two
+#: cells *on the critical path*. Holding the wall costs those two cells nothing.
+#:
+#: What it buys is service time, measured exactly by focusing the opcode profiler
+#: on one gate's man (he is the only one in the room, so his non-blocked ticks are
+#: that gate's service time) and dividing by its access count. The gate at chain
+#: position 1, per access, shipped::
+#:
+#:     spine        11.016   U b r M ` 8 8 5 ` - X
+#:     arm:north     2.956
+#:     arm:south     6.647
+#:     pad:east      4.691   <- air between the arm's last glyph and the descent
+#:     descent       3.903
+#:     floor:east    1.000
+#:     floor:west   21.999
+#:     climb         3.000
+#:     ---------------------
+#:     total        55.212
+#:
+#: The room is an out-and-back, so each column of air is walked twice — once east
+#: onto the descent and once west along the floor. Three columns is six ticks, and
+#: all six fall **after** the arm's ``s`` has already sent, so none of it is on the
+#: read's critical path. It is occupancy, which is what this store's queueing term
+#: is made of: mean read latency is 188.5 against a hard floor of 88.
+#: Measured same-moment on the 21-round tour, both endpoints built in one
+#: process: 114,847,979 -> 114,381,949, **-0.406%**, mean read latency
+#: 185.151 -> 183.716, box 625x403 unchanged, ``passed=True fatal=None``.
+#:
+#: That is the whole of what pure occupancy is worth here, and it is the number
+#: to price the next one against: six walked cells off five gates and two off
+#: four moved the mean read latency 1.435 ticks. The gate is **blocked 85% of the
+#: time** (9,400,695 ticks parked on its ``U`` against 1,690,629 walking, over an
+#: 11.09M 3-round run), so a tick removed from behind its ``s`` is mostly
+#: absorbed. A tick removed from in *front* of its ``s`` is not — see
+#: :data:`TAPED_GATE_PARK_CONST`, which is ten times larger for the same idea.
+TAPED_GATE_RETURN_SLACK: dict[tuple[str, str], int] = {("deadman-3d_hires", "taped"): 0}
+
+#: ``(slug, tier)`` pairs whose bank gates keep their range constant **parked in
+#: B between accesses** instead of reloading it on the spine
+#: (:func:`memory_taped.bank_gate`'s ``park_const``). Absent means the shipped
+#: spine, which holds ``deadman-3d``'s checked-in grid byte-identical.
+#:
+#: The spine is the gate's whole critical path — a request is not forwarded until
+#: the arm's second ``s``, and everything before that is ``U b r`` plus the range
+#: test. The shipped test spends five to seven of its cells fetching a constant
+#: that never changes::
+#:
+#:     low   UbrM`103`W-X   12 cells   ->  Ubr-X     5
+#:     high  UbrM`885`-X    11 cells   ->  Ubr-NX    6
+#:
+#: A gate man keeps A, B and BP across laps, so the constant can live in B, and
+#: the reload is written into the **return floor** — cells he already walks, and
+#: cells that were nops. It therefore costs nothing at all: the room's service
+#: time falls by the same five to seven cells *again*, because the floor is
+#: measured from the spine's ``X``.
+#:
+#: Two details make it work. The floor is walked **west**, and the engine keys a
+#: literal by the direction the man arrives from — the closing mark carries the
+#: forward value and the opening mark the digits reversed — so the digits are
+#: stamped reversed and the westmost mark is what fires. And the high form uses
+#: ``W`` rather than ``-N``: both leave the same A, but ``W`` also leaves ``addr``
+#: in B, which is where the two south arms have always looked for it, so all four
+#: arms are the shipped ones. ``-N`` leaves the constant in B instead and costs
+#: those arms two cells each to rebuild the address — measured same-moment,
+#: 10,461,012 against 10,417,535 on the 3-round tour, **-0.416%** for ``W``.
+#: Measured same-moment, one process, one build of each. On the 3-round tour,
+#: against the shipped gate::
+#:
+#:     ship                      11,091,760   180.534 mean read latency
+#:     park (alone)              10,706,704   166.884   -3.472%
+#:
+#: and on the 21-round tour with the whole store's three entries on::
+#:
+#:     ship                     114,847,979   185.151   625x403
+#:     the three entries        106,770,604   160.266   620x403   -7.033%
+#:
+#: ``passed=True fatal=None``, suite 2865/68. Five columns come off the machine
+#: because ``gate_w`` is the low form's width and that form loses seven cells.
+#: The gate's service time falls twice over — once on the spine, which is
+#: **critical path**, and once on the return floor, whose length is measured from
+#: the spine's ``X``. The first is what pays: the gate is 85% idle, so its
+#: occupancy converts at about 0.2 latency ticks per tick
+#: (:data:`TAPED_GATE_RETURN_SLACK`), and its spine at about 1.0 per crossing.
+TAPED_GATE_PARK_CONST: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
+
+#: ``(slug, tier)`` pairs whose **ring workers** keep the tape size in B between
+#: accesses (``memory_tape.worker_v2``/``worker_v2_jump``'s ``park_const``), the
+#: same move :data:`TAPED_GATE_PARK_CONST` makes inside a gate. MAIN's two arms
+#: each fetch N to build the signed remaining distance::
+#:
+#:     read   rbM`N`-M   ->  rb-NM
+#:     write  rbM`N`-NM  ->  rb-M
+#:
+#: and the reload rides the return gutter, which every lap already walks. Both
+#: arms are ahead of P1, so what they save is the read's **critical path**, not
+#: occupancy. Absent means the shipped MAIN, which is what holds ``deadman-3d``,
+#: ``matmul`` and ``sudoku`` byte-identical — they share this worker.
+#: Measured same-moment on the 21-round tour, on top of the two gate entries::
+#:
+#:     + gate entries only             10,692,372   166.376   (3-round)
+#:     + tape park                     10,461,012   158.177   **-2.164%**
+#:
+#: and the three together take the 21-round tour 114,847,979 -> 106,770,604,
+#: **-7.033%**, ``passed=True fatal=None``, 620x403.
+#:
+#: The arms alone are worth **nothing** — the descent to P1 stood at a fixed
+#: column 15, chosen for the widest literal, so a shorter arm only turned glyphs
+#: into blanks the man still walked. Moving that column to follow the arms (11,
+#: P1's entry, at every N now that the arms no longer depend on it) is what pays,
+#: and it pays twice: once walking east onto the descent and once walking west
+#: along row 4 to P1's turn. Measured 3-round: -0.000% for the arms, **-2.164%**
+#: with the descent.
+TAPED_TAPE_PARK_CONST: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
+
 #: ``(slug, tier)`` -> the DOOM unit's loop-corridor row (``d3_unit.R_LOOP``,
 #: shipped 27). Absent means "keep the shipped row", which is what holds
 #: ``deadman-3d``, ``deadman-3d_trim`` and ``deadman-3d_hires`` byte-identical.
@@ -11780,6 +11921,9 @@ def build_for(
         store_riser_lift=STORE_RISER_LIFT.get((slug, store), 0),
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_tight_gate=(slug, store) in TAPED_TIGHT_GATE,
+        store_gate_return_slack=TAPED_GATE_RETURN_SLACK.get((slug, store)),
+        store_gate_park_const=(slug, store) in TAPED_GATE_PARK_CONST,
+        store_tape_park_const=(slug, store) in TAPED_TAPE_PARK_CONST,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,

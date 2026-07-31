@@ -27,6 +27,8 @@ if str(PKG) not in sys.path:
 from randomfun2026solvers.fast_littleman import FastLittleman  # noqa: E402
 from randomfun2026solvers.lm1 import machine  # noqa: E402
 from randomfun2026solvers.memory_taped import (  # noqa: E402
+    COMPACT_GATE_H,
+    COMPACT_GATE_IN_ROW,
     bank_gate,
     gate_chain,
     gate_rows,
@@ -510,3 +512,112 @@ def test_the_hires_hot_first_chain_resolves_every_address_to_the_same_data() -> 
     address_order = readback(None)
     assert address_order == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
     assert readback(HIRES_ORDER) == address_order
+
+
+def test_the_parked_constant_gate_routes_every_hires_address_the_same() -> None:
+    """The load-bearing test for ``park_const``, and it has to be a readback.
+
+    Parking the range constant in B is a **register-liveness** change: the spine
+    stops writing B, so the high form's south arms — which used to find ``addr``
+    there, put by the spine's ``M`` — rebuild it with ``N+``. Get any of that
+    wrong and no build fails and no binding moves; the gate simply hands a read
+    to the wrong bank, and the bank answers. So this writes a distinct value into
+    every one of hires' 900 addresses and compares them **address by address**
+    against the shipped spine, over the real plan, the real hot-first chain (both
+    gate forms appear in it) and the real compact body.
+
+    It also pins the reversed floor literal, which is the other thing that cannot
+    be argued from the source: the man walks the return floor **west**, so the
+    digits are stamped in reverse and it is the *west* backtick that fires.
+    """
+
+    def readback(park: bool) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(
+                HIRES_N,
+                HIRES_PLAN,
+                skip_batch=1,
+                compact_gate=True,
+                order=list(HIRES_ORDER),
+                gate_park_const=park,
+            )
+        )
+        writes = [x for a in range(1, HIRES_N) for x in (1, a, (a * 37 + 11) % 9973)]
+        bounds = [1]
+        for m in HIRES_PLAN:
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            reads = [x for a in range(lo, hi) for x in (0, a)]
+            want = [(a * 37 + 11) % 9973 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=400_000_000)
+            assert res.fatal is None, (park, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    shipped = readback(False)
+    assert shipped == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
+    assert readback(True) == shipped
+
+
+def test_the_parked_constant_gate_is_opt_in_and_shorter_on_both_forms() -> None:
+    """Off is byte-identical; on, the spine loses the literal and the room the
+    columns that literal was holding — which is the whole point, because the
+    return floor is measured from the spine's ``X`` and so shrinks with it."""
+    for high in (None, 901):
+        shipped, w0 = bank_gate(102, compact=True, high=high)
+        parked, w1 = bank_gate(102, compact=True, high=high, park_const=True)
+        assert w1 < w0, (high, w0, w1)
+        # the spine keeps its `U`, and the constant is gone from it
+        row = COMPACT_GATE_IN_ROW
+        spine = "".join(
+            parked[(x, row)] for x in range(1, w1) if (x, row) in parked
+        )
+        assert spine.startswith("Ubr") and "`" not in spine, spine
+        # ... and turns up on the floor instead, digits reversed
+        floor = "".join(
+            parked[(x, COMPACT_GATE_H)]
+            for x in range(1, w1 - 1)
+            if (x, COMPACT_GATE_H) in parked
+        )
+        const = 103 if high is None else 901 - 102
+        assert f"M`{str(const)[::-1]}`" in floor, (floor, const)
+        assert "`" not in "".join(
+            shipped[(x, COMPACT_GATE_H)]
+            for x in range(1, w0 - 1)
+            if (x, COMPACT_GATE_H) in shipped
+        )
+
+
+@pytest.mark.parametrize("skip_batch", [1, 2])
+def test_the_parked_size_ring_worker_reads_back_what_was_written(skip_batch: int) -> None:
+    """``tape_park_const`` is the same liveness bet inside the ring worker, and
+    it moves the **descent to P1** as well as MAIN's two arms — so a wrong column
+    would route a request into P1 with the wrong count and quietly answer the
+    wrong slot. Both workers carry the change, so both are exercised, and the
+    comparison is against the shipped worker address by address."""
+
+    def readback(park: bool) -> list[int]:
+        engine = _standalone(
+            taped_store_block(
+                330, PLAN, skip_batch=skip_batch, compact_gate=True, tape_park_const=park
+            )
+        )
+        writes = [x for a in range(1, 330) for x in (1, a, a * 29 + 5)]
+        out: list[int] = []
+        bounds = [1]
+        for m in taped_plan(330, PLAN):
+            bounds.append(bounds[-1] + m)
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, 330)
+            reads = [x for a in range(lo, hi) for x in (0, a)]
+            want = [a * 29 + 5 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=200_000_000)
+            assert res.fatal is None, (park, lo, res.fatal)
+            out.extend(res.output)
+        return out
+
+    shipped = readback(False)
+    assert shipped == [a * 29 + 5 for a in range(1, 330)]
+    assert readback(True) == shipped

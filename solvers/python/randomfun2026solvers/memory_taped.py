@@ -122,6 +122,8 @@ def bank_gate(
     compact: bool = False,
     high: int | None = None,
     tight_return: bool = False,
+    return_slack: int | None = None,
+    park_const: bool = False,
     west_grow: int = 0,
     north_grow: int = 0,
 ) -> tuple[dict[tuple[int, int], str], int]:
@@ -181,6 +183,27 @@ def bank_gate(
     ``False`` keeps the shipped width, so ``deadman-3d``'s checked-in
     ``deadman-3d_taped.man`` stays byte-identical.
 
+    ``return_slack`` is the same move with the **east wall left where it was**:
+    the return column stands ``return_slack`` columns east of the longest arm
+    and the returned width is still ``max(cr, cx + 13) + 2``, so a caller that
+    lays its banks out from ``gate_w`` sees no change at all. That distinction
+    is the whole reason it exists. ``tight_return`` moves the wall *with* the
+    column — the two are the same column in that form — and on a shallow chain
+    that measured **+0.892%**, because ``taped_store_block``'s ``bx`` comes off
+    the **max** gate width, so pulling the (narrower) high gates in three
+    columns moved the bank row only one and grew every high gate's feed pipe by
+    two cells *on the critical path*. Here the wall does not move, the feed pipe
+    does not grow, and the six walked cells (three east onto the descent, three
+    west along the floor) come off the room's **service time** for nothing.
+
+    That is worth having even though none of it is on the critical path — it is
+    all after the arm's ``s`` has sent. The store is a tandem queue and what a
+    read waits for is the write in front of it clearing each room in turn, so
+    occupancy is what the queueing term is made of.
+
+    ``None`` keeps ``cx + 13``, so every existing caller's grid is
+    byte-identical; ``tight_return`` wins if both are given.
+
     The two outgoing pipes' ``s`` bindings cannot notice either way: both attach
     to the **same** east wall, so ``cr`` enters every one of the ten distances as
     the same column term and cancels — which is the module docstring's §7.1
@@ -234,10 +257,20 @@ def bank_gate(
     s_write = turn + 1 + gap  # the `a` that splits south on the parked op
     s_read = s_write + 1 + gap  # ... and the read arm below it
     # the spine, and the four arms it hands A to (see the docstring's table)
+    const = m + 1 if high is None else high - m
     if high is None:
-        spine = f"UbrM`{m + 1}`W-X"
+        spine = "Ubr-X" if park_const else f"UbrM`{m + 1}`W-X"
         n_read_arm, n_write_arm = "+M0sWs", "+M1sWsrs"  # restore addr
         s_read_arm, s_write_arm = "M1+M0sWs", "M1+M1sWsrs"  # rebase to addr - m
+    elif park_const:
+        # ``W`` reaches exactly the state ``M `const``` did — A the constant, B
+        # the address — in one glyph, because B already holds the constant. So
+        # all four arms are the shipped ones, including the two south arms that
+        # find ``addr`` in B. (``-N`` also reaches the right A, but leaves the
+        # constant in B and costs those two arms two cells each to rebuild it.)
+        spine = "UbrW-X"
+        n_read_arm, n_write_arm = "NM0sWs", "NM1sWsrs"  # negate to addr - (high-m)
+        s_read_arm, s_write_arm = "WM0sWs", "WM1sWsrs"  # addr is already in B
     else:
         spine = f"UbrM`{high - m}`-X"
         n_read_arm, n_write_arm = "NM0sWs", "NM1sWsrs"  # negate to addr - (high-m)
@@ -246,17 +279,24 @@ def bank_gate(
     # The return column: ``cx + 13`` shipped, or one east of whichever arm
     # actually reaches furthest (the north pair starts at ``cx + 1``, the south
     # pair at ``cx + 2``).
-    cr = (
-        1
-        + max(
-            cx + len(n_read_arm),
-            cx + len(n_write_arm),
-            cx + 1 + len(s_read_arm),
-            cx + 1 + len(s_write_arm),
-        )
-        if tight_return
-        else cx + 13  # the longest arm plus slack
+    cr_tight = 1 + max(
+        cx + len(n_read_arm),
+        cx + len(n_write_arm),
+        cx + 1 + len(s_read_arm),
+        cx + 1 + len(s_write_arm),
     )
+    if tight_return:
+        cr = cr_tight
+    elif return_slack is not None:
+        if return_slack < 0:
+            raise ValueError(f"return_slack stands east of the longest arm: {return_slack}")
+        cr = cr_tight + return_slack
+    else:
+        cr = cx + 13  # the longest arm plus slack
+    # The east wall follows the return column only in the ``tight_return`` form;
+    # ``return_slack`` holds it at the shipped ``cx + 15`` so ``gate_w`` — and
+    # with it every bank's column — cannot move.
+    width = cr + 2 if tight_return else max(cr, cx + 13) + 2
     g: dict[tuple[int, int], str] = {}
 
     def put(x: int, y: int, ch: str) -> None:
@@ -299,19 +339,35 @@ def bank_gate(
     put(cr - 1, h, "@")
     for x in range(2, cr - 1):
         put(x, h, "<")
+    if park_const:
+        # The reload, walked **west**, so the digits stand reversed: the engine
+        # pairs a row's backticks once and hands the closing mark the forward
+        # value and the opening mark the reversed one, keyed by the direction the
+        # man arrives from. He meets the east mark first (a nop westbound), then
+        # each digit as a bare one-digit literal, and the west mark finally puts
+        # the whole number in A; ``M`` west of it parks it in B for the next lap.
+        digits = str(const)[::-1]
+        if len(digits) + 3 > cr - 3:
+            raise ValueError(f"the floor is too short to reload {const} in a gate of {cr}")
+        g[(2, h)] = "M"
+        g[(3, h)] = "`"
+        for i, ch in enumerate(digits):
+            g[(4 + i, h)] = ch
+        g[(4 + len(digits), h)] = "`"
     put(1, h, "^")
     for y in range(in_row + 1, h):
         put(1, y, "^")
 
     # walls — the west and north ones as far out as the caller asked for
     x0, y0 = -west_grow, -north_grow
-    for x in range(x0, cr + 2):
-        put(x, y0, "+" if x in (x0, cr + 1) else "-")
-        put(x, h + 1, "+" if x in (x0, cr + 1) else "-")
+    ex = width - 1  # the east wall's column; ``cr + 1`` unless slack pinned it
+    for x in range(x0, ex + 1):
+        put(x, y0, "+" if x in (x0, ex) else "-")
+        put(x, h + 1, "+" if x in (x0, ex) else "-")
     for y in range(y0 + 1, h + 1):
         put(x0, y, "|")
-        put(cr + 1, y, "|")
-    return g, cr + 2
+        put(ex, y, "|")
+    return g, width
 
 
 def taped_plan(n: int, banks: int | tuple[int, ...]) -> list[int]:
@@ -396,6 +452,9 @@ def taped_store_block(
     answer_exit_west: bool = False,
     compact_gate: bool = False,
     tight_gate: bool = False,
+    gate_return_slack: int | None = None,
+    gate_park_const: bool = False,
+    tape_park_const: bool = False,
     order: tuple[int, ...] | None = None,
     chain_reach: bool = False,
     chain_pad: int = 0,
@@ -464,6 +523,12 @@ def taped_store_block(
     shorter walk through every one of them. The gate strip is the block's floor,
     so the block loses those five rows too. ``False`` keeps the shipped body, so
     every existing caller's grid is byte-identical.
+
+    ``gate_return_slack`` is :func:`bank_gate`'s ``return_slack`` for every gate
+    in the chain — the return column moves in while the east wall, and therefore
+    ``gate_w``, ``bx`` and every bank's column, stay exactly where they are. It
+    is the form of the tightening that costs no critical-path pipe cells; see
+    :func:`bank_gate`. ``None`` keeps the shipped column.
 
     ``tight_gate`` is :func:`bank_gate`'s ``tight_return`` for every gate in the
     chain: the return column moves in to whichever arm actually reaches
@@ -553,13 +618,25 @@ def taped_store_block(
     chain = gate_chain(plan, order)
     sizes = [plan[k] for k, _ in chain]
     tapes = [
-        tape_block(size + 1, skip_batch=skip_batch, jump_threshold=jump_threshold)
+        tape_block(
+            size + 1,
+            skip_batch=skip_batch,
+            jump_threshold=jump_threshold,
+            park_const=tape_park_const,
+        )
         for size in sizes
     ]
     bank_w = max(t.width for t in tapes)
     bank_h = max(t.height for t in tapes)
     gates = [
-        bank_gate(plan[k], compact=compact_gate, tight_return=tight_gate, high=top)
+        bank_gate(
+            plan[k],
+            compact=compact_gate,
+            tight_return=tight_gate,
+            return_slack=gate_return_slack,
+            park_const=gate_park_const,
+            high=top,
+        )
         for k, top in chain[:-1]
     ]
     gate_w = max(w for _, w in gates)
@@ -593,7 +670,16 @@ def taped_store_block(
     bank_y = 9 - bank_lift
     gate_y = bank_y + bank_h + 2  # one clear row under the banks
     gx = [4 + k * pitch for k in range(nb - 1)]
-    bx = [4 + gate_w + 4 - feed_tuck + k * pitch for k in range(nb)]
+    # The feed room's west wall stands at ``bx[k] - 5 + feed_tuck``, which is the
+    # column the **widest** gate's east wall already occupies — harmless for every
+    # gate but the first, because the feed rooms live entirely above the gate
+    # strip and only gate 0 grows north into their rows (``request_roof``). So the
+    # first gate must be strictly narrower than the widest one, and when it is not
+    # the bank row steps one column east rather than the corner being overdrawn.
+    # ``max(0, ...)`` is what keeps every shipped grid byte-identical: on the
+    # shipped chain gate 0 is 26 columns against a 27-column maximum.
+    lead = max(0, gates[0][1] - (gate_w - 1)) if request_roof is not None else 0
+    bx = [4 + gate_w + 4 + lead - feed_tuck + k * pitch for k in range(nb)]
 
     # ── how far each gate room reaches back toward its caller ────────────────
     # West wall of gate k lands one column east of bank k-1's own feed riser
@@ -626,6 +712,8 @@ def taped_store_block(
                 plan[k],
                 compact=compact_gate,
                 tight_return=tight_gate,
+                return_slack=gate_return_slack,
+                park_const=gate_park_const,
                 high=top,
                 west_grow=west_grow[j],
                 north_grow=north_grow[j],

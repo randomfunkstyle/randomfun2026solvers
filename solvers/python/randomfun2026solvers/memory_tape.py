@@ -51,6 +51,28 @@ def lit(n: int) -> str:
     return str(n) if n < 10 else f"`{n}`"
 
 
+def _park_size_on_row(c: "Circuit", n: int, x0: int, y: int) -> None:
+    """Stamp ``N -> B`` on a row the man walks **west**, starting at ``x0``.
+
+    The tape size is a constant and a worker keeps A, B and BP across laps, so
+    the MAIN arms do not have to fetch it: they can find it in B and spend two
+    glyphs instead of ``M `N` -``. The reload has to happen somewhere the man
+    already walks with nothing else to do, and the return gutter — which every
+    lap crosses to get from P2 back to MAIN — is exactly that, so this costs no
+    ticks at all.
+
+    He walks it **westward**, and the engine keys a numeric literal by the
+    direction of travel: it pairs a row's backticks once and gives the closing
+    mark the digits as written and the opening mark them reversed. So the digits
+    are stamped in reverse and the *west* mark is the one that fires; ``M``, west
+    of it again, parks the value. Under ten there is no literal to reverse and a
+    bare digit does it in one cell.
+    """
+    cells = ["M"] + ([str(n)] if n < 10 else ["`", *reversed(str(n)), "`"])
+    for i, ch in enumerate(cells):
+        c.set(x0 + i, y, ch)
+
+
 def geometry(n: int) -> dict[str, int]:
     """Column budget, derived from how wide the numeric literal is."""
     lw = len(lit(n))
@@ -327,10 +349,13 @@ def worker_v2(
     width: int = V2_IW,
     height: int = V2_IH,
     write_ack: bool = False,
+    park_const: bool = False,
 ) -> Circuit:
     c = Circuit(width, height)
     L = lit(n)
     GUT = width - 1                       # right gutter: P2 exit climbs to MAIN
+    if park_const and (constant_input or init_body is not None):
+        raise ValueError("park_const is only defined for the plain request protocol")
 
     # ── INIT (row 0) ──────────────────────────────────────────────────────
     init_n = "r" if constant_input else L
@@ -369,11 +394,20 @@ def worker_v2(
     else:
         # ── MAIN: op==0 goes straight to READ; op==1 turns CW to WRITE.
         c.run(1, 2, "rX")
-        rx, _ = c.run(3, 2, "rbM" + L + "-M")
+        # ``park_const`` reaches the identical (A, B, BP) with the tape size N
+        # already sitting in B — see :func:`_park_size_on_row`, which puts it
+        # there on the return gutter every lap walks.
+        rx, _ = c.run(3, 2, "rb-NM" if park_const else "rbM" + L + "-M")
         c.turn(2, 3, E)
-        wx, _ = c.run(3, 3, "rbM" + L + "-NM")
-        c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
-        c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+        wx, _ = c.run(3, 3, "rb-M" if park_const else "rbM" + L + "-NM")
+        # Where the two arms meet and drop to P1. Column 15 is the widest
+        # literal's arm plus slack; with the literal gone the arms are the same
+        # five and four cells at every N, so the descent follows them west — and
+        # what that deletes is walked *twice*, east to the descent and west along
+        # row 4 to P1's turn. 11 is the floor: P1's entry stands at column 10.
+        mg = max(rx, wx, 11) if park_const else 15
+        c.route((rx, 2), E, [(mg, 2), (mg, 4)], (10, 4), W)
+        c.route((wx, 3), E, [(mg, 3), (mg, 4)], (10, 4), W)
 
     # Both arms reach the shared absolute south turn into P1.
     c.turn(10, 4, S)
@@ -493,10 +527,14 @@ def worker_v2(
             )
         else:
             c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+    if park_const:
+        # After every route: ``Circuit.route`` refuses a corridor that crosses a
+        # glyph, and this one deliberately stands *in* the return gutter.
+        _park_size_on_row(c, n, 1, 1)
     return c
 
 
-def worker_v2_jump(n: int) -> Circuit:
+def worker_v2_jump(n: int, *, park_const: bool = False) -> Circuit:
     """A parameterized v2 worker whose skip loops move two tape words per lap.
 
     The request protocol and stored representation are identical to
@@ -527,11 +565,12 @@ def worker_v2_jump(n: int) -> Circuit:
     # MAIN and the signed remaining-distance setup are byte-for-byte the v2
     # protocol.  B carries +(N-addr) for READ and -(N-addr) for WRITE.
     c.run(1, 2, "rX")
-    rx, _ = c.run(3, 2, "rbM" + L + "-M")
+    rx, _ = c.run(3, 2, "rb-NM" if park_const else "rbM" + L + "-M")
     c.turn(2, 3, E)
-    wx, _ = c.run(3, 3, "rbM" + L + "-NM")
-    c.route((rx, 2), E, [(15, 2), (15, 4)], (10, 4), W)
-    c.route((wx, 3), E, [(15, 3), (15, 4)], (10, 4), W)
+    wx, _ = c.run(3, 3, "rb-M" if park_const else "rbM" + L + "-NM")
+    mg = max(rx, wx, 11) if park_const else 15
+    c.route((rx, 2), E, [(mg, 2), (mg, 4)], (10, 4), W)
+    c.route((wx, 3), E, [(mg, 3), (mg, 4)], (10, 4), W)
 
     # P1.  The north exit is the odd-count tail.  It points east along the
     # shared entry corridor, re-enters with BP=0, and then takes the one south
@@ -584,6 +623,8 @@ def worker_v2_jump(n: int) -> Circuit:
         (0, 1),
         S,
     )
+    if park_const:
+        _park_size_on_row(c, n, 1, 1)
     return c
 
 
