@@ -577,16 +577,130 @@ def test_the_fold_refuses_the_geometries_it_cannot_translate() -> None:
         _fold_cpu_with(levers)
 
 
-def _fold_cpu_with(levers):
+def _fold_cpu_with(levers, *, fold=True, tuck=False):
     from randomfun2026solvers.lm1 import programs
 
     program = machine.seek_split(
         programs.load("deadman-3d"), threshold=machine.SEEK_THRESHOLD, ops=machine.SEEK_OPS
     )
-    return machine.build_cpu(program, machine.plan(program), fetch_fold=True, **levers)
+    return machine.build_cpu(
+        program, machine.plan(program), fetch_fold=fold, fetch_tuck=tuck, **levers
+    )
 
 
 def test_the_fold_names_only_the_slug_that_measured_it() -> None:
     """Same rule as the two registries above: the key is the whole guarantee that
     every other machine's grid is byte-identical."""
     assert {slug for slug, _tier in machine.FETCH_FOLD} <= {"deadman-3d_hires"}
+
+
+# ── FETCH_TUCK: the whole prologue east of the up-leg, and a shorter U-turn ───
+#
+# The tuck keeps the fold's two claims and adds a third that is easier to break
+# than either: the corridor's ``b`` now runs **east** of the root's up-leg, so a
+# ``]`` on the corridor row is no longer dead. It would shift a BP that has
+# already been loaded, and the man would decode a right-shifted opcode — one
+# more silent divergence with no binding error and no collision.
+
+
+def _tuck_cpu():
+    return _fold_cpu_with(dict(FOLD_LEVERS), tuck=True)
+
+
+def test_the_tuck_empties_the_fetch_row_and_leaves_the_root_where_it_was() -> None:
+    """``fetch_w`` is unchanged, so the tuck is free of ``lane_x0`` entirely.
+
+    That is the reason it needs no pad re-sweep and no wall to move: the fold
+    bought two columns and this buys none, it only shortens the *walk* over cells
+    that were already drawn.
+    """
+    fold, tuck = _fold_cpu(True), _tuck_cpu()
+    assert [tuck.cells.get((x, tuck.centre)) for x in (1, 2)] == [">", ">"]
+    assert tuck.cells.get((3, tuck.centre)) in ("x", "d")
+    assert tuck.centre == fold.centre, "the fetch row is set by the band"
+    # no `r` left on the fetch row, and none claimed for the ROM pipe there
+    assert not [g for g in tuck.pipe_glyphs if g[:2] == (2, tuck.centre)]
+
+
+def test_the_tuck_keeps_both_approaches_at_exactly_one_prologue() -> None:
+    """The fold's invariant, restated on the tuck's two paths.
+
+    Same failure modes, same walk: one opcode ``r``, one ``b``, the operand
+    ``r``, then the branch. Both paths, once each.
+    """
+    cpu = _tuck_cpu()
+    cells, centre = cpu.cells, cpu.centre
+    hi_row = centre - 1
+    collector = max(y for (x, y), g in cells.items() if x == 1 and g == "^")
+    east = max(x for (x, y), g in cells.items() if y == hi_row and g == "<")
+    riser = _approach(cells, 1, collector, "N")
+    corridor = _approach(cells, east, hi_row, "W")
+    for name, ops in (("riser", riser), ("corridor", corridor)):
+        assert [o for o in ops if o != "]"] == ["r", "b", "r", "x"], (name, ops)
+
+
+def test_the_tuck_leaves_no_shift_at_all_on_the_corridor_row() -> None:
+    """The claim the fold could not make, and the one the tuck lives on.
+
+    Under the fold the corridor's ``b`` sat at column 2, west of every trie leg
+    it crossed, so a ``]`` on the row shifted a BP that ``b`` was about to
+    overwrite. The tuck moves ``b`` **east** of the up-leg, and that argument
+    dies with it — so the shifts are moved off the row instead, which
+    ``_uneven_trie``'s ``avoid_hi`` does by putting a leg's ``]`` on a later cell
+    of the same leg. Only the *count* of shifts between a node and its child is
+    semantics; where on the leg they stand is not.
+
+    Assert the strong form: not one ``]`` anywhere on the corridor row.
+    """
+    cpu = _tuck_cpu()
+    hi_row = cpu.centre - 1
+    on_row = sorted((x, g) for (x, y), g in cpu.cells.items() if y == hi_row)
+    assert on_row, "vacuous: nothing on the corridor row"
+    assert not [x for x, g in on_row if g == "]"], on_row
+    # and it is not vacuous the other way either: the fold *does* put one there
+    fold = _fold_cpu(True)
+    assert [x for (x, y), g in fold.cells.items() if y == fold.centre - 1 and g == "]"]
+
+
+def test_the_tuck_moves_a_leg_shift_without_changing_how_many() -> None:
+    """``avoid_hi`` is a re-ordering, not a re-count — checked per column."""
+    slug, _tier = STRAIGHT_KEY
+    p, slot_rows, _c = _corridor_rows(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
+    lane_x0 = _lane_x0_at(p.k, slot_rows, 2)
+    kw = dict(inline_far=True, tight_cols=True, fetch_w=2)
+    entry, plain = machine._uneven_trie(p.k, slot_rows, lane_x0, True, **kw)
+    entry2, moved = machine._uneven_trie(p.k, slot_rows, lane_x0, True, avoid_hi=True, **kw)
+    assert entry == entry2 and plain.keys() == moved.keys()
+    assert plain != moved, "vacuous: nothing moved"
+    per_col = lambda cs: sorted(  # noqa: E731
+        (x, sum(1 for (xx, _y), g in cs.items() if xx == x and g == "]"))
+        for x in {x for x, _ in cs}
+    )
+    assert per_col(plain) == per_col(moved)
+
+
+def test_the_tuck_still_decodes_every_opcode_to_its_own_lane() -> None:
+    """The re-ordered legs are walked, not trusted — the mis-decode is silent."""
+    slug, _tier = STRAIGHT_KEY
+    p, slot_rows, _c = _corridor_rows(slug, machine.OPCODE_SLOTS[STRAIGHT_KEY])
+    lane_x0 = _lane_x0_at(p.k, slot_rows, 2)
+    entry, cells = machine._uneven_trie(
+        p.k, slot_rows, lane_x0, True,
+        inline_far=True, tight_cols=True, fetch_w=2, avoid_hi=True,
+    )
+    for m, number in p.number.items():
+        landed = _walk_trie(cells, number, entry, lane_x0, fetch_w=2)
+        assert landed == slot_rows[(p.row[m] - 1) // 2], m
+
+
+def test_the_tuck_refuses_a_layout_with_no_corridor_to_shorten() -> None:
+    """It shortens the westbound man's U-turn, and without ``HIGH_COLLECTOR``
+    there is no westbound man. It is a delta on the fold for the same reason."""
+    with pytest.raises(machine.MachineError, match="fetch_tuck"):
+        _fold_cpu_with(dict(FOLD_LEVERS, high_collector=False), tuck=True)
+    with pytest.raises(machine.MachineError, match="fetch_tuck"):
+        _fold_cpu_with(dict(FOLD_LEVERS), fold=False, tuck=True)
+
+
+def test_the_tuck_names_only_the_slug_that_measured_it() -> None:
+    assert {slug for slug, _tier in machine.FETCH_TUCK} <= {"deadman-3d_hires"}
