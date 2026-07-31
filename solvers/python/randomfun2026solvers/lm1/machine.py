@@ -5569,6 +5569,7 @@ def build(
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
     store_request_west: bool = False,
+    store_riser_lift: int = 0,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -5793,6 +5794,7 @@ def build(
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
                     store_request_west=store_request_west,
+                    store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -5879,6 +5881,7 @@ def build(
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
                     store_request_west=store_request_west,
+                    store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
@@ -5987,6 +5990,7 @@ def _assemble(
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
     store_request_west: bool = False,
+    store_riser_lift: int = 0,
     store_compact_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
@@ -6316,7 +6320,11 @@ def _assemble(
                         f"cells but the tape needs {tape_n}"
                     )
                 tape = v3_store_grid_block(
-                    v3_cols, v3_rows, ops=v3_ops, request_west=store_request_west
+                    v3_cols,
+                    v3_rows,
+                    ops=v3_ops,
+                    request_west=store_request_west,
+                    riser_lift=store_riser_lift,
                 )
             else:
                 if store_request_west:
@@ -6421,6 +6429,10 @@ def _assemble(
         if (store_request_reach or store_chain_reach) and store != "taped":
             raise MachineError(
                 f"only the taped tier has gate rooms to grow, not {store!r}"
+            )
+        if store_riser_lift and store != "men-v3":
+            raise MachineError(
+                f"only the men-v3 grid block has an answer riser to lift, not {store!r}"
             )
         if store_request_west and store != "men-v3":
             raise MachineError(
@@ -10580,6 +10592,47 @@ STORE_REQUEST_WEST: set[tuple[str, str]] = {
     ("deadman-3d_hires", "men-v3"),
 }
 
+#: How many rows to lift the men-v3 block's **answer riser**, per ``(slug, tier)``.
+#: Absent (0) keeps the shipped block byte-for-byte.
+#:
+#: This is a pipe-length lever on the *read latency*, and it is worth stating why
+#: that is the only kind that matters here. Measured on ``deadman-3d_hires``
+#: men-v3, 21 rounds, with ``OpcodeTags(hist_pipe=store:collector->cpu)``: the
+#: CPU's blocked run on the answer pipe is **49 ticks on all 324,600 reads** — one
+#: bucket, min = max = mean. There is no queueing and no phase jitter in this
+#: store, so every tick of the path is paid by every read, and the exchange rate
+#: is exact: **1 tick of latency = 324,600 ticks of run = 0.421%**.
+#:
+#: The read crosses nine rooms on ten pipes. Nine of those pipes are two cells —
+#: the engine's minimum, "a pipe is two cells or it is not a pipe". The tenth, the
+#: riser's exit stub, was **six**, and not for any reason on the answer path:
+#: :func:`memory_men_grid.build_grid` puts the strips at ``router_y = 6`` to leave
+#: five rows above them for the standalone form's ``I`` room, and the block form —
+#: which never draws that room — was walking its answer through the hole. Lifting
+#: the riser's north wall into it takes those cells back one for one.
+#:
+#: Measured, 21-round tour, ``store="men-v3"``, ``frame_tiles=(2, 2)``,
+#: ``passed=True``/``fatal=None``, 496x674 **unchanged** (the lift moves nothing
+#: but the riser's own wall, inside rows the block already owned):
+#:
+#: | lift | read latency | ticks | Δ |
+#: |---|---|---|---|
+#: | 0 (was) | 49 | 77,067,979 | — |
+#: | 3 | 46 | 76,094,293 | -1.263% |
+#: | **4 (shipped)** | **45** | **75,770,083** | **-1.684%** |
+#:
+#: The two rows are the same measurement twice, which is the point: the saving is
+#: ``lift * reads`` and nothing else. Predicted 4 x 324,600 = 1,298,400 ticks
+#: against 1,297,896 measured — 0.04% out, and the residue is the last frame's
+#: own boundary. 4 is the bound; see :data:`memory_men_grid.MAX_RISER_LIFT` for
+#: why 5 measures identical and 6 refuses.
+#:
+#: **Absent: ``("deadman-3d", "men-v3")``** — the canonical hash-pinned grid, for
+#: the same reason it is absent from :data:`STORE_REQUEST_WEST`.
+STORE_RISER_LIFT: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "men-v3"): 4,
+}
+
 #: ``(slug, tier)`` pairs whose taped STORE grows every gate after the first
 #: **west** until its wall stands beside the previous gate's, so the chain link
 #: is a hop over the intervening feed riser instead of a run under a whole bank.
@@ -11603,6 +11656,7 @@ def build_for(
         store_feed_tuck=TAPED_FEED_TUCK.get((slug, store), 0),
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
         store_request_west=(slug, store) in STORE_REQUEST_WEST,
+        store_riser_lift=STORE_RISER_LIFT.get((slug, store), 0),
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,

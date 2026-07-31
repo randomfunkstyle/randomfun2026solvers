@@ -426,7 +426,8 @@ def v3_store_block(n: int, *, ops: int = 500) -> V3Store:
 
 
 def v3_store_grid_block(
-    cols: int, rows: int, *, ops: int = 500, request_west: bool = False
+    cols: int, rows: int, *, ops: int = 500, request_west: bool = False,
+    riser_lift: int = 0,
 ) -> V3Store:
     """:func:`build_v3_grid` as a placeable block: the multi-column store.
 
@@ -445,16 +446,27 @@ def v3_store_grid_block(
     router strip's south-west corner; see :func:`memory_men_grid.build_grid`. It is
     a touch point, not a shape: the block's cells are otherwise identical bar the
     two stub cells the caller no longer has to reach over.
+
+    ``riser_lift`` shortens the answer riser's exit stub by that many pipe cells,
+    which is that many ticks off **every read's latency** — see
+    :func:`memory_men_grid.build_grid`. Nothing else about the block moves.
     """
     if cols == 1:
-        if request_west:
+        if request_west or riser_lift:
             raise ValueError(
-                "request_west is the grid form's touch point; the one-column block is "
-                "v3_store_block, whose router is entered on its own west wall already"
+                "request_west and riser_lift are the grid form's: the one-column "
+                "block is v3_store_block, whose router is entered on its own west "
+                "wall already and whose answer leaves the same way — it has no "
+                "router strip to stand clear of and so no riser stub to shorten"
             )
         return v3_store_block(rows, ops=ops)
-    from .memory_men_grid import build_grid
+    from .memory_men_grid import MAX_RISER_LIFT, build_grid
 
+    # Checked here rather than left to the loop below: that loop treats every
+    # exception as "this snake width does not fit and the next one might", which
+    # would turn a bad lift into "no snake width fits a 14x65 strip".
+    if not 0 <= riser_lift <= MAX_RISER_LIFT:
+        raise ValueError(f"riser_lift {riser_lift} is outside 0..{MAX_RISER_LIFT}")
     g = None
     for per_row in range(min(max(ops, 1), 64), 0, -1):
         try:
@@ -464,6 +476,7 @@ def v3_store_grid_block(
                 router=router_rows(ops, per_row=per_row),
                 io=False,
                 request_west=request_west,
+                riser_lift=riser_lift,
             )
             break
         except Exception:  # noqa: BLE001 - the strip is simply too narrow; fold deeper

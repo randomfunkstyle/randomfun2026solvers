@@ -128,6 +128,22 @@ _GAP = 4
 #: Blank columns between one column of memory and the next.
 _COL_GAP = 2
 
+#: The strips stand ``_RISER_Y`` rows below the block's top edge, and in the
+#: **standalone** form those rows are the ``I`` room's. The block form draws no
+#: ``I`` room, so in a block they hold nothing but the answer riser's exit stub
+#: walking through them — see ``riser_lift`` in :func:`build_grid`.
+_RISER_Y = 6
+
+#: The bound on ``riser_lift``, and it is where the win saturates rather than a
+#: guess. At 4 the riser's north wall reaches the block's top edge, the block's
+#: own stub is gone, and what is left is the caller's own two cells of pipe — the
+#: engine's minimum. Measured on ``deadman-3d_hires`` men-v3, 3-round screen,
+#: read latency by ``OpcodeTags(hist_pipe=...)``: lift 0/1/2/3/4 give
+#: **49/48/47/46/45** ticks, one for one; **lift 5 also gives 45** (it only walks
+#: teleport L up a row behind the riser) and lift 6 refuses outright. So 4 is the
+#: last value that buys anything, and nothing is left on the table by stopping.
+MAX_RISER_LIFT = _RISER_Y - 2
+
 
 @dataclass(frozen=True)
 class Grid:
@@ -164,6 +180,7 @@ def build_grid(
     router: Sequence[str] | None = None,
     io: bool = True,
     request_west: bool = False,
+    riser_lift: int = 0,
 ) -> Grid:
     """``cols`` columns of ``rows`` cells each, addresses running column by column.
 
@@ -197,6 +214,15 @@ def build_grid(
     the walk to it costs nothing). ``ARCH.md`` §7.4b: a plain room may be attached
     at its corner; only displays forbid it. Block form only — the standalone grid
     has an I room to feed the stub.
+
+    ``riser_lift`` raises the answer riser's **north wall** by that many rows, and
+    shortens its exit stub by exactly as many pipe cells.  The stub is five cells
+    long at ``0`` only because ``router_y`` reserves five rows above the strip for
+    the standalone form's ``I`` room — a room the block form never draws, so in
+    the block those rows hold nothing but the stub walking through them.  Every
+    pipe cell is a tick of *read latency* (``ARCH.md`` §7.4b), and the riser sits
+    on the answer path, so this is worth ``riser_lift`` ticks off every read.
+    Left at ``0`` so every existing block stays byte-identical; opt in per caller.
     """
     if cols < 1 or rows < 1:
         raise ValueError("a grid needs at least one column of at least one cell")
@@ -204,6 +230,13 @@ def build_grid(
         raise ValueError("the one-column block form is memory_men_v3.v3_store_block")
     if request_west and io:
         raise ValueError("request_west is the block form's touch point; io=True has an I room")
+    if riser_lift and io:
+        raise ValueError("riser_lift raises the block form's answer riser; io=True has no riser")
+    if not 0 <= riser_lift <= MAX_RISER_LIFT:
+        raise ValueError(
+            f"riser_lift {riser_lift} is outside 0..{MAX_RISER_LIFT}: it comes straight "
+            f"off the riser's exit stub, and a pipe is two cells or it is not a pipe"
+        )
     if cols == 1:
         # One column needs none of this: the repeater would be a pass-through
         # costing a pipeline stage and two pipes, and a strip spanning one column
@@ -241,7 +274,7 @@ def build_grid(
     # ── vertical plan ─────────────────────────────────────────────────────────
     # I room, its pipe, the router strip, its pipes, the columns, their pipes,
     # the collector strip, its pipe, the O room. Two-cell pipes throughout.
-    router_y = 6
+    router_y = _RISER_Y
     router_prog = tuple(router) if router is not None else ROUTER_ROWS
     router_h = len(router_prog)
     col_y = router_y + router_h + 1 + _GAP - 1  # south wall, 2 pipe cells, north wall
@@ -307,11 +340,16 @@ def build_grid(
 
         east = x0 + strip_w  # the strips' shared east wall column
         rx = east + 4
-        _room(grid, rx, router_y, teleport_v(coll_y + 2 - router_y)[0])
+        # The riser's interior starts `riser_lift` rows higher, and is that much
+        # taller, so its south end still reaches the collector's attachment row.
+        # `router_y - 2` is the stub's first cell, so the lift comes straight off
+        # the stub — and the guard is that a pipe is two cells or it is not a pipe.
+        top = router_y - riser_lift
+        _room(grid, rx, top, teleport_v(coll_y + 2 - top)[0])
         # collector east wall -> the riser's west wall, two cells of pipe
         draw_pipe(grid, [(east + 1, coll_y), (east + 2, coll_y), (east + 3, coll_y)])
         # the riser's north wall -> the block's top edge; the caller extends it
-        draw_pipe(grid, [(rx + 1, y) for y in range(router_y - 2, -1, -1)])
+        draw_pipe(grid, [(rx + 1, y) for y in range(top - 2, -1, -1)])
         out_cell = (rx + 1, 0)
 
     # ── the columns ───────────────────────────────────────────────────────────
