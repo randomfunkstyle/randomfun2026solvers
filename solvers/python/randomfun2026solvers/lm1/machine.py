@@ -6838,12 +6838,19 @@ def _assemble(
         req_y, resp_y = spill["req_row"], spill["resp_row"]
         if sh < 6:
             raise MachineError("the SPILL loop needs 4 interior rows (room_h >= 6)")
-        if not resp_y + 2 <= sy0 <= sy1 <= req_y - 2:
+        if not (min(req_y, resp_y) + 2 <= sy0 <= sy1 <= max(req_y, resp_y) - 2):
             raise MachineError(
-                f"SPILL rows must run resp {resp_y} < room {sy0}..{sy1} < req "
-                f"{req_y}, each clear by two: the two pipes climb opposite sides "
-                "of the block and a pipe is two cells or it is not a pipe"
+                f"the SPILL block {sy0}..{sy1} must stand between its two attach "
+                f"rows (req {req_y}, resp {resp_y}) and clear of both by two: the "
+                "pipes climb opposite sides of it, and a pipe is two cells or it "
+                "is not a pipe"
             )
+        # Which pipe comes down from above is a §7.1 outcome, not a choice: the
+        # measured window puts the request row north of the response row on this
+        # machine and there is no reason the next one has to agree, so the block
+        # is drawn either way up. ``R``'s "any incoming pipe" is what makes that
+        # free — the receiving side does not care which wall its word arrives at.
+        req_above = req_y < resp_y
         # Two interior columns: the east one rises and *receives*, the west one
         # descends and *sends*. Which way round matters, because a man spawns
         # facing east (``SPEC.md``) and ``@`` is a nop once he is walking: putting
@@ -6864,10 +6871,10 @@ def _assemble(
             g.put(L, sy1 - 1, ">")
             g.put(R, sy1 - 1, "^")
             route_lengths["cpu->spill"] = g.draw_pipe(
-                [(sx0, req_y), (R, req_y), (R, sy1 + 1)]
+                [(sx0, req_y), (R, req_y), (R, sy0 - 1 if req_above else sy1 + 1)]
             )
             route_lengths["spill->cpu"] = g.draw_pipe(
-                [(L, sy0 - 1), (L, resp_y), (sx0, resp_y)]
+                [(L, sy1 + 1 if req_above else sy0 - 1), (L, resp_y), (sx0, resp_y)]
             )
         spill_touches = {"spill_req": (sx0, req_y), "spill_resp": (sx0, resp_y)}
         spill_regions["spill"] = (sx0, sy0, 4, sh)
