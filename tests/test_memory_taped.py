@@ -683,3 +683,171 @@ def test_the_parked_size_ring_worker_reads_back_what_was_written(skip_batch: int
     shipped = readback(False)
     assert shipped == [a * 29 + 5 for a in range(1, 330)]
     assert readback(True) == shipped
+
+
+# ── v4: the op in the address's low bit, and one word on the wire ────────────
+#: The shipped hi-res block, as ``lm1.machine`` builds it, minus the wire.
+_HIRES_KW = dict(
+    skip_batch=None,
+    jump_threshold=machine.TAPED_JUMP_THRESHOLD["deadman-3d_hires"],
+    compact_gate=True,
+    gate_park_const=True,
+    gate_south_reuse_b=True,
+    tape_park_const=True,
+    order=list(HIRES_ORDER),
+    chain_reach=True,
+    feed_teleport=True,
+    bank_lift=5,
+)
+
+
+def _wire(protocol: str, op: int, addr: int) -> list[int]:
+    """One access's request words. ``op`` is 0 for a read, 1 for a write."""
+    return [op, addr] if protocol == "v3" else [2 * addr - op]
+
+
+def test_the_v4_wire_is_opt_in_and_the_default_block_is_byte_identical() -> None:
+    """A wire format is not a tuning value, so it gets a version and a default."""
+    shipped = taped_store_block(330, PLAN, compact_gate=True, feed_teleport=True)
+    assert (
+        taped_store_block(
+            330, PLAN, compact_gate=True, feed_teleport=True, protocol="v3"
+        ).cells
+        == shipped.cells
+    )
+    packed = taped_store_block(
+        330, PLAN, compact_gate=True, feed_teleport=True, protocol="v4"
+    )
+    assert packed.cells != shipped.cells
+    # ... and the two ends of the wire are one decision, checked rather than hoped
+    with pytest.raises(ValueError):
+        taped_store_block(330, PLAN, compact_gate=True, protocol="v4")  # no feed room
+    with pytest.raises(ValueError):
+        taped_store_block(330, PLAN, protocol="v5")
+    with pytest.raises(ValueError):
+        gate_rows(True, "v5")
+    with pytest.raises(ValueError):
+        bank_gate(8, protocol="v5")
+
+
+def test_the_v4_gate_is_a_seven_row_body_with_two_arms_and_two_tails() -> None:
+    """Four arms become two arms plus two ``x`` tails, and the body does not
+    grow a row doing it: the elbow's merge cell points straight into the
+    downstream arm, which the two-word gate could not do because it still had a
+    word to receive after the branch."""
+    h, in_row, local_row, down_row = gate_rows(True, "v4")
+    assert (h, in_row, local_row, down_row) == (7, 4, 2, 6)
+    assert h == gate_rows(True)[0]  # ... no taller than the compact v3 body
+    for high in (None, 901):
+        g, w = bank_gate(102, high=high, park_const=True, protocol="v4")
+        assert w == 15, (high, w)  # both forms padded to one width
+        spine = "".join(g[(x, in_row)] for x in range(1, w) if (x, in_row) in g)
+        assert spine.startswith("UbW-X" if high else "Ub-X"), spine
+        assert "r" not in spine and "`" not in spine, spine  # one word, no literal
+        # one `x` per side, and exactly one `r` behind each of them (the value)
+        assert sum(1 for ch in g.values() if ch == "x") == 2
+        assert sum(1 for ch in g.values() if ch == "r") == 2
+        assert sum(1 for ch in g.values() if ch == "s") == 4  # was ten
+        # the parked constant is twice the v3 one (plus one on the low form)
+        floor = "".join(g[(x, h)] for x in range(1, w - 1) if (x, h) in g)
+        const = 2 * 102 + 1 if high is None else 2 * (901 - 102)
+        assert f"M`{str(const)[::-1]}`" in floor, (floor, const)
+
+
+def test_every_v4_gate_send_still_binds_to_the_pipe_it_means() -> None:
+    """Same argument as the v3 body's, on a different floor plan: two outgoing
+    pipes on one wall, the row decides, and an ``s`` above the spine is a local
+    arm. The v4 rows are tighter — the downstream arm sits *on* the elbow row —
+    so this is the check that the margins never cross."""
+    _h, in_row, local_row, down_row = gate_rows(True, "v4")
+    for m in (1, 5, 64, 85, 195, 256, 999, 12345):
+        for high in (None, m + 1, m + 7, 4 * m, 99999):
+            for park in (False, True):
+                g, w = bank_gate(m, high=high, park_const=park, protocol="v4")
+                src = {local_row: (w, local_row), down_row: (w, down_row)}
+                sends = [(x, y) for (x, y), ch in g.items() if ch == "s"]
+                assert len(sends) == 4, (m, high, park, len(sends))
+                assert all(y != in_row for _x, y in sends)
+                for x, y in sends:
+                    want = local_row if y < in_row else down_row
+                    dist = {r: abs(px - x) + abs(py - y) for r, (px, py) in src.items()}
+                    nearest = min(src, key=lambda r: (dist[r], r))
+                    assert nearest == want, (
+                        f"m={m} high={high} park={park}: the `s` at {(x, y)} binds "
+                        f"to the row-{nearest} pipe, not row {want} ({dist})"
+                    )
+
+
+@pytest.mark.parametrize("skip_batch", [1, 2, None])
+def test_the_v4_wire_routes_every_hires_address_the_same(skip_batch) -> None:
+    """The load-bearing test for the whole protocol, and it has to be a readback
+    over every address.
+
+    A wire format is exactly the kind of change that does not fail a build: the
+    constants in every gate spine double, the rebasing glyphs stay the same
+    glyphs, and the feed forwarder starts dividing. Get any of it wrong — an
+    off-by-one in a doubled constant, a floored division that rounds the wrong
+    way on the odd (write) word, an ``x`` that turns the wrong way — and no
+    build fails and no send rebinds; the store simply answers from the wrong
+    bank, or writes to one address and reads another.
+
+    So this writes a distinct value into every one of hi-res' 901 addresses and
+    compares them **address by address** against the v3 wire, over the real
+    plan, the real hot-first chain (both gate forms appear in it), the real
+    compact bodies and each ring worker in turn — including ``None``, which is
+    the shipped per-bank pick and therefore the only run in which the two
+    workers appear in the same block.
+    """
+
+    def readback(protocol: str) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(
+                HIRES_N, HIRES_PLAN, protocol=protocol, **{**_HIRES_KW, "skip_batch": skip_batch}
+            )
+        )
+        writes = [
+            x
+            for a in range(1, HIRES_N)
+            for x in (*_wire(protocol, 1, a), (a * 37 + 11) % 9973)
+        ]
+        bounds = [1]
+        for m in HIRES_PLAN:
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            reads = [x for a in range(lo, hi) for x in _wire(protocol, 0, a)]
+            want = [(a * 37 + 11) % 9973 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=800_000_000)
+            assert res.fatal is None, (protocol, skip_batch, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    shipped = readback("v3")
+    assert shipped == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
+    assert readback("v4") == shipped
+
+
+def test_the_v4_feed_forwarder_unpacks_with_one_divide() -> None:
+    """``2*addr - op`` and floored division are chosen for each other: the
+    quotient is short by exactly the remainder, so one ``+`` restores the
+    address on **both** arms with no branch at all."""
+    from randomfun2026solvers.memory_taped import V4_FEED_H, feed_unpack
+
+    for a in range(1, 400):
+        for op in (0, 1):
+            w = 2 * a - op
+            assert w // 2 + w % 2 == a, (a, op, w)
+            assert w % 2 == op, (a, op, w)  # ... and the remainder IS the op
+    rows, ports = feed_unpack(V4_FEED_H)
+    assert len(rows) == V4_FEED_H and len(ports) == V4_FEED_H
+    assert rows[0].endswith("Rv") and "/" in rows[1] and "@" in rows[-1]
+    assert sum(row.count("s") for row in rows) == 3  # op, address, and the value
+    assert sum(row.count("R") for row in rows) == 2  # the request and the value
+    # A taller corridor is the SAME ten-row loop with an empty room under it.
+    # Letting the loop follow the room instead is the one thing that measured a
+    # regression here, so it is pinned rather than described.
+    tall, _ = feed_unpack(V4_FEED_H + 7)
+    assert len(tall) == V4_FEED_H + 7
+    assert tall[:V4_FEED_H] == rows
+    assert set("".join(tall[V4_FEED_H:])) == {" "}

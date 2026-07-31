@@ -59,13 +59,45 @@ so ``lm1.machine`` places it with the men-v3 branch, teleports and all.
 ``deadman-3d_taped.input.txt`` is deliberately not generated: the taped machine
 runs the same program, protocol and preamble as the canonical men-v3 one, so
 its input is byte-identical to ``deadman-3d.input.txt``.
+
+**The wire has a version.** Everything above describes ``v3``, the two-word
+request. ``v4`` (:data:`TAPE_PROTOCOLS`) carries the op in the address's low
+bit and sends **one** word, ``2*addr - op``, so the adapter, every gate in the
+chain and every feed forwarder handle one fewer pipe transaction per access —
+which is the read's *address-independent* floor, the term no routing lever
+reaches. The banks are not on it: the feed forwarder unpacks with a single
+``/`` (:func:`feed_unpack`), so every ring worker keeps the protocol it was
+verified on. Measured on the ``deadman-3d_hires`` 21-round tour, same process,
+same moment: **105,152,308 -> 101,523,077, -3.451%**, ``passed=True``,
+``fatal=None``, box 620x403 -> 614x403 and every ``route_lengths`` entry
+identical. On the 3-round tour the same pair gives mean read latency
+**151.89 -> 141.15** against a floor (the histogram's minimum, which has no
+routing in it at all) of **73 -> 69**; 10.74 ticks x 28,227 reads is 303,004
+against 303,004 measured, so the conversion is exactly 1:1 and the whole saving
+is read latency.
 """
 
 from __future__ import annotations
 
 from .memory_men_v3 import V3Store
 
-__all__ = ["bank_gate", "gate_chain", "gate_rows", "taped_store_block", "taped_plan"]
+__all__ = [
+    "TAPE_PROTOCOLS",
+    "bank_gate",
+    "feed_unpack",
+    "gate_chain",
+    "gate_rows",
+    "taped_store_block",
+    "taped_plan",
+]
+
+#: The store's wire formats. ``v3`` is the two-word request every tier shipped
+#: on — ``0 addr`` for a read, ``1 addr value`` for a write. ``v4`` carries the
+#: op in the address's **low bit** and sends **one** word, ``2*addr - op``, so
+#: every stage from the adapter to the bank's own doorstep handles one fewer
+#: pipe transaction per access. See :func:`bank_gate` for the arithmetic and
+#: :func:`feed_unpack` for where the word is taken apart again.
+TAPE_PROTOCOLS = ("v3", "v4")
 
 #: The gate's interior height; rows 1..12 like the two-tier adapter it descends
 #: from, with the same return loop (east column down, floor west, climb to ``U``).
@@ -99,13 +131,112 @@ COMPACT_GATE_DOWN_ROW = 6
 #: ``answer_west`` and ``request_roof`` are stated in block coordinates.
 COLLECTOR_ROW = 5
 
+#: The **v4** body. Same seven rows as the compact v3 one, laid out around a
+#: different branch order: the range test still splits mine (north) from
+#: downstream (south), but each side now sends its **single** word first and
+#: only then splits on the op — with ``x``, which turns on the backpack's low
+#: bit and is exactly the parked request word's op. Two arms and two two-cell
+#: tails replace four arms, and the value-passing tail is off the read's path
+#: entirely.
+#:
+#: ::
+#:
+#:     y=1  mine read tail  ..........>        (walk east onto the descent)
+#:     y=2  mine arm        > N s x            <- local pipe attaches here
+#:     y=3  mine write tail       > r s
+#:     y=4  spine           U b W - X v   >    (and the downstream read tail)
+#:     y=5  elbow + down    > > W s x
+#:     y=6  down write tail         > r s      <- downstream pipe attaches here
+#:     y=7  floor           the return leg, unchanged
+V4_GATE_H = 7
+V4_GATE_IN_ROW = 4
+V4_GATE_LOCAL_ROW = 2
+V4_GATE_DOWN_ROW = 6
+#: The east wall both v4 forms are padded out to. The high form's return column
+#: lands at 12 and the low form's at 13; padding the *wall* rather than moving
+#: the *column* keeps every gate the same width — so ``taped_store_block``'s
+#: bank row, and with it every feed riser, is the same length whichever form a
+#: chain position happens to take — while the man still walks the tight loop.
+#: (Moving the column instead is ``tight_return``, and it measured **+0.892%**.)
+_V4_FLAT_CR = 13
 
-def gate_rows(compact: bool = False) -> tuple[int, int, int, int]:
+#: The v4 feed forwarder's fixed body: nine rows of work plus a spawn row.
+#: Anything taller is the same room with the read's return leg stretched.
+V4_FEED_H = 10
+
+
+def feed_unpack(height: int) -> tuple[list[str], list[tuple[int, int]]]:
+    """The **v4** feed forwarder: one packed word in, the bank's two words out.
+
+    A drop-in for :func:`~.memory_men.teleport_v` in the same four-column
+    corridor and with the same ports — one incoming pipe on the south wall, one
+    outgoing on the east — but it takes the wire apart instead of relaying it,
+    so the *bank* keeps the two-word protocol it was measured and verified on
+    and nothing in ``memory_tape`` moves by one cell.
+
+    The unpack is one glyph. With ``2`` parked in B, ``/`` divides the wire word
+    ``w = 2*addr - op`` and SPEC's floored division does the rest::
+
+        read   w = 2a    ->  A = a,     B = 0     ->  op 0, and A+B = a
+        write  w = 2a-1  ->  A = a - 1, B = 1     ->  op 1, and A+B = a
+
+    so a single ``+`` restores the address on **both** arms, with no branch: the
+    remainder that identifies the write is exactly the one the floor lost. The
+    ``X`` at the bottom is only about the *value* word — it fires after both
+    request words are already in the pipe, so a read never walks it.
+
+    The lap re-parks its own constant on the way home (``2`` then ``M``, walked
+    north, so they stand in that order down the column), which is also what
+    makes the **first** lap correct: the spawn stands on the return leg and
+    reaches the work through it.
+
+    **The loop is ten rows and it stays ten rows however tall the room is**,
+    which is the same property :func:`~.memory_men.teleport_v` has and for the
+    same reason: ``R`` takes from any incoming pipe with no distance term, so a
+    pipe entering the *south* wall is read by the man at the north end in one
+    instruction.
+
+    Letting the loop follow the room instead was built and measured first, and
+    it is worth recording what it did: the forwarders' work went from **+9.26 to
+    +36.8 ticks per access** over the two-word room, and the 21-round tour came
+    out at **exactly the same tick, 101,523,077**. That is the cleanest evidence
+    in this store of where its critical path is *not* — a feed forwarder is
+    94-99% blocked, so its service time is spent inside the gap before the next
+    request and none of it is on the wire. The compact loop is kept because
+    headroom that is free today is not free at four times the traffic, but it
+    bought nothing and is not claimed to have.
+    """
+    ih = max(V4_FEED_H, height)
+    rows = [
+        "> Rv",  # (0,0) return leg turns east; R takes the packed word
+        "M  /",  # ... the reload's `M` on the way home; `/` unpacks
+        "2  W",  # ... and its `2` below it; W puts the op in A
+        "^  s",  # send op
+        "^  W",  # A = addr - op, B = op
+        "^  +",  # A = addr
+        "^  s",  # send addr
+        "^  W",  # A = op again
+        "^sRX",  # write turns clockwise (west) into `R s`; read goes straight on
+        "^ @<",  # the read's turn west, and the spawn standing on it
+    ]
+    rows += [" " * 4] * (ih - V4_FEED_H)  # the room under the loop, unused
+    #: Every interior row down the **east** side is a legal attachment row.
+    return rows, [(3, i) for i in range(ih)]
+
+
+def gate_rows(compact: bool = False, protocol: str = "v3") -> tuple[int, int, int, int]:
     """``(height, in row, local out row, downstream out row)`` for a bank gate.
+
+    ``protocol="v4"`` returns the one-word body's rows; it has no non-compact
+    form, because it was never the two-tier adapter and never had the spacers.
 
     ``compact=False`` is the shipped 12-row body, so every existing caller's
     grid stays byte-identical; ``True`` is the spacer-free 7-row one.
     """
+    if protocol not in TAPE_PROTOCOLS:
+        raise ValueError(f"unknown store protocol {protocol!r}; expected {TAPE_PROTOCOLS!r}")
+    if protocol == "v4":
+        return (V4_GATE_H, V4_GATE_IN_ROW, V4_GATE_LOCAL_ROW, V4_GATE_DOWN_ROW)
     if compact:
         return (
             COMPACT_GATE_H,
@@ -114,6 +245,140 @@ def gate_rows(compact: bool = False) -> tuple[int, int, int, int]:
             COMPACT_GATE_DOWN_ROW,
         )
     return GATE_H, GATE_IN_ROW, GATE_LOCAL_ROW, GATE_DOWN_ROW
+
+
+def _bank_gate_v4(
+    m: int,
+    *,
+    high: int | None = None,
+    park_const: bool = False,
+    west_grow: int = 0,
+    north_grow: int = 0,
+) -> tuple[dict[tuple[int, int], str], int]:
+    """One **v4** range gate: the one-word wire in, the one-word wire out.
+
+    The wire is ``w = 2*addr - op`` (``2a`` for a read, ``2a-1`` for a write),
+    and that particular packing is not a convention — it is the one that makes
+    the gate's arithmetic *free*. A gate's whole job is one comparison and one
+    rebasing, and both survive the doubling untouched:
+
+    ==========  ===============================  ==============================
+    .           low gate (``high`` is ``None``)  high gate
+    ==========  ===============================  ==============================
+    constant    ``2m + 1``                       ``2(high - m)``
+    spine       ``Ub-X``  (``A = w - c``)        ``UbW-X`` (``A = c - w``)
+    mine        ``A < 0``, i.e. ``addr <= m``    ``A < 0``, i.e. ``addr > high-m``
+    local wire  ``A + c = w``      -> ``+``      ``-A = w - c``     -> ``N``
+    forwarded   ``A + 1 = w - 2m`` -> ``M1+``    ``w``, untouched   -> ``W``
+    ==========  ===============================  ==============================
+
+    Every one of those is the *same glyph* the two-word gate used on the bare
+    address, because ``2a - op`` is monotone in ``a`` with reads and writes of
+    address ``a`` sitting at ``{2a-1, 2a}``: an address threshold is a wire
+    threshold at twice the constant, and the high form's rebasing is still a
+    plain negation. (``2a + op`` — the other obvious packing — is one ``+1``
+    worse on the high form's local arm, which is the hot one.)
+
+    **The op branch moved behind the send, and that is the second half of the
+    win.** ``b`` parks the wire word, whose low bit *is* the op, and ``x`` turns
+    on that bit — clockwise for a write, counter-clockwise for a read, always
+    turning. So each side sends its single word and only then splits: the read
+    walks one cell onto the return leg, the write walks into ``r s`` and passes
+    the value on. Four arms become two arms and two tails, and a read never
+    executes the value-passing code at all.
+
+    Row 5 carries the elbow *and* the downstream arm, which the two-word gate
+    could not do: with the op already in the backpack there is nothing to
+    receive after the branch, so the merge cell can point straight into the
+    arm. That is what keeps the body at seven rows.
+    """
+    if m < 1:
+        raise ValueError(f"a bank must hold at least one slot, not {m}")
+    if high is not None and high - m < 1:
+        raise ValueError(f"a high gate over 1..{high} cannot hand {high - m} addresses on")
+    if west_grow < 0 or north_grow < 0:
+        raise ValueError(f"a gate room grows outward, not inward: {(west_grow, north_grow)}")
+    h, in_row, local_row, down_row = V4_GATE_H, V4_GATE_IN_ROW, V4_GATE_LOCAL_ROW, V4_GATE_DOWN_ROW
+    if high is None:
+        const = 2 * m + 1
+        spine = "Ub-X" if park_const else f"UbM`{const}`W-X"
+        n_arm, s_arm = "+s", "M1+s"
+    else:
+        const = 2 * (high - m)
+        spine = "UbW-X" if park_const else f"UbM`{const}`-X"
+        n_arm, s_arm = "Ns", "Ws"
+    cx = len(spine)  # the range test's X (the spine starts at column 1)
+    xn = cx + 1 + len(n_arm)  # the mine arm's `x`
+    xs = cx + 2 + len(s_arm)  # ... and the downstream arm's
+    cr = xs + 3  # one east of the longest tail (`>rs` off the `x`)
+    width = max(cr, _V4_FLAT_CR) + 2
+    g: dict[tuple[int, int], str] = {}
+
+    def put(x: int, y: int, ch: str) -> None:
+        old = g.get((x, y))
+        if old is not None and old != ch:
+            raise ValueError(f"gate collision at {(x, y)}: {old!r} vs {ch!r}")
+        g[(x, y)] = ch
+
+    def text(x: int, y: int, s: str) -> None:
+        for i, ch in enumerate(s):
+            put(x + i, y, ch)
+
+    # the spine: the wire word into the backpack, the range test, the three-way X
+    text(1, in_row, spine)
+
+    # A < 0 (mine): north to the local row, send, then split on the parked op
+    put(cx, in_row - 1, "^")
+    put(cx, local_row, ">")
+    text(cx + 1, local_row, n_arm)
+    put(xn, local_row, "x")
+    put(xn, local_row - 1, ">")  # read: one cell north, then east onto the descent
+    text(xn, local_row + 1, ">rs")  # write: one cell south, then pass the value
+
+    # A == 0 goes straight and A > 0 turns south; they merge one column east and
+    # one row down, which is the downstream arm's own row.
+    elbow = in_row + 1
+    put(cx + 1, in_row, "v")
+    put(cx, elbow, ">")
+    put(cx + 1, elbow, ">")
+    text(cx + 2, elbow, s_arm)
+    put(xs, elbow, "x")
+    put(xs, in_row, ">")  # read: north onto the spine's own row, east of it
+    text(xs, down_row, ">rs")  # write: south, then pass the value
+
+    # the return leg: every tail walks east onto the same descent, then the
+    # floor runs west and the climb re-enters the spine's `U` from below
+    for y in range(1, h):
+        put(cr, y, "v")
+    put(cr, h, "<")
+    put(cr - 1, h, "@")
+    for x in range(2, cr - 1):
+        put(x, h, "<")
+    if park_const:
+        # Walked **west**, so the digits stand reversed and the west backtick is
+        # the one that fires; `M` west of it parks the value for the next lap.
+        digits = str(const)[::-1]
+        if len(digits) + 3 > cr - 3:
+            raise ValueError(f"the floor is too short to reload {const} in a gate of {cr}")
+        g[(2, h)] = "M"
+        g[(3, h)] = "`"
+        for i, ch in enumerate(digits):
+            g[(4 + i, h)] = ch
+        g[(4 + len(digits), h)] = "`"
+    put(1, h, "^")
+    for y in range(in_row + 1, h):
+        put(1, y, "^")
+
+    # walls — the west and north ones as far out as the caller asked for
+    x0, y0 = -west_grow, -north_grow
+    ex = width - 1
+    for x in range(x0, ex + 1):
+        put(x, y0, "+" if x in (x0, ex) else "-")
+        put(x, h + 1, "+" if x in (x0, ex) else "-")
+    for y in range(y0 + 1, h + 1):
+        put(x0, y, "|")
+        put(ex, y, "|")
+    return g, width
 
 
 def bank_gate(
@@ -127,8 +392,14 @@ def bank_gate(
     south_reuse_b: bool = False,
     west_grow: int = 0,
     north_grow: int = 0,
+    protocol: str = "v3",
 ) -> tuple[dict[tuple[int, int], str], int]:
     """One range gate for a bank of ``m`` slots: cells (walls included), width.
+
+    ``protocol="v4"`` builds the one-word gate instead — see
+    :func:`_bank_gate_v4`, which is a different body rather than a knob on this
+    one. It ignores the width and spacer levers below: they are all answers to
+    the two-word body's own shape, and none of them survives it.
 
     Local coordinates: walls at column 0 / row 0, interior from (1, 1). The
     caller attaches the request pipe to the west wall at the in row and the two
@@ -241,6 +512,16 @@ def bank_gate(
     high gate's south arms only have to ``W`` the untouched address back into A,
     where the low gate's have to ``M1+`` it, so they are two cells *shorter*.
     """
+    if protocol not in TAPE_PROTOCOLS:
+        raise ValueError(f"unknown store protocol {protocol!r}; expected {TAPE_PROTOCOLS!r}")
+    if protocol == "v4":
+        return _bank_gate_v4(
+            m,
+            high=high,
+            park_const=park_const,
+            west_grow=west_grow,
+            north_grow=north_grow,
+        )
     if m < 1:
         raise ValueError(f"a bank must hold at least one slot, not {m}")
     if high is not None and high - m < 1:
@@ -481,6 +762,7 @@ def taped_store_block(
     feed_teleport: bool = False,
     bank_lift: int = 0,
     feed_tuck: int = 0,
+    protocol: str = "v3",
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
 
@@ -629,10 +911,28 @@ def taped_store_block(
     any tuck at all. See :data:`~.lm1.machine.TAPED_FEED_TUCK` for the collision
     cell and for why raising the room's floor above the relay instead trades four
     cells for thirteen.
+
+    ``protocol`` picks the block's **wire format**. ``v3`` is the two-word
+    request every shipped grid was built on. ``v4`` carries the op in the
+    address's low bit and sends one word — ``2*addr - op`` — from the block's
+    own request stub all the way to each bank's feed forwarder, which is where
+    it is taken apart again (:func:`feed_unpack`). The banks therefore keep the
+    protocol they were verified on and ``memory_tape`` does not move by one
+    cell; what changes is that the adapter, every gate in the chain and every
+    feed room handle **one fewer pipe transaction per access**. It needs
+    ``feed_teleport`` — the unpack lives in that room — and it is not
+    byte-compatible with anything, which is the point of giving it a number.
     """
     from .lm1.machine import tape_block
 
-    _gate_h, gate_in_row, gate_local_row, gate_down_row = gate_rows(compact_gate)
+    if protocol not in TAPE_PROTOCOLS:
+        raise ValueError(f"unknown store protocol {protocol!r}; expected {TAPE_PROTOCOLS!r}")
+    if protocol == "v4" and not feed_teleport:
+        raise ValueError(
+            "the v4 wire is unpacked in the feed forwarder, so there has to be "
+            "one: pass feed_teleport=True"
+        )
+    _gate_h, gate_in_row, gate_local_row, gate_down_row = gate_rows(compact_gate, protocol)
     plan = taped_plan(n, banks)
     chain = gate_chain(plan, order)
     sizes = [plan[k] for k, _ in chain]
@@ -656,6 +956,7 @@ def taped_store_block(
             park_const=gate_park_const,
             south_reuse_b=gate_south_reuse_b,
             high=top,
+            protocol=protocol,
         )
         for k, top in chain[:-1]
     ]
@@ -736,6 +1037,7 @@ def taped_store_block(
                 park_const=gate_park_const,
                 south_reuse_b=gate_south_reuse_b,
                 high=top,
+                protocol=protocol,
                 west_grow=west_grow[j],
                 north_grow=north_grow[j],
             )
@@ -795,8 +1097,17 @@ def taped_store_block(
         # takes from any incoming pipe with no distance term, and with one pipe
         # each way neither it nor ``s`` has anything to choose between. What is
         # left is the stub off the gate and the stub into the bank.
+        # ... and under ``v4`` the same room is where the packed word is taken
+        # apart, so the bank's own two-word protocol never changes.
         rx0, ry0, ry1 = bx[k] - 5 + feed_tuck, tin[1] - 1, gate_y - 1
-        _room(_Grid(), rx0 + 1, ry0 + 1, teleport_v(ry1 - ry0 - 1)[0])
+        art = feed_unpack if protocol == "v4" else teleport_v
+        floor = V4_FEED_H if protocol == "v4" else 2
+        if ry1 - ry0 - 1 < floor:
+            raise ValueError(
+                f"bank {k}'s feed corridor is {ry1 - ry0 - 1} rows and the "
+                f"{protocol} forwarder needs {floor}"
+            )
+        _room(_Grid(), rx0 + 1, ry0 + 1, art(ry1 - ry0 - 1)[0])
         # The climb uses the room's *second* interior column, not its first: a
         # pipe must leave the gate heading east (SPEC.md — the first arrowhead's
         # backward cell is the source room's border), and the widest gate's own

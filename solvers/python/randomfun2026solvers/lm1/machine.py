@@ -4769,28 +4769,75 @@ _ADAPTER_FORK = [
     " Hs0Yv  ",  # read arm:  <- H s 0   | Y | v ->
     "   ^s<  ",  # the read arm's send-and-return leg, back up column 3 into ``U``
 ]
+#: The **v4** adapter: the CPU's one word in, **one** word out.
+#:
+#: The CPU already sends a single word that carries both facts — ``+addr`` for a
+#: read, ``-addr`` for a write. The two-word adapter's whole job was to throw
+#: that encoding away and expand it; this one re-encodes it instead, into the
+#: store's own one-word wire ``2*addr - op`` (see
+#: :data:`~..memory_taped.TAPE_PROTOCOLS`). Nothing downstream has to expand it
+#: back until the bank's own doorstep.
+#:
+#: The read arm is three cells and no fork::
+#:
+#:     shipped read   U X > M 0 s W s     op on tick 5, address on tick 8
+#:     forked  read   U X Y v < s         op on tick 5, address on tick 6
+#:     v4      read   U X > * s           the whole request on tick 5
+#:
+#: ``*`` with ``2`` parked in B is the doubling, one glyph — which is why B is
+#: parked at all. The return floor reloads it (``2`` then ``M``, met in that
+#: order walking west), and because the spawn stands *on* the return floor the
+#: very first request already finds it there.
+#:
+#: The write arm pays for the odd word: ``* M 1 + N`` is ``-a`` -> ``-2a`` ->
+#: ``1 - 2a`` -> ``2a - 1``. That is two cells more than the fork's write arm
+#: and it is on the leg the CPU is **not** stopped on — it blocks on reads only.
+#:
+#: ``X`` is entered heading east (``U`` turns away from the west wall's pipe), so
+#: ``sign(A)`` puts the read arm (``A > 0``, clockwise) below the branch row and
+#: the write arm above it, exactly as in the shipped block. Neither return leg
+#: passes back through ``X``.
+#:
+#: The read's return drops out of the arm one cell after its ``s`` rather than
+#: walking the block's width, which puts the whole read lap at twelve ticks
+#: against the fork's eight — the fork gets its short lap by ``H``alting one of
+#: its two men, and one word needs no second man to halt. That is **+5.12 ticks
+#: per access of service time** and it costs nothing: the adapter is 89%
+#: blocked, and lengthening or shortening this leg leaves the tour on the same
+#: tick either way (both shapes were built and run). What is on the wire is the
+#: forward leg, and that is five ticks for one word instead of five and six for
+#: two.
+_ADAPTER_V4 = [
+    ".>*M1+Nsrsv",  # write: A=-2a; B=-2a; A=1; A=1-2a; A=2a-1; send; pass the value
+    "UX........v",  # receive request, point away from west pipe, branch on sign
+    ".>*sv.....v",  # read: A=2a; send; and straight back down onto the floor
+    "^.M2<....@<",  # return leg, reloading the parked 2 on the way past
+]
 ADAPTER_W = len(_ADAPTER[0])
 ADAPTER_H = len(_ADAPTER)
 ADAPTER_IN_ROW = 2  # west wall: the request pipe from the CPU
 ADAPTER_OUT_ROW = 2  # east wall: the expanded request out to the tape
 
 #: The adapter shapes :func:`adapter_rows` will hand out. ``wide`` is the shipped
-#: 12x4 block and stays the default; ``fork`` is :data:`_ADAPTER_FORK`.
-ADAPTER_FORMS = ("wide", "fork")
+#: 12x4 block and stays the default; ``fork`` is :data:`_ADAPTER_FORK` and
+#: ``v4`` is :data:`_ADAPTER_V4`, which speaks a **different wire** and is
+#: therefore only legal against a ``v4`` store block.
+ADAPTER_FORMS = ("wide", "fork", "v4")
 
 
 def adapter_rows(*, address_first: bool = False, form: str = "wide") -> list[str]:
     """The adapter's interior, as text rows.
 
-    ``form`` selects the shape. ``fork`` has no ``address_first`` variant: only
-    ``men-y`` wants the address first and only ``taped`` forks.
+    ``form`` selects the shape. ``fork`` and ``v4`` have no ``address_first``
+    variant: only ``men-y`` wants the address first and only ``taped`` forks or
+    packs.
     """
     if form not in ADAPTER_FORMS:
         raise MachineError(f"unknown adapter form {form!r}; expected {ADAPTER_FORMS!r}")
-    if form == "fork":
+    if form in ("fork", "v4"):
         if address_first:
-            raise MachineError("no address-first variant of the forked adapter")
-        return _ADAPTER_FORK
+            raise MachineError(f"no address-first variant of the {form} adapter")
+        return _ADAPTER_FORK if form == "fork" else _ADAPTER_V4
     return _Y_ADAPTER if address_first else _ADAPTER
 
 
@@ -5661,6 +5708,7 @@ def build(
     store_request_reach: bool = False,
     store_request_tuck: bool = False,
     adapter_form: str = "wide",
+    store_protocol: str = "v3",
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
@@ -5894,6 +5942,7 @@ def build(
                     store_request_reach=store_request_reach,
                     store_request_tuck=store_request_tuck,
                     adapter_form=adapter_form,
+                    store_protocol=store_protocol,
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
@@ -5989,6 +6038,7 @@ def build(
                     store_request_reach=store_request_reach,
                     store_request_tuck=store_request_tuck,
                     adapter_form=adapter_form,
+                    store_protocol=store_protocol,
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
@@ -6106,6 +6156,7 @@ def _assemble(
     store_request_reach: bool = False,
     store_request_tuck: bool = False,
     adapter_form: str = "wide",
+    store_protocol: str = "v3",
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
@@ -6380,6 +6431,26 @@ def _assemble(
         # ``AY+adapter_h+1``. So the shape is read once, here, and every use below
         # is of these locals rather than the module constants, which stay put for
         # :mod:`~.ram_machine` and :mod:`~.ram_machine2`.
+        # The wire format is a property of the whole chain, so the adapter that
+        # emits it and the block that decodes it are one decision, not two: a
+        # mismatched pair does not fail to build, it answers from the wrong bank.
+        from ..memory_taped import TAPE_PROTOCOLS
+
+        if store_protocol not in TAPE_PROTOCOLS:
+            raise MachineError(
+                f"unknown store protocol {store_protocol!r}; expected {TAPE_PROTOCOLS!r}"
+            )
+        if store_protocol == "v4":
+            if store != "taped":
+                raise MachineError(f"the v4 wire is the taped tier's, not {store!r}")
+            if adapter_form != "v4":
+                raise MachineError(
+                    f"a v4 store needs the v4 adapter to feed it, not {adapter_form!r}"
+                )
+        elif adapter_form == "v4":
+            raise MachineError(
+                f"the v4 adapter emits the packed wire; store protocol is {store_protocol!r}"
+            )
         _arows = adapter_rows(address_first=store == "men-y", form=adapter_form)
         adapter_w, adapter_h = len(_arows[0]), len(_arows)
         # A narrower adapter hands its columns back to the **corridor**, not to the
@@ -6546,6 +6617,7 @@ def _assemble(
                     else None
                 ),
                 request_tuck=store_request_tuck,
+                protocol=store_protocol,
             )
         elif store == "tape":
             tape = tape_block(
@@ -10753,7 +10825,56 @@ STORE_REQUEST_TUCK: set[tuple[str, str]] = {
 #: tick early, so the second tick is absorbed. Nothing else in the machine moves,
 #: which is what makes the attribution clean.
 ADAPTER_FORM: dict[tuple[str, str], str] = {
-    ("deadman-3d_hires", "taped"): "fork",
+    ("deadman-3d_hires", "taped"): "v4",
+}
+
+#: ``(slug, tier)`` pairs on the **v4** store wire: one word per request instead
+#: of two (``2*addr - op``), from the adapter to each bank's own feed forwarder.
+#:
+#: It is a version number rather than a knob because what changes is the
+#: *format*, not a tuning value: the adapter, every gate and every feed room are
+#: different rooms, and a v3 adapter in front of a v4 chain builds fine and
+#: answers from the wrong bank. The two halves are therefore checked against
+#: each other at build time, and this registry moves with
+#: :data:`ADAPTER_FORM`'s ``v4`` entry.
+#:
+#: The banks are **not** on it. The wire is unpacked in the feed forwarder
+#: (``memory_taped.feed_unpack``), which is one ``/`` — so every ring worker in
+#: :mod:`~..memory_tape` keeps the protocol it was verified on and does not move
+#: by one cell, and ``matmul``/``sudoku``, which share those workers, cannot be
+#: touched by this at all.
+#:
+#: What it attacks is the read's **address-independent floor** — the per-stage
+#: word handling that no routing lever reaches, because it is paid once per word
+#: per room whatever the address is.
+#:
+#: **Measured, 21-round hi-res tour, same process, same moment:** 105,152,308
+#: against 101,523,077 — **-3,629,231 ticks, -3.451%** — ``passed=True``,
+#: ``fatal=None``, box 620x403 -> 614x403 and every ``route_lengths`` entry
+#: identical (``cpu->adapter`` 2, ``adapter->store`` 1, ``store->cpu`` 2).
+#:
+#: Where it comes from, per-stage on the 3-round tour (exact ``heat``-minus-
+#: ``wait`` per room, and exact per-pipe word counts):
+#:
+#: =========  ==============  ======================================
+#: stage      words per read  work
+#: =========  ==============  ======================================
+#: adapter    2 -> 1          the whole request is in the pipe on
+#:                            tick 5, and there is one word of it
+#: gate hop   2 -> 1          **-6.63 ticks**, x 3.01 hops per access
+#: feed room  2 -> 1          +9.26 ticks of *service*, all of it
+#:                            absorbed: the room is 94-99% blocked
+#: bank       2 -> 2          untouched, to the cell
+#: =========  ==============  ======================================
+#:
+#: Read latency 151.89 -> 141.15 mean, floor 73 -> 69, over the identical
+#: 28,227 reads. 10.74 ticks x 28,227 = 303,004 against 303,004 ticks of run
+#: measured, so the conversion is 1:1 and nothing else in the machine moved.
+#:
+#: **The floor moved by 4 and the mean by 10.7, and the difference is the
+#: point**: the floor is one gate hop, and the mean is 3.01 of them.
+TAPED_PROTOCOL: dict[tuple[str, str], str] = {
+    ("deadman-3d_hires", "taped"): "v4",
 }
 
 #: ``(slug, tier)`` pairs whose **men-v3** STORE is entered on its router strip's
@@ -12150,6 +12271,7 @@ def build_for(
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
         store_request_tuck=(slug, store) in STORE_REQUEST_TUCK,
         adapter_form=ADAPTER_FORM.get((slug, store), "wide"),
+        store_protocol=TAPED_PROTOCOL.get((slug, store), "v3"),
         store_request_west=(slug, store) in STORE_REQUEST_WEST,
         store_riser_lift=STORE_RISER_LIFT.get((slug, store), 0),
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,

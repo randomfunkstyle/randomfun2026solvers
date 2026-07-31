@@ -93,15 +93,36 @@ def test_the_forked_adapter_gives_each_arms_op_to_the_child_that_moves_first() -
     assert len(rows) == machine.ADAPTER_H and len(rows[0]) < machine.ADAPTER_W
 
 
-def test_the_forked_adapter_is_keyed_to_one_machine() -> None:
-    """``deadman-3d``'s artifacts are byte-pinned and ram_machine reads the constants."""
-    assert machine.ADAPTER_FORM == {("deadman-3d_hires", "taped"): "fork"}
+def test_the_packed_adapter_is_keyed_to_one_machine_and_to_its_own_store() -> None:
+    """``deadman-3d``'s artifacts are byte-pinned and ram_machine reads the constants.
+
+    The ``v4`` entry carries a second obligation the ``fork`` one did not: the
+    adapter emits a **wire format**, so it and :data:`machine.TAPED_PROTOCOL`
+    are one decision. A v3 adapter in front of a v4 chain builds fine and
+    answers from the wrong bank, so the two registries are pinned together and
+    ``build`` refuses the mismatch rather than trusting them to agree.
+    """
+    assert machine.ADAPTER_FORM == {("deadman-3d_hires", "taped"): "v4"}
+    assert machine.TAPED_PROTOCOL == {("deadman-3d_hires", "taped"): "v4"}
+    assert {k for k, v in machine.ADAPTER_FORM.items() if v == "v4"} == set(
+        machine.TAPED_PROTOCOL
+    )
     assert ("deadman-3d", "taped") not in machine.ADAPTER_FORM
     assert (machine.ADAPTER_W, machine.ADAPTER_H) == (12, 4)
-    with pytest.raises(machine.MachineError):
-        machine.adapter_rows(form="fork", address_first=True)
+    for form in ("fork", "v4"):
+        with pytest.raises(machine.MachineError):
+            machine.adapter_rows(form=form, address_first=True)
     with pytest.raises(machine.MachineError):
         machine.adapter_rows(form="nonesuch")
+    # ... and the packed block is no taller than the ones it replaces, so
+    # ``floor_y`` and the store's request drop below it do not move.
+    packed = machine.adapter_rows(form="v4")
+    assert len(packed) == machine.ADAPTER_H and len(packed[0]) <= machine.ADAPTER_W
+    assert packed[1][:2] == "UX"  # receive, then branch on the CPU's sign
+    assert packed[2][1:5] == ">*sv"  # read: double, send, and straight home
+    assert packed[0][1:11] == ">*M1+Nsrs"[:9] + "v"  # write: ... and the value
+    assert "".join(packed).count("@") == 1
+    assert "M2" in packed[3]  # the parked 2 the `*` doubles against
     # the tuck moves the *grown* gate's entry; without the growth there is none
     assert machine.STORE_REQUEST_TUCK <= machine.STORE_REQUEST_REACH
 
