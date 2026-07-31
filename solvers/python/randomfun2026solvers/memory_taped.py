@@ -121,6 +121,7 @@ def bank_gate(
     *,
     compact: bool = False,
     high: int | None = None,
+    tight_return: bool = False,
     west_grow: int = 0,
     north_grow: int = 0,
 ) -> tuple[dict[tuple[int, int], str], int]:
@@ -155,6 +156,36 @@ def bank_gate(
     *toward the bank* would need — flips that binding at four rows and routes
     reads into the wrong tape, silently. A room can reach its caller, but not its
     callee.
+
+    ``tight_return`` puts the return column one east of whichever arm actually
+    reaches furthest, instead of the shipped flat ``cx + 13``. That constant is
+    the *low* gate's longest arm plus two spare columns, and the high gate's plus
+    four — and the high gate is the form every hot bank uses. **Every spare
+    column is a nop the man walks twice**, once east onto the descent and once
+    west along the floor, on every request the gate handles; the room is an
+    out-and-back loop, so its cost per access is close to twice its width.
+    Measured on ``deadman-3d_hires``: the high gate goes 26 columns wide to 23,
+    the low one 27 to 26, and the 3-round tour goes 12,248,581 -> 11,190,732
+    ticks, **-8.64%**, with mean store read latency 221.44 -> 184.04. Nothing
+    about the gate's *logic* moves — same glyphs, same rows, same arms.
+
+    That is a much larger return than 6 walked cells, and the reason is that this
+    store is a tandem queue of single-server rooms at ~20% utilisation each: what
+    a read waits for is not congestion but the **write in front of it** clearing
+    each room in turn, so a tick off a room's service time is taken off the
+    critical path more than once. It is the same reason the ring's rotation costs
+    nothing here — a 6-slot ring in a 154-cell pipe would stall for ~148 ticks a
+    lap if laps were back to back, and it stalls for 6.3 (measured, ``hist_pipe``
+    on the ring's return leg) because the bank is idle 86% of the time.
+
+    ``False`` keeps the shipped width, so ``deadman-3d``'s checked-in
+    ``deadman-3d_taped.man`` stays byte-identical.
+
+    The two outgoing pipes' ``s`` bindings cannot notice either way: both attach
+    to the **same** east wall, so ``cr`` enters every one of the ten distances as
+    the same column term and cancels — which is the module docstring's §7.1
+    argument, and ``test_every_gate_send_still_binds_to_the_pipe_it_means``
+    re-checks it at whatever width this returns.
 
     ``high`` turns the gate around: instead of claiming the **first** ``m``
     addresses of the space it is handed, it claims the **last** ``m`` of
@@ -212,7 +243,20 @@ def bank_gate(
         n_read_arm, n_write_arm = "NM0sWs", "NM1sWsrs"  # negate to addr - (high-m)
         s_read_arm, s_write_arm = "WM0sWs", "WM1sWsrs"  # addr is already in B
     cx = len(spine)  # the range test's X (the spine starts at column 1)
-    cr = cx + 13  # the return column, east of the longest arm plus slack
+    # The return column: ``cx + 13`` shipped, or one east of whichever arm
+    # actually reaches furthest (the north pair starts at ``cx + 1``, the south
+    # pair at ``cx + 2``).
+    cr = (
+        1
+        + max(
+            cx + len(n_read_arm),
+            cx + len(n_write_arm),
+            cx + 1 + len(s_read_arm),
+            cx + 1 + len(s_write_arm),
+        )
+        if tight_return
+        else cx + 13  # the longest arm plus slack
+    )
     g: dict[tuple[int, int], str] = {}
 
     def put(x: int, y: int, ch: str) -> None:
@@ -346,10 +390,12 @@ def taped_store_block(
     n: int,
     banks: int | tuple[int, ...],
     *,
-    skip_batch: int = 1,
+    skip_batch: int | None = 1,
+    jump_threshold: int = 128,
     answer_west: int | None = None,
     answer_exit_west: bool = False,
     compact_gate: bool = False,
+    tight_gate: bool = False,
     order: tuple[int, ...] | None = None,
     chain_reach: bool = False,
     chain_pad: int = 0,
@@ -366,6 +412,31 @@ def taped_store_block(
     Returns the same :class:`V3Store` contract the men-v3 blocks use — request
     stub west, answer stub rising out of the top, exact pipe inventory — so
     ``lm1.machine`` places it through the identical branch, teleports and all.
+
+    ``skip_batch`` picks the ring worker, and ``None`` picks **one per bank**:
+    :func:`~.lm1.machine.tape_block` then takes batch 2 for a bank of at least
+    ``jump_threshold`` slots and batch 1 below it. A block whose banks differ by
+    two orders of magnitude in size wants exactly that, because the two workers
+    trade a fixed cost against a per-slot one and the shipped cut straddles the
+    crossover. Measured on the `deadman-3d_hires` 3-round tour, focusing the
+    opcode profiler on one bank's worker room (he is the only man in it, so his
+    non-blocked ticks are that bank's service time exactly) and dividing by the
+    lap count its ring pipe reports::
+
+        bank slots   6      7      9     21        fit
+        batch 1    131.7  140.3  157.5  260.8   ~ 80 + 8.6 * slots
+        batch 2    156.9  160.0  169.6  244.3   ~122 + 5.8 * slots
+
+    The crossover is **~15 slots** and it is a property of the two workers, not
+    of any one cut, which is why this is a threshold rather than a per-bank list.
+    Batching pays for a long ring and costs 42 ticks of setup on a short one; the
+    shipped hires cut has four banks of 6..9 slots, which is where the hot
+    addresses are deliberately put (:data:`~.lm1.machine.TAPED_BANK_ORDER` — hot
+    traffic goes in *small* rings), and they were paying the setup on every
+    access. Nothing moves in the floor plan —
+    the batch-1 block is *narrower* (33 columns against 45) and no taller, and
+    ``bank_w``/``bank_h`` are maxima over the banks, so the big rings still set
+    the pitch and the block's own dimensions do not change.
 
     ``answer_west`` moves the **answer collector's west wall** to that interior
     column and turns its exit stub from a north riser into a south one. The
@@ -393,6 +464,12 @@ def taped_store_block(
     shorter walk through every one of them. The gate strip is the block's floor,
     so the block loses those five rows too. ``False`` keeps the shipped body, so
     every existing caller's grid is byte-identical.
+
+    ``tight_gate`` is :func:`bank_gate`'s ``tight_return`` for every gate in the
+    chain: the return column moves in to whichever arm actually reaches
+    furthest, which is three columns on the high-end form the hot banks all use.
+    ``False`` keeps the shipped width, so every existing caller's grid is
+    byte-identical.
 
     ``order`` is the **chain** order over ``banks``' address-order sizes — see
     :func:`gate_chain`, which also says which permutations exist. ``None`` is
@@ -475,10 +552,16 @@ def taped_store_block(
     plan = taped_plan(n, banks)
     chain = gate_chain(plan, order)
     sizes = [plan[k] for k, _ in chain]
-    tapes = [tape_block(size + 1, skip_batch=skip_batch) for size in sizes]
+    tapes = [
+        tape_block(size + 1, skip_batch=skip_batch, jump_threshold=jump_threshold)
+        for size in sizes
+    ]
     bank_w = max(t.width for t in tapes)
     bank_h = max(t.height for t in tapes)
-    gates = [bank_gate(plan[k], compact=compact_gate, high=top) for k, top in chain[:-1]]
+    gates = [
+        bank_gate(plan[k], compact=compact_gate, tight_return=tight_gate, high=top)
+        for k, top in chain[:-1]
+    ]
     gate_w = max(w for _, w in gates)
 
     # ── the floor plan ───────────────────────────────────────────────────────
@@ -542,6 +625,7 @@ def taped_store_block(
             bank_gate(
                 plan[k],
                 compact=compact_gate,
+                tight_return=tight_gate,
                 high=top,
                 west_grow=west_grow[j],
                 north_grow=north_grow[j],

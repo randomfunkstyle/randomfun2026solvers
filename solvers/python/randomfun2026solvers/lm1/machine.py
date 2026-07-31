@@ -5571,6 +5571,7 @@ def build(
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
+    store_tight_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
@@ -5782,6 +5783,7 @@ def build(
                     mem_offset[1],
                     hot,
                     tape_skip_batch=effective_skip_batch,
+                    tape_jump_threshold=tape_jump_threshold,
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
@@ -5796,6 +5798,7 @@ def build(
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
+                    store_tight_gate=store_tight_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
@@ -5869,6 +5872,7 @@ def build(
                     0,
                     hot,
                     tape_skip_batch=effective_skip_batch,
+                    tape_jump_threshold=tape_jump_threshold,
                     tape_relay_size=tape_relay_size,
                     in_north=in_north,
                     store_teleport=store_teleport,
@@ -5883,6 +5887,7 @@ def build(
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
+                    store_tight_gate=store_tight_gate,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
@@ -5978,6 +5983,7 @@ def _assemble(
     mem_dy: int = 0,
     hot: tuple[int, int] | None = None,
     tape_skip_batch: int = 1,
+    tape_jump_threshold: int = 128,
     tape_relay_size: tuple[int, int] | None = None,
     in_north: bool = False,
     store_teleport: bool = False,
@@ -5992,6 +5998,7 @@ def _assemble(
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
+    store_tight_gate: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
@@ -6364,6 +6371,11 @@ def _assemble(
                     if tape_skip_batch != 1
                     else TAPED_SKIP_BATCH.get(program.name, 1)
                 ),
+                # ... and, when that is ``None``, the size at which each bank
+                # picks batch 2 for itself (:data:`TAPED_JUMP_THRESHOLD`).
+                jump_threshold=TAPED_JUMP_THRESHOLD.get(
+                    program.name, tape_jump_threshold
+                ),
                 # Land the collector's west wall on ``CX + W + 3``: the column
                 # the deleted teleport U used to occupy, one clear of the
                 # response pipe's own attachment cell. A west exit stub owns that
@@ -6379,6 +6391,7 @@ def _assemble(
                 ),
                 answer_exit_west=answer_exit_west,
                 compact_gate=store_compact_gate,
+                tight_gate=store_tight_gate,
                 order=store_bank_order,
                 chain_reach=store_chain_reach,
                 chain_pad=store_chain_pad,
@@ -10859,6 +10872,52 @@ TAPED_COMPACT_GATE: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
 }
 
+#: ``(slug, tier)`` pairs whose bank gates pull their **return column** in to the
+#: longest arm instead of standing at :func:`memory_taped.bank_gate`'s flat
+#: ``cx + 13`` (its ``tight_return``). Absent means the shipped width, which is
+#: what holds ``deadman-3d``'s checked-in ``deadman-3d_taped.man`` byte-identical
+#: — the only reason this is a registry and not simply the new constant.
+#:
+#: **The gate room is an out-and-back loop, so it costs about twice its width per
+#: access, and four of those columns were empty.** ``cx + 13`` is the *low* gate's
+#: longest arm plus two spare columns; the **high** form's arms are two cells
+#: shorter on each side, so it was carrying four — and the high form is what every
+#: bank at the head of the chain uses (:data:`TAPED_BANK_ORDER` peels from the
+#: top). The man walks each spare column twice, east onto the descent and west
+#: along the floor, on every request the gate passes through.
+#:
+#: **Empty, and the way it emptied is the point.** On the eleven-bank chain as it
+#: stood before :data:`TAPED_BANK_ORDER`'s address-order re-cut, this measured
+#: **-8.64%** (3-round tour, 12,248,581 -> 11,190,732, box 625x403 -> 624x403,
+#: mean store read latency 221.44 -> 184.04). Re-measured **same-moment** against
+#: the re-cut chain, on one process with one build of each, it is **+0.892%**:
+#:
+#: | | ticks | mean read latency |
+#: |---|---|---|
+#: | **off (shipped)** | **11,091,760** | **180.53** |
+#: | on | 11,190,732 | 184.04 |
+#:
+#: The -8.64% was never real. It was measured across a window in which the bank
+#: re-cut landed underneath it in a shared file, and it credited that landing to
+#: this lever — the exact trap AGENTS.md names, walked into anyway. **Only a
+#: same-moment A/B says anything about a shared tree.**
+#:
+#: The mechanism that flipped it is worth keeping, because it says what the gate
+#: chain is now worth. Narrowing a gate takes six walked cells off its *service*
+#: time, all of them after its ``s`` has already sent — pure occupancy, nothing on
+#: the critical path. But ``bx`` is measured from ``gate_w``, the **max** over the
+#: gates, and only the low form sets that max: shrinking the high form by three
+#: moves its east wall three columns west while the bank row moves one, so every
+#: high gate's feed pipe grows **two cells that are on the critical path**. That
+#: trade wins while the chain is deep and loses once it is shallow, and the re-cut
+#: took mean hops 2.83 -> 1.874. Occupancy stopped being worth latency.
+#:
+#: To make it pay, the gate would have to keep its east wall where it is and move
+#: only the return column — the two are the same column today. The ``s`` bindings
+#: would not notice either way: both outgoing pipes attach to that one wall, so
+#: the return column enters all ten distances as a common term and cancels.
+TAPED_TIGHT_GATE: set[tuple[str, str]] = set()
+
 #: ``(slug, tier)`` -> the DOOM unit's loop-corridor row (``d3_unit.R_LOOP``,
 #: shipped 27). Absent means "keep the shipped row", which is what holds
 #: ``deadman-3d``, ``deadman-3d_trim`` and ``deadman-3d_hires`` byte-identical.
@@ -11391,7 +11450,17 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: matching one gives -56.4%. Any change here needs a new order beside it.
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
     "deadman-3d": (352, 164, 15, 69),
-    "deadman-3d_hires": (102, 21, 229, 7, 306, 135, 6, 9, 7, 58, 21)}
+    # **The last five are a re-ordering, not a re-cut**, and they move with
+    # ``deadman3d._HIRES_SCALARS`` — see there for the derivation and the
+    # measurement. Same five sizes, same five rings, same eleven gates; what
+    # changed is which addresses land in them. The cut used to run
+    # ``6, 9, 7, 58, 21`` up the address space, which put 58 cold slots
+    # (``TMP2``..``WBAND``) between the two hot clusters — and because a gate can
+    # only peel a bank off an **end**, that cold bank took chain position 1 and
+    # pushed the hottest ring to position 3. Reversed, the chain peels
+    # ``7, 9, 6, 21, 58`` and the scalars are renumbered to match, so the hot set
+    # is at the front and still in the small rings. -12.01% on the 21-round tour.
+    "deadman-3d_hires": (102, 21, 229, 7, 306, 135, 58, 21, 6, 9, 7)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
@@ -11483,10 +11552,62 @@ TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
 #: the drum then took ~40% out of everything *else*, which raised the store's
 #: share back and made it pay again. Shipped at 207,366,882 -> **204,117,437**,
 #: 21-round tour, ticks to frame 20. Batch 4 remains a loss at +2.773%.
-TAPED_SKIP_BATCH: dict[str, int] = {
+#: **And then it stopped being one decision.** ``None`` hands the choice to each
+#: bank separately (:func:`memory_taped.taped_store_block`'s ``jump_threshold``),
+#: and that beats either uniform answer outright, because the shipped eleven-bank
+#: cut straddles the two workers' crossover: its rings run 6, 7, 7, 9, 21, 21,
+#: 58, 102, 135, 229, 306 slots. Batch 2 trades ~42 ticks of extra setup for
+#: ~2.8 ticks a slot, so it wins above ~15 slots and loses below it — and the
+#: banks under that carry most of the store's traffic, so hires was paying that
+#: setup where it could never be earned back. Same-moment against the current
+#: chain (one process, one build each, 3-round tour): uniform batch 2
+#: 11,211,493 -> per-bank **11,091,760**, **-1.068%**, and uniform batch 1 is
+#: +3.654%. Neither uniform answer is within 1% of mixing them.
+TAPED_SKIP_BATCH: dict[str, int | None] = {
     "deadman-3d": 2,
-    "deadman-3d_hires": 2,
+    "deadman-3d_hires": None,
 }
+
+#: Ring size at which a ``TAPED_SKIP_BATCH`` of ``None`` switches a bank from the
+#: plain worker to the batched one; unlisted slugs fall through to ``build``'s own
+#: ``tape_jump_threshold`` (128, the whole-tape default, which is about the size a
+#: *single*-ring tape has to reach before batching is worth its width).
+#:
+#: **16 is the middle of a plateau, not a fitted edge.** Per-bank service time was
+#: measured directly — focus the opcode profiler on one bank's worker room, he is
+#: the only man in it, so his non-blocked ticks divided by the lap count his ring
+#: pipe reports *is* that bank's cost per access — and it fits ``80 + 8.6*slots``
+#: for batch 1 against ``122 + 5.8*slots`` for batch 2, crossing at ~15. The
+#: shipped cut has no ring between 10 and 22 slots, so every threshold in 11..22
+#: builds the identical grid. Swept same-moment — one process, one build per row,
+#: 3-round tour, everything else at its shipped value:
+#:
+#: | threshold | banks on batch 1 | ticks | Δ | mean read latency |
+#: |---|---|---|---|---|
+#: | all batch 2 | — | 11,211,493 | — | 184.78 |
+#: | 8 | 6 | 11,184,216 | -0.243% | 183.81 |
+#: | 10 | 6, 7, 7 | 11,126,328 | -0.760% | 181.76 |
+#: | **11..22** | **6, 7, 7, 9** | **11,091,760** | **-1.068%** | **180.53** |
+#: | 23..59 | + both 21s | 11,106,384 | -0.937% | 181.05 |
+#: | 128 (``tape_block``'s own) | everything under 128 | 11,337,427 | +1.123% | 189.24 |
+#: | all batch 1 | all | 11,620,819 | +3.654% | 198.83 |
+#:
+#: The two ends of that table are the two answers this registry used to be able to
+#: give, and both are worse than mixing.
+#:
+#: **This is also what moved the read-latency floor**, which is a separate thing
+#: from the mean and worth naming: min latency over every read goes **100 -> 88**
+#: ticks. The bank at chain position 0 is a short ring, so per-bank selection puts
+#: the *plain* worker there, and it answers ~12 ticks sooner than the batched one
+#: — batch 2's extra setup is all in front of the send. The mean moves for the
+#: ordinary reason (less occupancy, so less head-of-line behind writes); the floor
+#: moves because the fastest possible read got shorter.
+#:
+#: Swept twice, months of machine apart in effect: the first sweep was against the
+#: pre-re-cut chain and gave -1.643% with the same plateau and the same winner.
+#: The bank *multiset* is what this threshold reads, and re-ordering the cut did
+#: not change it.
+TAPED_JUMP_THRESHOLD: dict[str, int] = {"deadman-3d_hires": 16}
 
 
 def display_for(slug: str) -> tuple[int, int] | None:
@@ -11658,6 +11779,7 @@ def build_for(
         store_request_west=(slug, store) in STORE_REQUEST_WEST,
         store_riser_lift=STORE_RISER_LIFT.get((slug, store), 0),
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
+        store_tight_gate=(slug, store) in TAPED_TIGHT_GATE,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,

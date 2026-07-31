@@ -1970,9 +1970,85 @@ _TILE_SCALARS = ("TXT", "TSELT", "TSELB", "TTE", "TBS", "TBE",
 _DIGIT_SCALARS = ("DSRC", "DDIV", "DRET", "DVAL", "DPTR", "DKN", "DA", "DAC")
 
 
+#: The hi-res machine's own enumeration order for exactly those scalars.
+#:
+#: A scalar's slot number is nothing but its index in this tuple (``tape_slots``:
+#: ``ZBUF + width + i``), and the scalars are the one region of the tape that is
+#: **not** boot data — they sit above ``ZBUF``, so permuting them re-numbers a
+#: hundred ``.equ`` lines and changes no input word. On the ``men-v3`` tier that
+#: buys nothing, because man-memory is address-flat. On the **taped** tier it is
+#: the largest lever there is: the banks are contiguous address ranges behind a
+#: gate chain that a request scans linearly, and a gate can only peel a bank off
+#: an **end** of the space it is handed, so *which* addresses are hot decides how
+#: many gates every read walks. Measured over the 21-round tour, the shipped
+#: numbering puts 89% of reads in the top 101 slots but with 58 cold ones
+#: (``TMP2``..``WBAND``) sitting between the two hot clusters — which forces the
+#: hottest bank to chain position 3 and costs ~23 ticks a hop.
+#:
+#: Only ``GEOM128`` reads it; ``deadman-3d``'s byte-pinned grid is on ``GEOM64``,
+#: whose scalar set is ``_SCALARS`` alone and whose order is pinned by
+#: ``tests/test_deadman3d.py::test_tape_slots_are_the_documented_map``. An empty
+#: tuple falls back to the plain concatenation, i.e. every machine unchanged.
+#:
+#: **How this order was derived, so it can be re-derived rather than trusted.**
+#: The tuple is read bottom-up: the *last* names get the highest addresses, and
+#: :data:`lm1.machine.TAPED_BANK_ORDER` peels the chain off the **top** of the
+#: space, so the tail of this tuple is chain position 0. The tail is therefore
+#: the hot set, laid out against a cost of ~23 ticks per gate hop plus a ring
+#: term that rises steeply with the slot's position inside its bank.
+#:
+#: The pairing with :data:`lm1.machine.TAPED_BANKS` is load-bearing and the two
+#: must move together: the banks' **sizes** are unchanged as a multiset (the
+#: rings are exactly as big as they were, and there is exactly one gate per bank
+#: as before) but their order in address space is now ``... 58, 21, 6, 9, 7``, so
+#: chain positions 0..4 are rings of 7, 9, 6, 21 and 58 slots. Resizing a bank is
+#: a different and much worse operation — a previous sweep merged banks and
+#: measured +14.8% and +61% — because a ring rotates one way and its lap is the
+#: read's latency. Nothing here is resized; only the contents move.
+#:
+#: Measured on the 21-round tour, native engine, ``passed=True fatal=None``,
+#: 625x403 unchanged, against the same-tree baseline of 130,519,332:
+#: **114,847,979, -12.01%**. Ranking candidates by ``23 * hops + c * local`` and
+#: measuring the top few, ``c=16`` with these bank sizes was the best of fifteen
+#: builds; ``c=0`` (hops only) is +6.6% on it and putting the hot set in the
+#: 58-slot ring — which pure hop-counting asks for — is +77% on it. Weighting
+#: writes into the ranking is worse than ignoring them.
+#:
+#: Left as data rather than computed at import: the traffic it is fitted to is
+#: level-derived, and ``tape_slots`` has to answer without an IWAD.
+_HIRES_SCALARS: tuple[str, ...] = (
+    'CMD', 'PERP', 'TBS', 'TSELT', 'PW0', 'PTR', 'DA', 'DKN',
+    'WX', 'WPTR', 'DSRC', 'MI', 'TYN', 'MDX', 'DVAL', 'WTY',
+    'DET', 'WBOT', 'HEALTH', 'NEWX', 'STY0', 'STY1', 'STY2', 'AMMO',
+    'CHW', 'CW1', 'NEWY', 'BW', 'BS', 'BA', 'BD', 'HIT',
+    'SSX0', 'SSX1', 'SSX2', 'SEX0', 'SEX1', 'SEX2', 'SBA0', 'SBA1',
+    'SBA2', 'SBO0', 'SBO1', 'SBO2', 'SBN0', 'SBN1', 'SBN2', 'SID0',
+    'SID1', 'SID2', 'MSP', 'CBAND', 'COFF', 'CSX1', 'CBOT', 'CBASE',
+    'CID', 'STPY', 'WBAND', 'TMP', 'COLOR', 'RDY', 'TTE', 'FRACX',
+    'WADDR0', 'WXT', 'DPTR', 'ADDRV', 'DDIV', 'TMP2', 'SLOT', 'DRET',
+    'CTY', 'MDY', 'WX1', 'TXN', 'LIVE', 'Q2', 'FIRE', 'CSX0',
+    'S4X', 'XCOL', 'DEND', 'HALFH', 'WROW', 'CAMX', 'WADDR', 'DDY',
+    'SDY', 'DAC', 'NUKE', 'TSELB', 'TBE', 'FRACY', 'WSEL', 'PW',
+    'SDX', 'DDX', 'Q', 'DSTART', 'TXT', 'RDX',
+)
+
+
 def _scalars_for(geom: Geom) -> tuple[str, ...]:
-    return (_SCALARS + (_TILE_SCALARS if geom.tiled else ())
-            + (_DIGIT_SCALARS if geom.digits else ()))
+    names = (_SCALARS + (_TILE_SCALARS if geom.tiled else ())
+             + (_DIGIT_SCALARS if geom.digits else ()))
+    if geom.digits and _HIRES_SCALARS:
+        if set(_HIRES_SCALARS) != set(names) or len(_HIRES_SCALARS) != len(names):
+            raise ValueError(
+                "_HIRES_SCALARS must be a permutation of the geometry's own scalars; "
+                f"missing {sorted(set(names) - set(_HIRES_SCALARS))}, "
+                f"extra {sorted(set(_HIRES_SCALARS) - set(names))}"
+            )
+        if _HIRES_SCALARS[0] != "CMD":
+            # `tests/test_deadman3d_hires.py` pins `CMD == ZBUF + width`: the
+            # command word is the first slot above the z-buffer, not a free one.
+            raise ValueError("_HIRES_SCALARS must still start with CMD")
+        return _HIRES_SCALARS
+    return names
 
 #: How many copies of the DDA step the generated asm unrolls. A backward jump
 #: costs ``8 * (P - loop)`` ticks on this machine, and a frame walks ~1,000 DDA

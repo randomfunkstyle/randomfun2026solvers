@@ -654,33 +654,54 @@ def test_the_wall_judges_frame_by_frame_and_reports_what_each_one_cost(
     assert res.frame_ticks[0] < res.frame_ticks[1] == res.step
 
 
-def test_the_hires_ring_worker_batches_again_now_that_the_drum_landed() -> None:
-    """``TAPED_SKIP_BATCH``'s hires entry, and the four readings behind it.
+def test_the_hires_ring_worker_batches_one_bank_at_a_time() -> None:
+    """``TAPED_SKIP_BATCH``'s hires entry, and the five readings behind it.
 
-    This test previously pinned the *absence* of the entry, on a decline that was
+    This test first pinned the *absence* of the entry, on a decline that was
     correct when measured: the lever pays per slot walked,
     :data:`machine.TAPED_BANKS`' eleven-bank cut had already spent the ring length
     it would have paid on, and batching cost +2.40%.
 
     The seek drum then took ~40% out of everything that is not the store, which
-    raised the store's share of the run back up, and the same knob measures
-    **-1.567%** (207,366,882 -> 204,117,437, 21-round tour).  Batch 4 is still a
-    loss at +2.773%, so this is a genuine optimum and not a reversal of direction.
+    raised the store's share of the run back up, and the same knob measured
+    **-1.567%** (207,366,882 -> 204,117,437, 21-round tour).  Batch 4 was still a
+    loss at +2.773%, so it was a genuine optimum and not a reversal of direction.
 
-    Four readings on an unchanged builder: -27.29% (uniform quarters, beaten
-    outright by the cut), +3.54%, +0.185%, -1.567%.  Batching's value tracks the
-    store's share of the run, and that share has now gone down and back up.
+    **And then it stopped being one decision.**  ``None`` hands the choice to each
+    bank separately (:data:`machine.TAPED_JUMP_THRESHOLD`), and that beats either
+    uniform answer outright, because the eleven-bank cut *straddles* the two
+    workers' crossover.  Per-bank service time, measured directly by focusing the
+    opcode profiler on one bank's worker room — he is the only man in it, so his
+    non-blocked ticks divided by the lap count his ring pipe reports is that
+    bank's cost per access:
+
+        slots       6      7      9     21          fit
+        batch 1   131.7  140.3  157.5  260.8   ~ 80 + 8.6 * slots
+        batch 2   156.9  160.0  169.6  244.3   ~122 + 5.8 * slots
+
+    Batch 2 buys ~2.8 ticks a slot for ~42 ticks of setup, so it crosses at ~15,
+    and the four banks under that carry most of the store's traffic — they were
+    paying the setup where it could never be earned back.  Five readings on an
+    unchanged builder: -27.29% (uniform quarters, beaten outright by the cut),
+    +3.54%, +0.185%, -1.567%, and now per-bank.  Batching's value tracks the
+    store's share of the run, and that share has gone down and back up.
     Pinned as the value plus the reason, so a future re-measure has the history.
     """
     from randomfun2026solvers.lm1 import machine
 
-    assert machine.TAPED_SKIP_BATCH["deadman-3d_hires"] == 2
-    # the cut it has to amortise against is unchanged — eleven short banks — so
-    # what moved is the rest of the machine, not this
+    assert machine.TAPED_SKIP_BATCH["deadman-3d_hires"] is None
+    # 16 is the middle of a plateau: the cut has no ring between 10 and 22 slots,
+    # so every threshold in 11..22 builds the identical grid
+    assert machine.TAPED_JUMP_THRESHOLD["deadman-3d_hires"] == 16
+    # the cut it has to amortise against is still eleven short banks
     banks = machine.TAPED_BANKS["deadman-3d_hires"]
     assert len(banks) == 11
     assert max(banks) == 306
+    # ... and it straddles the crossover, which is the whole reason for `None`
+    assert min(banks) < 15 < max(banks)
     # and it only pays because the drum is on; the two are not independent
     assert "deadman-3d_hires" in machine.SEEK_DRUM
-    # `deadman-3d` untouched throughout
+    # `deadman-3d` untouched throughout: one uniform batch, and its checked-in
+    # `deadman-3d_taped.man` is byte-identical either way
     assert machine.TAPED_SKIP_BATCH["deadman-3d"] == 2
+    assert "deadman-3d" not in machine.TAPED_JUMP_THRESHOLD
