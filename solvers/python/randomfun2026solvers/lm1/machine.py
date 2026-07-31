@@ -8676,7 +8676,30 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # corridor. 21 rounds: drop 7/pad 4 = 84,937,580, **drop 9/pad 3 =
     # 83,979,347**, drop 12/pad 3 = 84,007,933. Both 9 and 12 clear the floor, so
     # this is a plateau rather than an edge, and 9 is the near end of it.
-    ("deadman-3d_hires", "men-v3"): 9,
+    # **11, and the same trade one more click along — found by SMT, not by sweep.**
+    # Once `check_bindings` stopped refusing decidable ties the pad floor became a
+    # question worth asking properly, so §7.1 went into Z3: glyph positions fixed,
+    # every pipe attachment an integer variable, and for each glyph against each
+    # rival `lex_lt((d_w, ty_w, tx_w), (d_q, ty_q, tx_q))` — the engines' key,
+    # verbatim and strict. Relaxing all six attachments to anywhere on the grid
+    # says `mem_pad` 1 and even 0 are *satisfiable*, so the pad was never a binding
+    # floor; freed one at a time, only `mem_resp` and `rom` unlock 1. This knob is
+    # the one that moves `rom` — in y only, x is pinned at 7 — and the constrained
+    # question (`tx_rom == 7`, y free) is SAT too. Confirmed on real captured
+    # geometry rather than on the model: drops 5..10 are unsat at pad 1, **11..17
+    # are sat**, so 11 is the near end of that plateau exactly as 9 was of the last.
+    #
+    # It pays for the two rows again, and by more than last time — 21 rounds,
+    # `passed=True`, box unchanged at 496x674: drop 9/pad 2 = 80,342,861, **drop
+    # 11/pad 1 = 79,341,770 (-1.246%)**, 91.26 -> 90.13 t/instr.
+    #
+    # Raising :data:`SQUASH_BAND` with it to hold the corridor difference constant
+    # is the obvious next click and does **not** build as-is: at squash 8 the
+    # store's request wall lands on row 159 while the adapter's request leaves on
+    # row 157, and a straight leg needs them level. It needs `store_offset` dy
+    # moved with it — men-v3 has its own level equation, the way taped's is
+    # `store_dy = 12 - squash_band`. Untested, and the pad is already at 1.
+    ("deadman-3d_hires", "men-v3"): 11,
 }
 
 LANE_PITCH: dict[tuple[str, str], int] = {
@@ -10072,7 +10095,24 @@ MEM_PAD_FOR: dict[tuple[str, str], int] = {
     # moving the `in` room: :data:`INPUT_NORTH_WEST` already has it at ``CX + 1``,
     # the westernmost legal column, so there is nowhere further to put it. 2 is
     # the floor, and it needed :data:`ROM_TOUCH_DROP` 16 to reach — see there.
+    #
+    # **"a tie, which check_bindings fails as hard as a loss" is no longer true** —
+    # see :func:`check_bindings` — so this was re-derived rather than trusted, and
+    # **2 survives, on the other half of the clause.** Pad 1 loses `'r' (21,148)`
+    # and pad 0 loses `'r' (20,148)`, both to `in`, at every :data:`ROM_TOUCH_DROP`
+    # in 16/18/20 — so unlike men-v3 the ROM pipe is not the rival here and sliding
+    # it does nothing. The `in` room is the rival and :data:`INPUT_NORTH_WEST`
+    # already has it at ``CX + 1``, the westernmost legal column. The conclusion
+    # was right; the reason recorded for it was not.
     ("deadman-3d_hires", "taped"): 2,
+    # 1, and the pad stopped being a floor at all: with ties decidable, §7.1 in Z3
+    # says 0 is satisfiable too and only `rom` or `mem_resp` can unlock it. This is
+    # what :data:`ROM_TOUCH_DROP` 11 buys — 21 rounds, `passed=True`, 496x674,
+    # 80,342,861 -> **79,341,770 (-1.246%)**. Pinned rather than swept: `build_for`
+    # would find it anyway (0 refuses, 1 binds, and every binding pad ties on
+    # footprint here so the first wins), but the pin skips a doomed `_assemble`
+    # pass, which on a P=9,237 program is most of the build.
+    ("deadman-3d_hires", "men-v3"): 1,
 }
 #: ``(slug, tier)`` pairs whose **request** leg crosses a room instead of a pipe
 #: — the mirror image of :data:`STORE_ANSWER_WEST`, on the leg that was left.
