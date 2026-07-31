@@ -13,7 +13,7 @@ if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))
 
 from randomfun2026solvers import optimize  # noqa: E402
-from randomfun2026solvers.lm1 import machine  # noqa: E402
+from randomfun2026solvers.lm1 import machine, seekrom  # noqa: E402
 from randomfun2026solvers.lm1.isa import SEEK_OF, SEEK_SEMS, TARGET_SEMS  # noqa: E402
 from randomfun2026solvers.lm1.programs import load  # noqa: E402
 from randomfun2026solvers.lm1.rom import token_cells  # noqa: E402
@@ -275,3 +275,68 @@ def test_deadman_seek_variant_is_near_square() -> None:
     assert (
         max(m.width, m.height) - min(m.width, m.height) <= max(m.width, m.height) // 10
     )
+
+
+def test_twin_station_drum_has_no_collector_riser_or_second_heading() -> None:
+    """``twin_station``'s three load-bearing claims, as cells.
+
+    Each of these is the kind of thing that binds cleanly and renders wrong, so
+    it is asserted rather than reasoned about:
+
+    * **no collector row and no riser.**  The whole point is that the arrival
+      leg stops walking the room; if either survived, the topology would be a
+      relabelling and the ticks would not move.
+    * **both gadgets turn north** (``a`` entered heading east on the west side,
+      ``d`` entered heading west on the east side), and the two cascade columns
+      cross the top connector on a ``.``.  A ``<`` there — which is what the
+      one-station drum has, redundantly, since a westbound man is already
+      westbound — silently merges the diverted man back into the wrap path, and
+      the drum then seeks to whatever row he happens to land on.
+    * **both stations are walked east.**  ``x`` turns clockwise on an odd row
+      and counter-clockwise on an even one, so entry *heading* is what decides
+      which feeder row each parity lands on.  Mirror one station and the two
+      parities swap rows, the two long feeders then want the same row in
+      opposite directions, and the layout needs two more rows — so the shared
+      feeders are sound only while the two headings agree.
+    """
+    words = [200 + j for j in range(60)]
+    plain = build_seek_rom(words, rows=6)
+    twin = build_seek_rom(words, rows=6, twin_station=True)
+    assert plain.rows_used == twin.rows_used
+    assert plain.word_pos == twin.word_pos  # same packing, so same operands
+    R = twin.rows_used
+    DR = twin.width - 1 - len(seekrom.STATION) - 1
+
+    def at(layout, x: int, y: int) -> str:
+        return layout.cells.get((x, y + layout.top_pad), " ")
+
+    # the collector row and the riser column are gone, and the room is a row
+    # shorter for it
+    assert twin.height == plain.height - 1
+    assert at(plain, 0, R + 2) == "^" and at(plain, 0, -2) == ">"
+    assert not any(x == 0 for x, _ in twin.cells)
+
+    # gadgets turn north, and the cascades cross row 0 on a nop
+    for y in range(1, R + 1, 2):
+        assert (at(plain, 7, y), at(twin, 7, y)) == ("d", "a")
+    for y in range(2, R + 1, 2):
+        assert (at(plain, DR + 1, y), at(twin, DR + 1, y)) == ("a", "d")
+    assert at(twin, 7, 0) == "." and at(twin, DR + 1, 0) == "."
+    assert at(twin, 7, -2) == ">" and at(twin, DR + 1, -2) == ">"
+
+    # two stations, both entered heading east, so both end on the same `x` sense
+    for x0 in (8, DR + 2):
+        run = "".join(at(twin, x0 + j, -2) for j in range(len(seekrom.STATION)))
+        assert run == seekrom.STATION
+    # ...and BP is halved once per parity, on the drop column the two share
+    assert at(twin, 1, -2) == "]"  # west ladder's drop
+    assert at(twin, DR + 6, 0) == "]"  # east ladder's drop
+    assert at(plain, 1, -2) == "." and at(plain, DR + 6, 0) == "."
+
+
+def test_twin_station_registry_is_keyed_to_hires_only() -> None:
+    """It moves hires and nothing else — ``deadman-3d``'s grids are hash-pinned."""
+    assert machine.SEEK_TWIN_STATION == {
+        ("deadman-3d_hires", "men-v3"),
+        ("deadman-3d_hires", "taped"),
+    }

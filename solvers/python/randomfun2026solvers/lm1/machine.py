@@ -881,7 +881,7 @@ def seek_split(
     return program.model_copy(update={"instrs": tuple(out)})
 
 
-def seek_words(program: Program, p: _Plan, *, rows: int):
+def seek_words(program: Program, p: _Plan, *, rows: int, twin_station: bool = False):
     """The fixed-width image for a seek build, and its drum layout.
 
     A **seek** operand is ``row * SEEK_K + offset`` of the target's opcode word
@@ -929,13 +929,14 @@ def seek_words(program: Program, p: _Plan, *, rows: int):
     # move as their values resolve.
     wide = frozenset(2 * k + 1 for k in targets)
     operands = {k: 0 for k in targets}
-    probe = build_seek_rom(encode(operands), rows=rows, wide=wide, wide_digits=5)
+    kw = {"rows": rows, "wide": wide, "twin_station": twin_station}
+    probe = build_seek_rom(encode(operands), wide_digits=5, **kw)
     digits = len(str((probe.rows_used + 2) * SEEK_K))
-    layout = build_seek_rom(encode(operands), rows=rows, wide=wide, wide_digits=digits)
+    layout = build_seek_rom(encode(operands), wide_digits=digits, **kw)
     for _ in range(4):
         operands = {k: seek_target(layout, 2 * t) for k, t in targets.items()}
         words = encode(operands)
-        new_layout = build_seek_rom(words, rows=rows, wide=wide, wide_digits=digits)
+        new_layout = build_seek_rom(words, wide_digits=digits, **kw)
         if new_layout.word_pos == layout.word_pos:
             return words, new_layout
         layout = new_layout
@@ -4819,6 +4820,7 @@ def build(
     seek_ops: Sequence[str] = SEEK_OPS,
     seek_teleport: bool = False,
     seek_taken_drop_east: bool = False,
+    seek_twin_station: bool = False,
     in_west: int = 0,
     doom_loop_row: int | None = None,
     doom_leaf_cols: tuple[int, ...] | None = None,
@@ -4962,7 +4964,9 @@ def build(
         seek_fold = rom_rows if rom_rows is not None else max(2, _packed_fold(plain, 60))
         budget = rommod.build_packed_rom(plain, rows=seek_fold).width + 4
         for extra in range(0, 24):
-            words, seek_layout = seek_words(program, p, rows=seek_fold + extra)
+            words, seek_layout = seek_words(
+                program, p, rows=seek_fold + extra, twin_station=seek_twin_station
+            )
             if seek_layout.width <= budget:
                 break
     else:
@@ -9050,6 +9054,90 @@ SEEK_TAKEN_DROP_EAST: set[tuple[str, str]] = {
     ("deadman-3d_hires", "men-v3"),
 }
 
+
+#: Per-``(slug, tier)`` opt-in for the **twin-station seek drum** — the notice
+#: path rebuilt so it stops walking the room.  See :func:`seekrom._twin_top` for
+#: the topology; this is why it exists and what it is worth.
+#:
+#: The drum is one man on a 421x123 boustrophedon ROM who notices a jump request
+#: only at a row-transition gadget.  Granularity is a row and that is cheap; the
+#: **walk to the station** is not.  Per taken seek, measured on
+#: ``deadman-3d_hires``/men-v3 at ``b115339``:
+#:
+#: | leg | ticks | blocked |
+#: |---|---|---|
+#: | station + feeders | 372.8 | 96.5 |
+#: | cascade collector row | 289.7 | 0 |
+#: | seek riser | 123.0 | 0 |
+#: | west + east cascade | 200.4 | 0 |
+#: | west + east ladder | 93.1 | 0 |
+#: | **total** | **1,079** | 96.5 |
+#:
+#: Essentially none of it blocked — it is pure travel — while the CPU sits
+#: **927 t/seek blocked waiting for it**.  That is why all four CPU-side seek
+#: levers measured 0.00%: the CPU's ~350 ticks of work sit inside a ~1,900-tick
+#: window the drum sets.  The conversion is measured, not modelled: a temporary
+#: ``SEEK_NOTICE_PAD`` of N idle cells between the drum reading the request and
+#: emitting the sentinel is linear to four significant figures across N =
+#: 50/100/200 and reproduces the baseline exactly at N = 0, at **5,812 ticks of
+#: run per tick of notice path** (0.0066% each).
+#:
+#: Two of those legs are defects with per-cell evidence:
+#:
+#: * the **riser reads 2,744 on every one of its 123 rows** — every taken seek
+#:   walks the full height unconditionally, because the cascade collects at the
+#:   *bottom* while the station sits at the *top*: 123 t = **0.82%**;
+#: * the **collector row reads 2,744 at column 1 but 1,819 at columns
+#:   100..430** — 66.3% of seeks cross the full 431-cell row to reach the single
+#:   station in the west corner: 289.7 t = **1.92%**.
+#:
+#: Both are the same root cause, and it is not the pipe: a **421x123 room with
+#: exactly one station, in one corner, that both the arrival and the departure
+#: path have to reach**.  The user's framing was a teleporting Send from the CPU,
+#: and the arithmetic of it is right — but the request *value* already teleports.
+#: The drum room has one incoming pipe, so ``q`` and ``r`` bind it from anywhere
+#: in the room and the station is under **no** binding constraint at all; what
+#: costs 1,079 ticks is the man walking to the one place the layout put a reader.
+#: Nor does this want ``S``: broadcasting the request into two pipes would put
+#: **two** values in the room, one gadget would fire on each, and the drum would
+#: seek twice.  One pipe and two stations cannot double-fire — there is one man
+#: and one value, and whichever station his cascade reaches consumes it.
+#:
+#: What is left after the rebuild is the **departure** crossing, and it is a
+#: floor rather than an oversight: a packed row is enterable only from the end
+#: it is packed from, so a target row of the far parity must be reached across
+#: the room whatever the topology.  0.5 crossings a seek is the minimum, and the
+#: one-station drum already pays exactly that on its feeder — which is why the
+#: ~1.38% the feeder looks worth is not additive with the rest, and the
+#: identified ~4.1% is really ~2.7% plus a small gain on the cascade.
+#:
+#: **Measured, 21-round tour, ``passed=True``/``fatal=None`` on both tiers:**
+#:
+#: | tier | grid | ticks | |
+#: |---|---|---|---|
+#: | men-v3 | 496x672 -> 496x674 | 86,981,643 -> **85,515,686** | **-1.685%** |
+#: | taped | 625x396 -> 625x400 | 145,970,818 -> **143,888,528** | **-1.427%** |
+#:
+#: That is 252 ticks a seek at men-v3's 5,812, against ~470 on paper, and the
+#: gap is paid in **width**: the east station is the only glyph run that reaches
+#: past the wrap riser, so the room grows eleven columns, ``build``'s fold loop
+#: buys them back in rows, and ``rom_rows`` goes 123 -> 126 (men-v3) / 127
+#: (taped).  A deeper drum is a longer ladder *and* a longer cascade, and the
+#: ROM room two rows taller moved men-v3's swept ``mem_pad`` from 15 to 2.
+#: **The eleven columns are the thing to attack next**: ``STATION`` is 17 glyphs
+#: because ``K = 128`` is built in digits, and a ```` `128` ```` literal would
+#: make it 15 — worth checking against the backtick rule, since the drum's
+#: vertical traffic (the east ladder's drop at ``L0+2``) crosses the east
+#: station's column range on other rows.  Reclaiming column 0, which twin mode
+#: leaves empty where the riser was, is a third.
+#:
+#: Neither tier needed a ``MEM_PAD_FOR`` re-sweep: taped bound at its pinned
+#: floor of 1 and men-v3's own ``range(0, 40)`` search found 2.
+SEEK_TWIN_STATION: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "men-v3"),
+    ("deadman-3d_hires", "taped"),
+}
+
 #: How many columns west of ``lane_x0`` an :data:`INPUT_NORTH` I room sits, per
 #: ``(slug, tier)``. Absent (0) keeps the shipped column, which is ``lane_x0``
 #: itself — the pipe drops onto the IN lane's own ``r``.
@@ -10327,6 +10415,7 @@ def build_for(
         seek_teleport=_seek and (slug, store) in SEEK_TELEPORT,
         in_west=INPUT_NORTH_WEST.get((slug, store), 0),
         seek_taken_drop_east=_seek and (slug, store) in SEEK_TAKEN_DROP_EAST,
+        seek_twin_station=_seek and (slug, store) in SEEK_TWIN_STATION,
         seek_ops=SEEK_OPS_FOR.get(slug, SEEK_OPS),
         top_bus=(slug in TOP_RETURN_BUS) if top_bus is None else top_bus,
         store_shape=STORE_SHAPE.get(slug),
