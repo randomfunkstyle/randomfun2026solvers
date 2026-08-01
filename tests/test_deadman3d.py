@@ -1809,7 +1809,7 @@ def test_the_bank_order_is_the_measured_traffic_order_and_reaches_every_bank() -
 
     assert machine.TAPED_BANK_ORDER == {
         ("deadman-3d", "taped"): (3, 2, 0, 1),
-        ("deadman-3d_hires", "taped"): (10, 9, 8, 7, 6, 0, 1, 2, 3, 5, 4),
+        ("deadman-3d_hires", "taped"): (10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
     }
     assert all(tier == "taped" for _slug, tier in machine.TAPED_BANK_ORDER)
     sizes = list(machine.TAPED_BANKS["deadman-3d"])

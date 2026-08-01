@@ -11823,7 +11823,18 @@ TAPED_BANK_ORDER: dict[tuple[str, str], tuple[int, ...]] = {
     # why the re-cut paid so well: bank 3 held the ZBUF, CMD and every per-frame
     # scalar, and at 128x96 the scalar traffic doubles against the map traffic —
     # so hires is *more* lopsided than `deadman-3d`, not less.
-    ("deadman-3d_hires", "taped"): (10, 9, 8, 7, 6, 0, 1, 2, 3, 5, 4),
+    # Re-derived a second time, with the cut it belongs to (the six-bank re-cut
+    # of 1..800 recorded under `TAPED_BANKS`). Under that cut the traffic is
+    # monotone *down* the address space for the first time — 111,321 reads in
+    # 895..901, then 80,088, 44,657, 33,015, 20,165, and everything below 801 in
+    # single digits of thousands — so the cheapest chain is the plain top-down
+    # peeling, every gate taking the high end. Measured against the alternative
+    # that keeps the old cut's shape (`(10, 9, 8, 7, 6, 0, 5, 4, 3, 2, 1)`, which
+    # peels cold bank 0 out of turn to reach 5 from the top): 96,280,186 against
+    # 96,935,246, so the order alone is worth **-0.65%** on the 21-round tour, or
+    # ~2.0 ticks of mean read latency for the two extra gate traversals it saves
+    # the 353..800 traffic.
+    ("deadman-3d_hires", "taped"): (10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
 }
 
 #: Per-slug STORE tier for :func:`build_for` (see :func:`build`'s ``store``).
@@ -12062,7 +12073,51 @@ TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
     # pushed the hottest ring to position 3. Reversed, the chain peels
     # ``7, 9, 6, 21, 58`` and the scalars are renumbered to match, so the hot set
     # is at the front and still in the small rings. -12.01% on the 21-round tour.
-    "deadman-3d_hires": (102, 21, 229, 7, 306, 135, 58, 21, 6, 9, 7)}
+    #
+    # **The first six were then re-cut, and the reason is that the old cut was
+    # fitted to a four-frame trace.** ``hires_bankcut.py`` traced
+    # ``hires.WALK[:4]``, and in four frames the player has barely moved — the
+    # DDA's map working set was 21 slots wide, so it landed inside the 21-slot
+    # bank at 103..123 and the 229-slot bank above it looked stone cold (0.07%
+    # of traffic). Over the twenty gameplay frames the gate actually scores, the
+    # player walks: the map reads spread over ``MAPB+110..MAPB+250`` at stride 4
+    # (one packed word per 16 columns, one row per four words), 6.6% of all
+    # reads land in that 229-slot ring, and it was doing **42.3% of the store's
+    # ring work**. Re-traced stride-1 exact over the 21-round tour (471,189
+    # accesses, 324,600 of them reads) and re-cut against that.
+    #
+    # What the cut is actually minimising is **not** ring length. Ring sends are
+    # exactly ``accesses * (slots + 1)`` in every bank — the worker laps the whole
+    # tape once per access — but the lap finishes *after* the answer leaves, so it
+    # is off the CPU's critical path, which is why :data:`TAPED_TIGHT_RING`
+    # measured 0.000% and why a service-time cut (the ``80 + 8.6*slots`` /
+    # ``122 + 5.8*slots`` fit under :data:`TAPED_JUMP_THRESHOLD`) mispredicts by
+    # 4x. Regressing measured mean read latency on thirteen built-and-run cuts
+    # gives, to within 0.7 ticks RMS on leave-one-out,
+    #
+    #     latency = 93.4 + 3.91 * E[offset in bank] + 5.03 * E[rotation]
+    #
+    # where the rotation is ``(slot - previous slot in that bank) mod slots``.
+    # Both terms are about **where a bank's boundary falls relative to the hot
+    # addresses**, and neither is about how big the bank is — a bank is cheap
+    # when its hot cluster sits near its base *and* consecutive accesses to it
+    # walk forwards a short way. That is the same rule the history states as "hot
+    # traffic in small rings, small rings at the front", but stated in the
+    # variable that is actually load-bearing, which is why "small" was never the
+    # right knob: the cold ``MONB``/``SPRB``/``DIGB``/``ZBUF`` span is **merged**
+    # here into one 441-slot ring — the largest this family has ever built — to
+    # buy a fourth boundary for the map, and that is a win, not a cost.
+    #
+    # Swept by coordinate descent on the ten boundaries against that model, then
+    # measured same-process, control first and last, on the 21-round tour:
+    # **100,669,456 -> 96,280,186, -4.36%**, mean read latency 141.47 -> 127.88
+    # (the run moves by exactly ``latency * 324,600 reads``). Runners-up, same
+    # sweep: the map in four banks at ``(138, 52, 45, 117)`` -3.79%, the map in
+    # three at ``(154, 73, 125)`` -1.71%, and -0.65% for the same cut behind the
+    # old end-peeling order. What does *not* work is optimising either term
+    # alone: the offset-only optimum ``(110, 52, 52, 138, 253, 195, ...)`` folds
+    # ``POSX..PLANEY`` into a 253-slot ring, and measured **+1.82%**.
+    "deadman-3d_hires": (114, 52, 52, 134, 7, 441, 58, 21, 6, 9, 7)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank

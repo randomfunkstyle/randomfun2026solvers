@@ -696,9 +696,16 @@ def test_the_hires_ring_worker_batches_one_bank_at_a_time() -> None:
     # the cut it has to amortise against is still eleven short banks
     banks = machine.TAPED_BANKS["deadman-3d_hires"]
     assert len(banks) == 11
-    assert max(banks) == 306
+    # 441, not 306: the re-cut of 1..800 merges the whole cold
+    # `MONB`/`SPRB`/`DIGB`/`ZBUF` span into one ring to free a fourth boundary
+    # for the map (see `machine.TAPED_BANKS`). Batch 2 is what makes that
+    # affordable — a 441-slot ring on batch 1 would be ~1,270 ticks an access
+    # against ~866.
+    assert max(banks) == 441
     # ... and it straddles the crossover, which is the whole reason for `None`
     assert min(banks) < 15 < max(banks)
+    # the plateau claim above still holds: no ring lands in 11..20
+    assert not any(10 < m < 21 for m in banks)
     # and it only pays because the drum is on; the two are not independent
     assert "deadman-3d_hires" in machine.SEEK_DRUM
     # `deadman-3d` untouched throughout: one uniform batch, and its checked-in
