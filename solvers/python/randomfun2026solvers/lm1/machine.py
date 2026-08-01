@@ -12061,6 +12061,30 @@ STORE_SHAPE: dict[str, tuple[int, int]] = {"deadman-3d": (10, 60),
 #: the uniform quarters' traffic, and re-cutting the banks rewrites the traffic it
 #: was read off. Priced on the DP-4 cut, the stale order gives -53.6% where the
 #: matching one gives -56.4%. Any change here needs a new order beside it.
+#:
+#: **hires' eleven-way cut is a measured local optimum, and a static per-read
+#: cost model will not find a better one.** The obvious objective — minimise
+#: ``reads * (ring service + 23 * gate hops)`` over every contiguous 11-way cut
+#: of ``1..901``, which is an exact DP, not a search — was run at hop costs 0,
+#: 10, 23, 40, 60 and 100 and its answers all measure **worse** on the 21-round
+#: tour than the shipped ``(114, 52, 52, 134, 7, 441, 58, 21, 6, 9, 7)``:
+#:
+#: | H | DP-optimal cut | E[service] | measured |
+#: |---|---|---|---|
+#: | — | **shipped** | 211.3 | **96,280,186** |
+#: | 0 / 10 | ``(154,73,125,7,441,7,51,21,7,8,7)`` | 199.5 | 140.04 mean lat, +9.5% |
+#: | 23 | ``(122,60,53,117,7,441,7,51,21,11,11)`` | 210.1 | 102,601,408, +6.57% |
+#: | 40 | ``(114,64,53,121,7,441,7,51,21,10,12)`` | 210.9 | 102,540,559, +6.50% |
+#: | 60 | ``(114,64,53,121,7,441,7,51,21,9,13)`` | 212.3 | 104,914,027, +8.97% |
+#:
+#: The H=0 answer is the already-measured ``P3`` cut, and it has *lower* expected
+#: service than the shipped one and loses by 9.5%. What the DP cannot see is that
+#: a bank is a **single-server ring**: the quantity that tracks these numbers is
+#: the share of reads whose immediately preceding request hit the same bank
+#: (shipped 0.271, every DP answer 0.320..0.582), because such a read waits out
+#: the previous one's whole lap. Any objective that only prices a read against
+#: its *own* bank will keep proposing concentration, and concentration is what
+#: costs. See ``deadman3d._HIRES_SCALARS``, where the same trap cost ten builds.
 TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
     "deadman-3d": (352, 164, 15, 69),
     # **The last five are a re-ordering, not a re-cut**, and they move with

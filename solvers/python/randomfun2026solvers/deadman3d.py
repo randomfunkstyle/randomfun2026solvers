@@ -2016,6 +2016,54 @@ _DIGIT_SCALARS = ("DSRC", "DDIV", "DRET", "DVAL", "DPTR", "DKN", "DA", "DAC")
 #:
 #: Left as data rather than computed at import: the traffic it is fitted to is
 #: level-derived, and ``tape_slots`` has to answer without an IWAD.
+#:
+#: **This tuple is settled, and it took ten builds to settle it.** A fitted
+#: latency model — ``93.4 + 3.91*E[offset in bank] + 5.03*E[rotation]``, 0.7
+#: ticks leave-one-out over 13 built-and-run *bank cuts* — attributes 19.43 of
+#: the hi-res store's 34.5 layout ticks to this span and says a permutation can
+#: take 11 of them back. **It cannot, and the model is why.** Every one of those
+#: 13 cuts varied bank *sizes*; not one varied the permutation at fixed banks.
+#: Over the address span an offset averages ~m/2, so ``offset`` was silently
+#: proxying for the bank's own ring size, and it carries no causal force at all
+#: once the banks are held still. Ten permutations were built and run on the
+#: 21-round tour against this order's 96,280,186 (614x403, ``passed=True``,
+#: ``store->cpu`` 2, control reproduced to the tick first and last in every
+#: session):
+#:
+#: | permutation, and what it optimises | E[m] | E[off] | E[rot] | mean lat | Δ ticks |
+#: |---|---|---|---|---|---|
+#: | **this order** | 11.19 | 1.83 | 2.44 | **127.88** | — |
+#: | model argmin, seed 4 | 16.23 | 1.54 | 0.40 | 139.11 | +3.79% |
+#: | model argmin, seed 3 | 16.64 | 1.57 | 0.38 | 136.30 | +2.84% |
+#: | rotation alone (12.27 -> 1.72) | 22.88 | 11.39 | 0.34 | 194.95 | +22.61% |
+#: | offset alone (7.16 -> 5.78) | 18.43 | 1.48 | 3.71 | 147.24 | +6.53% |
+#: | hottest into cheapest bank, hop=23 | 8.27 | 2.80 | 2.52 | 138.55 | +3.60% |
+#: | hottest into smallest ring, hop=0 | 8.03 | 2.73 | 2.59 | 145.14 | +5.82% |
+#: | hottest into lowest chain position | 8.52 | 2.85 | 2.61 | 138.32 | +3.52% |
+#: | drain the 58-ring into the 21-ring | 9.14 | 2.20 | 2.74 | 129.24 | +0.46% |
+#: | argmin of the refit below | 14.17 | 3.13 | 3.89 | 149.91 | +7.43% |
+#:
+#: This order has the **worst** offset and among the worst rotation of the ten
+#: and the best latency, which settles the direction of both terms: they are
+#: descriptive, not causal. Refitting on the ten (same banks, same chain order,
+#: so the whole store is held still) the surviving description is
+#:
+#:     mean = 195.9 + 562.3 * w58 - 0.79 * E[service] + 112.5 * f_same
+#:
+#: — 1.0 ticks leave-one-out — where ``w58`` is the read share landing in the
+#: 58-slot ring and ``f_same`` the share of reads whose immediately preceding
+#: request hit the **same** bank. That last term is the one the offset model
+#: never had and it is the reason every "put the hot set in the cheap bank"
+#: candidate loses: a bank is a single-server ring, so concentrating traffic
+#: makes each read wait out the previous one's lap, and the ~23-ticks-a-hop the
+#: chain charges for spreading is the cheaper of the two. It is also why draining
+#: the 58-slot ring — which every static cost model asks for first, and which
+#: leaves banks 8/9/10 byte-identical — measures **+0.46%**: the 5.5% of reads it
+#: moves land on top of the 21-slot ring's own traffic.
+#:
+#: The refit is a *description of ten points*, not a lever: its own argmin (the
+#: last row) is +7.43%. Do not fit a static per-read cost to this span again —
+#: what is left here is queueing, and it needs a queue model or a build.
 _HIRES_SCALARS: tuple[str, ...] = (
     'CMD', 'PERP', 'TBS', 'TSELT', 'PW0', 'PTR', 'DA', 'DKN',
     'WX', 'WPTR', 'DSRC', 'MI', 'TYN', 'MDX', 'DVAL', 'WTY',
