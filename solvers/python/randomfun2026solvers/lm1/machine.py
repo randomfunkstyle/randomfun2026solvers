@@ -5851,6 +5851,7 @@ def build(
     seek_threshold: int = SEEK_THRESHOLD,
     seek_ops: Sequence[str] = SEEK_OPS,
     seek_teleport: bool = False,
+    seek_attach_low: bool = False,
     seek_taken_drop_east: bool = False,
     seek_twin_station: bool = False,
     in_west: int = 0,
@@ -6086,6 +6087,7 @@ def build(
                     store_shape=store_shape,
                     seek_layout=seek_layout,
                     seek_teleport=seek_teleport,
+                    seek_attach_low=seek_attach_low,
                     seek_taken_drop_east=seek_taken_drop_east,
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
@@ -6185,6 +6187,7 @@ def build(
                     store_shape=store_shape,
                     seek_layout=seek_layout,
                     seek_teleport=seek_teleport,
+                    seek_attach_low=seek_attach_low,
                     seek_taken_drop_east=seek_taken_drop_east,
                     in_west=in_west,
                     doom_loop_row=doom_loop_row,
@@ -6306,6 +6309,7 @@ def _assemble(
     store_shape: tuple[int, int] | None = None,
     seek_layout=None,
     seek_teleport: bool = False,
+    seek_attach_low: bool = False,
     seek_taken_drop_east: bool = False,
     in_west: int = 0,
     doom_loop_row: int | None = None,
@@ -7196,10 +7200,18 @@ def _assemble(
         else:
             y_b = max(y for _, y in g.c) + 2
         if seek_teleport:
-            route_lengths["cpu->drum"], seek_regions = _seek_teleport(
-                g, cmd_y=cmd_y, src_x=CX + W + 2, x_e=x_e, rom_east=rom_east, ry=ry, y_b=y_b
+            route_lengths["cpu->drum"], seek_regions, cmd_attach_y = _seek_teleport(
+                g,
+                cmd_y=cmd_y,
+                src_x=CX + W + 2,
+                x_e=x_e,
+                rom_east=rom_east,
+                ry=ry,
+                y_b=y_b,
+                cpu_bottom=(CY + H if seek_attach_low else None),
             )
         else:
+            cmd_attach_y = cmd_y
             route_lengths["cpu->drum"] = g.draw_pipe(
                 [
                     (CX + W + 2, cmd_y),
@@ -7331,7 +7343,9 @@ def _assemble(
     if cpu.has_out:
         touches["out"] = (CX + cpu.out_col, CY + H + 2)
     if seek:
-        touches["cmd"] = (CX + W + 2, CY + (H - 9))
+        # ... at the row the pipe was actually drawn from, which is not always the
+        # send row: see ``_seek_teleport``'s ``attach_y`` and :data:`SEEK_ATTACH_LOW`.
+        touches["cmd"] = (CX + W + 2, cmd_attach_y)
     check_bindings(
         [(CX + x, CY + y, glyph, band) for x, y, glyph, band in cpu.pipe_glyphs], touches
     )
@@ -7654,9 +7668,26 @@ _TELE_W = 4
 _TELE_H = 2
 
 
+#: **An instrument, not a knob.** Stops :func:`_seek_teleport`'s wall-raising loop
+#: this many rows early, so the CPU's dive into room H is exactly that many cells
+#: longer and **nothing else in the grid moves** — H is a teleport and is crossed
+#: in one instruction whatever its height, so its own body does not care. It is
+#: how the ``cpu->drum`` leg's tick derivative gets measured on a real machine
+#: rather than argued from the pipe length. 0 in every build.
+SEEK_DIVE_PAD = 0
+
+
 def _seek_teleport(
-    g: _Grid, *, cmd_y: int, src_x: int, x_e: int, rom_east: int, ry: int, y_b: int
-) -> tuple[int, dict[str, tuple[int, int, int, int]]]:
+    g: _Grid,
+    *,
+    cmd_y: int,
+    src_x: int,
+    x_e: int,
+    rom_east: int,
+    ry: int,
+    y_b: int,
+    cpu_bottom: int | None = None,
+) -> tuple[int, dict[str, tuple[int, int, int, int]], int]:
     """The CPU -> drum seek request, teleported instead of piped end to end.
 
     The plain route is the machine's longest pipe by a factor of seven: out of the
@@ -7691,7 +7722,7 @@ def _seek_teleport(
     hy0 = hy1 - (_TELE_H + 1)
     if not clear(hx0, hy0, hx1, hy1):
         raise MachineError("seek teleport: no clear band below the store for room H")
-    while hy0 - 1 > cmd_y + 2 and clear(hx0, hy0 - 1, hx1, hy0 - 1):
+    while hy0 - 1 > cmd_y + 2 + SEEK_DIVE_PAD and clear(hx0, hy0 - 1, hx1, hy0 - 1):
         hy0 -= 1  # raise the north wall: every row raised is a cell off the dive
     # ── V, the vertical teleport ─────────────────────────────────────────────
     vx0, vx1, vy0 = rom_east + 3, x_e, ry - 1  # +3 leaves the drum stub its two cells
@@ -7716,16 +7747,41 @@ def _seek_teleport(
     for k, row in enumerate(v_rows):
         g.text(vx0 + 1, vy0 + 1 + k, row.replace(" ", "\0"))
 
-    # the CPU's own send cell, east two and down into H's north wall ...
-    n1 = g.draw_pipe([(src_x, cmd_y), (hx0 + 1, cmd_y), (hx0 + 1, hy0 - 1)])
+    # ── where the pipe leaves the CPU ────────────────────────────────────────
+    # The send cell and the attachment cell are two different things. ``s`` takes
+    # the nearest outgoing pipe wherever the man happens to stand, so the pipe may
+    # leave the east wall on **any** interior row — and the row it should leave on
+    # is H's own, because everything between is a dive the word makes at one cell a
+    # tick with the CPU stopped at the far end of it.
+    #
+    # ``cpu_bottom`` is the CPU's last interior row; below that there is no wall to
+    # attach to. The stub east of the wall has to be clear on the chosen row, which
+    # is why this is a test and not an assumption: on ``deadman-3d_hires`` the
+    # column immediately east of the CPU is shared with the seek adapter's own room
+    # for eight rows, and only the last two are free.
+    # ``hy0 - 2``, not ``hy0 - 1``: the last cell has to be an arrowhead pointing
+    # **south** into H's north wall, so the dive needs one real cell of its own —
+    # a pipe that arrives on H's row could only point east, into whatever stands
+    # beside it. Two cells is the floor a pipe has anyway (SPEC.md).
+    attach_y = cmd_y
+    if cpu_bottom is not None:
+        cand = min(hy0 - 2, cpu_bottom)
+        if cand > cmd_y and clear(src_x, cand, hx0 + 1, cand):
+            attach_y = cand
+    # ... the CPU's own attachment cell, east two and down into H's north wall ...
+    n1 = g.draw_pipe([(src_x, attach_y), (hx0 + 1, attach_y), (hx0 + 1, hy0 - 1)])
     # ... H hands it up the through-column into V's south wall ...
     n2 = g.draw_pipe([(thru, hy0 - 1), (thru, vy1 + 1)])
     # ... and V hands it west onto the drum's own attachment cell.
     n3 = g.draw_pipe([(vx0 - 1, ry), (rom_east + 1, ry)])
-    return n1 + n2 + n3, {
-        "seek:H": (hx0, hy0, hx1 - hx0 + 1, hy1 - hy0 + 1),
-        "seek:V": (vx0, vy0, vx1 - vx0 + 1, vy1 - vy0 + 1),
-    }
+    return (
+        n1 + n2 + n3,
+        {
+            "seek:H": (hx0, hy0, hx1 - hx0 + 1, hy1 - hy0 + 1),
+            "seek:V": (vx0, vy0, vx1 - vx0 + 1, vy1 - vy0 + 1),
+        },
+        attach_y,
+    )
 
 #: Use the side-ported grid man-memory for the hot tier, so its answer leaves the
 #: same wall its request enters. The bottom-ported block forces the answer to travel
@@ -10531,6 +10587,47 @@ SEEK_TELEPORT: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
 }
 
+#: ``(slug, tier)`` pairs whose ``cpu->drum`` pipe leaves the CPU's east wall on
+#: **room H's own row** rather than on the row the man sends from.
+#:
+#: The send cell and the attachment cell are two different things and only the
+#: first one is about the man: ``s`` takes the nearest outgoing pipe wherever he
+#: stands, so the pipe may leave the wall anywhere. On ``deadman-3d_hires`` it was
+#: leaving at the send row and then **diving eight rows** down the one free column
+#: east of the CPU to reach room H — eight cells the word crosses at one a tick
+#: with the CPU already waiting at the far end of the round trip.
+#: :func:`_seek_teleport` already raised H's north wall as far as it would go
+#: (the seek adapter's room blocks the rows above 206); what was left was to drop
+#: the *attachment* instead, and the dive becomes the two cells a pipe is required
+#: to be and cannot shorten again. ``cpu->drum`` **67 -> 60**.
+#:
+#: **Every ``s`` in the CPU room re-ranks when this moves, and that is the risk
+#: rather than the pipe.** The seek attach is one of the rivals for the store
+#: request and the display send, and a wrong bind is silent. What makes it safe is
+#: that :func:`check_bindings` already gates the whole CPU against ``touches``, so
+#: the attach row is passed *out* of :func:`_seek_teleport` and into that gate
+#: rather than being assumed to still equal ``cmd_y`` — the one line that would
+#: otherwise let this pass a build and answer from the wrong pipe.
+#:
+#: Measured on the 21-round hi-res tour, same process, same moment, control
+#: reproducing to the tick: **88,774,561 -> 88,754,090, -0.023%**, box unchanged
+#: at 614x403.
+#:
+#: **The response is strongly asymmetric and that is the finding, not the
+#: -0.023%.** The same leg was priced from the other side with
+#: :data:`SEEK_DIVE_PAD`, which lengthens the dive and changes nothing else: the
+#: first four cells beyond the shipped length are free to the tick, and the next
+#: four cost **+0.082%** — ~18k ticks a cell. Taking seven cells *off* recovers
+#: ~2.9k ticks a cell, a sixth of that. So this leg sits just inside a knee: the
+#: CPU hides most of a jump's round trip behind the seek walk and the fetch
+#: riser, and there are only a few cells of hidden slack left. Anyone tempted to
+#: spend grid on shortening ``cpu->drum`` further should read that asymmetry as
+#: the ceiling it is — the remaining 60 cells are two teleport rooms and three
+#: minimum-length stubs, and the CPU **never blocks on the send at all** (0
+#: ticks on ``cpu->room49`` over the whole tour; all of its waiting is on
+#: ``store:collector->cpu`` 34.0M, ``rom->cpu`` 0.99M and ``input->cpu`` 0.21M).
+SEEK_ATTACH_LOW: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
+
 #: Slugs whose **seek jump** turns south at the east end of its entry row instead of
 #: at its slab's ``base``, deleting the U-turn under the CPU.
 #:
@@ -12731,6 +12828,7 @@ def build_for(
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,
         seek_teleport=_seek and (slug, store) in SEEK_TELEPORT,
+        seek_attach_low=(slug, store) in SEEK_ATTACH_LOW,
         in_west=INPUT_NORTH_WEST.get((slug, store), 0),
         seek_taken_drop_east=_seek and (slug, store) in SEEK_TAKEN_DROP_EAST,
         seek_twin_station=_seek and (slug, store) in SEEK_TWIN_STATION,

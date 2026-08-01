@@ -465,10 +465,40 @@ def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
     sat at row 10 because its two arms wanted rows 9 and 11.
 
     So P1 moves as far **west** as its own bindings allow and the dispatch stands
-    on P1's exit row. The binding that pins P1 is the ring-forward pipe against
-    the output pipe: at ``s``'s cell (10, 7) that is 14 against 17, and one
-    column further west it is 15 against 16 and the ring loses. 9/10 is a wall,
-    not a preference.
+    on P1's exit row. 9/10 is a wall, not a preference.
+
+    **Which binding is the wall was recorded wrongly and it matters, because the
+    wrong one has three cells of margin and the right one has one.** It is not
+    P1's ``s`` against the output pipe — that is 14 against 17 at ``(10, 7)`` and
+    survives two columns of travel. It is P1's ``r`` at ``(10, 6)`` against the
+    **request stub**: 15 to the ring return against 16 to the request, a margin
+    of **one**, at ``west_grow=0``. One column west and it is 15 against 15 — an
+    exact tie, which SPEC hands to the northern attachment, and the request stub
+    on ``V2_IN_ROW`` is 17 rows north of the ring return. P1 would then read the
+    *next request* as though it were a tape word.
+
+    Two consequences worth having in one place.
+
+    * **The body cannot be narrowed by moving the descent columns west**, which
+      is the obvious way to take the room from 26 columns to 24. Every variant
+      was checked, at ``west_grow`` 0 and 4, moving the bottom-wall return column
+      with the wall or leaving it: a one-column shift ties, a two-column shift
+      loses by one, a three-column shift loses by two *and* ties the ``s`` as
+      well. There is no legal shift at all. (Narrowing the east wall alone,
+      without moving a glyph, is legal and only *improves* the ``s`` margin, 3 to
+      5 — but it buys nothing worth the move: the return gutter loses four cells
+      behind the send at 0.019% a tick, and ``bank_w`` is a maximum over the
+      banks that the **34-column batched** worker sets, so neither the pitch nor
+      the box notices. See :func:`~.memory_taped.feed_relay` for the other room
+      whose width looked free and was not.)
+    * **The margin is a property of the caller's wall, not of this body.** At
+      ``bank_west_grow=4`` — what ``deadman-3d_hires`` ships — the request stub is
+      four columns further west and the margin is 5, so a shift *would* build and
+      *would* pass the whole 21-round tour while any caller that did not grow the
+      wall silently answered from the request wire. That is not hypothetical:
+      it is exactly how :data:`V2_V4_MAIN_ROW` was nearly landed with the stub
+      moved as well. ``test_p1s_receive_keeps_the_ring_by_exactly_one_cell``
+      pins the number so this cannot be re-derived by accident.
 
     ``r`` -> ``S`` goes **27 + 8a -> 18 + 8a** ticks, and this is the worker the
     hot addresses use: the chain is hot-first and its first banks are the small
