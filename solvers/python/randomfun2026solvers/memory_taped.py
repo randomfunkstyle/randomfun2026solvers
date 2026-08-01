@@ -162,6 +162,34 @@ V4_GATE_H = 7
 V4_GATE_IN_ROW = 4
 V4_GATE_LOCAL_ROW = 2
 V4_GATE_DOWN_ROW = 6
+
+#: The east-wall row the **downstream pipe** attaches to, which is *not* the row
+#: the downstream write tail stands on. Both are called "the down row" and the
+#: two were the same number until it was noticed that they need not be.
+#:
+#: ``s`` binds by Manhattan distance to the attached segment, and both outgoing
+#: pipes leave the **same column** — one cell east of the east wall — so ``|dx|``
+#: cancels and the binding is purely a question of rows. The four ``s`` cells in
+#: a v4 gate stand at rows 2 and 3 (the mine arm and its write tail) and 5 and 6
+#: (the downstream arm and its write tail), and the requirement is only that the
+#: first two are nearer the local attachment and the last two nearer the
+#: downstream one. With the local pipe on row 2 that leaves the downstream pipe
+#: free anywhere from row 3 down, and **row 4 — the spine's own row — is the one
+#: that matters**, because the chain link leaves at this row and enters the next
+#: gate at :data:`V4_GATE_IN_ROW`. Equal rows make it a straight horizontal run
+#: and the two cells it used to climb disappear; the last gate's downstream feed
+#: loses the same two off its riser.
+#:
+#: Row 3 is exactly the tight case and it is a **tie**, decided by SPEC rather
+#: than by luck: the mine write tail's ``s`` at row 3 is one row from the local
+#: attachment at row 2 and one row from the downstream one at row 4, and
+#: "*ties break by reading order (top to bottom, left to right)*" gives it to row
+#: 2 — the local pipe, which is the one the write must take. Row 3 for the
+#: downstream pipe would lose that tail to the wrong bank in silence, and row 5
+#: is the elbow's own row, so 4 is both the best and the only value that shortens
+#: anything. Verified the way a silent mis-bind has to be: the 901-address
+#: readback at every ``skip_batch``, which writes each address before it reads it.
+V4_GATE_DOWN_PIPE_ROW = 4
 #: The east wall both v4 forms are padded out to. The high form's return column
 #: lands at 12 and the low form's at 13; padding the *wall* rather than moving
 #: the *column* keeps every gate the same width — so ``taped_store_block``'s
@@ -262,6 +290,48 @@ def feed_unpack(height: int) -> tuple[list[str], list[tuple[int, int]]]:
 #: The v5 forwarder's fixed body: receive, send, and the op branch behind it.
 V5_FEED_H = 8
 
+#: **Instruments, not knobs.** Nop cells inserted into :func:`feed_relay`'s loop,
+#: on one side of the send or the other, so the tick price of a cell in each half
+#: of the lap can be measured on the real machine rather than argued from the
+#: pipe lengths. ``RELAY_PRE_PAD`` adds one blank row between the ``R`` and the
+#: ``s`` — one tick of *pipe* latency per access. ``RELAY_POST_PAD`` pushes the
+#: return row that many rows south — the man descends that much further and
+#: climbs that much further back, so **two** ticks per access, all of them after
+#: the send. Both are 0 in every build; the block's walls, ports and every other
+#: room are byte-identical at 0 (see ``taped_store_block``'s ``pipes`` count,
+#: which does not move either).
+#:
+#: **They exist because the answer expires.** "After the send is free" is not a
+#: property of the machine, it is a property of the machine *at a given
+#: occupancy*: it holds while the gap between two requests to the same room is
+#: longer than the man's walk home, and every round of this work shortens the
+#: gap. So the numbers below carry the mean read latency they were taken at, and
+#: the right response to a much faster machine is to run these again rather than
+#: to inherit them.
+#:
+#: At **105.6 mean read latency** (this build), same process, same moment,
+#: 21-round tour, control reproducing to the tick:
+#:
+#: | pad | ticks/access | tour |
+#: |---|---|---|
+#: | ``RELAY_PRE_PAD=1`` | +1 before the send | **+0.329%** |
+#: | ``RELAY_PRE_PAD=4`` | +4 | +1.319% (0.330 each) |
+#: | ``RELAY_POST_PAD=4`` | +8 after the send | **+0.000%** (+8 ticks total) |
+#: | ``RELAY_POST_PAD=8`` | +16 | +0.000% (+16 ticks total) |
+#: | ``RELAY_POST_PAD=16`` | +32 | +0.000% (+32 ticks total) |
+#:
+#: The post-send rows are not rounding: the tour grew by *exactly* twice the pad,
+#: once, which is the single lap still in flight when the last frame lands. Per
+#: access it is zero to the tick. The forwarder is 94-99% blocked and that has
+#: not changed.
+#:
+#: **The bank worker is a different room and there the rule has already broken** —
+#: see ``memory_tape.WORKER_V4_POST_PAD``, where a post-send tick now costs
+#: 0.019%. The distinction that survives is not "before/after the send" but *how
+#: idle the room is*: this one waits 94-99% of the time, the worker only 82%.
+RELAY_PRE_PAD = 0
+RELAY_POST_PAD = 0
+
 
 def feed_relay(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     """The **v5** feed forwarder: one word in, the same word out.
@@ -328,18 +398,28 @@ def feed_relay(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     gate's west growth with it. Ticks are the goal, so the four-column room
     stays and its 27 blank rows stay with it.
     """
-    ih = max(V5_FEED_H, height)
+    body_h = V5_FEED_H + RELAY_PRE_PAD + RELAY_POST_PAD
+    ih = max(body_h, height)
     rows = [
         "> v ",  # (0,0) return leg turns east, then south INTO the descent
         "^ R ",  # ... R takes the packed word
+    ]
+    # A padded cell here is a cell of *pipe* latency: the CPU is stopped for it.
+    rows += ["^   "] * RELAY_PRE_PAD
+    rows += [
         "^ s ",  # ... and sends it on   <- the only cell on the wire
         "^ b ",  # BP = the word, whose low bit is the op
         "^vxv",  # x: WRITE turns CW/west into the value tail, READ CCW/east
         "^R v",  # the write's value word ...
         "^s v",  # ... passed straight through
+    ]
+    # ... and a padded cell here is two ticks of walking, both of them behind the
+    # send: the descent to the return row and the climb back off it.
+    rows += ["^   "] * RELAY_POST_PAD
+    rows += [
         "^<@<",  # both tails walk back onto the climb; the spawn stands on it
     ]
-    rows += [" " * 4] * (ih - V5_FEED_H)  # the room under the loop, unused
+    rows += [" " * 4] * (ih - body_h)  # the room under the loop, unused
     #: Every interior row down the **east** side is a legal attachment row.
     return rows, [(3, i) for i in range(ih)]
 
@@ -356,7 +436,9 @@ def gate_rows(compact: bool = False, protocol: str = "v3") -> tuple[int, int, in
     if protocol not in TAPE_PROTOCOLS:
         raise ValueError(f"unknown store protocol {protocol!r}; expected {TAPE_PROTOCOLS!r}")
     if protocol in _PACKED:
-        return (V4_GATE_H, V4_GATE_IN_ROW, V4_GATE_LOCAL_ROW, V4_GATE_DOWN_ROW)
+        # The caller draws pipes with this, so it gets the *attachment* row; the
+        # write tail's row is the gate's own business (:data:`V4_GATE_DOWN_PIPE_ROW`).
+        return (V4_GATE_H, V4_GATE_IN_ROW, V4_GATE_LOCAL_ROW, V4_GATE_DOWN_PIPE_ROW)
     if compact:
         return (
             COMPACT_GATE_H,
@@ -1267,7 +1349,10 @@ def taped_store_block(
         # apart, so the bank's own two-word protocol never changes.
         rx0, ry0, ry1 = bx[k] - 5 + feed_tuck, tin[1] - 1, gate_y - 1
         art = {"v4": feed_unpack, "v5": feed_relay}.get(protocol, teleport_v)
-        floor = {"v4": V4_FEED_H, "v5": V5_FEED_H}.get(protocol, 2)
+        floor = {
+            "v4": V4_FEED_H,
+            "v5": V5_FEED_H + RELAY_PRE_PAD + RELAY_POST_PAD,
+        }.get(protocol, 2)
         if ry1 - ry0 - 1 < floor:
             raise ValueError(
                 f"bank {k}'s feed corridor is {ry1 - ry0 - 1} rows and the "

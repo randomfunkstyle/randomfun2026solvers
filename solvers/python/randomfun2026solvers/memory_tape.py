@@ -376,6 +376,83 @@ def _bit_tail_horizontal(c: Circuit, x: int, y: int, pairs: int) -> tuple[int, i
 TAPE_WORKER_PROTOCOLS = ("v3", "v4")
 
 
+#: **Instruments, not knobs.** Nop cells inserted into the batch-1 v4 worker's
+#: lap, on one side of the answer's ``S`` or the other, so the tick price of a
+#: worker cell in each half can be measured on the real machine rather than
+#: inherited from a measurement taken at a different occupancy.
+#:
+#: ``WORKER_V4_PRE_PAD`` pushes MAIN's descent that many columns east and walks
+#: back west along the free row 3 — ``2 * pad`` ticks, all of them between the
+#: request's ``r`` and the answer's ``S``. ``WORKER_V4_POST_PAD`` dips the return
+#: gutter that many rows south before it turns east — ``2 * pad`` ticks, all of
+#: them after the answer has left. Both are 0 in every build and the room's
+#: walls, ports and bounding box do not move at any value, so nothing outside
+#: this worker changes: ``bank_w``/``bank_h`` and therefore the block's pitch are
+#: identical.
+#:
+#: **The finding is that "after the send is free" has expired here.** It was
+#: measured true when the store's mean read latency was ~152 and the banks were
+#: 77-86% idle; at **105.6** the front banks are 82% idle and their post-send
+#: tail has started to be the thing the next request waits for. Same process,
+#: same moment, 21-round tour, control reproducing to the tick — each pad adds
+#: ``2 * pad`` ticks to the lap of the four batch-1 banks, which answer roughly
+#: three reads in four:
+#:
+#: | pad | ticks/access | tour | per tick |
+#: |---|---|---|---|
+#: | ``PRE_PAD=1`` | +2 before the ``S`` | +0.541% | 0.271% |
+#: | ``PRE_PAD=3`` | +6 | +1.629% | 0.272% |
+#: | ``PRE_PAD=8`` | +16 | +4.352% | 0.272% |
+#: | ``POST_PAD=1`` | +2 after the ``S`` | +0.037% | 0.019% |
+#: | ``POST_PAD=2`` | +4 | +0.077% | 0.019% |
+#: | ``POST_PAD=3`` | +6 | +0.132% | 0.022% |
+#:
+#: So a post-send tick is worth **~7% of a forward one** — small, not zero, and
+#: slightly *convex*, which is the shape the explanation predicts: only the
+#: accesses whose gap is already shorter than the tail pay, and lengthening the
+#: tail recruits more of them. Roughly 5% of accesses are in that state now.
+#:
+#: **What is still exactly free is post-send *pipe* time, as against post-send
+#: walking.** :data:`~.lm1.machine.TAPED_TIGHT_RING` cuts every hot bank's ring
+#: perimeter by a quarter and was re-run at this latency: identical tick, again.
+#: A longer ring delays a *value* inside the gap; a longer tail delays the *man*,
+#: and only the man can make the next request wait.
+WORKER_V4_PRE_PAD = 0
+WORKER_V4_POST_PAD = 0
+
+#: The row the **v4 body's** MAIN stands on. It is one south of the request
+#: stub's :data:`V2_IN_ROW`, and the gap is the whole point.
+#:
+#: MAIN's job is to get from the request pipe to P1's ``d``, and every cell of
+#: that is a Manhattan distance the man walks in full on the read's own critical
+#: path. P1 cannot move — its ``s`` binding to the ring-forward pipe is exact at
+#: column 10 — so the only way to shorten the leg is to start it further south,
+#: and MAIN may: ``r`` takes the *nearest* incoming pipe, not the one it stands
+#: on, and from ``(1, 3)`` the request stub is 4 cells against the ring return's
+#: 27. One cell off ``r`` -> ``S`` at every access, measured **-0.252%**.
+#:
+#: **The stub must not follow it, and this is the trap.** Moving the pipe to row 3
+#: as well looks like tidying and is a silent wrong-bank: P1's own ``r`` at
+#: ``(10, 6)`` sits 15 cells from the ring return, and the request stub at
+#: ``V2_IN_ROW`` is 16 — a margin of one. Pull the stub a row closer and it is
+#: 15 against 15, a tie, which SPEC gives to the northern segment; P1 then reads
+#: the *next request* off the wire instead of a tape word. It builds, and at
+#: ``bank_west_grow=4`` — which is what ``deadman-3d_hires`` ships — the four
+#: extra columns hide it, so the machine passes its whole tour while any caller
+#: that does not grow the wall hangs. Found exactly that way.
+#:
+#: **Row 3 is also the floor, and the reason is column 1.** Row 4 already carries
+#: the write arm's westbound run and, at column 1, its descent to the realign
+#: row; rows 4..12 of that column belong to the write. Row 3 is the last row
+#: above it and it is empty from wall to wall.
+V2_V4_MAIN_ROW = 3
+
+#: The same move in the **batched** worker, whose MAIN was 21 cells and a
+#: three-row descent away from its ring. Here the row is the ring's own entry row
+#: (5) rather than one south of the stub, because the batched body's west half is
+#: empty down to row 9 and the ring's odd-count tail already re-enters along it.
+V2_V4_JUMP_MAIN_ROW = 5
+
 def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
     """The batch-1 ring worker's **v4 body**: five glyphs in, five glyphs out.
 
@@ -393,13 +470,36 @@ def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
     column further west it is 15 against 16 and the ring loses. 9/10 is a wall,
     not a preference.
 
-    ``r`` -> ``S`` goes **27 + 8a -> 20 + 8a** ticks, and this is the worker the
+    ``r`` -> ``S`` goes **27 + 8a -> 18 + 8a** ticks, and this is the worker the
     hot addresses use: the chain is hot-first and its first banks are the small
     ones, so batch 1 answers roughly three reads in four.
+
+    **18 is the floor for this glyph sequence, and it is a floor rather than a
+    best effort.** MAIN's ``r`` stands at ``(1, 3)`` and the answer's ``S`` at
+    ``(14, 7)``; that is 17 moves of Manhattan distance and the man makes exactly
+    17, east and south, never once doubling back. Five glyphs in MAIN, one ``d``,
+    four in the dispatch and two in the target account for twelve of the
+    eighteen cells and the other six are the distance between them. Nothing here
+    can be shortened by moving a room — only by needing fewer glyphs, and each of
+    the twelve is carrying something (:data:`TAPE_WORKER_PROTOCOLS` says what).
+    The two cells that *were* slack were MAIN's row
+    (:data:`V2_V4_MAIN_ROW`, -0.252%) and the turn east that used to stand
+    between ``x`` and the target ``r`` (-0.274%).
     """
     # ── MAIN: one packed word, no branch, no stall ────────────────────────
-    c.run(1, 2, "rb]-M")                   # BP = addr, A = B = w - (2n+1)
-    c.route((6, 2), E, [(9, 2)], (9, 4), S)
+    # On :data:`V2_V4_MAIN_ROW`, one row south of the request stub it reads from,
+    # because the leg from here to P1's `d` is walked in full on the critical path
+    # and every row MAIN gains is one cell off it. The stub stays where it is.
+    y = V2_V4_MAIN_ROW
+    c.turn(0, y, E)                        # the return gutter's own last cell
+    c.run(1, y, "rb]-M")                   # BP = addr, A = B = w - (2n+1)
+    if WORKER_V4_PRE_PAD:
+        # Out along the row above and back, so the pad is 2 ticks per unit with a
+        # fixed 2 on top of it; the slope is what the instrument is for.
+        k = WORKER_V4_PRE_PAD
+        c.route((6, y), N, [(6, y - 1), (9 + k, y - 1), (9 + k, y), (9, y)], (9, 4), S)
+    else:
+        c.route((6, y), E, [(9, y)], (9, 4), S)
     p1, _ = c.counted_loop(9, 5, "rs")
 
     # ── dispatch, on P1's own exit row: A is odd for a READ, even for a WRITE
@@ -408,11 +508,21 @@ def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
     # READ (row 6). The answer leaves on the `S`; P2's count is derived after
     # it, where :data:`~.lm1.machine.TAPED_TIGHT_RING` measured the rest of the
     # lap to be worth exactly 0.000%.
-    c.turn(14, 6, E)
-    c.run(15, 6, "rS")
-    c.route((17, 6), E, [(18, 6)], (18, 7), S)
-    c.run(18, 7, "WNb]m", d=S)             # BP = n - 1 - addr
-    c.route((18, 12), S, [(18, 13), (11, 13)], (11, 14), S)
+    # ... and the target stands **on the `x`'s own column**, not one turn east of
+    # it. The read leaves `x` heading south and the two cells it needs are the two
+    # cells below: the turn east that used to stand between them was a tick of
+    # the request's own critical path buying nothing, because an `S` writes every
+    # outgoing pipe and so has no binding to satisfy and no column it prefers.
+    # The target `r` does have one — it must take the ring's return, not the
+    # request — and column 14 keeps it: 16 cells against the request pipe's 23.
+    c.run(14, 6, "rS", d=S)                # (14,6) target, (14,7) the answer out
+    # The tail then turns east rather than running down column 18, which is what
+    # it did when it had to start from a cell three columns further east. It is
+    # one cell shorter *and* it hands column 18 back empty from row 6 down.
+    c.run(14, 8, "WNb", d=S)               # BP = n - 1 - addr, in two legs ...
+    c.turn(14, 11, E)                      # ... because row 12 is the write's
+    c.run(15, 11, "]m")                    # realign and column 14 crosses it
+    c.turn(17, 11, S)                      # onto the write arm's own exit column
 
     # WRITE (row 4). Column 9 stays blank: MAIN's own descent crosses it, and
     # two corridors may share a blank where neither may share a glyph.
@@ -429,7 +539,12 @@ def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
     c.route((17, 12), E, [(17, 13), (11, 13)], (11, 14), S)
 
     p2, _ = c.counted_loop(11, 14, "rs")
-    c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+    if WORKER_V4_POST_PAD:
+        k = WORKER_V4_POST_PAD
+        c.route((p2, 14), E,
+                [(p2 + 1, 14), (p2 + 1, 14 + k), (GUT, 14 + k), (GUT, 1)], (0, 1), S)
+    else:
+        c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
     _park_size_on_row(c, 2 * n + 1, 1, 1)
 
 
@@ -469,7 +584,8 @@ def worker_v2(
         c.route((x, 0), E, [(18, 0), (18, 2)], (18, 2), E)
         fill_exit = (c.counted_loop(19, 2, "0s")[0], 2)
         c.route(fill_exit, E, [(GUT, 2), (GUT, 1)], (0, 1), S)
-        c.turn(0, 2, E)
+        # ... and the turn east off the gutter is MAIN's own first cell, which the
+        # v4 body places for itself because it chooses its own row.
         _worker_v2_v4(c, n, GUT)
         return c
     c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
@@ -672,7 +788,8 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     c.route((x, 0), E, [(29, 0)], (29, 2), E)
     fill, _ = c.counted_loop(30, 2, "0s")
     c.route((fill, 2), E, [(GUT, 2), (GUT, 1)], (0, 1), S)
-    c.turn(0, 2, E)
+    if protocol != "v4":
+        c.turn(0, 2, E)  # ... the v4 body chooses its own MAIN row and turns there
 
     if protocol == "v4":
         # See :data:`TAPE_WORKER_PROTOCOLS`. MAIN is the same five glyphs; what
@@ -681,8 +798,19 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         # back west to a merge column the two v3 arms needed.
         if not park_const:
             raise ValueError("the v4 worker's constant is 2n+1 and it is parked; pass park_const")
-        c.run(1, 2, "rb]-M")
-        c.route((6, 2), E, [(23, 2)], (23, 4), S)
+        # MAIN stands on :data:`V2_V4_JUMP_MAIN_ROW`, which is the ring's own
+        # entry row, so the leg from the request to P1 is a single straight run
+        # east instead of a run east and a descent -- three cells off ``r`` ->
+        # ``S`` at every access to a batched bank. The corridor it joins is the
+        # ring's **odd-count re-entry**, which already runs east along this row
+        # into the same turn, so the two merge rather than collide.
+        y = V2_V4_JUMP_MAIN_ROW
+        c.turn(0, y, E)
+        c.run(1, y, "rb]-M")
+        if y == 5:
+            c.horizontal(5, 5, 19)  # ... straight into the odd tail's own corridor
+        else:
+            c.route((6, y), E, [(23, y)], (23, 4), S)
         c.turn(23, 5, S)
         p1_exit, p1_odd = c.counted_ring_horizontal(19, 6, "rs")
         c.turn(*p1_odd, E)

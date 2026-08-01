@@ -122,11 +122,19 @@ def test_the_packed_adapter_is_keyed_to_one_machine_and_to_its_own_store() -> No
     # ``floor_y`` and the store's request drop below it do not move.
     packed = machine.adapter_rows(form="v4")
     assert len(packed) == machine.ADAPTER_H and len(packed[0]) <= machine.ADAPTER_W
-    assert packed[1][:2] == "UX"  # receive, then branch on the CPU's sign
-    assert packed[2][1:5] == ">*sv"  # read: double, send, and straight home
-    assert packed[0][1:11] == ">*M1+Nsrs"[:9] + "v"  # write: ... and the value
+    # Receive, **double**, then branch on the CPU's sign: multiplying by a
+    # positive constant cannot change a sign, so the doubling belongs on the
+    # spine rather than on each arm — and putting it there is what makes the read
+    # arm a single cell, because the branch drops the man straight onto his `s`.
+    assert packed[1][:3] == "U*X"
+    # ``s`` is the read arm entire; the ``v`` is the write's descent passing by.
+    assert packed[2].replace(".", "") == "sv" and packed[2][2] == "s"
+    assert packed[0][2:11] == ">M1+Nsrsv"  # write: -2a -> 2a-1, then the value
     assert "".join(packed).count("@") == 1
     assert "M2" in packed[3]  # the parked 2 the `*` doubles against
+    # ... and only the write arm walks past it, because `*` leaves B alone and a
+    # read therefore never clobbers the constant it was parked for.
+    assert packed[3].index("<") < packed[3].index("M2")
     # the tuck moves the *grown* gate's entry; without the growth there is none
     assert machine.STORE_REQUEST_TUCK <= machine.STORE_REQUEST_REACH
 

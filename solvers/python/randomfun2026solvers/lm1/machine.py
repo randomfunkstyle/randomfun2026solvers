@@ -4778,16 +4778,32 @@ _ADAPTER_FORK = [
 #: :data:`~..memory_taped.TAPE_PROTOCOLS`). Nothing downstream has to expand it
 #: back until the bank's own doorstep.
 #:
-#: The read arm is three cells and no fork::
+#: The read arm is **one cell** and no fork::
 #:
 #:     shipped read   U X > M 0 s W s     op on tick 5, address on tick 8
 #:     forked  read   U X Y v < s         op on tick 5, address on tick 6
-#:     v4      read   U X > * s           the whole request on tick 5
+#:     v4      read   U * X s             the whole request on tick 4
 #:
 #: ``*`` with ``2`` parked in B is the doubling, one glyph — which is why B is
-#: parked at all. The return floor reloads it (``2`` then ``M``, met in that
-#: order walking west), and because the spawn stands *on* the return floor the
-#: very first request already finds it there.
+#: parked at all.
+#:
+#: **It doubles before the branch rather than on the read arm, and that is a
+#: whole tick off every access the machine makes.** ``X`` splits on ``sign(A)``
+#: and ``*`` by a positive constant does not touch a sign, so the doubling is
+#: legal on the spine: the CPU's ``+a``/``-a`` becomes ``+2a``/``-2a`` and the
+#: branch is the branch it always was. What that deletes is not the ``*`` — both
+#: arms still pay for it — but the read arm's **turn**: with the multiply on the
+#: spine the read's ``s`` is the cell ``X`` drops him onto, where before he had
+#: to land on a ``>``, walk east to the ``*`` and only then send. The write arm
+#: is unchanged glyph for glyph (``M 1 + N`` still turns ``-2a`` into ``2a - 1``)
+#: and it is not the leg the CPU is stopped on.
+#:
+#: The return floor reloads the ``2`` (``2`` then ``M``, met in that order walking
+#: west), and because the spawn stands *on* the return floor the very first
+#: request already finds it there. **Only the write arm walks the reload**, which
+#: is the other half of why this shape is cheaper: ``*`` leaves B alone, and a
+#: read's whole lap — ``U * X s`` and four cells home — never clobbers the parked
+#: constant, so it need never re-park it.
 #:
 #: The write arm pays for the odd word: ``* M 1 + N`` is ``-a`` -> ``-2a`` ->
 #: ``1 - 2a`` -> ``2a - 1``. That is two cells more than the fork's write arm
@@ -4808,10 +4824,10 @@ _ADAPTER_FORK = [
 #: forward leg, and that is five ticks for one word instead of five and six for
 #: two.
 _ADAPTER_V4 = [
-    ".>*M1+Nsrsv",  # write: A=-2a; B=-2a; A=1; A=1-2a; A=2a-1; send; pass the value
-    "UX........v",  # receive request, point away from west pipe, branch on sign
-    ".>*sv.....v",  # read: A=2a; send; and straight back down onto the floor
-    "^.M2<....@<",  # return leg, reloading the parked 2 on the way past
+    "..>M1+Nsrsv",  # write: B=-2a; A=1; A=1-2a; A=2a-1; send; pass the value
+    "U*X.......v",  # receive, double, branch on sign — `*` cannot change one
+    "..s.......v",  # read: the wire word is already in A, so this is the whole arm
+    "^.<M2....@<",  # return leg; only the write walks past the reloaded 2
 ]
 ADAPTER_W = len(_ADAPTER[0])
 ADAPTER_H = len(_ADAPTER)
@@ -5165,7 +5181,11 @@ def _tape_shell(
         g.set(WX + west, WY + y, "|")
         g.set(WX + worker_width, WY + y, "|")
 
-    # request stub: two cells pointing east into the worker's left wall
+    # request stub: two cells pointing east into the worker's left wall. It stays
+    # on ``V2_IN_ROW`` under every protocol, and the v4 body's MAIN sitting a row
+    # south of it is deliberate rather than an oversight — see
+    # ``memory_tape.V2_V4_MAIN_ROW``, where moving the *stub* as well is what
+    # breaks P1.
     iy = WY + input_row
     g.set(WX + west - 2, iy, ">")
     g.set(WX + west - 1, iy, ">")
@@ -11062,8 +11082,8 @@ ADAPTER_FORM: dict[tuple[str, str], str] = {
 #: Batch 1's body is laid out in ``memory_tape._worker_v2_v4``: with one arm
 #: instead of two and the unpack in the backpack, P1 moves as far **west** as
 #: its own ``s`` binding allows and the dispatch stands on P1's exit row, so
-#: ``r`` -> ``S`` goes **27 + 8a -> 19 + 8a**. Everything it deletes was a
-#: Manhattan distance the man walked in full.
+#: ``r`` -> ``S`` goes **27 + 8a -> 18 + 8a**, which is that leg's Manhattan
+#: floor. Everything it deletes was a distance the man walked in full.
 #:
 #: The **0.52 ticks (-0.177%)** in the middle are batch 2's dispatch standing *on* P1's
 #: own exit cell. The v3 body dropped three rows below it because its READ arm
@@ -11738,6 +11758,16 @@ TAPED_TAPE_PARK_CONST: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 #: 138.878, floor 68). So the re-circulation genuinely does happen inside the gap
 #: before the next request, and the head-of-line delay behind the value in front
 #: is not a term in read latency at this traffic.
+#:
+#: **Re-run at 105.6 mean read latency and it is still exactly zero.** The store
+#: has since been roughly halved, which is precisely the condition under which a
+#: "costs nothing because it happens in the gap" result is supposed to expire —
+#: and the bank worker's post-send *walk* did expire (``memory_tape``'s
+#: ``WORKER_V4_POST_PAD``: 0.019% a tick where it used to be 0.000%). This did
+#: not, and the difference is the point: a long ring delays a **value** in a
+#: pipe, which the man overlaps with his own walking, while a long tail delays
+#: the **man**, who is the only thing the next request can queue behind. Same
+#: process, same moment, identical tick both times.
 #:
 #: Kept, off, for two reasons: it makes :data:`_TAPE_FOLDS` reachable rather than
 #: dead, and headroom that is free at 87k reads a frame is not free at four times

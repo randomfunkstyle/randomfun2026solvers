@@ -29,6 +29,7 @@ from randomfun2026solvers.lm1 import machine  # noqa: E402
 from randomfun2026solvers.memory_taped import (  # noqa: E402
     COMPACT_GATE_H,
     COMPACT_GATE_IN_ROW,
+    V4_GATE_DOWN_ROW,
     bank_gate,
     gate_chain,
     gate_rows,
@@ -746,7 +747,12 @@ def test_the_v4_gate_is_a_seven_row_body_with_two_arms_and_two_tails() -> None:
     downstream arm, which the two-word gate could not do because it still had a
     word to receive after the branch."""
     h, in_row, local_row, down_row = gate_rows(True, "v4")
-    assert (h, in_row, local_row, down_row) == (7, 4, 2, 6)
+    # ... and the downstream row a caller draws pipes with is the **spine's own**,
+    # not the write tail's, so the chain link is a straight horizontal run
+    # (``memory_taped.V4_GATE_DOWN_PIPE_ROW``).
+    assert (h, in_row, local_row, down_row) == (7, 4, 2, 4)
+    assert down_row == in_row
+    assert V4_GATE_DOWN_ROW == 6  # where the tail still stands
     assert h == gate_rows(True)[0]  # ... no taller than the compact v3 body
     for high in (None, 901):
         g, w = bank_gate(102, high=high, park_const=True, protocol="v4")
@@ -768,12 +774,27 @@ def test_every_v4_gate_send_still_binds_to_the_pipe_it_means() -> None:
     """Same argument as the v3 body's, on a different floor plan: two outgoing
     pipes on one wall, the row decides, and an ``s`` above the spine is a local
     arm. The v4 rows are tighter — the downstream arm sits *on* the elbow row —
-    so this is the check that the margins never cross."""
+    so this is the check that the margins never cross.
+
+    **And with the downstream pipe moved onto the spine's own row
+    (``V4_GATE_DOWN_PIPE_ROW``) one of those margins is zero.** The mine write
+    tail's ``s`` stands on row 3, one row from each attachment, and what decides
+    it is SPEC's tie-break — *"ties break by reading order (top to bottom, left
+    to right)"* — over two segments in the **same column**, so the northern one
+    wins. That is the local pipe, which is the one a write must take. This test
+    therefore models the tie explicitly rather than letting a ``min`` happen to
+    land the right way, and it asserts that the tie is really there: a build in
+    which row 3 stopped being a tie would be a build in which the margin had
+    moved, and the readbacks are two rooms away from noticing.
+    """
     _h, in_row, local_row, down_row = gate_rows(True, "v4")
+    ties = 0
     for m in (1, 5, 64, 85, 195, 256, 999, 12345):
         for high in (None, m + 1, m + 7, 4 * m, 99999):
             for park in (False, True):
                 g, w = bank_gate(m, high=high, park_const=park, protocol="v4")
+                # Both pipes leave the same column, one cell east of the east
+                # wall, so reading order over them is simply the smaller row.
                 src = {local_row: (w, local_row), down_row: (w, down_row)}
                 sends = [(x, y) for (x, y), ch in g.items() if ch == "s"]
                 assert len(sends) == 4, (m, high, park, len(sends))
@@ -781,11 +802,18 @@ def test_every_v4_gate_send_still_binds_to_the_pipe_it_means() -> None:
                 for x, y in sends:
                     want = local_row if y < in_row else down_row
                     dist = {r: abs(px - x) + abs(py - y) for r, (px, py) in src.items()}
-                    nearest = min(src, key=lambda r: (dist[r], r))
+                    best = min(dist.values())
+                    nearest = min(r for r in src if dist[r] == best)  # reading order
                     assert nearest == want, (
                         f"m={m} high={high} park={park}: the `s` at {(x, y)} binds "
                         f"to the row-{nearest} pipe, not row {want} ({dist})"
                     )
+                    if len({r for r in src if dist[r] == best}) == 2:
+                        # ... and the one tie in the gate is the mine write tail,
+                        # on the row between the two attachments.
+                        assert (y, want) == (local_row + 1, local_row), (x, y)
+                        ties += 1
+    assert ties == 8 * 5 * 2, ties  # exactly one per gate built
 
 
 @pytest.mark.parametrize("skip_batch", [1, 2, None])
@@ -1090,3 +1118,98 @@ def test_the_tight_ring_reads_back_what_was_written(skip_batch) -> None:
     shipped = readback(False)
     assert shipped == {a: (a * 43 + 3) % 9973 for a in range(1, HIRES_N)}
     assert readback(True) == shipped
+
+
+# ── the batch-1 v4 worker's own bindings ─────────────────────────────────────
+@pytest.mark.parametrize("west_grow", [0, 1, 4])
+@pytest.mark.parametrize("n", [7, 8, 10, 16, 100])
+def test_the_v4_worker_reaches_the_pipe_each_receive_means(n: int, west_grow: int) -> None:
+    """Every ``r`` in the batch-1 v4 body, against both incoming pipes, with the
+    margin stated rather than assumed.
+
+    This is the check that ``memory_tape.V2_V4_MAIN_ROW`` needs and that the
+    readbacks are too far away to give. MAIN sits one row south of the request
+    stub so the walk to P1 is a cell shorter, and the temptation is to move the
+    stub down with it — which makes P1's own ``r`` **equidistant** between the
+    ring return and the request wire (15 and 15), a tie SPEC hands to the
+    northern segment. P1 then reads the next request as if it were a tape word:
+    no build error, no fault, just the wrong answer, and only at ``west_grow``
+    small enough that the four columns ``deadman-3d_hires`` ships do not hide it.
+
+    So the margins are enumerated here at ``west_grow=0``, where they are
+    tightest, and the assertion is **strict** — a tie is a failure even when the
+    intended pipe would happen to win it, because a margin of zero is a margin
+    that the next edit crosses without noticing.
+    """
+    from randomfun2026solvers.memory_tape import (
+        V2_FWD_ROW,
+        V2_IH,
+        V2_IN_ROW,
+        V2_IW,
+        V2_OUT_COL,
+        V2_RET_COL,
+        worker_v2,
+    )
+
+    art = worker_v2(n, park_const=True, protocol="v4")
+    #: The four wall anchors, in worker-local coordinates: the cell of each pipe
+    #: that touches this room (``SPEC.md``, "Which pipe do I talk to?").
+    request = (-2 - west_grow, V2_IN_ROW)
+    ring_in = (V2_RET_COL, V2_IH + 1)
+    ring_out = (V2_IW + 1, V2_FWD_ROW)
+    answer = (V2_OUT_COL, -2)
+
+    def near(cell, a, b):
+        da = abs(a[0] - cell[0]) + abs(a[1] - cell[1])
+        db = abs(b[0] - cell[0]) + abs(b[1] - cell[1])
+        return da, db
+
+    seen = {"r": 0, "s": 0, "S": 0}
+    for (x, y), ch in art.cell.items():
+        if ch == "r":
+            # The only receives that mean the request wire are MAIN's own and the
+            # write's value word, both against the west wall; everything else in
+            # the body is talking to the ring.
+            want_request = x <= 2
+            d_req, d_ring = near((x, y), request, ring_in)
+            if want_request:
+                assert d_req < d_ring, (f"the `r` at {(x, y)} means the request "
+                                        f"wire but is {d_req} from it and {d_ring} "
+                                        f"from the ring return")
+            else:
+                assert d_ring < d_req, (f"the `r` at {(x, y)} means the ring return "
+                                        f"but is {d_ring} from it and {d_req} from "
+                                        f"the request wire")
+            seen["r"] += 1
+        elif ch == "s":
+            d_ring, d_ans = near((x, y), ring_out, answer)
+            assert d_ring < d_ans, (f"the `s` at {(x, y)} means the ring but is "
+                                    f"{d_ring} from it and {d_ans} from the answer")
+            seen["s"] += 1
+        elif ch == "S":
+            seen["S"] += 1  # writes every outgoing pipe; it has nothing to bind
+    assert seen["S"] == 1 and seen["r"] >= 6 and seen["s"] >= 5, seen
+
+
+def test_p1s_receive_keeps_the_ring_by_exactly_one_cell() -> None:
+    """The tightest margin in the batch-1 v4 worker, named and pinned.
+
+    ``V2_V4_MAIN_ROW``'s docstring turns on this number; if the body ever moves
+    such that it grows, the comment is wrong, and if it shrinks the worker is.
+    """
+    from randomfun2026solvers.memory_tape import (
+        V2_IH,
+        V2_IN_ROW,
+        V2_RET_COL,
+        V2_V4_MAIN_ROW,
+        worker_v2,
+    )
+
+    art = worker_v2(8, park_const=True, protocol="v4")
+    p1 = next((x, y) for (x, y), ch in art.cell.items() if ch == "r" and x > 2 and y < 10)
+    assert p1 == (10, 6), p1
+    to_ring = abs(V2_RET_COL - p1[0]) + abs(V2_IH + 1 - p1[1])
+    to_request = abs(-2 - p1[0]) + abs(V2_IN_ROW - p1[1])
+    assert (to_ring, to_request) == (15, 16)
+    # ... and MAIN standing a row south of the stub is what spends the slack:
+    assert V2_V4_MAIN_ROW == V2_IN_ROW + 1
