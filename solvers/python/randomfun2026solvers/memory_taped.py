@@ -160,9 +160,9 @@ V4_GATE_DOWN_ROW = 6
 #: (Moving the column instead is ``tight_return``, and it measured **+0.892%**.)
 _V4_FLAT_CR = 13
 
-#: The v4 feed forwarder's fixed body: nine rows of work plus a spawn row.
+#: The v4 feed forwarder's fixed body: the descent, its two tails and the spawn.
 #: Anything taller is the same room with the read's return leg stretched.
-V4_FEED_H = 10
+V4_FEED_H = 14
 
 
 def feed_unpack(height: int) -> tuple[list[str], list[tuple[int, int]]]:
@@ -185,15 +185,36 @@ def feed_unpack(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     ``X`` at the bottom is only about the *value* word — it fires after both
     request words are already in the pipe, so a read never walks it.
 
+    **The turn stands before the ``R``, not after it, and that is worth a tick on
+    every access.** Only the cells between the ``R`` and the *last* ``s`` are on
+    the wire: the forwarder is 94-99% blocked, so it is already standing on the
+    ``R`` when the word arrives and everything before it — the climb, the reload,
+    the entry — is spent inside the gap. The word's own descent is not. The first
+    body turned south *after* reading (``> Rv`` over ``M  /``), which put the turn
+    between the ``R`` and the ``/``; entering the descent from the north instead
+    (``> v`` over ``M R``) moves that cell into the free half of the lap and hands
+    the address to the bank one tick earlier. Measured on the 21-round hi-res
+    tour, same process, same moment: 96,280,186 -> 95,979,598, **-0.312%**, and
+    the same -0.315% again on top of :data:`~.lm1.machine.TAPED_BANK_WEST_GROW`.
+    The probe that prices this leg agrees to three digits from the other side:
+    padding it with nops between the ``W`` and the first ``s`` costs **+0.313%
+    each** (4 give +1.250%, 8 give +2.504%, dead linear), so the tick is exactly
+    where it is claimed to be.
+
+    The ``N`` under the last ``W`` is what buys the room for that: with ``-op`` in
+    A the write turns **counter-clockwise**, east, so the read's own turn west has
+    the two cells it needs beside the climb. Both cells are past the second ``s``
+    and cost nothing.
+
     The lap re-parks its own constant on the way home (``2`` then ``M``, walked
     north, so they stand in that order down the column), which is also what
     makes the **first** lap correct: the spawn stands on the return leg and
-    reaches the work through it.
+    reaches the work through it, facing east into the read tail's own ``<``.
 
-    **The loop is ten rows and it stays ten rows however tall the room is**,
-    which is the same property :func:`~.memory_men.teleport_v` has and for the
-    same reason: ``R`` takes from any incoming pipe with no distance term, so a
-    pipe entering the *south* wall is read by the man at the north end in one
+    **The loop is fourteen rows and it stays fourteen rows however tall the room
+    is**, which is the same property :func:`~.memory_men.teleport_v` has and for
+    the same reason: ``R`` takes from any incoming pipe with no distance term, so
+    a pipe entering the *south* wall is read by the man at the north end in one
     instruction.
 
     Letting the loop follow the room instead was built and measured first, and
@@ -208,16 +229,20 @@ def feed_unpack(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     """
     ih = max(V4_FEED_H, height)
     rows = [
-        "> Rv",  # (0,0) return leg turns east; R takes the packed word
-        "M  /",  # ... the reload's `M` on the way home; `/` unpacks
-        "2  W",  # ... and its `2` below it; W puts the op in A
-        "^  s",  # send op
-        "^  W",  # A = addr - op, B = op
-        "^  +",  # A = addr
-        "^  s",  # send addr
-        "^  W",  # A = op again
-        "^sRX",  # write turns clockwise (west) into `R s`; read goes straight on
-        "^ @<",  # the read's turn west, and the spawn standing on it
+        "> v ",  # (0,0) return leg turns east, then south INTO the descent
+        "M R ",  # ... the reload's `M` on the way home; R takes the packed word
+        "2 / ",  # ... and its `2` below it; `/` unpacks
+        "^ W ",  # W puts the op in A
+        "^ s ",  # send op
+        "^ W ",  # A = addr - op, B = op
+        "^ + ",  # A = addr
+        "^ s ",  # send addr        <- the last cell on the wire
+        "^ W ",  # A = op again
+        "^ N ",  # ... negated, so the write turns the other way
+        "^ Xv",  # write turns counter-clockwise (east); read goes straight on
+        "^@<R",  # the read's turn west, the spawn on it, and the value
+        "^  s",  # ... which the write passes through
+        "^  <",  # and both tails walk back onto the climb
     ]
     rows += [" " * 4] * (ih - V4_FEED_H)  # the room under the loop, unused
     #: Every interior row down the **east** side is a legal attachment row.
@@ -764,6 +789,7 @@ def taped_store_block(
     feed_share_riser: bool = False,
     bank_lift: int = 0,
     feed_tuck: int = 0,
+    bank_west_grow: int = 0,
     protocol: str = "v3",
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
@@ -928,6 +954,15 @@ def taped_store_block(
     cell and for why raising the room's floor above the relay instead trades four
     cells for thirteen.
 
+    ``bank_west_grow`` takes **the same cells off the same stub from the other
+    end**: rather than carry the feed room east into the bank's margin, it carries
+    the bank's own west *wall* west to meet it
+    (:func:`~.lm1.machine.tape_block`). What ``feed_tuck`` dies on is a **row**
+    collision — the feed room spans the whole corridor vertically, so it meets the
+    relay at block rows 29..33 — and the worker room is only rows 7..26, so this
+    wall crosses nothing at all on its way west. At 4 the whole ``reqK->bankK``
+    leg is the block's own two-cell stub and the pipe drawn below is empty.
+
     ``protocol`` picks the block's **wire format**. ``v3`` is the two-word
     request every shipped grid was built on. ``v4`` carries the op in the
     address's low bit and sends one word — ``2*addr - op`` — from the block's
@@ -959,6 +994,7 @@ def taped_store_block(
             jump_threshold=jump_threshold,
             park_const=tape_park_const,
             tight_ring=tape_tight_ring,
+            west_grow=bank_west_grow,
         )
         for size in sizes
     ]
@@ -994,6 +1030,11 @@ def taped_store_block(
     _riser_off = 1 if feed_share_riser else 2
     if feed_tuck and not feed_teleport:
         raise ValueError("feed_tuck tucks the feed room into the bank; feed_teleport is off")
+    if feed_tuck + bank_west_grow > 4:
+        raise ValueError(
+            f"feed_tuck {feed_tuck} and bank_west_grow {bank_west_grow} shorten the "
+            f"same stub from opposite ends and would meet inside it"
+        )
     if not 0 <= feed_tuck <= nb_gap - 1:
         raise ValueError(
             f"feed_tuck {feed_tuck} is not in 0..{nb_gap - 1}: the feed room is six "

@@ -4998,6 +4998,16 @@ class _Tape:
 #: from it, so both ring layouts hang the same four pipes off the same four cells.
 _TAPE_WX, _TAPE_WY = 8, 8
 
+#: How far :func:`tape_block`'s ``west_grow`` may carry the worker's west wall, and
+#: the number is exact rather than cautious. The wall stands at ``_TAPE_WX - 1``, the
+#: stub is the two cells west of it, and a caller's pipe has to have a **source**
+#: cell east of the caller's own east wall — which for
+#: :func:`~..memory_taped.taped_store_block` is the block's column 0. At 4 the wall
+#: is at column 3 and the stub is columns 1 and 2, so the whole feed is the block's
+#: own two-cell stub and the pipe between the rooms draws nothing at all; at 5 the
+#: stub would start on column 0 and overdraw the feed room's east wall.
+_TAPE_WEST_GROW_MAX = 4
+
 
 def _resolve_tape_skip_batch(
     n: int,
@@ -5095,6 +5105,7 @@ def _tape_shell(
     *,
     skip_batch: int = 1,
     park_const: bool = False,
+    west_grow: int = 0,
 ) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
     """The worker room and the two CPU-facing pipe stubs — the part no ring changes.
 
@@ -5103,6 +5114,13 @@ def _tape_shell(
     shape of the ring: a ring may be routed any way at all so long as it uses the
     selected worker's forward-row and return-column anchors. That is the licence the
     serpentine uses.
+
+    ``west_grow`` moves the worker room's **west wall** that many columns further
+    west and carries the request stub with it, so the block's ``in_cell`` lands at
+    ``WX - 3 - west_grow``. Nothing else moves by one cell: the art, the three other
+    walls, both ring anchors and the response stub are all measured from ``WX``/``WY``
+    and the block's width is set by its east edge. See :func:`tape_block` for what it
+    is for and why 4 is the ceiling.
 
     Returns the canvas plus the request and response stub cells.
     """
@@ -5118,31 +5136,38 @@ def _tape_shell(
         _return_col,
     ) = _tape_worker_spec(skip_batch)
 
+    if not 0 <= west_grow <= _TAPE_WEST_GROW_MAX:
+        raise ValueError(
+            f"west_grow {west_grow} is not in 0..{_TAPE_WEST_GROW_MAX}: at "
+            f"{_TAPE_WEST_GROW_MAX} the request stub already starts on the block's "
+            f"first column"
+        )
     g = Circuit(400, 200)
     wk = worker(n, park_const=True) if park_const else worker(n)
     WX, WY = _TAPE_WX, _TAPE_WY
+    west = -1 - west_grow  # the west wall's column, relative to WX
     for (x, y), ch in wk.cell.items():
         g.set(WX + x, WY + y, ch)
-    for x in range(-1, worker_width + 1):
-        g.set(WX + x, WY - 1, "+" if x in (-1, worker_width) else "-")
+    for x in range(west, worker_width + 1):
+        g.set(WX + x, WY - 1, "+" if x in (west, worker_width) else "-")
         g.set(
             WX + x,
             WY + worker_height,
-            "+" if x in (-1, worker_width) else "-",
+            "+" if x in (west, worker_width) else "-",
         )
     for y in range(worker_height):
-        g.set(WX - 1, WY + y, "|")
+        g.set(WX + west, WY + y, "|")
         g.set(WX + worker_width, WY + y, "|")
 
     # request stub: two cells pointing east into the worker's left wall
     iy = WY + input_row
-    g.set(WX - 3, iy, ">")
-    g.set(WX - 2, iy, ">")
+    g.set(WX + west - 2, iy, ">")
+    g.set(WX + west - 1, iy, ">")
     # response stub: two cells climbing north out of the worker's top wall
     ox = WX + output_col
     g.set(ox, WY - 2, "^")
     g.set(ox, WY - 3, "^")
-    return g, (WX - 3, iy), (ox, WY - 3)
+    return g, (WX + west - 2, iy), (ox, WY - 3)
 
 
 def _tape_of(g: Circuit, in_cell: tuple[int, int], out_cell: tuple[int, int], slots: int) -> _Tape:
@@ -5213,6 +5238,7 @@ def tape_block(
     relay_size: tuple[int, int] | None = None,
     park_const: bool = False,
     tight_ring: bool = False,
+    west_grow: int = 0,
 ) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
 
@@ -5251,6 +5277,35 @@ def tape_block(
     loop to about five ticks per skipped word; its odd exit re-enters with BP=0, so
     it never consumes a speculative extra word.  Excess ring capacity only delays
     the first value of a lap; in both modes the worker remains the bottleneck.
+
+    ``west_grow`` moves the worker room's **west wall** that many columns west and
+    carries the two-cell request stub with it, so the block's ``in_cell`` moves from
+    column 5 to ``5 - west_grow``. Nothing else in the block moves by one cell: the
+    art, the relay, both ring pipes and the response stub are all measured from the
+    worker's own corner, and the block's width comes off its east edge.
+
+    **The point is that those columns are empty and the pipe that ends on the stub is
+    not.** A banked caller (:func:`~..memory_taped.taped_store_block`) parks a
+    forwarder room in the corridor west of each bank and runs a pipe from its east
+    wall across the block's west margin to the stub — six cells of pure transit that
+    every access pays in full, and a pipe cell is a tick of latency the CPU is
+    stopped for. Growing the wall west swallows them: at ``west_grow=4`` the feed is
+    the block's own two-cell stub and the drawn pipe is empty.
+
+    Why the caller cannot simply grow its *forwarder* east instead, which is the
+    same four cells: the forwarder spans the whole corridor **vertically**, from the
+    bank's stub row down to the gate strip, so its east wall would cross the ring's
+    relay room at block columns 1..6 (see :data:`TAPED_FEED_TUCK`). The worker room
+    is only rows 7..26 of
+    the block and the relay starts at row 29, so growing *this* wall west crosses
+    nothing. That is the whole trick: the same four cells, taken from the end of the
+    corridor that is free.
+
+    Bindings do not move, and they cannot: growing the wall only makes the request
+    pipe **further** from every ``r`` in the room, so the four receives that must
+    take the request keep it (the tightest, the WRITE value's, goes 10 -> 14 against
+    19 to the ring return) and the ring-facing ones are only more strongly bound.
+    The two outgoing pipes are on the north and east walls and do not move at all.
     """
     from ..memory_tape import _draw_pipe
 
@@ -5270,7 +5325,9 @@ def tape_block(
     WX, WY = _TAPE_WX, _TAPE_WY
     best: tuple[int, Circuit, tuple[int, int], tuple[int, int]] | None = None
     for fold in _TAPE_FOLDS:
-        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch, park_const=park_const)
+        g, in_cell, out_cell = _tape_shell(
+            n, skip_batch=skip_batch, park_const=park_const, west_grow=west_grow
+        )
 
         bottom_y = WY + worker_height
         fy = WY + forward_row
@@ -5316,7 +5373,13 @@ def tape_block(
             best = (n_fwd + n_ret, g, in_cell, out_cell)
     if best is not None:
         return _tape_of(best[1], best[2], best[3], best[0])
-    return _serpentine_tape(n, skip_batch=skip_batch, relay_art=relay_art, park_const=park_const)
+    return _serpentine_tape(
+        n,
+        skip_batch=skip_batch,
+        relay_art=relay_art,
+        park_const=park_const,
+        west_grow=west_grow,
+    )
 
 
 #: Columns the big ring reserves under the worker, in block coordinates.
@@ -5339,6 +5402,7 @@ def _serpentine_tape(
     skip_batch: int = 1,
     relay_art: list[str] | None = None,
     park_const: bool = False,
+    west_grow: int = 0,
 ) -> _Tape:
     """The same ring, with the forward pipe snaked so capacity scales with area.
 
@@ -5397,7 +5461,9 @@ def _serpentine_tape(
     # Seventeen rows carry the ~420 slots a little-little-man interpreter wants; the
     # last tier here holds 1976 values, at which point the block is 112 rows tall.
     for rows in range(5, 82, 2):
-        g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch, park_const=park_const)
+        g, in_cell, out_cell = _tape_shell(
+            n, skip_batch=skip_batch, park_const=park_const, west_grow=west_grow
+        )
         last = top + rows - 1  # the final, relay-bound westbound leg
         relay_y = last - relay_h  # so `last` is the relay's bottom interior row
         for i, row in enumerate(relay_art):
@@ -5726,6 +5792,7 @@ def build(
     store_feed_share_riser: bool = False,
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
+    store_bank_west_grow: int = 0,
     store_request_reach: bool = False,
     store_request_tuck: bool = False,
     adapter_form: str = "wide",
@@ -5962,6 +6029,7 @@ def build(
                     store_feed_share_riser=store_feed_share_riser,
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
+                    store_bank_west_grow=store_bank_west_grow,
                     store_request_reach=store_request_reach,
                     store_request_tuck=store_request_tuck,
                     adapter_form=adapter_form,
@@ -6060,6 +6128,7 @@ def build(
                     store_feed_share_riser=store_feed_share_riser,
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
+                    store_bank_west_grow=store_bank_west_grow,
                     store_request_reach=store_request_reach,
                     store_request_tuck=store_request_tuck,
                     adapter_form=adapter_form,
@@ -6180,6 +6249,7 @@ def _assemble(
     store_feed_share_riser: bool = False,
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
+    store_bank_west_grow: int = 0,
     store_request_reach: bool = False,
     store_request_tuck: bool = False,
     adapter_form: str = "wide",
@@ -6637,6 +6707,7 @@ def _assemble(
                 feed_share_riser=store_feed_share_riser,
                 bank_lift=store_bank_lift,
                 feed_tuck=store_feed_tuck,
+                bank_west_grow=store_bank_west_grow,
                 # Land the first gate's roof one row under the adapter's floor,
                 # so its west wall stands beside the adapter and the request is
                 # a drop, not a corridor. Same trick as ``answer_west``: the
@@ -11179,12 +11250,23 @@ TAPED_BANK_LIFT: dict[tuple[str, str], int] = {
 #: (``memory_taped.taped_store_block``'s ``feed_tuck``). **Empty, and it is a
 #: measured impossibility rather than an unswept knob.**
 #:
-#: The prize would have been real: four cells off the ``req0->bank0`` arm ~91% of
-#: hires accesses walk (the same leg :data:`TAPED_FEED_TELEPORT` bought -0.286%
-#: on), and four columns of pitch off each of eleven banks — the block's own width
+#: The prize would have been real: four cells off the ``reqK->bankK`` arm **every**
+#: hires access walks (the same leg :data:`TAPED_FEED_TELEPORT` bought -0.286% on),
+#: and four columns of pitch off each of eleven banks — the block's own width
 #: 580 -> 536. Whether the *machine* narrows with it is unmeasured, because the
 #: block does not build: the east edge at ``x = 642`` is the drum return wrapping
 #: the store rather than the store itself.
+#:
+#: (An earlier draft of this note said ~91% of hires accesses walk the **bank 0**
+#: arm. That is wrong — the head arm carries 35.3%, the first three 74% — but it
+#: understated rather than overstated the prize, because every access walks *some*
+#: bank's arm and they are all six cells.)
+#:
+#: **The four cells were taken anyway, off the other end of the same stub**:
+#: :data:`TAPED_BANK_WEST_GROW` grows the *bank's* west wall west to meet the feed
+#: room instead of carrying the feed room east into the bank, and measured
+#: **-1.245%**. What follows is still the reason this knob in particular cannot be
+#: the way to do it.
 #:
 #: What forbids it is the tape block's own art. Only its **first** column is
 #: empty; ``lm1.machine.tape_block`` stamps the ring's relay room at ``x = 1``,
@@ -11206,6 +11288,47 @@ TAPED_BANK_LIFT: dict[tuple[str, str], int] = {
 #: own wall column and both ring legs attach to it, so the fold and the ring's
 #: capacity move with it.
 TAPED_FEED_TUCK: dict[tuple[str, str], int] = {}
+
+#: How many columns each taped bank's **worker room grows west**, carrying the
+#: block's two-cell request stub with it (``lm1.machine.tape_block``'s
+#: ``west_grow``). This is :data:`TAPED_FEED_TUCK`'s prize, taken from the other
+#: end of the same stub — and it builds, because the obstacle above is a **row**
+#: collision, not a column one.
+#:
+#: The feed forwarder cannot move east into the bank's margin because it spans the
+#: whole corridor vertically and therefore meets the relay at block rows 29..33.
+#: The worker room is rows 7..26. Block columns 1..6 are empty over exactly those
+#: rows — the only thing in them is the request stub itself, on row 10 — so the
+#: wall walks west across nothing and the stub lands on columns 1 and 2, one clear
+#: of the feed room's own east wall. Four is the ceiling and it is exact: at 5 the
+#: stub's first cell would be that wall (:data:`~lm1.machine._TAPE_WEST_GROW_MAX`).
+#:
+#: What it deletes is transit. The ``reqK->bankK`` leg is six cells, every one of
+#: them a tick the CPU is stopped for, and every access walks one; at 4 the leg is
+#: the block's own stub and ``taped_store_block`` draws no pipe at all.
+#:
+#: Bindings cannot move and the argument is one line: growing the wall only makes
+#: the request pipe **further** from every ``r`` in the worker, so the receives
+#: that must take the request keep it — the tightest is the WRITE value's, 10 -> 14
+#: against 19 to the ring return — and the ring-facing ones are only more strongly
+#: bound. Both outgoing pipes are on the other two walls. The 901-address readback
+#: (``tests/test_memory_taped.py``) is what actually checks this, and does.
+#:
+#: **Measured, 21-round hi-res tour, same process, same moment:** 96,280,186 ->
+#: 95,081,140, **-1.245%**, ``passed=True``, ``fatal=None``, box 614x403 unchanged
+#: and every ``route_lengths`` entry identical. Dead linear in the grow — 2 gives
+#: -0.624%, half of 4's to three digits — which is the signature of a leg every
+#: access walks in full with nothing else moving. It is the same **0.313% per cell**
+#: the forwarder's own forward leg prices at (a nop between its ``W`` and its first
+#: ``s``: 4 give +1.250%, 8 give +2.504%), so a pipe cell here and a walked cell
+#: there cost exactly the same thing — a tick of read latency, and one of those is
+#: 324,588 ticks of run.
+#:
+#: The block's own width does not move: it is set by the east edge, and these four
+#: columns come out of the west margin, which was empty.
+TAPED_BANK_WEST_GROW: dict[tuple[str, str], int] = {
+    ("deadman-3d_hires", "taped"): 4,
+}
 
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
@@ -12457,6 +12580,7 @@ def build_for(
         store_feed_share_riser=(slug, store) in TAPED_FEED_SHARE_RISER,
         store_bank_lift=TAPED_BANK_LIFT.get((slug, store), 0),
         store_feed_tuck=TAPED_FEED_TUCK.get((slug, store), 0),
+        store_bank_west_grow=TAPED_BANK_WEST_GROW.get((slug, store), 0),
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
         store_request_tuck=(slug, store) in STORE_REQUEST_TUCK,
         adapter_form=ADAPTER_FORM.get((slug, store), "wide"),

@@ -828,6 +828,70 @@ def test_the_v4_wire_routes_every_hires_address_the_same(skip_batch) -> None:
     assert readback("v4") == shipped
 
 
+@pytest.mark.parametrize("grow", [1, 4])
+def test_growing_the_banks_west_answers_every_address_from_the_same_bank(grow) -> None:
+    """The load-bearing test for ``machine.TAPED_BANK_WEST_GROW``.
+
+    Moving a room's wall is exactly the kind of change that does not fail a
+    build. Every ``r`` in the ring worker takes from the **nearest** incoming
+    pipe, and there are two of them — the request on the west wall and the ring's
+    own return on the south — so carrying the west wall four columns further out
+    moves eight receives' distances at once. If one of them flipped, the worker
+    would take a request word off its own tape (or a tape word off the request
+    pipe) and the block would answer, in silence, with the wrong thing.
+
+    The argument that none of them can is one-directional and therefore easy to
+    get wrong in the other direction: growing west only makes the request pipe
+    *further*, so the four receives that must take the request are the ones at
+    risk, and the tightest of them is the WRITE value's at 10 -> 14 against 19.
+    This checks it rather than repeating it, address by address over all 901,
+    against the ungrown block's own answers, on the shipped hires plan, chain,
+    protocol and per-bank worker pick.
+    """
+
+    def readback(west: int) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(
+                HIRES_N, HIRES_PLAN, protocol="v4",
+                **{**_HIRES_KW, "bank_west_grow": west},
+            )
+        )
+        writes = [x for a in range(1, HIRES_N) for x in (*_wire("v4", 1, a),
+                                                         (a * 37 + 11) % 9973)]
+        bounds = [1]
+        for m in HIRES_PLAN:
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            reads = [x for a in range(lo, hi) for x in _wire("v4", 0, a)]
+            want = [(a * 37 + 11) % 9973 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=800_000_000)
+            assert res.fatal is None, (west, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    assert readback(grow) == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
+
+
+def test_the_bank_west_grow_is_opt_in_and_stops_at_the_feed_rooms_wall() -> None:
+    """Four is the ceiling because the stub owns the two columns west of the
+    wall and column 0 is the feed room's own east wall — and the two knobs that
+    shorten this stub from opposite ends cannot both spend it."""
+    assert machine.tape_block(8).cells == machine.tape_block(8, west_grow=0).cells
+    grown = machine.tape_block(8, west_grow=4)
+    assert grown.in_cell == (1, 10) and machine.tape_block(8).in_cell == (5, 10)
+    # the block's own box, its ring and its answer stub do not move at all
+    plain = machine.tape_block(8)
+    assert (grown.width, grown.height, grown.out_cell, grown.slots) == (
+        plain.width, plain.height, plain.out_cell, plain.slots)
+    with pytest.raises(ValueError, match="west_grow"):
+        machine.tape_block(8, west_grow=5)
+    with pytest.raises(ValueError, match="opposite ends"):
+        taped_store_block(HIRES_N, HIRES_PLAN,
+                          **{**_HIRES_KW, "bank_west_grow": 3, "feed_tuck": 2})
+
+
 def test_the_v4_feed_forwarder_unpacks_with_one_divide() -> None:
     """``2*addr - op`` and floored division are chosen for each other: the
     quotient is short by exactly the remainder, so one ``+`` restores the
@@ -841,10 +905,17 @@ def test_the_v4_feed_forwarder_unpacks_with_one_divide() -> None:
             assert w % 2 == op, (a, op, w)  # ... and the remainder IS the op
     rows, ports = feed_unpack(V4_FEED_H)
     assert len(rows) == V4_FEED_H and len(ports) == V4_FEED_H
-    assert rows[0].endswith("Rv") and "/" in rows[1] and "@" in rows[-1]
+    # The turn into the descent stands BEFORE the `R`, not after it: only the
+    # cells between the `R` and the last `s` are on the wire, and the forwarder is
+    # already standing on the `R` when the word arrives. Pinned as a column,
+    # because that is the property (-0.317% measured) rather than the art.
+    descent = [row[2] for row in rows]
+    assert rows[0][2] == "v" and descent[1] == "R"
+    assert "".join(descent[1:11]) == "R/WsW+sWNX"
     assert sum(row.count("s") for row in rows) == 3  # op, address, and the value
     assert sum(row.count("R") for row in rows) == 2  # the request and the value
-    # A taller corridor is the SAME ten-row loop with an empty room under it.
+    assert "@" in "".join(rows)
+    # A taller corridor is the SAME fourteen-row loop with an empty room under it.
     # Letting the loop follow the room instead is the one thing that measured a
     # regression here, so it is pinned rather than described.
     tall, _ = feed_unpack(V4_FEED_H + 7)
