@@ -376,6 +376,63 @@ def _bit_tail_horizontal(c: Circuit, x: int, y: int, pairs: int) -> tuple[int, i
 TAPE_WORKER_PROTOCOLS = ("v3", "v4")
 
 
+def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
+    """The batch-1 ring worker's **v4 body**: five glyphs in, five glyphs out.
+
+    See :data:`TAPE_WORKER_PROTOCOLS` for the wire. What is laid out here is the
+    other half of the win, and it is pure geometry: **everything between MAIN's
+    last glyph and P1's `d`, and between P1's exit and the answer's `S`, is a
+    Manhattan distance the man walks in full.** The v3 body spent 14 of its 27
+    fixed ticks on exactly that -- five blanks east to a descent column, three
+    rows down to P1, and six more rows down from P1's exit to a dispatch that
+    sat at row 10 because its two arms wanted rows 9 and 11.
+
+    So P1 moves as far **west** as its own bindings allow and the dispatch stands
+    on P1's exit row. The binding that pins P1 is the ring-forward pipe against
+    the output pipe: at ``s``'s cell (10, 7) that is 14 against 17, and one
+    column further west it is 15 against 16 and the ring loses. 9/10 is a wall,
+    not a preference.
+
+    ``r`` -> ``S`` goes **27 + 8a -> 20 + 8a** ticks, and this is the worker the
+    hot addresses use: the chain is hot-first and its first banks are the small
+    ones, so batch 1 answers roughly three reads in four.
+    """
+    # ── MAIN: one packed word, no branch, no stall ────────────────────────
+    c.run(1, 2, "rb]-M")                   # BP = addr, A = B = w - (2n+1)
+    c.route((6, 2), E, [(9, 2)], (9, 4), S)
+    p1, _ = c.counted_loop(9, 5, "rs")
+
+    # ── dispatch, on P1's own exit row: A is odd for a READ, even for a WRITE
+    c.run(p1, 5, "WMbx")
+
+    # READ (row 6). The answer leaves on the `S`; P2's count is derived after
+    # it, where :data:`~.lm1.machine.TAPED_TIGHT_RING` measured the rest of the
+    # lap to be worth exactly 0.000%.
+    c.turn(14, 6, E)
+    c.run(15, 6, "rS")
+    c.route((17, 6), E, [(18, 6)], (18, 7), S)
+    c.run(18, 7, "WNb]m", d=S)             # BP = n - 1 - addr
+    c.route((18, 12), S, [(18, 13), (11, 13)], (11, 14), S)
+
+    # WRITE (row 4). Column 9 stays blank: MAIN's own descent crosses it, and
+    # two corridors may share a blank where neither may share a glyph.
+    c.turn(14, 4, W)
+    c.run(13, 4, "Nb]m", d=W)              # BP = n - 1 - addr
+    c.run(8, 4, "m", d=W)
+    c.horizontal(4, 8, 2)
+    c.run(2, 4, "r", d=W)                  # the new value, off the request pipe
+    c.route((1, 4), W, [(1, 12)], (10, 12), E)
+    # `]` floored, so P1 moved one word too few: the ring gets one extra `r s`
+    # pass here rather than out on row 4, where its `s` would have stood one
+    # cell from preferring the *output* pipe -- 15 against 16, a margin of one.
+    c.run(11, 12, "MrsWsr")
+    c.route((17, 12), E, [(17, 13), (11, 13)], (11, 14), S)
+
+    p2, _ = c.counted_loop(11, 14, "rs")
+    c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+    _park_size_on_row(c, 2 * n + 1, 1, 1)
+
+
 def worker_v2(
     n: int,
     *,
@@ -405,6 +462,16 @@ def worker_v2(
     # ── INIT (row 0) ──────────────────────────────────────────────────────
     init_n = "r" if constant_input else L
     x, _ = c.run(1, 0, "@" + init_n + "b")  # A=N, BP=N
+    if protocol == "v4":
+        # The fill runs once, so it may stand anywhere free -- and under v4 the
+        # only free two columns are the room's north-east corner, because the
+        # compact body has taken rows 4..6 out as far east as column 18.
+        c.route((x, 0), E, [(18, 0), (18, 2)], (18, 2), E)
+        fill_exit = (c.counted_loop(19, 2, "0s")[0], 2)
+        c.route(fill_exit, E, [(GUT, 2), (GUT, 1)], (0, 1), S)
+        c.turn(0, 2, E)
+        _worker_v2_v4(c, n, GUT)
+        return c
     c.route((x, 0), E, [(16, 0), (16, 5)], (16, 5), E)
     if init_body is not None:
         if n % 2:
@@ -415,43 +482,6 @@ def worker_v2(
         fill_exit = (fill, 5)
     c.route(fill_exit, E, [(GUT, 5), (GUT, 1)], (0, 1), S)
     c.turn(0, 2, E)                        # left gutter -> MAIN
-
-    if protocol == "v4":
-        # ── MAIN: one packed word, no branch, no stall ────────────────────
-        c.run(1, 2, "rb]-M")               # BP = addr, A = B = w - (2n+1)
-        # ... and straight down the descent. The v3 arms merged one column west
-        # of P1's own entry and walked back east; there is nothing to merge.
-        c.route((6, 2), E, [(11, 2)], (11, 4), S)
-        p1, _ = c.counted_loop(11, 5, "rs")
-
-        # ── dispatch: A is odd for a READ, even for a WRITE ───────────────
-        c.route((p1, 5), E, [(13, 5), (13, 10)], (13, 10), S)
-        c.turn(13, 10, E)
-        c.run(14, 10, "WMbx")              # x: READ turns CW/south, WRITE CCW/north
-
-        # READ (row 11). The answer leaves on the `S`; P2's count is derived
-        # after it, where the rest of the lap already is.
-        c.turn(17, 11, E)
-        c.run(18, 11, "rS")
-        c.route((20, 11), E, [(20, 13)], (20, 13), W)
-        c.run(19, 13, "WNb]m", d=W)        # BP = n - 1 - addr
-        c.route((14, 13), W, [(10, 13), (10, 14)], (11, 14), E)
-
-        # WRITE (row 9). `]` floored, so P1 moved one word too few: one extra
-        # `r s` pass realigns the ring before the value is fetched.
-        c.turn(17, 9, W)
-        c.run(16, 9, "rsW", d=W)           # (13,9) stays clear: the descent crosses it
-        c.run(12, 9, "Nb]mm", d=W)         # BP = n - 1 - addr
-        c.horizontal(9, 8, 2)
-        c.run(2, 9, "r", d=W)              # the new value, off the request pipe
-        c.route((1, 9), W, [(1, 12)], (10, 12), E)
-        c.run(11, 12, "sr")
-        c.route((13, 12), E, [(14, 12), (14, 13), (10, 13), (10, 14)], (11, 14), E)
-
-        p2, _ = c.counted_loop(11, 14, "rs")
-        c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
-        _park_size_on_row(c, 2 * n + 1, 1, 1)
-        return c
 
     if constant_input:
         # Keep op in B while both input values are received near the lower port.

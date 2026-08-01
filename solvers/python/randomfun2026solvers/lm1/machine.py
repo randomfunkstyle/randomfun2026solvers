@@ -11020,16 +11020,29 @@ ADAPTER_FORM: dict[tuple[str, str], str] = {
 #: local addresses start at 1, so the floor never underflows.
 #:
 #: **Measured, 21-round hi-res tour, same process, control first and last:**
-#: 92,761,125 against 94,781,294 — **-2,020,169 ticks, -2.131%** — ``passed=True
+#: 90,852,830 against 94,781,294 — **-3,928,464 ticks, -4.145%** — ``passed=True
 #: fatal=None``, box 614x403 unchanged and every ``route_lengths`` entry
 #: unchanged (``cpu->adapter`` 2, ``adapter->store`` 1, ``store->cpu`` 2,
-#: ``rom->cpu`` 60, ``cpu->drum`` 67). Mean read latency 123.266 -> 117.042 and
-#: the floor 63 -> 58, over the identical 324,600 blocked answer-pipe runs:
-#: **6.224 ticks x 324,588 = 2,020,196 against 2,020,169 measured**, so the
+#: ``rom->cpu`` 60, ``cpu->drum`` 67). Mean read latency 123.266 -> 111.163 and
+#: the floor 63 -> 50, over the identical 324,600 blocked answer-pipe runs:
+#: **12.103 ticks x 324,588 = 3,928,489 against 3,928,464 measured**, so the
 #: conversion is 1:1 and nothing outside the read's critical path moved.
 #:
-#: The wire itself was worth **-1,851,799 (-1.954%, 5.705 ticks)** on its own;
-#: the rest is the batch-2 dispatch, below.
+#: Three measurements, in the order they were taken:
+#:
+#: ==================================  ===========  ==========  =========
+#: .                                   ticks        delta       latency
+#: ==================================  ===========  ==========  =========
+#: v4 (control)                        94,781,294   .           123.266
+#: + the wire                          92,929,495   -1.954%      117.561
+#: + batch 2's dispatch                92,761,125   -0.177%      117.042
+#: + batch 1's body (``_worker_v2_v4``) 90,852,830  -2.057%      111.163
+#: ==================================  ===========  ==========  =========
+#:
+#: The last one is the largest and the reason is the chain order: it is
+#: **hot-first**, and its first banks are the small ones (7, 9, 6 slots), so the
+#: batch-1 worker answers roughly **three reads in four**. Its 8 ticks came back
+#: as 5.88 of mean latency, which prices the share at 74%.
 #:
 #: Where the first 5.7 ticks come from, counted before they were measured:
 #:
@@ -11046,7 +11059,13 @@ ADAPTER_FORM: dict[tuple[str, str], str] = {
 #: * **the dispatch** — ``W X b m`` becomes ``W M b x``, and the ``b ] m`` that
 #:   replaces ``b m`` sits behind the ``S``. Even.
 #:
-#: The last **0.52 ticks (-0.177%)** are batch 2's dispatch standing *on* P1's
+#: Batch 1's body is laid out in ``memory_tape._worker_v2_v4``: with one arm
+#: instead of two and the unpack in the backpack, P1 moves as far **west** as
+#: its own ``s`` binding allows and the dispatch stands on P1's exit row, so
+#: ``r`` -> ``S`` goes **27 + 8a -> 19 + 8a**. Everything it deletes was a
+#: Manhattan distance the man walked in full.
+#:
+#: The **0.52 ticks (-0.177%)** in the middle are batch 2's dispatch standing *on* P1's
 #: own exit cell. The v3 body dropped three rows below it because its READ arm
 #: wanted the row under the ring's own bottom row; with the parked constant
 #: chosen so READ turns the other way (``2n`` rather than ``2n + 1`` — the

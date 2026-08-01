@@ -291,6 +291,42 @@ def feed_relay(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     stays eight rows however tall the room is**: ``R`` takes from any incoming
     pipe with no distance term, so a pipe entering the *south* wall is read by
     the man at the north end in one instruction.
+
+    **The walls are load-bearing and the empty cells are not waste.** On the
+    hi-res block the room is ``4 x 35`` interior with **22 live cells** — the
+    loop is the top eight rows and rows 8..34 are blank — and that is correct,
+    because *this room is the corridor*. Its two ports are at opposite ends of
+    it: the outgoing pipe leaves the **east** wall on the room's first interior
+    row, which is the bank's own request stub (machine row 161), and the
+    incoming pipe enters the **south** wall just above the gate strip (machine
+    row 196). A room that stopped after eight rows could not touch both, and the
+    feed would go back to being the 45-cell climb ``feed_teleport`` was built to
+    delete (~+11%). The blank rows are what the man crosses in **one
+    instruction** instead.
+
+    So the only dimension that could give anything back is the **width**, and it
+    was built and measured rather than argued. A three-column loop is legal —
+    put the climb on the east and the value tail on the west, so ``x``'s fixed
+    sense (a write turns clockwise) sends the write to the tail and the read
+    straight home::
+
+         v<        R takes the packed word at (1,1), sends at (1,2), and
+         R^        `b`/`x` split behind the send exactly as here; the climb
+         s^        runs up column 2 and the value tail down column 0.
+         b^
+        vx^
+        R ^
+        s ^
+        >@^
+
+    It builds, it answers all 901 addresses, and it takes the box to
+    **604x403** — because the corridor is what sets ``nb_gap``, and ``nb_gap``
+    sets the pitch at every one of eleven banks, so one column off the room is
+    ten off the machine. **It also costs 856,034 ticks, +0.94%** (91,708,864
+    against 90,852,830, same process, same moment): the pitch carries the whole
+    bank row, and pulling the banks together moves every answer riser and every
+    gate's west growth with it. Ticks are the goal, so the four-column room
+    stays and its 27 blank rows stay with it.
     """
     ih = max(V5_FEED_H, height)
     rows = [
