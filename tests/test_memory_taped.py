@@ -719,15 +719,25 @@ def test_the_v4_wire_is_opt_in_and_the_default_block_is_byte_identical() -> None
         330, PLAN, compact_gate=True, feed_teleport=True, protocol="v4"
     )
     assert packed.cells != shipped.cells
+    # ``v5`` is the same wire with the unpack moved into the bank, so it shares
+    # v4's gate rows and gate bodies and differs only in the forwarder and the
+    # ring worker -- a different block again, and never the shipped one.
+    relayed = taped_store_block(
+        330, PLAN, compact_gate=True, feed_teleport=True, protocol="v5"
+    )
+    assert relayed.cells not in (shipped.cells, packed.cells)
+    assert gate_rows(True, "v5") == gate_rows(True, "v4")
+    assert bank_gate(8, protocol="v5") == bank_gate(8, protocol="v4")
     # ... and the two ends of the wire are one decision, checked rather than hoped
+    for protocol in ("v4", "v5"):
+        with pytest.raises(ValueError):
+            taped_store_block(330, PLAN, compact_gate=True, protocol=protocol)  # no feed room
     with pytest.raises(ValueError):
-        taped_store_block(330, PLAN, compact_gate=True, protocol="v4")  # no feed room
+        gate_rows(True, "nonesuch")
     with pytest.raises(ValueError):
-        taped_store_block(330, PLAN, protocol="v5")
+        bank_gate(8, protocol="nonesuch")
     with pytest.raises(ValueError):
-        gate_rows(True, "v5")
-    with pytest.raises(ValueError):
-        bank_gate(8, protocol="v5")
+        taped_store_block(330, PLAN, protocol="nonesuch")
 
 
 def test_the_v4_gate_is_a_seven_row_body_with_two_arms_and_two_tails() -> None:
@@ -826,6 +836,11 @@ def test_the_v4_wire_routes_every_hires_address_the_same(skip_batch) -> None:
     shipped = readback("v3")
     assert shipped == {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
     assert readback("v4") == shipped
+    # ... and ``v5``, which is the same wire taken apart in the *bank* instead of
+    # the forwarder, so the same failure modes are reachable one room further on:
+    # ``]`` floors, and a write's word is the odd one, so a wrong arm's ring pass
+    # writes the address next door and only a readback of all 901 sees it.
+    assert readback("v5") == shipped
 
 
 @pytest.mark.parametrize("grow", [1, 4])

@@ -341,6 +341,41 @@ def _bit_tail_horizontal(c: Circuit, x: int, y: int, pairs: int) -> tuple[int, i
     return merge_x + 2, y
 
 
+#: The **v4 tape wire**: one word per request instead of two.
+#:
+#: ``v3`` hands a ring worker ``op`` then ``addr``, two pipe transactions three
+#: cells apart, and MAIN spends ``r X r b - N M`` plus a stall waiting for the
+#: second one. ``v4`` hands it the *packed* word ``w = 2*addr - op`` — the same
+#: word :data:`~.memory_taped.TAPE_PROTOCOLS`' own ``v4`` already carries from
+#: the adapter to the bank's doorstep — and MAIN becomes ``r b ] - M``, five
+#: glyphs, no branch and no stall.
+#:
+#: The unpack is **entirely in the backpack**, which is what makes it free:
+#:
+#: * ``b``   parks ``w`` in BP;
+#: * ``]``   is an arithmetic right shift of BP, so BP becomes ``w >> 1``, which
+#:   is ``addr`` for a read (``2a >> 1``) and ``addr - 1`` for a write
+#:   (``(2a-1) >> 1``) — and P1's count is exactly that;
+#: * ``x``   branches on BP's **low bit**, which *is* the op, and it still reads
+#:   correctly after the ``-`` because ``w - (2n+1)`` flips the parity in step
+#:   with it. So the op survives P1 inside the one register P1 does not touch.
+#:
+#: The parked constant becomes ``2n + 1`` rather than ``n`` (:func:`_park_size_on_row`
+#: stamps it on the same return gutter, so it is still free), and ``A = w - 2n - 1``
+#: carries **both** the arm and the P2 count: it is odd for a read and even for a
+#: write, and ``N b ] m`` recovers ``n - 1 - addr`` on either arm. Because that
+#: recovery is four glyphs rather than ``b m``'s two, it moves to **after** the
+#: answer's ``S`` — where :data:`~.lm1.machine.TAPED_TIGHT_RING` measured the rest
+#: of the lap to be worth exactly 0.000%.
+#:
+#: The one asymmetry is the write's ``]``: it floors, so P1 moves ``addr - 1``
+#: words and the write arm pays one extra ``r s`` ring pass to realign. Reads are
+#: exact, and a bank's local addresses start at 1 (``taped_plan`` gives bank ``k``
+#: ``plan[k]`` addresses and :func:`~.memory_taped.taped_store_block` builds it
+#: ``plan[k] + 1`` slots deep), so the floor never underflows.
+TAPE_WORKER_PROTOCOLS = ("v3", "v4")
+
+
 def worker_v2(
     n: int,
     *,
@@ -350,10 +385,20 @@ def worker_v2(
     height: int = V2_IH,
     write_ack: bool = False,
     park_const: bool = False,
+    protocol: str = "v3",
 ) -> Circuit:
     c = Circuit(width, height)
     L = lit(n)
     GUT = width - 1                       # right gutter: P2 exit climbs to MAIN
+    if protocol not in TAPE_WORKER_PROTOCOLS:
+        raise ValueError(
+            f"unknown tape worker protocol {protocol!r}; "
+            f"expected {TAPE_WORKER_PROTOCOLS!r}"
+        )
+    if protocol == "v4" and not park_const:
+        raise ValueError("the v4 worker's constant is 2n+1 and it is parked; pass park_const")
+    if protocol == "v4" and (constant_input or init_body is not None or write_ack):
+        raise ValueError("the v4 worker only speaks the plain one-word request protocol")
     if park_const and (constant_input or init_body is not None):
         raise ValueError("park_const is only defined for the plain request protocol")
 
@@ -370,6 +415,43 @@ def worker_v2(
         fill_exit = (fill, 5)
     c.route(fill_exit, E, [(GUT, 5), (GUT, 1)], (0, 1), S)
     c.turn(0, 2, E)                        # left gutter -> MAIN
+
+    if protocol == "v4":
+        # ── MAIN: one packed word, no branch, no stall ────────────────────
+        c.run(1, 2, "rb]-M")               # BP = addr, A = B = w - (2n+1)
+        # ... and straight down the descent. The v3 arms merged one column west
+        # of P1's own entry and walked back east; there is nothing to merge.
+        c.route((6, 2), E, [(11, 2)], (11, 4), S)
+        p1, _ = c.counted_loop(11, 5, "rs")
+
+        # ── dispatch: A is odd for a READ, even for a WRITE ───────────────
+        c.route((p1, 5), E, [(13, 5), (13, 10)], (13, 10), S)
+        c.turn(13, 10, E)
+        c.run(14, 10, "WMbx")              # x: READ turns CW/south, WRITE CCW/north
+
+        # READ (row 11). The answer leaves on the `S`; P2's count is derived
+        # after it, where the rest of the lap already is.
+        c.turn(17, 11, E)
+        c.run(18, 11, "rS")
+        c.route((20, 11), E, [(20, 13)], (20, 13), W)
+        c.run(19, 13, "WNb]m", d=W)        # BP = n - 1 - addr
+        c.route((14, 13), W, [(10, 13), (10, 14)], (11, 14), E)
+
+        # WRITE (row 9). `]` floored, so P1 moved one word too few: one extra
+        # `r s` pass realigns the ring before the value is fetched.
+        c.turn(17, 9, W)
+        c.run(16, 9, "rsW", d=W)           # (13,9) stays clear: the descent crosses it
+        c.run(12, 9, "Nb]mm", d=W)         # BP = n - 1 - addr
+        c.horizontal(9, 8, 2)
+        c.run(2, 9, "r", d=W)              # the new value, off the request pipe
+        c.route((1, 9), W, [(1, 12)], (10, 12), E)
+        c.run(11, 12, "sr")
+        c.route((13, 12), E, [(14, 12), (14, 13), (10, 13), (10, 14)], (11, 14), E)
+
+        p2, _ = c.counted_loop(11, 14, "rs")
+        c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
+        _park_size_on_row(c, 2 * n + 1, 1, 1)
+        return c
 
     if constant_input:
         # Keep op in B while both input values are received near the lower port.
@@ -534,7 +616,7 @@ def worker_v2(
     return c
 
 
-def worker_v2_jump(n: int, *, park_const: bool = False) -> Circuit:
+def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") -> Circuit:
     """A parameterized v2 worker whose skip loops move two tape words per lap.
 
     The request protocol and stored representation are identical to
@@ -561,6 +643,52 @@ def worker_v2_jump(n: int, *, park_const: bool = False) -> Circuit:
     fill, _ = c.counted_loop(30, 2, "0s")
     c.route((fill, 2), E, [(GUT, 2), (GUT, 1)], (0, 1), S)
     c.turn(0, 2, E)
+
+    if protocol == "v4":
+        # See :data:`TAPE_WORKER_PROTOCOLS`. MAIN is the same five glyphs; what
+        # differs here is that P1 is a ring in the room's east half, so the
+        # descent runs straight east along MAIN's own row instead of doubling
+        # back west to a merge column the two v3 arms needed.
+        if not park_const:
+            raise ValueError("the v4 worker's constant is 2n+1 and it is parked; pass park_const")
+        c.run(1, 2, "rb]-M")
+        c.route((6, 2), E, [(23, 2)], (23, 4), S)
+        c.turn(23, 5, S)
+        p1_exit, p1_odd = c.counted_ring_horizontal(19, 6, "rs")
+        c.turn(*p1_odd, E)
+        c.horizontal(5, 19, 23)
+
+        # The dispatch stands **on** P1's own exit cell rather than three rows
+        # below it: the v3 body dropped to row 10 because its READ arm needed
+        # row 11 and its WRITE arm row 9, and the ring's bottom row is 7. With
+        # the arms one row apart the other way round there is nothing between
+        # them and the exit, and two cells of descent go with it.
+        c.turn(*p1_exit, E)
+        c.run(24, 8, "WMbx")
+
+        # READ (row 7, CCW): the answer first, then P2's count, on the way home.
+        c.turn(27, 7, E)
+        c.run(28, 7, "rS")
+        c.route((30, 7), E, [(30, 7)], (30, 8), S)
+        c.run(30, 8, "WNb]m", d=S)
+        c.route((30, 13), S, [(30, 13)], (23, 13), S)
+
+        # WRITE (row 9, CW): one extra ring pass for the floored `]`, then the value.
+        c.turn(27, 9, W)
+        c.run(26, 9, "rsWNb]m", d=W)
+        c.route((19, 9), W, [(3, 9)], (3, 12), W)
+        c.run(2, 12, "r", d=W)
+        c.route((1, 12), W, [(0, 12), (0, 13)], (16, 13), E)
+        c.run(16, 13, "sr")
+        c.turn(19, 13, E)
+
+        p2_exit, _p2_odd = c.counted_ring_horizontal(19, 14, "rs")
+        c.route(p2_exit, S, [(23, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
+        # ``2n``, not ``2n + 1``: the parity of ``w - c`` is what ``x`` reads, so
+        # the constant chooses which way each arm turns. Even (READ) goes CCW,
+        # north, which is the side the ring's own bottom row does not stand on.
+        _park_size_on_row(c, 2 * n, 1, 1)
+        return c
 
     # MAIN and the signed remaining-distance setup are byte-for-byte the v2
     # protocol.  B carries +(N-addr) for READ and -(N-addr) for WRITE.

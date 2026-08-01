@@ -84,6 +84,7 @@ from .memory_men_v3 import V3Store
 __all__ = [
     "TAPE_PROTOCOLS",
     "bank_gate",
+    "feed_relay",
     "feed_unpack",
     "gate_chain",
     "gate_rows",
@@ -97,7 +98,16 @@ __all__ = [
 #: every stage from the adapter to the bank's own doorstep handles one fewer
 #: pipe transaction per access. See :func:`bank_gate` for the arithmetic and
 #: :func:`feed_unpack` for where the word is taken apart again.
-TAPE_PROTOCOLS = ("v3", "v4")
+#: ``v5`` keeps ``v4``'s wire and takes the **unpack out of the forwarder**: the
+#: room stays — it is the corridor, and it crosses machine rows 160..195 in one
+#: instruction because ``R`` has no distance term — but its body shrinks to a
+#: bare receive-and-send (:func:`feed_relay`) and the ring worker takes the word
+#: apart itself (``memory_tape.TAPE_WORKER_PROTOCOLS``). See
+#: :data:`~.lm1.machine.TAPED_PROTOCOL` for what it measured.
+TAPE_PROTOCOLS = ("v3", "v4", "v5")
+
+#: The protocols whose gate chain and adapter speak the one-word packed wire.
+_PACKED = ("v4", "v5")
 
 #: The gate's interior height; rows 1..12 like the two-tier adapter it descends
 #: from, with the same return loop (east column down, floor west, climb to ``U``).
@@ -249,6 +259,55 @@ def feed_unpack(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     return rows, [(3, i) for i in range(ih)]
 
 
+#: The v5 forwarder's fixed body: receive, send, and the op branch behind it.
+V5_FEED_H = 8
+
+
+def feed_relay(height: int) -> tuple[list[str], list[tuple[int, int]]]:
+    """The **v5** feed forwarder: one word in, the same word out.
+
+    :func:`feed_unpack`'s room with its arithmetic taken out. The wire word is
+    now taken apart in the *bank*, in the backpack, at no cost at all
+    (``memory_tape.TAPE_WORKER_PROTOCOLS``), so what is left here is the only
+    part of the room that was ever on the wire::
+
+        R   take the packed word
+        s   send it on            <- one cell, where six used to stand
+
+    **Six ticks of the read's critical path become one, and the measurement that
+    prices them is symmetric.** Padding this leg with nops costs *+0.313% each*
+    (4 give +1.250%, 8 give +2.504%, dead linear), while 27.5 t/access of extra
+    service added *after* the send left the tour on the identical tick — the
+    forwarder is 94-99% blocked, so only the cells between the ``R`` and the last
+    ``s`` are ever on anyone's critical path.
+
+    Everything after the send is therefore free, and the op branch goes there:
+    ``b`` parks the word and ``x`` turns on its low bit, which *is* the op, so a
+    write walks into its own ``R``/``s`` for the value word and a read walks
+    straight home. That is the same branch :func:`_bank_gate_v4` makes and for
+    the same reason — a packed wire needs no register to remember its op.
+
+    Same four-column corridor, same two ports, and the loop is **eight rows and
+    stays eight rows however tall the room is**: ``R`` takes from any incoming
+    pipe with no distance term, so a pipe entering the *south* wall is read by
+    the man at the north end in one instruction.
+    """
+    ih = max(V5_FEED_H, height)
+    rows = [
+        "> v ",  # (0,0) return leg turns east, then south INTO the descent
+        "^ R ",  # ... R takes the packed word
+        "^ s ",  # ... and sends it on   <- the only cell on the wire
+        "^ b ",  # BP = the word, whose low bit is the op
+        "^vxv",  # x: WRITE turns CW/west into the value tail, READ CCW/east
+        "^R v",  # the write's value word ...
+        "^s v",  # ... passed straight through
+        "^<@<",  # both tails walk back onto the climb; the spawn stands on it
+    ]
+    rows += [" " * 4] * (ih - V5_FEED_H)  # the room under the loop, unused
+    #: Every interior row down the **east** side is a legal attachment row.
+    return rows, [(3, i) for i in range(ih)]
+
+
 def gate_rows(compact: bool = False, protocol: str = "v3") -> tuple[int, int, int, int]:
     """``(height, in row, local out row, downstream out row)`` for a bank gate.
 
@@ -260,7 +319,7 @@ def gate_rows(compact: bool = False, protocol: str = "v3") -> tuple[int, int, in
     """
     if protocol not in TAPE_PROTOCOLS:
         raise ValueError(f"unknown store protocol {protocol!r}; expected {TAPE_PROTOCOLS!r}")
-    if protocol == "v4":
+    if protocol in _PACKED:
         return (V4_GATE_H, V4_GATE_IN_ROW, V4_GATE_LOCAL_ROW, V4_GATE_DOWN_ROW)
     if compact:
         return (
@@ -539,7 +598,7 @@ def bank_gate(
     """
     if protocol not in TAPE_PROTOCOLS:
         raise ValueError(f"unknown store protocol {protocol!r}; expected {TAPE_PROTOCOLS!r}")
-    if protocol == "v4":
+    if protocol in _PACKED:
         return _bank_gate_v4(
             m,
             high=high,
@@ -978,7 +1037,7 @@ def taped_store_block(
 
     if protocol not in TAPE_PROTOCOLS:
         raise ValueError(f"unknown store protocol {protocol!r}; expected {TAPE_PROTOCOLS!r}")
-    if protocol == "v4" and not feed_teleport:
+    if protocol in _PACKED and not feed_teleport:
         raise ValueError(
             "the v4 wire is unpacked in the feed forwarder, so there has to be "
             "one: pass feed_teleport=True"
@@ -995,6 +1054,7 @@ def taped_store_block(
             park_const=tape_park_const,
             tight_ring=tape_tight_ring,
             west_grow=bank_west_grow,
+            protocol="v4" if protocol == "v5" else "v3",
         )
         for size in sizes
     ]
@@ -1170,8 +1230,8 @@ def taped_store_block(
         # ... and under ``v4`` the same room is where the packed word is taken
         # apart, so the bank's own two-word protocol never changes.
         rx0, ry0, ry1 = bx[k] - 5 + feed_tuck, tin[1] - 1, gate_y - 1
-        art = feed_unpack if protocol == "v4" else teleport_v
-        floor = V4_FEED_H if protocol == "v4" else 2
+        art = {"v4": feed_unpack, "v5": feed_relay}.get(protocol, teleport_v)
+        floor = {"v4": V4_FEED_H, "v5": V5_FEED_H}.get(protocol, 2)
         if ry1 - ry0 - 1 < floor:
             raise ValueError(
                 f"bank {k}'s feed corridor is {ry1 - ry0 - 1} rows and the "

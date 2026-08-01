@@ -101,12 +101,16 @@ def test_the_packed_adapter_is_keyed_to_one_machine_and_to_its_own_store() -> No
     are one decision. A v3 adapter in front of a v4 chain builds fine and
     answers from the wrong bank, so the two registries are pinned together and
     ``build`` refuses the mismatch rather than trusting them to agree.
+
+    ``v5`` is the same wire — it moves the unpack from the forwarder into the
+    bank and changes nothing the adapter can see — so it takes the same adapter
+    and belongs on the same side of that pin.
     """
     assert machine.ADAPTER_FORM == {("deadman-3d_hires", "taped"): "v4"}
-    assert machine.TAPED_PROTOCOL == {("deadman-3d_hires", "taped"): "v4"}
-    assert {k for k, v in machine.ADAPTER_FORM.items() if v == "v4"} == set(
-        machine.TAPED_PROTOCOL
-    )
+    assert machine.TAPED_PROTOCOL == {("deadman-3d_hires", "taped"): "v5"}
+    assert {k for k, v in machine.ADAPTER_FORM.items() if v == "v4"} == {
+        k for k, v in machine.TAPED_PROTOCOL.items() if v in ("v4", "v5")
+    }
     assert ("deadman-3d", "taped") not in machine.ADAPTER_FORM
     assert (machine.ADAPTER_W, machine.ADAPTER_H) == (12, 4)
     for form in ("fork", "v4"):

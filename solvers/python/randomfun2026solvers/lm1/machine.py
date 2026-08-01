@@ -5106,6 +5106,7 @@ def _tape_shell(
     skip_batch: int = 1,
     park_const: bool = False,
     west_grow: int = 0,
+    protocol: str = "v3",
 ) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
     """The worker room and the two CPU-facing pipe stubs — the part no ring changes.
 
@@ -5143,7 +5144,12 @@ def _tape_shell(
             f"first column"
         )
     g = Circuit(400, 200)
-    wk = worker(n, park_const=True) if park_const else worker(n)
+    if protocol != "v3":
+        wk = worker(n, park_const=True, protocol=protocol)
+    elif park_const:
+        wk = worker(n, park_const=True)
+    else:
+        wk = worker(n)
     WX, WY = _TAPE_WX, _TAPE_WY
     west = -1 - west_grow  # the west wall's column, relative to WX
     for (x, y), ch in wk.cell.items():
@@ -5238,6 +5244,7 @@ def tape_block(
     relay_size: tuple[int, int] | None = None,
     park_const: bool = False,
     tight_ring: bool = False,
+    protocol: str = "v3",
     west_grow: int = 0,
 ) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
@@ -5326,7 +5333,11 @@ def tape_block(
     best: tuple[int, Circuit, tuple[int, int], tuple[int, int]] | None = None
     for fold in _TAPE_FOLDS:
         g, in_cell, out_cell = _tape_shell(
-            n, skip_batch=skip_batch, park_const=park_const, west_grow=west_grow
+            n,
+            skip_batch=skip_batch,
+            park_const=park_const,
+            west_grow=west_grow,
+            protocol=protocol,
         )
 
         bottom_y = WY + worker_height
@@ -5379,6 +5390,7 @@ def tape_block(
         relay_art=relay_art,
         park_const=park_const,
         west_grow=west_grow,
+        protocol=protocol,
     )
 
 
@@ -5403,6 +5415,7 @@ def _serpentine_tape(
     relay_art: list[str] | None = None,
     park_const: bool = False,
     west_grow: int = 0,
+    protocol: str = "v3",
 ) -> _Tape:
     """The same ring, with the forward pipe snaked so capacity scales with area.
 
@@ -5462,7 +5475,11 @@ def _serpentine_tape(
     # last tier here holds 1976 values, at which point the block is 112 rows tall.
     for rows in range(5, 82, 2):
         g, in_cell, out_cell = _tape_shell(
-            n, skip_batch=skip_batch, park_const=park_const, west_grow=west_grow
+            n,
+            skip_batch=skip_batch,
+            park_const=park_const,
+            west_grow=west_grow,
+            protocol=protocol,
         )
         last = top + rows - 1  # the final, relay-bound westbound leg
         relay_y = last - relay_h  # so `last` is the relay's bottom interior row
@@ -6538,12 +6555,15 @@ def _assemble(
             raise MachineError(
                 f"unknown store protocol {store_protocol!r}; expected {TAPE_PROTOCOLS!r}"
             )
-        if store_protocol == "v4":
+        if store_protocol in ("v4", "v5"):
             if store != "taped":
-                raise MachineError(f"the v4 wire is the taped tier's, not {store!r}")
+                raise MachineError(
+                    f"the {store_protocol} wire is the taped tier's, not {store!r}"
+                )
             if adapter_form != "v4":
                 raise MachineError(
-                    f"a v4 store needs the v4 adapter to feed it, not {adapter_form!r}"
+                    f"a {store_protocol} store needs the v4 adapter to feed it, "
+                    f"not {adapter_form!r}"
                 )
         elif adapter_form == "v4":
             raise MachineError(
@@ -10976,8 +10996,72 @@ ADAPTER_FORM: dict[tuple[str, str], str] = {
 #:
 #: **The floor moved by 4 and the mean by 10.7, and the difference is the
 #: point**: the floor is one gate hop, and the mean is 3.01 of them.
+#: **v5 takes the unpack out of the forwarder and puts it in the bank**, which
+#: is where it is free. The room stays — it is the corridor, and deleting it
+#: restores the 45-cell climb ``feed_teleport`` was built to kill — but its body
+#: becomes a bare ``R``/``s`` relay (:func:`~..memory_taped.feed_relay`) and each
+#: ring worker takes the packed word apart itself
+#: (``memory_tape.TAPE_WORKER_PROTOCOLS``).
+#:
+#: The obstacle this had to clear was that the worker's parked constant looked
+#: like it had to become ``2`` for a ``/``, evicting ``n`` and forcing a walked
+#: literal that only the smallest banks could afford. **It dissolves: the unpack
+#: never needs A at all.** ``b`` parks the word in BP, ``]`` shifts BP right —
+#: which is P1's count — and ``x`` branches on BP's low bit, which is the op. The
+#: parked constant is still one number (``2n + 1``), A is still free for the
+#: signed remaining distance, and MAIN goes from ``r X r b - N M`` plus a stall
+#: to ``r b ] - M``.
+#:
+#: What that costs is the arms: recovering ``n - 1 - addr`` from the packed
+#: remainder is ``N b ] m`` rather than ``b m``, so it moves to **after** the
+#: answer's ``S`` — where :data:`TAPED_TIGHT_RING` measured the rest of the lap
+#: to be worth exactly 0.000%. The write's ``]`` floors, so P1 moves one word too
+#: few and the write arm pays an extra ``r s``; reads are exact and a bank's
+#: local addresses start at 1, so the floor never underflows.
+#:
+#: **Measured, 21-round hi-res tour, same process, control first and last:**
+#: 92,761,125 against 94,781,294 — **-2,020,169 ticks, -2.131%** — ``passed=True
+#: fatal=None``, box 614x403 unchanged and every ``route_lengths`` entry
+#: unchanged (``cpu->adapter`` 2, ``adapter->store`` 1, ``store->cpu`` 2,
+#: ``rom->cpu`` 60, ``cpu->drum`` 67). Mean read latency 123.266 -> 117.042 and
+#: the floor 63 -> 58, over the identical 324,600 blocked answer-pipe runs:
+#: **6.224 ticks x 324,588 = 2,020,196 against 2,020,169 measured**, so the
+#: conversion is 1:1 and nothing outside the read's critical path moved.
+#:
+#: The wire itself was worth **-1,851,799 (-1.954%, 5.705 ticks)** on its own;
+#: the rest is the batch-2 dispatch, below.
+#:
+#: Where the first 5.7 ticks come from, counted before they were measured:
+#:
+#: * **forwarder** — ``R`` to the last ``s`` was six cells (``/ W s W + s``) and
+#:   is now one. Two of those were the gap between the two sends, which the bank
+#:   *stalled* in: ``r X`` then ``r`` wanted the address one tick before it
+#:   arrived. Worth 2.
+#: * **MAIN** — ``r X [stall] r b - N M`` (8 ticks) becomes ``r b ] - M`` (5).
+#:   Worth 3.
+#: * **the descent** — the v3 arms merged one column *west* of P1's own entry and
+#:   walked back east; with one arm there is nothing to merge, so batch 1 drops
+#:   the two-cell dogleg and batch 2 runs straight east along MAIN's own row
+#:   instead of doubling back to the merge column. Worth 2.
+#: * **the dispatch** — ``W X b m`` becomes ``W M b x``, and the ``b ] m`` that
+#:   replaces ``b m`` sits behind the ``S``. Even.
+#:
+#: The last **0.52 ticks (-0.177%)** are batch 2's dispatch standing *on* P1's
+#: own exit cell. The v3 body dropped three rows below it because its READ arm
+#: wanted the row under the ring's own bottom row; with the parked constant
+#: chosen so READ turns the other way (``2n`` rather than ``2n + 1`` — the
+#: parity of ``w - c`` is what ``x`` reads, so the constant picks the arm) the
+#: two arms straddle the exit instead and the descent disappears. Batch 1 has no
+#: equivalent: its room is 22 columns and the fill loop stands in the only rows
+#: the arms could take.
+#:
+#: ``matmul``, ``sudoku`` and the byte-pinned ``deadman-3d`` share these workers
+#: and are untouched: the v4 body is selected by this registry, not edited into
+#: the shared one. Verified by hashing built grids for all three (men-v3, taped
+#: and taped+seek), ``snake-ring``, ``brackets`` and the ``tape_block``/worker
+#: variants against a checkout of HEAD — every one identical.
 TAPED_PROTOCOL: dict[tuple[str, str], str] = {
-    ("deadman-3d_hires", "taped"): "v4",
+    ("deadman-3d_hires", "taped"): "v5",
 }
 
 #: ``(slug, tier)`` pairs whose **men-v3** STORE is entered on its router strip's
