@@ -851,3 +851,156 @@ def test_the_v4_feed_forwarder_unpacks_with_one_divide() -> None:
     assert len(tall) == V4_FEED_H + 7
     assert tall[:V4_FEED_H] == rows
     assert set("".join(tall[V4_FEED_H:])) == {" "}
+
+
+# ── the corridor's two riser columns, consolidated into one ──────────────────
+#: The shipped hi-res block *with* its request roof, which is what leaves the
+#: forwarder room's first interior column free. ``_HIRES_KW`` deliberately has
+#: no roof — every other lever is roof-independent — but ``feed_share_riser`` is
+#: the one that is not, so it gets its own base.
+_HIRES_ROOF_KW = dict(_HIRES_KW, request_roof=15, request_tuck=True, protocol="v4")
+
+
+def test_the_shared_riser_is_opt_in_and_needs_a_column_to_share() -> None:
+    """Off is byte-identical, and the case with no free column raises rather
+    than drawing a pipe that leaves its gate heading north."""
+    shipped = taped_store_block(HIRES_N, HIRES_PLAN, **_HIRES_ROOF_KW)
+    assert (
+        taped_store_block(
+            HIRES_N, HIRES_PLAN, feed_share_riser=False, **_HIRES_ROOF_KW
+        ).cells
+        == shipped.cells
+    )
+    shared = taped_store_block(HIRES_N, HIRES_PLAN, feed_share_riser=True, **_HIRES_ROOF_KW)
+    assert shared.cells != shipped.cells
+    # ... and it is a forwarder-room column, so there has to be a forwarder room
+    with pytest.raises(ValueError):
+        taped_store_block(
+            HIRES_N, HIRES_PLAN, **{**_HIRES_KW, "feed_teleport": False},
+            protocol="v3", feed_share_riser=True,
+        )
+    # Without the roof there is no ``lead``, so the widest gate's east wall
+    # stands where the shared column would be and the feed says so.
+    with pytest.raises(ValueError, match="must head east"):
+        taped_store_block(HIRES_N, HIRES_PLAN, feed_share_riser=True, protocol="v4",
+                          **_HIRES_KW)
+
+
+def test_the_shared_riser_moves_no_bank_and_shortens_every_link() -> None:
+    """The block's own dimensions, its ports and every bank's column stay put;
+    what changes is one column of corridor and, with it, one cell off each feed
+    pipe and each chain link."""
+    shipped = taped_store_block(HIRES_N, HIRES_PLAN, **_HIRES_ROOF_KW)
+    shared = taped_store_block(HIRES_N, HIRES_PLAN, feed_share_riser=True, **_HIRES_ROOF_KW)
+    assert (shared.width, shared.height) == (shipped.width, shipped.height)
+    assert (shared.in_cell, shared.out_cell) == (shipped.in_cell, shipped.out_cell)
+    assert shared.pipes == shipped.pipes
+    # The banks are rooms and the gates' interiors are rooms; only the corridor
+    # between them changes, so no `@` (a man, one per room) moves.
+    assert {c for c, ch in shared.cells.items() if ch == "@"} == {
+        c for c, ch in shipped.cells.items() if ch == "@"
+    }
+    # Every vertical pipe cell in the block: the count is one lower per corridor
+    # (the climb is the same height, but the horizontal lead-in loses a cell).
+    def arrows(cells: dict, ch: str) -> int:
+        return sum(1 for v in cells.values() if v == ch)
+
+    assert arrows(shared.cells, ">") == arrows(shipped.cells, ">") - 2 * (len(HIRES_PLAN) - 1)
+    assert arrows(shared.cells, "^") == arrows(shipped.cells, "^")
+
+
+@pytest.mark.parametrize("skip_batch", [1, 2, None])
+def test_the_shared_riser_routes_every_hires_address_the_same(skip_batch) -> None:
+    """The load-bearing test, and it has to be a readback over every address.
+
+    Moving a climb one column west is exactly the change that builds either
+    way: the feed pipe and the chain link end up in the same column, and if
+    their row spans ever crossed, one gate's request would climb into the
+    *forwarder* and be answered from the wrong bank — in silence, because a
+    pipe that parses is a pipe that runs. So this writes a distinct value into
+    every one of hi-res' 901 addresses and compares them address by address
+    against the two-column corridor, over the real plan, the real hot-first
+    chain, the real grown gates and each ring worker in turn.
+    """
+
+    def readback(share: bool) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(
+                HIRES_N,
+                HIRES_PLAN,
+                feed_share_riser=share,
+                **{**_HIRES_ROOF_KW, "skip_batch": skip_batch},
+            )
+        )
+        writes = [x for a in range(1, HIRES_N) for x in (*_wire("v4", 1, a), (a * 41 + 7) % 9973)]
+        bounds = [1]
+        for m in HIRES_PLAN:
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            reads = [x for a in range(lo, hi) for x in _wire("v4", 0, a)]
+            want = [(a * 41 + 7) % 9973 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=800_000_000)
+            assert res.fatal is None, (share, skip_batch, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    shipped = readback(False)
+    assert shipped == {a: (a * 41 + 7) % 9973 for a in range(1, HIRES_N)}
+    assert readback(True) == shipped
+
+
+# ── the bank ring's perimeter, and why shortening it buys nothing ────────────
+def test_the_tight_ring_is_opt_in_and_shortens_only_the_slack_ones() -> None:
+    """``tape_block`` searched its folds from 0 up and stopped at the first with
+    room, and fold 0 is the *longest* ring — so every other fold was dead code.
+    ``tight_ring`` reverses the preference. The block's box and both its ports
+    are unchanged, because a fold only moves the return pipe's middle leg."""
+    for skip in (1, 2):
+        for n in (7, 8, 10, 22, 59, 103):
+            a = machine.tape_block(n, skip_batch=skip)
+            b = machine.tape_block(n, skip_batch=skip, tight_ring=True)
+            assert (b.width, b.height) == (a.width, a.height), (n, skip)
+            assert (b.in_cell, b.out_cell) == (a.in_cell, a.out_cell), (n, skip)
+            assert n + 1 <= b.slots <= a.slots, (n, skip, a.slots, b.slots)
+        # ... and the hot sizes really do shrink, or the knob would be a no-op
+        assert machine.tape_block(8, skip_batch=skip, tight_ring=True).slots < 111
+    # A ring too big for any fold still falls through to the serpentine, whose
+    # capacity scales with area and which `tight_ring` does not touch.
+    big = machine.tape_block(400, skip_batch=1)
+    assert machine.tape_block(400, skip_batch=1, tight_ring=True).slots == big.slots
+
+
+@pytest.mark.parametrize("skip_batch", [1, 2, None])
+def test_the_tight_ring_reads_back_what_was_written(skip_batch) -> None:
+    """A ring is a FIFO whose capacity is its cell count, and one value short
+    does not fault — it **stalls**. So the guard is a readback over every hi-res
+    address through the real plan and each ring worker, not a build."""
+
+    def readback(tight: bool) -> dict[int, int]:
+        engine = _standalone(
+            taped_store_block(
+                HIRES_N,
+                HIRES_PLAN,
+                tape_tight_ring=tight,
+                **{**_HIRES_ROOF_KW, "skip_batch": skip_batch},
+            )
+        )
+        writes = [x for a in range(1, HIRES_N) for x in (*_wire("v4", 1, a), (a * 43 + 3) % 9973)]
+        bounds = [1]
+        for m in HIRES_PLAN:
+            bounds.append(bounds[-1] + m)
+        out: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            reads = [x for a in range(lo, hi) for x in _wire("v4", 0, a)]
+            want = [(a * 43 + 3) % 9973 for a in range(lo, hi)]
+            res = engine.run(writes + reads, expected=want, max_ticks=800_000_000)
+            assert res.fatal is None, (tight, skip_batch, lo, res.fatal)
+            out.update(zip(range(lo, hi), res.output, strict=False))
+        return out
+
+    shipped = readback(False)
+    assert shipped == {a: (a * 43 + 3) % 9973 for a in range(1, HIRES_N)}
+    assert readback(True) == shipped

@@ -5192,6 +5192,19 @@ def grid_block(n: int) -> _Tape:
     )
 
 
+#: How far west the return pipe's middle leg turns back before it runs out to the
+#: worker's own return column. It is a **fold**, so a bigger one is a *shorter*
+#: ring, and the ring's capacity is its cell count (``SPEC.md``: a pipe is a FIFO
+#: whose capacity equals its length). ``0`` — the longest — is what
+#: :func:`tape_block` has always taken, because it searches in this order and
+#: stops at the first fold with room for ``n + 1`` values, and fold 0 always has
+#: the most room. Every other entry was therefore unreachable; ``tight_ring``
+#: is what makes them mean something, and the list runs out to 22 because that is
+#: where both workers' folds bottom out (batch 1 at a 82-cell ring, batch 2 at
+#: 110, against 108 and 154 unfolded).
+_TAPE_FOLDS = (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22)
+
+
 def tape_block(
     n: int,
     *,
@@ -5199,6 +5212,7 @@ def tape_block(
     jump_threshold: int = 128,
     relay_size: tuple[int, int] | None = None,
     park_const: bool = False,
+    tight_ring: bool = False,
 ) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
 
@@ -5254,7 +5268,8 @@ def tape_block(
     ) = _tape_worker_spec(skip_batch)
 
     WX, WY = _TAPE_WX, _TAPE_WY
-    for fold in (0, 2, 4, 6, 8, 10, 12):
+    best: tuple[int, Circuit, tuple[int, int], tuple[int, int]] | None = None
+    for fold in _TAPE_FOLDS:
         g, in_cell, out_cell = _tape_shell(n, skip_batch=skip_batch, park_const=park_const)
 
         bottom_y = WY + worker_height
@@ -5295,7 +5310,12 @@ def tape_block(
         )
         if n_fwd + n_ret < n + 1:
             continue
-        return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
+        if not tight_ring:
+            return _tape_of(g, in_cell, out_cell, n_fwd + n_ret)
+        if best is None or n_fwd + n_ret < best[0]:
+            best = (n_fwd + n_ret, g, in_cell, out_cell)
+    if best is not None:
+        return _tape_of(best[1], best[2], best[3], best[0])
     return _serpentine_tape(n, skip_batch=skip_batch, relay_art=relay_art, park_const=park_const)
 
 
@@ -5703,6 +5723,7 @@ def build(
     store_chain_reach: bool = False,
     store_chain_pad: int = 0,
     store_feed_teleport: bool = False,
+    store_feed_share_riser: bool = False,
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
@@ -5717,6 +5738,7 @@ def build(
     store_gate_park_const: bool = False,
     store_gate_south_reuse_b: bool = False,
     store_tape_park_const: bool = False,
+    store_tape_tight_ring: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
@@ -5937,6 +5959,7 @@ def build(
                     store_chain_reach=store_chain_reach,
                     store_chain_pad=store_chain_pad,
                     store_feed_teleport=store_feed_teleport,
+                    store_feed_share_riser=store_feed_share_riser,
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
@@ -5951,6 +5974,7 @@ def build(
                     store_gate_park_const=store_gate_park_const,
                     store_gate_south_reuse_b=store_gate_south_reuse_b,
                     store_tape_park_const=store_tape_park_const,
+                    store_tape_tight_ring=store_tape_tight_ring,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
@@ -6033,6 +6057,7 @@ def build(
                     store_chain_reach=store_chain_reach,
                     store_chain_pad=store_chain_pad,
                     store_feed_teleport=store_feed_teleport,
+                    store_feed_share_riser=store_feed_share_riser,
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_request_reach=store_request_reach,
@@ -6047,6 +6072,7 @@ def build(
                     store_gate_park_const=store_gate_park_const,
                     store_gate_south_reuse_b=store_gate_south_reuse_b,
                     store_tape_park_const=store_tape_park_const,
+                    store_tape_tight_ring=store_tape_tight_ring,
                     store_bank_order=store_bank_order,
                     trim_dead=trim_dead,
                     top_bus=top_bus,
@@ -6151,6 +6177,7 @@ def _assemble(
     store_chain_reach: bool = False,
     store_chain_pad: int = 0,
     store_feed_teleport: bool = False,
+    store_feed_share_riser: bool = False,
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_request_reach: bool = False,
@@ -6165,6 +6192,7 @@ def _assemble(
     store_gate_park_const: bool = False,
     store_gate_south_reuse_b: bool = False,
     store_tape_park_const: bool = False,
+    store_tape_tight_ring: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
     trim_dead: bool = False,
     top_bus: bool = False,
@@ -6601,10 +6629,12 @@ def _assemble(
                 gate_park_const=store_gate_park_const,
                 gate_south_reuse_b=store_gate_south_reuse_b,
                 tape_park_const=store_tape_park_const,
+                tape_tight_ring=store_tape_tight_ring,
                 order=store_bank_order,
                 chain_reach=store_chain_reach,
                 chain_pad=store_chain_pad,
                 feed_teleport=store_feed_teleport,
+                feed_share_riser=store_feed_share_riser,
                 bank_lift=store_bank_lift,
                 feed_tuck=store_feed_tuck,
                 # Land the first gate's roof one row under the adapter's floor,
@@ -8332,6 +8362,8 @@ STREAM_SIZE: dict[str, tuple[int, int, int]] = {"matmul": (257, 257, 17)}
 #: candidate order below is rejected outright with "opcode slot map must preserve
 #: the lanes' north-to-south rank order". The two registries are one decision
 #: here, exactly as :data:`TAPED_BANKS` and :data:`TAPED_BANK_ORDER` are.
+#: (Not to be confused with :data:`TAPED_TIGHT_RING`, which is about the ring's
+#: *geometry* at a fixed size and measured **exactly zero**.)
 #:
 #: Dropping the slot map to price the order alone, against hires' own execution
 #: profile (per gameplay frame: ``LD`` 7,632 = 20.65%, ``ST`` 6,866 = 18.58%,
@@ -11066,6 +11098,43 @@ TAPED_FEED_TELEPORT: set[tuple[str, str]] = {
     ("deadman-3d_hires", "taped"),
 }
 
+#: Whether the taped STORE's feed climb and its chain link share one column
+#: (``memory_taped.taped_store_block``'s ``feed_share_riser``). Absent pairs keep
+#: the two-column corridor, so their grids stay byte-identical.
+#:
+#: Every corridor between a gate and the next carries two vertical pipe runs: the
+#: feed's climb into the forwarder room and the chain link's climb from the
+#: downstream arm back to the spine row. They occupy **disjoint rows** — the feed
+#: runs from the gate's local row (2) up to the forwarder's floor, the link from
+#: the downstream row (6) up to the spine row (4) — and the only reason they were
+#: in different columns is that the feed took the forwarder's *second* interior
+#: column, the first having been the widest gate's own east wall back when
+#: ``lead`` was 0. It is 1 now, so the first column is free, and putting both
+#: climbs in it hands the next column back to :data:`TAPED_CHAIN_REACH`.
+#:
+#: The block's width, pitch, bank columns and every room but the grown gates are
+#: untouched; what changes is that **each feed pipe and each chain link is one
+#: cell shorter**, which is transit on the read's critical path rather than walk
+#: inside a room (a forwarder is 89-99% blocked and its service time is provably
+#: free — see :func:`~.memory_taped.feed_unpack`).
+#:
+#: **-0.841%** on the 21-round hi-res tour, same process, same moment:
+#: 101,523,077 -> 100,669,456, ``passed=True``, ``fatal=None``, box 614x403
+#: either way and every ``route_lengths`` entry identical. That is 853,621 ticks
+#: over 324,588 ticks per tick of mean read latency = **2.63 ticks a read**, for
+#: one cell of feed pipe plus one cell of chain link on each of the links a read
+#: actually crosses — so the accesses-weighted chain depth is ~1.6, which is what
+#: :data:`TAPED_BANK_ORDER`'s hot-first cut is for.
+#:
+#: It is the clean counterpart to the forwarder's own null result: **pipe cells
+#: are on the wire and room walks are not.** SPEC's tick order shifts every pipe
+#: value one cell before any man executes, so a cell of pipe is a tick of latency
+#: the CPU is stopped for, while a forwarder's walk is spent in the gap before
+#: the next request. Both facts are now measured on this same store.
+TAPED_FEED_SHARE_RISER: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+}
+
 #: How many rows the taped STORE's bank row is raised toward its answer collector
 #: (``memory_taped.taped_store_block``'s ``bank_lift``). Absent pairs keep the
 #: shipped bank row, so their grids stay byte-identical.
@@ -11410,6 +11479,46 @@ TAPED_GATE_SOUTH_REUSE_B: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 #: along row 4 to P1's turn. Measured 3-round: -0.000% for the arms, **-2.164%**
 #: with the descent.
 TAPED_TAPE_PARK_CONST: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
+
+#: Whether each bank's ring is routed to the **shortest** fold that still holds
+#: its values, rather than the first one tried (:func:`tape_block`'s
+#: ``tight_ring``; the fold list is :data:`_TAPE_FOLDS`). Absent pairs keep the
+#: shipped ring, so ``matmul``, ``sudoku`` and the byte-pinned ``deadman-3d``
+#: grids do not move by a cell.
+#:
+#: A bank's ring is a **perimeter**, not a function of its slot count: every
+#: batch-1 bank gets 108 cells and every batch-2 one 154, whether it holds six
+#: values or a hundred. ``tape_block`` has always searched folds from 0 upward
+#: and returned the first with capacity for ``n + 1`` — and fold 0 is the
+#: *longest* ring, so it always won and no other fold was ever built. Reversing
+#: the preference costs nothing: the folds are the same two L-shaped pipes with
+#: the return's middle leg turning back further west, the worker's wall anchors
+#: do not move, and ``_Tape.slots`` still reports the real cell count.
+#:
+#: Why it should matter at all, when a previous agent measured a ring worker
+#: **6.29 ticks mean blocked** and concluded rotation was a myth: that measures
+#: the worker's *own* stalls, and the values do bunch at the head of a slack
+#: pipe. What a long ring still costs is the lap — a value the worker sends must
+#: travel the whole perimeter before it can be read again — and the hot banks
+#: here hold 6..9 values in a ring sized for a hundred, so ~100 of those cells
+#: are pure re-circulation delay between one access and the next.
+#:
+#: **It is worth exactly zero, and the zero is the finding.** Built same process,
+#: same moment on the 21-round hi-res tour with the eleven rings going
+#: ``108,108,108,154,154,154,154,294,108,154,366`` ->
+#: ``82,82,82,110,110,110,110,294,82,138,366`` — every hot bank's perimeter cut
+#: by a quarter — the tour came out on the **identical tick, 100,669,456**, and
+#: the 3-round read-latency histogram was identical bucket for bucket (mean
+#: 138.878, floor 68). So the re-circulation genuinely does happen inside the gap
+#: before the next request, and the head-of-line delay behind the value in front
+#: is not a term in read latency at this traffic.
+#:
+#: Kept, off, for two reasons: it makes :data:`_TAPE_FOLDS` reachable rather than
+#: dead, and headroom that is free at 87k reads a frame is not free at four times
+#: that. It is also what would *license* moving the relay room east — the ring
+#: would grow and that now costs nothing — which is the one way the six-cell
+#: ``reqK->bankK`` stub gets shorter (see :data:`TAPED_FEED_TUCK`).
+TAPED_TIGHT_RING: set[tuple[str, str]] = set()
 
 #: ``(slug, tier)`` -> the DOOM unit's loop-corridor row (``d3_unit.R_LOOP``,
 #: shipped 27). Absent means "keep the shipped row", which is what holds
@@ -12266,6 +12375,7 @@ def build_for(
         store_chain_reach=(slug, store) in TAPED_CHAIN_REACH,
         store_chain_pad=store_chain_pad,
         store_feed_teleport=(slug, store) in TAPED_FEED_TELEPORT,
+        store_feed_share_riser=(slug, store) in TAPED_FEED_SHARE_RISER,
         store_bank_lift=TAPED_BANK_LIFT.get((slug, store), 0),
         store_feed_tuck=TAPED_FEED_TUCK.get((slug, store), 0),
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
@@ -12280,6 +12390,7 @@ def build_for(
         store_gate_park_const=(slug, store) in TAPED_GATE_PARK_CONST,
         store_gate_south_reuse_b=(slug, store) in TAPED_GATE_SOUTH_REUSE_B,
         store_tape_park_const=(slug, store) in TAPED_TAPE_PARK_CONST,
+        store_tape_tight_ring=(slug, store) in TAPED_TIGHT_RING,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
         trim_dead=(slug in TRIM_DEAD_LANES) if trim_dead is None else trim_dead,
         seek=_seek,

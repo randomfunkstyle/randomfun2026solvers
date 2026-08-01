@@ -754,12 +754,14 @@ def taped_store_block(
     gate_park_const: bool = False,
     gate_south_reuse_b: bool = False,
     tape_park_const: bool = False,
+    tape_tight_ring: bool = False,
     order: tuple[int, ...] | None = None,
     chain_reach: bool = False,
     chain_pad: int = 0,
     request_roof: int | None = None,
     request_tuck: bool = False,
     feed_teleport: bool = False,
+    feed_share_riser: bool = False,
     bank_lift: int = 0,
     feed_tuck: int = 0,
     protocol: str = "v3",
@@ -887,6 +889,20 @@ def taped_store_block(
     between bank ``k-1``'s east edge and bank ``k``'s empty first column, above
     the gate strip and below the bank's own request stub row.
 
+    ``feed_share_riser`` consolidates the **two riser columns** every corridor
+    between a gate and its successor carries into one. The corridor holds the
+    feed's climb into the forwarder room (rows: the gate's local row up to the
+    room's floor) and the chain link's climb from the downstream row back to the
+    spine row; they are in disjoint rows and were only in different columns
+    because the feed took the forwarder's *second* interior column. Taking the
+    first one instead puts both climbs in the same column and hands the next one
+    back to ``chain_reach``, so **every feed pipe and every chain link loses one
+    cell** — the block's width, pitch and bank columns do not move at all, and
+    the only room that changes shape is each grown gate, one column wider west.
+    It needs ``feed_teleport`` (there is no forwarder room otherwise) and it
+    needs the first column to be free, which is what ``lead`` leaves; the feed
+    raises rather than silently mis-drawing when it is not.
+
     ``bank_lift`` raises the whole bank row (and, with it, the gate strip and the
     block's own height) that many rows toward the answer collector, which is the
     one thing between them: every bank's answer climbs a riser from its own ``^``
@@ -942,6 +958,7 @@ def taped_store_block(
             skip_batch=skip_batch,
             jump_threshold=jump_threshold,
             park_const=tape_park_const,
+            tight_ring=tape_tight_ring,
         )
         for size in sizes
     ]
@@ -970,6 +987,11 @@ def taped_store_block(
     # tape block's own first column is empty). Three spare is what the riser
     # needed; a forwarder room wants six.
     nb_gap = 5 if feed_teleport else 3
+    if feed_share_riser and not feed_teleport:
+        raise ValueError(
+            "feed_share_riser moves the forwarder room's own climb; feed_teleport is off"
+        )
+    _riser_off = 1 if feed_share_riser else 2
     if feed_tuck and not feed_teleport:
         raise ValueError("feed_tuck tucks the feed room into the bank; feed_teleport is off")
     if not 0 <= feed_tuck <= nb_gap - 1:
@@ -1016,8 +1038,15 @@ def taped_store_block(
     if chain_reach:
         for k in range(1, nb - 1):
             # ... one column east of whatever the previous bank's feed put in the
-            # corridor: the riser itself, or the forwarder's own entry stub.
-            corridor = bx[k - 1] - (3 - feed_tuck if feed_teleport else 2)
+            # corridor: the riser itself, or the forwarder's own entry stub, and
+            # the chain link's own climb, which is always two east of the wall
+            # it leaves. ``feed_share_riser`` is exactly the case where the first
+            # two coincide and the third is what the reach then stops against.
+            if feed_teleport:
+                corridor = bx[k - 1] - 5 + feed_tuck + _riser_off
+            else:
+                corridor = bx[k - 1] - 2
+            corridor = max(corridor, gx[k - 1] + gates[k - 1][1] + 1)
             west_grow[k] = gx[k] - (corridor + 1) - chain_pad
             if west_grow[k] < 0:
                 raise ValueError(
@@ -1112,7 +1141,23 @@ def taped_store_block(
         # pipe must leave the gate heading east (SPEC.md — the first arrowhead's
         # backward cell is the source room's border), and the widest gate's own
         # east wall already sits against the first one.
-        pipe([source, (rx0 + 2, source[1]), (rx0 + 2, ry1)])
+        #
+        # ``feed_share_riser`` takes the first column instead, which is legal
+        # exactly when the gate's east wall stops short of the room's west wall —
+        # ``lead`` is what leaves that column free — and which then puts this
+        # climb in the **same** column as the chain link out of the same gate.
+        # They never meet: this one runs from the gate's local row (2) up to the
+        # room's floor at ``gate_y - 1``, and the link runs from the downstream
+        # row (6) up to the spine row (4), so the whole of row 3 stands between
+        # them. What it buys is the column east of it, which the next gate then
+        # reaches one further west into (see ``chain_reach`` above).
+        riser_x = rx0 + _riser_off
+        if source[0] >= riser_x:
+            raise ValueError(
+                f"bank {k}'s feed leaves the gate at column {source[0]} and cannot "
+                f"turn north at {riser_x}: a pipe's first cell must head east"
+            )
+        pipe([source, (riser_x, source[1]), (riser_x, ry1)])
         pipe([(bx[k] + feed_tuck + 1, tin[1]), tin])
 
     # ── feeds: gate k's local arm into bank k, its downstream into gate k+1 ──
