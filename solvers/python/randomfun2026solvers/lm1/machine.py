@@ -5040,8 +5040,15 @@ def _resolve_tape_skip_batch(
     return skip_batch
 
 
-def _tape_worker_spec(skip_batch: int):
-    """Return the worker and wall anchors for one tape skip implementation."""
+def _tape_worker_spec(skip_batch: int, protocol: str = "v3"):
+    """Return the worker and wall anchors for one tape skip implementation.
+
+    ``protocol="v4"`` on the **batch-1** worker returns that body's own room and
+    its own four wall anchors: it stands three columns west of the v3 body it
+    used to share a room with, and the request stub and answer riser move with it
+    (``memory_tape.V2_V4_SHIFT`` says why none of the four is fixed). Batch 2 is
+    untouched, and so is every v3 caller.
+    """
     from ..memory_tape import (
         V2_FWD_ROW,
         V2_IH,
@@ -5063,6 +5070,18 @@ def _tape_worker_spec(skip_batch: int):
     )
 
     if skip_batch == 1:
+        if protocol == "v4":
+            from ..memory_tape import V2_V4_IN_ROW, V2_V4_IW, V2_V4_OUT_COL
+
+            return (
+                worker_v2,
+                V2_V4_IW,
+                V2_IH,
+                V2_V4_IN_ROW,
+                V2_V4_OUT_COL,
+                V2_FWD_ROW,
+                V2_RET_COL,
+            )
         return (
             worker_v2,
             V2_IW,
@@ -5151,7 +5170,7 @@ def _tape_shell(
         output_col,
         _forward_row,
         _return_col,
-    ) = _tape_worker_spec(skip_batch)
+    ) = _tape_worker_spec(skip_batch, protocol)
 
     if not 0 <= west_grow <= _TAPE_WEST_GROW_MAX:
         raise ValueError(
@@ -5347,7 +5366,7 @@ def tape_block(
         _output_col,
         forward_row,
         return_col,
-    ) = _tape_worker_spec(skip_batch)
+    ) = _tape_worker_spec(skip_batch, protocol)
 
     WX, WY = _TAPE_WX, _TAPE_WY
     best: tuple[int, Circuit, tuple[int, int], tuple[int, int]] | None = None
@@ -5482,7 +5501,7 @@ def _serpentine_tape(
         _output_col,
         forward_row,
         return_col_offset,
-    ) = _tape_worker_spec(skip_batch)
+    ) = _tape_worker_spec(skip_batch, protocol)
 
     WX, WY = _TAPE_WX, _TAPE_WY
     bottom_y = WY + worker_height

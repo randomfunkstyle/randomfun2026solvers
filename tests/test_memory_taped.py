@@ -1144,20 +1144,22 @@ def test_the_v4_worker_reaches_the_pipe_each_receive_means(n: int, west_grow: in
     from randomfun2026solvers.memory_tape import (
         V2_FWD_ROW,
         V2_IH,
-        V2_IN_ROW,
-        V2_IW,
-        V2_OUT_COL,
         V2_RET_COL,
+        V2_V4_IN_ROW,
+        V2_V4_IW,
+        V2_V4_OUT_COL,
         worker_v2,
     )
 
     art = worker_v2(n, park_const=True, protocol="v4")
     #: The four wall anchors, in worker-local coordinates: the cell of each pipe
-    #: that touches this room (``SPEC.md``, "Which pipe do I talk to?").
-    request = (-2 - west_grow, V2_IN_ROW)
+    #: that touches this room (``SPEC.md``, "Which pipe do I talk to?"). The v4
+    #: body has **its own** four — none of them is fixed, which is the whole
+    #: reason the body could move west at all (``memory_tape.V2_V4_SHIFT``).
+    request = (-2 - west_grow, V2_V4_IN_ROW)
     ring_in = (V2_RET_COL, V2_IH + 1)
-    ring_out = (V2_IW + 1, V2_FWD_ROW)
-    answer = (V2_OUT_COL, -2)
+    ring_out = (V2_V4_IW + 1, V2_FWD_ROW)
+    answer = (V2_V4_OUT_COL, -2)
 
     def near(cell, a, b):
         da = abs(a[0] - cell[0]) + abs(a[1] - cell[1])
@@ -1191,25 +1193,53 @@ def test_the_v4_worker_reaches_the_pipe_each_receive_means(n: int, west_grow: in
     assert seen["S"] == 1 and seen["r"] >= 6 and seen["s"] >= 5, seen
 
 
-def test_p1s_receive_keeps_the_ring_by_exactly_one_cell() -> None:
-    """The tightest margin in the batch-1 v4 worker, named and pinned.
+def test_the_v4_anchors_are_the_ones_that_licence_the_shift() -> None:
+    """P1's ``r`` is the tightest binding in the body, and its margin is a
+    property of **where the four wall anchors were put**, not of the layout.
 
-    ``V2_V4_MAIN_ROW``'s docstring turns on this number; if the body ever moves
-    such that it grows, the comment is wrong, and if it shrinks the worker is.
+    This is the correction to a conclusion that was recorded and wrong. With the
+    request stub on ``V2_IN_ROW`` — where it sat because nobody had chosen
+    otherwise — P1's ``r`` is 15 to the ring return against 16 to the request,
+    and *any* westward shift ties or loses it, which read as "the body cannot
+    move". The stub is a two-cell stub on a wall and every interior row takes it:
+    moved to the last one, the same cell is 15 against 20 and three columns of
+    travel are available. The answer riser moves for the same reason and buys
+    P1's ``s`` the room to follow.
+
+    So this pins the *margins*, not the coordinates, at both ``west_grow`` 0 and
+    the shipped 4 — and it fails a tie even when the intended pipe would win it,
+    because a margin of zero is a margin the next edit crosses without noticing.
     """
     from randomfun2026solvers.memory_tape import (
+        V2_FWD_ROW,
         V2_IH,
         V2_IN_ROW,
         V2_RET_COL,
+        V2_V4_IN_ROW,
+        V2_V4_IW,
         V2_V4_MAIN_ROW,
+        V2_V4_OUT_COL,
+        V2_V4_SHIFT,
         worker_v2,
     )
 
+    assert V2_V4_SHIFT == 3
+    assert V2_V4_MAIN_ROW == V2_IN_ROW + 1  # MAIN is still a row south of V2_IN_ROW
     art = worker_v2(8, park_const=True, protocol="v4")
     p1 = next((x, y) for (x, y), ch in art.cell.items() if ch == "r" and x > 2 and y < 10)
-    assert p1 == (10, 6), p1
-    to_ring = abs(V2_RET_COL - p1[0]) + abs(V2_IH + 1 - p1[1])
-    to_request = abs(-2 - p1[0]) + abs(V2_IN_ROW - p1[1])
-    assert (to_ring, to_request) == (15, 16)
-    # ... and MAIN standing a row south of the stub is what spends the slack:
-    assert V2_V4_MAIN_ROW == V2_IN_ROW + 1
+    assert p1 == (10 - V2_V4_SHIFT, 6), p1
+
+    ring_in = (V2_RET_COL, V2_IH + 1)
+    ring_out = (V2_V4_IW + 1, V2_FWD_ROW)
+    answer = (V2_V4_OUT_COL, -2)
+    d = lambda a, b: abs(a[0] - b[0]) + abs(a[1] - b[1])  # noqa: E731
+    for west_grow, want in ((0, 2), (4, 6)):
+        request = (-2 - west_grow, V2_V4_IN_ROW)
+        assert d(p1, request) - d(p1, ring_in) == want, (west_grow, p1)
+    # ... and the shipped stub row would have made every one of those negative:
+    for west_grow in (0, 4):
+        old = (-2 - west_grow, V2_IN_ROW)
+        assert d(p1, old) - d(p1, ring_in) < 0, west_grow
+    # P1's `s` is the other wall, and the answer riser is what keeps it clear.
+    p1_s = (p1[0], p1[1] + 1)
+    assert d(p1_s, answer) - d(p1_s, ring_out) == 2

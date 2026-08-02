@@ -447,6 +447,78 @@ WORKER_V4_POST_PAD = 0
 #: above it and it is empty from wall to wall.
 V2_V4_MAIN_ROW = 3
 
+#: How far **west** the batch-1 v4 body stands from where it used to, and with it
+#: how many columns narrower the room is. Everything from P1's entry east moves
+#: together — P1, the dispatch, the target, the write arm's east end, the realign
+#: row, P2, the INIT fill and the return gutter — so the east wall travels with
+#: the body and P1's ``s`` keeps its distance to the ring-forward attach exactly.
+#:
+#: **It is worth ``V2_V4_SHIFT`` ticks off ``r`` -> ``S``**, because that leg is
+#: Manhattan and the answer's ``S`` is its eastern endpoint: move the endpoint
+#: three columns west and the walk is three cells shorter, at every access to a
+#: batch-1 bank.
+#:
+#: **Three is the geometric ceiling and it is MAIN, not a binding, that sets it.**
+#: MAIN owns columns 1..5 of its own row and the descent turn is P1's entry
+#: column, ``9 - shift``; at 4 the turn would land on MAIN's own ``M``.
+V2_V4_SHIFT = 3
+
+#: The batch-1 v4 room's width, which is :data:`V2_IW` **unchanged** — the shift
+#: moves the body inside the room and leaves the walls alone.
+#:
+#: Narrowing the room with the body is legal on the bindings (it even improves
+#: P1's ``s``, because the ring-forward attach then travels with the east wall)
+#: and it was tried first. It does not survive the **ring**: the serpentine's
+#: band runs from :data:`~.lm1.machine._SNAKE_WEST` to one column east of the
+#: worker, so three columns off the room is three off every snake row, and above
+#: ~100 slots the fold that used to fit no longer does — ``Collision: (29,29)
+#: holds '|'`` at ``skip_batch=1``, which is a configuration the tests build even
+#: though ``deadman-3d_hires`` never does. The three blank columns on the east are
+#: the price of a ring that folds at every size, and they cost nothing: ``bank_w``
+#: is a maximum over the banks that the **34-column batched** worker sets, so
+#: neither the block's pitch nor its box ever noticed the width either way.
+V2_V4_IW = V2_IW
+
+#: The batch-1 v4 room's own **wall anchors**, and the reason the shift is legal
+#: at all.
+#:
+#: The earlier enumeration concluded there was *no* legal westward shift, and it
+#: was wrong for a reason worth stating plainly: it held the request stub on
+#: :data:`V2_IN_ROW`. **None of the four anchors is fixed.** Each is a stub on a
+#: wall and any interior row or column takes it, so the 15-against-16 that pinned
+#: P1's ``r`` was not a constraint — it was a consequence of a placement nobody
+#: had chosen deliberately.
+#:
+#: Sweeping all four against the shift, strict at ``west_grow`` **0 and 4** (the
+#: shipped 4 hides failures that break every other caller, which is how the last
+#: trap surfaced), the worst margin over all eleven binding-critical cells is:
+#:
+#: | shift | anchors moved | worst margin |
+#: |---|---|---|
+#: | 0 | none (shipped) | 1 — P1's ``r`` at ``west_grow`` 0 |
+#: | 2 | request row alone | 1 |
+#: | 3 | request row alone | **0 — a tie, refused** |
+#: | 3 | request row + answer column | **2** |
+#: | 3 | all four | 3 |
+#:
+#: (Those are at the shipped room width. Narrowing the room with the body
+#: gives the same margin of 2 and is refused for the ring's sake, above.)
+#:
+#: So two anchors buy the full three columns with a margin of two, where the
+#: shipped placement had one. ``q=17`` puts the request stub on the room's last
+#: interior row, as far from P1's ``r`` as the wall reaches; ``o=14`` moves the
+#: answer riser east, away from P1's ``s``. Moving the stub *down* is the
+#: opposite of the move that was a silent wrong-bank
+#: (:data:`V2_V4_MAIN_ROW`): rows 3..9 are all illegal, and the margin only comes
+#: back below row 10.
+#:
+#: **It also shortens the corridor.** The feed relay room spans from one row above
+#: the bank's request stub down to the gate strip; putting the stub fifteen rows
+#: lower takes that room from 35 interior rows to 20 for nothing, because ``R``
+#: crosses a room in one instruction whatever its height.
+V2_V4_IN_ROW = 17
+V2_V4_OUT_COL = 17
+
 #: The same move in the **batched** worker, whose MAIN was 21 cells and a
 #: three-row descent away from its ring. Here the row is the ring's own entry row
 #: (5) rather than one south of the stub, because the batched body's west half is
@@ -521,16 +593,23 @@ def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
     # because the leg from here to P1's `d` is walked in full on the critical path
     # and every row MAIN gains is one cell off it. The stub stays where it is.
     y = V2_V4_MAIN_ROW
+    k = V2_V4_SHIFT                        # every column east of MAIN moves west
+    dc = 9 - k                             # the descent turn, which is P1's entry
     c.turn(0, y, E)                        # the return gutter's own last cell
     c.run(1, y, "rb]-M")                   # BP = addr, A = B = w - (2n+1)
     if WORKER_V4_PRE_PAD:
         # Out along the row above and back, so the pad is 2 ticks per unit with a
         # fixed 2 on top of it; the slope is what the instrument is for.
-        k = WORKER_V4_PRE_PAD
-        c.route((6, y), N, [(6, y - 1), (9 + k, y - 1), (9 + k, y), (9, y)], (9, 4), S)
+        q = WORKER_V4_PRE_PAD
+        c.route((6, y), N, [(6, y - 1), (dc + q, y - 1), (dc + q, y), (dc, y)], (dc, 4), S)
+    elif dc > 6:
+        c.route((6, y), E, [(dc, y)], (dc, 4), S)
     else:
-        c.route((6, y), E, [(9, y)], (9, 4), S)
-    p1, _ = c.counted_loop(9, 5, "rs")
+        # At the full shift MAIN's own exit cell *is* the turn: columns 1..5 are
+        # MAIN and the descent stands on 6, which is why 3 is the ceiling.
+        c.turn(dc, y, S)
+        c.blanks(dc, 4, 1, S)
+    p1, _ = c.counted_loop(dc, 5, "rs")
 
     # ── dispatch, on P1's own exit row: A is odd for a READ, even for a WRITE
     c.run(p1, 5, "WMbx")
@@ -545,34 +624,33 @@ def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
     # outgoing pipe and so has no binding to satisfy and no column it prefers.
     # The target `r` does have one — it must take the ring's return, not the
     # request — and column 14 keeps it: 16 cells against the request pipe's 23.
-    c.run(14, 6, "rS", d=S)                # (14,6) target, (14,7) the answer out
-    # The tail then turns east rather than running down column 18, which is what
-    # it did when it had to start from a cell three columns further east. It is
-    # one cell shorter *and* it hands column 18 back empty from row 6 down.
-    c.run(14, 8, "WNb", d=S)               # BP = n - 1 - addr, in two legs ...
-    c.turn(14, 11, E)                      # ... because row 12 is the write's
-    c.run(15, 11, "]m")                    # realign and column 14 crosses it
-    c.turn(17, 11, S)                      # onto the write arm's own exit column
+    c.run(14 - k, 6, "rS", d=S)            # target, then the answer out below it
+    # The tail then turns east rather than running down the room's east side,
+    # which is what it did when it had to start three columns further east.
+    c.run(14 - k, 8, "WNb", d=S)           # BP = n - 1 - addr, in two legs ...
+    c.turn(14 - k, 11, E)                  # ... because row 12 is the write's
+    c.run(15 - k, 11, "]m")                # realign and this column crosses it
+    c.turn(17 - k, 11, S)                  # onto the write arm's own exit column
 
     # WRITE (row 4). Column 9 stays blank: MAIN's own descent crosses it, and
     # two corridors may share a blank where neither may share a glyph.
-    c.turn(14, 4, W)
-    c.run(13, 4, "Nb]m", d=W)              # BP = n - 1 - addr
-    c.run(8, 4, "m", d=W)
-    c.horizontal(4, 8, 2)
+    c.turn(14 - k, 4, W)
+    c.run(13 - k, 4, "Nb]m", d=W)          # BP = n - 1 - addr
+    c.run(8 - k, 4, "m", d=W)
+    c.horizontal(4, 8 - k, 2)
     c.run(2, 4, "r", d=W)                  # the new value, off the request pipe
-    c.route((1, 4), W, [(1, 12)], (10, 12), E)
+    c.route((1, 4), W, [(1, 12)], (10 - k, 12), E)
     # `]` floored, so P1 moved one word too few: the ring gets one extra `r s`
     # pass here rather than out on row 4, where its `s` would have stood one
     # cell from preferring the *output* pipe -- 15 against 16, a margin of one.
-    c.run(11, 12, "MrsWsr")
-    c.route((17, 12), E, [(17, 13), (11, 13)], (11, 14), S)
+    c.run(11 - k, 12, "MrsWsr")
+    c.route((17 - k, 12), E, [(17 - k, 13), (11 - k, 13)], (11 - k, 14), S)
 
-    p2, _ = c.counted_loop(11, 14, "rs")
+    p2, _ = c.counted_loop(11 - k, 14, "rs")
     if WORKER_V4_POST_PAD:
-        k = WORKER_V4_POST_PAD
+        q = WORKER_V4_POST_PAD
         c.route((p2, 14), E,
-                [(p2 + 1, 14), (p2 + 1, 14 + k), (GUT, 14 + k), (GUT, 1)], (0, 1), S)
+                [(p2 + 1, 14), (p2 + 1, 14 + q), (GUT, 14 + q), (GUT, 1)], (0, 1), S)
     else:
         c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
     _park_size_on_row(c, 2 * n + 1, 1, 1)
@@ -583,12 +661,16 @@ def worker_v2(
     *,
     init_body: str | None = None,
     constant_input: bool = False,
-    width: int = V2_IW,
+    width: int | None = None,
     height: int = V2_IH,
     write_ack: bool = False,
     park_const: bool = False,
     protocol: str = "v3",
 ) -> Circuit:
+    # The v4 body has its own, narrower room (:data:`V2_V4_IW`); every other
+    # caller keeps ``V2_IW`` and its grid does not move by a cell.
+    if width is None:
+        width = V2_V4_IW if protocol == "v4" else V2_IW
     c = Circuit(width, height)
     L = lit(n)
     GUT = width - 1                       # right gutter: P2 exit climbs to MAIN
@@ -611,6 +693,11 @@ def worker_v2(
         # The fill runs once, so it may stand anywhere free -- and under v4 the
         # only free two columns are the room's north-east corner, because the
         # compact body has taken rows 4..6 out as far east as column 18.
+        # The fill stays in the room's north-east corner and does **not** follow
+        # the body west: with the answer riser moved to column 17
+        # (:data:`V2_V4_OUT_COL`) its own `s` would be 6 cells from the answer
+        # against 10 to the ring, and the tape would be initialised into the
+        # collector. At column 20 it is 7 against 9 and still takes the ring.
         c.route((x, 0), E, [(18, 0), (18, 2)], (18, 2), E)
         fill_exit = (c.counted_loop(19, 2, "0s")[0], 2)
         c.route(fill_exit, E, [(GUT, 2), (GUT, 1)], (0, 1), S)
