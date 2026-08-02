@@ -5092,6 +5092,24 @@ def _tape_worker_spec(skip_batch: int, protocol: str = "v3"):
             V2_RET_COL,
         )
     if skip_batch == 2:
+        if protocol == "v4":
+            from ..memory_tape import (
+                V2_JUMP_V4_IH,
+                WORKER_JUMP_V4_POST_PAD,
+                _JUMP_V4_RETURN_LEFT,
+            )
+
+            return (
+                worker_v2_jump,
+                V2_JUMP_IW,
+                (V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD)
+                if _JUMP_V4_RETURN_LEFT
+                else V2_JUMP_IH,
+                V2_IN_ROW,
+                V2_OUT_COL,
+                V2_JUMP_FWD_ROW,
+                V2_JUMP_RET_COL,
+            )
         return (
             worker_v2_jump,
             V2_JUMP_IW,

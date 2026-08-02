@@ -303,6 +303,28 @@ V2_ACK_OUT_ROW = 16         # left wall; used only by banked worker variants
 # Its horizontal counted rings sit close to the tape ports and far from the
 # request port, which makes every receive binding deterministic.
 V2_JUMP_IW, V2_JUMP_IH = 34, 18
+
+#: The **v4** batched body's own height, one row shorter than the v3 one it used
+#: to share. Its P2 return no longer descends to a row of its own: it turns west
+#: on the ring's own bottom row and climbs column 13, so row 17 is empty and the
+#: room ends at 16. ``matmul``, ``sudoku`` and ``deadman-3d`` all take the v3
+#: body and do not move by a cell.
+V2_JUMP_V4_IH = 17
+
+#: **An instrument, not a knob**, and the batched twin of
+#: :data:`WORKER_V4_POST_PAD`: it dips the v4 batched worker's return that many
+#: rows before it turns west, so the lap grows by ``2 * pad`` ticks entirely
+#: behind the answer's ``S``. It is how the *wide* worker's tail gets priced
+#: rather than inherited from the narrow one, which serves different banks at a
+#: different occupancy.
+WORKER_JUMP_V4_POST_PAD = 0
+
+#: Toggle for the A/B above; the long way home is the v3 body's route.
+_JUMP_V4_RETURN_LEFT = True
+
+#: The same move on the **narrow** body: climb the westmost clear column
+#: instead of the room's far east wall. Toggle for the A/B.
+_V4_RETURN_NEAR = True
 V2_JUMP_FWD_ROW = 7
 V2_JUMP_RET_COL = 21
 
@@ -651,6 +673,19 @@ def _worker_v2_v4(c: Circuit, n: int, GUT: int) -> None:
         q = WORKER_V4_POST_PAD
         c.route((p2, 14), E,
                 [(p2 + 1, 14), (p2 + 1, 14 + q), (GUT, 14 + q), (GUT, 1)], (0, 1), S)
+    elif _V4_RETURN_NEAR:
+        # **Home the short way.** The lap used to run east to the room's far wall,
+        # climb all 13 rows of it and come back west across the whole room -- 47
+        # cells to reach a gutter that starts 11 columns from where it left.
+        # Column 15 is the **westmost** column clear from row 1 to row 13 (MAIN's
+        # descent owns 6, the write arm row 4, P1 6..7, the read tail 11, the
+        # realign row 12 and P2 8..9), and climbing it is 35 cells instead of 47.
+        #
+        # It still crosses the parked constant on row 1, which is not incidental:
+        # MAIN's own ``M`` clobbers B every lap, so the reload has to happen on
+        # cells the man already walks, and columns 5..1 of row 1 are exactly
+        # those. A climb any further west would have to cross MAIN's own row.
+        c.route((p2, 14), E, [(15, 14), (15, 1)], (0, 1), S)
     else:
         c.route((p2, 14), E, [(GUT, 14), (GUT, 1)], (0, 1), S)
     _park_size_on_row(c, 2 * n + 1, 1, 1)
@@ -894,7 +929,10 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     skip loops, while the WRITE-value receive remains closest to the request
     pipe.
     """
-    c = Circuit(V2_JUMP_IW, V2_JUMP_IH)
+    _h = V2_JUMP_IH
+    if protocol == "v4" and _JUMP_V4_RETURN_LEFT:
+        _h = V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD
+    c = Circuit(V2_JUMP_IW, _h)
     L = lit(n)
     GUT = V2_JUMP_IW - 1
 
@@ -958,7 +996,22 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         c.turn(19, 13, E)
 
         p2_exit, _p2_odd = c.counted_ring_horizontal(19, 14, "rs")
-        c.route(p2_exit, S, [(23, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
+        # **Home the short way.** The v3 body drops to a row below the ring, runs
+        # the room's whole width east, climbs the far wall and comes back west
+        # along row 1 -- about sixty cells to reach a gutter that starts twelve
+        # columns from where it left. Turning west on the ring's own bottom row
+        # and climbing column 13 instead is ~22 cells shorter and empties row 17,
+        # which is where :data:`V2_JUMP_V4_IH` comes from. Column 13 is clear from
+        # row 1 to row 16 (MAIN owns 1..5 of row 5 and the rings live at 19..23),
+        # and the run west along row 1 still crosses the parked constant, which is
+        # what re-loads it for the next lap.
+        if not _JUMP_V4_RETURN_LEFT:
+            c.route(p2_exit, S, [(23, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
+        elif WORKER_JUMP_V4_POST_PAD:
+            q = WORKER_JUMP_V4_POST_PAD
+            c.route(p2_exit, S, [(23, 16 + q), (13, 16 + q), (13, 1)], (0, 1), S)
+        else:
+            c.route(p2_exit, S, [(13, 16), (13, 1)], (0, 1), S)
         # ``2n``, not ``2n + 1``: the parity of ``w - c`` is what ``x`` reads, so
         # the constant chooses which way each arm turns. Even (READ) goes CCW,
         # north, which is the side the ring's own bottom row does not stand on.
