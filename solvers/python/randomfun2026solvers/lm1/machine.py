@@ -1013,7 +1013,21 @@ _BRANCH_SLAB_ROWS = 8
 #: branch span. Swept rather than derived: the drain block below the arms hard-puts
 #: its ``<`` at ``base + 3`` and ``base + 4``, so how far west a riser may go is a
 #: question about the *discard* block's width, not about the arms.
-_SLAB_RISER_SLOTS = (5, 3)
+#:
+#: **(3, 3), not (5, 3), and it is the branch span that pays.** This number is
+#: also what :func:`_slab_east_span` reports as the branch span, and a branch is
+#: the widest thing in the band — on ``deadman-3d_hires``' taped grid ``JMPS``
+#: spans 22 columns at row 32, which floors the drop suffix maximum at 31 for
+#: **all seventeen simple lanes above it**. Two columns off that span is two
+#: columns off every one of their drops, paid twice (east to the drop, west back
+#: along the collector).
+#:
+#: Swept exhaustively over ``(1..4, 1..5)``: **only (3, 3) and the shipped
+#: (5, 3) build at all.** The north arm at base+1 collides with the trie's ``X``
+#: at (3, 40) and at base+2 with the ``W`` at (4, 40) — the discard block's own
+#: hard-put ``<`` at base+3/base+4 is the floor the docstring above names, and 3
+#: is exactly it. Worth -16,264 on the 20-command tour (-0.021%).
+_SLAB_RISER_SLOTS = (3, 3)
 
 
 def _slab_east_span(
