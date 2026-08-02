@@ -415,7 +415,82 @@ _JUMP_V4_WEST_P2 = 0
 #: fill drops onto. 13 is the westmost clear column at :data:`_JUMP_V4_WEST` 0;
 #: at 4 the write arm's own ``sr`` lands on 12 and 13, and 11 is the westmost
 #: clear one. Both are derived by walking the grid, not chosen.
+#:
+#: Superseded when :data:`_JUMP_V4_MAIN_X` moves MAIN: the riser then stands one
+#: column west of MAIN's own ``r``, because that is where the man has to arrive.
 _JUMP_V4_HOME = (13, 11)
+
+#: **MAIN's own column** — the batched v4 body's live leg, and the largest single
+#: number in it.
+#:
+#: The leg the requester waits for is ``r`` -> ``S`` and it is twenty-nine cells,
+#: of which *fourteen* are MAIN's run east from column 6 to the ring's entry at
+#: 19: pure distance, no operation, on the critical path of every read this body
+#: serves. MAIN stood at column 1 because that is where the return gutter used to
+#: drop the man — the old lap climbed column 11 to row 4, ran the room's whole
+#: width west to column 0 and turned east there — and **not** because its ``r``
+#: needs the west wall. On row 5 the request binding holds out to **column 12**,
+#: strictly, at ``west_grow`` 0 and 4 both (``place/b2worker.py``: the frontier
+#: is 12 at margin 1, 11 at 3, 10 at 5).
+#:
+#: What actually caps it is the ring's **odd-count re-entry**, which runs east
+#: along MAIN's own row from ``19 - w`` into the ring's entry: MAIN's five glyphs
+#: may not stand in that corridor, so ``main_x + 4 < 19 - w``. At the shipped
+#: shift of four that is ``main_x <= 10``, and 10 keeps five cells of binding
+#: margin — the frontier and the corridor bound meet almost exactly.
+#:
+#: Moving it pays **twice**, which is the part a distance-sum model misses:
+#:
+#: * nine cells off the live leg, at 0.27 %/tick; and
+#: * eleven off the walk home, at 0.024 %/tick — because the riser no longer has
+#:   to overshoot to column 0 and row 4 and come back. The parked size moves with
+#:   it, from row 4 to the bottom row, where the return and INIT both already
+#:   walk west; it still costs no ticks at all.
+#:
+#: The **four** ``(main_x, west)`` pairs that reach a twenty-cell live leg are an
+#: exact Layer-1 tie — ``(10, 4)``, ``(11, 3)``, ``(9, 5)`` and ``(12, 2)`` all
+#: give ``r`` -> ``S`` of 20, a READ lap of 58 and a WRITE lap of 84 — because a
+#: column of ring shift lengthens both target arms by exactly what it shortens
+#: the walk home. A first model priced MAIN's walk and the walk home and nothing
+#: between them, ranked them strictly, and was wrong; the arms hang off the
+#: ring's own exit and have to be in the objective.
+#:
+#: All four were **built and measured** rather than argued about, 21-round tour,
+#: same process, control first and last reproducing 80,083,592 to the tick:
+#:
+#: ==========================  ===========  =========  ======  ==================
+#: .                           ticks        delta      margin  tightest glyph
+#: ==========================  ===========  =========  ======  ==================
+#: control (main_x 1, west 4)   80,083,592    .            3   ``s``(17,6)
+#: **main_x 10, west 4**        79,223,703   -1.074%    **3**   ``s``(17,6)
+#: main_x 11, west 3            79,224,321   -1.073%       3   ``r``(11,5)
+#: main_x 9,  west 5            79,223,125   -1.074%       1   ``s``(16,6)
+#: main_x 12, west 2            79,224,939   -1.072%       1   ``r``(12,5)
+#: ==========================  ===========  =========  ======  ==================
+#:
+#: The four span **1,814 ticks — 0.0023 %**, which is the tie holding to three
+#: decimal places; nothing in the room explains the residue and choosing on it
+#: would be fitting phase noise. So the tiebreak is the *binding margin* — cells
+#: a rival would have to close before it takes the glyph, counting a reading-order
+#: tie as already lost — which is the one thing that genuinely differs. ``(9, 5)``
+#: walks the ring's own ``s`` a column toward the answer collector and ``(12, 2)``
+#: walks MAIN's ``r`` a column toward the ring return; both land on **1**, which
+#: is the margin this family has been burned by twice. Of the two that keep three,
+#: 10 is the faster, and it is also the smaller diff: ``_JUMP_V4_WEST`` keeps its
+#: own measured value, the tightest glyph in the room is the same ``s`` it was
+#: before, and the only cells that move are MAIN's, the walk home's and the park's
+#: — **three pipe-op cells in each of the three rooms, and nothing else in the
+#: machine's 11,964 of them.**
+#:
+#: ``passed=True fatal=None``, box 614x402 unchanged, every ``route_lengths``
+#: entry unchanged (``store->cpu`` 2), and the 901-address readback green
+#: ascending, descending, random at two seeds and interleaved read/write per
+#: bank, with the parked size off by one failing ``wrong-output`` on all four
+#: orders as the negative control.
+#:
+#: 1 is the shipped body to the cell, and ``matmul``, ``sudoku`` and the
+#: byte-pinned ``deadman-3d`` take the v3 body and never reach this branch.
+_JUMP_V4_MAIN_X = 10
 
 #: The same move on the **narrow** body: climb the westmost clear column
 #: instead of the room's far east wall. Toggle for the A/B.
@@ -1145,11 +1220,36 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     # The east half's shift, and with it the column the body comes home on.
     w = _JUMP_V4_WEST if protocol == "v4" else 0
     w2 = _JUMP_V4_WEST_P2 if protocol == "v4" else 0
-    home = _JUMP_V4_HOME[1] if w else _JUMP_V4_HOME[0]
+    mx = _JUMP_V4_MAIN_X if protocol == "v4" else 1
+    # The riser MAIN is entered from. When MAIN moves east it moves with it —
+    # the man has to arrive on the cell west of the `r` whatever else is true.
+    home = (mx - 1) if mx > 1 else (_JUMP_V4_HOME[1] if w else _JUMP_V4_HOME[0])
+    bot = _h - 1
+    if protocol == "v4" and mx + 4 >= 19 - w:
+        raise ValueError(
+            f"MAIN at column {mx} stands in the ring's odd-count re-entry "
+            f"corridor, which runs east along row {V2_V4_JUMP_MAIN_ROW} from "
+            f"{19 - w}; the bound is main_x + 4 < 19 - west"
+        )
+    if protocol == "v4" and mx > 1 and not _JUMP_V4_RETURN_LEFT:
+        # The riser *is* the short way home; there is no version of it that also
+        # runs the room's whole width east and climbs the far wall.
+        raise ValueError(
+            "a MAIN east of column 1 comes home up its own riser; "
+            "_JUMP_V4_RETURN_LEFT is the premise, not an option"
+        )
     x, _ = c.run(1, 0, "@" + L + "b")
     c.route((x, 0), E, [(GUT - 4, 0)], (GUT - 4, 2), E)
     fill, _ = c.counted_loop(GUT - 3, 2, "0s")
-    if protocol == "v4" and _JUMP_V4_TIGHT_ARMS:
+    if protocol == "v4" and mx > 1:
+        # Down the east gutter to the bottom row, west across the parked size —
+        # which now lives there, on cells the return already walks — and up the
+        # home riser into MAIN's own entry glyph. INIT has to cross the park to
+        # leave ``2n`` in B for the first access, which is the whole reason it
+        # goes the long way round rather than dropping straight down the riser.
+        c.route((fill, 2), E, [(GUT, 2), (GUT, bot), (home, bot)],
+                (home, V2_V4_JUMP_MAIN_ROW), E)
+    elif protocol == "v4" and _JUMP_V4_TIGHT_ARMS:
         # ... into the park's own row, which is also where P2 comes home to.
         c.route((fill, 2), E, [(GUT, 2), (GUT, 1), (home, 1), (home, 4)], (0, 4), S)
     else:
@@ -1171,10 +1271,11 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         # ring's **odd-count re-entry**, which already runs east along this row
         # into the same turn, so the two merge rather than collide.
         y = V2_V4_JUMP_MAIN_ROW
-        c.turn(0, y, E)
-        c.run(1, y, "rb]-M")
+        if mx == 1:
+            c.turn(0, y, E)
+        c.run(mx, y, "rb]-M")
         if y == 5:
-            c.horizontal(5, 5, 19 - w)  # ... straight into the odd tail's corridor
+            c.horizontal(5, mx + 4, 19 - w)  # ... into the odd tail's corridor
         else:
             c.route((6, y), E, [(23 - w, y)], (23 - w, 4), S)
         c.turn(23 - w, 5, S)
@@ -1242,6 +1343,19 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         # and the run west still crosses the parked constant, which is what
         # re-loads it for the next lap -- on row 4 under
         # :data:`_JUMP_V4_TIGHT_ARMS`, three rows short of the old climb to row 1.
+        if mx > 1:
+            # ... and with MAIN moved east there is nothing west of the riser to
+            # come home *to*: the climb stops on MAIN's own row and turns straight
+            # into its `r`. The old lap overshot west past column 0 and north past
+            # row 5 and walked back, and what that cost was not slack but *box*:
+            # the READ lap sits exactly two cells above its own bounding box
+            # either way (`place/dispatch.bbox_floor`), and the box goes 26x12 ->
+            # 17x11, so the lap goes 78 -> 58. The park moves to the bottom row
+            # with the riser, where the return and INIT both already run west, so
+            # it still costs nothing at all.
+            c.route(p2_exit, S, [(home, bot)], (home, y), E)
+            _park_size_on_row(c, 2 * n, home + 1, bot)
+            return c
         if not _JUMP_V4_RETURN_LEFT:
             c.route(p2_exit, S, [(23 - w2, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
         elif WORKER_JUMP_V4_POST_PAD:

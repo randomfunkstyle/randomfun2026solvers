@@ -1263,6 +1263,63 @@ def test_the_batched_bodys_realign_send_cannot_follow_it_west() -> None:
     assert art.cell[(16, 13)] == "s" and art.cell[(17, 13)] == "r"
 
 
+def test_the_batched_bodys_main_stands_where_the_request_still_binds() -> None:
+    """``_JUMP_V4_MAIN_X``: MAIN's column, and the two things that cap it.
+
+    The live leg is ``r`` -> ``S`` and MAIN's run east to the ring's entry was
+    fourteen of its twenty-nine cells -- pure distance, on the critical path of
+    every read. MAIN stood at column 1 because that is where the old return
+    gutter dropped the man, not because its ``r`` needs the west wall.
+
+    Two independent bounds, and on the shipped shift they meet:
+
+    * **binding** -- on row 5 the request pipe wins out to column 12, strictly,
+      at ``west_grow`` 0 and 4 both. 13 is a tape word and would be silent.
+    * **the ring's odd-count re-entry** -- it runs east along MAIN's own row from
+      ``19 - west`` into the ring's entry, and MAIN's five glyphs may not stand
+      in that corridor: ``main_x + 4 < 19 - west``.
+
+    The generator refuses the second outright rather than drawing a body whose
+    skip loop walks over ``]``.
+    """
+    from randomfun2026solvers import memory_tape as mt
+
+    def request_margin(x: int, y: int, west_grow: int) -> int:
+        req = abs(x - (-2 - west_grow)) + abs(y - mt.V2_IN_ROW)
+        ring = abs(x - mt.V2_JUMP_RET_COL) + abs(y - (mt.V2_JUMP_V4_IH + 1))
+        return ring - req
+
+    assert [request_margin(x, 5, 4) for x in (10, 11, 12, 13)] == [5, 3, 1, -1]
+    assert [request_margin(x, 5, 0) for x in (10, 11, 12, 13)] == [9, 7, 5, 3]
+
+    c = mt.worker_v2_jump(53, park_const=True, protocol="v4")
+    mx, w = mt._JUMP_V4_MAIN_X, mt._JUMP_V4_WEST
+    assert mx + 4 < 19 - w, "MAIN may not stand in the odd-count corridor"
+    assert c.cell[(mx, 5)] == "r" and c.cell[(mx + 4, 5)] == "M"
+    assert c.cell[(19 - w, 5)] == ">", "the odd tail turns east from here"
+
+    # the live leg, walked: MAIN's five, the run east, the ring's two
+    # pass-through cells, the dispatch's five and the target's three.
+    assert 5 + ((23 - w) - (mx + 4)) + 2 + 5 + 3 == 15 + (19 - w - mx)
+    assert 15 + (19 - w - mx) == 20 and 15 + (19 - 4 - 1) == 29
+
+    prev = mt._JUMP_V4_MAIN_X
+    try:
+        mt._JUMP_V4_MAIN_X = 19 - w - 4
+        with pytest.raises(ValueError, match="odd-count re-entry"):
+            mt.worker_v2_jump(53, park_const=True, protocol="v4")
+        # ... and 1 is the body this replaces, to the cell: the park back on
+        # row 4, the entry turn back at column 0.
+        mt._JUMP_V4_MAIN_X = 1
+        old = mt.worker_v2_jump(53, park_const=True, protocol="v4")
+    finally:
+        mt._JUMP_V4_MAIN_X = prev
+    assert old.cell[(0, 5)] == ">" and old.cell[(1, 4)] == "M"
+    assert old.rows() != c.rows()
+    # neither the v3 batched body nor either narrow body can reach this branch.
+    assert mt.worker_v2_jump(53, park_const=True).cell[(1, 2)] == "r"
+
+
 def test_the_batched_bodys_p2_cannot_move_west_at_all() -> None:
     """P2's odd-count re-entry runs **east** along row 13, over live tape ops.
 
@@ -1605,12 +1662,19 @@ def test_the_batched_v4_body_fetches_its_write_value_where_it_still_binds() -> N
     # one-cell margin. The body takes 7 and keeps three.
     c = mt.worker_v2_jump(53, park_const=True, protocol="v4")
     assert c.cell[(7, 9)] == "r"
-    # the ring size parks directly above MAIN rather than four rows up, and the
-    # climb home stops on that row instead of running to row 1
+    # the climb home stops on MAIN's own row instead of running to row 1, and the
+    # ring size parks on whichever row the return already walks west along --
+    # row 4 with MAIN at column 1, the bottom row once :data:`_JUMP_V4_MAIN_X`
+    # moves it east (see the test below).
     rows = c.rows()
-    assert rows[4].startswith("vM`") and rows[5].startswith(">rb]-M")
-    assert rows[1].strip() in ("v", "v" + rows[1].strip()[1:])  # only the turn left
     assert "M`" not in rows[1]
+    if mt._JUMP_V4_MAIN_X == 1:
+        assert rows[4].startswith("vM`") and rows[5].startswith(">rb]-M")
+        assert rows[1].strip() in ("v", "v" + rows[1].strip()[1:])
+    else:
+        mx = mt._JUMP_V4_MAIN_X
+        assert rows[5][mx - 1:mx + 5] == ">rb]-M"
+        assert rows[-1][mx - 1:mx + 2] == "^M`"
     # off is the shipped grid, and only this branch moves: the v3 batched body
     # and both narrow bodies are byte-identical at either setting.
     try:
