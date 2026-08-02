@@ -12758,7 +12758,21 @@ DOOM_PACK_NORTH_WEST: dict[tuple[str, str], bool] = {
 
 DOOM_LEAF_COLS: dict[tuple[str, str], tuple[int, ...]] = {
     ("deadman-3d", "taped"): (3, 7, 27, 33, 37, 41, 73, 79),
-    ("deadman-3d_hires", "taped"): (3, 7, 27, 33, 37, 41, 73, 79),
+    # **(3, 7, 27, 31, 37, 41, 71, 76), -0.011%.** This tuple had never been
+    # swept -- it was derived once and thereafter only checked for *validity*,
+    # because a bad value fails loudly (`wrong-frame`) rather than quietly.
+    # Coordinate descent over all eight, +-1..4 each, converges in two steps:
+    #
+    #     shipped                        76,782,397
+    #     i7 78, i6 71, i3 31            76,776,120   -6,277
+    #     ... then i7 76                 76,773,760   -2,360   <- converged
+    #
+    # The coordinates are **coupled**, which is why one pass is not enough: i7=76
+    # is refused outright at the shipped i6 (`trie node at 74 is 1/2 from its
+    # children 73/76: a branch needs two cells a side`) and only becomes legal
+    # once i6 has moved to 71. Every value here is still gated over the tour
+    # rather than trusted because it built.
+    ("deadman-3d_hires", "taped"): (3, 7, 27, 31, 37, 41, 71, 76),
 }
 
 #: ``(slug, tier)`` pairs whose taped STORE visits its banks in a **chain order**

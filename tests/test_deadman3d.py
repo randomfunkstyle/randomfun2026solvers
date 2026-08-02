@@ -1293,13 +1293,24 @@ def test_doom_leaf_cols_is_opt_in_per_tier_and_moves_no_code() -> None:
     from randomfun2026solvers.lm1 import d3_unit
     from randomfun2026solvers.lm1.store import DoomUnit
 
-    assert machine.DOOM_LEAF_COLS == {
-        ("deadman-3d", "taped"): d3_unit.COMPACT_LEAF_COLS,
-        ("deadman-3d_hires", "taped"): d3_unit.COMPACT_LEAF_COLS,
+    # `deadman-3d` keeps the compact layout, which is what its hash pins require.
+    # `deadman-3d_hires` is free to move and has been swept off it: coordinate
+    # descent over all eight columns is worth -0.011% (see `DOOM_LEAF_COLS`).
+    hires = machine.DOOM_LEAF_COLS[("deadman-3d_hires", "taped")]
+    assert machine.DOOM_LEAF_COLS[("deadman-3d", "taped")] == d3_unit.COMPACT_LEAF_COLS
+    assert set(machine.DOOM_LEAF_COLS) == {
+        ("deadman-3d", "taped"),
+        ("deadman-3d_hires", "taped"),
     }
     assert all(tier == "taped" for _slug, tier in machine.DOOM_LEAF_COLS)
     assert d3_unit.arm_codes(d3_unit.COMPACT_LEAF_COLS) == d3_unit.arm_codes()
     assert d3_unit.arm_codes(d3_unit.COMPACT_LEAF_COLS) == DoomUnit.CODES
+    # The "moves no code" half of the claim, asserted for the swept tuple rather
+    # than inherited from it being the same tuple: the codes come off the leaves'
+    # *rank*, so any strictly-increasing eight give back the same map.
+    assert len(hires) == len(d3_unit.COMPACT_LEAF_COLS)
+    assert all(a < b for a, b in zip(hires, hires[1:]))
+    assert d3_unit.arm_codes(hires) == DoomUnit.CODES
 
     # the shipped uniform pitch is the same table, spelled the old way
     assert d3_unit.LEAF_COLS == tuple(
