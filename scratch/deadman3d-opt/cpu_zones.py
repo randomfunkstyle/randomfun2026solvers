@@ -216,7 +216,8 @@ one-cell margin, so a glyph parked there rebinds if any geometry shifts. Boxed g
 def main(argv: list[str]) -> int:
     out = Path(argv[0]) if argv else REPO / "littleman" / "examples" / "local"
     out.mkdir(parents=True, exist_ok=True)
-    for store, stem in (("men-v3", "deadman-3d_hires_men_v3"), ("taped", "deadman-3d_hires")):
+    # taped only — men-v3 is frozen and is deliberately not regenerated.
+    for store, stem in (("taped", "deadman-3d_hires"),):
         m, glyphs, touches, M = capture(store)
         render(m, glyphs, touches, M, store, out / f"{stem}.zones.debug.html")
     return 0
