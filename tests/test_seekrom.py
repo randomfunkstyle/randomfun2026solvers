@@ -128,7 +128,12 @@ def test_hires_seek_registries_are_complete_and_hires_keyed() -> None:
     """
     key = ("deadman-3d_hires", "taped")
     assert "deadman-3d_hires" in machine.SEEK_DRUM
-    assert machine.SEEK_TIER_LAYOUT[key] == {"rom_rows": 119}
+    # 185, not 119. The 119 sweep minimised ticks on a 517x496 machine that no
+    # longer exists (the store has since roughly halved, and the v4 adapter, the
+    # v5 wire and eleven rotated banks all moved where the fetch corridor ends).
+    # -1.503% re-swept; see `machine.SEEK_TIER_LAYOUT`. The keying is the claim
+    # here, not the value, so this line is expected to move again.
+    assert machine.SEEK_TIER_LAYOUT[key] == {"rom_rows": 185}
     assert machine.SEEK_SLAB_PITCH["deadman-3d_hires"] == 11
     # 2, re-swept under :data:`machine.FETCH_FOLD`, which walks the CPU's whole
     # rigid body two columns west while the pipes it is measured against stay put.
@@ -265,9 +270,17 @@ def test_the_hires_slot_map_names_jmps_and_stays_inert_without_it() -> None:
     IWAD-only.
     """
     slots = machine.OPCODE_SLOTS[("deadman-3d_hires", "taped")]
-    assert slots["JMPS"] == 25
-    # rank-preserving: the only gap the shipped 21 leave it is JMPF(24)..SND(28)
-    assert slots["JMPF"] < slots["JMPS"] < slots["SND"]
+    # **21 now, traded with ``BRN``, worth -1.373%.** The claim this pin was
+    # written to protect is that ``JMPS`` is *named*, not that it sits at 25 —
+    # and 25 was picked on the grounds that 25/26/27 are indistinguishable to the
+    # drum and the trie alike, which is still true. What that reasoning missed is
+    # that 21 was never in the candidate set: it is not a free slot, so taking it
+    # moves ``JMPS`` from the last structured lane to the first, and a structured
+    # lane owns a slab. See `machine.LANE_ORDER_FOR`, which this must agree with.
+    assert slots["JMPS"] == 21
+    assert slots["BRN"] == 25
+    # rank-preserving against its own lane order, which is the real invariant
+    assert slots["JMPS"] < slots["JMPF"] < slots["BRN"] < slots["SND"]
     assert len(set(slots.values())) == len(slots)
 
     # inert without a seek split: `_relabel_slots` drops names the build never

@@ -8960,12 +8960,46 @@ LANE_ORDER: dict[str, tuple[str, ...]] = {
 #: re-flows ``mem_out_row``, which the store has to follow. That is the model's
 #: blind spot, named: it prices the CPU's walk and nothing downstream of it. Build
 #: every tie rather than picking one.
+#:
+#: ## The blind spot is worth 1.37%, and it is all in the structured band
+#:
+#: The search above treats ``BRN``/``BRZ``/``JMPF``/``JMPS`` as pinned — ``rows.py``
+#: and ``rowsearch.py`` both hold them in ``STRUCTURED`` and permute only the simple
+#: lanes. So the one sub-order the model never scored is the one that moves: each
+#: structured lane owns a *slab*, and a slab's rows are what set the seek drum's
+#: reach and the pad below it, none of which is in the walk objective.
+#:
+#: Enumerated by building all 24 assignments of the four opcodes to their four
+#: slots (21, 22, 24, 25), plus every placement of each onto the ten unused slots.
+#: Against 77,914,595 on the 20-command tour:
+#:
+#: | assignment (slot 21, 22, 24, 25) | ticks | Δ |
+#: |---|---|---|
+#: | ``BRN BRZ JMPF JMPS`` (was shipped) | 77,914,595 | — |
+#: | ``BRZ BRN JMPF JMPS`` | 77,900,633 | -0.018% |
+#: | ``JMPS BRN JMPF BRZ`` | 76,875,928 | -1.333% |
+#: | **``JMPS BRZ JMPF BRN``** | **76,844,819** | **-1.373%** |
+#:
+#: Net it is one transposition — **``BRN`` and ``JMPS`` trade slots** — and the
+#: other 22 assignments are all worse, several by over 1%. Moving any of the four
+#: onto a *free* slot is either exactly neutral (23, 26, 27 — the rank is
+#: unchanged, so the lane never moves) or refused, which is the same
+#: rank-preservation rule stated from the other side.
+#:
+#: Why this one transposition and not the near-identical others: ``JMPS`` is the
+#: seek variant, so its slab carries the drum's taken arm, and putting that arm on
+#: the *first* structured row rather than the last is what lets the tail below it
+#: pack. That is a slab-geometry effect, invisible to a model whose only term is
+#: ``2 * (dx + dy)`` along a lane.
 LANE_ORDER_FOR: dict[tuple[str, str], tuple[str, ...]] = {
     # north to south, unpinned lanes only — `plan` places IN at the top and the
     # display lane at the bottom itself and rejects a permutation that names them.
+    # The tail is JMPS/BRZ/JMPF/BRN, not BRN/BRZ/JMPF/JMPS: see above. It must stay
+    # in step with `OPCODE_SLOTS` — a lane's row *is* its slot's rank, and `plan`
+    # refuses an order that disagrees with the map.
     ("deadman-3d_hires", "taped"): (
         "INCM", "MOVA", "NEG", "MUL", "SUB", "DIV", "LDA", "ADD", "MODI", "LD",
-        "MULI", "ST", "LDI", "ADDI", "SUBI", "DIVI", "BRN", "BRZ", "JMPF", "JMPS",
+        "MULI", "ST", "LDI", "ADDI", "SUBI", "DIVI", "JMPS", "BRZ", "JMPF", "BRN",
     ),
 }
 
@@ -9780,7 +9814,25 @@ ROM_TOUCH_DROP: dict[tuple[str, str], int] = {
     # throughout: 13 -> 143,631,709, 14 -> 143,590,497, **16 -> 143,513,651**,
     # 17 -> 143,634,141. The drop is worth -0.109% on the *unfolded* machine
     # (145,970,818 -> 145,811,785 at pad 1), so it is not carrying the fold.
-    ("deadman-3d_hires", "taped"): 21,
+    # **17, and the window moved because the ROM under it got taller.** The 13..17
+    # window above was measured against ``rom_rows`` 119; :data:`SEEK_TIER_LAYOUT`
+    # now pins 185, which moves the ROM corridor's whole south end. Both ends of
+    # the window moved with it — 14, 15 and 16 are now *refused* (the corridor `r`
+    # at (19,237) loses ``mem_resp`` to ``rom``), and 23 and 24 still are at the
+    # north end, so the feasible span is 17..22 and the optimum sits on its floor:
+    #
+    #     drop   ticks         Δ vs 21
+    #     **17** **77,914,595** **-0.087%**   <- the pick
+    #     18     77,932,036    -0.065%
+    #     19     77,978,363    -0.006%
+    #     20     77,963,951    -0.025%
+    #     21     77,983,xxx        —
+    #     22     77,935,028    -0.061%
+    #
+    # A shallow jagged bowl rather than the cliff the k=3 note describes: once the
+    # corridor is long enough not to be the binding constraint, what is left is
+    # FIFO depth against §7.1 slack, and that trades smoothly.
+    ("deadman-3d_hires", "taped"): 17,
     # **The men tier's 7 is that same identity, and it is the difference between
     # :data:`STRAIGHT_TRIE` being a 9.7% win and a 4.2% loss.** ``SQUASH_BAND`` 7
     # pulls ``cpu.centre`` seven rows north, so without this the corridor between
@@ -10689,10 +10741,49 @@ SEEK_MEM_PAD: dict[str, int] = {"deadman-3d": 22}
 #: sets how the words pack into rows and the ladder's depth at once, and neither
 #: is smooth in the row count. 119 is the minimum of a flat, jagged curve, so
 #: treat it as a pin to re-sweep rather than a crossing to reason from.
+#:
+#: ## Why the hires taped pin moved 119 -> 185
+#:
+#: The sweep above minimised **ticks**, so the pin was never a footprint
+#: compromise and the 0.63% span it reports is real. What expired is the machine
+#: it was measured on: that build was 517x496, before the store was roughly
+#: halved and before the v4 adapter, the v5 wire and the eleven rotated banks.
+#: Every one of those moved where the fetch corridor's south end lands, and the
+#: fold that packs the ROM best against it moved with them.
+#:
+#: The re-sweep is free to range as far as it likes because ``deadman-3d_hires``
+#: is a post-contest demo (``AGENTS.md``): ticks are the only metric, and
+#: ``max(w, h) ** 2 * ticks`` does not apply to it. The box grows 614x402 ->
+#: 614x479 here and that is not a cost anyone pays.
+#:
+#: Re-swept on the 20-command tour against 79,223,703 at 119:
+#:
+#: ::
+#:
+#:     rom_rows   box        ticks         Δ
+#:     130        614x416    78,979,811    -0.308%
+#:     140        614x427    78,266,737    -1.208%
+#:     165        614x455    78,474,220    -0.946%
+#:     178        614x473    78,137,701    -1.371%
+#:     182        614x478    78,120,473    -1.393%
+#:     **185**    614x479    **78,032,960**  **-1.503%**   <- the pin
+#:     192        614x488    79,093,334    -0.165%
+#:     198        614x494    78,854,691    -0.466%
+#:
+#: Still jagged, still non-monotone, for the same reason as before — the fold sets
+#: the word packing and the ladder depth together, and neither is smooth in the
+#: row count. 188, 190 and 200 do not run at all (``numeric literal does not fit
+#: signed 64 bits``: SPEC:262-276 pairs backticks on rows *and* columns, and a
+#: fold of that depth makes a column pair overflow), which is what ends the sweep
+#: rather than any diminishing return.
+#:
+#: Treat 185 exactly as the note above treats 119: **a pin to re-sweep, not a
+#: crossing to reason from.** It moved once because the machine under it moved,
+#: and it will do that again.
 SEEK_TIER_LAYOUT: dict[tuple[str, str], dict[str, object]] = {
     ("deadman-3d", "men-v3"): {"rom_rows": 60},
     ("deadman-3d", "taped"): {"rom_rows": 84},
-    ("deadman-3d_hires", "taped"): {"rom_rows": 119},
+    ("deadman-3d_hires", "taped"): {"rom_rows": 185},
     # Without this key the men path fell through to ``ROM_ROWS`` 88 and died with
     # ``row 0 holds 158 words >= K=128`` — which reads exactly like the tier being
     # broken for hires, and is the likeliest reason nobody re-tried it for a month.
@@ -10859,7 +10950,17 @@ OPCODE_SLOTS: dict[tuple[str, str], dict[str, int]] = {
         # needs (see there). Worth +3,291 ticks on the 21-round tour on its own —
         # 0.002%, against the -5.34% it unblocks.
         "MULI": 14, "ST": 15, "LDI": 16, "ADDI": 17, "SUBI": 18, "DIVI": 20,
-        "BRN": 21, "BRZ": 22, "JMPF": 24, "JMPS": 25, "SND": 28,
+        # **``BRN`` and ``JMPS`` trade slots, worth -1.373%** — see
+        # :data:`LANE_ORDER_FOR`, which this has to stay in step with. The
+        # paragraph above picks ``JMPS`` = 25 on the grounds that 25, 26 and 27 all
+        # bit-reverse to a two-digit opcode and the 21-round tour was identical at
+        # all three. Both halves of that stand: the *drum* still cannot tell them
+        # apart, and neither can the trie. What it does not cover is 21, which is
+        # not a free slot at all — taking it makes ``JMPS`` the **first**
+        # structured lane instead of the last, and a structured lane owns a slab.
+        # So this is a rank change wearing a relabelling's clothes, and it is the
+        # one assignment out of 24 the walk model had no term for.
+        "JMPS": 21, "BRZ": 22, "JMPF": 24, "BRN": 25, "SND": 28,
     },
 }
 
@@ -12402,12 +12503,21 @@ TAPED_TAPE_PARK_CONST: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 #: the **man**, who is the only thing the next request can queue behind. Same
 #: process, same moment, identical tick both times.
 #:
-#: Kept, off, for two reasons: it makes :data:`_TAPE_FOLDS` reachable rather than
-#: dead, and headroom that is free at 87k reads a frame is not free at four times
-#: that. It is also what would *license* moving the relay room east — the ring
-#: would grow and that now costs nothing — which is the one way the six-cell
-#: ``reqK->bankK`` stub gets shorter (see :data:`TAPED_FEED_TUCK`).
-TAPED_TIGHT_RING: set[tuple[str, str]] = set()
+#: **Taken now, and the zero was real both times — a third thing changed.** The
+#: two measurements above are still correct: at ``rom_rows`` 119 this moved
+#: nothing, twice, for the reason given (a long ring delays a *value*, which the
+#: man overlaps with his own walk). What made it start paying is
+#: :data:`SEEK_TIER_LAYOUT`'s 119 -> 185. A taller ROM lengthens the fetch's own
+#: walk, and the ring delay that used to hide entirely inside the man's slack now
+#: has more slack to hide in — so the *fold search this switch unlocks* over
+#: :data:`_TAPE_FOLDS`, which was picking a fold whose only effect was ring
+#: length, starts landing on folds that shorten the worker instead.
+#:
+#: Measured on the 20-command tour at ``rom_rows`` 185, ``ROM_TOUCH_DROP`` 17:
+#: 77,983,604 off -> **77,914,595 on, -0.089%**. Small, and the sign is the
+#: point: a lever that measured 0.000% twice is not dead, it is *conditional*,
+#: and the condition was the geometry it was measured against.
+TAPED_TIGHT_RING: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 
 #: ``(slug, tier)`` -> the DOOM unit's loop-corridor row (``d3_unit.R_LOOP``,
 #: shipped 27). Absent means "keep the shipped row", which is what holds
@@ -13030,7 +13140,17 @@ TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
     # old end-peeling order. What does *not* work is optimising either term
     # alone: the offset-only optimum ``(110, 52, 52, 138, 253, 195, ...)`` folds
     # ``POSX..PLANEY`` into a 253-slot ring, and measured **+1.82%**.
-    "deadman-3d_hires": (114, 52, 52, 134, 7, 441, 58, 21, 6, 9, 7)}
+    # **The third boundary moved eight slots west, -0.060%.** Everything above
+    # stands — the DP is still wrong, the shipped cut still beats every static
+    # model — but "measured local optimum" was measured with a *coarse* probe.
+    # A ±1/±3/±8 sweep of all ten boundaries on the current machine finds one
+    # that pays: 52 -> 44 at bank 2, with the eight slots handed to bank 3.
+    # 76,844,819 -> 76,798,661 on the 20-command tour, and it is a true local
+    # optimum from there: -2, -4, -6 and -10 at the same boundary are all worse
+    # (+0.060%, +0.093%, +0.158%, +0.203%), and re-perturbing all ten boundaries
+    # afterwards moves nothing. A jagged basin, so the step size is the finding —
+    # a ±1 probe would have reported the shipped cut as optimal, twice.
+    "deadman-3d_hires": (114, 52, 44, 142, 7, 441, 58, 21, 6, 9, 7)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank
