@@ -6939,7 +6939,10 @@ def _assemble(
         # Aligned so the request pipe leaves the CPU beside the memory lanes, but never
         # so high that the response pipe's westward leg grazes the adapter's top corner.
         # A small machine (few lanes, no memory) is the case that needs the clamp.
-        AY0 = max(CY + cpu.mem_out_row - ADAPTER_IN_ROW, CY + cpu.mem_in_row + 3)
+        AY0 = max(
+            CY + cpu.mem_out_row - ADAPTER_IN_ROW,
+            CY + cpu.mem_in_row + ADAPTER_TOP_CLEARANCE,
+        )
         resp_row_check = CY + cpu.mem_in_row
         if resp_row_check >= AY0 - 1:
             raise MachineError(
@@ -7903,6 +7906,23 @@ STORE_TIERS = ("tape", "grid", "men", "men-y", "men-v3", "taped")
 #: the five columns come straight off its score.
 CPU_ADAPTER_GAP = 4
 ADAPTER_TAPE_GAP = 1
+
+#: How far below the CPU's **response** row the adapter's top wall must sit.
+#:
+#: ``AY0`` takes the larger of "aligned with the memory lanes" and "clear of the
+#: response pipe", and this is the clearance in the second term. It was a literal
+#: ``3`` -- the smallest value that keeps the response pipe's westward leg off the
+#: adapter's top corner, which is all it ever needed to be while the *first* term
+#: was the one that bound.
+#:
+#: Named because it is the **only** vertical freedom the adapter has, and the
+#: adapter's top wall is what three separate band-restructuring families collide
+#: with: :data:`SQUASH_BAND`, :data:`TRIE_SLACK_ROWS` and :data:`TOP_RETURN_BUS`
+#: all refuse with ``collision at (47, 232)``, and that is the wall.
+#: :data:`CPU_ADAPTER_GAP` cannot relieve it -- it is horizontal, and widening it
+#: drives ``answer_west`` negative -- and ``mem_offset`` cannot either, pinned by
+#: ``answer_west`` one way and the tape's west wall the other.
+ADAPTER_TOP_CLEARANCE = 3
 
 #: Whole-machine placement floors. These are geometric minima, not visual
 #: padding:
