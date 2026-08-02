@@ -5104,8 +5104,16 @@ def _tape_worker_spec(skip_batch: int, protocol: str = "v3", rotate: bool = Fals
 
     if skip_batch == 1:
         if protocol == "v4":
-            from ..memory_tape import V2_V4_IN_ROW, V2_V4_IW, V2_V4_OUT_COL
+            from ..memory_tape import (
+                V2_V4_IN_ROW,
+                V2_V4_IW,
+                V2_V4_OUT_COL,
+                v4_ret_col,
+            )
 
+            # ... and the return column is the one anchor this body chooses for
+            # itself: see ``memory_tape.V4_P1_RING_RET_COL``, where moving the
+            # wall two columns west is what lets the ring keep the full shift.
             return (
                 worker_v2,
                 V2_V4_IW,
@@ -5113,7 +5121,7 @@ def _tape_worker_spec(skip_batch: int, protocol: str = "v3", rotate: bool = Fals
                 V2_V4_IN_ROW,
                 V2_V4_OUT_COL,
                 V2_FWD_ROW,
-                V2_RET_COL,
+                v4_ret_col(),
             )
         return (
             worker_v2,
@@ -5914,6 +5922,7 @@ def build(
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
+    store_collector_fast: bool = False,
     store_tight_gate: bool = False,
     store_gate_return_slack: int | None = None,
     store_gate_park_const: bool = False,
@@ -6153,6 +6162,7 @@ def build(
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
+                    store_collector_fast=store_collector_fast,
                     store_tight_gate=store_tight_gate,
                     store_gate_return_slack=store_gate_return_slack,
                     store_gate_park_const=store_gate_park_const,
@@ -6254,6 +6264,7 @@ def build(
                     store_request_west=store_request_west,
                     store_riser_lift=store_riser_lift,
                     store_compact_gate=store_compact_gate,
+                    store_collector_fast=store_collector_fast,
                     store_tight_gate=store_tight_gate,
                     store_gate_return_slack=store_gate_return_slack,
                     store_gate_park_const=store_gate_park_const,
@@ -6377,6 +6388,7 @@ def _assemble(
     store_request_west: bool = False,
     store_riser_lift: int = 0,
     store_compact_gate: bool = False,
+    store_collector_fast: bool = False,
     store_tight_gate: bool = False,
     store_gate_return_slack: int | None = None,
     store_gate_park_const: bool = False,
@@ -6818,6 +6830,7 @@ def _assemble(
                 ),
                 answer_exit_west=answer_exit_west,
                 compact_gate=store_compact_gate,
+                collector_fast=store_collector_fast,
                 tight_gate=store_tight_gate,
                 gate_return_slack=store_gate_return_slack,
                 gate_park_const=store_gate_park_const,
@@ -11732,6 +11745,32 @@ TAPED_ROTATE_BANKS: dict[tuple[str, str], tuple[int, ...]] = {
 #: of reads pay three gate traversals to reach the cheapest ring — is
 #: :data:`TAPED_BANK_ORDER`, and it is worth an order of magnitude more. The two
 #: do not add; see that entry.
+#: ``(slug, tier)`` pairs whose taped store gives its **answer collector**
+#: :func:`~..memory_men.teleport`'s latency art — ``R`` and ``s`` adjacent, an
+#: 8-cell lap — instead of the 6-cell one every other caller wants.
+#:
+#: A 6-cell lap is a 3x2 rectangle; a 3x2 rectangle has four corners and exactly
+#: two straight cells, and those two are **diagonally opposite**. ``R`` and ``s``
+#: cannot double as a corner, so they must stand on the two straight cells and
+#: the walk between them is three moves — not by accident but by the shape, and
+#: no amount of moving the room changes it. Four columns instead of three put
+#: them side by side.
+#:
+#: The trade is a lap two cells longer for an answer two ticks earlier, and it is
+#: worth taking exactly when the room is on the critical path and idle enough
+#: that its lap is free. The collector is both: it is the last room on every
+#: read, and it is 97.7% idle. There is no binding question — a collector has one
+#: outgoing pipe, so its ``s`` has nothing to choose between, and ``R`` has no
+#: distance term at all.
+#:
+#: **Measured, 21-round hi-res tour, same process, same moment, control
+#: reproducing 85,522,204 to the tick: -0.706%** (85,522,204 -> 84,918,154),
+#: ``passed=True``, box 614x403, ``route_lengths`` identical. Keyed by pair
+#: because ``deadman-3d``'s taped store is pinned to a checked-in ``.man``.
+TAPED_COLLECTOR_FAST: set[tuple[str, str]] = {
+    ("deadman-3d_hires", "taped"),
+}
+
 TAPED_COMPACT_GATE: set[tuple[str, str]] = {
     ("deadman-3d", "taped"),
     # Same tier, same gate chain, and the spacer rows are a property of the gate
@@ -12944,6 +12983,7 @@ def build_for(
         store_request_west=(slug, store) in STORE_REQUEST_WEST,
         store_riser_lift=STORE_RISER_LIFT.get((slug, store), 0),
         store_compact_gate=(slug, store) in TAPED_COMPACT_GATE,
+        store_collector_fast=(slug, store) in TAPED_COLLECTOR_FAST,
         store_tight_gate=(slug, store) in TAPED_TIGHT_GATE,
         store_gate_return_slack=TAPED_GATE_RETURN_SLACK.get((slug, store)),
         store_gate_park_const=(slug, store) in TAPED_GATE_PARK_CONST,

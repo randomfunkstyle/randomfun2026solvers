@@ -489,7 +489,35 @@ HEAD_IN = ((1, 0), (8, 2))
 HEAD_OUT = ((5, 0), (10, 1))
 
 
-def teleport(width: int, *, n_in: int | None = None) -> tuple[list[str], list[tuple[int, int]]]:
+#: The teleport's two loops, and they optimise different things.
+#:
+#: ``@>Rv`` over `` ^s<`` is six cells, which is the **shortest lap** -- and it is
+#: therefore what every caller that cares about the man's occupancy wants. But a
+#: 6-cell lap is a 3x2 rectangle, a 3x2 rectangle has four corners and exactly two
+#: straight cells, and those two are **diagonally opposite**. ``R`` and ``s`` do
+#: not turn, so they must stand on the two straight cells, and the walk from the
+#: take to the forward is therefore always three moves, whatever else is done to
+#: the room.
+#:
+#: ``@>Rsv`` over `` ^  <`` is eight cells and puts them **adjacent**. The lap is
+#: two cells longer and the answer leaves two ticks earlier, so it is the right
+#: art exactly when the room is on a critical path and idle enough that the lap
+#: costs nothing -- which is the taped store's answer collector, measured at
+#: 97.7% idle and standing on every read.
+#:
+#: There is no binding question either way: a collector has **one** outgoing pipe,
+#: so its ``s`` has nothing to choose between, and ``R`` takes from any incoming
+#: pipe in the room with no distance term at all.
+_TELEPORT_LAP = ("@>Rv", " ^s<")
+_TELEPORT_FAST = ("@>Rsv", " ^  <")
+
+
+def teleport(
+    width: int,
+    *,
+    n_in: int | None = None,
+    fast: bool = False,
+) -> tuple[list[str], list[tuple[int, int]]]:
     """A **teleport**: a long room that moves a value across itself for free.
 
     Six cells — ``@>Rv`` over `` ^s<`` — at the room's west end, padded to ``width``.
@@ -520,8 +548,9 @@ def teleport(width: int, *, n_in: int | None = None) -> tuple[list[str], list[tu
     Cost is one little man per teleport, and *not* a function of length — which is the
     property that matters on a machine whose wall-clock budget is ``runners x ticks``.
     """
-    iw = max(4, width if n_in is None else max(width, n_in))
-    rows = [list("@>Rv".ljust(iw)), list(" ^s<".ljust(iw))]
+    art = _TELEPORT_FAST if fast else _TELEPORT_LAP
+    iw = max(len(art[0]), width if n_in is None else max(width, n_in))
+    rows = [list(r.ljust(iw)) for r in art]
     ports = [(i, 0) for i in range(n_in if n_in is not None else width)]
     return ["".join(r) for r in rows], ports
 

@@ -813,7 +813,17 @@ def test_every_v4_gate_send_still_binds_to_the_pipe_it_means() -> None:
                         # on the row between the two attachments.
                         assert (y, want) == (local_row + 1, local_row), (x, y)
                         ties += 1
-    assert ties == 8 * 5 * 2, ties  # exactly one per gate built
+    # **The climbed mine arm deletes that tie**, and that is worth an assertion of
+    # its own rather than a relaxed bound. With the arm on the local row the mine
+    # write tail had to sit one row below it, exactly between the two
+    # attachments, and the binding was decided by SPEC's reading-order tie-break
+    # — legal, and a one-cell margin on the hottest arm in the block. Climbing
+    # the ``X``'s column puts both mine sends *on* the local row, four cells from
+    # the local pipe and eight from the downstream one, so the gate now has no
+    # tie in it at all (:data:`~randomfun2026solvers.memory_taped.V4_GATE_MINE_UP`).
+    from randomfun2026solvers.memory_taped import V4_GATE_MINE_UP
+
+    assert ties == (0 if V4_GATE_MINE_UP else 8 * 5 * 2), ties
 
 
 @pytest.mark.parametrize("skip_batch", [1, 2, None])
@@ -1148,6 +1158,8 @@ def test_the_v4_worker_reaches_the_pipe_each_receive_means(n: int, west_grow: in
         V2_V4_IN_ROW,
         V2_V4_IW,
         V2_V4_OUT_COL,
+        V4_P1_RING,
+        v4_ret_col,
         worker_v2,
     )
 
@@ -1157,7 +1169,12 @@ def test_the_v4_worker_reaches_the_pipe_each_receive_means(n: int, west_grow: in
     #: body has **its own** four — none of them is fixed, which is the whole
     #: reason the body could move west at all (``memory_tape.V2_V4_SHIFT``).
     request = (-2 - west_grow, V2_V4_IN_ROW)
-    ring_in = (V2_RET_COL, V2_IH + 1)
+    # ... and the return column is the body's own, not the shared one. The ring
+    # body moved it (``memory_tape.V4_P1_RING_RET_COL``) precisely because the
+    # assertion below caught the tie it would otherwise have had at (6, 8), so
+    # reading the constant this body actually ships with is the point of the
+    # test rather than a concession to it.
+    ring_in = (v4_ret_col(), V2_IH + 1)
     ring_out = (V2_V4_IW + 1, V2_FWD_ROW)
     answer = (V2_V4_OUT_COL, -2)
 
@@ -1191,6 +1208,118 @@ def test_the_v4_worker_reaches_the_pipe_each_receive_means(n: int, west_grow: in
         elif ch == "S":
             seen["S"] += 1  # writes every outgoing pipe; it has nothing to bind
     assert seen["S"] == 1 and seen["r"] >= 6 and seen["s"] >= 5, seen
+
+    # The ring carries a second `r` at the bottom-LEFT of its two columns, which
+    # the counted loop does not have, and that corner is the one nearest the west
+    # wall. On the *shared* return column it is an exact 17-17 tie with the
+    # request stub at ``west_grow=0`` — legal, decided by reading order, and
+    # decided the wrong way. Pinned here so the anchor cannot drift back.
+    if V4_P1_RING and west_grow == 0:
+        shared = (V2_RET_COL, V2_IH + 1)
+        d_ring, d_req = near((6, 8), shared, request)
+        assert d_ring == d_req == 17, (d_ring, d_req)
+        assert v4_ret_col() < V2_RET_COL
+
+
+def test_the_batched_bodys_realign_send_cannot_follow_it_west() -> None:
+    """``_JUMP_V4_WEST`` moves the batched body's east half; this is what stops it.
+
+    The write arm's realign is ``s`` then ``r`` on row 13: the ``s`` pushes the
+    word being written into the ring's forward pipe on the **east** wall, and its
+    only rival is the answer collector on the **north** wall at column 2. So
+    walking the pair west walks the ``s`` toward the rival, and the crossing is
+    inside the four columns the shift wanted:
+
+        column 16 (shipped)   25 to the ring, 29 to the answer   margin 4
+        column 15             26              28                 margin 2
+        column 14             27              27                 A TIE
+        column 12             29              25                 WRONG PIPE
+
+    At 12 the store pushes the value being written into the answer riser and
+    answers the next read with it. It builds, and unlike most of this family's
+    wrong-pipe failures it is wrong at ``west_grow`` 0 **and** 4 — which is the
+    one mercy, because the 901-address readback catches it on the first bank of
+    the first order rather than only on a caller that did not grow the wall.
+    """
+    from randomfun2026solvers import memory_tape as T
+
+    ring_out = (T.V2_JUMP_IW + 1, T.V2_JUMP_FWD_ROW)
+    answer = (T.V2_OUT_COL, -2)
+
+    def margin(col: int) -> int:
+        cell = (col, 13)
+        d_ring = abs(ring_out[0] - col) + abs(ring_out[1] - 13)
+        d_ans = abs(answer[0] - col) + abs(answer[1] - 13)
+        assert cell  # the cell is the whole input; stated for the reader
+        return d_ans - d_ring
+
+    assert margin(16) == 4
+    assert margin(15) == 2
+    assert margin(14) == 0, "column 14 is the tie the shift may not reach"
+    assert margin(12) < 0, "column 12 binds the answer collector, not the ring"
+
+    # ... and the shipped body keeps it at 16 whatever the shift is.
+    art = T.worker_v2_jump(53, park_const=True, protocol="v4")
+    assert art.cell[(16, 13)] == "s" and art.cell[(17, 13)] == "r"
+
+
+def test_the_batched_bodys_p2_cannot_move_west_at_all() -> None:
+    """P2's odd-count re-entry runs **east** along row 13, over live tape ops.
+
+    P2 is a ``counted_ring_horizontal`` like P1, so an odd count leaves it
+    through the north exit one row above its own west column, and that exit is
+    the turn at ``(19, 13)`` which sends the man east into the ``v`` both target
+    arms drop through. Row 13 east of 19 is empty. Row 13 *west* of 19 carries
+    the write arm's realign ``sr`` at 16 and 17 — and that pair cannot move west
+    either (see the test above), so P2's odd exit may not cross it.
+
+    The bound is one cell: the exit stands at ``19 - w2`` and the realign's ``r``
+    at 17. Measured on the 901-address readback, a four-column P2 shift walks the
+    man into a wall outright.
+    """
+    from randomfun2026solvers import memory_tape as T
+
+    assert T._JUMP_V4_WEST_P2 == 0
+    art = T.worker_v2_jump(53, park_const=True, protocol="v4")
+    # P2's ring, its odd exit, and the realign it may not reach.
+    entry = 23 - T._JUMP_V4_WEST_P2
+    odd = 19 - T._JUMP_V4_WEST_P2
+    assert art.cell[(entry, 14)] == "v", "P2's entry is where the arms drop"
+    assert art.cell[(odd, 13)] == ">", "P2's odd exit turns east from here"
+    assert art.cell[(17, 13)] == "r", "the realign is the obstacle, at 17"
+    assert odd > 17, "one cell of clearance is the whole budget"
+
+
+def test_the_narrow_rings_odd_tail_returns_to_its_own_entry() -> None:
+    """The vertical ring's two exits are two *parities*, and both must leave once.
+
+    ``counted_ring`` tests BP once per word, so an even count leaves east through
+    the top-right ``d`` — the same cell and the same heading the counted loop it
+    replaces leaves through, which is why nothing downstream of P1 moves — and an
+    odd count leaves **west** through the bottom-left one. That exit climbs the
+    column the ring vacated and turns back east into the entry, where BP is now
+    zero and the top ``d`` passes it straight out east.
+
+    So the dispatch sees one entry for both parities, and the odd path costs the
+    seven cells of the climb rather than a second dispatch.
+    """
+    from randomfun2026solvers import memory_tape as T
+
+    if not T.V4_P1_RING:
+        pytest.skip("the narrow body is not ringed")
+    art = T.worker_v2(8, park_const=True, protocol="v4")
+    dc = 9 - T.V4_P1_RING_SHIFT
+    # the ring itself: `d` at both ends of its two columns, `r`/`s` on both sides
+    assert art.cell[(dc + 1, 5)] == "d" and art.cell[(dc, 9)] == "d"
+    assert art.cell[(dc + 1, 6)] == "r" and art.cell[(dc, 8)] == "r"
+    assert art.cell[(dc + 1, 7)] == "s" and art.cell[(dc, 7)] == "s"
+    assert art.cell[(dc + 1, 8)] == "m" and art.cell[(dc, 6)] == "m"
+    # the odd tail: north out of the bottom-left corner, then east into the entry
+    assert art.cell[(dc - 1, 9)] == "^"
+    assert art.cell[(dc - 1, 5)] == ">"
+    assert art.cell[(dc, 5)] == ">"
+    for row in (6, 7, 8):
+        assert art.cell.get((dc - 1, row), " ") == " ", "the climb must be clear"
 
 
 def test_the_v4_anchors_are_the_ones_that_licence_the_shift() -> None:

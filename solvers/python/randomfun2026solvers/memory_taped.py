@@ -141,6 +141,48 @@ COMPACT_GATE_DOWN_ROW = 6
 #: ``answer_west`` and ``request_roof`` are stated in block coordinates.
 COLLECTOR_ROW = 5
 
+#: The v4 gate's **mine arm climbs the X's own column** instead of doglegging
+#: onto the local row.
+#:
+#: The three-way ``X`` sends "this address is mine" counter-clockwise, i.e.
+#: north, and the local row is two rows above the spine — so the man was always
+#: going to stand on those two cells. Shipped he stood on a ``^`` and a ``>`` and
+#: executed nothing on either, then turned east onto the arm's ``N s``. That is
+#: ``UbW-X^>Ns`` = **9 cells** of pre-send walk against ``UbW-XNs`` = **7**, which
+#: is the routed floor for seven ops. Both cells come off the request's own
+#: critical path, on every read that terminates at a gate.
+#:
+#: The op branch moves to the row above the arm, which is the second cell: the
+#: read's counter-clockwise exit off ``x`` there lands *on the descent column*
+#: rather than one cell short of it, so the shipped ``>`` that turned it north is
+#: gone too.
+#:
+#: Off is the shipped grid to the cell, which is what holds ``deadman-3d``'s
+#: checked-in taped store byte-identical.
+V4_GATE_MINE_UP = True
+
+#: The answer collector takes :func:`~.memory_men.teleport`'s **latency** art
+#: rather than its shortest lap: ``R`` and ``s`` adjacent, an 8-cell lap instead
+#: of 6.
+#:
+#: The collector is the last room on every read -- the bank's ``S`` climbs a riser
+#: into it and it forwards to the CPU -- and it is 97.7% idle. So its lap is worth
+#: nothing and its ``R``-to-``s`` walk is worth a tick of read latency each. On
+#: the 6-cell lap that walk is **three moves and cannot be fewer**, because a 3x2
+#: rectangle's two non-corner cells are diagonally opposite and ``R`` and ``s``
+#: are the two glyphs that cannot double as a corner. Four columns instead of
+#: three put them side by side.
+#:
+#: This is the *documentation* anchor; the live selection is per ``(slug, tier)``
+#: in :data:`~.lm1.machine.TAPED_COLLECTOR_FAST`, because ``deadman-3d``'s taped
+#: store is byte-pinned to a checked-in ``.man`` and shares this block. The other
+#: nine callers of ``teleport`` do not pass the flag and do not move either.
+#:
+#: **Measured, 21-round hi-res tour, same process, same moment, control
+#: reproducing 85,522,204 to the tick: 85,522,204 -> 84,918,154, -0.706%**,
+#: ``passed=True``, ``fatal=None``, box 614x403 and every ``route_lengths``
+#: entry unchanged.
+
 #: The **v4** body. Same seven rows as the compact v3 one, laid out around a
 #: different branch order: the range test still splits mine (north) from
 #: downstream (south), but each side now sends its **single** word first and
@@ -594,8 +636,8 @@ def _bank_gate_v4(
         spine = "UbW-X" if park_const else f"UbM`{const}`-X"
         n_arm, s_arm = "Ns", "Ws"
     cx = len(spine)  # the range test's X (the spine starts at column 1)
-    xn = cx + 1 + len(n_arm)  # the mine arm's `x`
-    xs = cx + 2 + len(s_arm)  # ... and the downstream arm's
+    xn = cx + 1 + len(n_arm)  # the mine arm's `x` (the flat arm's; the climbed
+    xs = cx + 2 + len(s_arm)  # ... and the downstream arm's   one takes cr - 1)
     cr = xs + 3  # one east of the longest tail (`>rs` off the `x`)
     width = max(cr, _V4_FLAT_CR) + 2
     g: dict[tuple[int, int], str] = {}
@@ -614,12 +656,51 @@ def _bank_gate_v4(
     text(1, in_row, spine)
 
     # A < 0 (mine): north to the local row, send, then split on the parked op
-    put(cx, in_row - 1, "^")
-    put(cx, local_row, ">")
-    text(cx + 1, local_row, n_arm)
-    put(xn, local_row, "x")
-    put(xn, local_row - 1, ">")  # read: one cell north, then east onto the descent
-    text(xn, local_row + 1, ">rs")  # write: one cell south, then pass the value
+    if V4_GATE_MINE_UP:
+        # **The two climb cells ARE the arm.** The ``X``'s counter-clockwise exit
+        # lands on ``(cx, in_row - 1)`` and the local row is exactly two north of
+        # the spine, so the man was already going to stand on those two cells --
+        # shipped he stood on a ``^`` and a ``>`` and did nothing on either, then
+        # turned east onto ``N s``. Putting the arm's own two glyphs there instead
+        # deletes both cells from the walk, and ``UbW-XNs`` is seven, which is the
+        # routed floor for seven ops in a row.
+        #
+        # The op branch then has to move off the local row, because ``x`` no
+        # longer stands on it -- it goes to the row above, where the read's
+        # counter-clockwise exit lands **directly on the descent column** and
+        # saves the cell the shipped read spent turning north. The write's
+        # clockwise exit walks west into ``r s`` and drops onto its own corridor.
+        #
+        # SPEC 7.1 is unmoved: both outgoing pipes are on the east wall four rows
+        # apart, so an ``s`` anywhere on the local row is nearer the local pipe
+        # than the downstream one by exactly four, wherever in the row it stands.
+        if len(n_arm) != 2 or local_row != in_row - 2:
+            raise ValueError(
+                f"the climbed mine arm wants a two-glyph arm two rows above the "
+                f"spine, not {n_arm!r} at {local_row} under {in_row}"
+            )
+        xn = cr - 1
+        if xn - 3 <= cx:
+            raise ValueError(
+                f"the climbed mine arm's write tail starts at {xn - 3}, which is "
+                f"not east of the spine's X at {cx}"
+            )
+        put(cx, in_row - 1, n_arm[0])
+        put(cx, local_row, n_arm[1])
+        put(cx, local_row - 1, ">")   # ... on north, then east to the branch
+        put(xn, local_row - 1, "v")
+        put(xn, local_row, "x")
+        put(xn - 1, local_row, "r")   # write: west into the value pass
+        put(xn - 2, local_row, "s")
+        put(xn - 3, local_row, "v")
+        put(xn - 3, local_row + 1, ">")
+    else:
+        put(cx, in_row - 1, "^")
+        put(cx, local_row, ">")
+        text(cx + 1, local_row, n_arm)
+        put(xn, local_row, "x")
+        put(xn, local_row - 1, ">")  # read: one cell north, then east onto the descent
+        text(xn, local_row + 1, ">rs")  # write: one cell south, then pass the value
 
     # A == 0 goes straight and A > 0 turns south; they merge one column east and
     # one row down, which is the downstream arm's own row.
@@ -1052,6 +1133,7 @@ def taped_store_block(
     feed_tuck: int = 0,
     bank_west_grow: int = 0,
     rotate_banks: tuple[int, ...] | frozenset[int] = (),
+    collector_fast: bool = False,
     protocol: str = "v3",
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
@@ -1245,6 +1327,11 @@ def taped_store_block(
     **batch-1** worker (there is no narrow rotating body), a block without
     ``feed_teleport`` (the head has nowhere to live) and a two-word ``protocol``
     (the head arithmetic rides the packed wire).
+
+    ``collector_fast`` gives the answer collector :func:`~.memory_men.teleport`'s
+    **latency** art instead of its shortest lap — see
+    :data:`TAPED_COLLECTOR_FAST`. ``False`` is the shipped grid to the cell, which
+    is what holds ``deadman-3d``'s checked-in store byte-identical.
 
     ``protocol`` picks the block's **wire format**. ``v3`` is the two-word
     request every shipped grid was built on. ``v4`` carries the op in the
@@ -1555,7 +1642,7 @@ def taped_store_block(
                 f"collector's interior cannot start at column {answer_west}"
             )
         coll_x0 = answer_west
-    coll_rows, _ = teleport(coll_x1 - coll_x0 + 1)
+    coll_rows, _ = teleport(coll_x1 - coll_x0 + 1, fast=collector_fast)
     _room(_Grid(), coll_x0, coll_y + 1, coll_rows)
     for k, t in enumerate(tapes):
         ax = bx[k] + t.out_cell[0]
