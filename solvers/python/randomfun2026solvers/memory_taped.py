@@ -424,6 +424,90 @@ def feed_relay(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     return rows, [(3, i) for i in range(ih)]
 
 
+#: The rotating forwarder's fixed body: the relay, the head update, and the spawn
+#: that seeds it. Sixteen rows against :data:`V5_FEED_H`'s eight, and every one of
+#: the eight extra is **behind the send**.
+V5_ROT_FEED_H = 16
+
+
+def feed_rotate(height: int) -> tuple[list[str], list[tuple[int, int]]]:
+    """:func:`feed_relay` **carrying the bank's ring head in its off hand**.
+
+    This is where the rotating worker's missing register went. A rotating bank
+    needs ``ROT = (n + addr - head) % n`` and that wants four live values against
+    three registers (:func:`~.memory_tape.worker_v2_rot` says why the shuffle
+    cannot close, and that there is no ``BP -> A`` glyph to close it with). This
+    man has slack for exactly one of them: he handles a single word, he keeps A,
+    B and BP across laps like every little man, and he is **94-99% blocked**, so
+    everything he does behind his own ``s`` is free (measured: ``RELAY_POST_PAD``
+    at 4, 8 and 16 rows all came out at +0.000% per access).
+
+    So B holds ``P = 2*head - 1`` from one access to the next and the wire word
+    ``w = 2*addr - op`` leaves as ``D = w - P``. That is **one glyph** on the
+    critical path — ``-`` is ``A = A - B`` and B is already the head — so the
+    ``R``-to-``s`` leg goes from one cell to two, against the 0.313%/tick this
+    leg prices at. Everything that makes the delta usable happens in the bank
+    (:func:`~.memory_tape.worker_v2_rot`), off a single ``%`` against the ring
+    size it already parks.
+
+    **Why the head is ``2*head - 1`` and not ``head``.** The reduction has to
+    give ``2*ROT + 1 - op`` for every sign of the delta *and* both ops, and the
+    odd offset is exactly what keeps ``ROT == 0`` on a **write** from wrapping to
+    a full lap. With ``P = 2*head`` that one case reduces to ``2n - 1`` and the
+    bank skips ``n - 1`` words instead of ``0``; the ring survives it (the count
+    is still exact) but the access costs a whole lap, which is the thing this
+    body exists to delete.
+
+    **The update, and why it needs the op.** The head after an access is
+    ``addr + 1`` whatever the op was, and ``w`` encodes ``2*addr - op``, so
+    recovering ``2*addr`` needs ``op`` — there is no encoding of the two in one
+    word that avoids it. ``x`` already splits on it (a write's word is odd), so
+    each tail knows its own constant statically and adds it: the read tail wants
+    ``w + 1``, the write tail ``w + 2``, and both land on ``2*addr + 1``, which is
+    ``2*(addr+1) - 1``. No reduction is needed on the way out — ``addr <= n-1``
+    keeps ``P`` inside ``[3, 2n-1]`` and the bank's ``%`` absorbs the wrap at
+    ``addr == n-1`` on its own.
+
+    ``x``'s sense is **inverted** from :func:`feed_relay`'s here and that is not
+    a choice: the word that reaches ``b`` is ``D``, not ``w``, and subtracting an
+    odd ``P`` flips the parity. A **read** turns clockwise/west now, so the read
+    tail is the west column and the value-word passthrough is the east one.
+
+    **The spawn had to move.** ``feed_relay``'s ``@`` stands on the return leg,
+    which every lap re-walks; a seed for B may not. It stands two rows below the
+    loop instead, on a three-glyph run (``1 N`` then ``M``) that only the first
+    man's first steps ever touch, and joins the return leg from the south. That
+    is what puts ``head = 0`` — an untouched ring's head — into B before the
+    first request arrives.
+
+    Same four-column corridor and the same two ports as every other forwarder, so
+    nothing in the block's floor plan moves; the room is the corridor and the
+    rows below the loop stay blank exactly as they were.
+    """
+    ih = max(V5_ROT_FEED_H, height)
+    rows = [
+        "> v ",  # (0,0) the return leg turns east, then south into the descent
+        "^ R ",  # A = w                                  [B = P = 2*head - 1]
+        "^ - ",  # A = D = w - P                          <- the delta
+        "^ s ",  # ... and out                            <- the only wire cells
+        "^ b ",  # BP = D, whose low bit is 1 - op
+        "^vxv",  # READ turns clockwise/west; WRITE counter-clockwise/east
+        "^+ +",  # A = D + P = w again (B still holds P)
+        "^M M",  # B = w
+        "^1 R",  # READ: A = 1          | WRITE: the value word ...
+        "^+ s",  # A = w + 1            | ... straight through
+        "^M 2",  # B = 2*addr + 1  done | A = 2
+        "^  +",  #                      | A = w + 2
+        "^  M",  #                      | B = 2*addr + 1  done
+        "^< <",  # both tails walk back west onto the climb
+        "   M",  # the seed's own last glyph: B = -1, i.e. head 0
+        "@1N^",  # ... and the spawn, which no lap ever returns to
+    ]
+    rows += [" " * 4] * (ih - V5_ROT_FEED_H)  # the room under the loop, unused
+    #: Every interior row down the **east** side is a legal attachment row.
+    return rows, [(3, i) for i in range(ih)]
+
+
 def gate_rows(compact: bool = False, protocol: str = "v3") -> tuple[int, int, int, int]:
     """``(height, in row, local out row, downstream out row)`` for a bank gate.
 
@@ -967,6 +1051,7 @@ def taped_store_block(
     bank_lift: int = 0,
     feed_tuck: int = 0,
     bank_west_grow: int = 0,
+    rotate_banks: tuple[int, ...] | frozenset[int] = (),
     protocol: str = "v3",
 ) -> V3Store:
     """The banked-tape store as a placeable block, in men-v3's clothes.
@@ -1140,6 +1225,27 @@ def taped_store_block(
     wall crosses nothing at all on its way west. At 4 the whole ``reqK->bankK``
     leg is the block's own two-cell stub and the pipe drawn below is empty.
 
+    ``rotate_banks`` names banks — **in address order**, the index into
+    ``banks`` — whose ring worker skips the *rotational delta* instead of the
+    address (``memory_tape.worker_v2_rot``) and whose feed forwarder therefore
+    carries that ring's head in its off hand (:func:`feed_rotate`). Empty is the
+    shipped grid to the cell; on, nothing in the floor plan moves at all,
+    because both rotating bodies stand in the same rooms with the same ports as
+    the bodies they replace — the block's box, its man census and its pipe
+    inventory are identical either way.
+
+    It is a per-bank list rather than a flag because the ring turns **one way**:
+    a delta that runs backwards costs a near-full lap where the address-skip
+    cost only the address, so a bank whose traffic walks backwards often on a
+    ring that was short anyway loses outright, and applying it to every bank of
+    ``deadman-3d_hires`` measures **+5.3%** against **-1.8%** for the four that
+    win (:data:`~.lm1.machine.TAPED_ROTATE_BANKS` has the per-bank table).
+
+    Three things are refused rather than built: a bank that resolves to the
+    **batch-1** worker (there is no narrow rotating body), a block without
+    ``feed_teleport`` (the head has nowhere to live) and a two-word ``protocol``
+    (the head arithmetic rides the packed wire).
+
     ``protocol`` picks the block's **wire format**. ``v3`` is the two-word
     request every shipped grid was built on. ``v4`` carries the op in the
     address's low bit and sends one word — ``2*addr - op`` — from the block's
@@ -1164,6 +1270,36 @@ def taped_store_block(
     plan = taped_plan(n, banks)
     chain = gate_chain(plan, order)
     sizes = [plan[k] for k, _ in chain]
+    # ``rotate_banks`` names banks in **address order** (the index into ``plan``,
+    # which is what ``lm1.machine.TAPED_ROTATE_BANKS`` and the trace both key on);
+    # everything below runs in chain order, so resolve it once here.
+    rot = frozenset(rotate_banks)
+    if rot - set(range(len(plan))):
+        raise ValueError(
+            f"rotate_banks {sorted(rot)} names a bank outside 0..{len(plan) - 1}"
+        )
+    rot_at = [k in rot for k, _ in chain]
+    if rot:
+        from .lm1.machine import _resolve_tape_skip_batch
+
+        if protocol not in _PACKED:
+            raise ValueError(
+                "the rotating bank's head rides the packed wire's own forwarder; "
+                f"protocol {protocol!r} has none"
+            )
+        if not feed_teleport:
+            raise ValueError(
+                "a rotating bank keeps its ring head in the feed forwarder's B "
+                "register, so there has to be one: pass feed_teleport=True"
+            )
+        for j, size in enumerate(sizes):
+            if rot_at[j] and _resolve_tape_skip_batch(
+                size + 1, skip_batch, jump_threshold
+            ) != 2:
+                raise ValueError(
+                    f"bank {chain[j][0]} resolves to the batch-1 worker at "
+                    f"{size + 1} slots; there is no rotating narrow body"
+                )
     tapes = [
         tape_block(
             size + 1,
@@ -1173,8 +1309,9 @@ def taped_store_block(
             tight_ring=tape_tight_ring,
             west_grow=bank_west_grow,
             protocol="v4" if protocol == "v5" else "v3",
+            rotate=rot_at[j],
         )
-        for size in sizes
+        for j, size in enumerate(sizes)
     ]
     bank_w = max(t.width for t in tapes)
     bank_h = max(t.height for t in tapes)
@@ -1353,6 +1490,10 @@ def taped_store_block(
             "v4": V4_FEED_H,
             "v5": V5_FEED_H + RELAY_PRE_PAD + RELAY_POST_PAD,
         }.get(protocol, 2)
+        if rot_at[k]:
+            # This bank's ring head lives in *this* man's off hand; the room and
+            # its two ports are otherwise identical (:func:`feed_rotate`).
+            art, floor = feed_rotate, V5_ROT_FEED_H
         if ry1 - ry0 - 1 < floor:
             raise ValueError(
                 f"bank {k}'s feed corridor is {ry1 - ry0 - 1} rows and the "

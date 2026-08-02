@@ -5040,7 +5040,7 @@ def _resolve_tape_skip_batch(
     return skip_batch
 
 
-def _tape_worker_spec(skip_batch: int, protocol: str = "v3"):
+def _tape_worker_spec(skip_batch: int, protocol: str = "v3", rotate: bool = False):
     """Return the worker and wall anchors for one tape skip implementation.
 
     ``protocol="v4"`` on the **batch-1** worker returns that body's own room and
@@ -5048,7 +5048,40 @@ def _tape_worker_spec(skip_batch: int, protocol: str = "v3"):
     used to share a room with, and the request stub and answer riser move with it
     (``memory_tape.V2_V4_SHIFT`` says why none of the four is fixed). Batch 2 is
     untouched, and so is every v3 caller.
+
+    ``rotate`` selects the **third** body, ``memory_tape.worker_v2_rot`` — the
+    batched ring that skips the rotational delta instead of the address, and
+    whose head is kept one room upstream in ``memory_taped.feed_rotate``. It
+    returns the batched body's room and all four of its anchors unchanged, which
+    is the whole point: the shell, both ring pipes, the request stub and the
+    answer riser are byte-identical, so the only cells in the machine that move
+    are inside the worker's own walls. It is packed-wire and batch-2 only.
     """
+    if rotate:
+        if skip_batch != 2 or protocol != "v4":
+            raise ValueError(
+                "the rotating worker is the batched packed-wire body only, not "
+                f"skip_batch={skip_batch} protocol={protocol!r}"
+            )
+        from ..memory_tape import (
+            V2_IN_ROW,
+            V2_JUMP_FWD_ROW,
+            V2_JUMP_RET_COL,
+            V2_OUT_COL,
+            V2_ROT_IH,
+            V2_ROT_IW,
+            worker_v2_rot,
+        )
+
+        return (
+            worker_v2_rot,
+            V2_ROT_IW,
+            V2_ROT_IH,
+            V2_IN_ROW,
+            V2_OUT_COL,
+            V2_JUMP_FWD_ROW,
+            V2_JUMP_RET_COL,
+        )
     from ..memory_tape import (
         V2_FWD_ROW,
         V2_IH,
@@ -5160,6 +5193,7 @@ def _tape_shell(
     park_const: bool = False,
     west_grow: int = 0,
     protocol: str = "v3",
+    rotate: bool = False,
 ) -> tuple[Circuit, tuple[int, int], tuple[int, int]]:
     """The worker room and the two CPU-facing pipe stubs — the part no ring changes.
 
@@ -5188,7 +5222,7 @@ def _tape_shell(
         output_col,
         _forward_row,
         _return_col,
-    ) = _tape_worker_spec(skip_batch, protocol)
+    ) = _tape_worker_spec(skip_batch, protocol, rotate)
 
     if not 0 <= west_grow <= _TAPE_WEST_GROW_MAX:
         raise ValueError(
@@ -5303,6 +5337,7 @@ def tape_block(
     tight_ring: bool = False,
     protocol: str = "v3",
     west_grow: int = 0,
+    rotate: bool = False,
 ) -> _Tape:
     """``memory_tape``'s verified rotating-pipe tape, wired for use as STORE.
 
@@ -5384,7 +5419,7 @@ def tape_block(
         _output_col,
         forward_row,
         return_col,
-    ) = _tape_worker_spec(skip_batch, protocol)
+    ) = _tape_worker_spec(skip_batch, protocol, rotate)
 
     WX, WY = _TAPE_WX, _TAPE_WY
     best: tuple[int, Circuit, tuple[int, int], tuple[int, int]] | None = None
@@ -5395,6 +5430,7 @@ def tape_block(
             park_const=park_const,
             west_grow=west_grow,
             protocol=protocol,
+            rotate=rotate,
         )
 
         bottom_y = WY + worker_height
@@ -5448,6 +5484,7 @@ def tape_block(
         park_const=park_const,
         west_grow=west_grow,
         protocol=protocol,
+        rotate=rotate,
     )
 
 
@@ -5473,6 +5510,7 @@ def _serpentine_tape(
     park_const: bool = False,
     west_grow: int = 0,
     protocol: str = "v3",
+    rotate: bool = False,
 ) -> _Tape:
     """The same ring, with the forward pipe snaked so capacity scales with area.
 
@@ -5519,7 +5557,7 @@ def _serpentine_tape(
         _output_col,
         forward_row,
         return_col_offset,
-    ) = _tape_worker_spec(skip_batch, protocol)
+    ) = _tape_worker_spec(skip_batch, protocol, rotate)
 
     WX, WY = _TAPE_WX, _TAPE_WY
     bottom_y = WY + worker_height
@@ -5537,6 +5575,7 @@ def _serpentine_tape(
             park_const=park_const,
             west_grow=west_grow,
             protocol=protocol,
+            rotate=rotate,
         )
         last = top + rows - 1  # the final, relay-bound westbound leg
         relay_y = last - relay_h  # so `last` is the relay's bottom interior row
@@ -5867,6 +5906,7 @@ def build(
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_bank_west_grow: int = 0,
+    store_rotate_banks: tuple[int, ...] = (),
     store_request_reach: bool = False,
     store_request_tuck: bool = False,
     adapter_form: str = "wide",
@@ -6105,6 +6145,7 @@ def build(
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_bank_west_grow=store_bank_west_grow,
+                    store_rotate_banks=store_rotate_banks,
                     store_request_reach=store_request_reach,
                     store_request_tuck=store_request_tuck,
                     adapter_form=adapter_form,
@@ -6205,6 +6246,7 @@ def build(
                     store_bank_lift=store_bank_lift,
                     store_feed_tuck=store_feed_tuck,
                     store_bank_west_grow=store_bank_west_grow,
+                    store_rotate_banks=store_rotate_banks,
                     store_request_reach=store_request_reach,
                     store_request_tuck=store_request_tuck,
                     adapter_form=adapter_form,
@@ -6327,6 +6369,7 @@ def _assemble(
     store_bank_lift: int = 0,
     store_feed_tuck: int = 0,
     store_bank_west_grow: int = 0,
+    store_rotate_banks: tuple[int, ...] = (),
     store_request_reach: bool = False,
     store_request_tuck: bool = False,
     adapter_form: str = "wide",
@@ -6789,6 +6832,7 @@ def _assemble(
                 bank_lift=store_bank_lift,
                 feed_tuck=store_feed_tuck,
                 bank_west_grow=store_bank_west_grow,
+                rotate_banks=store_rotate_banks,
                 # Land the first gate's roof one row under the adapter's floor,
                 # so its west wall stands beside the adapter and the request is
                 # a drop, not a corridor. Same trick as ``answer_west``: the
@@ -11587,6 +11631,50 @@ TAPED_BANK_WEST_GROW: dict[tuple[str, str], int] = {
     ("deadman-3d_hires", "taped"): 4,
 }
 
+#: Banks — **in address order**, the index into :data:`TAPED_BANKS` — whose ring
+#: worker skips the *rotational delta* instead of the address, and whose feed
+#: forwarder therefore carries that ring's head in its off hand. See
+#: ``memory_tape.worker_v2_rot`` for the body and ``memory_taped.feed_rotate``
+#: for where the head lives.
+#:
+#: **Per-bank selection is the mechanism, not a refinement of it.** The ring turns
+#: one way, so a *backwards* delta costs a near-full lap where the old skip cost
+#: the address; a bank whose accesses walk backwards often, and whose ring is
+#: short enough that the old skip was cheap anyway, loses outright. Over the
+#: 21-round trace (471,189 accesses), per bank, with ``ROT_v1`` today's skip and
+#: ``ROT_v2`` the delta:
+#:
+#: | bank | ring | accesses | ROT_v1 | ROT_v2 | v2>v1 | pre-send ticks saved |
+#: |---|---|---|---|---|---|---|
+#: | **5** | 442 | 3,850 | **327.0** | **18.4** | 4.2% | **6,889,762** |
+#: | 2 | 53 | 10,490 | 24.4 | 7.3 | 13.7% | 1,039,540 |
+#: | 8 | 7 | 59,916 | 2.7 | 1.2 | 17.1% | 735,168 |
+#: | 1 | 53 | 6,238 | 27.1 | 7.5 | 14.2% | 709,004 |
+#: | 10 | 8 | 165,181 | 2.8 | 2.6 | 33.1% | 215,664 |
+#: | 0 | 115 | 343 | 93.1 | 2.3 | 1.7% | 180,624 |
+#: | 4 | 8 | 11,107 | 5.3 | 4.0 | 50.3% | 116,936 |
+#: | 9 | 10 | 121,890 | 2.9 | 2.8 | 27.7% | 116,432 |
+#: | 3 | 135 | 6,668 | 13.1 | **23.0** | 17.1% | **-382,823** |
+#: | 7 | 22 | 54,218 | 3.5 | **6.8** | 30.9% | **-1,030,005** |
+#: | 6 | 59 | 31,288 | 4.8 | **12.1** | 20.5% | **-1,328,745** |
+#:
+#: Applied to all eleven that is **+8.31%** — a regression. Applied to
+#: ``{0, 1, 2, 5}`` it is 21,921 accesses and 8.82M pre-send ticks, and those
+#: four are also the ones with the most tolerance for whatever the rotation
+#: machinery itself costs (bank 5 answers at ~1,789 ticks an access; bank 8 at
+#: 12.3, which is why the small hot rings stay where they are even where the
+#: delta is nominally shorter).
+#:
+#: **The four are exactly the batch-2 banks worth having.** Rotation is a
+#: property of the batched body only — the narrow worker has no room for it and
+#: no bank that wants it — and 115/53/53/442 are four of the five rings over
+#: :data:`TAPED_JUMP_THRESHOLD`. The fifth, bank 3 at 135, is the one whose
+#: delta is *longer* than its address, so the registry and the worker's own
+#: precondition agree by construction.
+TAPED_ROTATE_BANKS: dict[tuple[str, str], tuple[int, ...]] = {
+    ("deadman-3d_hires", "taped"): (0, 1, 2, 5),
+}
+
 #: ``(slug, tier)`` pairs whose taped STORE builds its gates from the
 #: **spacer-free** body (``memory_taped.COMPACT_GATE_H``) instead of the shipped
 #: 12-row one. Keyed by tier because only the taped tier has gates at all;
@@ -12848,6 +12936,7 @@ def build_for(
         store_bank_lift=TAPED_BANK_LIFT.get((slug, store), 0),
         store_feed_tuck=TAPED_FEED_TUCK.get((slug, store), 0),
         store_bank_west_grow=TAPED_BANK_WEST_GROW.get((slug, store), 0),
+        store_rotate_banks=TAPED_ROTATE_BANKS.get((slug, store), ()),
         store_request_reach=(slug, store) in STORE_REQUEST_REACH,
         store_request_tuck=(slug, store) in STORE_REQUEST_TUCK,
         adapter_form=ADAPTER_FORM.get((slug, store), "wide"),

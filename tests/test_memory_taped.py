@@ -1243,3 +1243,259 @@ def test_the_v4_anchors_are_the_ones_that_licence_the_shift() -> None:
     # P1's `s` is the other wall, and the answer riser is what keeps it clear.
     p1_s = (p1[0], p1[1] + 1)
     assert d(p1_s, answer) - d(p1_s, ring_out) == 2
+
+
+# ── the rotating bank: skip the delta, not the address ──────────────────────
+def _rot_kw() -> dict:
+    """The hi-res block as ``lm1.machine`` builds it, minus the machine-geometry
+    knobs the standalone wrapper cannot supply."""
+    return dict(
+        _HIRES_KW,
+        gate_return_slack=0,
+        request_roof=20,
+        feed_share_riser=True,
+        bank_west_grow=machine.TAPED_BANK_WEST_GROW[("deadman-3d_hires", "taped")],
+        protocol="v5",
+    )
+
+
+def test_the_rotating_worker_stands_in_the_batched_body_s_own_room() -> None:
+    """The third worker body, and the constraint that makes it cheap to trust.
+
+    ``bank_w``/``bank_h`` are maxima over the banks and the batched worker sets
+    both, so a narrower rotating body would still leave the block's pitch alone —
+    but it would move the **ring**, because ``tape_block`` measures the fold and
+    the serpentine from the worker's own bottom wall. Identical room means the
+    shell, both ring pipes, the request stub and the answer riser are
+    byte-identical and the only cells that differ anywhere in the machine are
+    inside the worker's own walls.
+    """
+    from randomfun2026solvers import memory_tape as mt
+    from randomfun2026solvers.lm1.machine import _tape_worker_spec
+
+    assert (mt.V2_ROT_IW, mt.V2_ROT_IH) == (mt.V2_JUMP_IW, mt.V2_JUMP_V4_IH)
+    rot = _tape_worker_spec(2, "v4", True)
+    wide = _tape_worker_spec(2, "v4")
+    assert rot[1:] == wide[1:], "the rotating body must keep all four wall anchors"
+    assert rot[0] is mt.worker_v2_rot and wide[0] is mt.worker_v2_jump
+    # ... and it is the batched packed-wire body only; there is no narrow form
+    # and no two-word form, so ask for one and be told rather than built.
+    for batch, proto in ((1, "v4"), (2, "v3"), (4, "v3")):
+        with pytest.raises(ValueError):
+            _tape_worker_spec(batch, proto, True)
+    with pytest.raises(ValueError):
+        mt.worker_v2_rot(53, protocol="v3")
+    with pytest.raises(ValueError):
+        mt.worker_v2_rot(53, park_const=False)
+    # the room really is the same size, at every ring size the cut uses
+    for n in (22, 53, 59, 115, 135, 442):
+        c = mt.worker_v2_rot(n)
+        assert (c.w, c.h) == (mt.V2_JUMP_IW, mt.V2_JUMP_V4_IH), n
+        rows = c.rows()
+        # P2 is gone: the batched body's second ring occupied rows 14 and 15.
+        assert all(r.strip() == "" for r in rows[10:]), n
+        # ... and the ring size is parked directly above MAIN, not four rows up
+        assert rows[4].startswith("vM"), rows[4]
+        assert rows[5].startswith(">r%Mb]"), rows[5]
+
+
+def test_every_rotating_worker_send_still_binds_the_pipe_it_means() -> None:
+    """The silent failure this body could have is a wrong *pipe*, not a crash.
+
+    ``r`` takes the nearest incoming and ``s`` the nearest outgoing, Manhattan,
+    ties by reading order — so the two receives that must take the **request**
+    wire (MAIN's word and the write's value) and the four that must take the
+    **ring** are decided by geometry alone. Enumerated strictly at ``west_grow``
+    0 **and** 4: the shipped 4 pushes the request stub four columns further west
+    and hides a mis-bind that breaks every other caller, which is exactly how
+    ``V2_V4_MAIN_ROW`` was nearly landed wrong.
+    """
+    from randomfun2026solvers import memory_tape as mt
+
+    iw, ih = mt.V2_ROT_IW, mt.V2_ROT_IH
+    c = mt.worker_v2_rot(53)
+    want = {
+        (1, 5): "request",       # MAIN's own word
+        (13, 2): "request",      # the write's value, on the request stub's row
+        (20, 6): "ring-return",  # P1
+        (21, 6): "ring-forward",
+        (21, 7): "ring-forward",
+        (22, 7): "ring-return",
+        (16, 8): "ring-forward",  # the write's swap
+        (17, 8): "ring-return",
+        (27, 9): "ring-return",  # the read's target
+        (31, 4): "ring-forward",  # INIT's fill
+    }
+    seen = {
+        (x, y) for (x, y), ch in c.cell.items() if ch in "rs"
+    }
+    assert seen == set(want), sorted(seen ^ set(want))
+    for west_grow in (0, 4):
+        ports = {
+            "request": ("in", (-2 - west_grow, mt.V2_IN_ROW)),
+            "ring-return": ("in", (mt.V2_JUMP_RET_COL, ih + 1)),
+            "ring-forward": ("out", (iw + 1, mt.V2_JUMP_FWD_ROW)),
+            "answer": ("out", (mt.V2_OUT_COL, -2)),
+        }
+        for (x, y), name in want.items():
+            side = "in" if c.cell[(x, y)] == "r" else "out"
+            ranked = sorted(
+                (abs(x - px) + abs(y - py), nm)
+                for nm, (sd, (px, py)) in ports.items()
+                if sd == side
+            )
+            assert ranked[0][1] == name, ((x, y), west_grow, ranked)
+            # a tie is decidable but it is still a one-cell margin, and this
+            # body has none: the tightest is the write's `s` at four.
+            assert ranked[1][0] - ranked[0][0] >= 4, ((x, y), west_grow, ranked)
+
+
+def test_rotating_banks_are_opt_in_and_the_default_block_is_byte_identical() -> None:
+    """Off is the shipped grid to the cell; on, only those banks' rooms move."""
+    kw = _rot_kw()
+    shipped = taped_store_block(HIRES_N, HIRES_PLAN, **kw)
+    assert taped_store_block(HIRES_N, HIRES_PLAN, **kw, rotate_banks=()).cells == (
+        shipped.cells
+    )
+    rot = taped_store_block(HIRES_N, HIRES_PLAN, **kw, rotate_banks=(0, 1, 2, 5))
+    assert rot.cells != shipped.cells
+    # the block's own box, man census and pipe inventory do not move at all: the
+    # rotating worker stands in the batched body's room and the rotating
+    # forwarder in the relay's, so nothing is added and nothing is resized.
+    assert (rot.width, rot.height) == (shipped.width, shipped.height)
+    assert rot.pipes == shipped.pipes
+    assert sum(1 for c in rot.cells.values() if c == "@") == sum(
+        1 for c in shipped.cells.values() if c == "@"
+    )
+    # ... and the refusals, which are the pairs that cannot be built rather than
+    # tuning values: no packed wire, no forwarder, a narrow bank, a bad index.
+    for bad in (
+        dict(protocol="v3"),
+        dict(feed_teleport=False),
+    ):
+        with pytest.raises(ValueError):
+            taped_store_block(HIRES_N, HIRES_PLAN, **{**kw, **bad},
+                              rotate_banks=(5,))
+    with pytest.raises(ValueError):
+        taped_store_block(HIRES_N, HIRES_PLAN, **kw, rotate_banks=(4,))  # 8 slots
+    with pytest.raises(ValueError):
+        taped_store_block(HIRES_N, HIRES_PLAN, **kw, rotate_banks=(11,))
+
+
+@pytest.mark.slow
+def test_a_rotating_bank_reads_back_in_ascending_descending_and_random_order()  -> None:
+    """The test without which a green suite means nothing for this body.
+
+    A rotating bank keeps no "the ring comes home" invariant — it keeps "the head
+    is at ``addr + 1``", and **every** access has to leave it there exactly,
+    writes included. One off-by-one desynchronises the bank permanently and
+    nothing errors: it answers the wrong slot.
+
+    The shipped 901-address readback cannot see that, because it **ascends**: the
+    rotational delta is then 1 at every step and the wraparound is never walked.
+    So this reads all 901 back three more ways — descending (delta ``n-1``, the
+    backwards case, every time), and two independent shuffles — and then streams
+    interleaved reads and writes inside each bank, which is the case where the
+    head has to survive a write that also moved it.
+    """
+    import random
+
+    kw = _rot_kw()
+    engine = _standalone(
+        taped_store_block(HIRES_N, HIRES_PLAN, **kw, rotate_banks=(0, 1, 2, 5))
+    )
+    val = {a: (a * 37 + 11) % 9973 for a in range(1, HIRES_N)}
+    writes = [w for a in range(1, HIRES_N) for w in (2 * a - 1, val[a])]
+    bounds = [1]
+    for m in HIRES_PLAN:
+        bounds.append(bounds[-1] + m)
+    rng = random.Random(20260802)
+
+    for name, key in (
+        ("ascending", lambda xs: xs),
+        ("descending", lambda xs: xs[::-1]),
+        ("random", lambda xs: rng.sample(xs, len(xs))),
+    ):
+        got: dict[int, int] = {}
+        for lo, hi in zip(bounds, bounds[1:], strict=False):
+            hi = min(hi, HIRES_N)
+            addrs = key(list(range(lo, hi)))
+            res = engine.run(
+                writes + [2 * a for a in addrs],
+                expected=[val[a] for a in addrs],
+                max_ticks=900_000_000,
+            )
+            assert res.fatal is None, (name, lo, res.fatal)
+            got.update(zip(addrs, res.output, strict=False))
+        assert got == val, name
+
+    for lo, hi in zip(bounds, bounds[1:], strict=False):
+        hi = min(hi, HIRES_N)
+        if hi - lo < 4:
+            continue
+        addrs = rng.sample(range(lo, hi), min(40, hi - lo))
+        stream: list[int] = []
+        want: list[int] = []
+        cur = dict(val)
+        for i, a in enumerate(addrs):
+            if i % 3 == 2:
+                cur[a] = (a * 91 + 5) % 7919
+                stream += [2 * a - 1, cur[a]]
+            else:
+                stream += [2 * a]
+                want.append(cur[a])
+        res = engine.run(writes + stream, expected=want, max_ticks=900_000_000)
+        assert res.fatal is None and res.output == want, (lo, res.fatal)
+
+
+def test_the_batched_v4_body_fetches_its_write_value_where_it_still_binds() -> None:
+    """``_JUMP_V4_TIGHT_ARMS``: the entry and the write arm, both pulled in.
+
+    The write's value ``r`` stood beside the west wall for one reason — it has to
+    bind the **request** pipe and not the ring return — and on row 9 that holds
+    much further east than it was using. This pins where the line actually is,
+    at ``west_grow`` 0 **and** 4, because hires ships 4 and 4 is the tight case:
+    the grown wall pushes the request stub *further* from the glyph, so a column
+    that binds at 0 can silently take a tape word for its value at 4.
+    """
+    from randomfun2026solvers import memory_tape as mt
+
+    def margin(x: int, y: int, west_grow: int) -> int:
+        req = abs(x - (-2 - west_grow)) + abs(y - mt.V2_IN_ROW)
+        ring = abs(x - mt.V2_JUMP_RET_COL) + abs(y - (mt.V2_JUMP_V4_IH + 1))
+        return ring - req  # positive means the request pipe wins
+
+    # where it stood: column 2 of row 12, three rows further down and five
+    # columns further west than it needs to be.
+    assert (margin(2, 12, 4), margin(2, 12, 0)) == (7, 11)
+    # where it can stand, on the arm's own row 9
+    assert [margin(x, 9, 4) for x in (7, 8, 9)] == [3, 1, -1]
+    assert [margin(x, 9, 0) for x in (7, 8, 9)] == [7, 5, 3]
+    # ... so 9 is a *wrong pipe* at the shipped wall and legal at an ungrown one,
+    # which is the shape of every silent mis-bind this family has had; 8 is a
+    # one-cell margin. The body takes 7 and keeps three.
+    c = mt.worker_v2_jump(53, park_const=True, protocol="v4")
+    assert c.cell[(7, 9)] == "r"
+    # the ring size parks directly above MAIN rather than four rows up, and the
+    # climb home stops on that row instead of running to row 1
+    rows = c.rows()
+    assert rows[4].startswith("vM`") and rows[5].startswith(">rb]-M")
+    assert rows[1].strip() in ("v", "v" + rows[1].strip()[1:])  # only the turn left
+    assert "M`" not in rows[1]
+    # off is the shipped grid, and only this branch moves: the v3 batched body
+    # and both narrow bodies are byte-identical at either setting.
+    try:
+        mt._JUMP_V4_TIGHT_ARMS = False
+        shipped = mt.worker_v2_jump(53, park_const=True, protocol="v4").rows()
+        v3 = mt.worker_v2_jump(53, park_const=True).rows()
+        narrow = mt.worker_v2(53, park_const=True, protocol="v4").rows()
+    finally:
+        mt._JUMP_V4_TIGHT_ARMS = True
+    assert shipped != c.rows()
+    assert mt.worker_v2_jump(53, park_const=True).rows() == v3
+    assert mt.worker_v2(53, park_const=True, protocol="v4").rows() == narrow
+    # ... and no other caller can reach this branch at all, which is the whole
+    # reason `matmul`, `sudoku` and the byte-pinned `deadman-3d` do not move: the
+    # batched *v4* body exists only behind a packed wire, and one slug has one.
+    assert list(machine.TAPED_PROTOCOL) == [("deadman-3d_hires", "taped")]
+    assert machine.TAPED_PROTOCOL[("deadman-3d_hires", "taped")] in ("v4", "v5")

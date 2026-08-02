@@ -322,6 +322,47 @@ WORKER_JUMP_V4_POST_PAD = 0
 #: Toggle for the A/B above; the long way home is the v3 body's route.
 _JUMP_V4_RETURN_LEFT = True
 
+#: The batched v4 body's **entry and its write arm**, both pulled in. Off is the
+#: shipped grid to the cell; the v3 body and every other worker are untouched at
+#: either setting, and only ``deadman-3d_hires`` reaches this branch at all.
+#:
+#: Two moves, and they are the two ends of the same lap:
+#:
+#: * **The ring size parks on row 4 instead of row 1.** The reload has to happen
+#:   on cells the man already walks and as late before its use as possible (the
+#:   idiom :data:`~.lm1.machine.TAPED_GATE_PARK_CONST` measured at -3.472%). The
+#:   walk west is the same 13 columns either way, but the *climb* is not: P2's
+#:   return used to run all the way up column 13 to row 1 and back down column 0
+#:   to MAIN, and it now stops three rows short at row 4 and steps straight into
+#:   the park. **Six cells off every access**, and INIT's own return with it.
+#: * **The write's value is fetched at column 7, not column 2.** ``r`` there has
+#:   to bind the *request* pipe and not the ring return, which is the only reason
+#:   it ever stood beside the west wall — and on row 9 the binding holds out to
+#:   column 8. Enumerated strictly at ``west_grow`` 0 **and** 4 (hires ships 4,
+#:   which pushes the stub *further* west and is therefore the tight case):
+#:
+#:   | cell | request | ring return | margin at ``west_grow=4`` |
+#:   |---|---|---|---|
+#:   | (2, 12) — shipped | 18 | 25 | 7 |
+#:   | **(7, 9)** | **20** | **23** | **3** |
+#:   | (8, 9) | 21 | 22 | 1 |
+#:   | (9, 9) | 22 | 21 | **wrong pipe — the value is a tape word** |
+#:
+#:   Column 9 builds, passes every *ascending* readback and is wrong — and it is
+#:   wrong only at ``west_grow=4``; at 0 it has three cells to spare, which is
+#:   the exact shape of every silent mis-bind this family has had. Column 8 is
+#:   legal on a one-cell margin, which is the margin that has burned it twice.
+#:   Seven keeps three and still deletes the whole descent to row 12 and the run
+#:   back east along row 13 — **twelve cells off every write**.
+#:
+#: Measured together on the 21-round tour, same process, same moment, control
+#: reproducing 87,431,352 to the tick: **-0.344%** on its own (87,130,548), and
+#: -2.184% stacked with :data:`~.lm1.machine.TAPED_ROTATE_BANKS`'s -1.837%,
+#: which is additive to three decimal places. It reaches only the three banks
+#: that are batch-2 and *not* rotating — the rotating body has both moves built
+#: in — and no other caller reaches this branch at all.
+_JUMP_V4_TIGHT_ARMS = True
+
 #: The same move on the **narrow** body: climb the westmost clear column
 #: instead of the room's far east wall. Toggle for the A/B.
 _V4_RETURN_NEAR = True
@@ -942,7 +983,11 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     x, _ = c.run(1, 0, "@" + L + "b")
     c.route((x, 0), E, [(29, 0)], (29, 2), E)
     fill, _ = c.counted_loop(30, 2, "0s")
-    c.route((fill, 2), E, [(GUT, 2), (GUT, 1)], (0, 1), S)
+    if protocol == "v4" and _JUMP_V4_TIGHT_ARMS:
+        # ... into the park's own row, which is also where P2 comes home to.
+        c.route((fill, 2), E, [(GUT, 2), (GUT, 1), (13, 1), (13, 4)], (0, 4), S)
+    else:
+        c.route((fill, 2), E, [(GUT, 2), (GUT, 1)], (0, 1), S)
     if protocol != "v4":
         c.turn(0, 2, E)  # ... the v4 body chooses its own MAIN row and turns there
 
@@ -989,9 +1034,17 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         # WRITE (row 9, CW): one extra ring pass for the floored `]`, then the value.
         c.turn(27, 9, W)
         c.run(26, 9, "rsWNb]m", d=W)
-        c.route((19, 9), W, [(3, 9)], (3, 12), W)
-        c.run(2, 12, "r", d=W)
-        c.route((1, 12), W, [(0, 12), (0, 13)], (16, 13), E)
+        if _JUMP_V4_TIGHT_ARMS:
+            # Column 7 is the furthest east this `r` still binds the request
+            # pipe with more than one cell to spare; the descent to row 12 and
+            # the run back east along row 13 go with it.
+            c.horizontal(9, 19, 7)
+            c.run(7, 9, "r", d=W)
+            c.route((6, 9), W, [(6, 13)], (15, 13), E)
+        else:
+            c.route((19, 9), W, [(3, 9)], (3, 12), W)
+            c.run(2, 12, "r", d=W)
+            c.route((1, 12), W, [(0, 12), (0, 13)], (16, 13), E)
         c.run(16, 13, "sr")
         c.turn(19, 13, E)
 
@@ -1003,19 +1056,22 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         # and climbing column 13 instead is ~22 cells shorter and empties row 17,
         # which is where :data:`V2_JUMP_V4_IH` comes from. Column 13 is clear from
         # row 1 to row 16 (MAIN owns 1..5 of row 5 and the rings live at 19..23),
-        # and the run west along row 1 still crosses the parked constant, which is
-        # what re-loads it for the next lap.
+        # and the run west still crosses the parked constant, which is what
+        # re-loads it for the next lap -- on row 4 under
+        # :data:`_JUMP_V4_TIGHT_ARMS`, three rows short of the old climb to row 1.
         if not _JUMP_V4_RETURN_LEFT:
             c.route(p2_exit, S, [(23, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
         elif WORKER_JUMP_V4_POST_PAD:
             q = WORKER_JUMP_V4_POST_PAD
             c.route(p2_exit, S, [(23, 16 + q), (13, 16 + q), (13, 1)], (0, 1), S)
+        elif _JUMP_V4_TIGHT_ARMS:
+            c.route(p2_exit, S, [(13, 16), (13, 4)], (0, 4), S)
         else:
             c.route(p2_exit, S, [(13, 16), (13, 1)], (0, 1), S)
         # ``2n``, not ``2n + 1``: the parity of ``w - c`` is what ``x`` reads, so
         # the constant chooses which way each arm turns. Even (READ) goes CCW,
         # north, which is the side the ring's own bottom row does not stand on.
-        _park_size_on_row(c, 2 * n, 1, 1)
+        _park_size_on_row(c, 2 * n, 1, 4 if _JUMP_V4_TIGHT_ARMS else 1)
         return c
 
     # MAIN and the signed remaining-distance setup are byte-for-byte the v2
@@ -1081,6 +1137,143 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     )
     if park_const:
         _park_size_on_row(c, n, 1, 1)
+    return c
+
+
+#: The rotating batched worker's own room, which is :data:`V2_JUMP_IW` x
+#: :data:`V2_JUMP_V4_IH` **exactly** — the same 34 x 17 the batched v4 body
+#: stands in, with the same four wall anchors.
+#:
+#: That is a deliberate constraint rather than a coincidence. ``bank_w`` and
+#: ``bank_h`` in :func:`~.memory_taped.taped_store_block` are maxima over the
+#: banks and the batched worker is what sets both, so a *narrower* or *shorter*
+#: rotating body would still leave the pitch where it is — but it would move the
+#: ring, because :func:`~.lm1.machine.tape_block` measures the fold (and the
+#: serpentine) from the worker's own bottom wall. Keeping the room identical
+#: means the shell, both ring pipes, the request stub and the answer riser are
+#: byte-identical to the body this replaces, so the **only** cells that differ
+#: anywhere in the machine are inside this room. It makes the binding diff
+#: readable and it makes the A/B honest.
+V2_ROT_IW, V2_ROT_IH = V2_JUMP_IW, V2_JUMP_V4_IH
+
+
+def worker_v2_rot(n: int, *, park_const: bool = True, protocol: str = "v4") -> Circuit:
+    """The **rotating** batched ring worker: skip the delta, not the address.
+
+    Every other worker in this module walks the ring home. Slot *k* is the *k*-th
+    value out of the return pipe because the previous access left the ring where
+    it found it, which costs P1 ``addr`` passes on the way in and P2 ``n-1-addr``
+    on the way out — a whole lap per access whatever the address was. This body
+    keeps no such invariant. It leaves the head wherever the access left it and
+    P1 skips the **rotational delta**::
+
+        ROT = (n + addr - head) % n
+
+    which for a 442-slot bank measures 18.4 against 327.0 (21-round trace,
+    3,850 accesses). P2 then has nothing to do and is gone.
+
+    **Where the head lives.** Not here. Rotation wants four values live at MAIN —
+    the arriving word, the head, the ring size for the wrap, and P1's own count —
+    against three registers, and there is no BP -> A glyph to shuffle with. The
+    head lives one room upstream instead, in the **feed forwarder's B register**
+    (:func:`~.memory_taped.feed_rotate`), which is per-bank, private, and idle
+    94-99% of the time. It costs no tape slot, no extra room and one tick of the
+    forwarder's own critical path; what arrives here is not ``2*addr - op`` but::
+
+        D = w - P        where P = 2*head - 1 is the forwarder's running head
+
+    and everything this body needs falls out of one ``%`` against the parked ring
+    size:
+
+    ==================  ========================================================
+    ``D % 2n``          ``2*ROT + 1 - op``, for every sign of the delta and both
+                        ops, with no branch and no special case at ``ROT == 0``
+    ``(D % 2n) >> 1``   ``ROT`` — P1's count, exact for a read *and* a write
+    low bit of ``D%2n`` ``1 - op`` — the dispatch, read clockwise
+    ==================  ========================================================
+
+    The ``-1`` in ``P`` is what makes that uniform: with ``P = 2*head`` the
+    same expression is off by one exactly when a **write** lands on the slot the
+    head is already standing on, and a counted loop cannot skip ``-1`` words. It
+    is the one off-by-one this design has and it is bought out in the constant.
+
+    **The invariant that replaces "the ring comes home" is "the head is at
+    ``addr + 1``"**, and both arms have to leave it there exactly. A read is
+    ``r`` then ``S`` — ``S`` writes *every* outgoing pipe, so the answer and the
+    ring-forward recirculation are the same glyph and the ring advances one. A
+    write is ``r`` (the value, off the request wire) then ``s`` then ``r``: send
+    the new value, drop the old one, and the ring advances one the same way. No
+    floored-`]` correction pass, because ``ROT`` is exact rather than
+    ``addr - op``.
+
+    Everything else in the room is the batched v4 body's, cell for cell where it
+    could be: INIT and its fill loop, the parked constant, MAIN's five glyphs,
+    P1's ``counted_ring_horizontal`` at (19, 6) and its odd tail. What moved:
+
+    * **The parked constant moved from row 1 to row 4**, directly above MAIN, so
+      the entry walks into the reload and then into MAIN instead of parking at
+      the top and descending four rows to reach it. The walk is the same length
+      — it has to end at column 0 either way — but row 1 is now free for the
+      return gutter alone and every arm comes home along **row 4**, which is
+      three rows closer to MAIN than row 1 was to anything.
+    * **The write arm's westward excursion lost seven columns.** It used to
+      descend to row 9, run west to column 3, drop to row 12 and pick the value
+      up at column 2 — because ``r`` there has to bind the *request* pipe and
+      not the ring return. On row 2, the request stub's own row, the same
+      binding holds out to column 13 with five cells of margin at
+      ``west_grow=4`` (and nine at 0), so the value is fetched eleven columns
+      further east and the arm is ~14 cells shorter each traversal.
+    * **P2 is gone**, and with it 38.2M ticks of post-send walking across the
+      four banks this serves. That is a bonus and not the mechanism — a
+      post-send tick on this body prices at 0.024% against a pre-send one's
+      0.27% — but it is also what empties rows 10..16.
+
+    The room stays 34 x 17 regardless (:data:`V2_ROT_IW`), so nothing outside it
+    moves by one cell.
+    """
+    if protocol != "v4":
+        raise ValueError(
+            f"the rotating worker speaks the packed wire only, not {protocol!r}"
+        )
+    if not park_const:
+        raise ValueError("the rotating worker's `%` needs 2n in B; pass park_const")
+    c = Circuit(V2_ROT_IW, V2_ROT_IH)
+    L = lit(n)
+
+    # ── INIT: n zeros into the ring, head 0, then home along row 4 ──────────
+    x, _ = c.run(1, 0, "@" + L + "b")
+    c.route((x, 0), E, [(29, 0)], (29, 2), E)
+    fill, _ = c.counted_loop(30, 2, "0s")
+    # Column 28 rather than the room's own east gutter: the fill loop owns
+    # (31, 4) and a westbound return along row 4 would walk its `s`.
+    c.route((fill, 2), E, [(33, 2), (33, 1), (28, 1), (28, 4)], (0, 4), S)
+
+    # ── MAIN: reduce the delta, and P1's count falls out of it ──────────────
+    c.turn(0, 5, E)
+    c.run(1, 5, "r%Mb]")  # A = D%2n, B = same, BP = ROT
+    c.horizontal(5, 5, 19)
+    c.turn(23, 5, S)
+    p1_exit, p1_odd = c.counted_ring_horizontal(19, 6, "rs")
+    c.turn(*p1_odd, E)
+    c.horizontal(5, 19, 23)
+
+    # ── dispatch, on P1's own exit row. `x` reads 1 - op, so READ turns CW ──
+    c.turn(*p1_exit, E)
+    c.run(24, 8, "Wbx")
+
+    # READ (row 9, CW/south): the answer and the recirculation are one `S`.
+    c.turn(26, 9, E)
+    c.run(27, 9, "rS")
+    c.route((29, 9), E, [(29, 4)], (0, 4), S)
+
+    # WRITE (row 2, CCW/north): the value off the request wire, then the swap.
+    c.route((26, 7), N, [(26, 2)], (14, 2), W)
+    c.run(13, 2, "r", d=W)  # the new value; row 2 is the request stub's own row
+    c.route((12, 2), W, [(12, 8)], (15, 8), E)
+    c.run(16, 8, "sr")  # ... in, and the word it displaces out
+    c.route((18, 8), E, [(18, 4)], (0, 4), S)
+
+    _park_size_on_row(c, 2 * n, 1, 4)
     return c
 
 

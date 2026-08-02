@@ -712,3 +712,56 @@ def test_the_hires_ring_worker_batches_one_bank_at_a_time() -> None:
     # `deadman-3d_taped.man` is byte-identical either way
     assert machine.TAPED_SKIP_BATCH["deadman-3d"] == 2
     assert "deadman-3d" not in machine.TAPED_JUMP_THRESHOLD
+
+
+def test_the_hires_rotating_banks_are_four_and_the_other_seven_are_refusals() -> None:
+    """``TAPED_ROTATE_BANKS``'s hires entry, and why it is a per-bank list.
+
+    A rotating bank skips ``ROT = (n + addr - head) % n`` instead of ``addr``.
+    The ring turns **one way**, so a backwards delta costs a near-full lap where
+    the old skip cost only the address, and a bank that walks backwards often on
+    a ring that was short anyway loses outright. Applied to all eleven the
+    21-round tour is **+8.31%** by the trace model; measured on the machine, one
+    bank at a time, same process, same moment, control reproducing 87,431,352 to
+    the tick:
+
+        bank 5 (ring 442)  -1.437%      bank 3 (135)  +1.747%
+        bank 2 (53)        -0.318%      bank 6 (59)   +3.948%
+        bank 1 (53)        -0.082%      bank 7 (22)   +1.332%
+        bank 0 (115)       -0.001%      all seven     +5.332%
+
+    The four together are **-1.837%** (87,431,352 -> 85,824,944), which is the
+    sum of the four singles to within a tick, and mean read latency goes
+    100.685 -> 95.737 with the floor unmoved at 44 and the **max** 14,836 ->
+    3,099 — the tail was bank 5's full-lap walk and it is gone.
+
+    So the sign of every one of the eleven is a measured fact, and the entry is
+    the four that are negative. Note what it is *not*: it is not "the big rings"
+    (bank 3 at 135 slots is the largest loser) and it is not "the hot banks"
+    (bank 5 takes 3,850 of 471,189 accesses). It is the banks whose accesses
+    happen to move **forward** around their own ring.
+    """
+    from randomfun2026solvers.lm1 import machine
+
+    key = ("deadman-3d_hires", "taped")
+    rot = machine.TAPED_ROTATE_BANKS[key]
+    assert rot == (0, 1, 2, 5)
+    banks = machine.TAPED_BANKS["deadman-3d_hires"]
+    # every named bank is a batch-2 ring: there is no narrow rotating body, and
+    # the builder refuses rather than silently building the wrong one.
+    threshold = machine.TAPED_JUMP_THRESHOLD["deadman-3d_hires"]
+    assert machine.TAPED_SKIP_BATCH["deadman-3d_hires"] is None
+    assert all(banks[k] + 1 >= threshold for k in rot)
+    # ... and the three batch-2 rings left out are left out on their measured
+    # regressions rather than on their size: bank 3 at 134 slots is bigger than
+    # two of the four that are in.
+    batched = {k for k, m in enumerate(banks) if m + 1 >= threshold}
+    assert batched == {0, 1, 2, 3, 5, 6, 7}
+    assert batched - set(rot) == {3, 6, 7}
+    assert banks[3] > banks[1] and banks[3] > banks[2]
+    # the head rides the packed wire's own forwarder, so both are load-bearing
+    assert machine.TAPED_PROTOCOL[key] == "v5"
+    assert key in machine.TAPED_FEED_TELEPORT
+    # nothing else in the family rotates: `deadman-3d` is byte-pinned and
+    # `matmul`/`sudoku` share the same two modules.
+    assert list(machine.TAPED_ROTATE_BANKS) == [key]
