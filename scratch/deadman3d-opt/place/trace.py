@@ -40,6 +40,13 @@ STOP = set("H")
 #: :class:`Walk` records them so the caller knows where the count is a lower bound.
 PIPEOP = set("sSrRUq")
 
+#: Glyphs that end a walk because a man may never step on a room wall.  Note the
+#: overload: ``-`` is also *subtract* and ``|`` is also *bitwise or*, so on a grid
+#: where the interior is known this set is the wrong test and the caller should
+#: pass ``walls=frozenset()`` and bound the walk with ``box`` instead.  Getting
+#: this wrong silently truncates a walk in the middle of a spine (``UbW-X`` stops
+#: dead at the ``-``), which reads as "the leg is three ticks long" rather than as
+#: an error.
 WALLS = set("+-|=:")
 
 
@@ -146,6 +153,8 @@ def walk(
     choices: Choices | None = None,
     max_steps: int = 100_000,
     stop_at: set | None = None,
+    walls: set | None = None,
+    box: tuple[int, int, int, int] | None = None,
 ) -> Walk:
     """Walk the grid from ``start``, counting cells stood on.
 
@@ -155,11 +164,15 @@ def walk(
     """
     choices = choices or Choices()
     stop_at = stop_at or set()
+    walls = WALLS if walls is None else walls
     w = Walk()
     x, y = start
     for _ in range(max_steps):
+        if box is not None and not (box[0] <= x <= box[2] and box[1] <= y <= box[3]):
+            w.stopped = f"left the interior at {(x, y)}"
+            return w
         g = grid.at(x, y)
-        if g in WALLS:
+        if g in walls:
             w.stopped = f"wall {g!r} at {(x, y)}"
             return w
         w.cells.append((x, y))

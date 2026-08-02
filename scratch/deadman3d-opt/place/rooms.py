@@ -184,6 +184,57 @@ def case_score_identity() -> None:
            "(zero: every cell adjacent, so no transit term)")
 
 
+# ── case 7: the counting floor against the routing one ───────────────────────
+def case_router() -> None:
+    """Every counted floor must come with a construction, or it is a guess.
+
+    :func:`place.route.loop_floor` *counts*; :func:`place.circuit.route_loop`
+    *builds*.  Agreement on a structure that ships is the only evidence that the
+    count is reachable, and disagreement is worth having: the counting floor
+    treats ``x`` as an op that may pay for a corner, when in fact ``x`` has no
+    straight exit at all and so **forces** one.
+    """
+    print("\n-- counted floor vs routed floor --", flush=True)
+    from circuit import route_loop
+
+    for lap, name in (
+        ("rs", "relay"),
+        ("drsm", "batch-1 skip loop"),
+        ("drsmmsrd", "batch-2 ring"),
+        ("rX", "cpu:seek:flush"),
+        ("rmrma", "cpu:seek:discard (2x4)"),
+        ("amrrrrrrrr", "cpu:discard:BRN counted loop (shipped 14 cells)"),
+    ):
+        n_ops, n_turn = ops_of(lap)
+        counted = loop_floor(n_ops, n_turn)
+        routed = route_loop(lap, box=(0, 0, 6, 6))
+        ok = routed is not None and routed.ticks == counted.ticks
+        report(f"{name}: routed == counted", ok,
+               f"counted {counted.ticks}, routed "
+               f"{routed.ticks if routed else 'no layout'}"
+               + (f"  [{routed.render().replace(chr(10), ' / ')}]" if routed else ""))
+
+    # ── the case the counting floor gets wrong, checked against a shipped lap ──
+    # `cpu:seek:flush` is `r X` on a closed circuit, and it has TWO laps: the
+    # A > 0 one, where the `X` turns and pays for a corner, and the A == 0 one,
+    # where it goes straight and does not.  The counting floor cannot tell them
+    # apart -- it discounts a corner for every self-turning op whatever that op
+    # does on the lap being priced -- and says 6 for both.  The machine says 6
+    # and 8, and the router says 6 and 8.
+    from circuit import Op, route_loop as rl
+
+    hot = rl([Op("r"), Op("X")], box=(0, 0, 5, 5))
+    cold = rl([Op("r"), Op("r"), Op("X", exit="straight")], box=(0, 0, 5, 5))
+    counted = loop_floor(3, 1)
+    report("routed floor separates an X that turns from one that does not",
+           hot.ticks == 6 and cold.ticks == 8 and counted.ticks == 6,
+           f"counting floor says {counted.ticks} for a lap whose X goes straight; "
+           f"the router says {cold.ticks} and builds it "
+           f"[{cold.render().replace(chr(10), ' / ')}]. The shipped flush loop's "
+           "A==0 lap is 8 cells, measured -- so the router is right and the "
+           "count was optimistic by two")
+
+
 def main() -> int:
     print("=== small-room validation ===", flush=True)
     case_relay()
@@ -192,6 +243,7 @@ def main() -> int:
     case_batch_law()
     case_adapter()
     case_score_identity()
+    case_router()
     bad = [r for r in _results if r[0] == BAD]
     print(f"\n=== {len(_results) - len(bad)}/{len(_results)} agree ===", flush=True)
     for _, name, detail in bad:
