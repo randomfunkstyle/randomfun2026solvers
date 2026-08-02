@@ -353,13 +353,21 @@ def test_the_hires_opcode_map_is_its_own_and_a_win(wad_installed) -> None:
     key = ("deadman-3d_hires", "taped")
     slots = machine.OPCODE_SLOTS[key]
     program = assemble(wad_installed.hires_source(), name="deadman-3d_hires")
-    # exactly what `build_for` plans with: no LANE_ORDER entry, and the seek
-    # split's JMPS filtered out by `_relabel_slots` (see the map's own test in
-    # `test_seekrom.py` — the DP's twenty-one assignments are what is checked here)
+    # exactly what `build_for` plans with, and the row order is now part of that:
+    # `_relabel_slots` enforces rank preservation, so the map only makes sense
+    # against the order it was zipped to (:data:`machine.LANE_ORDER_FOR`).
+    #
+    # The slug-keyed `LANE_ORDER` must stay empty, and that is not tidiness: it
+    # would move hires' men-v3 grid, which is hash-pinned. The tier-keyed table is
+    # the escape hatch, and it names taped only.
     assert machine.LANE_ORDER.get("deadman-3d_hires") is None
+    assert set(machine.LANE_ORDER_FOR) == {key}
+    # the seek split's JMPS filtered out by `_relabel_slots` on both sides (see the
+    # map's own test in `test_seekrom.py`); this plan is the classic one
     slots = {m: s for m, s in slots.items() if m != "JMPS"}
-    base = machine.plan(program, middle_order=None)
-    relabelled = machine.plan(program, middle_order=None, slots=slots)
+    order = tuple(m for m in machine.LANE_ORDER_FOR[key] if m != "JMPS")
+    base = machine.plan(program, middle_order=order)
+    relabelled = machine.plan(program, middle_order=order, slots=slots)
 
     by_rank = sorted(base.number, key=lambda m: base.row[m])
     assert sorted(relabelled.number, key=lambda m: relabelled.row[m]) == by_rank

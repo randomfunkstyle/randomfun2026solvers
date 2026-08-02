@@ -1505,7 +1505,11 @@ def test_taped_registry_pins() -> None:
     # CPU's response row is the collector's first *interior* row rather than its
     # north wall — a wall has nothing to attach to.
     # dy 9, not -1: it sets `route_lengths["store->cpu"]` (5 cells -> 2) by making
-    # the level test true, which switches to the `answer_exit_west` branch.
+    # the level test true, which switches to the `answer_exit_west` branch. It
+    # survived :data:`machine.LOW_COLLECTOR` by cancellation, not by luck holding:
+    # the corridor takes ``mem_out_row`` 19 -> 18 (which wants dy 8) and
+    # :data:`machine.LANE_ORDER_FOR` re-flows the memory lanes back onto 19. Either
+    # knob alone moves this number.
     assert hires["store_offset"] == (-20, 9)
     # The taped store is a quarter of the men-v3 block's height, so its fold
     # goes far deeper than the canonical machine's height budget allows.
