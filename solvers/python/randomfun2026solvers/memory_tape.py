@@ -318,6 +318,18 @@ V2_JUMP_V4_IH = 17
 #: run, so this is the largest single lever on the machine.
 RING_MEN = 1
 
+
+def jump_v4_height() -> int:
+    """The batched v4 worker's interior height, as the body actually builds it.
+
+    ``machine._tape_worker_spec`` draws the room's four walls from this and the
+    body draws its glyphs from the same number, so the two must not be written
+    twice: a stale height puts the south wall *through* the ring cells below it
+    (``Collision: (31,25) holds 'H', cannot place '-'``), which is what a fan-out
+    room did the first time :data:`RING_MEN` grew it.
+    """
+    return V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD + 6 * max(0, RING_MEN - 1)
+
 #: **An instrument, not a knob**, and the batched twin of
 #: :data:`WORKER_V4_POST_PAD`: it dips the v4 batched worker's return that many
 #: rows before it turns west, so the lap grows by ``2 * pad`` ticks entirely
@@ -1216,7 +1228,7 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     """
     _h = V2_JUMP_IH
     if protocol == "v4" and _JUMP_V4_RETURN_LEFT:
-        _h = V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD + 4 * max(0, RING_MEN - 1)
+        _h = jump_v4_height()
     c = Circuit(V2_JUMP_IW, _h)
     L = lit(n)
     GUT = V2_JUMP_IW - 1

@@ -5369,18 +5369,12 @@ def _tape_worker_spec(skip_batch: int, protocol: str = "v3", rotate: bool = Fals
         )
     if skip_batch == 2:
         if protocol == "v4":
-            from ..memory_tape import (
-                V2_JUMP_V4_IH,
-                WORKER_JUMP_V4_POST_PAD,
-                _JUMP_V4_RETURN_LEFT,
-            )
+            from ..memory_tape import _JUMP_V4_RETURN_LEFT, jump_v4_height
 
             return (
                 worker_v2_jump,
                 V2_JUMP_IW,
-                (V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD)
-                if _JUMP_V4_RETURN_LEFT
-                else V2_JUMP_IH,
+                jump_v4_height() if _JUMP_V4_RETURN_LEFT else V2_JUMP_IH,
                 V2_IN_ROW,
                 V2_OUT_COL,
                 V2_JUMP_FWD_ROW,

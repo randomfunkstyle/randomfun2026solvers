@@ -274,7 +274,7 @@ class Circuit:
         y: int,
         body: str = "rs",
         men: int = 2,
-        pitch: int = 3,
+        pitch: int = 4,
     ) -> list[tuple[int, int]]:
         """``men`` copies of :meth:`counted_ring_horizontal`, fed by a ``Y`` cascade.
 
@@ -304,16 +304,39 @@ class Circuit:
             raise ValueError(f"a fan-out needs at least one man, not {men}")
         if men == 1:
             return self.counted_ring_horizontal(x, y, body)
-        if pitch < 3:
-            raise ValueError(f"rings are two rows and need a gap: pitch {pitch} < 3")
+        if pitch < 4:
+            # Two rows of ring plus **two** spare: one carries the level's own
+            # south exit `H`, the other is the odd-exit merge corridor of the
+            # ring below it. At pitch 3 they are the same row and collide.
+            raise ValueError(f"rings need two rows and two spare: pitch {pitch} < 4")
         k = len(body)
         exits: list[tuple[int, int]] = []
         for i in range(men):
-            rx, ry = x + i, y + pitch * i
+            # Every level's fork stands at ``rgt + 1`` and sends its east child
+            # down ``rgt + 2``, which is the *next* level's fork column — so the
+            # rings drift one column east a level and the cascade stays aligned.
+            # The last ring has no fork of its own, so the man arrives one column
+            # east of where the others do and the ring has to move with him;
+            # without this he descends past its entry into the wall.
+            rx = x + i + (1 if i == men - 1 else 0)
+            ry = y + pitch * i
             rgt = rx + k + 2
             got = self.counted_ring_horizontal(rx, ry, body)
             if i == men - 1:
-                exits = got
+                # **Merge the odd exit rather than returning it.** A single-man
+                # ring leaves by the south exit whenever the count's parity says
+                # so, and its callers discard the north one; halving BP for the
+                # fan-out changes that parity, so the north exit becomes
+                # reachable and walks the man back into the ring above.  Send him
+                # east to the entry column instead and drop him back in: BP is
+                # zero by then, so the `d` passes him straight out south and both
+                # parities leave by the one exit the caller routes.
+                ox, oy = got[1]
+                self.set(ox, oy, ">")
+                for cx in range(ox + 1, rgt):
+                    self.set(cx, oy, ".")
+                self.set(rgt, oy, "v")
+                exits = [got[0], got[0]]
                 break
             # this level's fork, one row above its ring
             self.set(rgt + 1, ry - 1, "Y")
