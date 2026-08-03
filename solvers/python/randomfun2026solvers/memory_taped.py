@@ -553,6 +553,14 @@ def feed_rotate(height: int) -> tuple[list[str], list[tuple[int, int]]]:
 #: The broadcast room's fixed body: :func:`feed_relay` with ``s`` written ``S``.
 BCAST_H = 8
 
+#: Interior columns of the descender that lifts the request past the bank row,
+#: and the block column its **west wall** stands on. The block's north-west
+#: corner is not free -- the machine tucks the adapter into it -- so where
+#: this lands is a search, not a choice.
+DESC_W = 4
+DESC_X = 1
+DESC_TOP = 0
+
 #: The filter room's spine row, and the rows its four discard exits use.
 FILTER_IN_ROW = 2
 
@@ -639,10 +647,10 @@ def filter_room(base: int, size: int) -> "Circuit":
     IN = FILTER_IN_ROW
     x1 = 5                      # R at 2, - at 3, b at 4, X at 5
     x2 = x1 + len(arm2)         # the high-bound X
-    D = x2 + 9                  # the column every discard comes home on
-    cr = D + 5                  # the descent
-    lane = IN + 5
-    floor = lane + 3
+    D = x2 + 7                  # the column every discard comes home on
+    cr = D + 4                  # the descent
+    lane = IN + 4
+    floor = lane + 2
     c = Circuit(cr + 1, floor + 1)
 
     # ── the lap: the floor reloads B = 2*base, column 1 climbs to the spine ─
@@ -1671,7 +1679,11 @@ def taped_store_block(
         )
     bank_y = 9 - bank_lift
     gate_y = bank_y + bank_h + 2  # one clear row under the banks
-    gx = [4 + k * pitch for k in range(nb if broadcast else nb - 1)]
+    # A broadcast room spans the strip, so it cannot grow north to meet its
+    # caller the way `request_roof` grows gate 0 -- the bank row is in the
+    # way. The descender does it instead, and it needs its own columns.
+    x0 = max(4, DESC_X + DESC_W + 4) if broadcast else 4
+    gx = [x0 + k * pitch for k in range(nb if broadcast else nb - 1)]
     # The feed room's west wall stands at ``bx[k] - 5 + feed_tuck``, which is the
     # column the **widest** gate's east wall already occupies — harmless for every
     # gate but the first, because the feed rooms live entirely above the gate
@@ -1685,7 +1697,7 @@ def taped_store_block(
         if (request_roof is not None and not broadcast)
         else 0
     )
-    bx = [4 + gate_w + 4 + lead - feed_tuck + k * pitch for k in range(nb)]
+    bx = [x0 + gate_w + 4 + lead - feed_tuck + k * pitch for k in range(nb)]
 
     # ── how far each gate room reaches back toward its caller ────────────────
     # West wall of gate k lands one column east of bank k-1's own feed riser
@@ -1849,9 +1861,21 @@ def taped_store_block(
             feed((east + 1, gate_y + FILTER_IN_ROW + 3), k)
         # One cell, like the roofed chain's: whatever hands the request over has
         # to descend to this row anyway, and `R` reads it from any wall.
-        in_y = bcy + 2
-        put(gx[0] - 1, in_y, ">")
-        in_cell = (gx[0] - 1, in_y)
+        # **The descender: `feed_relay` used as nothing but a lift.** `R` takes
+        # from any incoming pipe with no distance term, so a room whose north
+        # wall is up beside the caller and whose south wall is down beside the
+        # broadcast room crosses every row between them in ONE instruction. The
+        # 26 rows the request would otherwise walk as pipe -- and pipe is a
+        # shift register, one tick a cell -- become an `R` and an `s`.
+        # ... starting clear of the answer collector, whose west end
+        # `answer_west` may have pulled into these very columns.
+        dtop = max(coll_y + 5, bank_y - 2) + DESC_TOP
+        dh = bcy + 2 - dtop
+        _room(_Grid(), DESC_X + 1, dtop, feed_relay(dh)[0])
+        pipe([(DESC_X + DESC_W + 2, bcy + 1), (gx[0], bcy + 1)])
+        in_y = dtop + 1
+        put(DESC_X - 1, in_y, ">")
+        in_cell = (DESC_X - 1, in_y)
 
     # ── feeds: gate k's local arm into bank k, its downstream into gate k+1 ──
     for k in range(nb - 1) if not broadcast else ():
@@ -1950,7 +1974,9 @@ def taped_store_block(
     # Per bank two ring legs, an answer and the two halves of a feed crossing the
     # forwarder. The chain then adds a link between consecutive gates; the
     # broadcast adds one riser per filter, which is a pipe the chain never had.
-    pipes = nb * (5 if feed_teleport else 4) + (nb if broadcast else nb - 2)
+    # ... the broadcast adds one riser per filter and the descender's own
+    # leg into the broadcast room, both pipes the chain never had.
+    pipes = nb * (5 if feed_teleport else 4) + (nb + 1 if broadcast else nb - 2)
     return V3Store(
         cells=cells,
         width=width,

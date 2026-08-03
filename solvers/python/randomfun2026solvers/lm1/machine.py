@@ -12630,7 +12630,9 @@ TAPED_GATE_ZERO_ARM: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 #: |---|---|---|---|
 #: | chain (shipped) | 614x478 | 75,371,817 | — |
 #: | chain, no ``SEEK_TELEPORT`` | 614x478 | 82,390,192 | +9.312% |
-#: | **broadcast**, no ``SEEK_TELEPORT`` | 616x489 | 100,154,565 | **+21.6%** on its own control |
+#: | broadcast v1, no ``SEEK_TELEPORT`` | 616x489 | 100,154,565 | +21.6% on its own control |
+#: | v2, filter compacted to 8 rows | 613x487 | 98,541,411 | +19.6% |
+#: | **v3, + the descender** | 623x487 | **85,421,793** | **+3.68%** |
 #:
 #: (``SEEK_TELEPORT`` has to come off both sides to compare at all: its room H
 #: wants a full-width clear strip under the store and the broadcast strip eats
@@ -12646,15 +12648,32 @@ TAPED_GATE_ZERO_ARM: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 #:   ~45 cells against a gate's ~30. ``S`` is all-or-nothing, so the broadcast
 #:   room cannot fire again until **every** filter has drained, which prices the
 #:   store at the slowest lap rather than the addressed one.
-#: * **The strip got 17 rows deeper** (an 11-row filter where the gate was 7,
-#:   plus the broadcast room and its risers) and the request descends every one.
-#:   The chain does not pay this: ``request_roof`` grows gate 0's *room* north
-#:   until it touches the adapter, so the pipe between them stops existing. A
-#:   room spanning the strip cannot do that without swallowing the bank row,
-#:   which is why ``store_request_reach`` is forced off here.
+#: * **The strip got 17 rows deeper** and the request descended every one as
+#:   *pipe*, which is a shift register at a tick a cell: ``in_cell`` fell from
+#:   row 42 to row 68. The chain does not pay this — ``request_roof`` grows gate
+#:   0's *room* north until it touches the adapter and the pipe between them
+#:   stops existing — and a room spanning the strip cannot do that without
+#:   swallowing the bank row. **Fixed** by :data:`~.memory_taped.DESC_X`'s
+#:   descender: ``feed_relay`` used as nothing but a lift, ``R`` at the top and
+#:   ``s`` at the bottom, crossing every row between them in one instruction.
+#:   ``in_cell`` goes to row 11 — *above* the chain's — and the tour falls
+#:   85,421,793, taking +21.6% to **+3.68%**.
+#:
+#:   Where it may stand is a search and not a choice: the machine tucks the
+#:   **adapter** into the store block's empty north-west corner (machine rows
+#:   232..237), and the request column must land under the adapter's own floor
+#:   (46..56). Only ``DESC_X`` in 6..12 with ``DESC_TOP`` 8 builds at all.
 #: * **The free rebasing costs a hop.** ``-`` really is the test and the rebase
 #:   in one glyph, but the word then goes filter -> forwarder -> bank where it
 #:   used to go gate -> forwarder -> bank.
+#:
+#: **And the remaining 3.68% is not the reason it stays off.** ``SEEK_TELEPORT``
+#: is: its room H wants a full-width clear strip under the store, the broadcast
+#: strip is **14 rows** taller than the gate strip (a 9-row filter where the gate
+#: was 7, +2; the broadcast room's 8 and its walls, +10; the risers, +2), and it
+#: eats that strip. No descender placement recovers it — all nine tried fail on
+#: ``no clear band below the store for room H``. Losing it costs 9.312%, so the
+#: broadcast must reach **-9.3% on its own control** merely to break even.
 #:
 #: **What would have to be true for it to win**, in the order that matters: the
 #: filter merged *into* :func:`~.memory_taped.feed_relay` instead of standing in
@@ -12663,6 +12682,13 @@ TAPED_GATE_ZERO_ARM: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 #: and all 17 rows at once. Its ``B`` is free on the seven non-rotating banks;
 #: the four in :data:`TAPED_ROTATE_BANKS` keep the ring head there and would need
 #: the test elsewhere, and they are 4.4% of accesses.
+#:
+#: That is not merely the cheaper packaging, it is the **only** one that fits:
+#: with the filter inside the forwarder the gate strip is replaced by the
+#: broadcast room alone, so the block grows **one** row rather than fourteen and
+#: ``SEEK_TELEPORT`` survives. Projected on the rates measured here — 17.9 ticks
+#: a pass-through, 1.71 of them an access, 0.834 of a walked cell reaching the
+#: critical path — it is ~21 ticks an access against ~40, or **about -10%**.
 #:
 #: Kept, off, and tested rather than deleted, because a measured negative with a
 #: diagnosis is what stops it being built a second time.
