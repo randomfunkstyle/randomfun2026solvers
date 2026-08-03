@@ -311,6 +311,13 @@ V2_JUMP_IW, V2_JUMP_IH = 34, 18
 #: body and do not move by a cell.
 V2_JUMP_V4_IH = 17
 
+#: How many little men share a bank ring. One man spends 5 ticks a value (`r`
+#: `s` `m` `d` and a turn) while the ring's two pipes each carry one value a
+#: tick, so a single runner leaves four fifths of the throughput idle. See
+#: `Circuit.counted_ring_horizontal_fanout`. Rings are 30% of the hires taped
+#: run, so this is the largest single lever on the machine.
+RING_MEN = 1
+
 #: **An instrument, not a knob**, and the batched twin of
 #: :data:`WORKER_V4_POST_PAD`: it dips the v4 batched worker's return that many
 #: rows before it turns west, so the lap grows by ``2 * pad`` ticks entirely
@@ -1209,7 +1216,7 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     """
     _h = V2_JUMP_IH
     if protocol == "v4" and _JUMP_V4_RETURN_LEFT:
-        _h = V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD
+        _h = V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD + 4 * max(0, RING_MEN - 1)
     c = Circuit(V2_JUMP_IW, _h)
     L = lit(n)
     GUT = V2_JUMP_IW - 1
@@ -1296,7 +1303,8 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         c.run(28 - w, 7, "rS")
         c.route((30 - w, 7), E, [(30 - w, 7)], (30 - w, 8), S)
         c.run(30 - w, 8, "WNb]m", d=S)
-        c.route((30 - w, 13), S, [(30 - w, 13)], (23 - w2, 13), S)
+        c.route((30 - w, 13), S, [(30 - w, 13)],
+                (23 - w2 + (1 if RING_MEN > 1 else 0), 13), S)
 
         # WRITE (row 9, CW): one extra ring pass for the floored `]`, then the value.
         c.turn(27 - w, 9, W)
@@ -1332,7 +1340,18 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         if 19 < 23 - w2:
             c.turn(19, 13, E)
 
-        p2_exit, _p2_odd = c.counted_ring_horizontal(19 - w2, 14, "rs")
+        if RING_MEN > 1:
+            # One extra `]` per doubling of men: each runner owes `count // men`,
+            # and the count is already in BP from the `]m` above.
+            # Overwrite one cell of the westward approach run: `]` does not turn,
+            # so the man shifts BP and carries straight on to the fork.
+            c.cell[(26 - w2, 13)] = "]"
+            # One row lower than the single-man ring: the approach's own `v`
+            # turns him south at row 13, so the `Y` has to be the cell below it.
+            p2_exit, _p2_odd = c.counted_ring_horizontal_fanout(
+                19 - w2, 15, "rs", men=RING_MEN)
+        else:
+            p2_exit, _p2_odd = c.counted_ring_horizontal(19 - w2, 14, "rs")
         # **Home the short way.** The v3 body drops to a row below the ring, runs
         # the room's whole width east, climbs the far wall and comes back west
         # along row 1 -- about sixty cells to reach a gutter that starts twelve
@@ -1357,7 +1376,11 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
             _park_size_on_row(c, 2 * n, home + 1, bot)
             return c
         if not _JUMP_V4_RETURN_LEFT:
-            c.route(p2_exit, S, [(23 - w2, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
+            if RING_MEN > 1:
+                c.route(p2_exit, S, [(p2_exit[0], p2_exit[1]),
+                                     (GUT, p2_exit[1]), (GUT, 1)], (0, 1), S)
+            else:
+                c.route(p2_exit, S, [(23 - w2, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
         elif WORKER_JUMP_V4_POST_PAD:
             q = WORKER_JUMP_V4_POST_PAD
             c.route(p2_exit, S, [(23 - w2, 16 + q), (home, 16 + q), (home, 1)], (0, 1), S)

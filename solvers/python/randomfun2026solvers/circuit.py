@@ -268,6 +268,62 @@ class Circuit:
         self.set(x, y, ">")
         return [(x + 2, y), (x - 1, y + k + 2)]
 
+    def counted_ring_horizontal_fanout(
+        self,
+        x: int,
+        y: int,
+        body: str = "rs",
+        men: int = 2,
+        pitch: int = 3,
+    ) -> list[tuple[int, int]]:
+        """``men`` copies of :meth:`counted_ring_horizontal`, fed by a ``Y`` cascade.
+
+        A single man in a ring spends 5 ticks a value (``r`` ``s`` ``m`` ``d``
+        and a turn) but the ring's two pipes each move **one value a tick**, so
+        one man leaves four fifths of the throughput unused.  ``men`` runners on
+        ``men`` rings divide the wall clock by ``men`` until the pipes saturate
+        at five.
+
+        Entered heading **south** at ``(x + len(body) + 3, y - 1)`` with
+        ``BP = count // men``; the caller owes the shifts.  Each ``Y`` is entered
+        heading south, so its clockwise child is born **west** (into that level's
+        ring) and its counter-clockwise child **east** (carrying on down).  The
+        cascade therefore drifts one column east a level, and each ring drifts
+        with it.
+
+        Ordering is by construction rather than by agreement.  Runners act in
+        creation order and ``Y``'s clockwise child keeps the parent's slot, so
+        man *i* is strictly older than man *i+1*; he also enters his ring
+        ``pitch - 1`` cells sooner.  Man ``men-1`` is therefore last in and last
+        out, which is why only his exits are returned — every earlier ring's two
+        exits get an ``H``.
+
+        Returns the last ring's ``[south exit, north exit]``.
+        """
+        if men < 1:
+            raise ValueError(f"a fan-out needs at least one man, not {men}")
+        if men == 1:
+            return self.counted_ring_horizontal(x, y, body)
+        if pitch < 3:
+            raise ValueError(f"rings are two rows and need a gap: pitch {pitch} < 3")
+        k = len(body)
+        exits: list[tuple[int, int]] = []
+        for i in range(men):
+            rx, ry = x + i, y + pitch * i
+            rgt = rx + k + 2
+            got = self.counted_ring_horizontal(rx, ry, body)
+            if i == men - 1:
+                exits = got
+                break
+            # this level's fork, one row above its ring
+            self.set(rgt + 1, ry - 1, "Y")
+            self.set(rgt, ry - 1, "v")      # clockwise child -> down into the ring
+            self.set(rgt + 2, ry - 1, "v")  # counter-clockwise child -> down the cascade
+            self.blanks(rgt + 2, ry, pitch - 2, S)
+            for ex in got:                  # this man is not the one who continues
+                self.set(ex[0], ex[1], "H")
+        return exits
+
     def counted_ring_horizontal(
         self,
         x: int,
