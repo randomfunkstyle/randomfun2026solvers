@@ -13198,7 +13198,19 @@ TAPED_BANKS: dict[str, int | tuple[int, ...]] = {
     # (+0.060%, +0.093%, +0.158%, +0.203%), and re-perturbing all ten boundaries
     # afterwards moves nothing. A jagged basin, so the step size is the finding —
     # a ±1 probe would have reported the shipped cut as optimal, twice.
-    "deadman-3d_hires": (114, 52, 44, 142, 7, 441, 58, 21, 6, 9, 7)}
+    # **And boundary 4 by +7, another -0.023%, found only by a finer step set.**
+    # The +-1/+-3/+-8 probe above reports this cut optimal; a multi-pass descent
+    # over +-{1,2,3,5,8,12,16,24} walks 7 -> 12 -> 14 in two passes and then goes
+    # dry. +5 and +2 are simply not in the coarser set, and the basin is jagged
+    # enough that neither of its neighbours points at them:
+    #
+    #     (..., 7, 441, ...)   76,773,760
+    #     (..., 12, 436, ...)  76,760,794   -12,966
+    #     (..., 14, 434, ...)  76,756,224   -17,536   <- converged
+    #
+    # Twice now this cut has been declared a measured local optimum and twice the
+    # step size was the thing being measured. Re-probe with a *set* of steps.
+    "deadman-3d_hires": (114, 52, 44, 142, 14, 434, 58, 21, 6, 9, 7)}
 
 #: Ring-worker batch for the taped tier's banks. ``2`` is the two-word counted
 #: worker (~5 ticks per skipped word against batch 1's 8): +12 columns per bank

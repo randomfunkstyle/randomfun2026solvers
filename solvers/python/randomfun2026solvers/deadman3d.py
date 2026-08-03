@@ -2065,7 +2065,7 @@ _DIGIT_SCALARS = ("DSRC", "DDIV", "DRET", "DVAL", "DPTR", "DKN", "DA", "DAC")
 #: last row) is +7.43%. Do not fit a static per-read cost to this span again —
 #: what is left here is queueing, and it needs a queue model or a build.
 _HIRES_SCALARS: tuple[str, ...] = (
-    'CMD', 'PERP', 'TBS', 'TSELT', 'PW0', 'PTR', 'DA', 'DKN',
+    'CMD', 'PERP', 'TBS', 'TSELT', 'PW0', 'DA', 'PTR', 'DKN',
     'WX', 'WPTR', 'DSRC', 'MI', 'TYN', 'MDX', 'DVAL', 'WTY',
     'DET', 'WBOT', 'HEALTH', 'NEWX', 'STY0', 'STY1', 'STY2', 'AMMO',
     'CHW', 'CW1', 'NEWY', 'BW', 'BS', 'BA', 'BD', 'HIT',
@@ -2075,9 +2075,9 @@ _HIRES_SCALARS: tuple[str, ...] = (
     'CID', 'STPY', 'WBAND', 'TMP', 'COLOR', 'RDY', 'TTE', 'FRACX',
     'WADDR0', 'WXT', 'DPTR', 'ADDRV', 'DDIV', 'TMP2', 'SLOT', 'DRET',
     'CTY', 'MDY', 'WX1', 'TXN', 'LIVE', 'Q2', 'FIRE', 'CSX0',
-    'S4X', 'XCOL', 'DEND', 'HALFH', 'WROW', 'CAMX', 'WADDR', 'DDY',
-    'SDY', 'DAC', 'NUKE', 'TSELB', 'TBE', 'FRACY', 'WSEL', 'PW',
-    'SDX', 'DDX', 'Q', 'DSTART', 'TXT', 'RDX',
+    'XCOL', 'S4X', 'DEND', 'HALFH', 'WROW', 'CAMX', 'DDY', 'WADDR',
+    'DAC', 'SDY', 'NUKE', 'TSELB', 'TBE', 'FRACY', 'WSEL', 'SDX',
+    'PW', 'Q', 'DDX', 'DSTART', 'TXT', 'RDX'
 )
 
 

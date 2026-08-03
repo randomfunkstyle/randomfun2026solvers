@@ -698,22 +698,28 @@ def test_the_hires_ring_worker_batches_one_bank_at_a_time() -> None:
     from randomfun2026solvers.lm1 import machine
 
     assert machine.TAPED_SKIP_BATCH["deadman-3d_hires"] is None
-    # 16 is the middle of a plateau: the cut has no ring between 10 and 22 slots,
-    # so every threshold in 11..22 builds the identical grid
+    # 16 is on a plateau, but the plateau is **15..22 now, not 11..22**: the cut
+    # has grown a 14-slot ring (see `machine.TAPED_BANKS`), so a threshold at or
+    # below 14 puts that bank on the wide batch-2 worker and costs +0.068%.
+    # Re-swept 10..24 on the 20-command tour; 15..22 are identical to the tick.
     assert machine.TAPED_JUMP_THRESHOLD["deadman-3d_hires"] == 16
+    assert any(m == 14 for m in machine.TAPED_BANKS["deadman-3d_hires"])
     # the cut it has to amortise against is still eleven short banks
     banks = machine.TAPED_BANKS["deadman-3d_hires"]
     assert len(banks) == 11
-    # 441, not 306: the re-cut of 1..800 merges the whole cold
+    # 434, not 441 and not 306: the re-cut of 1..800 merges the whole cold
     # `MONB`/`SPRB`/`DIGB`/`ZBUF` span into one ring to free a fourth boundary
-    # for the map (see `machine.TAPED_BANKS`). Batch 2 is what makes that
-    # affordable — a 441-slot ring on batch 1 would be ~1,270 ticks an access
-    # against ~866.
-    assert max(banks) == 441
+    # for the map (see `machine.TAPED_BANKS`), and a multi-pass descent has since
+    # moved seven of its slots to the neighbour. Batch 2 is what makes the big
+    # ring affordable — on batch 1 it would be ~1,270 ticks an access to ~866.
+    assert max(banks) == 434
     # ... and it straddles the crossover, which is the whole reason for `None`
     assert min(banks) < 15 < max(banks)
-    # the plateau claim above still holds: no ring lands in 11..20
-    assert not any(10 < m < 21 for m in banks)
+    # The old "no ring in 11..20" plateau claim is **gone**, deliberately: the
+    # descent put one at 14, which is what narrows the threshold plateau above.
+    # What still has to hold is that nothing lands in 15..20, or the threshold
+    # would sit on a ring rather than in a gap.
+    assert not any(14 < m < 21 for m in banks)
     # and it only pays because the drum is on; the two are not independent
     assert "deadman-3d_hires" in machine.SEEK_DRUM
     # `deadman-3d` untouched throughout: one uniform batch, and its checked-in
