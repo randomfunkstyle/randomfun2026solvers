@@ -5303,15 +5303,19 @@ def _tape_worker_spec(skip_batch: int, protocol: str = "v3", rotate: bool = Fals
             V2_JUMP_FWD_ROW,
             V2_JUMP_RET_COL,
             V2_OUT_COL,
-            V2_ROT_IH,
             V2_ROT_IW,
+            jump_v4_height,
             worker_v2_rot,
         )
 
+        # The **same call** the batched branch below makes, not a constant that
+        # once equalled it: the return column is on the bottom wall, so a room
+        # that grows for the batched body has to grow for this one too or the
+        # two hang their ring pipes off different rows. See ``V2_ROT_IW``.
         return (
             worker_v2_rot,
             V2_ROT_IW,
-            V2_ROT_IH,
+            jump_v4_height(),
             V2_IN_ROW,
             V2_OUT_COL,
             V2_JUMP_FWD_ROW,
@@ -5402,6 +5406,76 @@ def _tape_worker_spec(skip_batch: int, protocol: str = "v3", rotate: bool = Fals
     raise ValueError(f"skip_batch must be 1, 2, or 4, got {skip_batch}")
 
 
+#: Interior width of the ring's turnaround room when it is drawn **flat and
+#: dense** — ``0`` keeps the shipped ``relay(4, 3)`` and every existing grid is
+#: byte-identical.
+#:
+#: **It is worth nothing, and that is the finding.** Keep it off; the number
+#: below is why, and it is the cheap answer to a question that otherwise keeps
+#: being asked.
+#:
+#: The premise was good. A ring is a closed loop of *two* rooms — the worker and
+#: this turnaround — and every value passes through both, so the loop's rate is
+#: the slower of the two. ``relay(4, 3)`` walks a ten-cell perimeter carrying two
+#: words a lap: **5.00 ticks a word**, which is *exactly* what a one-word
+#: ``counted_ring_horizontal`` worker pays. Two men, both at 5.00, on the same
+#: loop. That looks like a co-bottleneck, and a co-bottleneck would mean every
+#: past attempt to tune the worker alone was measuring against a relay that held
+#: the rate where it was.
+#:
+#: A **two-row** room walked east-and-back has four turn cells and one spawn
+#: whatever its width, so ``2w`` cells carry ``(2w - 5) // 2`` words and the rate
+#: falls toward the floor of **2.00** (``r`` and ``s`` are two glyphs and one man
+#: fires one a tick): 3.20 at ``w = 8``, 2.67 at 12, 2.35 at 20. It is also one
+#: row *shorter* than the 4x3 room, because the ports are its two interior rows,
+#: and the columns are free — the room stands at block column 1 and the block's
+#: east edge is set by the worker's, so a wider relay eats empty floor.
+#:
+#: Built and run, 21-round hi-res tour, control reproducing 76,610,982 to the
+#: tick, with :data:`TAPE_RELAY_SIZE` supplying the other direction:
+#:
+#: ==========================  ============  ===========  ==========
+#: turnaround room             t/word        tour         delta
+#: ==========================  ============  ===========  ==========
+#: ``relay(3, 3)``                   8.00     77,782,245    +1.529%
+#: ``relay(4, 3)`` — shipped         5.00     76,610,982      .
+#: ``relay(6, 3)``                   3.33     76,610,982   **+0.000%**
+#: ``flat_relay(8)``                 3.20     76,610,982   **+0.000%**
+#: ``flat_relay(12)``                2.67     76,660,656     +0.065%
+#: ==========================  ============  ===========  ==========
+#:
+#: **5.00 is the knee, to the tick.** Slower costs — the relay really is on the
+#: loop and 8.00 t/word is +1.53% — but *faster is free*, and free means zero,
+#: not small: 3.33 and 3.20 reproduce the control's tick count exactly. The
+#: worker's ring runs at 5.00 and its ``r``/``s`` never block (``FastProfile.wait``
+#: over all ten ring cells is **0**), so the relay was already keeping up with
+#: room to spare and had nothing to give back. Past 3.20 the extra columns start
+#: taking ring capacity off the two pipes and it turns slightly negative.
+#:
+#: Nor does it come back when the worker gets faster. With
+#: :data:`~..memory_tape.JUMP_V4_P2_BATCH` at 4 — P2's ring down to ~2.9 t/word,
+#: which is *below* the relay's 5.00 — ``flat_relay(8)`` is worth
+#: **2,592 ticks, 0.003%** (76,032,819 -> 76,030,227). P2 is post-send, so the
+#: relay finishes the tail of a rotation while the worker is already walking
+#: home; it is never the thing the next request waits for.
+TAPE_RELAY_FLAT = 0
+
+#: Whether :data:`TAPE_RELAY_FLAT` reaches the **batch-1** banks too. Their rings
+#: are seven to fifteen slots and their worker pays 8.00 ticks a slot, so the
+#: 6.00 of the legacy ``RELAY`` is not their binding term; separating the two
+#: keeps the batch-1 grids out of the batch-2 measurement.
+TAPE_RELAY_FLAT_BATCH1 = False
+
+#: **An instrument, not a knob**: force every batch-2 ring's turnaround room to
+#: this ``(w, h)`` interior, so the relay's own ticks-per-word can be moved in
+#: *both* directions and the ring's throughput asked whether it notices.
+#: ``relay(3, 3)`` carries one word per eight-cell lap (8.00 t/word) against the
+#: shipped ``relay(4, 3)``'s 5.00 and :data:`TAPE_RELAY_FLAT`'s 2.29..3.20 — and
+#: if none of that moves the tour, the relay is not the ring's binding term at
+#: any rate a room of this size can reach. ``None`` is the shipped room.
+TAPE_RELAY_SIZE: tuple[int, int] | None = None
+
+
 def _resolve_tape_relay(
     skip_batch: int,
     relay_size: tuple[int, int] | None,
@@ -5411,10 +5485,19 @@ def _resolve_tape_relay(
     Batch 1 retains the byte-identical legacy relay unless explicitly tuned.
     Batch 2 gets the two-word relay with the same 4x3 interior/exterior size;
     batch 4 defaults to the engine-pinned 8x6 relay.
+
+    :data:`TAPE_RELAY_FLAT` overrides both with the dense two-row room; see there
+    for why the relay's rate is half of what a ring costs.
     """
-    from ..dataflow_relay import relay
+    from ..dataflow_relay import flat_relay, relay
     from ..memory_tape import RELAY
 
+    if relay_size is None and TAPE_RELAY_SIZE is not None and skip_batch != 1:
+        return relay(*TAPE_RELAY_SIZE), TAPE_RELAY_SIZE
+    if relay_size is None and TAPE_RELAY_FLAT and (
+        skip_batch != 1 or TAPE_RELAY_FLAT_BATCH1
+    ):
+        return flat_relay(TAPE_RELAY_FLAT, caps=True), (TAPE_RELAY_FLAT, 2)
     if relay_size is None:
         if skip_batch == 1:
             return RELAY, None

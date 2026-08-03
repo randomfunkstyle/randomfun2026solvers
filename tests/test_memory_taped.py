@@ -1284,13 +1284,35 @@ def test_the_batched_bodys_main_stands_where_the_request_still_binds() -> None:
     """
     from randomfun2026solvers import memory_tape as mt
 
-    def request_margin(x: int, y: int, west_grow: int) -> int:
+    def request_margin(x: int, y: int, west_grow: int, ih: int | None = None) -> int:
+        # The ring return attaches to the **bottom wall**, so its distance — and
+        # therefore this whole frontier — moves with the room's height. Read it
+        # from the body's own height rather than a constant.
+        ih = mt.jump_v4_height() if ih is None else ih
         req = abs(x - (-2 - west_grow)) + abs(y - mt.V2_IN_ROW)
-        ring = abs(x - mt.V2_JUMP_RET_COL) + abs(y - (mt.V2_JUMP_V4_IH + 1))
+        ring = abs(x - mt.V2_JUMP_RET_COL) + abs(y - (ih + 1))
         return ring - req
 
-    assert [request_margin(x, 5, 4) for x in (10, 11, 12, 13)] == [5, 3, 1, -1]
-    assert [request_margin(x, 5, 0) for x in (10, 11, 12, 13)] == [9, 7, 5, 3]
+    assert [request_margin(x, 5, 4, 17) for x in (10, 11, 12, 13)] == [5, 3, 1, -1]
+    assert [request_margin(x, 5, 0, 17) for x in (10, 11, 12, 13)] == [9, 7, 5, 3]
+    # **A deeper room moves the ring-return attach away from everything**, since
+    # it hangs off the bottom wall — so it is not neutral, it is a trade with a
+    # sign: every request-binder gains a margin and every ring-binder loses one.
+    # MAIN is a request-binder, so the row `JUMP_V4_P2_BATCH` costs makes *this*
+    # frontier looser, 10 going 5 -> 6 and the bound 12 -> 13:
+    assert [request_margin(x, 5, 4, 18) for x in (10, 11, 12, 13)] == [6, 4, 2, 0]
+
+    # The side that pays is P1's own ring `r`, and it is what caps the depth.
+    # Note the tight ``west_grow`` is the **other** one: a request-binder is
+    # tightest at 4, where the stub is furthest west, and a ring-binder at 0.
+    def ring_margin(x: int, y: int, west_grow: int, ih: int) -> int:
+        return -request_margin(x, y, west_grow, ih)
+
+    assert [ring_margin(16, 6, 0, ih) for ih in (17, 18, 19, 22)] == [5, 4, 3, 0]
+    assert ring_margin(16, 6, 0, mt.jump_v4_height()) >= 3, (
+        "P1's ring `r` is 5 cells from the return pipe and 22 from the request; "
+        "the room may deepen by four rows before it takes the wrong one"
+    )
 
     c = mt.worker_v2_jump(53, park_const=True, protocol="v4")
     mx, w = mt._JUMP_V4_MAIN_X, mt._JUMP_V4_WEST
@@ -1337,7 +1359,18 @@ def test_the_batched_bodys_p2_cannot_move_west_at_all() -> None:
     from randomfun2026solvers import memory_tape as T
 
     assert T._JUMP_V4_WEST_P2 == 0
-    art = T.worker_v2_jump(53, park_const=True, protocol="v4")
+    # This is a statement about the **one-word** P2 and the row-13 corridor it
+    # shares with the realign, so it builds that P2 rather than whichever one the
+    # knob is set to. `JUMP_V4_P2_BATCH` replaces the structure being described:
+    # its ring is two rows lower and its odd tail merges on row 14, clear of the
+    # realign entirely — which is why the bound below does not constrain it, and
+    # why its own merge is checked by the 901-address readback instead.
+    old = T.JUMP_V4_P2_BATCH
+    try:
+        T.JUMP_V4_P2_BATCH = 0
+        art = T.worker_v2_jump(53, park_const=True, protocol="v4")
+    finally:
+        T.JUMP_V4_P2_BATCH = old
     # P2's ring, its odd exit, and the realign it may not reach.
     entry = 23 - T._JUMP_V4_WEST_P2
     odd = 19 - T._JUMP_V4_WEST_P2
@@ -1459,11 +1492,32 @@ def test_the_rotating_worker_stands_in_the_batched_body_s_own_room() -> None:
     from randomfun2026solvers import memory_tape as mt
     from randomfun2026solvers.lm1.machine import _tape_worker_spec
 
-    assert (mt.V2_ROT_IW, mt.V2_ROT_IH) == (mt.V2_JUMP_IW, mt.V2_JUMP_V4_IH)
+    # The room is the *batched body's own*, asked for rather than copied — so
+    # this compares against that body, not against a constant that once equalled
+    # it. (At the shipped knobs it is still the documented 34 x 17.)
+    wide_room = mt.worker_v2_jump(53, park_const=True, protocol="v4")
+    assert (mt.V2_ROT_IW, mt.jump_v4_height()) == (wide_room.w, wide_room.h)
     rot = _tape_worker_spec(2, "v4", True)
     wide = _tape_worker_spec(2, "v4")
     assert rot[1:] == wide[1:], "the rotating body must keep all four wall anchors"
     assert rot[0] is mt.worker_v2_rot and wide[0] is mt.worker_v2_jump
+
+    # **And it has to keep them when the batched room grows**, which is the way
+    # this has actually broken: the height was a module constant assigned from
+    # `V2_JUMP_V4_IH` at import, so a knob that grew the batched body to 18 rows
+    # left this one at 17 — and the anchor that moves with the height is the
+    # return column, on the bottom wall. Four of eleven hi-res banks take this
+    # body. Checking one setting cannot see that; checking the knob can.
+    for batch in (0, 2, 4):
+        old = mt.JUMP_V4_P2_BATCH
+        try:
+            mt.JUMP_V4_P2_BATCH = batch
+            assert _tape_worker_spec(2, "v4", True)[1:] == _tape_worker_spec(2, "v4")[1:], batch
+            assert mt.worker_v2_rot(53).h == mt.worker_v2_jump(
+                53, park_const=True, protocol="v4"
+            ).h, batch
+        finally:
+            mt.JUMP_V4_P2_BATCH = old
     # ... and it is the batched packed-wire body only; there is no narrow form
     # and no two-word form, so ask for one and be told rather than built.
     for batch, proto in ((1, "v4"), (2, "v3"), (4, "v3")):
@@ -1476,7 +1530,8 @@ def test_the_rotating_worker_stands_in_the_batched_body_s_own_room() -> None:
     # the room really is the same size, at every ring size the cut uses
     for n in (22, 53, 59, 115, 135, 442):
         c = mt.worker_v2_rot(n)
-        assert (c.w, c.h) == (mt.V2_JUMP_IW, mt.V2_JUMP_V4_IH), n
+        assert (c.w, c.h) == (mt.V2_JUMP_IW, mt.jump_v4_height()), n
+        assert (c.w, c.h) == (wide_room.w, wide_room.h), n
         rows = c.rows()
         # P2 is gone: the batched body's second ring occupied rows 14 and 15.
         assert all(r.strip() == "" for r in rows[10:]), n
@@ -1498,7 +1553,12 @@ def test_every_rotating_worker_send_still_binds_the_pipe_it_means() -> None:
     """
     from randomfun2026solvers import memory_tape as mt
 
-    iw, ih = mt.V2_ROT_IW, mt.V2_ROT_IH
+    # The height is the batched body's, by call: the ring-return anchor hangs off
+    # the **bottom wall**, so every one of the six margins below moves with it and
+    # this must not read a stale constant. (Run with `JUMP_V4_P2_BATCH` at 4 and
+    # the room is a row deeper; the assertions below are margins, not distances,
+    # and they are checked at whatever height the body is actually built to.)
+    iw, ih = mt.V2_ROT_IW, mt.jump_v4_height()
     c = mt.worker_v2_rot(53)
     want = {
         (1, 5): "request",       # MAIN's own word

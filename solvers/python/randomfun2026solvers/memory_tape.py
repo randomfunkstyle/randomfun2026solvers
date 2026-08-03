@@ -318,6 +318,68 @@ V2_JUMP_V4_IH = 17
 #: run, so this is the largest single lever on the machine.
 RING_MEN = 1
 
+#: How many tape words the batched v4 body's **P2** moves per ring lap-half — a
+#: power of two, or ``0`` for the shipped one-word ring. It is the ladder, in the
+#: form the room can actually hold.
+#:
+#: **P2 is four fifths of the whole ring bill.** Over the 21-round tour the ten
+#: ``d r s m v`` rings burn 22,945,102 ticks — 29.95% of the run — and
+#: 18,316,543 of those are the three *non-rotating* batched banks' P2, because P2
+#: rotates the complement ``n - 1 - addr`` and P1 only ``addr``: mean counts of
+#: 18.2, 53.5 and 124.3 against 3.8, 5.0 and 18.8.
+#:
+#: A ``counted_ring_horizontal`` lap-half is ``d`` + body + ``m`` + a turn, so a
+#: one-word body spends **5 ticks a word** and three of them are the test, the
+#: decrement and the corner. Those three are paid *per lap*, not per word, so a
+#: body of ``k`` words costs ``2 + 3/k``: 2.75 at ``k = 4``, against the 2.00
+#: floor one man can ever reach (``r`` and ``s`` are two glyphs and a man fires
+#: one a tick).
+#:
+#: What a counted loop cannot do is the remainder, and that is what the two
+#: :func:`_bit_tail_horizontal` stages in front of the ring are for — bit 0 and
+#: bit 1 of the count, each a hairpin whose set arm moves ``2**j`` words and
+#: whose clear arm falls past it in the same number of columns, with a ``]``
+#: outside both so BP is bit-identical on either path. After them BP is
+#: ``count >> 2`` and the ring owes exactly that many laps of four. Fixed cost is
+#: 7 + 9 = 16 ticks, against 5 a word saved on everything above three.
+#:
+#: **Four is what the room holds, and the bound is binding rather than
+#: aesthetic.** A third tail and a body of eight would reach 2.375 t/word, but
+#: the tails alone would then be 23 columns and the ring 19, against the 34 the
+#: room has — and the room may not grow *west* (a ``s`` at column 14 ties the
+#: answer collector and loses it: see the note on :data:`_JUMP_V4_TIGHT_ARMS`)
+#: nor much *south* (the tape-return anchor is the south wall, so every row of
+#: growth walks P1's own ``r`` at (16, 6) one cell further from the pipe it must
+#: bind and one cell closer to the request; the margin is 4 at the +1 row this
+#: costs and 0 at +5).
+#:
+#: **Measured**, 21-round hi-res tour, same process, control reproducing
+#: 76,610,982 to the tick, ``passed=True fatal=None``, box 614x478 unchanged:
+#:
+#: ==========  ============  ===========  ==========
+#: ``batch``    ring t/word   tour         delta
+#: ==========  ============  ===========  ==========
+#: 0 (shipped)      5.00      76,610,982      .
+#: 2                3.50      76,082,499    -0.690%
+#: **4**            **2.75**  **76,032,819**  **-0.755%**
+#: ==========  ============  ===========  ==========
+#:
+#: The one extra room row is priced separately and it is real:
+#: ``WORKER_JUMP_V4_POST_PAD=1`` is **+35,234 ticks (+0.046%)**, +70,653 at 2, so
+#: the ring change itself is **-613,397 (-0.801%)** and the room gives 35k back.
+#:
+#: **And the ring's heat is not the ring's wall clock**, which is the thing to
+#: carry away from this. ``FastProfile.heat`` over the ten rings falls
+#: 22,945,102 -> 18,282,447 (29.95% -> 24.05% of the run), so 4.66M ticks of
+#: *worker time* buy 578k of *tour* — a transfer of **12%**. P2 runs behind the
+#: answer's ``S``; the seven P1 rings' heat is unchanged to the tick, which is
+#: what says only P2 moved.
+#:
+#: Exactness is checked by walking the drawn cells for every count 0..300
+#: (``moves == count``, no exceptions) and by the 901-address readback of the
+#: whole store, ascending and descending, against the shipped block.
+JUMP_V4_P2_BATCH = 4
+
 
 def jump_v4_height() -> int:
     """The batched v4 worker's interior height, as the body actually builds it.
@@ -328,7 +390,15 @@ def jump_v4_height() -> int:
     (``Collision: (31,25) holds 'H', cannot place '-'``), which is what a fan-out
     room did the first time :data:`RING_MEN` grew it.
     """
-    return V2_JUMP_V4_IH + WORKER_JUMP_V4_POST_PAD + 6 * max(0, RING_MEN - 1)
+    return (
+        V2_JUMP_V4_IH
+        # The batched P2 stacks its two bit tails on rows 10..12 and drops the
+        # ring one row, so the room owes it exactly one more row and the ring's
+        # own south exit lands *on* the return gutter, as the shipped one does.
+        + (1 if JUMP_V4_P2_BATCH else 0)
+        + WORKER_JUMP_V4_POST_PAD
+        + 6 * max(0, RING_MEN - 1)
+    )
 
 #: **An instrument, not a knob**, and the batched twin of
 #: :data:`WORKER_V4_POST_PAD`: it dips the v4 batched worker's return that many
@@ -641,6 +711,76 @@ def _bit_tail_horizontal(c: Circuit, x: int, y: int, pairs: int) -> tuple[int, i
     c.turn(merge_x, y, E)
     c.set(merge_x + 1, y, "]")
     return merge_x + 2, y
+
+
+def _p2_batched(c: Circuit, batch: int) -> tuple[int, int]:
+    """The batched v4 body's **P2**, at ``2 + 3/batch`` ticks a tape word.
+
+    Enter at ``(18, 13)`` heading **east** — the cell the WRITE arm's realign
+    ``sr`` already walks on to, and the cell the READ arm's own homeward corridor
+    ends on, so the two arms merge here rather than at a ring entry. BP holds the
+    count. Returns the ring's single south exit, on the room's own return gutter.
+
+    The shape is :func:`worker_v2_jump4`'s, folded into a room fifteen columns
+    narrower::
+
+        row 10   the bit tails' *clear* arms — a straight fall past the run
+        row 11   `x` `]` `x` `]`   the two branches and their two shifts
+        row 12   the bit tails' *set* arms — `rs` and `rs rs`
+        row 14   the ring's entry corridor, which is also its odd tail's merge
+        rows 15-16  `d` + `rs`*batch + `m` + a turn, twice
+        row 17   the one exit, on the gutter the return already walks
+
+    Three things are load-bearing and none of them is the loop:
+
+    * **Polarity.** ``x`` turns clockwise on a **set** bit; entered heading east,
+      clockwise is south, and south is the arm carrying the ``rs``. A clear bit
+      goes counter-clockwise, north, and falls past the run in the same number of
+      columns — which is the whole point of the hairpin, and why a ladder costs
+      what its *set* bits cost rather than what its width does.
+    * **The ``]`` stands outside both arms**, east of the merge, so BP is
+      bit-identical whichever way the man came and the next stage reads the next
+      bit and not a shifted one.
+    * **The odd tail is reachable and is merged, not discarded.** BP entering the
+      ring is ``count >> log2(batch)``, so its parity is no longer the count's;
+      an odd BP leaves through the *north* exit. That exit is turned east along
+      the entry corridor and dropped back into the ring, where BP is now zero and
+      the first ``d`` passes the man straight out south. Both parities therefore
+      leave by the one cell the caller routes. (Discarding it is what a shipped
+      single-word ring may do — its parity is the count's, and the count's
+      parity is what the ``d`` already tested.)
+    """
+    if batch < 2 or batch & (batch - 1):
+        raise ValueError(f"P2's batch must be a power of two above one, not {batch}")
+    # Both arms turn north here: the WRITE arm arrives heading east off its own
+    # `sr`, the READ arm heading west off its count recovery.
+    c.turn(18, 13, N)
+    c.turn(18, 11, E)
+
+    x, y, pairs = 19, 11, 1
+    while pairs < batch:
+        x, y = _bit_tail_horizontal(c, x, y, pairs)
+        pairs *= 2
+
+    right = x  # the ring's entry column: the tails leave straight above it
+    k = 2 * batch
+    rx = right - k - 2
+    if rx < 15:
+        # Every `s` in the ring has to beat the answer collector on the north
+        # wall for the tape-forward pipe on the east one, and on this row the
+        # frontier is column 15 — 14 is an exact tie and a tie goes to the
+        # northern attach. A wider body would put the ring's west `rs` past it.
+        raise ValueError(
+            f"a batch of {batch} puts P2's ring at column {rx}; the answer "
+            "collector takes every `s` west of 15"
+        )
+    c.route((right, 11), E, [(right, 11)], (right, 14), S)
+    exits = c.counted_ring_horizontal(rx, 15, "rs" * batch)
+    # The entry cell is also the odd tail's merge, so it is a turn and not a gap.
+    c.set(right, 14, "v")
+    c.turn(*exits[1], E)
+    c.horizontal(14, rx, right)
+    return exits[0]
 
 
 #: The **v4 tape wire**: one word per request instead of two.
@@ -1313,10 +1453,23 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         # READ (row 7, CCW): the answer first, then P2's count, on the way home.
         c.turn(27 - w, 7, E)
         c.run(28 - w, 7, "rS")
-        c.route((30 - w, 7), E, [(30 - w, 7)], (30 - w, 8), S)
-        c.run(30 - w, 8, "WNb]m", d=S)
-        c.route((30 - w, 13), S, [(30 - w, 13)],
-                (23 - w2 + (1 if RING_MEN > 1 else 0), 13), S)
+        if JUMP_V4_P2_BATCH:
+            # The count recovery moves **two columns east**, off column 26 and on
+            # to 32, and the whole reason is that the batched P2's bit tails want
+            # rows 10..12 across columns 19..30 and the old descent stood in the
+            # middle of them. 32 is the last column that is not the INIT gutter
+            # (33), and every glyph on it is post-send arithmetic with no pipe op
+            # in it, so nothing rebinds.
+            c.route((30 - w, 7), E, [(32, 7)], (32, 8), S)
+            c.run(32, 8, "WNb]m", d=S)
+            # ... and home along row 13 to the shared turn north, which is the
+            # cell the WRITE arm's own realign already walks on to.
+            c.route((32, 13), S, [(32, 13)], (18, 13), N)
+        else:
+            c.route((30 - w, 7), E, [(30 - w, 7)], (30 - w, 8), S)
+            c.run(30 - w, 8, "WNb]m", d=S)
+            c.route((30 - w, 13), S, [(30 - w, 13)],
+                    (23 - w2 + (1 if RING_MEN > 1 else 0), 13), S)
 
         # WRITE (row 9, CW): one extra ring pass for the floored `]`, then the value.
         c.turn(27 - w, 9, W)
@@ -1349,10 +1502,14 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
         # 6 to the P2 entry either way, and where the two glyphs sit inside that
         # run does not change its length.
         c.run(16, 13, "sr")
-        if 19 < 23 - w2:
+        if JUMP_V4_P2_BATCH:
+            p2_exit = _p2_batched(c, JUMP_V4_P2_BATCH)
+        elif 19 < 23 - w2:
             c.turn(19, 13, E)
 
-        if RING_MEN > 1:
+        if JUMP_V4_P2_BATCH:
+            pass
+        elif RING_MEN > 1:
             # One extra `]` per doubling of men: each runner owes `count // men`,
             # and the count is already in BP from the `]m` above.
             # Overwrite one cell of the westward approach run: `]` does not turn,
@@ -1384,7 +1541,13 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
             # 17x11, so the lap goes 78 -> 58. The park moves to the bottom row
             # with the riser, where the return and INIT both already run west, so
             # it still costs nothing at all.
-            c.route(p2_exit, S, [(home, bot)], (home, y), E)
+            # **The dip descends the ring's own exit column before it turns
+            # west.** The shipped ring's exit lands on ``bot`` already, so this
+            # is the same corner list it always had; but a P2 that ends anywhere
+            # else — a deeper room from :data:`WORKER_JUMP_V4_POST_PAD`, or the
+            # batched ring's own exit row — hands ``route`` the leg
+            # ``(23, 16) -> (9, 17)``, which is a diagonal and refused.
+            c.route(p2_exit, S, [(p2_exit[0], bot), (home, bot)], (home, y), E)
             _park_size_on_row(c, 2 * n, home + 1, bot)
             return c
         if not _JUMP_V4_RETURN_LEFT:
@@ -1393,13 +1556,19 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
                                      (GUT, p2_exit[1]), (GUT, 1)], (0, 1), S)
             else:
                 c.route(p2_exit, S, [(23 - w2, 17), (GUT, 17), (GUT, 1)], (0, 1), S)
+        # ... and the same rule as the ``mx > 1`` branch above: **the corner list
+        # follows the exit.** The 16 these three used to spell was the shipped
+        # ring's own exit row written down a second time, so a P2 that ends
+        # anywhere else — a batched ring two rows lower — asked ``route`` for a
+        # diagonal. ``p2_exit[1]`` is the one place that row is decided.
         elif WORKER_JUMP_V4_POST_PAD:
             q = WORKER_JUMP_V4_POST_PAD
-            c.route(p2_exit, S, [(23 - w2, 16 + q), (home, 16 + q), (home, 1)], (0, 1), S)
+            c.route(p2_exit, S, [(p2_exit[0], p2_exit[1] + q),
+                                 (home, p2_exit[1] + q), (home, 1)], (0, 1), S)
         elif _JUMP_V4_TIGHT_ARMS:
-            c.route(p2_exit, S, [(home, 16), (home, 4)], (0, 4), S)
+            c.route(p2_exit, S, [(home, p2_exit[1]), (home, 4)], (0, 4), S)
         else:
-            c.route(p2_exit, S, [(home, 16), (home, 1)], (0, 1), S)
+            c.route(p2_exit, S, [(home, p2_exit[1]), (home, 1)], (0, 1), S)
         # ``2n``, not ``2n + 1``: the parity of ``w - c`` is what ``x`` reads, so
         # the constant chooses which way each arm turns. Even (READ) goes CCW,
         # north, which is the side the ring's own bottom row does not stand on.
@@ -1472,9 +1641,10 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
     return c
 
 
-#: The rotating batched worker's own room, which is :data:`V2_JUMP_IW` x
-#: :data:`V2_JUMP_V4_IH` **exactly** — the same 34 x 17 the batched v4 body
-#: stands in, with the same four wall anchors.
+#: The rotating batched worker's own room width, which is :data:`V2_JUMP_IW`
+#: **exactly** — the same 34 columns the batched v4 body stands in, with the same
+#: four wall anchors. Its *height* is :func:`jump_v4_height`, and deliberately not
+#: a constant of its own; see below.
 #:
 #: That is a deliberate constraint rather than a coincidence. ``bank_w`` and
 #: ``bank_h`` in :func:`~.memory_taped.taped_store_block` are maxima over the
@@ -1486,7 +1656,18 @@ def worker_v2_jump(n: int, *, park_const: bool = False, protocol: str = "v3") ->
 #: byte-identical to the body this replaces, so the **only** cells that differ
 #: anywhere in the machine are inside this room. It makes the binding diff
 #: readable and it makes the A/B honest.
-V2_ROT_IW, V2_ROT_IH = V2_JUMP_IW, V2_JUMP_V4_IH
+#:
+#: **This was written as ``V2_ROT_IW, V2_ROT_IH = V2_JUMP_IW, V2_JUMP_V4_IH`` and
+#: that is the same trap :func:`jump_v4_height` was written to close, one room
+#: further on.** Binding the height to the raw constant at import time makes it a
+#: *third* place the batched room's height is decided; the moment anything grows
+#: that room — :data:`JUMP_V4_P2_BATCH`, :data:`WORKER_JUMP_V4_POST_PAD`,
+#: :data:`RING_MEN` — the batched body goes to 18 rows and this one stays at 17,
+#: and the anchor that moves with the change is the **return column**, which sits
+#: on the bottom wall. Four of eleven hi-res banks take this body, including the
+#: 434-slot one, so the two would then hang their ring pipes off two different
+#: rows of two differently-sized rooms. There is one height and it is a call.
+V2_ROT_IW = V2_JUMP_IW
 
 
 def worker_v2_rot(n: int, *, park_const: bool = True, protocol: str = "v4") -> Circuit:
@@ -1560,8 +1741,9 @@ def worker_v2_rot(n: int, *, park_const: bool = True, protocol: str = "v4") -> C
       post-send tick on this body prices at 0.024% against a pre-send one's
       0.27% — but it is also what empties rows 10..16.
 
-    The room stays 34 x 17 regardless (:data:`V2_ROT_IW`), so nothing outside it
-    moves by one cell.
+    The room stays whatever the *batched* body's room is — 34 columns by
+    :func:`jump_v4_height` rows (:data:`V2_ROT_IW`) — so nothing outside it moves
+    by one cell, at any setting of the knobs that grow that room.
     """
     if protocol != "v4":
         raise ValueError(
@@ -1569,7 +1751,11 @@ def worker_v2_rot(n: int, *, park_const: bool = True, protocol: str = "v4") -> C
         )
     if not park_const:
         raise ValueError("the rotating worker's `%` needs 2n in B; pass park_const")
-    c = Circuit(V2_ROT_IW, V2_ROT_IH)
+    # ... and the height is the *batched* body's own, by call and not by copy:
+    # this body's rows 10.. are empty, so a room that grows for P2's sake grows
+    # here as empty floor, and the two keep the one bottom wall their shared
+    # return-column anchor stands on. See :data:`V2_ROT_IW`.
+    c = Circuit(V2_ROT_IW, jump_v4_height())
     L = lit(n)
 
     # ── INIT: n zeros into the ring, head 0, then home along row 4 ──────────

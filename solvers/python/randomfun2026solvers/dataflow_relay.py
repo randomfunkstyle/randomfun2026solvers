@@ -62,7 +62,7 @@ def flat_relay_words(w: int) -> int:
     return w - 3               # 2w cells, less four turns and the spawn, in pairs
 
 
-def flat_relay(w: int) -> list[str]:
+def flat_relay(w: int, *, caps: bool = False) -> list[str]:
     """`relay` at interior height **two**, which the perimeter walk cannot reach.
 
     :func:`relay` needs three interior rows because it walks a rectangle whose two
@@ -84,6 +84,13 @@ def flat_relay(w: int) -> list[str]:
     The room still holds exactly **one** word at rest -- one spawn, one man -- so a
     ring sized on `snake_layout.RING_MIN` or `gradebook_place.RING_WORDS` counts it
     as one however wide it is.
+
+    ``caps`` writes ``R``/``S`` instead of ``r``/``s``.  In a turnaround room the two
+    are the same instruction — one incoming pipe and one outgoing, so "any ready"
+    and "nearest" have nothing to choose between and ``S``'s "every outgoing" is a
+    set of one — but the capitals say so *structurally*, which is what a caller who
+    is about to make the body very dense wants: §7.1's Manhattan tie-break cannot
+    silently re-bind a glyph that does not consult it.
     """
     flat_relay_words(w)
     turns = {(0, 0): ">", (w - 1, 0): "v", (w - 1, 1): "<", (0, 1): "^"}
@@ -95,7 +102,7 @@ def flat_relay(w: int) -> list[str]:
     blank = w - 4 if (w - 3) % 2 else w - 3          # the top run is w-3 long
     ops = [p for i, p in enumerate(ops) if i != blank]
     for i, p in enumerate(ops):
-        cell[p] = "rs"[i % 2]
+        cell[p] = ("RS" if caps else "rs")[i % 2]
     return (["+" + "-" * w + "+"]
             + ["|" + "".join(cell.get((x, y), " ") for x in range(w)) + "|"
                for y in (0, 1)]
