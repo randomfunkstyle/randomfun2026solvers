@@ -550,6 +550,146 @@ def feed_rotate(height: int) -> tuple[list[str], list[tuple[int, int]]]:
     return rows, [(3, i) for i in range(ih)]
 
 
+#: The broadcast room's fixed body: :func:`feed_relay` with ``s`` written ``S``.
+BCAST_H = 8
+
+#: The filter room's spine row, and the rows its four discard exits use.
+FILTER_IN_ROW = 2
+
+
+def bcast_room(span: int) -> list[str]:
+    """The one room that shouts every request at **every** bank at once.
+
+    This is :func:`feed_relay` with its two ``s`` glyphs written ``S``, and that
+    single substitution is the whole of the mechanism. ``S`` binds
+    ``tuple(room.outgoing)`` — *every* outgoing pipe, with no distance term and
+    no nearest-wins rule — where ``s`` binds the Manhattan-nearest one.
+
+    **That is why this room, alone in the block, may be long.** A gate may not
+    grow toward its bank: its two outgoing pipes share a wall and ``s`` picks
+    between them, so moving the room flips the binding and routes reads into the
+    wrong tape in silence (see :func:`bank_gate`, "a room can reach its caller,
+    but not its callee"). ``S`` has nothing to pick, so the room is free to span
+    the whole strip and put its north wall directly under all eleven filters.
+    Every riser off it is then two cells, and the fan-out costs no distance at
+    all — which is the thing that makes broadcasting cheaper than the chain
+    rather than more expensive.
+
+    The lap is eight rows whatever ``span`` is: the art is the first four
+    columns and the rest of the room is floor the man never walks, exactly as
+    :func:`feed_relay`'s twenty-seven blank rows are.
+
+    Two words go out per write and one per read, because the wire is what it
+    always was — ``b`` parks the packed word, ``x`` turns on its low bit, and
+    the write tail broadcasts the value behind the address. Every filter
+    swallows both, which is what keeps ``S`` (all-or-nothing by definition) from
+    wedging on a pipe that is one word behind.
+    """
+    if span < 4:
+        raise ValueError(f"the broadcast room is at least its own art wide, not {span}")
+    rows = [
+        "> v ",  # the return leg turns east, then south into the descent
+        "^ R ",  # A = the packed request word
+        "^ S ",  # ... at every bank at once      <- the only cell on the wire
+        "^ b ",  # BP = the word, whose low bit is the op
+        "^vxv",  # x: WRITE turns CW/west into the value tail, READ CCW/east
+        "^R v",  # the write's value word ...
+        "^S v",  # ... broadcast behind it
+        "^<@<",  # both tails walk back onto the climb; the spawn stands on it
+    ]
+    return [r + " " * (span - 4) for r in rows]
+
+
+def filter_room(base: int, size: int) -> "Circuit":
+    """One bank's share of the broadcast: swallow every word, forward only mine.
+
+    The chain's gate answers "is this mine?" by *elimination* — it hands on what
+    it does not want, so the bank at chain position ``j`` is ``j`` pass-throughs
+    away and the whole store pays for the ordering. A filter answers the same
+    question by *arithmetic*, in parallel with ten others, and nothing is ahead
+    of anything.
+
+    **The rebasing is free, and that is the structural payoff.** A gate rebases
+    the space it hands on so its neighbour sees ``1..m``; here ``B`` is parked at
+    ``2*base`` across laps and the spine's single ``-`` produces
+    ``rebased = w - 2*base``, which *is* the bank's own local wire word. The
+    glyph that decides the word is mine is the glyph that converts it.
+
+    ``b`` follows immediately, so ``BP`` holds the rebased word — and therefore
+    the op in its low bit — on **every** path out of the room. That is what makes
+    the four discard exits share one lane: a discarded *write* still has to eat
+    its value word or the pipe desyncs one word forever, and the lane's single
+    ``x`` knows whether to.
+
+    The high bound is one-sided because the constant is ``2*size + 1`` rather
+    than ``2*size``: the wire is ``w = 2a - op``, so ``rebased == 2*size + 1``
+    is a write of ``base + size + 1`` — already the next bank's — and ``A > 0``
+    is exactly "mine" with no second case to merge.
+    """
+    from .circuit import Circuit, E, N, S
+    from .memory_tape import lit
+
+    if size < 1:
+        raise ValueError(f"a bank filter covers at least one address, not {size}")
+    if base < 0:
+        raise ValueError(f"a bank's base is an address, not {base}")
+    b2, cc = 2 * base, 2 * size + 1
+    dig = str(b2)[::-1]
+    arm2 = "M" + lit(cc) + "-X"
+    IN = FILTER_IN_ROW
+    x1 = 5                      # R at 2, - at 3, b at 4, X at 5
+    x2 = x1 + len(arm2)         # the high-bound X
+    D = x2 + 9                  # the column every discard comes home on
+    cr = D + 5                  # the descent
+    lane = IN + 5
+    floor = lane + 3
+    c = Circuit(cr + 1, floor + 1)
+
+    # ── the lap: the floor reloads B = 2*base, column 1 climbs to the spine ─
+    c.set(2, floor, "M")
+    c.set(3, floor, "`")
+    for i, ch in enumerate(dig):
+        c.set(4 + i, floor, ch)
+    c.set(4 + len(dig), floor, "`")
+    c.set(cr, floor, "<")
+    c.set(cr - 1, floor, "@")
+    for x in range(5 + len(dig), cr - 1):
+        c.set(x, floor, "<")
+    for y in range(IN + 1, floor + 1):
+        c.set(1, y, "^")
+    c.turn(1, IN, E)
+
+    # ── the spine: rebase, park the op, test the low bound ─────────────────
+    c.run(2, IN, "R-bX")
+    # ── the high bound, one-sided on `2*size + 1` ──────────────────────────
+    c.turn(x1, IN + 1, E)
+    c.run(x1 + 1, IN + 1, arm2)
+    # ── mine: the rebased word is in B, so `W` fetches it back ─────────────
+    c.turn(x2, IN + 2, E)
+    c.run(x2 + 1, IN + 2, "Wsx")
+    c.route((x2 + 3, IN + 1), N, [], (cr, IN + 1), S)          # READ: home
+    c.turn(x2 + 3, IN + 3, E)
+    c.run(x2 + 4, IN + 3, "Rs")                                # WRITE: the value
+    c.route((x2 + 6, IN + 3), E, [], (cr, IN + 3), S)
+
+    # ── every discard walks to column D and drops onto the shared lane ─────
+    c.route((x1, IN - 1), N, [(D, IN - 1)], (D, lane), E)      # low,  A < 0
+    c.route((x1 + 1, IN), E, [(D, IN)], (D, lane), E)          # low,  A == 0
+    c.route((x2, IN), N, [(D, IN)], (D, lane), E)              # high, A < 0
+    c.route((x2 + 1, IN + 1), E, [(D, IN + 1)], (D, lane), E)  # high, A == 0
+    # ── the lane: BP is the rebased word, so `x` knows what to swallow ─────
+    c.run(D + 1, lane, "x")
+    c.route((D + 1, lane - 1), N, [], (cr, lane - 1), S)       # READ: nothing more
+    c.turn(D + 1, lane + 1, E)
+    c.run(D + 2, lane + 1, "R")                                # WRITE: eat the value
+    c.route((D + 3, lane + 1), E, [], (cr, lane + 1), S)
+
+    for y in range(IN - 1, floor):
+        if c.free(cr, y):
+            c.set(cr, y, "v")
+    return c
+
+
 def gate_rows(compact: bool = False, protocol: str = "v3") -> tuple[int, int, int, int]:
     """``(height, in row, local out row, downstream out row)`` for a bank gate.
 
@@ -580,6 +720,7 @@ def _bank_gate_v4(
     *,
     high: int | None = None,
     park_const: bool = False,
+    zero_arm: bool = False,
     west_grow: int = 0,
     north_grow: int = 0,
 ) -> tuple[dict[tuple[int, int], str], int]:
@@ -637,7 +778,11 @@ def _bank_gate_v4(
         n_arm, s_arm = "Ns", "Ws"
     cx = len(spine)  # the range test's X (the spine starts at column 1)
     xn = cx + 1 + len(n_arm)  # the mine arm's `x` (the flat arm's; the climbed
-    xs = cx + 2 + len(s_arm)  # ... and the downstream arm's   one takes cr - 1)
+    # ``zero_arm`` gives the ``A == 0`` word its own copy of the arm, so the
+    # elbow stops carrying a merge cell and the hot arm starts one column west.
+    _zero = zero_arm and high is not None
+    xs = cx + (1 if _zero else 2) + len(s_arm)  # the downstream arm's `x` (the
+    #                                            climbed mine arm takes cr - 1)
     cr = xs + 3  # one east of the longest tail (`>rs` off the `x`)
     width = max(cr, _V4_FLAT_CR) + 2
     g: dict[tuple[int, int], str] = {}
@@ -705,10 +850,31 @@ def _bank_gate_v4(
     # A == 0 goes straight and A > 0 turns south; they merge one column east and
     # one row down, which is the downstream arm's own row.
     elbow = in_row + 1
-    put(cx + 1, in_row, "v")
-    put(cx, elbow, ">")
-    put(cx + 1, elbow, ">")
-    text(cx + 2, elbow, s_arm)
+    if _zero:
+        # **``A == 0`` is a whole read, and on a high gate it is always a
+        # read.** The constant is ``2(high - m)`` — even — and the wire is
+        # ``w = 2a - op``, so ``w == c`` forces ``op == 0``. That word therefore
+        # needs no ``x``, no value-passing tail and no share of the hot arm: it
+        # gets its own ``s_arm`` on the spine's own row, straight ahead of the
+        # ``X``, and walks east onto the return leg from there.
+        #
+        # What that buys is the **merge cell**. Shipped, ``A == 0`` falls south
+        # onto the downstream arm and the two paths join one column east of the
+        # ``X``, so the ``A > 0`` man walks ``> >`` before he reaches ``W s``.
+        # With the zero word gone the elbow is one ``>`` and the arm starts at
+        # ``cx + 1``: ``UbW-X>Ws`` = **8** against nine, on the walk that a
+        # request pays once per gate it is *not* addressed to.
+        #
+        # Low gates keep the merge: there the constant is ``2m + 1``, odd, so
+        # ``A == 0`` is always a *write* and does need the tail it would lose.
+        put(cx, elbow, ">")
+        text(cx + 1, elbow, s_arm)
+        text(cx + 1, in_row, s_arm)
+    else:
+        put(cx + 1, in_row, "v")
+        put(cx, elbow, ">")
+        put(cx + 1, elbow, ">")
+        text(cx + 2, elbow, s_arm)
     put(xs, elbow, "x")
     put(xs, in_row, ">")  # read: north onto the spine's own row, east of it
     text(xs, down_row, ">rs")  # write: south, then pass the value
@@ -757,6 +923,7 @@ def bank_gate(
     return_slack: int | None = None,
     park_const: bool = False,
     south_reuse_b: bool = False,
+    zero_arm: bool = False,
     west_grow: int = 0,
     north_grow: int = 0,
     protocol: str = "v3",
@@ -886,6 +1053,7 @@ def bank_gate(
             m,
             high=high,
             park_const=park_const,
+            zero_arm=zero_arm,
             west_grow=west_grow,
             north_grow=north_grow,
         )
@@ -1120,6 +1288,8 @@ def taped_store_block(
     gate_return_slack: int | None = None,
     gate_park_const: bool = False,
     gate_south_reuse_b: bool = False,
+    gate_zero_arm: bool = False,
+    broadcast: bool = False,
     tape_park_const: bool = False,
     tape_tight_ring: bool = False,
     order: tuple[int, ...] | None = None,
@@ -1402,20 +1572,66 @@ def taped_store_block(
     ]
     bank_w = max(t.width for t in tapes)
     bank_h = max(t.height for t in tapes)
-    gates = [
-        bank_gate(
-            plan[k],
-            compact=compact_gate,
-            tight_return=tight_gate,
-            return_slack=gate_return_slack,
-            park_const=gate_park_const,
-            south_reuse_b=gate_south_reuse_b,
-            high=top,
-            protocol=protocol,
-        )
-        for k, top in chain[:-1]
-    ]
-    gate_w = max(w for _, w in gates)
+    if broadcast:
+        if protocol not in _PACKED:
+            raise ValueError(
+                f"the broadcast store speaks the one-word wire only, not {protocol!r}"
+            )
+        if not feed_teleport:
+            raise ValueError(
+                "a filter hands the bank its rebased word through the forwarder; "
+                "pass feed_teleport=True"
+            )
+        if chain_reach or chain_pad or request_roof is not None:
+            raise ValueError(
+                "chain_reach / chain_pad / request_roof all measure a chain, and "
+                "a broadcast store has none"
+            )
+        if order is not None:
+            raise ValueError(
+                "a broadcast store has no chain position, so no order to pick: "
+                "every filter tests its own range and nothing is ahead of anything"
+            )
+        # ``feed_share_riser`` puts the feed climb in the same column as the
+        # **chain link** out of the same gate, which is free only because the two
+        # never meet. There is no chain link to share with here, so the column it
+        # saves buys nothing and the filter's own east wall needs it back.
+        feed_share_riser = False
+        # Address order, because a filter's range is its own and the layout is
+        # what decides how far each answer has to climb -- not who is asked first.
+        bases, acc = [], 0
+        for m in sizes:
+            bases.append(acc)
+            acc += m
+        raw = [filter_room(b, m).rows() for b, m in zip(bases, sizes, strict=True)]
+        # Every filter is padded to the same box, because `_room` puts its walls
+        # at the art's own extent and the strip's risers and feeds are drawn off
+        # one set of columns for all eleven.
+        filter_h = max(len(f) for f in raw)
+        filter_w = max(len(r) for f in raw for r in f)
+        filters = [
+            [r.ljust(filter_w) for r in f] + [" " * filter_w] * (filter_h - len(f))
+            for f in raw
+        ]
+        gate_w = filter_w + 2  # ... plus its two walls
+        gates = []
+    else:
+        gates = [
+            bank_gate(
+                plan[k],
+                compact=compact_gate,
+                tight_return=tight_gate,
+                return_slack=gate_return_slack,
+                park_const=gate_park_const,
+                south_reuse_b=gate_south_reuse_b,
+                zero_arm=gate_zero_arm,
+                high=top,
+                protocol=protocol,
+            )
+            for k, top in chain[:-1]
+        ]
+        gate_w = max(w for _, w in gates)
+        filters, filter_h = [], 0
 
     # ── the floor plan ───────────────────────────────────────────────────────
     # Banks in one row on top, the gate strip below; bank k sits a half pitch
@@ -1455,7 +1671,7 @@ def taped_store_block(
         )
     bank_y = 9 - bank_lift
     gate_y = bank_y + bank_h + 2  # one clear row under the banks
-    gx = [4 + k * pitch for k in range(nb - 1)]
+    gx = [4 + k * pitch for k in range(nb if broadcast else nb - 1)]
     # The feed room's west wall stands at ``bx[k] - 5 + feed_tuck``, which is the
     # column the **widest** gate's east wall already occupies — harmless for every
     # gate but the first, because the feed rooms live entirely above the gate
@@ -1464,7 +1680,11 @@ def taped_store_block(
     # the bank row steps one column east rather than the corner being overdrawn.
     # ``max(0, ...)`` is what keeps every shipped grid byte-identical: on the
     # shipped chain gate 0 is 26 columns against a 27-column maximum.
-    lead = max(0, gates[0][1] - (gate_w - 1)) if request_roof is not None else 0
+    lead = (
+        max(0, gates[0][1] - (gate_w - 1))
+        if (request_roof is not None and not broadcast)
+        else 0
+    )
     bx = [4 + gate_w + 4 + lead - feed_tuck + k * pitch for k in range(nb)]
 
     # ── how far each gate room reaches back toward its caller ────────────────
@@ -1508,6 +1728,7 @@ def taped_store_block(
                 return_slack=gate_return_slack,
                 park_const=gate_park_const,
                 south_reuse_b=gate_south_reuse_b,
+                zero_arm=gate_zero_arm,
                 high=top,
                 protocol=protocol,
                 west_grow=west_grow[j],
@@ -1542,7 +1763,7 @@ def taped_store_block(
         for (x, y), (nx, ny) in zip(path, path[1:], strict=False):
             put(x, y, arrow[(nx - x, ny - y)])
 
-    for k in range(nb - 1):
+    for k in range(nb - 1) if not broadcast else ():
         blit(gx[k], gate_y, gates[k][0])
     for k, t in enumerate(tapes):
         blit(bx[k], bank_y, t.cells)
@@ -1610,8 +1831,30 @@ def taped_store_block(
         pipe([source, (riser_x, source[1]), (riser_x, ry1)])
         pipe([(bx[k] + feed_tuck + 1, tin[1]), tin])
 
+    # ── the broadcast strip: one room shouting into nb filters, each its own ─
+    if broadcast:
+        # The filters stand where the gates stood, and the room that feeds them
+        # spans the whole strip so every riser off it is the two cells a pipe is
+        # required to be. `S` is what allows that (see `bcast_room`).
+        for k, art in enumerate(filters):
+            _room(_Grid(), gx[k] + 1, gate_y + 1, art)
+        f_south = gate_y + filter_h + 1          # the filters' shared south wall
+        bcy = f_south + 3                        # ... the broadcast room's north
+        span = gx[-1] + gate_w - gx[0] - 2
+        _room(_Grid(), gx[0] + 1, bcy + 1, bcast_room(span))
+        for k in range(nb):
+            # straight up out of the roof, into the filter directly above
+            pipe([(gx[k] + 3, bcy - 1), (gx[k] + 3, f_south)])
+            east = gx[k] + gate_w - 1            # this filter's east wall
+            feed((east + 1, gate_y + FILTER_IN_ROW + 3), k)
+        # One cell, like the roofed chain's: whatever hands the request over has
+        # to descend to this row anyway, and `R` reads it from any wall.
+        in_y = bcy + 2
+        put(gx[0] - 1, in_y, ">")
+        in_cell = (gx[0] - 1, in_y)
+
     # ── feeds: gate k's local arm into bank k, its downstream into gate k+1 ──
-    for k in range(nb - 1):
+    for k in range(nb - 1) if not broadcast else ():
         east = gx[k] + gates[k][1] - 1  # this gate's east wall column
         feed((east + 1, gate_y + gate_local_row), k)
         down_y = gate_y + gate_down_row
@@ -1668,7 +1911,9 @@ def taped_store_block(
         pipe([(out_x, coll_y + 4), (out_x, coll_y + 5)])
 
     # ── the block's own ports ────────────────────────────────────────────────
-    if request_roof is None:
+    if broadcast:
+        pass  # the broadcast room's own west stub, drawn with the strip above
+    elif request_roof is None:
         in_y = gate_y + gate_in_row
         pipe([(gx[0] - 2, in_y), (gx[0], in_y)])
         in_cell = (gx[0] - 2, in_y)
@@ -1702,7 +1947,10 @@ def taped_store_block(
     # request and response runs, men-v3's convention): per bank two ring legs
     # and one feed and one answer, plus the gate-to-gate chain links. A feed
     # crossing a forwarder is two pipes, not one.
-    pipes = nb * (5 if feed_teleport else 4) + (nb - 2)
+    # Per bank two ring legs, an answer and the two halves of a feed crossing the
+    # forwarder. The chain then adds a link between consecutive gates; the
+    # broadcast adds one riser per filter, which is a pipe the chain never had.
+    pipes = nb * (5 if feed_teleport else 4) + (nb if broadcast else nb - 2)
     return V3Store(
         cells=cells,
         width=width,

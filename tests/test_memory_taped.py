@@ -1752,3 +1752,43 @@ def test_the_batched_v4_body_fetches_its_write_value_where_it_still_binds() -> N
     # batched *v4* body exists only behind a packed wire, and one slug has one.
     assert list(machine.TAPED_PROTOCOL) == [("deadman-3d_hires", "taped")]
     assert machine.TAPED_PROTOCOL[("deadman-3d_hires", "taped")] in ("v4", "v5")
+
+
+@pytest.mark.parametrize("broadcast", [False, True])
+def test_the_packed_wire_reads_back_through_either_router(broadcast: bool) -> None:
+    """The v5 store answers the same addresses whether it is asked by a **chain**
+    of gates or by one broadcast room and eleven parallel filters.
+
+    The wire here is v5's single packed word ``2a - op`` (the value behind it on
+    a write), not v3's ``op, addr[, value]`` — so this reads back through the
+    same protocol the hi-res machine actually runs, and through the same eleven
+    banks (``machine.TAPED_BANKS['deadman-3d_hires']``).
+
+    The broadcast path is *off* in the registry — it measured +21.6% against its
+    own control (see ``machine.TAPED_BROADCAST``) — and is tested anyway, because
+    the failure it can have is silent: a filter whose range is off by one
+    answers from the wrong bank without ever raising.
+    """
+    n, plan = 902, (114, 52, 44, 142, 14, 434, 58, 21, 6, 9, 7)
+    engine = _standalone(
+        taped_store_block(
+            n, plan, skip_batch=2, protocol="v5",
+            feed_teleport=True, broadcast=broadcast,
+        )
+    )
+    writes = [x for a in range(1, n) for x in (2 * a - 1, a * 13 + 7)]
+    bounds, acc = [1], 1
+    for m in taped_plan(n, plan):
+        acc += m
+        bounds.append(acc)
+    for lo, hi in zip(bounds, bounds[1:], strict=False):
+        hi = min(hi, n)
+        if lo >= hi:
+            continue
+        want = [a * 13 + 7 for a in range(lo, hi)]
+        res = engine.run(
+            writes + [2 * a for a in range(lo, hi)],
+            expected=want,
+            max_ticks=400_000_000,
+        )
+        assert res.fatal is None and res.output == want, (broadcast, lo, res.fatal)

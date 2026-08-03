@@ -6239,6 +6239,8 @@ def build(
     store_gate_return_slack: int | None = None,
     store_gate_park_const: bool = False,
     store_gate_south_reuse_b: bool = False,
+    store_gate_zero_arm: bool = False,
+    store_broadcast: bool = False,
     store_tape_park_const: bool = False,
     store_tape_tight_ring: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
@@ -6480,6 +6482,8 @@ def build(
                     store_gate_return_slack=store_gate_return_slack,
                     store_gate_park_const=store_gate_park_const,
                     store_gate_south_reuse_b=store_gate_south_reuse_b,
+                    store_gate_zero_arm=store_gate_zero_arm,
+                    store_broadcast=store_broadcast,
                     store_tape_park_const=store_tape_park_const,
                     store_tape_tight_ring=store_tape_tight_ring,
                     store_bank_order=store_bank_order,
@@ -6583,6 +6587,8 @@ def build(
                     store_gate_return_slack=store_gate_return_slack,
                     store_gate_park_const=store_gate_park_const,
                     store_gate_south_reuse_b=store_gate_south_reuse_b,
+                    store_gate_zero_arm=store_gate_zero_arm,
+                    store_broadcast=store_broadcast,
                     store_tape_park_const=store_tape_park_const,
                     store_tape_tight_ring=store_tape_tight_ring,
                     store_bank_order=store_bank_order,
@@ -6708,6 +6714,8 @@ def _assemble(
     store_gate_return_slack: int | None = None,
     store_gate_park_const: bool = False,
     store_gate_south_reuse_b: bool = False,
+    store_gate_zero_arm: bool = False,
+    store_broadcast: bool = False,
     store_tape_park_const: bool = False,
     store_tape_tight_ring: bool = False,
     store_bank_order: tuple[int, ...] | None = None,
@@ -7155,11 +7163,17 @@ def _assemble(
                 gate_return_slack=store_gate_return_slack,
                 gate_park_const=store_gate_park_const,
                 gate_south_reuse_b=store_gate_south_reuse_b,
+                gate_zero_arm=store_gate_zero_arm,
+                broadcast=store_broadcast,
                 tape_park_const=store_tape_park_const,
                 tape_tight_ring=store_tape_tight_ring,
-                order=store_bank_order,
-                chain_reach=store_chain_reach,
-                chain_pad=store_chain_pad,
+                # A broadcast store has no chain, so it has no chain position to
+                # order and no link to reach across: the three knobs that tune
+                # those are not merely unused here, they are ill-formed, and
+                # `taped_store_block` rejects them rather than ignoring them.
+                order=None if store_broadcast else store_bank_order,
+                chain_reach=False if store_broadcast else store_chain_reach,
+                chain_pad=0 if store_broadcast else store_chain_pad,
                 feed_teleport=store_feed_teleport,
                 feed_share_riser=store_feed_share_riser,
                 bank_lift=store_bank_lift,
@@ -7172,7 +7186,7 @@ def _assemble(
                 # block's origin is known before the block is.
                 request_roof=(
                     (AY + adapter_h + 2) - (CY + mem_dy + store_dy)
-                    if store_request_reach
+                    if store_request_reach and not store_broadcast
                     else None
                 ),
                 request_tuck=store_request_tuck,
@@ -12542,6 +12556,118 @@ TAPED_GATE_PARK_CONST: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 #: ``N`` computes it and something has to hold it across the op digit.
 TAPED_GATE_SOUTH_REUSE_B: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
 
+#: ``(slug, tier)`` pairs whose **high** v4 gates give the ``A == 0`` word its
+#: own arm instead of merging it onto the downstream one
+#: (``memory_taped._bank_gate_v4``'s ``zero_arm``).
+#:
+#: **The pass-through arm is the most expensive walk in this machine, and it is
+#: expensive for a reason that has nothing to do with its own gate.** ``A > 0``
+#: means "not mine, hand it on", so a request for the bank at chain position
+#: ``j`` walks ``j`` south arms before it walks its own north one. Over the
+#: 21-round hi-res tour that is **805,588 pass-throughs against 471,189
+#: accesses** — a mean chain depth of 1.71 even with
+#: :data:`TAPED_BANK_ORDER`'s hot-first cut — so a cell on this arm is paid
+#: 1.71 times per access and nowhere else.
+#:
+#: Measured by padding, which is the only instrument that gives a slope here
+#: (``heat`` counts blocked time and would say something else): one nop spliced
+#: into ``s_arm`` costs **+671,807 ticks, +0.884%**, two cost +1,379,523. The
+#: room absorbs the first cell — its width is ``max(cr, 13) + 2`` — so 614x478
+#: is unchanged and the number is the walk alone.
+#:
+#: **What the arm was spending a cell on.** ``X`` is three-way: ``A > 0`` turns
+#: south, ``A < 0`` north, and ``A == 0`` goes *straight*. Shipped, the zero
+#: word falls one column east and one row down onto the downstream arm, and the
+#: cell it lands on is a second ``>`` that the ``A > 0`` man walks through on
+#: every pass-through. So the whole chain pays, once per gate skipped, for a
+#: merge that exists for one wire word.
+#:
+#: And on a high gate that word is knowable: the constant is ``2(high - m)``,
+#: **even**, and the wire is ``w = 2a - op``, so ``w == c`` forces ``op == 0``.
+#: ``A == 0`` is always a **read** of the top downstream address — it needs no
+#: ``x``, no value-passing tail and no share of the hot arm. Giving it its own
+#: two-glyph copy on the spine's own row, straight ahead of the ``X``, takes the
+#: elbow from ``> >`` to ``>`` and the arm from **9 cells to 8**::
+#:
+#:     y=4   U b W - X  W  s  >        <- the zero word's own arm, then the leg
+#:     y=5             >  W  s  x      <- UbW-X>Ws = 8, was UbW-X>>Ws = 9
+#:
+#: ``xs`` and ``cr`` both come in one column with it, so the return leg shortens
+#: too and the room stays 15 wide.
+#:
+#: **Low gates are excluded and the exclusion is load-bearing**: there the
+#: constant is ``2m + 1``, *odd*, so ``A == 0`` is always a **write** — of the
+#: first address downstream — and it does need the value-passing tail it would
+#: lose. ``_bank_gate_v4`` guards on ``high is not None`` rather than trusting
+#: the registry, because the two facts are the same fact.
+#:
+#: Measured, 21-round hi-res tour, same process, control reproducing 76,032,819
+#: to the tick: **76,032,819 -> 75,371,817, -661,002, -0.869%**, ``passed=True
+#: fatal=None``, box 614x478 unchanged. (An earlier cut that kept the shared
+#: ``x`` measured -0.748%; the extra 0.12pp is the post-send cell the zero
+#: word's own leg deletes.)
+#:
+#: Keyed by ``(slug, tier)`` because ``deadman-3d``'s taped store is byte-pinned
+#: to a checked-in ``.man`` and its chain ``(3, 2, 0, 1)`` has high gates too.
+TAPED_GATE_ZERO_ARM: set[tuple[str, str]] = {("deadman-3d_hires", "taped")}
+
+#: ``(slug, tier)`` pairs whose taped STORE replaces the **gate chain** with a
+#: single broadcast room and one range filter per bank
+#: (``memory_taped.bcast_room`` / ``memory_taped.filter_room``).
+#:
+#: See those two for the mechanism. The number this exists for: a gate forwards
+#: whatever is not its own, so over the 21-round hi-res tour the chain is walked
+#: **805,588 times against 471,189 accesses** — 1.71 pass-throughs an access even
+#: with :data:`TAPED_BANK_ORDER`'s hot-first cut, and each one measured at ~17.9
+#: ticks. A filter answers the same question by arithmetic, eleven at once, and
+#: nothing is ahead of anything.
+#:
+#: **Empty, because it was built and it lost.** It is correct — the 901-address
+#: readback of the real eleven-bank cut passes through it, and the 21-round
+#: hi-res tour runs clean on it — and it is *slower*:
+#:
+#: | variant | box | ticks | Δ |
+#: |---|---|---|---|
+#: | chain (shipped) | 614x478 | 75,371,817 | — |
+#: | chain, no ``SEEK_TELEPORT`` | 614x478 | 82,390,192 | +9.312% |
+#: | **broadcast**, no ``SEEK_TELEPORT`` | 616x489 | 100,154,565 | **+21.6%** on its own control |
+#:
+#: (``SEEK_TELEPORT`` has to come off both sides to compare at all: its room H
+#: wants a full-width clear strip under the store and the broadcast strip eats
+#: it. That is itself the first finding.)
+#:
+#: **Why the arithmetic said -11% and the machine said +21%.** The saving is real
+#: and still there; what was not costed is that a broadcast replaces one room on
+#: the request path with **two**, and the second is not free:
+#:
+#: * **An extra room is an extra lap, not an extra walk.** The filter's man has
+#:   to be back at his ``R`` before he can take the next word, and his lap is the
+#:   room's whole perimeter — descent, floor, the ``2*base`` reload, the climb:
+#:   ~45 cells against a gate's ~30. ``S`` is all-or-nothing, so the broadcast
+#:   room cannot fire again until **every** filter has drained, which prices the
+#:   store at the slowest lap rather than the addressed one.
+#: * **The strip got 17 rows deeper** (an 11-row filter where the gate was 7,
+#:   plus the broadcast room and its risers) and the request descends every one.
+#:   The chain does not pay this: ``request_roof`` grows gate 0's *room* north
+#:   until it touches the adapter, so the pipe between them stops existing. A
+#:   room spanning the strip cannot do that without swallowing the bank row,
+#:   which is why ``store_request_reach`` is forced off here.
+#: * **The free rebasing costs a hop.** ``-`` really is the test and the rebase
+#:   in one glyph, but the word then goes filter -> forwarder -> bank where it
+#:   used to go gate -> forwarder -> bank.
+#:
+#: **What would have to be true for it to win**, in the order that matters: the
+#: filter merged *into* :func:`~.memory_taped.feed_relay` instead of standing in
+#: front of it — the forwarder is 4x35 with 22 live cells and rows 8..34 blank,
+#: so the cells are already bought — which deletes the extra lap, the extra hop
+#: and all 17 rows at once. Its ``B`` is free on the seven non-rotating banks;
+#: the four in :data:`TAPED_ROTATE_BANKS` keep the ring head there and would need
+#: the test elsewhere, and they are 4.4% of accesses.
+#:
+#: Kept, off, and tested rather than deleted, because a measured negative with a
+#: diagnosis is what stops it being built a second time.
+TAPED_BROADCAST: set[tuple[str, str]] = set()
+
 #: ``(slug, tier)`` pairs whose **ring workers** keep the tape size in B between
 #: accesses (``memory_tape.worker_v2``/``worker_v2_jump``'s ``park_const``), the
 #: same move :data:`TAPED_GATE_PARK_CONST` makes inside a gate. MAIN's two arms
@@ -13622,6 +13748,8 @@ def build_for(
         store_gate_return_slack=TAPED_GATE_RETURN_SLACK.get((slug, store)),
         store_gate_park_const=(slug, store) in TAPED_GATE_PARK_CONST,
         store_gate_south_reuse_b=(slug, store) in TAPED_GATE_SOUTH_REUSE_B,
+        store_gate_zero_arm=(slug, store) in TAPED_GATE_ZERO_ARM,
+        store_broadcast=(slug, store) in TAPED_BROADCAST,
         store_tape_park_const=(slug, store) in TAPED_TAPE_PARK_CONST,
         store_tape_tight_ring=(slug, store) in TAPED_TIGHT_RING,
         store_bank_order=TAPED_BANK_ORDER.get((slug, store)),
